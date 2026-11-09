@@ -85,8 +85,16 @@ export interface JiraReportRequiredFields {
 function screenEstimateField(value: unknown): readonly JiraReportFieldCatalogEntry[] {
   const field = asRecord(value);
   if (typeof field?.fieldId !== "string" || !FIELD_ID.test(field.fieldId)) return [];
-  if (typeof field.name !== "string" || asRecord(field.schema)?.type !== "number") return [];
-  return [{ id: field.fieldId, name: field.name.trim() }];
+  const schema = asRecord(field.schema);
+  if (typeof field.name !== "string" || schema?.type !== "number") return [];
+  const key = schema.custom;
+  return [
+    {
+      id: field.fieldId,
+      name: field.name.trim(),
+      ...(typeof key === "string" ? { schemaKey: key } : {}),
+    },
+  ];
 }
 
 function requiredIds(values: readonly unknown[]): readonly string[] {

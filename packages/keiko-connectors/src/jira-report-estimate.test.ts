@@ -5,6 +5,7 @@ import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime
 import type { JiraReport } from "./jira-report-types.js";
 import { POINTS, fixtureJira, response, syntheticProject } from "./jira-report.fixture.js";
 import { CONNECTION, CONTEXT, NOW, idOf, record, reportOf } from "./jira-report.harness.js";
+import { JIRA_STORY_POINTS_SCHEMA_KEY } from "./jira-report-estimate.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool, type JiraReportActivity } from "./jira-report-tool.js";
 import { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
@@ -15,7 +16,7 @@ const CONFIG = {
 const SCREEN_FIELD = {
   fieldId: POINTS,
   name: "Story Points",
-  schema: { type: "number" },
+  schema: { type: "number", custom: JIRA_STORY_POINTS_SCHEMA_KEY },
   required: false,
 };
 interface Options {
@@ -153,6 +154,25 @@ describe("project estimate discovery (#4321 C4)", () => {
       });
     },
   );
+
+  it("finds a localized Story Points field by its schema key and refuses a name-only match", async () => {
+    const localized = await run({
+      boards: [],
+      screenFields: [{ ...SCREEN_FIELD, name: "Storypunkte" }],
+    });
+    expect(localized.report.scope).toMatchObject({
+      estimateFieldId: POINTS,
+      estimateFieldName: "Storypunkte",
+      estimateSource: "project-screen",
+    });
+    for (const schema of [{ type: "number" }, { type: "number", custom: "x.y:float" }]) {
+      const named = await run({ boards: [], screenFields: [{ ...SCREEN_FIELD, schema }] });
+      expect(named.report.scope).toMatchObject({
+        estimateSource: "unavailable",
+        estimateUnavailableReason: "field-not-found",
+      });
+    }
+  });
 
   it("pages every project board before accepting a unique field", async () => {
     const h = await run({ boards: [{ id: 7 }, { id: 8 }], pageSize: 1 });

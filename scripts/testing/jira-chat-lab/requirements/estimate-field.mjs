@@ -10,7 +10,8 @@
 // Every function takes a `jira` port, so the logic is unit-tested without HTTP:
 //   jira.call(name, method, path, body?, expected?) -> JSON value, throws on an unexpected status
 //   jira.request(method, path, body?)               -> { status, value }, never throws
-// Lab-side code may know Jira Software's field schemas; product code may not.
+// The product identifies a screen story-points field by the same non-localized schema key
+// (`JIRA_STORY_POINTS_SCHEMA_KEY` in jira-report-estimate.ts), never by its display name.
 import { sequentially } from "./journey-support.mjs";
 
 const JSW_STORY_POINTS = "com.pyxis.greenhopper.jira:jsw-story-points";

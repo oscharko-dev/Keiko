@@ -89,6 +89,8 @@ export interface JiraReportComplianceChecker {
 export interface JiraReportFieldCatalogEntry {
   readonly id: string;
   readonly name: string;
+  /** The field's non-localized schema `custom` key, when the metadata states one. */
+  readonly schemaKey?: string;
 }
 
 /**

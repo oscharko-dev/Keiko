@@ -104,6 +104,29 @@ export async function readPlanningField(
       )
     : { ok: true, value: field };
 }
+/** What a board configuration says about its estimation: one native projection for every reader. */
+export type BoardEstimation =
+  | { readonly kind: "field"; readonly fieldId: string; readonly displayName: string }
+  | { readonly kind: "none" }
+  | { readonly kind: "malformed" };
+const BOARD_NAME_MAX = 200;
+const MALFORMED_ESTIMATION: BoardEstimation = { kind: "malformed" };
+const NO_ESTIMATION: BoardEstimation = { kind: "none" };
+
+export function boardEstimationField(board: Readonly<Record<string, unknown>>): BoardEstimation {
+  const estimation = asRecord(board.estimation);
+  if (estimation === undefined)
+    return board.type === "kanban" ? NO_ESTIMATION : MALFORMED_ESTIMATION;
+  if (estimation.type === "issueCount" || estimation.type === "none") return NO_ESTIMATION;
+  const field = asRecord(estimation.field);
+  if (estimation.type !== "field" || !isJiraFieldId(field?.fieldId)) return MALFORMED_ESTIMATION;
+  const name = field.displayName;
+  return {
+    kind: "field",
+    fieldId: field.fieldId,
+    displayName: typeof name === "string" ? name.slice(0, BOARD_NAME_MAX) : field.fieldId,
+  };
+}
 export function boardFieldMatches(
   input: Exclude<PlanningInput, { operation: "jira.epic-remove-issues" }>,
   board: Readonly<Record<string, unknown>>,
@@ -112,8 +135,8 @@ export function boardFieldMatches(
     return (
       jiraNativeNumericId(asRecord(board.ranking)?.rankCustomFieldId) === input.rankCustomFieldId
     );
-  const estimation = asRecord(board.estimation);
-  return estimation?.type === "field" && asRecord(estimation.field)?.fieldId === input.fieldId;
+  const estimation = boardEstimationField(board);
+  return estimation.kind === "field" && estimation.fieldId === input.fieldId;
 }
 export async function readPlanningEpic(
   requests: JiraAgileRequestPhase,

@@ -1,10 +1,10 @@
 import {
-  JIRA_FIELD_ID_PATTERN,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
   type JiraReportEstimateUnavailableReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import { asRecord } from "./atlassian-sync-classify.js";
+import { boardEstimationField } from "./jira-agile-planning-observations.js";
 import type { JiraReportHttp } from "./jira-report-http.js";
 import {
   collectJiraReportMetadataPages,
@@ -22,7 +22,8 @@ type Selection = Pick<
   | "estimateSource"
   | "estimateUnavailableReason"
 > & { readonly failure?: JiraReportFailure };
-const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
+/** Jira Software's own, non-localized schema key of its Story Points field. */
+export const JIRA_STORY_POINTS_SCHEMA_KEY = "com.pyxis.greenhopper.jira:jsw-story-points";
 
 function unavailable(
   reason: JiraReportEstimateUnavailableReason,
@@ -51,20 +52,6 @@ function boardId(value: unknown): string | undefined {
   const text = typeof id === "number" && Number.isSafeInteger(id) ? String(id) : id;
   return typeof text === "string" && /^[1-9]\d{0,17}$/u.test(text) ? text : undefined;
 }
-function configuredField(body: Record<string, unknown>): JiraReportFieldCatalogEntry | undefined {
-  const estimation = asRecord(body.estimation);
-  const field = asRecord(estimation?.field);
-  const id = field?.fieldId;
-  if (estimation?.type !== "field" || typeof id !== "string" || !FIELD_ID.test(id))
-    return undefined;
-  const name = field?.displayName;
-  return { id, name: typeof name === "string" ? name.slice(0, 200) : id };
-}
-function boardWithoutEstimate(body: Record<string, unknown>): boolean {
-  const estimation = asRecord(body.estimation);
-  if (estimation === undefined) return body.type === "kanban";
-  return estimation.type === "issueCount" || estimation.type === "none";
-}
 interface BoardFields {
   readonly fields: readonly JiraReportFieldCatalogEntry[];
   readonly failure?: JiraReportFailure;
@@ -74,11 +61,10 @@ async function boardConfiguration(http: JiraReportHttp, board: unknown): Promise
   if (id === undefined) return { fields: [], failure: "malformed-payload" };
   const outcome = await http.getAgileRecord(`board/${id}/configuration`);
   if (!outcome.ok) return { fields: [], failure: outcome.reason };
-  const field = configuredField(outcome.body);
-  if (field !== undefined) return { fields: [field] };
-  return boardWithoutEstimate(outcome.body)
-    ? { fields: [] }
-    : { fields: [], failure: "malformed-payload" };
+  const estimation = boardEstimationField(outcome.body);
+  if (estimation.kind === "field")
+    return { fields: [{ id: estimation.fieldId, name: estimation.displayName }] };
+  return estimation.kind === "none" ? { fields: [] } : { fields: [], failure: "malformed-payload" };
 }
 async function boardFields(http: JiraReportHttp, project: string): Promise<BoardFields> {
   const boards: unknown[] = [];
@@ -111,8 +97,8 @@ function timeTracking(): Selection {
 }
 function fromScreens(required: JiraReportRequiredFields, boards: BoardFields): Selection {
   if (required.state !== "applied") return unavailable("metadata-unavailable");
-  const fields = unique(required.estimateFields ?? []).filter((field) =>
-    /^story[ -]points(?: estimate)?$/iu.test(field.name),
+  const fields = unique(required.estimateFields ?? []).filter(
+    (field) => field.schemaKey === JIRA_STORY_POINTS_SCHEMA_KEY,
   );
   const first = fields.length === 1 ? fields[0] : undefined;
   if (first !== undefined) return selected(first, "project-screen");
