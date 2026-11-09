@@ -220,8 +220,12 @@ it("grades a settled, independently reproduced 403 write as denied without a rec
   const evidence = await runQualificationCase({}, {}, selected, {}, witness, output, report);
   expect(evidence.runtimeAvailability).toBe("denied");
   expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(false);
-  // Without the independent reproduction the same 403 still stops the run.
+  // A 2xx beside the refusal is not a definite non-effect and still stops the run.
   const unproven = { ...specification({}), readback: async () => ({ matched: false }) };
+  refused.witness.responses = [
+    { status: 403, truncated: false },
+    { status: 204, truncated: false },
+  ];
   dispatch.mockResolvedValue(refused);
   await expect(
     runQualificationCase({}, {}, unproven, {}, witness, directory(), report),
