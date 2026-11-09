@@ -8,7 +8,6 @@ import { readBoundedOoxmlPackage } from "@oscharko-dev/keiko-local-knowledge";
 import { basicAuth, labSessionConnection } from "./lab-client.mjs";
 import { connectQualificationFile } from "./api-qualification-fixtures.mjs";
 import { createZip } from "./requirements/ooxml-zip.mjs";
-import { writeCorpusDocuments } from "./requirements/corpus-documents.mjs";
 
 const assetHash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -81,9 +80,21 @@ function connectAsset(context, f, path) {
 
 export async function prepareAttachmentSource(context, f) {
   const { directory } = assetDirectory(context, f);
-  const [document] = writeCorpusDocuments(directory);
-  f.assetAttachmentFile = await connectAsset(context, f, document);
-  f.assetArchivePack = await assetPack(readFileSync(document));
+  // Jira expands only recognised archives: an OOXML document is a ZIP but is listed as empty and its
+  // human summary is a 409, so the attachment is a plain synthetic ZIP the existing writer builds.
+  const archive = join(directory, "synthetic-ac7-archive.zip");
+  writeFileSync(
+    archive,
+    createZip(
+      ["a", "b"].map((name) => ({
+        name: `synthetic/${name}.txt`,
+        data: `Synthetic AC7 archive entry ${name} ${f.runId}\n`,
+      })),
+    ),
+    { mode: 0o600 },
+  );
+  f.assetAttachmentFile = await connectAsset(context, f, archive);
+  f.assetArchivePack = await assetPack(readFileSync(archive));
 }
 
 /** Defaults are an explicit operator fixture from the fresh owned native image, never inferred. */

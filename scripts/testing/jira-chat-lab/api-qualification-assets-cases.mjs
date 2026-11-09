@@ -17,9 +17,17 @@ const scope = { actor: "admin", administration: true };
 const actorArgs = (f) => ({ expectedActorKey: f.adminActorKey });
 const attachmentPath = (f) => `/rest/api/2/attachment/${f.assetAttachment.id}`;
 
+/** Jira 10.3's attachment record carries no `id`; its self link names the exact attachment. */
+const nativeAttachment = (raw) => ({ ...raw, id: String(raw.self).split("/").at(-1) });
+async function attachmentRecord(context, id, path) {
+  assert.match(id, /^[1-9]\d*$/u);
+  const value = nativeAttachment(await read(context, path));
+  assert.equal(value.id, id);
+  return value;
+}
 async function attachmentReadback(context, data, f) {
   assert.match(data.attachmentId, /^[1-9]\d*$/u);
-  const native = await readRecord(
+  const native = await attachmentRecord(
     context,
     data.attachmentId,
     `/rest/api/2/attachment/${data.attachmentId}`,
@@ -47,7 +55,7 @@ async function ensureAttachment(context, f) {
   await observeAdminActor(context, f);
   await prepareAttachmentSource(context, f);
   if (f.assetAttachment !== undefined) {
-    const native = await readRecord(context, f.assetAttachment.id, attachmentPath(f));
+    const native = await attachmentRecord(context, f.assetAttachment.id, attachmentPath(f));
     assert.equal(native.filename, f.assetAttachment.filename);
     assert.equal(native.size, f.assetAttachment.size);
     return;
@@ -262,7 +270,7 @@ export const API_QUALIFICATION_ASSETS_CASES = [
     ["attachmentId", "filename", "size"],
     {
       args: (f) => ({ attachmentId: f.assetAttachment.id }),
-      nativeRoot: "single",
+      nativeRoot: (raw) => [nativeAttachment(raw)],
       productRoot: "single",
       nativeNames: { attachmentId: "id" },
       optionalFields: ["mimeType", "created"],
