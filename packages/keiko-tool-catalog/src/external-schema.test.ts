@@ -124,4 +124,46 @@ describe("external JSON Schema catalog dialect", () => {
     expect(mismatch?.unexpectedPropertyCount).toBe(1);
     expect(JSON.stringify(mismatch)).not.toContain("private-extra");
   });
+  it("validates identically when many schemas share one compiler across references and dialects", () => {
+    const build = (index: number, dialect: string): Record<string, unknown> => ({
+      $schema: dialect,
+      type: "object",
+      $defs: { n: { type: "integer", minimum: index } },
+      properties: { value: { $ref: "#/$defs/n" } },
+      required: ["value"],
+      additionalProperties: false,
+    });
+    const dialects = [
+      "https://json-schema.org/draft/2020-12/schema",
+      "https://json-schema.org/draft/2019-09/schema",
+      "http://json-schema.org/draft-07/schema#",
+    ];
+    for (let index = 0; index < 40; index++) {
+      const compiled = compileExternalCatalogSchema(build(index, dialects[index % 3] ?? ""));
+      expect(matchesCatalogSchema(compiled, { value: index })).toBe(true);
+      expect(matchesCatalogSchema(compiled, { value: index - 1 })).toBe(false);
+      expect(matchesCatalogSchema(compiled, { value: "x" })).toBe(false);
+      expect(matchesCatalogSchema(compiled, {})).toBe(false);
+      expect(matchesCatalogSchema(compiled, { value: index, extra: 1 })).toBe(false);
+    }
+  });
+
+  it("keeps refusing an unresolvable schema after sharing a compiler across schemas", () => {
+    const refused = {
+      type: "object",
+      properties: { a: { $ref: "https://example.invalid/missing" } },
+    };
+    expect(() => compileExternalCatalogSchema(refused)).toThrow(
+      expect.objectContaining({ reason: "unsupported-schema" }),
+    );
+    expect(() => compileExternalCatalogSchema({ type: "object", properties: { a: 1 } })).toThrow(
+      expect.objectContaining({ reason: "unsupported-schema" }),
+    );
+    const ok = compileExternalCatalogSchema({
+      type: "object",
+      properties: { a: { type: "string" } },
+    });
+    expect(matchesCatalogSchema(ok, { a: "x" })).toBe(true);
+    expect(matchesCatalogSchema(ok, { a: 1 })).toBe(false);
+  });
 });

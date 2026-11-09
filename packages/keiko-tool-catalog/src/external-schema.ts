@@ -59,6 +59,32 @@ function compiler(dialect: CatalogJsonValue | undefined): Ajv {
   validator.addKeyword({ keyword: "x-mcp-header", schemaType: "string", valid: true });
   return validator;
 }
+// Building an Ajv instance compiles its meta-schema, which dominated every distinct schema's cost
+// (about 3.8 ms against 0.15 ms to compile on an existing instance). One instance per dialect
+// compiles every schema; each is removed from the instance right after, so no schema, `$id` or
+// anchor outlives its own compilation and a repeated `$id` cannot collide. External schemas cannot
+// carry `$id`, `$anchor` or dynamic anchors at all (`isBoundedExternalJsonSchema`), so a `$ref` can
+// only resolve inside its own schema, as on a fresh instance.
+const SHARED_COMPILERS = new Map<string, Ajv>();
+function sharedCompiler(dialect: CatalogJsonValue | undefined): Ajv {
+  const key = typeof dialect === "string" ? dialect : "";
+  const existing = SHARED_COMPILERS.get(key);
+  if (existing !== undefined) return existing;
+  const created = compiler(dialect);
+  SHARED_COMPILERS.set(key, created);
+  return created;
+}
+function compileValidator(schema: CatalogJsonObject): ValidateFunction {
+  const shared = sharedCompiler(schema.$schema);
+  try {
+    return shared.compile(schema);
+  } catch {
+    // A refusal is only ever decided by a fresh instance, exactly as before sharing.
+    return compiler(schema.$schema).compile(schema);
+  } finally {
+    shared.removeSchema(schema);
+  }
+}
 const VALIDATORS = new Map<string, ValidateFunction>();
 function validationFor(schema: CatalogJsonObject, bounded = false): ValidateFunction {
   requireCatalog(bounded || isBoundedExternalJsonSchema(schema), "unsupported-schema");
@@ -66,8 +92,7 @@ function validationFor(schema: CatalogJsonObject, bounded = false): ValidateFunc
   const cached = VALIDATORS.get(identity);
   if (cached !== undefined) return cached;
   try {
-    const validator = compiler(schema.$schema);
-    const validate = validator.compile(schema);
+    const validate = compileValidator(schema);
     if (VALIDATORS.size >= 64) {
       const oldest = VALIDATORS.keys().next().value;
       if (oldest !== undefined) VALIDATORS.delete(oldest);

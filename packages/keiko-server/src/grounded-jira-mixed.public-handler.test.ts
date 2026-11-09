@@ -18,7 +18,7 @@ import {
 import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
-import { jiraOperationContracts } from "./atlassian/jiraManagedProvider.js";
+import { jiraOperationDefinitions } from "./atlassian/jiraOperationRegistry.js";
 import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -309,16 +309,15 @@ function preselectKnownFixtureTools(
   if (tool === undefined && additionalTools.length === 0) return;
   vi.spyOn(catalog, "get").mockImplementation(async (scope) => {
     const base = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
-    const operations = jiraOperationContracts();
+    const operations = jiraOperationDefinitions();
     const selected = await catalog.select(
       operations
         .filter((entry) =>
           tool === undefined
-            ? base.has(entry.declaration.name.replace(/[.-]/gu, "_")) ||
-              additionalTools.includes(entry.declaration.name)
-            : entry.declaration.name === tool,
+            ? base.has(entry.tool.replace(/[.-]/gu, "_")) || additionalTools.includes(entry.tool)
+            : entry.tool === tool,
         )
-        .map((entry) => entry.binding.identity),
+        .map((entry) => entry.identity),
       scope,
     );
     if (tool === undefined) return selected;
@@ -330,9 +329,7 @@ function preselectKnownFixtureTools(
     }
     return {
       ...selected.omitting(
-        operations
-          .filter((entry) => !retained.has(entry.declaration.name))
-          .map((entry) => entry.declaration.name),
+        operations.filter((entry) => !retained.has(entry.tool)).map((entry) => entry.tool),
       ),
       close: selected.close,
     };

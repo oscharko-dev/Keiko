@@ -3,7 +3,7 @@ import type {
   AtlassianHttpBodyPort,
   AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
-import { jiraOperationContracts } from "./jiraManagedProvider.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import {
   mutationRemoteState,
   nativeRead,
@@ -662,9 +662,11 @@ function remote(tool?: string): AtlassianHttpBodyPort {
 }
 describe("native Agile registry and actual connector transport agreement", () => {
   it("covers every current Agile identity exactly once", () => {
-    const native = jiraOperationContracts().filter(
-      ({ definition }) => definition.kind === "native" && definition.apiRoot === "/rest/agile/1.0",
-    );
+    const native = jiraOperationDefinitions()
+      .filter(
+        (definition) => definition.kind === "native" && definition.apiRoot === "/rest/agile/1.0",
+      )
+      .map((definition) => ({ definition }));
     expect(native).toHaveLength(46);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(

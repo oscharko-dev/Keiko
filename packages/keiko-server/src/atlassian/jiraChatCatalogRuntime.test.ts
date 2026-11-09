@@ -12,7 +12,7 @@ import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatCatalogRuntime, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
-import { jiraOperationContracts } from "./jiraManagedProvider.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 
 const CURATED_JIRA_ALIASES = [
@@ -260,7 +260,7 @@ describe("application-owned Jira catalog initialization", () => {
   it("refuses a selection larger than one host carries before any host is built", async () => {
     const f = fixture();
     try {
-      const everything = jiraOperationContracts().map((entry) => entry.binding.identity);
+      const everything = jiraOperationDefinitions().map((definition) => definition.identity);
       expect(everything.length).toBeGreaterThan(320);
       await expect(f.runtime.select(everything)).rejects.toMatchObject({
         name: "ToolCatalogError",

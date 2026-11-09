@@ -1,8 +1,5 @@
-import {
-  jiraOperationContracts,
-  jiraDeclarationForTool,
-  jiraOperationForTool,
-} from "./jiraManagedProvider.js";
+import { jiraDeclarationForTool, jiraOperationForTool } from "./jiraManagedProvider.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
 import {
@@ -330,10 +327,13 @@ function describeFixtureOperation(
   base: NormalizedResponse,
   canonicalId: string,
 ): NormalizedResponse {
-  const contract = jiraOperationContracts().find(
-    (entry) => entry.declaration.descriptor.toolRef.canonicalId === canonicalId,
+  // Only the named operation compiles; its compiled descriptor must still carry the canonical id.
+  const named = jiraOperationDefinitions().find(
+    (definition) => `keiko.${definition.tool.replaceAll("-", ".")}` === canonicalId,
   );
-  if (contract === undefined) throw new TypeError("Missing fixture operation contract");
+  const contract = named === undefined ? undefined : jiraOperationForTool(named.tool);
+  if (contract?.declaration.descriptor.toolRef.canonicalId !== canonicalId)
+    throw new TypeError("Missing fixture operation contract");
   const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
   return {
     ...base,
@@ -445,9 +445,9 @@ function preselectFixtureCatalog(deps: UiHandlerDeps): void {
   if (catalog === undefined) throw new TypeError("Missing Jira catalog");
   vi.spyOn(catalog, "get").mockImplementation((scope) =>
     catalog.select(
-      jiraOperationContracts()
-        .filter((entry) => FIXTURE_OPERATION_TOOLS.has(entry.definition.tool))
-        .map((entry) => entry.binding.identity),
+      jiraOperationDefinitions()
+        .filter((definition) => FIXTURE_OPERATION_TOOLS.has(definition.tool))
+        .map((definition) => definition.identity),
       scope,
     ),
   );
@@ -3748,8 +3748,8 @@ it("records the closed too-large selection refusal on the settled tool-result li
   const f = fixture(false, undefined, true, false, false, undefined, true);
   configure(f.deps, true, 32768);
   // The demand model already selects the project read first; every other contract follows it.
-  const everything = jiraOperationContracts()
-    .map((entry) => entry.binding.identity)
+  const everything = jiraOperationDefinitions()
+    .map((definition) => definition.identity)
     .filter((identity) => identity !== "GET /rest/api/2/project");
   demandSelectedModel(f, false, undefined, everything);
   await handleSendDesktopChat(sendContext(f, "demand-too-large"), f.deps);
