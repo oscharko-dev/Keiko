@@ -170,6 +170,7 @@ const uploadArguments = (f, kind, owner) => ({
 });
 /** Uploads through the governed tool; the native temporary slot is consumed by the next effect. */
 async function stageTemporary(c, f, kind, owner, chat) {
+  f.avatarTemporary = undefined;
   await avatarFile(c, f, chat);
   const before = await observeAvatars(c, kind, owner);
   await fixtureWrite(

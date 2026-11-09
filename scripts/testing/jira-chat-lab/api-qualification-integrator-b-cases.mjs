@@ -296,6 +296,8 @@ async function avatarRows(c, f) {
 }
 const avatarTarget = (f) => ({ kind: "project", id: f.avatarProject.id, key: f.avatarProject.key });
 async function prepareAvatarUpload(c, f, chat) {
+  // A refused upload must leave no temporary state for create-owned-avatar to inherit.
+  f.avatarTemporary = undefined;
   await observeAdminActor(c, f);
   f.avatarProject = projectReview(await createQualificationProject(c, f, "avatar-owner"));
   // The recipe's own file is the connected source of this Chat while the avatar cases run.

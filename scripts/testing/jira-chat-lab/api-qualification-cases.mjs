@@ -109,7 +109,14 @@ export function readCase(
   tool,
   path,
   fields,
-  { args = () => ({}), nativeRoot, productRoot, nativeNames, optionalFields = [] } = {},
+  {
+    args = () => ({}),
+    nativeRoot,
+    productRoot,
+    nativeNames,
+    optionalFields = [],
+    nonEmpty = false,
+  } = {},
 ) {
   return {
     tool,
@@ -122,6 +129,9 @@ export function readCase(
       if (absent !== undefined) return absent;
       assert.equal(response.status, 200);
       const native = nativeRows(response.value, nativeRoot);
+      // A read of a collection this run just populated proves nothing when it is empty: the
+      // refused write that should have populated it would pass as a vacuous match.
+      if (nonEmpty) assert.ok(native.length > 0, "the owned fixture must be natively present");
       const projected = projectRows(data, productRoot);
       const actual = rowValues(projected, fields);
       const expected = rowValues(native, fields, nativeNames).slice(0, 100);

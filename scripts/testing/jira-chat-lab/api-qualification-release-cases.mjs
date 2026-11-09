@@ -74,14 +74,14 @@ async function versionContext(context, f) {
   assert.equal(String(version.projectId), f.projectId);
   f.versionSnapshot = versionSnapshot(version);
 }
-async function links(context, f) {
+async function links(context, f, suffixes = f.linkSuffixes) {
   const observed = await read(context, `${versionPath(f)}/remotelink`);
   assert.ok(Array.isArray(observed.links));
   const values = observed.links.map((row) =>
     typeof row.link === "string" ? JSON.parse(row.link) : row.link,
   );
   const ordered = (rows) => rows.toSorted((a, b) => a.globalId.localeCompare(b.globalId));
-  assert.deepEqual(ordered(values), ordered(f.linkSuffixes.map((suffix) => linkValue(f, suffix))));
+  assert.deepEqual(ordered(values), ordered(suffixes.map((suffix) => linkValue(f, suffix))));
   f.linkSnapshots = values.map((value) => ({
     globalId: value.globalId,
     valueNodes: observedLinkNodes(value),
@@ -104,9 +104,10 @@ function createLink(tool, suffix) {
     tool,
     (f) => ({ ...linkArguments(f), globalId: linkId(f, suffix), valueNodes: linkNodes(f, suffix) }),
     async (context, data, f) => {
-      f.linkSuffixes.push(suffix);
-      const actual = await links(context, f);
-      assert.equal(actual.length, f.linkSuffixes.length);
+      const expected = [...f.linkSuffixes, suffix];
+      const actual = await links(context, f, expected);
+      assert.equal(actual.length, expected.length);
+      f.linkSuffixes = expected;
       assert.equal(data.globalId, linkId(f, suffix));
       assert.equal(data.linkPresent, true);
       return proof(4);
@@ -118,6 +119,8 @@ function linkReadback(path) {
   return async (context, data, f) => {
     const observed = await read(context, path(f));
     const rows = Array.isArray(observed.links) ? observed.links : [observed];
+    // The links were created by this run; an empty set means the creating write never landed.
+    assert.ok(rows.length > 0, "the owned fixture must be natively present");
     assert.equal(data.items.length, rows.length);
     for (const [index, row] of rows.entries()) {
       const value = typeof row.link === "string" ? JSON.parse(row.link) : row.link;
@@ -263,8 +266,8 @@ export const API_QUALIFICATION_RELEASE_CASES = [
     "jira.delete-version-remote-link",
     (f) => ({ ...linkArguments(f), globalId: linkId(f, "a") }),
     async (context, _data, f) => {
+      await links(context, f, ["b"]);
       f.linkSuffixes = ["b"];
-      await links(context, f);
       return proof(1);
     },
     linkContext,
@@ -273,8 +276,8 @@ export const API_QUALIFICATION_RELEASE_CASES = [
     "jira.delete-version-remote-links",
     (f) => ({ ...linkArguments(f), confirmAll: true }),
     async (context, _data, f) => {
+      await links(context, f, []);
       f.linkSuffixes = [];
-      await links(context, f);
       return proof(1);
     },
     linkContext,

@@ -182,8 +182,10 @@ export const API_QUALIFICATION_LINK_CASES = [
       value: { ...f.remoteDesired, title: "Synthetic AC7 revised remote link" },
     }),
     async (c, _data, f) => {
-      f.remoteDesired = { ...f.remoteDesired, title: "Synthetic AC7 revised remote link" };
-      return assertRemote(c, f, f.remoteDesired);
+      const revised = { ...f.remoteDesired, title: "Synthetic AC7 revised remote link" };
+      const result = await assertRemote(c, f, revised);
+      f.remoteDesired = revised;
+      return result;
     },
     remote,
   ),

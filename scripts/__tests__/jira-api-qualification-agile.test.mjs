@@ -188,3 +188,36 @@ it("does not infer backlog removal from a filtered empty sprint list without can
     rmSync(directory, { recursive: true, force: true });
   }
 });
+it("refuses the backlog move when the refused sprint move left the issue outside the sprint", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-backlog-prep-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+  let member = false;
+  const native = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    const path = new URL(url).pathname;
+    const bodies = {
+      "/rest/api/2/myself": { name: "keiko-admin", key: "admin-key" },
+      "/rest/agile/1.0/sprint/15/issue": { total: 1, issues: member ? [{ key: "KEIKO-1" }] : [] },
+      "/rest/api/2/field": [
+        { id: "customfield_10020", schema: { custom: "com.pyxis.greenhopper.jira:gh-sprint" } },
+      ],
+      "/rest/api/2/issue/KEIKO-1": {
+        key: "KEIKO-1",
+        fields: { customfield_10020: member ? [{ id: 19 }] : null },
+      },
+    };
+    expect(Object.hasOwn(bodies, path)).toBe(true);
+    return new globalThis.Response(JSON.stringify(bodies[path]), { status: 200 });
+  });
+  const entry = API_QUALIFICATION_AGILE_CASES.find((e) => e.tool === "jira.backlog-move-issues");
+  const context = { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } };
+  const fixture = { agileSprintId: "15", issueKeys: ["KEIKO-1"] };
+  try {
+    await expect(entry.prepare(context, fixture)).rejects.toThrow();
+    member = true;
+    await expect(entry.prepare(context, fixture)).resolves.toBeUndefined();
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

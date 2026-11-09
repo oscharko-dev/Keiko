@@ -56,6 +56,21 @@ async function board(c, f) {
     expectedFilterId: String(value.filter.id),
   };
 }
+// A refused sprint move would leave the backlog move a vacuous no-op: the connector's backlog
+// branch reads nothing first. Native membership and a non-empty sprint field are the precondition.
+async function sprintMembership(c, f) {
+  await actor(c, f);
+  const members = await read(c, `${sprintPath(f)}/issue?maxResults=100`);
+  assert.ok(members.issues.some((row) => row.key === f.issueKeys[0]));
+  const fields = await read(c, "/rest/api/2/field");
+  const sprintFields = fields.filter(
+    (field) => field.schema?.custom === "com.pyxis.greenhopper.jira:gh-sprint",
+  );
+  assert.equal(sprintFields.length, 1);
+  const core = await read(c, `/rest/api/2/issue/${f.issueKeys[0]}?fields=${sprintFields[0].id}`);
+  const value = core.fields[sprintFields[0].id];
+  assert.ok(Array.isArray(value) && value.length > 0);
+}
 const properties = (kind, parent, args) =>
   qualificationPropertyCases({
     name: kind,
@@ -128,7 +143,11 @@ export const API_QUALIFICATION_AGILE_CASES = [
     "jira.boards",
     (f) => `/rest/agile/1.0/board?name=${encodeURIComponent(filterName(f))}&maxResults=100`,
     ["id", "name", "type"],
-    { args: (f) => ({ name: filterName(f), maxResults: 100 }), nativeRoot: "values" },
+    {
+      args: (f) => ({ name: filterName(f), maxResults: 100 }),
+      nativeRoot: "values",
+      nonEmpty: true,
+    },
   ),
   readCase("jira.board", boardPath, ["id", "name", "type"], {
     args: boardArgs,
@@ -265,6 +284,7 @@ export const API_QUALIFICATION_AGILE_CASES = [
       assert.ok(value === null || (Array.isArray(value) && value.length === 0));
       return proof(9);
     },
+    sprintMembership,
   ),
   readCase(
     "jira.board-refined-velocity",
