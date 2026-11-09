@@ -3,7 +3,10 @@
 import { createHash } from "node:crypto";
 import { URL } from "node:url";
 import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { resolveJiraTemplateFieldIds } from "@oscharko-dev/keiko-connectors";
+import {
+  JIRA_TEMPLATE_SYSTEM_FIELDS,
+  resolveJiraTemplateFieldIds,
+} from "@oscharko-dev/keiko-connectors";
 import { basicAuth, checked, labRequest } from "../lab-client.mjs";
 import { discoverReadableEstimate } from "./estimate-field.mjs";
 import { pagedJql } from "./journeys.mjs";
@@ -102,6 +105,17 @@ export async function readInstalledTemplateScope(ctx) {
     parentForTypes,
     templates,
   };
+}
+
+/**
+ * The fields a template reference can name, as the product resolves them: Jira's system fields
+ * and the native field list, one entry per id. Data Center's `GET field` omits `parent`.
+ */
+export function templateFieldCatalog(catalog) {
+  const fields = new Map();
+  for (const field of [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...catalog])
+    fields.set(field.id, { id: field.id, name: field.name });
+  return [...fields.values()];
 }
 
 /** Field IDs for the one independent JQL reader. Unknown required-field names fail closed. */
@@ -304,7 +318,7 @@ async function nativeConfiguration(ctx, native) {
   const estimate = await discoverReadableEstimate(jira, ctx.projectKey);
   return {
     fieldIds: { ...ids, storyPoints: estimate?.unit === "points" ? estimate.fieldId : undefined },
-    fieldCatalog: catalog.map((field) => ({ id: field.id, name: field.name })),
+    fieldCatalog: templateFieldCatalog(catalog),
     ...(estimate === undefined ? {} : { estimate }),
     templateScope: await readInstalledTemplateScope(ctx),
   };

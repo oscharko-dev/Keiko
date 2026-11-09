@@ -7,6 +7,7 @@ import {
 import { privateJson } from "./private-json.mjs";
 import { gradeRuleRefusal } from "./rules-knowledge-oracles.mjs";
 import { toolExchangeOf } from "./requirements/tool-exchanges.mjs";
+import { EPIC_SUMMARY_VIOLATION } from "./requirements/templates.mjs";
 import {
   GOLDEN_ACCEPTANCE_COUNT,
   GOLDEN_REQUIREMENT_COUNT,
@@ -275,9 +276,17 @@ function contextOptions(ctx) {
     projectKey: goldenProjectKey(ctx.projectKey),
     manifest,
     read: ctx.read,
-    boardId: ctx.boardId ?? state?.project?.boardId,
-    bulkViolation: ctx.bulkViolation ?? state?.templates?.bulkViolation,
+    boardId: ctx.boardId ?? state?.["ac5-project"]?.resources?.boardId,
+    bulkViolation: ctx.bulkViolation ?? installedEpicViolation(state),
   };
+}
+
+/**
+ * The project step records its native board; the template step installs the Epic template whose
+ * summary pattern the bulk run breaks on purpose. Neither is assumed before its step completed.
+ */
+function installedEpicViolation(state) {
+  return state?.["w12-templates"]?.phase === "completed" ? EPIC_SUMMARY_VIOLATION : undefined;
 }
 
 async function viewResult(options, issues) {

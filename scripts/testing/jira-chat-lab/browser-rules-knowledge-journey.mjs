@@ -49,7 +49,9 @@ function probeDigest(observed) {
 
 function probePrompt(projectKey) {
   return (
-    `Erstelle genau ein Epic im Projekt ${projectKey} mit Zusammenfassung 'Regelprobe ohne Kennung', ` +
+    // Jira Data Center requires an Epic Name on every Epic; without it field admission refuses
+    // before the formal template is consulted, and the probe would observe no template rule.
+    `Erstelle genau ein Epic im Projekt ${projectKey} mit Epic-Name 'Regelprobe' und Zusammenfassung 'Regelprobe ohne Kennung', ` +
     "Beschreibung 'Absichtlich ohne Abschnitte' und keinen Labels. Keine Elternzuordnung und keine explizite Priorität. " +
     "Lege es genau mit diesem Inhalt an, ohne Vorabkorrektur. " +
     "Wenn die formale Vorlage verweigert, melde ihre konkrete Regel und beende den Turn ohne erneuten Schreibversuch."

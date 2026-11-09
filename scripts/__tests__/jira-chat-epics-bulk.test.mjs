@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import * as goldenOracle from "../testing/jira-chat-lab/requirements/golden-jira-oracle.mjs";
+import { EPIC_SUMMARY_VIOLATION } from "../testing/jira-chat-lab/requirements/templates.mjs";
 import {
   goldenJiraReadAdapter,
   gradeGoldenEpics,
@@ -94,7 +95,11 @@ const issueSet = () => REQUIREMENTS.map((requirement, index) => epic(requirement
 function bulkHarness() {
   const issues = [];
   const search = issueRead(issues);
-  const state = { templates: { bulkViolation: VIOLATION }, project: { boardId: "7" } };
+  // The shapes the project and template steps actually record in the limit-run intent.
+  const state = {
+    "ac5-project": { phase: "completed", resources: { boardId: "7" } },
+    "w12-templates": { phase: "completed", resources: {} },
+  };
   const read = vi.fn(async (path) => {
     if (path.startsWith("/rest/api/2/search?")) return search(path);
     const query = new URL(path, "https://synthetic.invalid").searchParams;
@@ -764,7 +769,7 @@ describe("ordinary browser bulk orchestration", () => {
   });
   it("blocks before any write when the native board identity is unavailable", async () => {
     const ctx = bulkHarness();
-    delete ctx.intent.state.project.boardId;
+    delete ctx.intent.state["ac5-project"].resources.boardId;
     expect(await runBulkEpics(ctx)).toMatchObject({
       status: "unverified",
       counts: { attemptedCount: 0 },
@@ -772,6 +777,16 @@ describe("ordinary browser bulk orchestration", () => {
     expect(ctx.turn).not.toHaveBeenCalled();
     expect(ctx.read).not.toHaveBeenCalled();
     expect(ctx.intent.record).not.toHaveBeenCalled();
+  });
+  it("takes its deliberate violation from the installed Epic template only after that step completed", async () => {
+    const ctx = bulkHarness();
+    ctx.intent.state["w12-templates"].phase = "pending";
+    expect(await runBulkEpics(ctx)).toMatchObject({
+      status: "unverified",
+      counts: { attemptedCount: 0 },
+    });
+    expect(ctx.turn).not.toHaveBeenCalled();
+    expect(EPIC_SUMMARY_VIOLATION).toEqual(VIOLATION);
   });
   it("exports the fixed public StepResult contract and blocks writes without observed template metadata", async () => {
     const ctx = {

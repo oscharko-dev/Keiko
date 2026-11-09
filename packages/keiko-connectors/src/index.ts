@@ -363,6 +363,7 @@ export {
 } from "./jira-issue-template-check.js";
 export {
   gateJiraMutationByTemplates,
+  JIRA_TEMPLATE_SYSTEM_FIELDS,
   type JiraIssueTemplateSet,
   type JiraIssueTemplateSource,
   type JiraTemplateGateInput,

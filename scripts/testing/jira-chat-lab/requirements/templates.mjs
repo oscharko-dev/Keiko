@@ -23,6 +23,12 @@ export function runtimeTemplateProjectKey(projectKey) {
 /** The summary every epic of the lab starts with: `[LH-001] <title>`. */
 export const EPIC_SUMMARY_PATTERN = String.raw`^\[LH-\d{3}\] \S`;
 
+/** The one formal rule the bulk run breaks on purpose: the installed Epic template's summary pattern. */
+export const EPIC_SUMMARY_VIOLATION = Object.freeze({
+  ruleId: "summary-pattern",
+  prompt: "Deliberately omit the required bracketed requirement ID from the summary.",
+});
+
 /**
  * The Markdown template a lead would write for `issueType` from the lab's structure rule: the
  * rule's description sections become the body headings, its labels the required labels, and the
