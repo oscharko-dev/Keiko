@@ -446,6 +446,10 @@ function preselectKnownFixtureTools(deps: UiHandlerDeps, options: Options): void
     catalog.select(selected.map((entry) => entry.binding.identity)),
   );
 }
+// Each wait observes a Chat turn that projects the governed tool catalog before it reaches the
+// awaited state: about 0.4-0.7 s per turn under coverage, so the 1 s default deadline expired under
+// shard load. The state is still polled, never slept for; the bound matches this file's other waits.
+const TURN_PROGRESS = { timeout: 5_000, interval: 10 } as const;
 function send(f: Fixture): ReturnType<typeof handleSendDesktopChat> {
   return handleSendDesktopChat(
     context({
@@ -478,7 +482,7 @@ async function pendingWrite(
       )?.approval;
   await vi.waitFor(() => {
     expect(current()).toBeDefined();
-  });
+  }, TURN_PROGRESS);
   const approval = current();
   if (approval === undefined) throw new Error("Missing action approval");
   return approval;
@@ -618,7 +622,7 @@ function privateProfileExchange(f: Fixture): ChatToolExchange | undefined {
 async function pendingPrivateInput(f: Fixture): Promise<JiraHumanInputView> {
   await vi.waitFor(() => {
     expect(privateProfileExchange(f)?.humanInput?.state).toBe("awaiting-input");
-  });
+  }, TURN_PROGRESS);
   const view = privateProfileExchange(f)?.humanInput;
   if (view === undefined) throw new TypeError("Missing private input request");
   return view;
@@ -866,7 +870,7 @@ it("clears ready private input after a pre-dispatch mixed-Chat revocation and pe
   expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
   await vi.waitFor(() => {
     expect(privateProfileExchange(f)?.approval).toBeDefined();
-  });
+  }, TURN_PROGRESS);
   const inputs = f.deps.atlassianConnectorCredentials?.custody.humanInputs;
   if (inputs === undefined) throw new TypeError("Missing input custody");
   const cancel = vi.spyOn(inputs, "cancel");
@@ -984,7 +988,7 @@ it("rechecks the bound Pod after awaiting a delayed protected-input body", async
 async function expectFirstMutationAwaitingResult(f: Fixture): Promise<void> {
   await vi.waitFor(() => {
     expect(f.effects).toEqual(["mcp-write"]);
-  });
+  }, TURN_PROGRESS);
   const blocked = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
   // The remote effect has started, but its result/receipt/journal settlement is still pending.
   // The second source must not even publish a call or request its read grant/action approval yet.
@@ -1002,7 +1006,7 @@ it("offers both sources through one ordinary Chat handler and grants each first 
   void pending.catch(() => undefined);
   await vi.waitFor(() => {
     expect(f.calls[0]).toBeDefined();
-  });
+  }, TURN_PROGRESS);
   const offered = f.calls[0]?.toolCatalog;
   if (offered?.kind !== "bound") throw new Error("Expected a bound combined catalog");
   expect(
@@ -1138,7 +1142,7 @@ it("approves and journals writes from both sources independently on the same acc
       mutationOutcome: "succeeded",
       result: { status: "completed" },
     });
-  });
+  }, TURN_PROGRESS);
   await approveWrite(f, "jira-chat-write");
   expect((await pending).status).toBe(200);
   expect(f.effects).toEqual(["mcp-write", "jira-write", "jira-read"]);
@@ -1674,7 +1678,7 @@ describe("combined Jira review admission parity", () => {
     try {
       await vi.waitFor(() => {
         expect(limitRequested).toBe(true);
-      });
+      }, TURN_PROGRESS);
       expect(jiraExchange(f)?.approval).toBeUndefined();
       const snapshot = settings.read(CORRELATION);
       settings.update(
