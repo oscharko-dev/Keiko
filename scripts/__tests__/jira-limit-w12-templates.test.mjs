@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { URL } from "node:url";
 import { memoryLimitIntent } from "./helpers/limit-run-intent.mjs";
 
 const ports = vi.hoisted(() => ({
@@ -42,6 +43,19 @@ import {
   templateMarkdown,
 } from "../testing/jira-chat-lab/requirements/templates.mjs";
 import { STRUCTURE_RULES } from "../testing/jira-chat-lab/requirements/corpus.mjs";
+
+const { parseJiraIssueTemplate, compileJiraTemplatePattern } = await import(
+  new URL("../../packages/keiko-contracts/dist/jira-issue-template.js", import.meta.url).href
+);
+const GOLDEN = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../tests/fixtures/requirements/lastenheft-kundenportal/manifest.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
 
 const roots = [];
 const TYPES = ["Epic", "Task", "Bug", "Sub-task"];
@@ -187,6 +201,42 @@ describe("W12 runtime-bound template installation", () => {
     const evidence = JSON.stringify(f.ctx.intent.state["w12-templates"]);
     expect(evidence).not.toContain("## ");
     expect(evidence).not.toContain("fixture-model");
+  });
+
+  describe("installed Epic summary rule", () => {
+    // LIM29: the limit run installed an Epic template demanding `[LH-ddd]` while the golden
+    // Lastenheft numbers its requirements REQ-FA-, NFA-SEC-, MIG_DAT- and others, so every correct
+    // golden Epic broke the template. The rule is the one installTemplates uploads, read and
+    // compiled by the product as the live run does.
+    async function installedEpicPattern() {
+      const f = fixture();
+      await installTemplates(f.ctx);
+      const parsed = parseJiraIssueTemplate(f.uploads[0].markdown);
+      expect(f.uploads[0].formal.issueType).toBe("Epic");
+      expect(parsed.ok).toBe(true);
+      return compileJiraTemplatePattern(parsed.template.summary.pattern);
+    }
+
+    it("admits the exact golden summary of every requirement in the Lastenheft", async () => {
+      const pattern = await installedEpicPattern();
+      const refused = GOLDEN.requirements
+        .map((requirement) => `[${requirement.id}] ${requirement.title}`)
+        .filter((summary) => !pattern.test(summary));
+      expect(GOLDEN.requirements).toHaveLength(370);
+      expect(refused).toEqual([]);
+    });
+
+    it("refuses a summary without its bracketed requirement ID", async () => {
+      const pattern = await installedEpicPattern();
+      for (const summary of [
+        "Geräteverwaltung",
+        "REQ-FA-017 Geräteverwaltung",
+        "[REQ-FA-017]Geräteverwaltung",
+        "[] Geräteverwaltung",
+        "[req-fa-017] Geräteverwaltung",
+      ])
+        expect(pattern.test(summary)).toBe(false);
+    });
   });
 
   it.each([

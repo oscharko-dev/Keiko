@@ -23,6 +23,14 @@ export function runtimeTemplateProjectKey(projectKey) {
 /** The summary every epic of the lab starts with: `[LH-001] <title>`. */
 export const EPIC_SUMMARY_PATTERN = String.raw`^\[LH-\d{3}\] \S`;
 
+/**
+ * The Epic summary rule of the golden Lastenheft run: the bracketed requirement ID, then the title.
+ * The Lastenheft numbers its requirements in several schemes (REQ-FA-017, NFA-SEC-003, MIG_DAT-002,
+ * ABN-45.1), so the rule names the ID shape, not one scheme. It is flat because the product refuses
+ * a quantified group that holds a quantifier (ADR-0128 D4).
+ */
+export const REQUIREMENT_EPIC_SUMMARY_PATTERN = String.raw`^\[[A-Z][A-Z0-9_.-]*[0-9]\] \S`;
+
 /** The one formal rule the bulk run breaks on purpose: the installed Epic template's summary pattern. */
 export const EPIC_SUMMARY_VIOLATION = Object.freeze({
   ruleId: "summary-pattern",
@@ -69,12 +77,12 @@ export function templateMarkdown({
 }
 
 /** The template of the lab's work project for epics. */
-export const epicTemplateMarkdown = (project) =>
+export const epicTemplateMarkdown = (project, summaryPattern = EPIC_SUMMARY_PATTERN) =>
   templateMarkdown({
     project,
     issueType: "Epic",
     rule: STRUCTURE_RULES.Epic,
-    summaryPattern: EPIC_SUMMARY_PATTERN,
+    summaryPattern,
   });
 
 /**

@@ -13,6 +13,7 @@ import { openLimitStep } from "./limit-run-step.mjs";
 import { projectAgileRead } from "./project-agile-oracles.mjs";
 import { STRUCTURE_RULES } from "./requirements/corpus.mjs";
 import {
+  REQUIREMENT_EPIC_SUMMARY_PATTERN,
   epicTemplateMarkdown,
   gradeTemplateListing,
   runtimeTemplateProjectKey,
@@ -23,13 +24,14 @@ const TYPES = ["Epic", "Task", "Bug", "Sub-task"];
 const STEP = "w12-templates";
 const SKILL_ID = /^msk_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
+/** The four templates a project lead installs for the golden Lastenheft run. */
 function definitions(project, epicLinkFieldId) {
   return TYPES.map((issueType) => {
     const subtask = issueType === "Sub-task";
     const parentIssueTypes = subtask ? ["Task"] : undefined;
     const markdown =
       issueType === "Epic"
-        ? epicTemplateMarkdown(project)
+        ? epicTemplateMarkdown(project, REQUIREMENT_EPIC_SUMMARY_PATTERN)
         : templateMarkdown({
             project,
             issueType,
