@@ -124,7 +124,8 @@ interface SessionRecord {
   readonly id: string;
   readonly cdpPort: number;
   readonly targetId: string;
-  readonly client: CdpClient;
+  // The record only sends commands and closes; a placeholder reserves the slot without a socket.
+  readonly client: Pick<CdpClient, "send" | "close">;
   readonly cdpSessionId: string;
   readonly runId: string;
   readonly fingerprint: string;
@@ -622,21 +623,16 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     // It is replaced by the live record inside attachAndRegister once the CDP handshake
     // completes. Because closed=true, requireRecord and closeSession treat it as unavailable.
     const noop = (): void => undefined;
-    const fakeClient = {
-      connect: (): Promise<void> => Promise.resolve(),
-      send: (): Promise<Record<string, unknown>> => Promise.resolve({}),
-      onEvent: (): (() => void) => noop,
-      onClose: (): (() => void) => noop,
+    const placeholderClient: Pick<CdpClient, "send" | "close"> = {
+      send: () => Promise.reject(new Error("browser session placeholder has no CDP connection")),
       close: noop,
-      isClosed: (): boolean => true,
-      closeCause: (): undefined => undefined,
-    } as unknown as CdpClient;
+    };
     const now = this.nowMs();
     return {
       id,
       cdpPort,
       targetId: "",
-      client: fakeClient,
+      client: placeholderClient,
       cdpSessionId: "",
       runId: id.replaceAll("-", ""),
       fingerprint: `browser-${id.replaceAll("-", "")}`,

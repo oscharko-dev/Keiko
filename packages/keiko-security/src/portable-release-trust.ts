@@ -105,22 +105,23 @@ function releaseId(manifest: Record<string, unknown>): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-function validTrustIdentity(value: Record<string, unknown>): boolean {
-  return (
-    value.schemaVersion === 1 &&
+// The key id of a trust record with the expected schema, role and algorithm.
+function trustKeyId(value: Record<string, unknown>): string | undefined {
+  const keyId = value.keyId;
+  return value.schemaVersion === 1 &&
     value.role === ROLE &&
     value.algorithm === ALGORITHM &&
-    typeof value.keyId === "string" &&
-    KEY_ID.test(value.keyId)
-  );
+    typeof keyId === "string" &&
+    KEY_ID.test(keyId)
+    ? keyId
+    : undefined;
 }
 
-function validTrustVersion(value: Record<string, unknown>): boolean {
-  return (
-    typeof value.metadataVersion === "number" &&
-    Number.isSafeInteger(value.metadataVersion) &&
-    value.metadataVersion > 0
-  );
+function trustMetadataVersion(value: Record<string, unknown>): number | undefined {
+  const version = value.metadataVersion;
+  return typeof version === "number" && Number.isSafeInteger(version) && version > 0
+    ? version
+    : undefined;
 }
 
 function validTrustWindow(value: Record<string, unknown>): boolean {
@@ -138,15 +139,31 @@ function trustMetadata(
 ): PortableReleaseTrustMetadata | undefined {
   const value = manifest.releaseTrust;
   if (!isRecord(value) || !exactTrustKeys(value)) return undefined;
+  const keyId = trustKeyId(value);
+  const metadataVersion = trustMetadataVersion(value);
+  const signedAt = value.signedAt;
+  const expiresAt = value.expiresAt;
+  const signature = value.signature;
   if (
-    !validTrustIdentity(value) ||
-    !validTrustVersion(value) ||
+    keyId === undefined ||
+    metadataVersion === undefined ||
     !validTrustWindow(value) ||
-    !canonicalBase64Signature(value.signature)
+    !validIsoInstant(signedAt) ||
+    !validIsoInstant(expiresAt) ||
+    !canonicalBase64Signature(signature)
   ) {
     return undefined;
   }
-  return value as unknown as PortableReleaseTrustMetadata;
+  return {
+    algorithm: ALGORITHM,
+    expiresAt,
+    keyId,
+    metadataVersion,
+    role: ROLE,
+    schemaVersion: 1,
+    signature,
+    signedAt,
+  };
 }
 
 function signingPayload(

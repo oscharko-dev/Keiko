@@ -91,6 +91,16 @@ export {
   supportReportDigest,
 } from "./support-report-json.js";
 
+// Node returns `{ buffer, engine }` when `info` is set (docs: zlib convenience methods); the
+// published typings only declare the Buffer form. The engine's bytesWritten counts the input the
+// inflater consumed, which proves the payload carries no trailing bytes.
+declare module "node:zlib" {
+  function inflateSync(
+    buf: InputType,
+    options: ZlibOptions & { readonly info: true },
+  ): { readonly buffer: Buffer; readonly engine: Zlib };
+}
+
 const REPORT_KEYS = [
   "kind",
   "schemaVersion",
@@ -376,7 +386,12 @@ export { serializeSupportReport };
 
 // A newer schema may add sections, so its declared minimum analyzer and schema are judged before
 // the closed section set: an unsupported report names the analyzer it needs instead of "unsafe".
-function readHeader(value: unknown): Record<string, unknown> {
+interface SupportReportHeader {
+  readonly value: Record<string, unknown>;
+  readonly minimumAnalyzerVersion: string;
+}
+
+function readHeader(value: unknown): SupportReportHeader {
   if (!reportObject(value) || !isActivityLogProductVersion(value.minimumAnalyzerVersion))
     throw new SupportReportError("unsafe-report");
   validateMinimumAnalyzerVersion(value.minimumAnalyzerVersion);
@@ -384,7 +399,7 @@ function readHeader(value: unknown): Record<string, unknown> {
     throw new SupportReportError("unsupported-report");
   }
   if (!reportKeys(value, REPORT_KEYS)) throw new SupportReportError("unsafe-report");
-  return value;
+  return { value, minimumAnalyzerVersion: value.minimumAnalyzerVersion };
 }
 
 function validateMinimumAnalyzerVersion(version: string): void {
@@ -473,7 +488,9 @@ function validEvidence(value: unknown): value is SupportReportEvidence {
   );
 }
 
-function verifyIntegrity(value: Record<string, unknown>): void {
+// Returns the verified integrity section. Each digest it returns is the recomputed digest, which
+// equals the stored one or the report is refused.
+function verifyIntegrity(value: Record<string, unknown>): SupportReport["integrity"] {
   const integrity = value.integrity;
   if (
     !reportObject(integrity) ||
@@ -482,16 +499,32 @@ function verifyIntegrity(value: Record<string, unknown>): void {
     integrity.authenticity !== "unknown"
   )
     throw new SupportReportError("unsafe-report");
-  for (const section of ["incident", "selection", "evidence"] as const) {
-    if (integrity[`${section}Digest`] !== supportReportDigest(canonicalSupportJson(value[section])))
-      throw new SupportReportError("corrupt-report");
-  }
+  const incidentDigest = verifiedSectionDigest(value, integrity, "incident");
+  const selectionDigest = verifiedSectionDigest(value, integrity, "selection");
+  const evidenceDigest = verifiedSectionDigest(value, integrity, "evidence");
   const { reportDigest, ...sectionIntegrity } = integrity;
-  if (
-    reportDigest !==
-    supportReportDigest(canonicalSupportJson({ ...value, integrity: sectionIntegrity }))
-  )
-    throw new SupportReportError("corrupt-report");
+  const expectedReportDigest = supportReportDigest(
+    canonicalSupportJson({ ...value, integrity: sectionIntegrity }),
+  );
+  if (reportDigest !== expectedReportDigest) throw new SupportReportError("corrupt-report");
+  return {
+    algorithm: "sha256",
+    authenticity: "unknown",
+    incidentDigest,
+    selectionDigest,
+    evidenceDigest,
+    reportDigest: expectedReportDigest,
+  };
+}
+
+function verifiedSectionDigest(
+  value: Record<string, unknown>,
+  integrity: Record<string, unknown>,
+  section: "incident" | "selection" | "evidence",
+): string {
+  const digest = supportReportDigest(canonicalSupportJson(value[section]));
+  if (integrity[`${section}Digest`] !== digest) throw new SupportReportError("corrupt-report");
+  return digest;
 }
 
 function validEvent(value: unknown, registry: SupportReaderRegistry): value is SupportReportEvent {
@@ -528,7 +561,7 @@ function decodeEvidence(
     const inflated = inflateSync(encoded, {
       maxOutputLength: Math.max(1, evidence.rawBytes),
       info: true,
-    }) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
+    });
     if (inflated.engine.bytesWritten !== encoded.length)
       throw new SupportReportError("corrupt-report");
     bytes = inflated.buffer;
@@ -709,24 +742,35 @@ interface ValidatedSupportReport {
 function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   if (isLegacySupportInput(text)) throw new SupportReportError("legacy-input");
   if (!text.endsWith("\n")) throw new SupportReportError("corrupt-report");
-  const value = readHeader(
+  const header = readHeader(
     parseCanonicalSupportJson(text.slice(0, -1), MAX_SUPPORT_REPORT_BYTES - 1),
   );
+  const value = header.value;
   const incident = parseSupportIncidentPrivateProjection(value.incident);
+  const reportSelection = value.selection;
+  const evidence = value.evidence;
   if (
     incident === undefined ||
     !incidentCorrelationsRedacted(incident) ||
-    !validSelection(value.selection) ||
-    !validEvidence(value.evidence)
+    !validSelection(reportSelection) ||
+    !validEvidence(evidence)
   )
     throw new SupportReportError("unsafe-report");
   if (Buffer.byteLength(canonicalSupportJson(incident)) > MAX_SUPPORT_REPORT_INCIDENT_BYTES)
     throw new SupportReportError("report-budget-exceeded");
-  verifyIntegrity(value);
+  const integrity = verifyIntegrity(value);
   const registry = reportRegistry(incident);
-  const events = decodeEvidence(value.evidence, registry);
+  const events = decodeEvidence(evidence, registry);
   validateIncidentProvenance(incident, events);
-  const report = value as unknown as SupportReport;
+  const report: SupportReport = {
+    kind: SUPPORT_REPORT_KIND,
+    schemaVersion: SUPPORT_REPORT_SCHEMA_VERSION,
+    minimumAnalyzerVersion: header.minimumAnalyzerVersion,
+    incident,
+    selection: reportSelection,
+    evidence,
+    integrity,
+  };
   validateClientOnlyProvenance(report);
   validateLifetimeProvenance(report.selection, events);
   const analysis = eventAnalysis(events, registry);

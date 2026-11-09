@@ -184,11 +184,14 @@ function parseIrLayout(value: unknown): IrNode["layout"] | undefined {
   };
 }
 
+function isPaddingTuple(
+  value: readonly unknown[],
+): value is readonly [number, number, number, number] {
+  return value.length === 4 && value.every(isFiniteNumber);
+}
+
 function parsePadding(value: unknown): readonly [number, number, number, number] | undefined {
-  if (!Array.isArray(value) || value.length !== 4) return undefined;
-  return value.every(isFiniteNumber)
-    ? (value as unknown as readonly [number, number, number, number])
-    : undefined;
+  return Array.isArray(value) && isPaddingTuple(value) ? value : undefined;
 }
 
 type IrSizingValue = NonNullable<NonNullable<IrNode["sizing"]>["horizontal"]>;

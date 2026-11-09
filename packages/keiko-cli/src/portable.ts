@@ -583,9 +583,7 @@ async function inspectNormalStartupRecovery(
 async function defaultPortableRecovery(
   input: Parameters<PortableNormalStartupRecoveryFn>[0],
 ): Promise<PortableNormalStartupRecoveryResult> {
-  const server = (await loadServer()) as unknown as {
-    readonly reconcilePortableNormalStartup: PortableNormalStartupRecoveryFn;
-  };
+  const server = await loadServer();
   return server.reconcilePortableNormalStartup(input);
 }
 
