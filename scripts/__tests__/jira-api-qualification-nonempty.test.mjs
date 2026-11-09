@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
 import { expect, it, vi } from "vitest";
+import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
+import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
+import { versionFixtureArguments } from "../testing/jira-chat-lab/api-qualification-fixtures.mjs";
 import { readCase } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
 import { API_QUALIFICATION_AGILE_CASES } from "../testing/jira-chat-lab/api-qualification-agile-cases.mjs";
 import { API_QUALIFICATION_RELEASE_CASES } from "../testing/jira-chat-lab/api-qualification-release-cases.mjs";
@@ -96,4 +99,12 @@ it("never leaves a link fixture changed by a refused write", async () => {
     native.mockRestore();
     rmSync(directory, { recursive: true, force: true });
   }
+});
+it("builds auxiliary version arguments the governed create-version schema accepts", async () => {
+  const schema = jiraOperationForTool("jira.create-version").declaration.descriptor.inputSchema;
+  const args = versionFixtureArguments(
+    { projectId: "10000" },
+    "AC7 move source 2f822fba-561d-4b08-805d-119a3e845b17",
+  );
+  expect(describeCatalogSchemaMismatch(schema, args)).toBeUndefined();
 });
