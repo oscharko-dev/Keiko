@@ -342,3 +342,34 @@ export async function seedQualificationFilterColumns(context, filterId, columns)
   );
   assert.equal(response.status, 200, "Jira must accept the synthetic filter's explicit columns");
 }
+
+/**
+ * The instance's default share scope gives a new filter a native `loggedin` share, a recipient type
+ * the governed permission tools do not review. The recipe removes those broad shares from its own
+ * synthetic filter as native fixture preparation so the group-share cases start from a private filter.
+ */
+export async function privatizeQualificationFilter(context, filterId) {
+  assert.match(filterId, /^[1-9]\d*$/u);
+  const origin = labSessionConnection(context.session).origin;
+  const auth = basicAuth(context.session, context.actor);
+  const base = new URL(`/rest/api/2/filter/${filterId}/permission`, origin);
+  const call = (method, url) =>
+    globalThis.fetch(url, {
+      method,
+      redirect: "manual",
+      signal: globalThis.AbortSignal.timeout(30_000),
+      headers: { Authorization: auth, Accept: "application/json" },
+    });
+  const listed = await call("GET", base);
+  assert.equal(listed.status, 200);
+  for (const row of await listed.json()) {
+    assert.ok(
+      new Set(["loggedin", "global"]).has(row.type),
+      "Only broad default shares are removed",
+    );
+    assert.match(String(row.id), /^[1-9]\d*$/u);
+    assert.equal((await call("DELETE", new URL(`${base.pathname}/${row.id}`, origin))).status, 204);
+  }
+  const after = await call("GET", base);
+  assert.deepEqual(await after.json(), []);
+}

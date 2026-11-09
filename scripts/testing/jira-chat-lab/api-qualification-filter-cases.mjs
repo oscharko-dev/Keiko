@@ -93,6 +93,7 @@ export const API_QUALIFICATION_FILTER_CASES = [
     prepare: async (c, f) => {
       await observeAdminActor(c, f);
       f.savedFilterId = String((await createQualificationFilter(c, f, "saved configuration")).id);
+      await privatizeQualificationFilter(c, f.savedFilterId);
       await seedQualificationFilterColumns(c, f.savedFilterId, ["issuekey", "summary"]);
       await columns(c, f);
     },
