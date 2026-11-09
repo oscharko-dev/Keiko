@@ -368,3 +368,25 @@ freshness gate passes. No updater fixture, assertion, behavior or numerical ceil
 The Editor release-evidence checker also passes against the actual rebuilt export. These
 records qualify updater presentation and the declared recovery fixture, not native installation
 or overall integrated-head acceptance.
+
+## Stream wire split and catalog refresh — 2026-11-09 (#4287)
+
+The stream wire split changed `packages/keiko-ui/src/lib/api.ts`, and later Jira work changed the
+German core catalog and both optional catalogs, so the freshness gate rejected their digests.
+
+The 14 committed captures are not from this run. They are the set committed before it (#4321,
+2026-11-08), and their glyphs show the DejaVu Sans fallback, not Liberation Sans. That run therefore
+did not have `fonts-liberation` installed, although this README names Liberation as the reference.
+
+On 2026-11-09 the complete original nine-case producer ran on the current sources in the Linux arm64
+gates container (`keiko-ac12ci-gates`: Node 24.18.0, Chromium build 1248, `--init`) after
+`apt-get install fonts-liberation`. All nine cases passed in 1.9 minutes, including real BFF stop
+and restart, and `npm run check:update-ui-evidence` passes. Only the four stale source digests and
+`generatedAt` in the three records were taken from this run.
+
+Its Liberation captures differed from the committed set only in font rendering, with no visible
+updater state change. No record binds capture bytes, so the committed captures are kept, as in
+#4279. The reference environment remains Linux arm64 with Liberation Sans. The next regeneration
+that replaces captures must install `fonts-liberation` first. The gates image does not ship it, so
+confirm `fc-list | grep -i liberation` before the run. No updater behavior, baseline or numerical
+ceiling changed.
