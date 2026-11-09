@@ -464,6 +464,35 @@ async function completeSimulation(ctx, state) {
   return stepResult(ctx, state, "green");
 }
 
+// The orchestrator plans the progress faults at these fractions (browser-limit-run.mjs). A full
+// native observation per unit would re-read the whole project hundreds of times, so only the first
+// unit at or after each fraction pulses; the final verdict is the orchestrator's own pulse at 1.
+const FAULT_FRACTIONS = [
+  [2, 5],
+  [4, 5],
+];
+const FAULT_PROBE_PROMPT = "Reply with the single word OK. Do not use any tool.";
+
+function faultPulseIndexes(total) {
+  return new Set(
+    FAULT_FRACTIONS.map(([numerator, denominator]) =>
+      Math.ceil((total * numerator) / denominator),
+    ).filter((index) => index < total),
+  );
+}
+
+/**
+ * The simulation writes through Jira's admin REST only, so a Chat response drop has no Chat POST to
+ * hit. When that fault is armed, one trivial read-only turn gives it the traffic it must survive.
+ */
+async function pulseFaults(ctx, progress01) {
+  if (ctx.faults === undefined) return;
+  await ctx.faults.maybeInject(ctx, progress01);
+  const drop = ctx.intent.state.faults?.["progress:response-drop"];
+  if (drop?.phase === "injecting" && drop.injected !== true)
+    await ctx.turn(ctx.chat, FAULT_PROBE_PROMPT, { operations: [], timeoutMs: 600_000 });
+}
+
 async function resumeSimulation(ctx, native, state, seedDeviations) {
   if (
     state.schemaVersion !== 1 ||
@@ -485,10 +514,15 @@ async function resumeSimulation(ctx, native, state, seedDeviations) {
     return stepResult(ctx, state, "green");
   }
   const done = new Set(state.completed.map((unit) => unit.id));
+  const pulses = faultPulseIndexes(state.plan.length);
   await inBatches(
     state.plan.filter((unit) => !done.has(unit.id)),
     1,
-    (unit) => executeUnit(ctx, native, state, unit),
+    async (unit) => {
+      if (pulses.has(state.completed.length))
+        await pulseFaults(ctx, state.completed.length / state.plan.length);
+      await executeUnit(ctx, native, state, unit);
+    },
   );
   return completeSimulation(ctx, state);
 }

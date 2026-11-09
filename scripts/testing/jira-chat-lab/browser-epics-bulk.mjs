@@ -95,6 +95,7 @@ export function planDeliberateViolations(
         `Attempt exactly one ordinary jira.create for Epic [${requirement.id}] ${requirement.title} in project ${projectKey}.`,
         // Data Center requires an Epic Name; without one field admission refuses before the rule.
         `Set the Epic Name Jira requires to ${requirement.id}.`,
+        `Bind requirementIds to the one requirement [${requirement.id}] so the product writes its own Keiko traceability footer.`,
         "Use its complete actual source and template except for this deliberate formal violation:",
         bulkViolation.prompt,
         "Expose the real formal rule refusal. Do not correct the proposal, retry, create a replacement, or perform any other write in this turn.",

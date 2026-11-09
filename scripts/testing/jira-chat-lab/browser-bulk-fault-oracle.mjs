@@ -4,7 +4,22 @@ import { nativePages } from "./project-agile-oracles.mjs";
 
 const MAX_RECORDS = 10_000;
 const ISSUE_FIELDS = "summary,project,status,parent,updated";
-const REFERENCE_ARRAYS = new Set(["keys", "issueKeys", "memberKeys", "createdKeys", "movedKeys"]);
+const REFERENCE_ARRAYS = new Set([
+  "keys",
+  "issueKeys",
+  "memberKeys",
+  "createdKeys",
+  "movedKeys",
+  "populationKeys",
+]);
+// A checkpoint grades its own scope: the unit it interrupted records those keys and cursors. Whole
+// intent walks also visited every earlier step's issue copies, which pass 100,000 nodes with a
+// project of about 700 issues (the progress simulation alone keeps several full copies of each).
+const SCOPE_SECTIONS = {
+  "bulk-epics": ["bulk-epics", "bulkEpics"],
+  hierarchy: ["hierarchy", "hierarchyBulk"],
+  progress: ["progress", "progressSimulation", "sprintBulk", "progress-simulation"],
+};
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function requireFact(condition) {
   if (!condition) throw new TypeError("Native fault evidence is incomplete");
@@ -65,14 +80,26 @@ function walkField(name, item, state, projectKey, depth) {
   if (name === "sprint" && item?.id !== undefined) state.sprints.add(nativeId(item.id));
   walkIntent(item, state, projectKey, name, depth + 1);
 }
-function intentPositions(data, scope) {
-  const aliases = {
-    "bulk-epics": ["bulk-epics", "bulkEpics"],
-    hierarchy: ["hierarchy", "hierarchyBulk"],
-    progress: ["progress", "progressSimulation", "sprintBulk"],
+/** Native issue records already carry the full issue; the simulation's intent needs only its keys. */
+function sectionFacts(name, value) {
+  if (name !== "progress-simulation" || !value || typeof value !== "object") return value;
+  return {
+    populationKeys: value.populationKeys,
+    completed: Array.isArray(value.completed)
+      ? value.completed.map((unit) => ({ key: unit?.key }))
+      : undefined,
   };
+}
+function scopeFacts(data, scope) {
+  return Object.fromEntries(
+    SCOPE_SECTIONS[scope]
+      .filter((name) => data[name] !== undefined)
+      .map((name) => [name, sectionFacts(name, data[name])]),
+  );
+}
+function intentPositions(data, scope) {
   const positions = {};
-  for (const name of aliases[scope]) {
+  for (const name of SCOPE_SECTIONS[scope]) {
     const unit = data[name];
     for (const field of ["completedBatches", "next", "completedUnits"]) {
       const value = unit?.[field];
@@ -86,7 +113,7 @@ function intentPositions(data, scope) {
 function intentFacts(ctx, scope) {
   const data = ctx.intent.state;
   const state = { references: new Map(), sprints: new Set(), visited: 0 };
-  walkIntent(data, state, ctx.projectKey);
+  walkIntent(scopeFacts(data, scope), state, ctx.projectKey);
   const positions = intentPositions(data, scope);
   requireFact(state.references.size <= MAX_RECORDS && state.sprints.size <= 50);
   return { references: [...state.references.values()], sprintIds: [...state.sprints], positions };

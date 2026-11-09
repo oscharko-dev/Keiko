@@ -608,6 +608,14 @@ describe("ordinary browser bulk orchestration", () => {
       expect(new Set(seeded.map((entry) => entry.requirementId)).size).toBe(count);
       expect(seeded.every((entry) => entry.ruleId === "summary-pattern")).toBe(true);
       expect(seeded.every((entry) => entry.prompt.includes("Do not correct"))).toBe(true);
+      // The oracle grades the refused create's requirementIds binding, so the prompt must ask for it.
+      expect(
+        seeded.every((entry) =>
+          entry.prompt.includes(
+            `Bind requirementIds to the one requirement [${entry.requirementId}]`,
+          ),
+        ),
+      ).toBe(true);
       // The rule under test is the only refusal: the Epic Name Data Center requires is supplied.
       expect(
         seeded.every((entry) =>

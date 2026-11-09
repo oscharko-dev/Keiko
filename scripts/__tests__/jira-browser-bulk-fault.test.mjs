@@ -1,6 +1,7 @@
 import { URL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import * as faultModule from "../testing/jira-chat-lab/browser-bulk-fault.mjs";
+import { observeFaultCheckpoint } from "../testing/jira-chat-lab/browser-bulk-fault-oracle.mjs";
 
 function issue(index, summary = `Requirement ${index}`) {
   return {
@@ -595,4 +596,33 @@ it("binds numeric native issue IDs recorded in intent as strictly as string IDs"
   expect(result.status).toBe("red");
   expect(result.counts.lost).toBe(1);
   expect(ctx.recovery.restartServer).not.toHaveBeenCalled();
+});
+
+describe("checkpoint intent walk is bounded by the interrupted scope", () => {
+  const copies = (count) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: String(index + 1),
+      key: `LIM7-${index + 1}`,
+      fields: { status: { id: "1", name: "To Do" }, issuetype: { id: "2", name: "Task" } },
+    }));
+  it("does not visit other steps' or the simulation's whole-issue copies", async () => {
+    const issues = copies(700);
+    const ctx = context({
+      "progress-simulation": {
+        populationKeys: issues.map((row) => row.key),
+        initial: [...issues, ...issues, ...issues],
+        plan: issues.map((row) => ({ before: row })),
+        completed: issues.slice(0, 3).map((row) => ({ id: row.id, key: row.key, observed: row })),
+        truth: { native: { issues }, issues },
+      },
+      "ac2-other-step": { views: Array.from({ length: 12 }, () => issues) },
+    });
+    const observed = await observeFaultCheckpoint(ctx, "progress");
+    expect(observed.references.map((row) => row.key)).toEqual(issues.map((row) => row.key));
+  });
+  it("keeps the keys a scope recorded as references", async () => {
+    const ctx = context({ bulkEpics: { privateMappings: [{ id: "1", key: "LIM7-1" }] } });
+    const observed = await observeFaultCheckpoint(ctx, "bulk-epics");
+    expect(observed.references).toEqual([{ key: "LIM7-1", id: "1" }]);
+  });
 });

@@ -213,6 +213,17 @@ describe("limit-run report golden: native Story scope", () => {
     expect(truth.unestimatedByType?.get("story")).toBe(1);
   });
 
+  it("reports an exact zero estimate when every issue carries the field and none is estimated", () => {
+    const truth = progressTruth(
+      [issue("LIM7-1", "Story", "Done", null), issue("LIM7-2", "Story", "To Do", null)],
+      { storyPoints: FIELDS.storyPoints },
+      ESTIMATE,
+    );
+    expect(truth.estimate).toEqual({ total: 0, done: 0, remaining: 0 });
+    expect(truth.estimatedByType?.get("story")).toBe(0);
+    expect(truth.unestimatedByType?.get("story")).toBe(2);
+  });
+
   it("leaves an absent native estimate property unavailable instead of counting it as null or zero", () => {
     const observed = issue("LIM7-1", "Story", "Done", 0);
     const { [FIELDS.storyPoints]: estimate, ...fields } = observed.fields;

@@ -75,11 +75,12 @@ function intentFixture(directory) {
       return structuredClone(data);
     },
     record(name, value) {
-      expect(name).toBe(STEP);
+      expect([STEP, "faults"]).toContain(name);
       data[name] = structuredClone(value);
-      records.push(structuredClone(value));
+      if (name === STEP) records.push(structuredClone(value));
     },
     records,
+    data,
   };
 }
 
@@ -625,5 +626,44 @@ describe("W7 simulateProgress public building block", () => {
     expect(result.status).toBe("unverified");
     expect(f.fetch).not.toHaveBeenCalled();
     expect(f.intent.records).toHaveLength(0);
+  });
+});
+
+describe("progress faults reach Keiko during the simulation", () => {
+  it("pulses the planned fault plan at its thresholds and gives an armed response drop Chat traffic", async () => {
+    const simulateProgress = await simulation();
+    const f = fixture();
+    const pulses = [];
+    f.ctx.faults = {
+      maybeInject: vi.fn(async (_ctx, progress) => {
+        pulses.push(progress);
+        if (pulses.length === 1)
+          f.intent.data.faults = {
+            "progress:response-drop": { phase: "injecting", progress01: progress },
+          };
+        return {};
+      }),
+    };
+    f.ctx.chat = { id: "document-chat" };
+    f.ctx.turn = vi.fn(async () => {
+      f.intent.data.faults["progress:response-drop"].injected = true;
+      return {};
+    });
+    const result = await simulateProgress(f.ctx, { seedDeviations: true });
+    expect(result.status).toBe("green");
+    expect(pulses).toHaveLength(2);
+    expect(pulses[0]).toBeGreaterThanOrEqual(0.4);
+    expect(pulses[1]).toBeGreaterThanOrEqual(0.8);
+    expect(f.ctx.turn).toHaveBeenCalledTimes(1);
+    expect(f.ctx.turn.mock.calls[0][2]).toMatchObject({ operations: [] });
+  });
+  it("sends no probe turn while no response drop is armed", async () => {
+    const simulateProgress = await simulation();
+    const f = fixture();
+    f.ctx.faults = { maybeInject: vi.fn(async () => ({})) };
+    const result = await simulateProgress(f.ctx, { seedDeviations: true });
+    expect(result.status).toBe("green");
+    expect(f.ctx.faults.maybeInject).toHaveBeenCalledTimes(2);
+    expect(f.ctx.turn).not.toHaveBeenCalled();
   });
 });

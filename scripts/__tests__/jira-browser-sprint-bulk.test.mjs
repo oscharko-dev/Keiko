@@ -401,6 +401,10 @@ function fixture({
             to: state,
             members: f.members.length,
           });
+          if (fault === "constraint-dated") {
+            args.startDate = "2026-01-01T09:00:00.000Z";
+            args.endDate = "2026-01-15T09:00:00.000Z";
+          }
           if (fault === "constraint-membership-change") f.members.pop();
           if (fault === "constraint-state-change") f.sprints[0].state = state;
           receipts = [{ outcome: "rejected", reason: "invalid-transition" }];
@@ -695,6 +699,14 @@ describe("AC6 normal-UI sprint bulk with independent native proof", () => {
       detail: "sprint-bulk-pending",
     });
     expect(ports.send).toHaveBeenCalledTimes(calls);
+  });
+
+  it("accepts a refused closed-to-active attempt that names the documented dates", async () => {
+    const f = fixture({ history: true, fault: "constraint-dated" });
+    expect(await runSprintBulk(f.ctx, { size: 200, batch: 50 })).toMatchObject({
+      status: "green",
+      counts: { constraintRefusals: 2 },
+    });
   });
 
   it("requires an unambiguous native board unless its own secured intent binds it", async () => {

@@ -97,10 +97,20 @@ export function complianceFieldIds(truth) {
     : { ...truth.fieldIds, storyPoints: estimate.writeFieldId };
 }
 
+const ZERO_ESTIMATE = { total: 0, done: 0, remaining: 0 };
+
+/** Every issue carries the field (null: unestimated), so "no estimate anywhere" is an exact zero. */
+const carriesEstimateField = (issues, field) =>
+  issues.every(
+    ({ fields }) =>
+      Object.hasOwn(fields, field) && (fields[field] === null || Number.isFinite(fields[field])),
+  );
+
 /** Sums are taken in the field's own unit; seconds convert to hours exactly, once, after summing. */
 function estimateTotals(issues, field, divisor) {
   const estimated = issues.filter((issue) => Number.isFinite(issue.fields[field]));
-  if (estimated.length === 0) return undefined;
+  if (estimated.length === 0)
+    return carriesEstimateField(issues, field) ? ZERO_ESTIMATE : undefined;
   const total = estimated.reduce((sum, issue) => sum + issue.fields[field], 0);
   const done = estimated
     .filter((issue) => isDone(issue))

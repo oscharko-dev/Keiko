@@ -73,11 +73,23 @@ async function cardLinks(card, origin) {
   }
   return links;
 }
+/**
+ * The tool state is the output right after the heading. A report card adds its own read status as
+ * a second direct output, so every direct output is read and none may be empty.
+ */
+async function statusOutputs(card) {
+  const outputs = card.locator(":scope > output");
+  const texts = [];
+  for (let index = 0; index < (await outputs.count()); index += 1)
+    texts.push((await outputs.nth(index).innerText()).trim());
+  return texts;
+}
 async function readableCard(card, origin, projectKey) {
   const title = (await card.locator(":scope > strong").innerText()).trim();
-  const outcome = (await card.locator(":scope > output").innerText()).trim();
+  const outcome = (await card.locator(":scope > strong + output").innerText()).trim();
   const text = await card.innerText();
   demand(title.length > 0 && outcome.length > 0);
+  demand((await statusOutputs(card)).every((value) => value.length > 0));
   const findings = cardTextFindings({ title, text, preCount: await card.locator("pre").count() });
   demand(Object.values(findings).every((count) => count === 0));
   const links = await cardLinks(card, origin);

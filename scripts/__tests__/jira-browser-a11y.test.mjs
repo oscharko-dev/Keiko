@@ -58,8 +58,20 @@ function cardLocator(value) {
     innerText: async () => `${value.title}\n${value.outcome}\n${value.body}`,
     locator: (selector) => {
       if (selector === "pre") return { count: async () => value.pre ?? 0 };
-      expect([":scope > strong", ":scope > output"]).toContain(selector);
-      return { innerText: async () => (selector.endsWith("strong") ? value.title : value.outcome) };
+      const outputs = [value.outcome, ...(value.extraOutputs ?? [])];
+      if (selector === ":scope > strong") return { innerText: async () => value.title };
+      // Playwright strict mode: a text read of a multi-match locator throws.
+      if (selector === ":scope > output")
+        return {
+          count: async () => outputs.length,
+          nth: (index) => ({ innerText: async () => outputs[index] }),
+          innerText: async () => {
+            if (outputs.length !== 1) throw new Error("strict mode violation");
+            return outputs[0];
+          },
+        };
+      expect(selector).toBe(":scope > strong + output");
+      return { innerText: async () => value.outcome };
     },
     getByRole: (role) => {
       expect(role).toBe("link");
@@ -397,6 +409,19 @@ describe("AC9 current Chat result cards", () => {
     expect(result).toMatchObject({ status: "red", detail: "cards-readability-failed" });
     expect(f.page.reload).not.toHaveBeenCalled();
     expect(f.listeners.size).toBe(0);
+  });
+  it("reads a report card whose read status is a second direct output", async () => {
+    const f = fixture();
+    f.state.cards = [card("LIM7-1", { extraOutputs: ["Complete: 7 issues read"] })];
+    expect((await assertCardsReadable(f.ctx, { reload: true })).status).toBe("green");
+  });
+  it("rejects a report card whose read status output is empty", async () => {
+    const f = fixture();
+    f.state.cards = [card("LIM7-1", { extraOutputs: ["  "] })];
+    expect(await assertCardsReadable(f.ctx, { reload: true })).toMatchObject({
+      status: "red",
+      detail: "cards-readability-failed",
+    });
   });
   it("requires a visible actual result card", async () => {
     const f = fixture();

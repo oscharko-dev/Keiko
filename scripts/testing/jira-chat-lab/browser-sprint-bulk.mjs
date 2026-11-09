@@ -300,8 +300,17 @@ async function constraint(run, from, target) {
     "jira.sprint-update",
     `Attempt exactly once to change sprint ${run.resources.sprintId} directly from ${from} to ${target}. Report the native state constraint refusal; do not use an intermediate state, approval, other write or retry.`,
     (args) => {
-      ownKeys(args, ["sprintId", "state"]);
-      return args.sprintId === run.resources.sprintId && args.state === target;
+      // The refusal precedes any effect (no wire write, unchanged sprint and tasks, checked below);
+      // a model may add the documented date or name fields of a sprint update without changing that.
+      const keys = Object.keys(args);
+      const documented = new Set(["sprintId", "state", "name", "startDate", "endDate", "goal"]);
+      return (
+        keys.includes("sprintId") &&
+        keys.includes("state") &&
+        keys.every((key) => documented.has(key)) &&
+        args.sprintId === run.resources.sprintId &&
+        args.state === target
+      );
     },
     { denied: true, wire: [] },
   );
