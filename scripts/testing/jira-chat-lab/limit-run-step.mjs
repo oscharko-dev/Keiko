@@ -225,6 +225,7 @@ function sprintResources(value, projectKey) {
   resourceFields(value, {
     boardId: nativeId,
     sprintId: nativeId,
+    sprintRenamed: (renamed) => renamed === true,
     epicKey: (key) => projectIssueKey(key, projectKey),
     provenanceDigest: digestValue,
     taskRefs: (refs) => taskReferences(refs, projectKey),

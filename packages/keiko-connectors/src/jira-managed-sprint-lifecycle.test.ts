@@ -123,6 +123,46 @@ describe("fixed sprint lifecycle effects", () => {
     expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
   });
 
+  it("renames a future sprint with a reviewed open destination and refuses a closed one before any effect", async () => {
+    // Jira 10.3 omits a null destination from the next read, so a full replacement can prove every
+    // field only with a persisted, reviewed open destination (live PUT 200 and exact readback).
+    const replacement = {
+      ...CASES[0].args.replacement,
+      startDate: "2030-01-01T09:00:00.000Z",
+      endDate: "2030-01-15T09:00:00.000Z",
+      goal: "Synthetic replaced goal",
+      incompleteIssuesDestinationId: "12",
+    };
+    const open = sprintLifecycleFixture();
+    const destination = { ...open.sprints.get("12") } as CatalogJsonObject;
+    const args = { ...CASES[0].args, replacement, expectedDestination: destination };
+    expect(await executeJiraSprintLifecycleMutation(CASES[0].name, args, open.ports)).toMatchObject(
+      { ok: true, receipt: { sprintId: "11" } },
+    );
+    expect(open.calls.find(({ method }) => method === "PUT")?.body).toMatchObject({
+      name: "Synthetic renamed",
+      state: "future",
+      incompleteIssuesDestinationId: 12,
+    });
+    expect(open.sprints.get("11")).toMatchObject({ name: "Synthetic renamed" });
+
+    const closed = sprintLifecycleFixture();
+    const closedSprint = closed.sprints.get("12");
+    if (closedSprint === undefined) throw new Error("Synthetic destination must exist");
+    closedSprint.state = "closed";
+    const refused = await executeJiraSprintLifecycleMutation(
+      CASES[0].name,
+      {
+        ...CASES[0].args,
+        replacement,
+        expectedDestination: { ...closedSprint } as CatalogJsonObject,
+      },
+      closed.ports,
+    );
+    expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(closed.calls.every(({ method }) => method === "GET")).toBe(true);
+  });
+
   it("writes explicit nulls on PUT and does not interpret absent readback fields as successful clears", async () => {
     const f = sprintLifecycleFixture();
     const result = await executeJiraSprintLifecycleMutation(CASES[0].name, CASES[0].args, f.ports);

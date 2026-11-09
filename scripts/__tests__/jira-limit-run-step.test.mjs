@@ -184,6 +184,17 @@ describe("extended record scopes", () => {
       taskRefs,
     );
   });
+  it("retains only an affirmative sprint rename fact", async () => {
+    const journal = await openLimitStep(ctx, "ac6-sprint-bulk");
+    await journal.checkpoint({
+      phase: "pending",
+      resources: { sprintId: "9", sprintRenamed: true },
+    });
+    expect((await openLimitStep(ctx, "ac6-sprint-bulk")).state.resources).toMatchObject({
+      sprintId: "9",
+      sprintRenamed: true,
+    });
+  });
   it.each([
     { taskRefs: [{ id: "1", key: "OTHER-1" }] },
     {
@@ -205,6 +216,8 @@ describe("extended record scopes", () => {
       })),
     },
     { doneKeys: Array.from({ length: 11 }, (_, index) => `LIM7-${index + 1}`) },
+    { sprintRenamed: false },
+    { sprintRenamed: "true" },
   ])("refuses unbound or oversized Sprint resources %#", async (resources) => {
     const journal = await openLimitStep(ctx, "ac6-sprint-bulk");
     await expect(journal.checkpoint({ resources })).rejects.toThrow("Invalid limit step");

@@ -408,6 +408,9 @@ function fixture({
           if (fault === "constraint-membership-change") f.members.pop();
           if (fault === "constraint-state-change") f.sprints[0].state = state;
           receipts = [{ outcome: "rejected", reason: "invalid-transition" }];
+        } else if (prompt.startsWith("Rename only future sprint")) {
+          args = await renameTurn(f, { prompt, operation, review, fault });
+          receipts = [{ outcome: "succeeded", sprintId: "99" }];
         } else {
           const starting = prompt.startsWith("Start only future");
           args = { sprintId: "99", state: starting ? "active" : "closed" };
@@ -489,6 +492,10 @@ describe("AC6 normal-UI sprint bulk with independent native proof", () => {
       expect(f.calls.filter((call) => call.operation === "jira.create")).toHaveLength(0);
       expect(f.calls.filter((call) => call.operation === "jira.transition")).toHaveLength(1);
       expect(
+        f.calls.filter((call) => call.prompt.startsWith("Rename only future sprint")),
+      ).toHaveLength(1);
+      expect(f.sprints[0].name).toMatch(/^Renamed LIM\d* [0-9a-f]{8}$/u);
+      expect(
         f.pages.some(
           (item) => item.path === "/rest/agile/1.0/sprint/99/issue" && item.startAt === 150,
         ),
@@ -567,7 +574,7 @@ describe("AC6 normal-UI sprint bulk with independent native proof", () => {
     const f = fixture({ requireApprovals: true, approvals: true });
     expect(await runSprintBulk(f.ctx, { size: 200, batch: 50 })).toMatchObject({
       status: "green",
-      counts: { decisions: 12 },
+      counts: { decisions: 13 },
     });
   });
 
@@ -595,7 +602,7 @@ describe("AC6 normal-UI sprint bulk with independent native proof", () => {
     const f = fixture({ witness: true, approvals: false });
     expect(await runSprintBulk(f.ctx, { size: 200, batch: 50 })).toMatchObject({
       status: "green",
-      counts: { wireWrites: 12, decisions: 0 },
+      counts: { wireWrites: 13, decisions: 0 },
     });
   });
 
@@ -603,7 +610,7 @@ describe("AC6 normal-UI sprint bulk with independent native proof", () => {
     const f = fixture({ witness: true, requireApprovals: true });
     expect(await runSprintBulk(f.ctx, { size: 200, batch: 50 })).toMatchObject({
       status: "green",
-      counts: { wireWrites: 12, decisions: 12 },
+      counts: { wireWrites: 13, decisions: 13 },
     });
     expect(f.ctx.witness.snapshot()).toEqual({
       attempted: 0,
@@ -686,6 +693,8 @@ describe("AC6 normal-UI sprint bulk with independent native proof", () => {
     "not-done",
     "dual-live",
     "extra-write",
+    "rename-extra-field",
+    "rename-not-applied",
   ])("fails closed for %s and never replays a pending run", async (fault) => {
     const f = fixture({ fault });
     expect(await runSprintBulk(f.ctx, { size: 200, batch: 50 })).toMatchObject({
@@ -793,6 +802,17 @@ describe("sprint bulk oracle boundaries", () => {
     expect(() => sprintBulkClosedIssues(issues, refs, ["LIM7-1"], [])).toThrow();
   });
 });
+
+/** The rename turn: only the name changes, unless a fault adds a field or loses the effect. */
+async function renameTurn(f, { prompt, operation, review, fault }) {
+  const name = JSON.parse(/ to ("[^"]+")\. /u.exec(prompt)[1]);
+  const args = { sprintId: "99", name };
+  if (fault === "rename-extra-field") args.goal = "Unrequested goal";
+  await review(exchange(operation, args, {}));
+  await f.native("POST", "/rest/agile/1.0/sprint/99", { name }, 200);
+  if (fault !== "rename-not-applied") f.sprints[0].name = name;
+  return args;
+}
 
 function settledModelTurn(operation, args, receipts, denied, approvals, fault) {
   const exchanges = receipts.map((receipt) => exchange(operation, args, receipt, denied));

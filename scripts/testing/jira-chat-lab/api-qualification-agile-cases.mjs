@@ -18,6 +18,7 @@ const mutation = (tool, args, readback, prepare = actor) => ({
 });
 const filterName = (f) => `Synthetic AC7 agile ${f.runId}`;
 const sprintName = (f) => `AC7-${f.runId.slice(0, 26)}`;
+const renamedSprint = (f) => `AC7r-${f.runId.slice(0, 25)}`;
 const filterPath = (f) => `/rest/api/2/filter/${f.agileFilterId}`;
 const boardPath = (f) => `/rest/agile/1.0/board/${f.agileBoardId}`;
 const sprintPath = (f) => `/rest/agile/1.0/sprint/${f.agileSprintId}`;
@@ -229,12 +230,19 @@ export const API_QUALIFICATION_AGILE_CASES = [
   }),
   mutation(
     "jira.sprint-update",
-    (f) => ({ sprintId: f.agileSprintId, goal: "Synthetic AC7 sprint revised" }),
+    // Renaming is the customer's everyday sprint change; the goal proves a second field together.
+    (f) => ({
+      sprintId: f.agileSprintId,
+      name: renamedSprint(f),
+      goal: "Synthetic AC7 sprint revised",
+    }),
     async (c, _d, f) => {
       const v = await read(c, sprintPath(f));
       assert.equal(String(v.id), f.agileSprintId);
+      assert.equal(v.name, renamedSprint(f));
+      assert.notEqual(v.name, sprintName(f));
       assert.equal(v.goal, "Synthetic AC7 sprint revised");
-      return proof(2);
+      return proof(4);
     },
   ),
   mutation(

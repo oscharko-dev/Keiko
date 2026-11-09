@@ -221,3 +221,28 @@ it("refuses the backlog move when the refused sprint move left the issue outside
     rmSync(directory, { recursive: true, force: true });
   }
 });
+it("qualifies the sprint update only when the native sprint carries the new name and goal", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-sprint-rename-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+  const fixture = { agileSprintId: "15", runId: "0123456789abcdef0123456789abcdef" };
+  const entry = API_QUALIFICATION_AGILE_CASES.find((e) => e.tool === "jira.sprint-update");
+  const args = entry.arguments(fixture);
+  expect(Object.keys(args).sort()).toEqual(["goal", "name", "sprintId"]);
+  let name = args.name;
+  const native = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    expect(new URL(url).pathname).toBe("/rest/agile/1.0/sprint/15");
+    return new globalThis.Response(JSON.stringify({ id: 15, name, goal: args.goal }), {
+      status: 200,
+    });
+  });
+  const context = { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } };
+  try {
+    await expect(entry.readback(context, {}, fixture)).resolves.toMatchObject({ matched: true });
+    name = `AC7-${fixture.runId.slice(0, 26)}`;
+    await expect(entry.readback(context, {}, fixture)).rejects.toThrow();
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

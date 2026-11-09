@@ -239,11 +239,14 @@ async function reverifyUnmovedTasks(run) {
   exactSprintBulkIssues(eligible, run.resources.taskRefs);
 }
 
+const sprintNameOf = (run) =>
+  run.resources.sprintRenamed === true ? run.sprintRenamed : run.sprintName;
+
 async function sprint(run, state) {
   const observed = await run.read(`/rest/agile/1.0/sprint/${run.resources.sprintId}`);
   assert.equal(id(observed.id), run.resources.sprintId);
   assert.equal(id(observed.originBoardId), run.resources.boardId);
-  assert.equal(observed.name, run.sprintName);
+  assert.equal(observed.name, sprintNameOf(run));
   assert.equal(observed.state, state);
   if (state !== "future") {
     assert.ok(Number.isFinite(Date.parse(observed.startDate)));
@@ -288,6 +291,39 @@ async function createSprint(run) {
   run.resources.sprintId = id(added[0].id);
   assert.equal(receipts[0].sprintId, run.resources.sprintId);
   await sprint(run, "future");
+  await save(run);
+}
+
+/** Renaming is the everyday sprint change of a project lead; only the name may change. */
+async function renameSprint(run) {
+  const name = run.sprintRenamed;
+  const before = await sprint(run, "future");
+  const { receipts } = await submit(
+    run,
+    "jira.sprint-update",
+    `Rename only future sprint ${run.resources.sprintId} to ${JSON.stringify(name)}. Change no state, date, goal or membership; no other write or retry.`,
+    (args) => {
+      ownKeys(args, ["sprintId", "name"]);
+      return args.sprintId === run.resources.sprintId && args.name === name;
+    },
+    {
+      wire: [
+        {
+          method: "POST",
+          path: `/rest/agile/1.0/sprint/${run.resources.sprintId}`,
+          status: 200,
+          admit: (body) => {
+            assert.deepEqual(body, { name });
+            return true;
+          },
+        },
+      ],
+    },
+  );
+  assert.equal(receipts[0].sprintId, run.resources.sprintId);
+  run.resources.sprintRenamed = true;
+  const after = await sprint(run, "future");
+  assert.deepEqual({ ...after, name: before.name }, before);
   await save(run);
 }
 
@@ -494,6 +530,7 @@ async function execute(run) {
   await reverifyUnmovedTasks(run);
   await save(run, "pending");
   await createSprint(run);
+  await renameSprint(run);
   await moveTasks(run);
   await constraint(run, "future", "closed");
   await updateSprint(run, "active");
@@ -515,7 +552,9 @@ function completedCounts(run) {
   assert.equal(run.counts.createBatches, 0);
   assert.equal(run.counts.moveBatches, Math.ceil(run.counts.size / run.counts.batch));
   assert.equal(run.counts.constraintRefusals, 2);
-  const effects = run.counts.moveBatches + 8;
+  assert.equal(run.resources.sprintRenamed, true);
+  // Create, rename, start, complete and five Done transitions, plus the move batches.
+  const effects = run.counts.moveBatches + 9;
   assert.ok(
     Number.isSafeInteger(run.counts.decisions) &&
       run.counts.decisions >= 0 &&
@@ -543,6 +582,7 @@ function sprintRun(ctx, journal, key, size, batch) {
     counts:
       journal.state.phase === "prepared" ? initialCounts(size, batch) : { ...journal.state.counts },
     sprintName: `Limit ${key} ${provenanceDigest.slice(0, 12)}`,
+    sprintRenamed: `Renamed ${key} ${provenanceDigest.slice(12, 20)}`,
     read: async (path) => {
       try {
         return await projectAgileRead(ctx.session, path);

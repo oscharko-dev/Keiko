@@ -118933,7 +118933,7 @@
     {
       "op": "knowledge.requirement-trace",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirement-trace.ts:231",
+      "site": "packages/keiko-server/src/requirement-trace.ts:247",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

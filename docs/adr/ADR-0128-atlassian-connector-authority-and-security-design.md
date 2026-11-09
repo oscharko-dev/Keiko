@@ -932,6 +932,14 @@ removal uses the same key and is not yet qualified live. After an epic removal J
 epicless issue as an explicit `fields: null`, which means no epic; a missing `fields` key or an
 object without the epic key stays malformed.
 
+A full sprint replacement (`PUT /sprint/{sprintId}`) may carry a reviewed incomplete-issues
+destination for a future or active sprint, not only for the closing replacement. Jira 10.3 accepts
+it with 200 and returns it on the next read, while it omits a null destination. Because an omitted
+field is never read as a confirmed clear, an open destination is the only way a full replacement
+can prove every field; a closed destination remains refused before any effect. Renaming a sprint
+for everyday planning uses the partial update (`POST /sprint/{sprintId}`), which the Chat and the
+qualification both prove by its native name.
+
 Native issue-link changes bind both canonical parents and the complete reviewed relations;
 saved templates judge the planned native post-relation before a single effect. Remote-link
 replacement reuses one supported typed snapshot and does not follow its metadata URLs. Native

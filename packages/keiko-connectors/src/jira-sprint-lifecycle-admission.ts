@@ -188,12 +188,12 @@ function replaceState(
     );
   const invalid = replacementTransition(current, desired) ?? replacementDates(current, desired);
   if (invalid !== undefined) return invalid;
-  if (
-    input.destination !== undefined &&
-    (desired.state !== "closed" || input.destination.state === "closed")
-  )
+  // Jira 10.3 stores a reviewed destination on a future or active sprint and returns it on the
+  // next read, while it omits a null one. An open destination is therefore the only way a full
+  // replacement can prove every field; only a closed destination is refused.
+  if (input.destination?.state === "closed")
     return sprintRefusal(
-      "An incomplete-issue destination is reviewed only for closing an active sprint and must not be closed.",
+      "An incomplete-issue destination must be an open sprint, not a closed one.",
     );
   return undefined;
 }
