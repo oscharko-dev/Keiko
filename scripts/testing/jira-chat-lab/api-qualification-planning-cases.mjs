@@ -613,7 +613,11 @@ export const API_QUALIFICATION_PLANNING_CASES = [
   ),
   adminMutationCase(
     "jira.replace-sprint",
-    (f) => ({ ...sprintArgs(f), replacement: f.planningReplacement }),
+    (f) => ({
+      ...sprintArgs(f),
+      replacement: f.planningReplacement,
+      expectedDestination: f.planningDestination,
+    }),
     async (c, _data, f) => {
       const current = await read(c, sprintPath(f.planningSprint.id));
       assertNativeSprintFields(current, { ...f.planningSprint, ...f.planningReplacement });
@@ -631,6 +635,8 @@ export const API_QUALIFICATION_PLANNING_CASES = [
       // never reads as a confirmed clear. Every replaced field is therefore a persisted value: both
       // dates, the goal and a second, owned sprint as the incomplete-issues destination.
       const destination = await createSprint(c, f, "replace-destination");
+      // The product admits a named destination only with its reviewed native snapshot.
+      f.planningDestination = destination;
       f.planningReplacement = {
         name: `${f.planningSprint.name.slice(0, 22)} revised`,
         state: "future",

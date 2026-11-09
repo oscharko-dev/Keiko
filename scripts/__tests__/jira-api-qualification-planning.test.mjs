@@ -8,6 +8,7 @@ import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian
 import { API_QUALIFICATION_PLANNING_CASES } from "../testing/jira-chat-lab/api-qualification-planning-cases.mjs";
 import { API_QUALIFICATION_APPLICATION_ROLE_CASES } from "../testing/jira-chat-lab/api-qualification-application-role-cases.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
+import { parseSprintLifecycleInput } from "../../packages/keiko-connectors/dist/jira-sprint-lifecycle-values.js";
 
 const cases = [...API_QUALIFICATION_PLANNING_CASES, ...API_QUALIFICATION_APPLICATION_ROLE_CASES];
 const entry = (tool) => cases.find((item) => item.tool === tool);
@@ -82,6 +83,7 @@ function fixture() {
       autoStartStop: false,
       incompleteIssuesDestinationId: "16",
     },
+    planningDestination: sprint("16"),
     applicationRoleBefore: [role],
     applicationRoleChange: {
       expected: role,
@@ -687,6 +689,17 @@ it("requires all explicit replacement fields, distinguishing an omitted value fr
       await expect(entry("jira.replace-sprint").readback(context, {}, f)).rejects.toThrow();
     },
   );
+});
+
+it("hands the product the reviewed destination sprint that the replacement names", () => {
+  const args = entry("jira.replace-sprint").arguments(fixture());
+  // The product's own parser decides admission: a named destination needs its reviewed snapshot.
+  const parsed = parseSprintLifecycleInput("jira.replace-sprint", args);
+  expect(parsed?.replacement.incompleteIssuesDestinationId).toBe("16");
+  expect(parsed?.destination?.id).toBe("16");
+  const { expectedDestination, ...withoutDestination } = args;
+  expect(expectedDestination).toEqual(sprint("16"));
+  expect(parseSprintLifecycleInput("jira.replace-sprint", withoutDestination)).toBeUndefined();
 });
 
 it("requires a complete observed sprint swap and preserves native snapshot metadata", async () => {
