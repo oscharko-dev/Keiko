@@ -1,3 +1,4 @@
+import { ownField } from "./contract-validation-primitives.js";
 import type { EditorDocumentVersion } from "./editor-session.js";
 import type {
   LanguageDiagnostic,
@@ -2053,7 +2054,8 @@ type SnapshotRequestBounds = Pick<EditorAgentSnapshotRequest, "sessionId" | "max
 function parseSnapshotRequestBounds(
   value: Record<string, unknown>,
 ): EditorAgentParse<SnapshotRequestBounds> {
-  const { sessionId, maxBytes } = value;
+  const sessionId = ownField(value, "sessionId");
+  const maxBytes = ownField(value, "maxBytes");
   if (
     sessionId !== undefined &&
     !isBoundedUtf8String(sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES)

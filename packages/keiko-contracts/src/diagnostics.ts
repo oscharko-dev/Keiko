@@ -31,6 +31,7 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
+import { ownField } from "./contract-validation-primitives.js";
 import { CLIENT_ERROR_CLASSES } from "./error-classification.js";
 export { CLIENT_ERROR_CLASSES, clientErrorClass } from "./error-classification.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
@@ -786,7 +787,9 @@ function hasValidCodingContext(value: Record<string, unknown>): boolean {
 // The three Git-related structured fields, grouped only to keep the caller below under the
 // complexity ceiling — each is independently optional and validated on its own (PR #3625 review).
 function hasValidGitContext(value: Record<string, unknown>): boolean {
-  const { gitChangeDescription, workspaceTrustBinding, gitClientOperation } = value;
+  const gitChangeDescription = ownField(value, "gitChangeDescription");
+  const workspaceTrustBinding = ownField(value, "workspaceTrustBinding");
+  const gitClientOperation = ownField(value, "gitClientOperation");
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   if (gitClientOperation === undefined) return true;

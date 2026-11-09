@@ -135,8 +135,9 @@ function validateReceiptAccounting(
 /** Copy only bounded scalar receipt evidence; never accept cached result or argument payloads. */
 export function captureToolInvocationReceipt(value: unknown): ToolInvocationReceipt {
   const receipt = receiptFields(value);
-  const { invocationId, settlementId, status, effectStarted, reservationId, budgetDisposition } =
-    receipt;
+  const { invocationId, settlementId, effectStarted, reservationId } = receipt;
+  const status = receipt.status;
+  const budgetDisposition = receipt.budgetDisposition;
   requireReceipt(typeof invocationId === "string" && RECEIPT_ID.test(invocationId));
   requireReceipt(typeof settlementId === "string" && RECEIPT_ID.test(settlementId));
   requireReceipt(isReceiptStatus(status));

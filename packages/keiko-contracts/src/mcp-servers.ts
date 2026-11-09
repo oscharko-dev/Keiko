@@ -12,6 +12,7 @@
 // `KEIKO_MCP_SECRET_*` variable of Keiko's own environment that holds it (#3903 AC3), which Keiko
 // adds to the requests it relays and never hands to a runtime.
 
+import { ownField } from "./contract-validation-primitives.js";
 import { isRecord } from "./run-result-validation.js";
 
 export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
@@ -200,7 +201,8 @@ function capturedLocalCommand(
     if (captured.length === MCP_ARGUMENT_MAX) return undefined;
     captured.push(member);
   }
-  const [executable, ...args] = captured;
+  const executable = captured[0];
+  const args = captured.slice(1);
   if (!isMcpLocalAbsolutePath(executable)) return undefined;
   if (!args.every((part): part is string => boundedText(part) && literal(part))) return undefined;
   return [executable, ...args];
@@ -286,7 +288,8 @@ function secretHeaderOf(name: string, value: unknown): McpRemoteSecretHeader | u
   const header = record(value);
   if (header === undefined || !hasOnlyKeys(header, ["secretEnv", "prefix"])) return undefined;
   if (!MCP_HEADER_NAME.test(name) || MCP_RESERVED_HEADERS.has(name.toLowerCase())) return undefined;
-  const { secretEnv, prefix } = header;
+  const secretEnv = ownField(header, "secretEnv");
+  const prefix = ownField(header, "prefix");
   if (typeof secretEnv !== "string" || !MCP_SECRET_ENVIRONMENT_NAME.test(secretEnv))
     return undefined;
   if (!optionalMatch(prefix, MCP_HEADER_PREFIX)) return undefined;
@@ -315,7 +318,9 @@ function secretHeadersOf(
 function oauthOf(value: unknown): McpRemoteOAuth | undefined {
   const oauth = record(value);
   if (oauth === undefined || !hasOnlyKeys(oauth, ["issuer", "clientId", "scope"])) return undefined;
-  const { issuer, clientId, scope } = oauth;
+  const issuer = ownField(oauth, "issuer");
+  const clientId = ownField(oauth, "clientId");
+  const scope = ownField(oauth, "scope");
   if (typeof issuer !== "string" || !issuerIdentifier(issuer)) return undefined;
   if (!optionalMatch(clientId, MCP_OAUTH_CLIENT_ID) || !optionalMatch(scope, MCP_OAUTH_SCOPE))
     return undefined;
@@ -381,7 +386,9 @@ function admittedToolEntries(entries: [string, unknown][]): [string, McpToolRisk
 function serverHeader(
   server: Json,
 ): Pick<McpServerDefinition, "name" | "description" | "enabled"> | undefined {
-  const { name, description, enabled } = server;
+  const name = ownField(server, "name");
+  const description = ownField(server, "description");
+  const enabled = ownField(server, "enabled");
   if (typeof name !== "string" || !MCP_SERVER_NAME.test(name)) return undefined;
   if (description !== undefined && !(boundedText(description) && noControl(description)))
     return undefined;
@@ -606,7 +613,9 @@ function workbenchServer(value: unknown): CodingWorkbenchMcpServer | undefined {
   const entry = record(value);
   if (entry === undefined || !hasOnlyKeys(entry, ["name", "status", "authorization"]))
     return undefined;
-  const { name, status, authorization } = entry;
+  const name = ownField(entry, "name");
+  const status = ownField(entry, "status");
+  const authorization = ownField(entry, "authorization");
   if (!isMcpServerName(name) || !isOneOfValues(status, CODING_WORKBENCH_MCP_SERVER_STATUSES))
     return undefined;
   if (authorization !== "oauth" && authorization !== "none") return undefined;
@@ -655,7 +664,9 @@ export function parseCodingWorkbenchMcpAuthorizationStart(
 function startedAuthorization(answer: Json): CodingWorkbenchMcpAuthorizationStart | undefined {
   if (!hasOnlyKeys(answer, ["outcome", "attemptId", "authorizationUrl", "expiresAtMs"]))
     return undefined;
-  const { attemptId, authorizationUrl, expiresAtMs } = answer;
+  const attemptId = ownField(answer, "attemptId");
+  const authorizationUrl = ownField(answer, "authorizationUrl");
+  const expiresAtMs = ownField(answer, "expiresAtMs");
   const valid =
     isMcpAuthorizationAttemptId(attemptId) &&
     httpsAuthorizationUrl(authorizationUrl) &&
