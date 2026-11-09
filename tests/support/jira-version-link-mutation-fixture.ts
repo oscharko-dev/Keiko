@@ -98,10 +98,11 @@ interface VersionLinkCall {
   readonly body: unknown;
   readonly expect: unknown;
 }
+/** Jira serializes `link` raw (`@JsonRawValue`), so a row carries the stored JSON value itself. */
 interface VersionLinkRow {
   name: string;
   self?: string;
-  link?: string;
+  link?: CatalogJsonValue;
 }
 interface VersionLinkState {
   readonly links: Map<string, CatalogJsonValue>;

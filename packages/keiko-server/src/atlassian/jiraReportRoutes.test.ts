@@ -54,7 +54,7 @@ function seeded(): JiraReportStore {
         donePercent: 0,
         estimate: { total: 0, done: 0, remaining: 0, unestimated: 1 },
       },
-      byType: [{ typeName: "Task", total: 1, done: 0 }],
+      byType: [{ typeName: "Task", total: 1, done: 0, estimated: 0, unestimated: 1 }],
       byStatus: [{ typeName: "Task", statusName: "Open", category: "new", total: 1 }],
       unassigned: 1,
       overdue: 0,
