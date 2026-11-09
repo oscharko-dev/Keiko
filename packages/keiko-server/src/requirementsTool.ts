@@ -7,6 +7,10 @@
 // the bounds that cut, and a cursor until the last page. It is hosted by the existing governed Chat
 // tool catalog like the Jira reads; it adds no tool system of its own.
 
+import {
+  KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION,
+  KNOWLEDGE_REQUIREMENTS_TOOL_ID,
+} from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import type { JiraReportRequirementIds, JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
@@ -219,7 +223,7 @@ const DESCRIPTION =
 
 function declaration(): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
-    toolRef: createToolRef("keiko.knowledge.requirements", 1),
+    toolRef: createToolRef(KNOWLEDGE_REQUIREMENTS_TOOL_ID, KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION),
     description: DESCRIPTION,
     inputSchema: compileExternalCatalogSchema(ARGUMENTS),
     resultSchema: compileExternalCatalogSchema(RESULT),

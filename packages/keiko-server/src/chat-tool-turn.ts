@@ -1,3 +1,4 @@
+import { KNOWLEDGE_DOCUMENTS_TOOL_ID } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import { chatToolSelectionFits, offeredDefinitions } from "./chat-tool-schema-selection.js";
 import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
@@ -1465,7 +1466,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const managed = this.managed;
     if (chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length === 0) return;
     const tool = managed.projection.tools.find(
-      (entry) => entry.toolRef.canonicalId === "keiko.knowledge.documents",
+      (entry) => entry.toolRef.canonicalId === KNOWLEDGE_DOCUMENTS_TOOL_ID,
     );
     requireDispatch(tool !== undefined, "failed", "handler-unavailable");
     const offered = this.binder.offerTool(tool.toolRef);

@@ -26,17 +26,27 @@ export const KNOWLEDGE_REVIEW_VALIDATION_REASONS = [
   "clarification-question",
 ] as const;
 export type KnowledgeReviewValidationReason = (typeof KNOWLEDGE_REVIEW_VALIDATION_REASONS)[number];
-/** The single table of managed Knowledge tool identities; consumers derive from it, never restate it. */
+/**
+ * The single declaration of every managed Knowledge tool identity. The server's tool descriptors,
+ * its coverage receipts and the UI presentation all derive from these; none restates them.
+ */
 export const KNOWLEDGE_REQUIREMENTS_TOOL_ID = "keiko.knowledge.requirements";
+export const KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION = 1;
+export const KNOWLEDGE_DOCUMENTS_TOOL_ID = "keiko.knowledge.documents";
+export const KNOWLEDGE_DOCUMENTS_CONTRACT_VERSION = 1;
 export const KNOWLEDGE_REVIEW_TOOL_ID = "keiko.knowledge.review";
 export const KNOWLEDGE_REVIEW_CONTRACT_VERSION = 2;
 export const KNOWLEDGE_TOOL_IDENTITIES = [
   {
     name: "knowledge_requirements",
     canonicalId: KNOWLEDGE_REQUIREMENTS_TOOL_ID,
-    contractVersion: 1,
+    contractVersion: KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION,
   },
-  { name: "knowledge_documents", canonicalId: "keiko.knowledge.documents", contractVersion: 1 },
+  {
+    name: "knowledge_documents",
+    canonicalId: KNOWLEDGE_DOCUMENTS_TOOL_ID,
+    contractVersion: KNOWLEDGE_DOCUMENTS_CONTRACT_VERSION,
+  },
   {
     name: "knowledge_review",
     canonicalId: KNOWLEDGE_REVIEW_TOOL_ID,
