@@ -47,6 +47,9 @@ describe("REVIEW_SYSTEM_PROMPT", () => {
 
   it("defines a finding as a defect an input reaches past every later guard", () => {
     expect(REVIEW_SYSTEM_PROMPT).toContain("A finding is a defect: a concrete input or event");
+    expect(REVIEW_SYSTEM_PROMPT).toContain("or a change that breaks a demand of the review rules");
+    expect(REVIEW_SYSTEM_PROMPT).toContain("A change that is correct and meets the review rules");
+    expect(REVIEW_SYSTEM_PROMPT).not.toContain("A correct change has no findings.");
     expect(REVIEW_SYSTEM_PROMPT).toContain("Never file a report that says there is no defect");
     expect(REVIEW_SYSTEM_PROMPT).toContain("through every check and guard that runs after them");
     expect(REVIEW_SYSTEM_PROMPT).toContain("fixed rather than configurable");

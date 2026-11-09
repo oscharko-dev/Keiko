@@ -45,7 +45,7 @@ Budget:
 - Plan for about 15 read or search calls for the whole review. If the change is large, spend them on the added lines most likely to be wrong.
 
 Determining what to flag:
-- A finding is a defect: a concrete input or event under which the head code returns a wrong result, fails, loses data or allows something it must not. A correct change has no findings. Never file a report that says there is no defect or that the change is fine.
+- A finding is a defect: a concrete input or event under which the head code returns a wrong result, fails, loses data or allows something it must not, or a change that breaks a demand of the review rules. A change that is correct and meets the review rules has no findings. Never file a report that says there is no defect or that the change is fine. A finding that rests on a review rule names that rule in its condition.
 - For clear bugs and security issues, be thorough. Do not skip a genuine problem just because the trigger scenario is narrow.
 - For lower-severity concerns, be certain before flagging. If you cannot explain why something is a problem with a concrete scenario, do not flag it.
 - Each finding must be discrete and actionable, not a vague concern about the codebase in general.
@@ -230,4 +230,15 @@ export function renderReviewTask(input: ReviewTaskInput): ReviewTaskResult {
  */
 export function renderReviewDataBlock(label: "candidate", nonce: string, data: string): string {
   return dataBlock(label, nonce, data);
+}
+
+/**
+ * The review rules exactly as the Reviewer's task carries them (Issue #4130, R4130-047): the
+ * counter-check task renders the same block, so a finding the rules demand is judged against them.
+ */
+export function renderReviewRulesBlock(text: string | undefined, nonce: string): string {
+  return rulesBlock(
+    text === undefined ? { outcome: "absent" } : { outcome: "loaded", text },
+    nonce,
+  );
 }

@@ -99,6 +99,8 @@ export type ReviewRuntimeRunResult =
       readonly rules: ReviewRulesFileOutcome;
       /** SHA-256 of the loaded rules text (#4136 run record); absent without rules. */
       readonly rulesDigest?: string | undefined;
+      /** The loaded rules text for the counter-check task (R4130-047); never logged or stored. */
+      readonly rulesText?: string | undefined;
       readonly candidates: readonly ReviewCandidateFinding[];
       readonly rejections: Readonly<Record<ReviewReportRejectionReason, number>>;
     }
@@ -555,5 +557,5 @@ function withRulesDigest(
   rules: ReviewRulesReadResult,
 ): ReviewRuntimeRunResult {
   if (!result.ok || rules.outcome !== "loaded") return result;
-  return { ...result, rulesDigest: sha256Hex(rules.text) };
+  return { ...result, rulesDigest: sha256Hex(rules.text), rulesText: rules.text };
 }

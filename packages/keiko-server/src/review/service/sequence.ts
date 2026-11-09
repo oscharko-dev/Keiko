@@ -106,6 +106,8 @@ export interface ReviewRunState {
   target: ReviewRunTarget | undefined;
   worktreeRoot: string | undefined;
   candidates: readonly ReviewCandidateFinding[];
+  /** The review rules text the Reviewer received, handed to every counter-check (R4130-047). */
+  rulesText: string | undefined;
   readonly outcomes: Map<string, CounterCheckOutcome>;
   reviewerTotals: ReviewRoleTotals;
   counterCheckerTotals: ReviewRoleTotals;
@@ -131,6 +133,7 @@ export function newReviewRunState(): ReviewRunState {
     target: undefined,
     worktreeRoot: undefined,
     candidates: [],
+    rulesText: undefined,
     outcomes: new Map(),
     reviewerTotals: ZERO_TOTALS,
     counterCheckerTotals: ZERO_TOTALS,
@@ -440,6 +443,7 @@ function partStep(
 ): ReviewerPartStep {
   if (!result.ok) return { kind: "stop", settlement: runtimeRefusalSettlement(result.reason) };
   if (result.rulesDigest !== undefined) deps.store.setRulesDigest(ctx.runId, result.rulesDigest);
+  if (result.rulesText !== undefined) state.rulesText = result.rulesText;
   state.runtimeCleanup = combinedCleanup(state.runtimeCleanup, result.runtimeCleanup);
   const fact = reviewerOutcomeFact(result);
   if ("kind" in fact) return { kind: "stop", settlement: fact };
@@ -572,6 +576,7 @@ export async function counterCheckCandidates(
       budget,
       signal: ctx.signal,
       runCorrelationId: ctx.correlationId,
+      rulesText: state.rulesText,
     });
     state.outcomes.set(candidate.fingerprint, outcome);
     state.counterCheckEffects.push(outcome.effect);

@@ -235,8 +235,8 @@ the literal is one `-e<literal>` token, so an option-shaped literal such as `-cp
 never refused as an option, R4130-026) and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
 commit in the run's review worktree (never a working tree), behind the sensitive-path deny list.
 Each candidate gets a fresh session with the Counter-checker model whose only input is the candidate
-task: location, category, condition, mechanism, consequence and evidence locations as nonce-bound
-untrusted data, never the Reviewer's reasoning, transcript, title, remedy, failure-mode prose or any
+task: location, category, condition, mechanism, consequence and evidence locations, and the review
+rules block the Reviewer received, as nonce-bound untrusted data, never the Reviewer's reasoning, transcript, title, remedy, failure-mode prose or any
 other candidate. The verdict tool records the first valid `CounterCheckVerdict` (the server binds
 the fingerprint) and ends the session; free text is ignored and a missing or invalid verdict is
 `undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 600 seconds (raised from
@@ -257,12 +257,17 @@ on `createReviewEvaluationService`; the product route's request shape is closed 
 
 Both prompts share one definition of a finding (Issue #4130): a defect is a concrete input or
 event under which the head code returns a wrong result, fails, loses data or allows something it
-must not. The Reviewer follows one input from the changed lines through every later check and
-guard before it reports, and files nothing for a correct change; the `keiko_review_report`
-description says the same, so the generated review plugin source is re-pinned. The Counter-checker
-follows the candidate's input through the code before it confirms, and refutes a candidate that
-describes no wrong behaviour (no defect, no consequence, or only readability, style, naming,
-maintainability or configurability) with `evidence-mismatch`. On the seed runs of 2026-11-06 to
+must not, or a change that breaks a demand of the repository's review rules. The Reviewer follows
+one input from the changed lines through every later check and guard before it reports, files
+nothing for a correct change that meets the rules, and names the rule a rule-based finding rests
+on; the `keiko_review_report` description says the same, so the generated review plugin source is
+re-pinned. The Counter-checker follows the candidate's input through the code before it confirms.
+It refutes a candidate that describes no wrong behaviour (no defect, no consequence, or only
+readability, style, naming, maintainability, a missing test or configurability) with
+`evidence-mismatch`, unless a demand of the review rules requires that finding. The counter-check
+task therefore carries the same nonce-bound rules block as the Reviewer's task, or the line that
+there are none (R4130-047). The runtime result hands the loaded rules text to the run's
+counter-checks in memory only; the run record keeps its digest, never the text. On the seed runs of 2026-11-06 to
 2026-11-09, the Reviewer filed a report that itself said "no defect" on the named-constants clean
 control twice, and the Counter-checker confirmed both. In two runs the Reviewer named a consequence
 of the off-by-one seed that a later guard catches, so the Counter-checker refuted a real defect.
