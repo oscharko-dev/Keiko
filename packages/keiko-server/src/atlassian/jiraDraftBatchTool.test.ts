@@ -54,10 +54,6 @@ const CREATE_FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
   { ...field("summary", "string", true), name: "Summary" },
-  {
-    ...field("labels", "array"),
-    schema: { type: "array", items: "string", system: "labels" },
-  },
   field("parent", "issuelink"),
   {
     ...field("description", "string", false),
