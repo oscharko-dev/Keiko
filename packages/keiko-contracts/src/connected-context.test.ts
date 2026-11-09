@@ -418,7 +418,7 @@ describe("isWithinBudget", () => {
   // stops a runaway exploration loop failed OPEN. checkBudgetDimension in the same file already
   // validates the cap first; this brings the spend guard in line with it.
   it("fails closed on a budget with a missing cap instead of reporting every usage in-budget", () => {
-    expect(isWithinBudget(happyUsage(), {} as ExplorationBudget)).toBe(false);
+    expect(isWithinBudget(happyUsage(), {})).toBe(false);
   });
 
   it.each([
@@ -441,7 +441,7 @@ describe("validateSelectedScope", () => {
   });
 
   it("rejects a malformed runtime object instead of throwing", () => {
-    const result = validateSelectedScope({ bogus: true } as unknown as SelectedScope);
+    const result = validateSelectedScope({ bogus: true });
     expectInvalidWithReason(result, "schemaVersion");
   });
 
@@ -808,7 +808,7 @@ describe("validateRetrievalQuery", () => {
   }
 
   it("rejects a malformed runtime object instead of throwing", () => {
-    const result = validateRetrievalQuery({ bogus: true } as unknown as RetrievalQuery);
+    const result = validateRetrievalQuery({ bogus: true });
     expectInvalidWithReason(result, "text");
   });
 
@@ -854,12 +854,12 @@ describe("validateConnectedContextPack", () => {
   });
 
   it("rejects a malformed runtime object instead of throwing", () => {
-    const result = validateConnectedContextPack({ bogus: true } as unknown as ConnectedContextPack);
+    const result = validateConnectedContextPack({ bogus: true });
     expectInvalidWithReason(result, "scope");
   });
 
   it("rejects a pack with a missing runtime scope instead of throwing", () => {
-    const pack = { ...happyPack(), scope: undefined as unknown as ConnectedContextPack["scope"] };
+    const pack = { ...happyPack(), scope: undefined };
     expectInvalidWithReason(validateConnectedContextPack(pack), "scope invalid");
   });
 
