@@ -5,6 +5,7 @@ import { URL } from "node:url";
 import { expect, it, vi } from "vitest";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
+import { expressibleGrants } from "../testing/jira-chat-lab/api-qualification-association-cases.mjs";
 import { versionFixtureArguments } from "../testing/jira-chat-lab/api-qualification-fixtures.mjs";
 import { readCase } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
 import { API_QUALIFICATION_AGILE_CASES } from "../testing/jira-chat-lab/api-qualification-agile-cases.mjs";
@@ -107,4 +108,30 @@ it("builds auxiliary version arguments the governed create-version schema accept
     "AC7 move source 2f822fba-561d-4b08-805d-119a3e845b17",
   );
   expect(describeCatalogSchemaMismatch(schema, args)).toBeUndefined();
+});
+it("copies only permission grants the governed create-permission-scheme schema accepts", () => {
+  const schema = jiraOperationForTool("jira.create-permission-scheme").declaration.descriptor
+    .inputSchema;
+  const review = {
+    permissions: [
+      { id: "1", permission: "BROWSE_PROJECTS", holder: { type: "applicationRole" } },
+      {
+        id: "2",
+        permission: "BROWSE_PROJECTS",
+        holder: { type: "projectRole", parameter: "10002" },
+      },
+      { id: "3", permission: "CREATE_ISSUES", holder: { type: "anyone" } },
+    ],
+  };
+  const permissions = expressibleGrants(review);
+  expect(permissions).toHaveLength(2);
+  expect(
+    describeCatalogSchemaMismatch(schema, {
+      expectedActorKey: "JIRAUSER10000",
+      name: "x",
+      description: "d",
+      permissions,
+    }),
+  ).toBeUndefined();
+  expect(() => expressibleGrants({ permissions: [review.permissions[0]] })).toThrow();
 });

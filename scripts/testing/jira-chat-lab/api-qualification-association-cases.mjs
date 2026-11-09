@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { URL } from "node:url";
+import { basicAuth, labSessionConnection } from "./lab-client.mjs";
 import { read, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import {
@@ -29,16 +31,81 @@ async function permissionSchemeReview(c, id) {
     })),
   };
 }
+/**
+ * Jira's default permission scheme also grants to application roles, a holder the governed
+ * create-permission-scheme tool cannot express (its schema refused them with a ToolCatalogError).
+ * The auxiliary target scheme therefore copies exactly the grants the tool can name.
+ */
+const EXPRESSIBLE_HOLDERS = new Set([
+  "anyone",
+  "reporter",
+  "projectLead",
+  "assignee",
+  "reporterWithCreatePermission",
+  "assigneeWithAssignablePermission",
+  "group",
+  "user",
+  "projectRole",
+  "userCustomField",
+  "groupCustomField",
+]);
+export function expressibleGrants(review) {
+  const grants = review.permissions
+    .filter(({ holder }) => EXPRESSIBLE_HOLDERS.has(holder.type))
+    .map(({ id: _id, ...grant }) => grant);
+  assert.ok(grants.length > 0, "The scheme must hold grants the governed tool can express");
+  return grants;
+}
 const projectPath = (f) => `/rest/api/2/project/${f.associationProject.id}`;
 const args = (f) => ({
   expectedActorKey: f.adminActorKey,
   expectedProject: f.associationProject,
   confirmUnverifiedConsequences: true,
 });
+/** Native fixture call; the project priority-scheme association is an experimental Jira resource. */
+async function nativeFixture(c, method, path, body) {
+  const response = await globalThis.fetch(new URL(path, labSessionConnection(c.session).origin), {
+    method,
+    redirect: "manual",
+    signal: globalThis.AbortSignal.timeout(30_000),
+    headers: {
+      Authorization: basicAuth(c.session, c.actor),
+      "Content-Type": "application/json",
+      "X-Atlassian-Token": "no-check",
+      "X-ExperimentalApi": "true",
+    },
+    body: JSON.stringify(body),
+  });
+  assert.ok(response.status === 200 || response.status === 201, "Jira must accept the fixture");
+  return response.json();
+}
+const customPriorityScheme = (c, f, label) =>
+  nativeFixture(c, "POST", "/rest/api/2/priorityschemes", {
+    name: `AC7 ${label} ${f.runId}`,
+    description: "Synthetic AC7 association fixture",
+    optionIds: ["1"],
+    defaultOptionId: "1",
+  });
+/**
+ * Jira's global default priority scheme names no default option, so its review is incomplete and the
+ * product correctly cannot admit a write against it. The owned project therefore starts on a native
+ * custom scheme the operator fixture assigns; the default scheme is where a removal returns it.
+ */
 async function priority(c, f) {
   await observeAdminActor(c, f);
   f.associationProject = projectReview(await read(c, projectPath(f)));
-  const selected = await read(c, `${projectPath(f)}/priorityscheme`);
+  let selected = await read(c, `${projectPath(f)}/priorityscheme`);
+  const current = await read(c, `/rest/api/2/priorityschemes/${selected.id}`);
+  const all = await read(c, "/rest/api/2/priorityschemes");
+  const defaults = all.schemes.filter((scheme) => scheme.defaultScheme === true);
+  assert.equal(defaults.length, 1);
+  f.associationPriorityDefaultId = String(defaults[0].id);
+  if (!Object.hasOwn(current, "defaultOptionId")) {
+    const baseline = await customPriorityScheme(c, f, "association baseline");
+    await nativeFixture(c, "PUT", `${projectPath(f)}/priorityscheme`, { id: baseline.id });
+    selected = await read(c, `${projectPath(f)}/priorityscheme`);
+    assert.equal(String(selected.id), String(baseline.id));
+  }
   f.associationPriorityBefore = optionSchemeReview(
     await read(c, `/rest/api/2/priorityschemes/${selected.id}`),
     OPTION_SCHEMES[1],
@@ -96,8 +163,9 @@ export const API_QUALIFICATION_ASSOCIATION_CASES = [
       );
       await priority(c, f);
       f.associationPriorityOriginal = f.associationPriorityBefore;
+      const target = await customPriorityScheme(c, f, "association target");
       f.associationPriorityTarget = optionSchemeReview(
-        await read(c, `/rest/api/2/priorityschemes/${f.optionSchemeIds.priority}`),
+        await read(c, `/rest/api/2/priorityschemes/${target.id}`),
         OPTION_SCHEMES[1],
       );
       assert.notEqual(f.associationPriorityTarget.id, f.associationPriorityBefore.id);
@@ -107,7 +175,8 @@ export const API_QUALIFICATION_ASSOCIATION_CASES = [
     "jira.remove-project-priority-scheme",
     (f) => ({ ...args(f), expectedScheme: f.associationPriorityBefore }),
     async (c, _data, f) => {
-      await assertProjectScheme(c, f, "priorityscheme", f.associationPriorityOriginal.id);
+      assert.equal(typeof f.associationPriorityDefaultId, "string");
+      await assertProjectScheme(c, f, "priorityscheme", f.associationPriorityDefaultId);
       return proof(5);
     },
     priority,
@@ -134,16 +203,14 @@ export const API_QUALIFICATION_ASSOCIATION_CASES = [
           expectedActorKey: f.adminActorKey,
           name: `AC7 project permission ${f.runId}`,
           description: "Synthetic AC7 unchanged grants",
-          permissions: f.associationPermissionBefore.permissions.map(
-            ({ id: _id, ...grant }) => grant,
-          ),
+          permissions: expressibleGrants(f.associationPermissionBefore),
         },
         async (context, data) => {
           assert.match(data.schemeId, /^[1-9]\d*$/u);
           f.associationPermissionTarget = await permissionSchemeReview(context, data.schemeId);
           assert.deepEqual(
             f.associationPermissionTarget.permissions.map(({ id: _id, ...grant }) => grant),
-            f.associationPermissionBefore.permissions.map(({ id: _id, ...grant }) => grant),
+            expressibleGrants(f.associationPermissionBefore),
           );
           return proof(2);
         },
