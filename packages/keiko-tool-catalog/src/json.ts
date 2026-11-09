@@ -15,12 +15,23 @@ const MAX_ADVERTISEMENT_COPY_BYTES = GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES;
 
 const ENCODER = new TextEncoder();
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+/** What a bounded copy of a value charges: bytes, deepest level (the root is 1), longest string. */
+export interface CatalogFootprint {
+  readonly bytes: number;
+  readonly depth: number;
+  readonly longestString: number;
+}
+/** Vouches for a value this package issued deeply frozen; undefined for every other value. */
+export type CatalogRetention = (value: object) => CatalogFootprint | undefined;
 interface CopyBudget {
   readonly maxBytes: number;
   readonly maxDepth: number;
   readonly maxStringBytes: number;
   readonly ancestors: Set<object>;
+  readonly retained?: CatalogRetention | undefined;
   bytes: number;
+  deepest: number;
+  longestString: number;
 }
 
 export function catalogBytes(value: CatalogJsonValue): number {
@@ -41,8 +52,11 @@ function scalar(value: unknown, budget: CopyBudget): CatalogJsonValue {
     "invalid-shape",
   );
   if (typeof value === "number") requireCatalog(Number.isFinite(value), "invalid-shape");
-  if (typeof value === "string")
-    requireCatalog(ENCODER.encode(value).length <= budget.maxStringBytes, "input-bound");
+  if (typeof value === "string") {
+    const length = ENCODER.encode(value).length;
+    requireCatalog(length <= budget.maxStringBytes, "input-bound");
+    budget.longestString = Math.max(budget.longestString, length);
+  }
   const result = value;
   charge(budget, JSON.stringify(result));
   return result;
@@ -105,18 +119,71 @@ function copyObject(value: object, budget: CopyBudget, depth: number): CatalogJs
 // return, rather than returning from inside each branch.
 function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJsonValue {
   requireCatalog(depth <= budget.maxDepth, "input-bound");
+  budget.deepest = Math.max(budget.deepest, depth);
   let result: CatalogJsonValue;
   if (typeof value !== "object" || value === null) {
     result = scalar(value, budget);
   } else {
-    requireCatalog(!budget.ancestors.has(value), "invalid-shape");
-    budget.ancestors.add(value);
-    result = Array.isArray(value)
-      ? copyArray(value, budget, depth)
-      : copyObject(value, budget, depth);
-    budget.ancestors.delete(value);
+    const footprint = budget.retained?.(value);
+    result =
+      footprint === undefined
+        ? copyComposite(value, budget, depth)
+        : retainValue(value, footprint, budget, depth);
   }
   return result;
+}
+
+function copyComposite(value: object, budget: CopyBudget, depth: number): CatalogJsonValue {
+  requireCatalog(!budget.ancestors.has(value), "invalid-shape");
+  budget.ancestors.add(value);
+  const result = Array.isArray(value)
+    ? copyArray(value, budget, depth)
+    : copyObject(value, budget, depth);
+  budget.ancestors.delete(value);
+  return result;
+}
+
+// A deeply frozen value this package issued after validating it cannot have changed since, so
+// copying it again only repeats that work. It is kept by identity and charged the footprint its
+// own copy measured, so this copy's byte, depth and string bounds still apply in full.
+function retainValue(
+  value: object,
+  footprint: CatalogFootprint,
+  budget: CopyBudget,
+  depth: number,
+): CatalogJsonValue {
+  const deepest = depth + footprint.depth - 1;
+  requireCatalog(
+    deepest <= budget.maxDepth && footprint.longestString <= budget.maxStringBytes,
+    "input-bound",
+  );
+  budget.deepest = Math.max(budget.deepest, deepest);
+  budget.longestString = Math.max(budget.longestString, footprint.longestString);
+  budget.bytes += footprint.bytes;
+  requireCatalog(budget.bytes <= budget.maxBytes, "input-bound");
+  return value as CatalogJsonValue;
+}
+
+/**
+ * The footprint a bounded copy of `value` charges, measured by that same copy. Only shape is
+ * enforced here: a later copy that keeps the value applies its own bounds to this footprint.
+ */
+export function measureCatalogFootprint(value: unknown): CatalogFootprint {
+  const budget: CopyBudget = {
+    maxBytes: Number.MAX_SAFE_INTEGER,
+    maxDepth: Number.MAX_SAFE_INTEGER,
+    maxStringBytes: Number.MAX_SAFE_INTEGER,
+    ancestors: new Set(),
+    bytes: 0,
+    deepest: 0,
+    longestString: 0,
+  };
+  copyValue(value, budget, 1);
+  return Object.freeze({
+    bytes: budget.bytes,
+    depth: budget.deepest,
+    longestString: budget.longestString,
+  });
 }
 
 /**
@@ -142,11 +209,29 @@ export function copyCatalogEnvelope(value: unknown): CatalogJsonValue {
   );
 }
 
+/**
+ * The same envelope copy, keeping each value `retained` vouches for by identity. Package-internal:
+ * only this package's own issuers may vouch, so it is deliberately absent from the public index.
+ */
+export function copyCatalogEnvelopeRetaining(
+  value: unknown,
+  retained: CatalogRetention,
+): CatalogJsonValue {
+  return copyWithinBounds(
+    value,
+    TOOL_CATALOG_LIMITS.maxArgumentBytes,
+    TOOL_CATALOG_LIMITS.maxSchemaDepth + 6,
+    GENERIC_TOOL_ARGUMENT_LIMITS,
+    retained,
+  );
+}
+
 function copyWithinBounds(
   value: unknown,
   requestedBytes: number | undefined,
   maxDepth: number,
   limits: ToolArgumentLimits,
+  retained?: CatalogRetention,
 ): CatalogJsonValue {
   requireCatalog(
     limits === GENERIC_TOOL_ARGUMENT_LIMITS || limits === CHANGESET_EDIT_ARGUMENT_LIMITS,
@@ -165,7 +250,16 @@ function copyWithinBounds(
   try {
     return copyValue(
       value,
-      { maxBytes, maxDepth, maxStringBytes, ancestors: new Set(), bytes: 0 },
+      {
+        maxBytes,
+        maxDepth,
+        maxStringBytes,
+        ancestors: new Set(),
+        retained,
+        bytes: 0,
+        deepest: 0,
+        longestString: 0,
+      },
       1,
     );
   } catch (error) {

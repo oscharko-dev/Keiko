@@ -136,11 +136,14 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     private readonly log: ManagedMcpLogPort,
   ) {
     const tools = toolsOf(providers);
+    const frozen = tools.map((tool) => isDeepFrozen(tool.descriptor));
     this.#tools = deepFreeze(
-      tools.map(({ name, risk, descriptor, execute, title, annotations }) => ({
+      tools.map(({ name, risk, descriptor, execute, title, annotations }, index) => ({
         name,
         risk,
-        descriptor: structuredClone(descriptor),
+        // A deeply frozen descriptor cannot change, so it is admitted as itself: a clone would
+        // drop the identity the tool catalog uses to skip verifying it again on every turn.
+        descriptor: frozen[index] === true ? descriptor : structuredClone(descriptor),
         execute,
         ...(title === undefined ? {} : { title }),
         ...(annotations === undefined ? {} : { annotations: structuredClone(annotations) }),
@@ -151,7 +154,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
-    this.#frozenDescriptors = tools.every((tool) => isDeepFrozen(tool.descriptor))
+    this.#frozenDescriptors = frozen.every(Boolean)
       ? tools.map((tool) => tool.descriptor)
       : undefined;
     this.#registrySha256 = sha256Hex(this.#declarations);

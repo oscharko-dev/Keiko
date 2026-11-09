@@ -237,6 +237,53 @@ describe("profile compilation", () => {
       "unrepresentable-projection",
     );
   });
+  it("reuses one frozen schema projection of an issued descriptor across catalogs", () => {
+    // Each Jira chat selection composes a new catalog over the same issued descriptors; compiling
+    // their already compiled schemas again on every selection was repeated work (#4288).
+    const descriptor = createToolDescriptor(declaration());
+    const project = (dialect: string): ReturnType<typeof compileToolProjection> =>
+      compileToolProjection(
+        createToolCatalog(
+          {
+            descriptors: [descriptor],
+            profiles: [profile(descriptor, dialect)],
+            compatibility: [],
+          },
+          { referenceTimeMs: 0 },
+        ),
+        { id: "fixture", version: 1 },
+      );
+    const [first, second] = [project("gateway-json-schema"), project("gateway-json-schema")];
+    expect(second.tools[0]?.inputSchema).toBe(first.tools[0]?.inputSchema);
+    expect(second.tools[0]?.resultSchema).toBe(first.tools[0]?.resultSchema);
+    expect(second.projectionDigest).toBe(first.projectionDigest);
+  });
+  it("never lets a reused plain projection bypass the managed input projection's refusal", () => {
+    const descriptor = createToolDescriptor({
+      ...declaration(),
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: [],
+        additionalProperties: false,
+      },
+    });
+    const project = (dialect: string): ReturnType<typeof compileToolProjection> =>
+      compileToolProjection(
+        createToolCatalog(
+          {
+            descriptors: [descriptor],
+            profiles: [profile(descriptor, dialect)],
+            compatibility: [],
+          },
+          { referenceTimeMs: 0 },
+        ),
+        { id: "fixture", version: 1 },
+      );
+    expect(project("gateway-json-schema").tools).toHaveLength(1);
+    expect(() => project("managed-runtime-json-schema")).toThrow("unrepresentable-projection");
+    expect(project("gateway-json-schema").tools).toHaveLength(1);
+  });
   it("generates a body-free manifest from the current producer", () => {
     const { catalog, projection, descriptor } = fixture();
     const manifest = createCatalogManifest(catalog, projection);

@@ -53,6 +53,16 @@ function fixture(): {
 }
 
 describe("local Jira operation discovery", () => {
+  it("shares one issued descriptor per discovery tool across provider constructions", () => {
+    // Every Jira chat selection constructs this provider again; its descriptors are constants (#4288).
+    const first = createJiraCatalogDiscoveryProvider().tools();
+    const second = createJiraCatalogDiscoveryProvider({}).tools();
+    expect(first.map((tool) => tool.name)).toEqual(["jira.discover", "jira.describe"]);
+    first.forEach((tool, index) => {
+      expect(second[index]?.descriptor).toBe(tool.descriptor);
+    });
+  });
+
   it("lists and resolves registry identities without compiling unrelated schemas", async () => {
     const all = vi.spyOn(provider, "jiraOperationContracts").mockImplementation(() => {
       throw new TypeError("Unrelated invalid descriptor");

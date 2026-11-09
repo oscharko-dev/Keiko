@@ -264,6 +264,56 @@ const RESULT_SCHEMA = object(
   ["outcome", "items"],
 );
 
+// A pure constant: built once per process, not again for every catalog a Chat turn composes.
+const DISCOVERY_DESCRIPTORS = new Map<
+  JiraCatalogDiscoveryToolName,
+  ReturnType<typeof createToolDescriptor>
+>();
+function discoveryDescriptor(
+  name: JiraCatalogDiscoveryToolName,
+): ReturnType<typeof createToolDescriptor> {
+  const known = DISCOVERY_DESCRIPTORS.get(name);
+  if (known !== undefined) return known;
+  const discovery = name === "jira.discover";
+  const descriptor = createToolDescriptor({
+    toolRef: createToolRef(`keiko.${name}`, 2),
+    description: discovery
+      ? "List implemented Jira Data Center operations by stable identity. This reads local catalog metadata, not Jira data. Pass a short query of plain words, such as create project or sprint issues, to rank matching operations first; page until the required operation is found, then use jira.describe to load its typed tool."
+      : "Select additional native Jira operation identities returned by jira.discover. Curated Jira tools stay available. Replaces the additional selected tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all additional operations needed together. An empty list clears the additional selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
+    inputSchema: discovery
+      ? object({
+          query: text(QUERY_MAX_CHARS),
+          startAt: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+          maxResults: { type: "integer", minimum: 1, maximum: 100 },
+        })
+      : object(
+          {
+            identities: {
+              type: "array",
+              maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+              items: IDENTITY,
+            },
+          },
+          ["identities"],
+        ),
+    resultSchema: RESULT_SCHEMA,
+    effects: ["connector-access"],
+    actionMapping: [{ action: name, effects: ["connector-access"] }],
+    policyReferences: ["adr-0128.d4"],
+    handlerRequirement: { id: name, contractVersion: 1 },
+    bounds: {
+      maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+      maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
+      maxResultCount: TOOL_CATALOG_LIMITS.maxArrayItems,
+      maxDurationMs: 15000,
+    },
+    idempotency: "server-key-required",
+    cancellation: "before-effect",
+  });
+  DISCOVERY_DESCRIPTORS.set(name, descriptor);
+  return descriptor;
+}
+
 function tool(
   name: JiraCatalogDiscoveryToolName,
   options: DiscoveryOptions,
@@ -272,41 +322,7 @@ function tool(
   return {
     name,
     risk: "read",
-    descriptor: createToolDescriptor({
-      toolRef: createToolRef(`keiko.${name}`, 2),
-      description: discovery
-        ? "List implemented Jira Data Center operations by stable identity. This reads local catalog metadata, not Jira data. Pass a short query of plain words, such as create project or sprint issues, to rank matching operations first; page until the required operation is found, then use jira.describe to load its typed tool."
-        : "Select additional native Jira operation identities returned by jira.discover. Curated Jira tools stay available. Replaces the additional selected tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all additional operations needed together. An empty list clears the additional selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
-      inputSchema: discovery
-        ? object({
-            query: text(QUERY_MAX_CHARS),
-            startAt: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
-            maxResults: { type: "integer", minimum: 1, maximum: 100 },
-          })
-        : object(
-            {
-              identities: {
-                type: "array",
-                maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
-                items: IDENTITY,
-              },
-            },
-            ["identities"],
-          ),
-      resultSchema: RESULT_SCHEMA,
-      effects: ["connector-access"],
-      actionMapping: [{ action: name, effects: ["connector-access"] }],
-      policyReferences: ["adr-0128.d4"],
-      handlerRequirement: { id: name, contractVersion: 1 },
-      bounds: {
-        maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
-        maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
-        maxResultCount: TOOL_CATALOG_LIMITS.maxArrayItems,
-        maxDurationMs: 15000,
-      },
-      idempotency: "server-key-required",
-      cancellation: "before-effect",
-    }),
+    descriptor: discoveryDescriptor(name),
     execute: (args, context) =>
       discovery ? discover(args, context, options) : describe(args, context, options),
   };

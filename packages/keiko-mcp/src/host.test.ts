@@ -11,7 +11,7 @@ import type {
   ManagedMcpLogPort,
   ManagedMcpTool,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
+import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createManagedMcpHost, ManagedMcpError } from "./index.js";
 import { toolDefinition } from "./definitions.js";
@@ -272,6 +272,24 @@ it("serves an unchanged frozen descriptor and still refuses a replaced one", asy
     host.call("fixture.echo", { text: "two" }, context("frozen-drift")),
   ).rejects.toMatchObject({ reason: "descriptor-drift" });
   expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it("admits a deeply frozen provider descriptor by identity instead of a clone", async () => {
+  // A clone loses the tool catalog's issued identity, so every admission was verified again.
+  const source = { descriptor: deepFreeze(structuredClone(descriptor)) };
+  const { host } = sourceHost(source);
+  await host.admit("frozen-identity");
+  expect(host.catalog()[0]?.descriptor).toBe(source.descriptor);
+});
+
+it("admits a private frozen clone of a descriptor that is not deeply frozen", async () => {
+  const mutable = structuredClone(descriptor);
+  const { host } = sourceHost({ descriptor: mutable });
+  await host.admit("clone-identity");
+  const admitted = host.catalog()[0]?.descriptor;
+  expect(admitted).not.toBe(mutable);
+  expect(admitted).toEqual(mutable);
+  expect(isDeepFrozen(admitted)).toBe(true);
 });
 
 it("refuses an in-place change of a descriptor that was not deeply frozen", async () => {

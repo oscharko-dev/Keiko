@@ -221,7 +221,7 @@ const DESCRIPTION =
   "Otherwise page view units with nextCursor and report the totals. " +
   "Pass a unit's reference as requirementIds when creating or editing a Jira issue.";
 
-function declaration(): ManagedMcpToolDeclaration {
+function createDeclaration(): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
     toolRef: createToolRef(KNOWLEDGE_REQUIREMENTS_TOOL_ID, KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION),
     description: DESCRIPTION,
@@ -247,6 +247,13 @@ function declaration(): ManagedMcpToolDeclaration {
     annotations: { openWorldHint: false, idempotentHint: true },
     descriptor,
   });
+}
+
+// A pure constant: built once per process, not again for every catalog a Chat turn composes.
+let requirementsDeclaration: ManagedMcpToolDeclaration | undefined;
+function declaration(): ManagedMcpToolDeclaration {
+  requirementsDeclaration ??= createDeclaration();
+  return requirementsDeclaration;
 }
 
 interface ParsedArguments {
