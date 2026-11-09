@@ -4275,6 +4275,8 @@ async function observe(scenario: Scenario): Promise<Observation> {
 }
 
 describe("native Jira registry and real connector transport agreement", () => {
+  // Compiles the complete Jira catalog (443 contracts, about 3.4 s per pass without coverage,
+  // measured 2026-11-09); the bound is sized to that work, like the other whole-catalog cases.
   it("covers every current platform and authentication native operation exactly once", () => {
     const platformRoots = new Set(["/rest/api/2", "/rest/auth/1"]);
     const native = jiraOperationContracts().filter(
@@ -4287,7 +4289,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     );
     for (const scenario of SCENARIOS)
       expect(independentPrimary(scenario), scenario.tool).toBeDefined();
-  });
+  }, 60_000);
   it.each(SCENARIOS)("binds $tool to its actual primary HTTP request", async (scenario) => {
     const observed = await observe(scenario);
     assertPrimary(observed, scenario);

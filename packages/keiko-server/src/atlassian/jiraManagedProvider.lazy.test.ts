@@ -49,6 +49,8 @@ it("isolates an unrequested invalid read schema while preserving later fail-clos
   expect(provider.jiraOperationForTool("jira.projects")).toBe(selected);
 });
 
+// Compiles the complete Jira catalog (443 contracts, about 3.4 s per pass without coverage,
+// measured 2026-11-09); the bound is sized to that work, like the other whole-catalog cases.
 it("does not compile unrequested mutations and still refuses an explicitly requested invalid write", async () => {
   vi.resetModules();
   vi.doMock("./jiraManagedMutationDescriptors.js", async (importOriginal) => {
@@ -73,8 +75,10 @@ it("does not compile unrequested mutations and still refuses an explicitly reque
     "Synthetic invalid mutation schema",
   );
   expect(() => provider.jiraOperationContracts()).toThrow("Synthetic invalid mutation schema");
-});
+}, 60_000);
 
+// Compiles the complete Jira catalog (443 contracts, about 3.4 s per pass without coverage,
+// measured 2026-11-09); the bound is sized to that work, like the other whole-catalog cases.
 it("memoizes composite members once and matches the complete raw-declaration batch exactly", async () => {
   vi.resetModules();
   const registry = await import("./jiraOperationRegistry.js");
@@ -116,4 +120,4 @@ it("memoizes composite members once and matches the complete raw-declaration bat
     expect(provider.jiraOperationForTool(entry.definition.tool)).toBe(entry);
     expect(Object.isFrozen(entry)).toBe(true);
   }
-});
+}, 60_000);

@@ -42,7 +42,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import { conversationForGateway } from "./conversation-gateway.js";
-import { jiraOperationContracts, jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
+import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { NO_LOCAL_VAULT_KEYCHAIN } from "@oscharko-dev/keiko-security/secret-vault";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
@@ -52,7 +52,10 @@ import {
   handleGetJiraHumanInput,
   handleCancelJiraHumanInput,
 } from "./atlassian/jiraHumanInputRoutes.js";
-import { jiraOperationActionDigest } from "./atlassian/jiraOperationRegistry.js";
+import {
+  jiraOperationActionDigest,
+  jiraOperationDefinitions,
+} from "./atlassian/jiraOperationRegistry.js";
 import * as requirementBinding from "./atlassian/jiraChatRequirementBinding.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { specification } from "./_requirementSupport.js";
@@ -426,9 +429,15 @@ function preselectKnownFixtureTools(deps: UiHandlerDeps, options: Options): void
         ? ["keiko.jira.draft.stage", "keiko.jira.draft"]
         : [options.write === true ? "keiko.jira.comment" : "keiko.jira.projects"],
   );
-  const selected = jiraOperationContracts().filter((entry) =>
-    canonicalIds.has(entry.declaration.descriptor.toolRef.canonicalId),
-  );
+  // Compile only the selected operations, as a real Chat selection does; the expectation below
+  // still checks each compiled descriptor's own canonical id.
+  const selected = jiraOperationDefinitions()
+    .filter((definition) => canonicalIds.has(`keiko.${definition.tool.replaceAll("-", ".")}`))
+    .map((definition) => {
+      const contract = jiraOperationForTool(definition.tool);
+      if (contract === undefined) throw new TypeError("Missing selected Jira contract");
+      return contract;
+    });
   expect(
     new Set(selected.map((entry) => entry.declaration.descriptor.toolRef.canonicalId)),
   ).toEqual(canonicalIds);

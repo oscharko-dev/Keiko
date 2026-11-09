@@ -22,7 +22,7 @@ import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps } from "../deps.js";
 import { createJiraChatCatalogRuntime } from "./jiraChatCatalogRuntime.js";
 import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
-import { jiraOperationContracts } from "./jiraManagedProvider.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL } from "../requirementsToolName.js";
 
 const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
@@ -145,10 +145,11 @@ function parameters(alias: string): CatalogJsonObject {
 
 beforeAll(async () => {
   const original: ReadonlySet<string> = new Set(ORIGINAL_TOOL_ALIASES);
+  // Select from discovery metadata: only the selected declarations compile, as in a real Chat.
   const selected = await runtime.select(
-    jiraOperationContracts()
-      .filter((entry) => original.has(entry.definition.tool.replaceAll(/[.-]/gu, "_")))
-      .map((entry) => entry.binding.identity),
+    jiraOperationDefinitions()
+      .filter((definition) => original.has(definition.tool.replaceAll(/[.-]/gu, "_")))
+      .map((definition) => definition.identity),
   );
   selectedDefinitions = gatewayToolDefinitions(selected.catalog, selected.projection.profile);
 });
