@@ -1121,3 +1121,57 @@ Card checks use the ordinary Settings language control, reject raw JSON and
 generic result rows, require zero serious/critical axe findings and compare keys,
 links, history and native state across reload without replay. Hermetic tests are
 not live Jira/Keiko/model acceptance; the integrator owns that coordinated run.
+
+## Selective follow-up steps: Story and Coding Workbench
+
+`browser-limit-run.mjs` always runs every step and reserves `browser-limit-run.pending.json`
+exclusively, so it cannot be started again for the same session. Two steps that the limit run does not
+cover run afterwards, on the finished run's retained product state, without repeating any earlier step:
+
+```bash
+node scripts/testing/jira-chat-lab/browser-limit-followup.mjs \
+  <session-dir> <model-id> <embedding-model-id> <permitted-token-file> <denied-token-file> \
+  <LIM-project-key> story,coding-jira
+```
+
+The first six arguments are exactly those of the limit run. The last one selects the steps, `story`,
+`coding-jira` or both (always in that order); each step may be selected alone and run again. The
+follow-up refuses to start unless `browser-limit-run.pending.json` is `completed` with
+`steps-verified`, green `ac2-epics` and `ac4-hierarchy`, and the same inputs. It reopens the retained
+state directory, the three Chats and both Pods, copies the finished run's state into its own
+`browser-limit-followup.pending.json` and never rewrites the original file. An interrupted follow-up
+resumes from its own checkpoints; it never replays a write whose outcome is unknown. It takes the same
+`browser-limit-run-owner` lock, so it cannot overlap a limit run. The Jira license window of 30 minutes
+and an idle Jira laboratory, model and Keiko instance are required, as for the limit run.
+
+**`story` (`ac4-story`), about 25 to 40 minutes.** A project lead's templates come first: through the
+Skills dialog the step installs a `Story` template (sections Nutzerziel, Akzeptanzkriterien,
+Definition of Done, Epic link required) and replaces the limit run's `Sub-task` template, which admits
+only a Task parent, by the same template with `parentIssueTypes: ["Task", "Story"]`. Only a template
+byte-identical to what the limit run installed is replaced; any other content stops the step as
+`unverified`. Then two ordinary Chat turns in the document Chat (Lastenheft Knowledge Pod plus Jira
+Pod) create three Stories under the Epics of three requirements that carry at least two acceptance
+criteria, and then one Sub-task under each Story. Summaries are `[REQ-...] [ST-n] <title>` and
+`[REQ-...] [ST-n-S1] <title>`. The oracle reads Jira over REST and asserts: issue type `Story` and
+`Sub-task`; Epic link of every Story; `parent` of every Sub-task, whose parent type is `Story`;
+template sections and required create fields of both types; the product's own Keiko traceability
+footer with the requirement id and source; every acceptance criterion verbatim, once, with none
+invented; zero duplicate keys, ids, summaries or draft identities; zero Story or marked issue outside
+the plan. A partial or unknown earlier write is `unverified`, never repeated.
+
+**`coding-jira` (`ac10-coding-jira`), about 10 to 20 minutes.** A second, headless browser pairs with
+the same Keiko instance, opens the Coding Workbench on the lab workspace, selects the model, Full
+access and `Jira: Limit Run Jira`, and starts a run through the ordinary UI that asks for the number
+of Epics and the first five Epic keys without editing anything. It is green only if the run succeeded,
+its answer states the exact Epic count and all five lowest keys that a Jira REST readback holds, Jira
+itself is unchanged (same issues, same update times), and the Activity Log holds, inside the run, a
+`coding-runtime.jira-pod` `bind` line, at least one completed `jira-read` `call` line and no
+`jira-write` line. That operation is emitted only by Coding runs, so it proves the Jira tool was
+called from the Coding surface. A Keiko without an available coding runtime reports `unverified`
+(`coding-runtime-unavailable`), not green.
+
+Evidence: `story-bulk.json` and `coding-jira.json` in the session directory (counts only) and the
+results in `browser-limit-followup.pending.json`. The earlier `ac4-hierarchy` oracle counts a Story as
+unexpected, so do not run the limit run's hierarchy step against a project that holds these Stories.
+Hermetic tests: `scripts/__tests__/jira-lab-story-bulk.test.mjs`, `jira-lab-story-templates.test.mjs`,
+`jira-lab-coding-jira.test.mjs` and `jira-lab-limit-followup.test.mjs`; they are not live acceptance.

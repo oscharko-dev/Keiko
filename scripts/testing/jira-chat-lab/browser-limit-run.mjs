@@ -11,6 +11,8 @@ import { withExclusiveProcessLock } from "./requirements/work-project-lock.mjs";
 
 const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"];
 const CHAT_SLOTS = ["document", "report", "denied"];
+/** The label of the permitted Jira Pod; the Coding Workbench lists it as `Jira: <label>`. */
+export const LIMIT_RUN_JIRA_POD_LABEL = "Limit Run Jira";
 const FAULT_STEPS = new Set(["bulk-epics", "hierarchy", "progress"].map((scope) => `ac8-${scope}`));
 const RECOVERED_FAULT_COUNTS = { injected: 2, recovered: 2, duplicates: 0, lost: 0 };
 const OWNERS = {
@@ -48,14 +50,14 @@ export function limitRunArguments(argv) {
 }
 
 /** Missing owner exports are an incomplete build, never a successful skipped step. */
-export async function loadLimitRunBlocks(importer = (path) => import(path)) {
+export async function loadLimitRunBlocks(importer = (path) => import(path), owners = OWNERS) {
   const modules = new Map(
     await Promise.all(
-      [...new Set(Object.values(OWNERS))].map(async (path) => [path, await importer(path)]),
+      [...new Set(Object.values(owners))].map(async (path) => [path, await importer(path)]),
     ),
   );
   return Object.fromEntries(
-    Object.entries(OWNERS).map(([name, path]) => {
+    Object.entries(owners).map(([name, path]) => {
       assert.equal(
         typeof modules.get(path)[name],
         "function",
@@ -78,12 +80,17 @@ export function createLimitRunIntent(sessionDir, identity, assertOwned = () => u
     data: {},
     results: [],
   };
+  assertOwned();
+  privateJson(path, state, true);
+  return limitRunIntentHandle(path, state, assertOwned);
+}
+
+/** The recorded-state handle of one intent file; the follow-up runner reuses it for its own file. */
+export function limitRunIntentHandle(path, state, assertOwned = () => undefined) {
   const persist = () => {
     assertOwned();
     privateJson(path, state);
   };
-  assertOwned();
-  privateJson(path, state, true);
   return {
     path,
     get state() {
@@ -188,7 +195,8 @@ function validateCounts(counts) {
   }
 }
 
-async function step(ctx, results, name, run) {
+/** One validated step of a run: license window, durable begin/settle and a green-only continuation. */
+export async function runLimitStep(ctx, results, name, run) {
   ctx.signal.throwIfAborted();
   await ctx.checkLicense?.();
   ctx.intent.begin(name);
@@ -221,15 +229,15 @@ async function cards(ctx, blocks, results, checkpoint) {
 
 async function bilingualCards(ctx, blocks, results, checkpoint) {
   for (const locale of ["en", "de"]) {
-    await step(ctx, results, `ac9-${checkpoint}-${locale}-language`, () =>
+    await runLimitStep(ctx, results, `ac9-${checkpoint}-${locale}-language`, () =>
       blocks.setUiLanguage(ctx, locale),
     );
     ctx.locale = locale;
-    await step(ctx, results, `ac9-${checkpoint}-${locale}`, () =>
+    await runLimitStep(ctx, results, `ac9-${checkpoint}-${locale}`, () =>
       blocks.assertCardsReadable(ctx, { reload: true }),
     );
   }
-  await step(ctx, results, `ac9-${checkpoint}-restore-language`, () =>
+  await runLimitStep(ctx, results, `ac9-${checkpoint}-restore-language`, () =>
     blocks.setUiLanguage(ctx, "en"),
   );
   ctx.locale = "en";
@@ -256,7 +264,7 @@ function faultPlan(blocks, scope) {
 }
 
 async function finishFaultPlan(ctx, results, scope, plan) {
-  return step(ctx, results, `ac8-${scope}`, async () => {
+  return runLimitStep(ctx, results, `ac8-${scope}`, async () => {
     const result = await plan.maybeInject(ctx, 1);
     assert.ok(result?.step === `ac8-${scope}`, "The final fault verdict matches its calling scope");
     return result;
@@ -289,34 +297,38 @@ function bulkSeeds(ctx) {
 }
 
 async function stages(ctx, options, blocks, results) {
-  await step(ctx, results, "ac5-project", () => blocks.runProjectSetup(ctx, { deniedActor: true }));
+  await runLimitStep(ctx, results, "ac5-project", () =>
+    blocks.runProjectSetup(ctx, { deniedActor: true }),
+  );
   await ctx.prepareTruth?.();
-  await step(ctx, results, "ac1-templates", () => blocks.installTemplates(ctx));
-  await step(ctx, results, "ac1-probes", () => blocks.runRuleProbes(ctx, { modes: [...MODES] }));
-  await step(ctx, results, "ac2-lastenheft", () => blocks.stageLastenheft(ctx));
+  await runLimitStep(ctx, results, "ac1-templates", () => blocks.installTemplates(ctx));
+  await runLimitStep(ctx, results, "ac1-probes", () =>
+    blocks.runRuleProbes(ctx, { modes: [...MODES] }),
+  );
+  await runLimitStep(ctx, results, "ac2-lastenheft", () => blocks.stageLastenheft(ctx));
   const epicFaults = faultPlan(blocks, "bulk-epics");
-  await step(ctx, results, "ac2-epics", () =>
+  await runLimitStep(ctx, results, "ac2-epics", () =>
     blocks.runBulkEpics(ctx, {
       violationRate: options.violationRate,
       faults: epicFaults,
     }),
   );
   await finishFaultPlan(ctx, results, "bulk-epics", epicFaults);
-  await step(ctx, results, "ac1-bulk-refusals", () =>
+  await runLimitStep(ctx, results, "ac1-bulk-refusals", () =>
     blocks.gradeBulkRefusals(ctx, { seeded: bulkSeeds(ctx) }),
   );
   await cards(ctx, blocks, results, "epics");
   const hierarchyFaults = faultPlan(blocks, "hierarchy");
-  await step(ctx, results, "ac4-hierarchy", () =>
+  await runLimitStep(ctx, results, "ac4-hierarchy", () =>
     blocks.runHierarchyBulk(ctx, { faults: hierarchyFaults }),
   );
   await finishFaultPlan(ctx, results, "hierarchy", hierarchyFaults);
-  await step(ctx, results, "ac6-sprint", () =>
+  await runLimitStep(ctx, results, "ac6-sprint", () =>
     blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
   );
   await cards(ctx, blocks, results, "sprint");
   ctx.faults = faultPlan(blocks, "progress");
-  const progress = await step(ctx, results, "progress-simulation", () =>
+  const progress = await runLimitStep(ctx, results, "progress-simulation", () =>
     blocks.simulateProgress(ctx, { seedDeviations: true }),
   );
   await finishFaultPlan(ctx, results, "progress", ctx.faults);
@@ -324,7 +336,7 @@ async function stages(ctx, options, blocks, results) {
     progress.evidenceFile,
     "Progress simulation must return its independently observed private truth",
   );
-  await step(ctx, results, "ac3-report", () =>
+  await runLimitStep(ctx, results, "ac3-report", () =>
     blocks.runProgressReport(ctx, { truthFile: progress.evidenceFile }),
   );
   await cards(ctx, blocks, results, "report");
@@ -415,7 +427,9 @@ async function requiredFields(read, path) {
   throw new TypeError("Native required-field metadata is incomplete");
 }
 
-export async function readLimitFieldTruth(read, projectKey) {
+export const LIMIT_ISSUE_TYPES = Object.freeze(["Epic", "Task", "Bug", "Sub-task"]);
+
+export async function readLimitFieldTruth(read, projectKey, typeNames = LIMIT_ISSUE_TYPES) {
   const fields = await read("/rest/api/2/field");
   assert.ok(Array.isArray(fields));
   const epic = fields.filter(
@@ -426,7 +440,7 @@ export async function readLimitFieldTruth(read, projectKey) {
   const path = `/rest/api/2/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`;
   const types = await nativePages(read, path, "values");
   const requiredFieldsByType = {};
-  for (const name of ["Epic", "Task", "Bug", "Sub-task"]) {
+  for (const name of typeNames) {
     const matches = types.filter((type) => type.name === name);
     assert.equal(matches.length, 1);
     requiredFieldsByType[name] = await requiredFields(read, `${path}/${matches[0].id}`);
@@ -470,7 +484,7 @@ function limitChatOptions(slot, saved, handles, options, intent) {
     chatId: saved.chatId,
     podId: saved.podId ?? (slot === "report" ? handles.document.podId : undefined),
     title: `Limit Run ${titles[slot]}`,
-    label: restricted ? "Limit Run Restricted" : "Limit Run Jira",
+    label: restricted ? "Limit Run Restricted" : LIMIT_RUN_JIRA_POD_LABEL,
     tokenFile: restricted ? options.deniedToken : options.permittedToken,
     actorClass,
     mode: "autonomous-delivery",

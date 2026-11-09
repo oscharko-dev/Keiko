@@ -18,7 +18,7 @@ const BATCH_SIZE = 25;
 const EPIC_MARKER = /^\[([^\]\r\n]+)\](?:\s|$)/;
 const CHILD_MARKER = /^\[([^\]\r\n]+)\] \[HB-(T[12](?:-S1)?|B1)\](?:\s|$)/;
 
-function epicRequirementId(epic) {
+export function epicRequirementId(epic) {
   return EPIC_MARKER.exec(epic?.fields?.summary ?? "")?.[1];
 }
 
@@ -31,7 +31,7 @@ function projectValid(projectKey) {
   }
 }
 
-function nativeId(value) {
+export function nativeId(value) {
   return (
     typeof value === "string" &&
     /^[1-9]\d{0,18}$/.test(value) &&
@@ -39,7 +39,7 @@ function nativeId(value) {
   );
 }
 
-function keyValid(key, projectKey) {
+export function keyValid(key, projectKey) {
   return typeof key === "string" && new RegExp(`^${projectKey}-[1-9]\\d*$`).test(key);
 }
 
@@ -140,7 +140,7 @@ function filled(value) {
   return true;
 }
 
-function requiredFieldsValid(issue, requiredFieldsByType) {
+export function requiredFieldsValid(issue, requiredFieldsByType) {
   const fields = issue.fields;
   const required = requiredFieldsByType[fields.issuetype?.name] ?? [];
   return ["summary", "description", "issuetype", ...required].every((name) => filled(fields[name]));

@@ -262,7 +262,8 @@ function ownedTraceReference(group, requirementId) {
   return reference;
 }
 
-function requirementTrace(description, requirement) {
+/** The identity and source a requirement's own Keiko traceability group carries, and the body before it. */
+export function requirementTrace(description, requirement) {
   const block = traceBlocks(description);
   if (block === undefined) return { id: false, source: false, body: description };
   const groups = block.lines.join("\n").split(/\n\s*\n/u);
@@ -321,7 +322,8 @@ function criterionBlocks(body) {
   return blocks;
 }
 
-function gradeCriteria(body, requirement, counts) {
+/** Counts the criteria of `requirement` present, duplicated and unexpected in the acceptance region of `body`. */
+export function gradeCriteria(body, requirement, counts) {
   const expected = new Set(requirement.acceptanceCriteria.map(norm));
   const blocks = criterionBlocks(acceptanceRegion(body)).filter(
     (block) => expected.size > 0 || block !== GOLDEN_NO_CRITERIA_TEXT,

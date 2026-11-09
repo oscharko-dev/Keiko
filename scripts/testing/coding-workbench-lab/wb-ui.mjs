@@ -115,7 +115,7 @@ export async function seedWorkbenchWindow(page, repo) {
   );
 }
 
-async function waitForWorkbench(page) {
+export async function waitForWorkbench(page) {
   const workbench = page.locator(WORKBENCH);
   await workbench.waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
   await sleep(SETTLE_MS);
@@ -135,7 +135,7 @@ export function selectCheckout(page, repo, branch) {
 }
 
 /** Reloads the page so the Workbench opens on the repository the dev server just selected. */
-async function reopenWorkbench(page) {
+export async function reopenWorkbench(page) {
   await page.reload();
   return waitForWorkbench(page);
 }
@@ -196,7 +196,7 @@ async function chooseOptionOnce(page, comboName, optionLabel, settle) {
   await options.nth(index).click();
 }
 
-async function startRun(page, workbench, { model, mode, text, jiraPod }) {
+export async function startRun(page, workbench, { model, mode, text, jiraPod }) {
   const newTask = page.getByRole("button", { name: "New task", exact: true });
   if (await newTask.isVisible().catch(() => false)) {
     await newTask.click();
@@ -313,7 +313,7 @@ async function declineQuestion(page) {
   await reject.click();
 }
 
-async function watchRun(page, runId, { approve, deadline, shots }) {
+export async function watchRun(page, runId, { approve, deadline, shots }) {
   let last = "";
   let shotCount = 0;
   let snapshot = {};

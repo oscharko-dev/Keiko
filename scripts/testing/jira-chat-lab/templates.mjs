@@ -11,42 +11,15 @@ import {
 } from "./browser-rules-knowledge-setup.mjs";
 import { openLimitStep } from "./limit-run-step.mjs";
 import { projectAgileRead } from "./project-agile-oracles.mjs";
-import { STRUCTURE_RULES } from "./requirements/corpus.mjs";
 import {
-  REQUIREMENT_EPIC_SUMMARY_PATTERN,
-  epicTemplateMarkdown,
   gradeTemplateListing,
+  limitTemplateDefinitions,
   runtimeTemplateProjectKey,
-  templateMarkdown,
 } from "./requirements/templates.mjs";
 
 const TYPES = ["Epic", "Task", "Bug", "Sub-task"];
 const STEP = "w12-templates";
 const SKILL_ID = /^msk_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-
-/** The four templates a project lead installs for the golden Lastenheft run. */
-function definitions(project, epicLinkFieldId) {
-  return TYPES.map((issueType) => {
-    const subtask = issueType === "Sub-task";
-    const parentIssueTypes = subtask ? ["Task"] : undefined;
-    const markdown =
-      issueType === "Epic"
-        ? epicTemplateMarkdown(project, REQUIREMENT_EPIC_SUMMARY_PATTERN)
-        : templateMarkdown({
-            project,
-            issueType,
-            rule: subtask ? STRUCTURE_RULES.Task : STRUCTURE_RULES[issueType],
-            parentField: subtask ? "parent" : epicLinkFieldId,
-            parentIssueTypes,
-            requiredFields: issueType === "Bug" ? ["priority"] : [],
-          });
-    return {
-      issueType,
-      markdown,
-      formal: { project, issueType, ...(subtask ? { parentIssueTypes } : {}) },
-    };
-  });
-}
 
 async function nativeMetadata(ctx, projectKey) {
   const project = await projectAgileRead(
@@ -193,7 +166,7 @@ export async function installTemplates(ctx) {
     const plan = {
       projectKey,
       metadata,
-      expected: definitions(projectKey, metadata.epicLinkFieldId),
+      expected: limitTemplateDefinitions(projectKey, metadata.epicLinkFieldId),
     };
     const detail = await withEnglishLimitUi(ctx, () =>
       installOrVerify(ctx, journal, plan, progress),

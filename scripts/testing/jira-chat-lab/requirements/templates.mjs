@@ -85,6 +85,62 @@ export const epicTemplateMarkdown = (project, summaryPattern = EPIC_SUMMARY_PATT
     summaryPattern,
   });
 
+/** The structure a project lead defines for Stories: a user goal, the criteria and the done list. */
+export const STORY_STRUCTURE_RULE = Object.freeze({
+  sections: ["Nutzerziel", "Akzeptanzkriterien", "Definition of Done"],
+  parent: true,
+});
+
+/** The Story template of the work project: its sections, and the epic link the lead requires. */
+export const storyTemplateMarkdown = (project, epicLinkFieldId) =>
+  templateMarkdown({
+    project,
+    issueType: "Story",
+    rule: STORY_STRUCTURE_RULE,
+    parentField: epicLinkFieldId,
+  });
+
+/** The Sub-task template of the work project; `parentIssueTypes` names the types it may hang under. */
+export const subtaskTemplateMarkdown = (project, parentIssueTypes = ["Task"]) =>
+  templateMarkdown({
+    project,
+    issueType: "Sub-task",
+    rule: STRUCTURE_RULES.Task,
+    parentField: "parent",
+    parentIssueTypes,
+  });
+
+/** The issue types whose templates the limit run installs for its work project. */
+const LIMIT_TEMPLATE_TYPES = Object.freeze(["Epic", "Task", "Bug", "Sub-task"]);
+
+function limitTemplateMarkdown(project, issueType, epicLinkFieldId) {
+  if (issueType === "Epic") return epicTemplateMarkdown(project, REQUIREMENT_EPIC_SUMMARY_PATTERN);
+  if (issueType === "Sub-task") return subtaskTemplateMarkdown(project, ["Task"]);
+  return templateMarkdown({
+    project,
+    issueType,
+    rule: STRUCTURE_RULES[issueType],
+    parentField: epicLinkFieldId,
+    requiredFields: issueType === "Bug" ? ["priority"] : [],
+  });
+}
+
+/**
+ * The four templates the limit run installs for its work project, as the lead defines them. The
+ * Epic rule is the golden Lastenheft one, so every correctly traced golden Epic can meet it.
+ */
+export function limitTemplateDefinitions(project, epicLinkFieldId) {
+  return LIMIT_TEMPLATE_TYPES.map((issueType) => {
+    const subtask = issueType === "Sub-task";
+    const parentIssueTypes = subtask ? ["Task"] : undefined;
+    return {
+      issueType,
+      markdown: limitTemplateMarkdown(project, issueType, epicLinkFieldId),
+      formal: { project, issueType, ...(subtask ? { parentIssueTypes } : {}) },
+    };
+  });
+}
+
 /**
  * The templates a lead defines for the report project before judging its compliance (S11): the
  * epic template of the work project, a task template that requires the epic link and, where
