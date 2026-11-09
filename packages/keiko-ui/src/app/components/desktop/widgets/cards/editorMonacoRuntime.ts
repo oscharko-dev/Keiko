@@ -151,12 +151,7 @@ export function ensureMonacoRuntime(): EditorRuntimeStatus {
     return status;
   }
   if (!runtimeConfigured) {
-    // `self` is the browser global scope; narrow it to the worker-host shape the editor expects
-    // (exactOptionalPropertyTypes makes the DOM `MonacoEnvironment?` slot incompatible otherwise).
-    installMonacoEnvironment(
-      self as unknown as MonacoGlobalScope,
-      createMonacoEnvironment(defaultMonacoWorkerFactories),
-    );
+    installMonacoEnvironment(self, createMonacoEnvironment(defaultMonacoWorkerFactories));
     configureMonacoLoader(loader, monaco);
     registerJsonLanguageId(monaco);
     monaco.editor.onDidCreateEditor((editor) => {

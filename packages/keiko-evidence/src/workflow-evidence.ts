@@ -57,6 +57,10 @@ export interface WorkflowRunIdentity {
 // only needs `type` to filter and the usage fields on the model-call-completed event.
 export interface WorkflowEventLike {
   readonly type: string;
+  // Model-call-completed events carry their usage here; every other event omits these fields.
+  readonly promptTokens?: unknown;
+  readonly completionTokens?: unknown;
+  readonly latencyMs?: unknown;
 }
 
 interface WorkflowManifestOptions {
@@ -88,10 +92,9 @@ export function foldWorkflowUsage(
     ) {
       continue;
     }
-    const record = event as unknown as Record<string, unknown>;
-    promptTokens += numberOf(record.promptTokens);
-    completionTokens += numberOf(record.completionTokens);
-    totalLatencyMs += numberOf(record.latencyMs);
+    promptTokens += numberOf(event.promptTokens);
+    completionTokens += numberOf(event.completionTokens);
+    totalLatencyMs += numberOf(event.latencyMs);
     requestCount += 1;
   }
   return { promptTokens, completionTokens, requestCount, totalLatencyMs };

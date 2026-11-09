@@ -3817,13 +3817,13 @@
       "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-evidence/src/workflow-evidence.ts": {
-      "anti-slop/no-chained-type-assertions": 2,
+      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 4,
       "anti-slop/no-runtime-typeof": 6,
       "anti-slop/no-unknown-parameters": 5,
       "anti-slop/no-unknown-returns": 1,
-      "anti-slop/no-unsafe-dictionary-type": 6,
-      "anti-slop/require-safety-comment-for-type-assertion": 4
+      "anti-slop/no-unsafe-dictionary-type": 5,
+      "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-git/src/git-executable.ts": {
       "anti-slop/no-runtime-typeof": 2
@@ -15447,10 +15447,8 @@
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-ui/src/app/components/desktop/hooks/useAssistantSpeech.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 1,
-      "anti-slop/no-unknown-parameters": 4,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-unknown-parameters": 4
     },
     "packages/keiko-ui/src/app/components/desktop/hooks/useAutonomyModePolicy.test.ts": {
       "anti-slop/no-known-value-widening": 1,
@@ -16051,12 +16049,10 @@
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/AgentRunWidget.tsx": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-known-value-widening": 1,
-      "anti-slop/no-runtime-typeof": 7,
+      "anti-slop/no-runtime-typeof": 4,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 4,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-unsafe-dictionary-type": 3
     },
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/BrowserWidget.test.tsx": {
       "anti-slop/no-module-mocking": 1,
@@ -16389,8 +16385,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorMonacoRuntime.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorOutlineModel.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1

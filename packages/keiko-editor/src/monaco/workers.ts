@@ -68,7 +68,10 @@ export function createMonacoEnvironment(factories: MonacoWorkerFactories): Monac
 
 /** Global scope that may carry a `MonacoEnvironment` (browser `self`/`window` or a test double). */
 export interface MonacoGlobalScope {
-  MonacoEnvironment?: MonacoEnvironmentLike;
+  // The slot as Monaco declares it on the browser global: optional, and its worker may be async. An
+  // environment from createMonacoEnvironment fits it, so `self` is a scope as declared.
+  MonacoEnvironment?:
+    { getWorker?(workerId: string, label: string): Worker | Promise<Worker> } | undefined;
 }
 
 /**
