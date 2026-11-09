@@ -81,9 +81,11 @@ function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
   if (native !== undefined) return native;
   if ("upload" in request && request.upload !== undefined)
     return { "content-type": request.upload.contentType, "x-atlassian-token": "no-check" };
-  return "bodyJson" in request && request.bodyJson !== undefined
-    ? { "content-type": "application/json" }
-    : {};
+  if ("bodyJson" in request && request.bodyJson !== undefined)
+    return { "content-type": "application/json" };
+  // A bodiless write carries no content type, so Jira's XSRF check refuses it (403 "XSRF check
+  // failed") unless it opts out, exactly like a governed upload. Reads never need it.
+  return request.method === "GET" ? {} : { "x-atlassian-token": "no-check" };
 }
 function emailTemplateHeaders(
   value: unknown,

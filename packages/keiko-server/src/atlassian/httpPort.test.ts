@@ -596,6 +596,18 @@ describe("createGatewayAtlassianHttpBodyPort — governed upload (#4176)", () =>
     expect(seen[0]?.headers.get("x-atlassian-token")).toBe("no-check");
     expect(Buffer.from(seen[0]?.body as Uint8Array).equals(Buffer.from(upload.bytes))).toBe(true);
   });
+  it.each(["POST", "PUT", "DELETE"] as const)(
+    "adds Jira's XSRF opt-out to a bodiless %s write and never to a read",
+    async (method) => {
+      const { fetchImpl, seen } = recordingFetch();
+      const { upload: _upload, ...bodiless } = request;
+      await bodyPort(fetchImpl, resolver())({ ...bodiless, method });
+      await bodyPort(fetchImpl, resolver())({ ...bodiless, method: "GET" });
+      expect(seen[0]?.headers.get("x-atlassian-token")).toBe("no-check");
+      expect(seen[0]?.headers.get("content-type")).toBeNull();
+      expect(seen[1]?.headers.get("x-atlassian-token")).toBeNull();
+    },
+  );
   it("never adds the opt-out header to an ordinary JSON write", async () => {
     const { fetchImpl, seen } = recordingFetch();
     await bodyPort(fetchImpl, resolver())({ ...request, upload: undefined, bodyJson: "{}" });
