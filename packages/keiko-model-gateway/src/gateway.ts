@@ -48,6 +48,7 @@ import { toolCallingConfigurationFingerprint } from "./config.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
+import { describedSchemaPathCount } from "./toolSchemaCorrection.js";
 import {
   admissionBudgetFor,
   bufferedCallBudgetMs,
@@ -373,6 +374,8 @@ const GATEWAY_TOOL_CATALOG_REPAIR_OPERATION = defineActivityLogOperation({
     invalidPathCount: { type: "integer", dataClass: "count", required: false },
     unexpectedPropertyCount: { type: "integer", dataClass: "count", required: false },
     droppedPathCount: { type: "integer", dataClass: "count", required: false },
+    // Listed paths the correction describes from the offered schema (type, bounds, description).
+    describedPathCount: { type: "integer", dataClass: "count", required: false },
     promptTokens: { type: "integer", dataClass: "count", required: true },
     maxPromptTokens: { type: "integer", dataClass: "count", required: true },
     maxOutputTokens: { type: "integer", dataClass: "count", required: true },
@@ -1639,6 +1642,7 @@ export class Gateway {
                 invalidPathCount: repair.shape.invalidPaths.length,
                 unexpectedPropertyCount: repair.shape.unexpectedPropertyCount,
                 droppedPathCount: repair.shape.droppedPathCount,
+                describedPathCount: describedSchemaPathCount(repair),
               }),
           ...budget,
           correctionMessageCount: 1,

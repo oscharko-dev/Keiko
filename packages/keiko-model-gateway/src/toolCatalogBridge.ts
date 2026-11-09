@@ -553,6 +553,7 @@ function schemaRepair(
     toolCallId: call.id,
     offeredAlias: projected.alias,
     ...(cause.shape === undefined ? {} : { shape: cause.shape }),
+    schema: projected.inputSchema,
   });
 }
 

@@ -914,7 +914,15 @@ States:
   rejection so the model can regenerate the call — on the buffered and, since the #3873 review, the
   streamed path alike, while the stream has delivered nothing but reasoning: a streamed tool call is
   delivered only with the terminal answer, so a rejected one was never handed to the caller, and the
-  next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). A
+  next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). The
+  correction lists each missing or mismatching property path. When the offered tool's schema is one
+  of Keiko's own closed-dialect schemas, it describes each path from that schema: its declared type,
+  bounds or allowed values (at most 8 values of at most 40 characters each), and its description,
+  capped at 240 characters. An external schema, such as a managed MCP server's, is the server's own
+  text and its paths can start inside a `$ref` target, so its paths are listed by name only. The
+  correction never quotes the rejected arguments. The repair line counts the described paths as
+  `describedPathCount` (#4130: a local Reviewer repeated the omission of a required property after a
+  correction that named it only; R4130-045 and R4130-046 on #4330). A
   streamed rejection that carries no correction is never replayed as it was, and one that follows
   answer text the caller already received (a sentence of preface, then a malformed call) surfaces at
   once, because a repair would deliver that text a second time; the coding sidecar then ends the turn

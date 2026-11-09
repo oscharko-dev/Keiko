@@ -756,17 +756,47 @@ function reviewTextSchema(maxLength: number): Readonly<Record<string, unknown>> 
   return { type: "string", minLength: 1, maxLength };
 }
 
-function reviewLineSchema(): Readonly<Record<string, unknown>> {
-  return { type: "integer", minimum: 1, maximum: REVIEW_LINE_MAX };
+function reviewLineSchema(description: string): Readonly<Record<string, unknown>> {
+  return { type: "integer", minimum: 1, maximum: REVIEW_LINE_MAX, description };
 }
 
-function reviewLocationProperties(): Readonly<Record<string, Readonly<Record<string, unknown>>>> {
+interface ReviewLocationDescriptions {
+  readonly file: string;
+  readonly startLine: string;
+  readonly endLine: string;
+}
+
+function reviewLocationProperties(
+  descriptions: ReviewLocationDescriptions,
+): Readonly<Record<string, Readonly<Record<string, unknown>>>> {
   return {
-    file: { type: "string", minLength: 1, maxLength: WORKSPACE_PORTABLE_PATH_MAX_BYTES },
-    startLine: reviewLineSchema(),
-    endLine: reviewLineSchema(),
+    file: {
+      type: "string",
+      minLength: 1,
+      maxLength: WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+      description: descriptions.file,
+    },
+    startLine: reviewLineSchema(descriptions.startLine),
+    endLine: reviewLineSchema(descriptions.endLine),
   };
 }
+
+// #4130 seeds (2026-11-09): without descriptions a local Reviewer left out the report's own `file`
+// in 4 of 21 reports, each time while every evidence entry named the file, and one correction did
+// not always stop it. The descriptions say what each location is and that `file` is never implied.
+const REVIEW_FINDING_LOCATION_DESCRIPTIONS: ReviewLocationDescriptions = {
+  file:
+    "Repository-relative path of the file that contains the defect. Required in every report, " +
+    "also when evidence entries name the same file.",
+  startLine: "First line of the defect in the head commit, as keiko_workspace_read numbers it.",
+  endLine: "Last line of the defect in the head commit, inclusive.",
+};
+
+const REVIEW_EVIDENCE_LOCATION_DESCRIPTIONS: ReviewLocationDescriptions = {
+  file: "Repository-relative path of the file this evidence range is in.",
+  startLine: "First line of the evidence range in the head commit.",
+  endLine: "Last line of the evidence range in the head commit, inclusive.",
+};
 
 /**
  * The model-facing JSON schema of the `keiko_review_report` arguments, derived from the bounds of
@@ -777,7 +807,7 @@ function reviewLocationProperties(): Readonly<Record<string, Readonly<Record<str
 export const REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS: Readonly<
   Record<string, Readonly<Record<string, unknown>>>
 > = Object.freeze({
-  ...reviewLocationProperties(),
+  ...reviewLocationProperties(REVIEW_FINDING_LOCATION_DESCRIPTIONS),
   title: reviewTextSchema(REVIEW_FINDING_TITLE_MAX_CHARS),
   condition: reviewTextSchema(REVIEW_FINDING_TEXT_MAX_CHARS),
   mechanism: reviewTextSchema(REVIEW_FINDING_TEXT_MAX_CHARS),
@@ -789,10 +819,13 @@ export const REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS: Readonly<
     type: "array",
     minItems: REVIEW_EVIDENCE_MIN_ENTRIES,
     maxItems: REVIEW_EVIDENCE_MAX_ENTRIES,
+    description:
+      "Line ranges in the head commit that prove the finding, at least one with role defect. " +
+      "Each entry needs its own file, startLine, endLine and role.",
     items: {
       type: "object",
       properties: {
-        ...reviewLocationProperties(),
+        ...reviewLocationProperties(REVIEW_EVIDENCE_LOCATION_DESCRIPTIONS),
         role: { type: "string", enum: [...REVIEW_EVIDENCE_ROLES] },
       },
       required: ["endLine", "file", "role", "startLine"],

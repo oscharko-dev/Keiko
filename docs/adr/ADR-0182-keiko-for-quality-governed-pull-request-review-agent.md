@@ -187,7 +187,11 @@ Keiko uses `docs/qa/review-standards.md`); `AGENTS.md` is not a review input.
 As implemented (#4135): `keiko_review_report` is a governed tool of the `review` profile only
 (catalog id `keiko.review.report`, effect `workspace-read`), whose arguments are exactly the
 `ReviewFindingReport` fields (`REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS`, every field required at the
-tool boundary). The run-bound intake (`findingIntake.ts`) validates each call with
+tool boundary). The location fields and `evidence` carry descriptions. The report's own `file` says
+it is required even when evidence entries name the same file: in the 2026-11-09 seed run the local
+Reviewer left it out in 4 of 21 reports, each time while its evidence named the file. The
+generated review plugin source and the review contract digest are re-pinned for these
+descriptions. The run-bound intake (`findingIntake.ts`) validates each call with
 `validateReviewFindingReport`, then against the head commit's objects: every cited path must be a
 regular file of the head tree outside the sensitive-path deny list (`path-outside-worktree`), every
 range must lie within that blob (`range-invalid`), and the report's location must be backed by

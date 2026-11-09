@@ -62,3 +62,16 @@ export function openCodeGatewayCatalogAdvertisement(now: number): GatewayToolCat
   const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
   return boundAdvertisement(catalog, projection, now);
 }
+
+/**
+ * The same for the review profile (ADR-0182 D2): the three read tools and `keiko_review_report`,
+ * from the producer the review runtime composes (`opencodeRegistrationSet("review")`).
+ */
+export function openCodeReviewGatewayCatalogAdvertisement(
+  now: number,
+): GatewayToolCatalogAdvertisement {
+  const set = opencodeRegistrationSet("review");
+  const catalog = createKeikoToolCatalog([set]);
+  const projection = compileToolProjection(catalog, set.profile);
+  return boundAdvertisement(catalog, projection, now);
+}

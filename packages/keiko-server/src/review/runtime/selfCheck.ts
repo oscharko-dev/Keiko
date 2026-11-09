@@ -72,7 +72,7 @@ export type ReviewRuntimeSelfCheck =
  * changes its digest and refuses the review start until the new source is reviewed and re-pinned.
  */
 const REVIEW_PLUGIN_SOURCE_SHA256: Readonly<Record<string, string>> = Object.freeze({
-  keiko_governed_tools: "76ce586fe63768b4f477b66d918e5f63e294b631ed4a8c8b42eca9a61655d089",
+  keiko_governed_tools: "571496ee674688b836f9a086567d3238aa6ebdf4971851e0d689aaf609fa1e6e",
   keiko_native_context: "884d0fd4f1eda22f363a2f1e0709446b45d6e5e96b98fdb689977ec66dc53e89",
 });
 

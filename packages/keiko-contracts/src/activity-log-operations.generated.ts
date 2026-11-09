@@ -23429,6 +23429,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      describedPathCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       promptTokens: {
         type: "integer",
         dataClass: "count",
