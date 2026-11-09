@@ -78,6 +78,7 @@ function archivedReadback(readback) {
     assertionCount: Number.isSafeInteger(readback?.assertionCount) ? readback.assertionCount : 0,
     permissionDenied: readback?.permissionDenied === true,
     capabilityAbsent: readback?.capabilityAbsent === true,
+    routeShadowed: readback?.routeShadowed === true,
     digest: qualificationDigest(readback),
   };
 }

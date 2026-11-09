@@ -172,6 +172,16 @@ function sameNativeIssue(
 ): boolean {
   return raw !== undefined && jiraNativeNumericId(raw.id) === issue.id && raw.key === issue.key;
 }
+/**
+ * Jira answers `fields: null` for an issue that belongs to no epic and omits the empty epic; the
+ * transport may drop the null. An object without the epic key stays malformed.
+ */
+function epicFieldsOf(
+  raw: Readonly<Record<string, unknown>> | undefined,
+): Readonly<Record<string, unknown>> | null | undefined {
+  if (raw?.fields === null || raw?.fields === undefined) return null;
+  return asRecord(raw.fields);
+}
 export async function readPlanningEpicMembership(
   requests: JiraAgileRequestPhase,
   issue: PlanningIssue,
@@ -179,14 +189,10 @@ export async function readPlanningEpicMembership(
   const response = await requests.agile(`issue/${issue.id}?fields=epic&updateHistory=false`);
   if (!response.ok) return dispatchFailure(response);
   const raw = response.body;
-  const fields = asRecord(raw?.fields);
-  if (
-    response.status !== 200 ||
-    !sameNativeIssue(raw, issue) ||
-    fields === undefined ||
-    !Object.hasOwn(fields, "epic")
-  )
-    return PLANNING_MALFORMED;
+  if (response.status !== 200 || !sameNativeIssue(raw, issue)) return PLANNING_MALFORMED;
+  const fields = epicFieldsOf(raw);
+  if (fields === null) return { ok: true, value: null };
+  if (fields === undefined || !Object.hasOwn(fields, "epic")) return PLANNING_MALFORMED;
   const epic = nativeEpic(fields.epic);
   return epic === undefined ? PLANNING_MALFORMED : { ok: true, value: epic };
 }

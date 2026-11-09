@@ -63,7 +63,14 @@ export function reviewedPlatformTransportFixture(
       expect(request.jiraPermissionAttribute).toBe(
         selected.bodyText === undefined ? undefined : true,
       );
-      const expectedBody = selected.body === undefined ? undefined : JSON.stringify(selected.body);
+      // Jira reads the one bare-string body (the base URL) as raw text under a JSON content type.
+      const rawText = selected.path === "settings/baseUrl" && typeof selected.body === "string";
+      const expectedBody =
+        selected.body === undefined
+          ? undefined
+          : rawText
+            ? String(selected.body)
+            : JSON.stringify(selected.body);
       expect(request.bodyJson).toBe(selected.bodyText ?? expectedBody);
       expect(++writes).toBe(1);
       const result = await native(

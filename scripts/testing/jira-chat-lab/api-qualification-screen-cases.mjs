@@ -15,12 +15,24 @@ const screenFieldReview = (rows) =>
     type: row.type ?? null,
     showWhenEmpty: row.showWhenEmpty ?? null,
   }));
+/** Jira pages the screen list; the oracle follows every page until the announced total. */
+async function allScreens(c) {
+  const rows = [];
+  for (;;) {
+    const page = await read(c, `/rest/api/2/screens?startAt=${rows.length}&maxResults=100`);
+    assert.ok(Array.isArray(page.screens) && page.screens.length > 0);
+    rows.push(...page.screens);
+    if (rows.length >= page.total) {
+      assert.equal(rows.length, page.total);
+      return rows;
+    }
+  }
+}
 async function screen(c, f) {
   await observeAdminActor(c, f);
-  const page = await read(c, "/rest/api/2/screens?startAt=0&maxResults=100");
-  assert.equal(page.total, page.screens.length);
-  f.qualificationScreenId ??= String(page.screens[0]?.id);
-  const selected = page.screens.find((row) => String(row.id) === f.qualificationScreenId);
+  const screens = await allScreens(c);
+  f.qualificationScreenId ??= String(screens[0]?.id);
+  const selected = screens.find((row) => String(row.id) === f.qualificationScreenId);
   assert.ok(selected?.name);
   f.qualificationScreenName = selected.name;
   f.qualificationTabs = normalizeTabs(await read(c, `${root(f)}/tabs`));
@@ -52,10 +64,9 @@ async function assertParent(c, f) {
   return screenFieldReview(await read(c, fieldsPath(f)));
 }
 async function allLayouts(c) {
-  const screens = await read(c, "/rest/api/2/screens?startAt=0&maxResults=100");
-  assert.equal(screens.total, screens.screens.length);
+  const screens = await allScreens(c);
   const result = [];
-  await screens.screens.reduce(async (previous, screen) => {
+  await screens.reduce(async (previous, screen) => {
     await previous;
     const tabs = await read(c, `/rest/api/2/screens/${screen.id}/tabs`);
     await tabs.reduce(async (prior, tab) => {

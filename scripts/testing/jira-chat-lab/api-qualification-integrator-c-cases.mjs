@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { setTimeout as delay } from "node:timers/promises";
 import { projectJiraAnonymizationTaskSnapshot } from "../../../packages/keiko-connectors/dist/jira-managed-anonymization-reads.js";
-import { basicAuth, labRequest } from "./lab-client.mjs";
+import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import { qualificationDigest } from "./api-qualification-evidence.mjs";
@@ -18,6 +18,7 @@ import {
   adminLoginInput,
   fixtureWrite,
   generatedSecret,
+  labActorPassword,
   protectedInputPublisher,
   releaseQualificationFile,
 } from "./api-qualification-fixtures.mjs";
@@ -297,7 +298,39 @@ async function adminSessionReadback(c, data, f, established) {
   return proof(established ? 5 : 4);
 }
 const loginInput = protectedInputPublisher(adminLoginInput, "login");
-function loginFixture(c, f) {
+/**
+ * Independent native observation of the administrator login. Jira refuses it with 403 and a plain
+ * statement when two-step verification is enabled on the instance, so no private session exists.
+ * The request is the same login the product sends; the response body is only matched, never kept.
+ */
+export async function nativeLoginRefusedByTwoStep(c) {
+  const response = await globalThis.fetch(
+    new globalThis.URL("/rest/auth/1/session", labSessionConnection(c.session).origin),
+    {
+      method: "POST",
+      redirect: "manual",
+      signal: globalThis.AbortSignal.timeout(30_000),
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "keiko-admin",
+        password: labActorPassword(c, "admin"),
+      }),
+    },
+  );
+  const text = await response.text();
+  return response.status === 403 && /two-step verification/iu.test(text);
+}
+async function loginReadback(c, data, f) {
+  if (await nativeLoginRefusedByTwoStep(c))
+    return { permissionDenied: true, status: 403, reason: "two-step-verification-enabled" };
+  return adminSessionReadback(c, data, f, true);
+}
+async function loginFixture(c, f) {
+  assert.equal(
+    await nativeLoginRefusedByTwoStep(c),
+    false,
+    "Two-step verification refuses the native login; no private session can be established",
+  );
   return fixtureWrite(
     c,
     "jira.login",
@@ -319,12 +352,7 @@ const sessionCase = (entry, tools = [], held = async () => undefined) => ({
   },
 });
 const loginCase = {
-  ...adminMutationCase(
-    "jira.login",
-    actorArgs,
-    (c, data, f) => adminSessionReadback(c, data, f, true),
-    observeAdminActor,
-  ),
+  ...adminMutationCase("jira.login", actorArgs, loginReadback, observeAdminActor),
   publishHumanInput: loginInput,
 };
 const sessionActionCase = (tool) =>
@@ -510,6 +538,32 @@ const userAvatarCases = [
 
 const flatSession = (value) => [{ name: value.name, ...value.loginInfo }];
 
+/**
+ * Jira counts every authenticated request as a login, so the counter moves between the product's
+ * read and the independent one. Identity and the stable login fields must match exactly; the
+ * counter must be a safe integer that did not move backwards.
+ */
+function currentSessionCase() {
+  const base = readCase("jira.current-session", "/rest/auth/1/session", ["username"], {
+    nativeRoot: flatSession,
+    nativeNames: { username: "name" },
+    productRoot: (data) => {
+      assert.equal(data.observationScope, "bound-current-user-session");
+      return [{ username: data.username, ...data.loginInfo }];
+    },
+    optionalFields: ["failedLoginCount", "lastFailedLoginTime"],
+  });
+  return {
+    ...base,
+    readback: async (c, data, f) => {
+      const matched = await base.readback(c, data, f);
+      const native = (await nativeStatus(c, "/rest/auth/1/session")).value.loginInfo;
+      assert.ok(Number.isSafeInteger(data.loginInfo.loginCount));
+      assert.ok(data.loginInfo.loginCount <= native.loginCount);
+      return { ...matched, assertionCount: matched.assertionCount + 2 };
+    },
+  };
+}
 export const API_QUALIFICATION_INTEGRATOR_C_CASES = [
   adminMutationCase(
     "jira.create-user",
@@ -589,20 +643,7 @@ export const API_QUALIFICATION_INTEGRATOR_C_CASES = [
   { ...worklogFeed("jira.deleted-worklogs", "deleted"), actor: "admin", administration: true },
   { ...worklogFeed("jira.updated-worklogs", "updated"), actor: "admin", administration: true },
   {
-    ...readCase("jira.current-session", "/rest/auth/1/session", ["username"], {
-      nativeRoot: flatSession,
-      nativeNames: { username: "name" },
-      productRoot: (data) => {
-        assert.equal(data.observationScope, "bound-current-user-session");
-        return [{ username: data.username, ...data.loginInfo }];
-      },
-      optionalFields: [
-        "loginCount",
-        "failedLoginCount",
-        "lastFailedLoginTime",
-        "previousLoginTime",
-      ],
-    }),
+    ...currentSessionCase(),
     actor: "admin",
     administration: true,
   },

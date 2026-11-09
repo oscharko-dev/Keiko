@@ -337,6 +337,8 @@ async function myselfCleanup(c, f) {
       );
       return proof(1);
     },
+    // The governed update asks a protected input for the account's own login, here as well.
+    protectedInputPublisher(adminLoginInput),
   );
 }
 async function ownPasswordPrepare(c, f) {
@@ -363,7 +365,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
             outwardIssueKey: value.outwardIssue.key,
           },
         ],
-        productRoot: "single",
+        // The product returns the one projected link as the only item of its page.
       },
     ),
     ...adminRead,

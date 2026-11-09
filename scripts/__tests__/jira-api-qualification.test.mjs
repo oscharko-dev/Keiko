@@ -120,6 +120,61 @@ describe("native Jira qualification evidence", () => {
     ).toBe("unknown");
   });
 
+  it("accepts a 400 only with the shadowed-route absence proof", () => {
+    const o = observation();
+    o.dispatch.result.status = "failed";
+    o.dispatch.receipt.status = "failed";
+    o.witness.responses[0].status = 400;
+    expect(classifyQualification({ ...o, readback: { capabilityAbsent: true } })).toBe("unknown");
+    expect(classifyQualification({ ...o, readback: { routeShadowed: true } })).toBe("unknown");
+    expect(
+      classifyQualification({ ...o, readback: { capabilityAbsent: true, routeShadowed: true } }),
+    ).toBe("unavailable");
+  });
+
+  it("accepts a not-found acknowledgement only for a 2xx DELETE with a matched readback", () => {
+    const deleted = "DELETE /rest/api/2/issue/{issueIdOrKey}";
+    const o = observation();
+    const binding = { identity: deleted, contractDigest: "a".repeat(64) };
+    const base = {
+      ...o,
+      identity: deleted,
+      binding,
+      mutation: true,
+      journal: { phase: "settled", outcome: "succeeded-unconfirmed", httpStatus: 204 },
+      witness: { blocked: 0, responses: [{ status: 204, truncated: false }] },
+    };
+    base.dispatch = {
+      ...o.dispatch,
+      result: {
+        status: "failed",
+        data: { operationBinding: binding, outcome: "succeeded-unconfirmed", reason: "not-found" },
+      },
+      receipt: { status: "failed", budgetDisposition: "committed", effectStarted: true },
+    };
+    expect(classifyQualification(base)).toBe("executable");
+    expect(classifyQualification({ ...base, readback: { matched: false } })).toBe("unknown");
+    const other = {
+      identity: "PUT /rest/api/2/issue/{issueIdOrKey}",
+      contractDigest: "a".repeat(64),
+    };
+    const put = { ...base, identity: other.identity, binding: other };
+    put.dispatch = {
+      ...base.dispatch,
+      result: {
+        ...base.dispatch.result,
+        data: { ...base.dispatch.result.data, operationBinding: other },
+      },
+    };
+    expect(classifyQualification(put)).toBe("unknown");
+    expect(
+      classifyQualification({
+        ...base,
+        journal: { phase: "settled", outcome: "unknown", httpStatus: 204 },
+      }),
+    ).toBe("unknown");
+  });
+
   it("refuses foreign operation bindings, truncated responses and unobserved calls", () => {
     const o = observation();
     expect(classifyQualification({ ...o, identity: "GET /rest/api/2/project" })).toBe("unknown");

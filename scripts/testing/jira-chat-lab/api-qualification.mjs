@@ -217,6 +217,15 @@ async function prepareCase(context, chat, specification, fixture) {
     return prepareFailure(error);
   }
 }
+const refusedOnly = (snapshot) =>
+  snapshot.blocked === 0 &&
+  snapshot.responses.length > 0 &&
+  snapshot.responses.every((response) => response.status >= 400 && response.status < 500);
+/** An ungraded case after a native effect needs reconciliation unless every response was a 4xx. */
+const unknownAfterEffect = (evidence, witness) =>
+  evidence.runtimeAvailability === "unknown" &&
+  witness.effectsStarted() > 0 &&
+  !refusedOnly(witness.snapshot());
 async function dispatchCase(context, chat, specification, fixture, witness, pending) {
   try {
     return {
@@ -227,7 +236,9 @@ async function dispatchCase(context, chat, specification, fixture, witness, pend
   } catch (error) {
     stage({ identity: specification.identity, dispatchFailure: prepareSite(error) });
     // Before any native effect started, a refusal or local failure proves nothing about Jira.
-    if (witness.effectsStarted() > 0) throw new ReconcileRequiredError();
+    // A native effect whose every observed response is a definite 4xx refusal changed nothing.
+    if (witness.effectsStarted() > 0 && !refusedOnly(witness.snapshot()))
+      throw new ReconcileRequiredError();
     rmSync(pending);
     return { failure: "dispatch-failed" };
   }
@@ -253,6 +264,27 @@ function recordAuxiliaries(attempted, directory, report) {
     return `${row.id}.json`;
   });
 }
+/** A settled refusal that the case's own readback reproduced independently left nothing to reconcile. */
+function settledRefusal(journal, evidence) {
+  if (journal.phase !== "settled") return false;
+  const { runtimeAvailability, readback } = evidence;
+  // The running release does not publish the write at all (route-level 404/405, or a shadowed route).
+  if (runtimeAvailability === "unavailable")
+    return readback?.capabilityAbsent === true && new Set([400, 404, 405]).has(journal.httpStatus);
+  // A native 403 independently reproduced as a refusal wrote nothing either.
+  return (
+    runtimeAvailability === "denied" &&
+    readback?.permissionDenied === true &&
+    journal.httpStatus === 403
+  );
+}
+/** An unsettled or unknown native write stops the run unless it is such a settled refusal. */
+function needsReconcile(journal, evidence, snapshot) {
+  if (journal?.outcome !== "unknown" && journal?.phase !== "dispatched") return false;
+  // A settled write whose every native response was a definite 4xx refusal changed nothing.
+  if (journal.phase === "settled" && refusedOnly(snapshot)) return false;
+  return !settledRefusal(journal, evidence);
+}
 async function gradeCase(
   { context, specification, fixture, witness, directory, report },
   attempted,
@@ -273,7 +305,7 @@ async function gradeCase(
   if (detail !== undefined) evidence.detail = detail;
   evidence.auxiliaryReferences = recordAuxiliaries(attempted, directory, report);
   privateJson(join(directory, `${evidence.id}.json`), evidence, true);
-  if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
+  if (needsReconcile(attempted.journal, evidence, evidence.witness))
     throw new ReconcileRequiredError();
   rmSync(join(directory, `${evidence.id}.pending.json`));
   stage({
@@ -311,7 +343,12 @@ export async function runQualificationCase(
     return recordUngraded(
       specification,
       directory,
-      ungradedEvidence(specification, report, dispatched.failure, witness.effectsStarted()),
+      ungradedEvidence(
+        specification,
+        report,
+        dispatched.failure,
+        refusedOnly(witness.snapshot()) ? 0 : witness.effectsStarted(),
+      ),
     );
   return gradeCase(
     { context, specification, fixture, witness, directory, report },
@@ -409,8 +446,7 @@ async function executeCases(context, specifications, report, directory, witness,
     });
     privateJson(join(directory, report.file), report);
     // A failure before any native effect leaves nothing to reconcile; the run continues.
-    if (evidence.runtimeAvailability === "unknown" && witness.effectsStarted() > 0)
-      throw new ReconcileRequiredError();
+    if (unknownAfterEffect(evidence, witness)) throw new ReconcileRequiredError();
     if (evidence.runtimeAvailability === "executable")
       await specification.cleanup?.(context, fixture);
   }

@@ -488,15 +488,17 @@ export const API_QUALIFICATION_PLANNING_CASES = [
   },
   adminMutationCase(
     "jira.epic-update",
+    // Jira echoes `done` in its acknowledgement but does not persist it on this release (the next
+    // read still shows the prior value), so the persisted epic name carries this proof instead.
     (f) => ({
       epicIdOrKey: String(f.planningEpic.id),
-      done: !f.planningEpic.done,
+      name: `${f.planningEpic.name} revised`,
     }),
     async (c, _data, f) => {
       const current = await read(c, epicPath(f));
-      for (const key of ["id", "key", "name", "summary"])
+      for (const key of ["id", "key", "summary", "done"])
         assert.equal(current[key], f.planningEpic[key]);
-      assert.equal(current.done, !f.planningEpic.done);
+      assert.equal(current.name, `${f.planningEpic.name} revised`);
       return proof(5);
     },
     planningEpic,
@@ -625,14 +627,18 @@ export const API_QUALIFICATION_PLANNING_CASES = [
         "Replacement requires an observed native synced flag",
       );
       assert.equal(f.planningSprint.synced, false);
+      // Jira omits a null date, goal or destination from its next read, which the product (rightly)
+      // never reads as a confirmed clear. Every replaced field is therefore a persisted value: both
+      // dates, the goal and a second, owned sprint as the incomplete-issues destination.
+      const destination = await createSprint(c, f, "replace-destination");
       f.planningReplacement = {
         name: `${f.planningSprint.name.slice(0, 22)} revised`,
         state: "future",
-        startDate: null,
-        endDate: null,
+        startDate: "2030-01-01T09:00:00.000Z",
+        endDate: "2030-01-15T09:00:00.000Z",
         goal: "Synthetic AC7 replaced sprint",
         autoStartStop: false,
-        incompleteIssuesDestinationId: null,
+        incompleteIssuesDestinationId: destination.id,
       };
       assert.notEqual(f.planningReplacement.name, f.planningSprint.name);
     },

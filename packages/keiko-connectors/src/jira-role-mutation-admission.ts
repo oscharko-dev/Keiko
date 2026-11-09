@@ -159,7 +159,8 @@ export interface RoleEffect {
 function actorEffect(input: RoleSelection, context: RoleContext): RoleEffect | undefined {
   const selected = input.principals;
   if (selected === undefined || input.role === undefined) return undefined;
-  const names = selected.users.map((user) => user.name);
+  // Native Jira resolves default (global) role actors by user key; project roles by username.
+  const names = selected.users.map((user) => (input.project === undefined ? user.key : user.name));
   if (input.operation === "jira.set-project-role-actors")
     return {
       path: context.path,

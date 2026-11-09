@@ -59,9 +59,11 @@ export const API_QUALIFICATION_MONITORING_CASES = [
       "/rest/api/2/monitoring/jmx/getAvailableMetrics",
       ["metricsText"],
       {
+        // Jira serves the metric names as a JSON array; the product keeps the literal response
+        // text, so the independent oracle compares it with the compact JSON of the native array.
         nativeRoot: (value) => {
-          assert.equal(typeof value, "string");
-          return [{ metricsText: value }];
+          assert.ok(Array.isArray(value) && value.every((name) => typeof name === "string"));
+          return [{ metricsText: JSON.stringify(value) }];
         },
         productRoot: "single",
       },

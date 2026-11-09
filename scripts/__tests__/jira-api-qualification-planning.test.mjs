@@ -75,11 +75,12 @@ function fixture() {
     planningReplacement: {
       name: "Revised sprint",
       state: "future",
-      startDate: null,
-      endDate: null,
+      // Jira omits a null from its next read, so the recipe replaces with persisted values.
+      startDate: "2030-01-01T09:00:00.000Z",
+      endDate: "2030-01-15T09:00:00.000Z",
       goal: "Revised goal",
       autoStartStop: false,
-      incompleteIssuesDestinationId: null,
+      incompleteIssuesDestinationId: "16",
     },
     applicationRoleBefore: [role],
     applicationRoleChange: {
@@ -103,6 +104,40 @@ async function withNative(handler, run) {
     fetch.mockRestore();
     rmSync(directory, { recursive: true, force: true });
   }
+}
+const AGILE_STORY_POINTS = { id: "customfield_10098", name: "Story Points", custom: true };
+const AGILE_EPIC_LABEL = {
+  id: "customfield_10011",
+  schema: { custom: "com.pyxis.greenhopper.jira:gh-epic-label" },
+};
+/** The native fields the operator fixture needs, added once to whatever a test already serves. */
+function withAgileFields(fields) {
+  const ids = new Set(fields.map((field) => field.id));
+  return [...fields, ...[AGILE_EPIC_LABEL, AGILE_STORY_POINTS].filter((f) => !ids.has(f.id))];
+}
+/** Native reads of the Agile operator fixture, already satisfied so that it writes nothing. */
+function agileSetup(url) {
+  const path = url.pathname;
+  const plain = (value) => response(value);
+  if (path === "/rest/api/2/issuetypescheme")
+    return plain({ schemes: [{ id: "5", name: "KEIKO: Simple scheme" }] });
+  if (path === "/rest/api/2/issuetypescheme/5")
+    return plain({ name: "KEIKO: Simple scheme", issueTypes: [{ id: "90" }, { id: "91" }] });
+  if (path === "/rest/api/2/issuetype")
+    return plain([
+      { id: "90", name: "Epic", subtask: false },
+      { id: "91", name: "Story", subtask: false },
+    ]);
+  if (path === "/rest/api/2/screens")
+    return plain([
+      { id: "31", name: "KEIKO: Simple Issue Tracking Create Issue Screen" },
+      { id: "32", name: "KEIKO: Simple Issue Tracking Edit/View Issue Screen" },
+    ]);
+  if (/^\/rest\/api\/2\/screens\/3[12]\/tabs$/u.test(path))
+    return plain([{ id: "41", name: "Field Tab" }]);
+  if (/^\/rest\/api\/2\/screens\/3[12]\/tabs\/41\/fields$/u.test(path))
+    return plain([{ id: AGILE_EPIC_LABEL.id }, { id: AGILE_STORY_POINTS.id }]);
+  return undefined;
 }
 const page = (values) => ({
   startAt: 0,
@@ -224,17 +259,24 @@ it.each(["jira.epic-remove-issues", "jira.epic-move-issues"])(
   },
 );
 
-it("requires an actual epic done-state change while preserving the observed identity", async () => {
+it("requires the persisted epic name change while preserving identity, summary and done state", async () => {
   const f = fixture();
-  let current = { ...f.planningEpic, done: true };
+  const revised = `${f.planningEpic.name} revised`;
+  let current = { ...f.planningEpic, name: revised };
   await withNative(
     () => response(current),
     async (context) => {
-      expect(entry("jira.epic-update").arguments(f)).toEqual({ epicIdOrKey: "31", done: true });
+      expect(entry("jira.epic-update").arguments(f)).toEqual({
+        epicIdOrKey: "31",
+        name: revised,
+      });
       await expect(entry("jira.epic-update").readback(context, {}, f)).resolves.toMatchObject({
         matched: true,
       });
       current = f.planningEpic;
+      await expect(entry("jira.epic-update").readback(context, {}, f)).rejects.toThrow();
+      // A done flag that Jira merely echoed in its acknowledgement is not a persisted change.
+      current = { ...f.planningEpic, name: revised, done: !f.planningEpic.done };
       await expect(entry("jira.epic-update").readback(context, {}, f)).rejects.toThrow();
     },
   );
@@ -354,16 +396,20 @@ it("creates an authentic Epic fixture through the governed hook using native typ
   await withNative(
     (url) => {
       if (url.pathname.endsWith("/myself")) return response(actor);
+      const setup = agileSetup(url);
+      if (setup) return setup;
       if (url.pathname.endsWith("/configuration")) return response(f.planningBoard);
       if (url.pathname.endsWith("/project/KEIKO"))
         return response({ id: "10", issueTypes: [{ id: "7", name: "Epic", subtask: false }] });
       if (url.pathname.endsWith("/field"))
-        return response([
-          {
-            id: "customfield_10011",
-            schema: { custom: "com.pyxis.greenhopper.jira:gh-epic-label" },
-          },
-        ]);
+        return response(
+          withAgileFields([
+            {
+              id: "customfield_10011",
+              schema: { custom: "com.pyxis.greenhopper.jira:gh-epic-label" },
+            },
+          ]),
+        );
       return response(url.pathname.includes("/epic/") ? nativeEpic : created);
     },
     async (context) => {
@@ -408,11 +454,18 @@ it.each([
     await withNative(
       (url) => {
         if (url.pathname.endsWith("/myself")) return response(actor);
+        const setup = agileSetup(url);
+        if (setup) return setup;
         if (url.pathname.endsWith("/configuration")) return response(f.planningBoard);
         if (url.pathname.endsWith("/field"))
-          return response([
-            { id: fieldId, schema: unit === "minutes" ? { system: fieldId } : { type: "number" } },
-          ]);
+          return response(
+            withAgileFields([
+              {
+                id: fieldId,
+                schema: unit === "minutes" ? { system: fieldId } : { type: "number" },
+              },
+            ]),
+          );
         if (url.pathname.endsWith("/project/KEIKO"))
           return response({
             id: "10",
@@ -466,14 +519,18 @@ it("selects the opposite observed rank order using two genuinely created issue i
   await withNative(
     (url) => {
       if (url.pathname.endsWith("/myself")) return response(actor);
+      const setup = agileSetup(url);
+      if (setup) return setup;
       if (url.pathname.endsWith("/configuration")) return response(f.planningBoard);
       if (url.pathname.endsWith("/field"))
-        return response([
-          {
-            id: "customfield_10019",
-            schema: { custom: "com.pyxis.greenhopper.jira:gh-lexo-rank" },
-          },
-        ]);
+        return response(
+          withAgileFields([
+            {
+              id: "customfield_10019",
+              schema: { custom: "com.pyxis.greenhopper.jira:gh-lexo-rank" },
+            },
+          ]),
+        );
       if (url.pathname === "/rest/agile/1.0/board/13/issue")
         return response({ startAt: 0, total: 2, issues: [...created].reverse() });
       return response(created.find((item) => item.key === url.pathname.split("/").at(-1)));
@@ -566,6 +623,9 @@ it("prepares sprint deletion through the governed fixture hook and refuses a mis
   await withNative(
     (url) => {
       if (url.pathname.endsWith("/myself")) return response(actor);
+      const setup = agileSetup(url);
+      if (setup) return setup;
+      if (url.pathname === "/rest/api/2/field") return response(withAgileFields([]));
       if (url.pathname.endsWith("/configuration")) return response(f.planningBoard);
       return response(
         omitFlag

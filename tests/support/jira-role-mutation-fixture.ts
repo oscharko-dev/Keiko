@@ -61,7 +61,7 @@ export const ROLE_MUTATION_FIXTURE_CASES = [
     args: { ...REVIEW, principals: NEXT },
     method: "POST",
     path: "role/7/actors",
-    body: { user: ["next-user"] },
+    body: { user: ["next-key"] },
     receipt: { ...ACTOR_RECEIPT, roleActorsScope: "role-defaults", actorChange: "add" },
     confirmed: false,
   },
@@ -281,7 +281,12 @@ function roleRead(state: RoleState, url: URL): AtlassianWriteHttpOutcome {
     return { ok: true, status: 200, body: undefined, items: [...state.roles.values()] };
   return rolePrincipalRead(state, url) ?? roleProjectRead(state, url) ?? roleByIdRead(state, url);
 }
-function roleAdditions(state: RoleState, body: Readonly<Record<string, unknown>>): Actor[] {
+/** Native Jira names default (global) role actors by user key and project role actors by username. */
+function roleAdditions(
+  state: RoleState,
+  body: Readonly<Record<string, unknown>>,
+  userIdentifier: "key" | "name",
+): Actor[] {
   const result: Actor[] = [];
   for (const [key, type] of [
     ["user", "atlassian-user-role-actor"],
@@ -292,7 +297,13 @@ function roleAdditions(state: RoleState, body: Readonly<Record<string, unknown>>
     assert.ok(Array.isArray(names));
     for (const name of names) {
       assert.ok(typeof name === "string");
-      result.push({ id: String(state.nextActor++), type, name });
+      const user =
+        type === "atlassian-user-role-actor"
+          ? state.users.find((item) => item[userIdentifier] === name)
+          : undefined;
+      // An unresolvable user identifier is refused natively before anything is written.
+      if (type === "atlassian-user-role-actor") assert.ok(user, "Unknown native user identifier");
+      result.push({ id: String(state.nextActor++), type, name: user?.name ?? name });
     }
   }
   return result;
@@ -304,21 +315,28 @@ function roleModifyActors(
   method: string,
   raw: Readonly<Record<string, unknown>> | undefined,
 ): Actor[] {
+  const identifier = url.pathname === "/role/7/actors" ? "key" : "name";
   if (method === "DELETE")
     return old.filter(
       (item) =>
         item.name !==
-        url.searchParams.get(item.type === "atlassian-user-role-actor" ? "user" : "group"),
+        (item.type === "atlassian-user-role-actor"
+          ? state.users.find((user) => user[identifier] === url.searchParams.get("user"))?.name
+          : url.searchParams.get("group")),
     );
   assert.ok(raw);
-  if (method === "POST") return [...old, ...roleAdditions(state, raw)];
+  if (method === "POST") return [...old, ...roleAdditions(state, raw, identifier)];
   assert.equal(raw.id, 7);
   const categorised = asRecord(raw.categorisedActors);
   assert.ok(categorised);
-  return roleAdditions(state, {
-    user: categorised["atlassian-user-role-actor"],
-    group: categorised["atlassian-group-role-actor"],
-  });
+  return roleAdditions(
+    state,
+    {
+      user: categorised["atlassian-user-role-actor"],
+      group: categorised["atlassian-group-role-actor"],
+    },
+    identifier,
+  );
 }
 function roleApplyEffect(
   state: RoleState,

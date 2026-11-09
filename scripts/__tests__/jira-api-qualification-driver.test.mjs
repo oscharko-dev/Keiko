@@ -153,3 +153,106 @@ it("retains a reconciliation marker for an unsettled native write", async () => 
   ).rejects.toThrow("Uncertain native effect");
   expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(true);
 });
+it("grades a settled 404 write on a release that does not publish it without a reconcile stop", async () => {
+  const output = directory();
+  const selected = {
+    ...specification({}),
+    readback: async () => ({ capabilityAbsent: true, status: 404, matched: undefined }),
+  };
+  const refused = attempt(primary.identity, true);
+  refused.dispatch.result = {
+    status: "failed",
+    data: { operationBinding: refused.binding, outcome: "unknown", reason: "not-found" },
+  };
+  refused.dispatch.receipt.status = "failed";
+  refused.witness.responses = [{ status: 404, truncated: false }];
+  refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 404 };
+  dispatch.mockResolvedValue(refused);
+  const evidence = await runQualificationCase({}, {}, selected, {}, witness, output, report);
+  expect(evidence.runtimeAvailability).toBe("unavailable");
+  expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(false);
+});
+it("keeps going after a settled unknown 404 write because every native response was a refusal", async () => {
+  const output = directory();
+  const refused = attempt(primary.identity, true);
+  refused.dispatch.result = {
+    status: "failed",
+    data: { operationBinding: refused.binding, outcome: "unknown", reason: "not-found" },
+  };
+  refused.dispatch.receipt.status = "failed";
+  refused.witness.responses = [{ status: 404, truncated: false }];
+  refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 404 };
+  dispatch.mockResolvedValue(refused);
+  const evidence = await runQualificationCase(
+    {},
+    {},
+    specification({}),
+    {},
+    witness,
+    output,
+    report,
+  );
+  expect(evidence.runtimeAvailability).toBe("unknown");
+  // A 2xx beside the refusal is not a definite non-effect and still stops the run.
+  refused.witness.responses = [
+    { status: 404, truncated: false },
+    { status: 204, truncated: false },
+  ];
+  await expect(
+    runQualificationCase({}, {}, specification({}), {}, witness, directory(), report),
+  ).rejects.toThrow("Uncertain native effect");
+});
+it("grades a settled, independently reproduced 403 write as denied without a reconcile stop", async () => {
+  const output = directory();
+  const selected = {
+    ...specification({}),
+    readback: async () => ({ permissionDenied: true, status: 403 }),
+  };
+  const refused = attempt(primary.identity, true);
+  refused.dispatch.result = {
+    status: "failed",
+    data: { operationBinding: refused.binding, outcome: "unknown", reason: "permission-denied" },
+  };
+  refused.dispatch.receipt.status = "failed";
+  refused.witness.responses = [{ status: 403, truncated: false }];
+  refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 403 };
+  dispatch.mockResolvedValue(refused);
+  const evidence = await runQualificationCase({}, {}, selected, {}, witness, output, report);
+  expect(evidence.runtimeAvailability).toBe("denied");
+  expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(false);
+  // A 2xx beside the refusal is not a definite non-effect and still stops the run.
+  const unproven = { ...specification({}), readback: async () => ({ matched: false }) };
+  refused.witness.responses = [
+    { status: 403, truncated: false },
+    { status: 204, truncated: false },
+  ];
+  dispatch.mockResolvedValue(refused);
+  await expect(
+    runQualificationCase({}, {}, unproven, {}, witness, directory(), report),
+  ).rejects.toThrow("Uncertain native effect");
+});
+it.each([
+  [[{ status: 403, truncated: false }], false],
+  [
+    [
+      { status: 403, truncated: false },
+      { status: 200, truncated: false },
+    ],
+    true,
+  ],
+  [[], true],
+])(
+  "continues after a failed dispatch only when every native response was a 4xx refusal",
+  async (responses, stops) => {
+    const output = directory();
+    dispatch.mockRejectedValue(new TypeError("Settled outcome unknown"));
+    const refusing = {
+      arm: vi.fn(),
+      effectsStarted: () => 1,
+      snapshot: () => ({ blocked: 0, responses }),
+    };
+    const outcome = runQualificationCase({}, {}, specification({}), {}, refusing, output, report);
+    if (stops) await expect(outcome).rejects.toThrow("Uncertain native effect");
+    else await expect(outcome).resolves.toMatchObject({ runtimeAvailability: "unknown" });
+  },
+);

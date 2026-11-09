@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
-import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import { executeJiraManagedMutation, nativeRequestBody } from "./jira-managed-mutations.js";
 import type { JiraAttachmentSource } from "./jira-attachments.js";
 import { jiraEditAlreadyHeld } from "./jira-mutation-confirmation.js";
 
@@ -1799,3 +1799,12 @@ it.each([
     );
   },
 );
+
+it("sends only the base-URL string as raw text and every other body, even a string, as JSON", () => {
+  expect(nativeRequestBody("settings/baseUrl", "https://jira.example/ctx")).toBe(
+    "https://jira.example/ctx",
+  );
+  expect(nativeRequestBody("comment/7/properties/k", "text")).toBe('"text"');
+  expect(nativeRequestBody("readonly-mode", { enabled: true })).toBe('{"enabled":true}');
+  expect(nativeRequestBody("x", ["a"])).toBe('["a"]');
+});
