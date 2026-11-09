@@ -139,7 +139,6 @@ export const API_QUALIFICATION_FILTER_CASES = [
     (f) => ({
       ...permissionArgs(f),
       permission: { type: "group", groupName: f.savedShareGroup, view: true, edit: false },
-      acceptGlobalReplacement: true,
     }),
     async (c, data, f) => {
       assert.match(data.permissionId, /^[1-9]\d*$/u);
