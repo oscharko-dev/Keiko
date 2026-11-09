@@ -166,6 +166,26 @@ describe("reviewed membership and global rank evidence", () => {
     ).toMatchObject({ ok: false, receipt: CASES[0].receipt });
     expect(writes(f)).toHaveLength(1);
   });
+  it("confirms removal when native Jira answers fields:null for an epicless issue", async () => {
+    const f = agilePlanningFixture();
+    const agile = f.ports.requests.agile;
+    const requests = {
+      ...f.ports.requests,
+      agile: (async (...call: Parameters<typeof agile>): ReturnType<typeof agile> => {
+        const result = await agile(...call);
+        // Native Jira omits the empty epic and answers `fields: null` once the issue has left it.
+        return writes(f).length > 0 &&
+          call[0].endsWith("?fields=epic&updateHistory=false") &&
+          result.ok
+          ? { ...result, body: { ...result.body, fields: null } }
+          : result;
+      }) as typeof agile,
+    };
+    expect(
+      await executeJiraAgilePlanningMutation(CASES[0].name, CASES[0].args, { requests }),
+    ).toEqual({ ok: true, receipt: CASES[0].receipt });
+    expect(writes(f)).toHaveLength(1);
+  });
   it("reports explicit no-op removal without POST", async () => {
     const f = agilePlanningFixture();
     first(f).fields.customfield_10014 = null;

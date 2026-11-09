@@ -133,10 +133,12 @@ async function confirmRemoval(
     if (!issue.ok) return issue;
     const epic = await readPlanningEpicMembership(requests, issue.value);
     if (!epic.ok) return epic;
+    // Jira omits an empty Epic Link from the issue read; the independent agile epic read above
+    // already proved the absence, so only a field that is present must be null.
+    const field = admission.field.metadata.id;
     if (
       epic.value !== null ||
-      !Object.hasOwn(issue.value.fields, admission.field.metadata.id) ||
-      issue.value.fields[admission.field.metadata.id] !== null
+      (Object.hasOwn(issue.value.fields, field) && issue.value.fields[field] !== null)
     )
       return planningRefusal(
         "The selected issue's native epic and Epic Link field do not independently prove removal.",
