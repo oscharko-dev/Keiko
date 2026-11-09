@@ -70,6 +70,12 @@ readbacks. Declared same-turn prerequisites share one bounded accepted authority
 and private lifetime; their evidence cannot replace the frozen primary witness.
 File sources are attached to the actual Chat through its protected Files scope.
 
+Every session's Jira starts with `-Datlassian.authentication.legacy.mode=true` (set in
+`compose.yaml`). Jira 10.3 otherwise answers `POST /rest/auth/1/session` with a 403 "two-step
+verification" refusal, so the private administrator session that websudo, session and user-avatar
+recipes need could not exist. The setting is part of provisioning: a session started from this
+compose file needs no UI step, and the credentials stay read programmatically from its private files.
+
 Some recipes require genuine operator fixtures in the owned session's `fixture.json`:
 `planningSyncedSprintIds` and `planningAllSyncedSprintIds` identify real synced sprints;
 `assetDashboard: { id, itemId, name }` identifies a disposable dashboard/item created
