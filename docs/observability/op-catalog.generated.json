@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a4d2372b0d24cddde588bf2607681c0ae97125497a4abadb8d2a9857cefd321d",
+    "catalogDigest": "6eca7a72aa34d3deda089586a8a911e115394a5afb32393c38bcb04df9f0419e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3806,8 +3806,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:153",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:1129"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:155",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:1131"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -7849,9 +7849,9 @@
         "failureClasses": ["coding-app-session-channel"],
         "proofIds": ["coding-app-session.channel.closed.duration"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:76",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:79",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:307"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:322"
         ]
       },
       {
@@ -7884,9 +7884,9 @@
         "failureClasses": ["coding-app-session-channel"],
         "proofIds": ["coding-app-session.channel.opened.live"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:54",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:57",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:299"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:314"
         ]
       },
       {
@@ -7930,8 +7930,8 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.expired.observation"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:159",
-        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:302"]
+        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:171",
+        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:315"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -7968,9 +7968,9 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.local-session.confirmed.request"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:116",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:119",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:433"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:448"
         ]
       },
       {
@@ -8009,9 +8009,9 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.local-session.denied.request"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:135",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:138",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:209"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:221"
         ]
       },
       {
@@ -8072,9 +8072,9 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.local-session.refused.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:159",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:162",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:197"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:209"
         ]
       },
       {
@@ -8184,9 +8184,9 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.paired.request"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:92",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:95",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:397"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:412"
         ]
       },
       {
@@ -8255,8 +8255,8 @@
         "failureClasses": ["coding-app-session-pairing"],
         "proofIds": ["coding-app-session.proof.refused.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:222",
-        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:263"]
+        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:234",
+        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:276"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8293,9 +8293,9 @@
         "failureClasses": ["coding-app-session-rotation"],
         "proofIds": ["coding-app-session.rotated.request"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:219",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:234",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:614"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:629"
         ]
       },
       {
@@ -8334,8 +8334,8 @@
         "failureClasses": ["coding-app-session-rotation"],
         "proofIds": ["coding-app-session.rotation.state.observation"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:184",
-        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:214"]
+        "registrationSite": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:196",
+        "emitterSites": ["packages/keiko-server/src/coding-app-session/sessionRegistry.ts:226"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8362,9 +8362,9 @@
         "failureClasses": ["coding-app-session-sign-out"],
         "proofIds": ["coding-app-session.signed-out.request"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:238",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:253",
         "emitterSites": [
-          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:634"
+          "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:649"
         ]
       },
       {
@@ -115310,7 +115310,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:268",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:283",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -116080,7 +116080,7 @@
     {
       "op": "chat.tool-transcript.updated",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:156",
+      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:158",
       "package": "keiko-server"
     },
     {
@@ -116357,13 +116357,13 @@
     {
       "op": "coding-app-session.channel.closed",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:79",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:82",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.channel.opened",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:57",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:60",
       "package": "keiko-server"
     },
     {
@@ -116383,25 +116383,25 @@
     {
       "op": "coding-app-session.expired",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:162",
+      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:174",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.local-session.confirmed",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:119",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:122",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.local-session.denied",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:138",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:141",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.local-session.refused",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:162",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:165",
       "package": "keiko-server"
     },
     {
@@ -116420,31 +116420,31 @@
     {
       "op": "coding-app-session.paired",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:95",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:98",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.proof.refused",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:225",
+      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:237",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.rotated",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:222",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:237",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.rotation.state",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:187",
+      "site": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts:199",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.signed-out",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:241",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:256",
       "package": "keiko-server"
     },
     {
