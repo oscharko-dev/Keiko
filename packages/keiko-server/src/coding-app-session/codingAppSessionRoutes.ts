@@ -45,7 +45,10 @@ import {
   serializeSessionCookies,
 } from "./sessionCookie.js";
 
-import { SESSION_PROOF_REFUSAL_REASONS } from "./sessionRegistry.js";
+import {
+  SESSION_EXPIRY_REFUSAL_REASONS,
+  SESSION_PROOF_REFUSAL_REASONS,
+} from "./sessionRegistry.js";
 import type { CodingAppSessionRepairFailureReason } from "./sessionChannel.js";
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
@@ -187,11 +190,20 @@ const LOCAL_SESSION_REFUSED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// Only a caller holding a registered session can reach these refusals, each at most once per
+// session (expiry) or within its final second (`lifetime-insufficient`). Every other refused repair
+// is caller-controlled and stays in the per-minute denial aggregate, never one line per request.
+const RECORDED_REPAIR_REFUSALS: ReadonlySet<string> = new Set([
+  ...SESSION_EXPIRY_REFUSAL_REASONS,
+  "lifetime-insufficient",
+]);
+
 function localSessionRefused(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   reason: CodingAppSessionRepairFailureReason | "channel-unavailable",
 ): RouteResult {
+  if (!RECORDED_REPAIR_REFUSALS.has(reason)) return localSessionDenied(ctx, deps);
   const { presentedProofCount, distinctProofCount } = readSessionCookieObservation(ctx.req);
   appSessionActivity(deps).write(
     activityLogEvent(

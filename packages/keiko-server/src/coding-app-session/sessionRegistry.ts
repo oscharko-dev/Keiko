@@ -40,6 +40,18 @@ export const SESSION_PROOF_REFUSAL_REASONS = [
   "session-unregistered",
 ] as const;
 export type SessionProofRefusalReason = (typeof SESSION_PROOF_REFUSAL_REASONS)[number];
+/**
+ * Refusals a caller can cause at most once per registered session, because the refusal expires and
+ * removes it. Only these are recorded per request: a missing, malformed, foreign or wrong proof is
+ * caller-controlled and unbounded, so recording each would let any page that reaches the loopback
+ * server flood the bounded Activity Log. Those stay in the existing per-minute denial aggregates.
+ */
+export const SESSION_EXPIRY_REFUSAL_REASONS: ReadonlySet<SessionProofRefusalReason> = new Set([
+  "approval",
+  "inactivity",
+  "invalid-clock",
+  "lifetime",
+]);
 export interface SessionProofObservation {
   readonly correlationId?: string;
   readonly purpose?: "verification" | "inspection" | "repair" | "operation" | "rotation";
@@ -258,6 +270,7 @@ function recordProofRefusal(
   observation: SessionProofObservation,
 ): void {
   observation.onRefusal?.(reason);
+  if (!SESSION_EXPIRY_REFUSAL_REASONS.has(reason)) return;
   if (!registered && state.sessions.size === 0) return;
   state.activityLog?.write(
     activityLogEvent(

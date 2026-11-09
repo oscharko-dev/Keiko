@@ -344,12 +344,16 @@ an ordinary state of a page load) returns the content-free acknowledgement with 
 cookie, never a 401 that would surface as a browser console error on every unpaired load. The
 existing Activity Log records `coding-app-session.local-session.denied` with the single closed
 reason `authority-unavailable` and the aggregate `count`, at warning level when the pairing-denial threshold is reached, at most once per minute per composed server. It contains no
-identity, cookie or caller-provided content. Every failed repair also records
-`coding-app-session.local-session.refused` for its request, with count one and a closed reason.
-`coding-app-session.proof.refused` records refused proofs while sessions remain registered,
-distinguishing missing/malformed proofs, an unregistered session, a secret mismatch and the
-existing expiry reasons. These lines carry only the request correlation, closed purpose,
-registered flag and counts (including presented/distinct cookie counts where available).
+identity, cookie or caller-provided content. A missing, malformed, foreign or wrong proof and an
+absent channel are caller-controlled: any page that reaches the loopback server can repeat them
+without limit, so they never write a line per request and remain only in that aggregate. A refusal
+only a registered session's holder can reach is recorded for its request:
+`coding-app-session.proof.refused` names the closed expiry reason (`approval`, `inactivity`,
+`invalid-clock`, `lifetime`) once, because the expiry removes the session, and
+`coding-app-session.local-session.refused` records that expiry or `lifetime-insufficient` (the final
+second of the absolute lifetime) with count one. These lines carry only the request correlation,
+closed purpose, registered flag and counts (including presented/distinct cookie counts where
+available).
 They expose no bearer, session identity or personal content. Repeated observations of the same
 HTTP request reuse its canonical generated correlation. These diagnostics do not widen authority
 or refresh rejected proofs. Pairing acknowledgement semantics remain unchanged.
