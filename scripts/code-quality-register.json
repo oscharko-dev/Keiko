@@ -3062,10 +3062,9 @@
       "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-contracts/src/voice-session-recap.ts": {
-      "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 4,
       "anti-slop/no-unknown-parameters": 3,
-      "anti-slop/no-unsafe-dictionary-type": 3
+      "anti-slop/no-unsafe-dictionary-type": 2
     },
     "packages/keiko-contracts/src/voice-transcript.test.ts": {
       "anti-slop/require-safety-comment-for-type-assertion": 1
