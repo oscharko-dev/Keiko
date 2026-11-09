@@ -168,14 +168,14 @@ describe("reviewed global role and project actor mutations", () => {
       receipt: test.receipt,
     });
   });
-  it("binds key and native username separately before sending only usernames", async () => {
+  it("binds key and native username separately before selecting native user keys for default actors", async () => {
     const f = roleMutationFixture();
     const test = ROLE_MUTATION_FIXTURE_CASES[4];
     await execute(test.name, test.args, f.request);
     const effect = f.calls.findIndex((call) => call.method === "POST");
     expect(f.calls.slice(0, effect).map((call) => call.path)).toContain("user?username=next-user");
     expect(f.calls.slice(0, effect).map((call) => call.path)).toContain("user?key=next-key");
-    expect(f.calls[effect]?.body).toEqual({ user: ["next-user"] });
+    expect(f.calls[effect]?.body).toEqual({ user: ["next-key"] });
   });
   it("refuses a user-key/username mismatch without name-based fallback", async () => {
     const f = roleMutationFixture();

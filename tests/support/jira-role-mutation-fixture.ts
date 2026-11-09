@@ -61,7 +61,7 @@ export const ROLE_MUTATION_FIXTURE_CASES = [
     args: { ...REVIEW, principals: NEXT },
     method: "POST",
     path: "role/7/actors",
-    body: { user: ["next-user"] },
+    body: { user: ["next-key"] },
     receipt: { ...ACTOR_RECEIPT, roleActorsScope: "role-defaults", actorChange: "add" },
     confirmed: false,
   },
