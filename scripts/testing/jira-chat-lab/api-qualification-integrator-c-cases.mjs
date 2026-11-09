@@ -538,6 +538,32 @@ const userAvatarCases = [
 
 const flatSession = (value) => [{ name: value.name, ...value.loginInfo }];
 
+/**
+ * Jira counts every authenticated request as a login, so the counter moves between the product's
+ * read and the independent one. Identity and the stable login fields must match exactly; the
+ * counter must be a safe integer that did not move backwards.
+ */
+function currentSessionCase() {
+  const base = readCase("jira.current-session", "/rest/auth/1/session", ["username"], {
+    nativeRoot: flatSession,
+    nativeNames: { username: "name" },
+    productRoot: (data) => {
+      assert.equal(data.observationScope, "bound-current-user-session");
+      return [{ username: data.username, ...data.loginInfo }];
+    },
+    optionalFields: ["failedLoginCount", "lastFailedLoginTime"],
+  });
+  return {
+    ...base,
+    readback: async (c, data, f) => {
+      const matched = await base.readback(c, data, f);
+      const native = (await nativeStatus(c, "/rest/auth/1/session")).value.loginInfo;
+      assert.ok(Number.isSafeInteger(data.loginInfo.loginCount));
+      assert.ok(data.loginInfo.loginCount <= native.loginCount);
+      return { ...matched, assertionCount: matched.assertionCount + 2 };
+    },
+  };
+}
 export const API_QUALIFICATION_INTEGRATOR_C_CASES = [
   adminMutationCase(
     "jira.create-user",
@@ -617,20 +643,7 @@ export const API_QUALIFICATION_INTEGRATOR_C_CASES = [
   { ...worklogFeed("jira.deleted-worklogs", "deleted"), actor: "admin", administration: true },
   { ...worklogFeed("jira.updated-worklogs", "updated"), actor: "admin", administration: true },
   {
-    ...readCase("jira.current-session", "/rest/auth/1/session", ["username"], {
-      nativeRoot: flatSession,
-      nativeNames: { username: "name" },
-      productRoot: (data) => {
-        assert.equal(data.observationScope, "bound-current-user-session");
-        return [{ username: data.username, ...data.loginInfo }];
-      },
-      optionalFields: [
-        "loginCount",
-        "failedLoginCount",
-        "lastFailedLoginTime",
-        "previousLoginTime",
-      ],
-    }),
+    ...currentSessionCase(),
     actor: "admin",
     administration: true,
   },

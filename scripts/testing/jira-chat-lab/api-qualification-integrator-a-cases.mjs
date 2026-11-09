@@ -365,7 +365,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
             outwardIssueKey: value.outwardIssue.key,
           },
         ],
-        productRoot: "single",
+        // The product returns the one projected link as the only item of its page.
       },
     ),
     ...adminRead,
