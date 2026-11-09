@@ -28,7 +28,7 @@ interface RestoredTurnSnapshot {
   readonly message: ChatMessage;
   readonly persisted?: readonly ChatMessage[];
 }
-async function restoredTurnSnapshot(
+export async function restoredTurnSnapshot(
   chat: Chat,
   reference: string,
   signal: AbortSignal,
@@ -54,7 +54,7 @@ async function restoredTurnSnapshot(
     return undefined;
   return { message: canonical, persisted: full.messages };
 }
-/** Poll spacing grows 1 s, 2 s, 4 s, 8 s (15 polls each), then holds at 10 s. */
+/** Poll spacing is 1 s for 14 polls, then 2 s, 4 s and 8 s for 15 polls each, then holds at 10 s. */
 const RESTORED_TURN_POLL_BASE_MS = 1000;
 const RESTORED_TURN_POLL_MAX_DELAY_MS = 10_000;
 const RESTORED_TURN_POLLS_PER_STEP = 15;
@@ -73,11 +73,17 @@ export function restoredTurnPollDelayMs(attempt: number): number {
   );
 }
 
-function reportObservationAbandoned(): void {
+function reportObservationAbandoned(onAbandoned: () => void): void {
   reportClientDiagnostic("Restored chat turn observation gave up.", { kind: "other" });
+  onAbandoned();
 }
 
-function observeRestoredTurn(chat: Chat, reference: string, publish: Publish): () => void {
+function observeRestoredTurn(
+  chat: Chat,
+  reference: string,
+  publish: Publish,
+  onAbandoned: () => void,
+): () => void {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout>;
   let terminal = false;
@@ -100,7 +106,7 @@ function observeRestoredTurn(chat: Chat, reference: string, publish: Publish): (
         });
     } finally {
       if (!terminal && !controller.signal.aborted) {
-        if (attempts >= RESTORED_TURN_POLL_MAX_ATTEMPTS) reportObservationAbandoned();
+        if (attempts >= RESTORED_TURN_POLL_MAX_ATTEMPTS) reportObservationAbandoned(onAbandoned);
         else
           timer = setTimeout(() => {
             void poll();
@@ -122,6 +128,7 @@ export function useRestoredToolTurn(
   messages: readonly ChatMessage[],
   ownsSend: boolean,
   publish: Publish,
+  onAbandoned: () => void,
 ): void {
   const pending = restoredPendingToolTurn(messages, chat?.id);
   const pendingRef = useRef(pending);
@@ -131,6 +138,6 @@ export function useRestoredToolTurn(
     if (chat === undefined || reference === undefined || ownsSend) return;
     const initial = pendingRef.current;
     if (initial !== undefined) publish(initial);
-    return observeRestoredTurn(chat, reference, publish);
-  }, [chat, reference, ownsSend, publish]);
+    return observeRestoredTurn(chat, reference, publish, onAbandoned);
+  }, [chat, reference, ownsSend, publish, onAbandoned]);
 }

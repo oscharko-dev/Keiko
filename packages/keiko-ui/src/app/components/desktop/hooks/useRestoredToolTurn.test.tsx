@@ -72,7 +72,8 @@ it("reads the full persisted page when the known canonical turn is outside the r
     Promise.resolve({ messages: limit === 8 ? [] : [completed, assistant] }),
   );
   const publish = vi.fn();
-  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish));
+  const onAbandoned = vi.fn();
+  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish, onAbandoned));
   await waitFor(() => expect(publish).toHaveBeenCalledWith(completed, [completed, assistant]), {
     timeout: 2500,
   });
@@ -88,7 +89,10 @@ it("aborts its observation and refuses a late response after unmount", async () 
     });
   });
   const publish = vi.fn();
-  const { unmount } = renderHook(() => useRestoredToolTurn(chat, [pending], false, publish));
+  const onAbandoned = vi.fn();
+  const { unmount } = renderHook(() =>
+    useRestoredToolTurn(chat, [pending], false, publish, onAbandoned),
+  );
   await waitFor(() => expect(signal).toBeDefined());
   unmount();
   expect(signal?.aborted).toBe(true);
@@ -118,7 +122,8 @@ it("gives up after a bounded number of polls when the turn never settles", async
   setClientDiagnosticWriter(diagnostics);
   vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
   const publish = vi.fn();
-  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish));
+  const onAbandoned = vi.fn();
+  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish, onAbandoned));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
   });
@@ -134,6 +139,8 @@ it("gives up after a bounded number of polls when the turn never settles", async
   });
   expect(vi.mocked(fetchChatMessages).mock.calls.length).toBe(calls);
   expect(publish).toHaveBeenCalledTimes(1);
+  // The give-up is explained to the person exactly once, not only logged.
+  expect(onAbandoned).toHaveBeenCalledOnce();
 });
 
 it("stops observing once the server settles the turn as failed", async () => {
@@ -141,7 +148,8 @@ it("stops observing once the server settles the turn as failed", async () => {
   const failed = { ...pending, turnState: "failed" as const };
   vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [failed] });
   const publish = vi.fn();
-  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish));
+  const onAbandoned = vi.fn();
+  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish, onAbandoned));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1000);
   });
@@ -151,4 +159,5 @@ it("stops observing once the server settles the turn as failed", async () => {
     await vi.advanceTimersByTimeAsync(60_000);
   });
   expect(vi.mocked(fetchChatMessages).mock.calls.length).toBe(calls);
+  expect(onAbandoned).not.toHaveBeenCalled();
 });

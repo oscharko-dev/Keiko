@@ -2615,6 +2615,36 @@ describe("bounded Jira approval continuation across a page reload", () => {
     }
   });
 
+  it("cancels a retained worker when Stop reaches the server after the transport closed", async () => {
+    const f = fixture(true);
+    const stream = leasedStream(f, "leased-late-stop");
+    try {
+      const approval = await pendingWriteApproval(f);
+      const message = f.deps.store.listMessages(f.chatId)[0];
+      expect(
+        handleGetChatWriteApproval(context({}, { approvalId: approval.approvalId }), f.deps).status,
+      ).toBe(200);
+      // The browser aborts its transport first; the worker is retained for the observed review.
+      stream.response.res.destroy();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(continuations.get(f.deps.store)?.size).toBe(1);
+      const stopped = await handleCancelDesktopChat(
+        context({ chatId: f.chatId, canonicalTurnRef: message?.canonicalTurnRef }),
+        f.deps,
+      );
+      expect(stopped).toMatchObject({ status: 200, body: { cancelled: true } });
+      await stream.outcome;
+      expect(await postWriteDecision(f, approval, "approve")).not.toBe(200);
+      expect(f.writes()).toBe(0);
+      expectCancelledConsent(f, "cancelled");
+      expect(continuations.get(f.deps.store)?.size ?? 0).toBe(0);
+    } finally {
+      for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
+      stream.response.res.destroy();
+      await stream.outcome;
+    }
+  });
+
   it("refuses resumption after the original app session was revoked", async () => {
     const f = fixture(true);
     const stream = leasedStream(f, "leased-logout");

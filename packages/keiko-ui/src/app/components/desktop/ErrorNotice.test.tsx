@@ -11,6 +11,8 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
+import { EN_MESSAGES } from "@/lib/i18n-messages.en";
+import { DE_MESSAGES } from "@/lib/i18n-messages.de";
 import {
   I18N_STORAGE_KEY,
   I18nProvider,
@@ -435,5 +437,17 @@ describe("explicit model readiness recovery", () => {
   it("does not infer a recovery action from prose in an unrelated error", () => {
     renderInLocale(new ApiError("BAD_REQUEST", "Open Settings > Models", 400), "en");
     expect(screen.queryByRole("button", { name: "Open model verification" })).toBeNull();
+  });
+});
+
+describe("unknown pending review notice", () => {
+  it.each([
+    ["en", EN_MESSAGES["chat.pendingObservation.unknown"]],
+    ["de", DE_MESSAGES["chat.pendingObservation.unknown"]],
+  ] as const)("announces the %s message as an accessible alert", async (locale, message) => {
+    const view = renderInLocale(message, locale);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(message);
+    expect(await axe(view.container)).toHaveNoViolations();
   });
 });

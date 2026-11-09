@@ -627,7 +627,10 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
 
   it("cancelSend aborts the in-flight request and transitions to cancelled (AC#3)", async () => {
     const send = deferred();
-    const cancelTurn = vi.spyOn(api, "cancelDesktopChatTurn");
+    // Stop never waits for the server's notice: it stays unanswered for the whole test.
+    const cancelTurn = vi
+      .spyOn(api, "cancelDesktopChatTurn")
+      .mockReturnValue(new Promise(() => undefined));
     vi.spyOn(api, "sendDesktopChat").mockImplementation((_input, signal) => {
       send.signal = signal;
       // Wire the abort to reject with a DOMException, matching real fetch.
@@ -651,9 +654,9 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     await sendPromise;
     expect(view.result.current.sendStatus).toBe("cancelled");
     expect(view.result.current.sending).toBe(false);
-    // Stop before the server accepted the turn is a plain transport abort: without an observed
-    // pending review there is no worker to acknowledge, so no cancel request and no error.
-    expect(cancelTurn).not.toHaveBeenCalled();
+    // Stop before the server accepted the turn aborts the transport at once and only notifies the
+    // server, so the UI neither waits for it nor reports an error when no turn exists there.
+    await waitFor(() => expect(cancelTurn).toHaveBeenCalledOnce());
     expect(send.signal?.aborted).toBe(true);
     expect(view.result.current.error).toBeUndefined();
 
@@ -715,6 +718,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     const groundedPromise = new Promise((_res, rej) => {
       rejectGrounded = rej;
     });
+    vi.spyOn(api, "cancelDesktopChatTurn").mockResolvedValue({ cancelled: false });
     const askSpy = vi.spyOn(api, "askGrounded").mockImplementation((_req, signal) => {
       signal?.addEventListener("abort", () => {
         rejectGrounded?.(new DOMException("aborted", "AbortError"));

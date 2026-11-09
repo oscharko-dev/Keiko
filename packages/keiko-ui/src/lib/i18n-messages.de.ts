@@ -2,6 +2,8 @@ import type { MessageCatalog } from "./i18n-messages.en";
 export const DE_MESSAGES = {
   "chat.pendingCancellation.unconfirmed":
     "Der Abbruch konnte nicht bestätigt werden. Versuche erneut, die Antwort zu stoppen.",
+  "chat.pendingObservation.unknown":
+    "Der Status dieser Prüfung ist unbekannt. Lade die Seite neu, um ihn erneut zu prüfen.",
   "grounded.uncertainty.memoryKind": "Gedächtniskontext",
   "grounded.files.capabilityUnattached":
     "Dieses Modell liefert selbst keine verlässlichen Quellenangaben. Dieser Antwort wurden keine Quellenangaben angehängt.",

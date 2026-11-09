@@ -6,7 +6,11 @@ import {
   applyChatWriteApproval,
 } from "@/lib/chat-tool-events";
 import { watchChatToolConsent } from "@/lib/chat-tool-consent";
-import { restoredPendingToolTurn, useRestoredToolTurn } from "./useRestoredToolTurn";
+import {
+  restoredPendingToolTurn,
+  restoredTurnSnapshot,
+  useRestoredToolTurn,
+} from "./useRestoredToolTurn";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
 import {
@@ -3228,6 +3232,74 @@ function launchChatWork(work: Promise<void>): void {
     });
   });
 }
+interface PendingStopInput {
+  readonly awaitingDecision: boolean;
+  readonly live: { readonly chatId: string; readonly clientTurnId: string } | null;
+  readonly uncertain: { readonly chatId: string; readonly canonicalTurnRef: string } | null;
+  readonly saved: ChatMessage | undefined;
+  readonly activeChatId: string | undefined;
+}
+/**
+ * The turn whose retained server worker Stop must acknowledge. Only a turn visibly waiting for the
+ * human's decision, a Stop that could not be confirmed, or a restored review qualifies; every other
+ * in-flight send stops by aborting its transport.
+ */
+function pendingStopTarget(
+  input: PendingStopInput,
+): { readonly chatId: string; readonly reference: Promise<string> } | undefined {
+  const { live, uncertain, saved } = input;
+  if (input.awaitingDecision && live !== null)
+    return {
+      chatId: live.chatId,
+      reference: canonicalTurnReferenceForClient(live.chatId, live.clientTurnId),
+    };
+  if (uncertain !== null && uncertain.chatId === input.activeChatId)
+    return { chatId: uncertain.chatId, reference: Promise.resolve(uncertain.canonicalTurnRef) };
+  if (saved?.canonicalTurnRef !== undefined)
+    return { chatId: saved.chatId, reference: Promise.resolve(saved.canonicalTurnRef) };
+  return undefined;
+}
+interface SettledStopTurn {
+  readonly message: ChatMessage;
+  readonly persisted: readonly ChatMessage[];
+}
+/** After a Stop that found no running worker, the saved turn may already be decided elsewhere. */
+async function readSettledStopTurn(
+  chat: Chat | undefined,
+  chatId: string,
+  canonicalTurnRef: string,
+): Promise<SettledStopTurn | undefined> {
+  if (chat?.id !== chatId) return undefined;
+  try {
+    const snapshot = await restoredTurnSnapshot(chat, canonicalTurnRef, AbortSignal.timeout(5000));
+    const { message, persisted } = snapshot ?? {};
+    return message === undefined || persisted === undefined || message.turnState === "cancelled"
+      ? undefined
+      : { message, persisted };
+  } catch (error) {
+    reportClientDiagnostic("Chat settled turn read after Stop failed.", {
+      kind: "other",
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return undefined;
+  }
+}
+/** Tells the server to stop a leased turn the browser has already detached from. */
+async function noticeServerOfStop(chatId: string, clientTurnId: string): Promise<void> {
+  try {
+    const canonicalTurnRef = await canonicalTurnReferenceForClient(chatId, clientTurnId);
+    await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
+  } catch (error) {
+    reportClientDiagnostic("Chat stop notice failed.", {
+      kind: "other",
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+  }
+}
 function restoredToolTurnStatus(message: ChatMessage): SendStatus {
   if (message.turnState === "pending")
     return awaitsToolDecision(message) ? "awaiting-decision" : "contacting";
@@ -3725,11 +3797,15 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   useEffect(() => {
     if (sendControllerRef.current === null) updateSendStatus("idle");
   }, [state.activeChat?.id, updateSendStatus]);
+  const onObservationAbandoned = useCallback((): void => {
+    setError(t("chat.pendingObservation.unknown"));
+  }, [t]);
   useRestoredToolTurn(
     state.activeChat,
     state.messages,
     sendControllerRef.current !== null,
     publishRestoredToolTurn,
+    onObservationAbandoned,
   );
 
   const waitForCanonicalVoiceSendSlot = useCallback((signal: AbortSignal): Promise<void> => {
@@ -4993,6 +5069,30 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [releaseCancelledSendController, updateSendStatus, ownsStoppedTurn],
   );
 
+  const presentSettledStop = useCallback(
+    (owner: PendingToolStopOwner, settled: SettledStopTurn): void => {
+      const { message, persisted } = settled;
+      if (
+        pendingToolStopOwnerRef.current !== owner ||
+        sendControllerRef.current !== null ||
+        activeChatIdRef.current !== message.chatId
+      )
+        return;
+      const owns = (entry: ChatMessage): boolean =>
+        entry.chatId === message.chatId && entry.canonicalTurnRef === message.canonicalTurnRef;
+      setState((previous) => ({
+        ...previous,
+        messages: replaceCanonicalTurnMessages(
+          previous.messages,
+          [message.id, ...previous.messages.filter(owns).map((entry) => entry.id)],
+          persisted.filter(owns),
+        ),
+      }));
+      updateSendStatus(restoredToolTurnStatus(message));
+    },
+    [updateSendStatus],
+  );
+
   const stopPendingToolTurn = useCallback(
     async (
       chatId: string,
@@ -5003,6 +5103,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const predecessor = owner.attempt;
       let attempt: PendingToolStopAttempt | undefined;
       let failed = false;
+      let settled: SettledStopTurn | undefined;
       try {
         const canonicalTurnRef = await reference;
         attempt = claimStoppedTurn(owner, predecessor, { chatId, controller, canonicalTurnRef });
@@ -5011,11 +5112,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         unconfirmedStopTargetRef.current = { chatId, canonicalTurnRef };
         // The server answers every authenticated Stop with 200. `cancelled: false` means no
         // worker of this session is running that turn any more, which is the Stop's goal.
-        await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
+        const outcome = await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
         if (ownsStoppedTurn(owner, attempt)) {
           unconfirmedStopTargetRef.current = null;
           setError(undefined);
         }
+        // No running worker: the review may have been decided elsewhere, so show the saved state.
+        if (!outcome.cancelled)
+          settled = await readSettledStopTurn(
+            sessionStateRef.current.activeChat,
+            chatId,
+            canonicalTurnRef,
+          );
       } catch (error_) {
         failed = true;
         attempt ??= claimStoppedTurn(owner, predecessor, { chatId, controller });
@@ -5029,54 +5137,35 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         });
       } finally {
         if (attempt !== undefined) settleStoppedToolTurn(owner, attempt, failed);
+        if (settled !== undefined) presentSettledStop(owner, settled);
       }
     },
-    [claimStoppedTurn, settleStoppedToolTurn, ownsStoppedTurn, t],
+    [claimStoppedTurn, settleStoppedToolTurn, ownsStoppedTurn, presentSettledStop, t],
   );
 
   const cancelSend = useCallback(() => {
     if (!isInFlight(sendStatusRef.current)) return;
-    const saved = restoredPendingToolTurn(
-      sessionStateRef.current.messages,
-      activeChatIdRef.current,
-    );
-    // Only a turn that is visibly waiting for the human's decision can have a retained worker on
-    // the server. Every other in-flight send stops at once by aborting its transport.
-    const active =
-      sendStatusRef.current === "awaiting-decision" ? sendCanonicalIdentityRef.current : null;
-    const uncertain = unconfirmedStopTargetRef.current;
-    if (active !== null) {
-      launchChatWork(
-        stopPendingToolTurn(
-          active.chatId,
-          canonicalTurnReferenceForClient(active.chatId, active.clientTurnId),
-          sendControllerRef.current,
-        ),
-      );
+    const controller = sendControllerRef.current;
+    const target = pendingStopTarget({
+      awaitingDecision: sendStatusRef.current === "awaiting-decision",
+      live: sendCanonicalIdentityRef.current,
+      uncertain: unconfirmedStopTargetRef.current,
+      saved:
+        controller === null
+          ? restoredPendingToolTurn(sessionStateRef.current.messages, activeChatIdRef.current)
+          : undefined,
+      activeChatId: activeChatIdRef.current,
+    });
+    if (target !== undefined) {
+      launchChatWork(stopPendingToolTurn(target.chatId, target.reference, controller));
       return;
     }
-    if (uncertain !== null && uncertain.chatId === activeChatIdRef.current) {
-      launchChatWork(
-        stopPendingToolTurn(
-          uncertain.chatId,
-          Promise.resolve(uncertain.canonicalTurnRef),
-          sendControllerRef.current,
-        ),
-      );
-      return;
-    }
-    if (sendControllerRef.current === null && saved?.canonicalTurnRef !== undefined) {
-      launchChatWork(
-        stopPendingToolTurn(
-          saved.chatId,
-          Promise.resolve(saved.canonicalTurnRef),
-          sendControllerRef.current,
-        ),
-      );
-      return;
-    }
-    sendControllerRef.current?.abort();
+    // The transport aborts at once. A turn that carried the bounded lease may still have a review
+    // the browser has not seen yet, so the server is told as well, without waiting for it.
+    const leased = sendCanonicalIdentityRef.current;
+    controller?.abort();
     releaseCancelledSendController();
+    if (leased !== null) launchChatWork(noticeServerOfStop(leased.chatId, leased.clientTurnId));
   }, [releaseCancelledSendController, stopPendingToolTurn]);
 
   // ADR-0154 D4 barge-in. Unlike cancelSend (the visible stop control, which cancels whatever the
