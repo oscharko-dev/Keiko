@@ -488,15 +488,17 @@ export const API_QUALIFICATION_PLANNING_CASES = [
   },
   adminMutationCase(
     "jira.epic-update",
+    // Jira echoes `done` in its acknowledgement but does not persist it on this release (the next
+    // read still shows the prior value), so the persisted epic name carries this proof instead.
     (f) => ({
       epicIdOrKey: String(f.planningEpic.id),
-      done: !f.planningEpic.done,
+      name: `${f.planningEpic.name} revised`,
     }),
     async (c, _data, f) => {
       const current = await read(c, epicPath(f));
-      for (const key of ["id", "key", "name", "summary"])
+      for (const key of ["id", "key", "summary", "done"])
         assert.equal(current[key], f.planningEpic[key]);
-      assert.equal(current.done, !f.planningEpic.done);
+      assert.equal(current.name, `${f.planningEpic.name} revised`);
       return proof(5);
     },
     planningEpic,

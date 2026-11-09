@@ -224,17 +224,24 @@ it.each(["jira.epic-remove-issues", "jira.epic-move-issues"])(
   },
 );
 
-it("requires an actual epic done-state change while preserving the observed identity", async () => {
+it("requires the persisted epic name change while preserving identity, summary and done state", async () => {
   const f = fixture();
-  let current = { ...f.planningEpic, done: true };
+  const revised = `${f.planningEpic.name} revised`;
+  let current = { ...f.planningEpic, name: revised };
   await withNative(
     () => response(current),
     async (context) => {
-      expect(entry("jira.epic-update").arguments(f)).toEqual({ epicIdOrKey: "31", done: true });
+      expect(entry("jira.epic-update").arguments(f)).toEqual({
+        epicIdOrKey: "31",
+        name: revised,
+      });
       await expect(entry("jira.epic-update").readback(context, {}, f)).resolves.toMatchObject({
         matched: true,
       });
       current = f.planningEpic;
+      await expect(entry("jira.epic-update").readback(context, {}, f)).rejects.toThrow();
+      // A done flag that Jira merely echoed in its acknowledgement is not a persisted change.
+      current = { ...f.planningEpic, name: revised, done: !f.planningEpic.done };
       await expect(entry("jira.epic-update").readback(context, {}, f)).rejects.toThrow();
     },
   );
