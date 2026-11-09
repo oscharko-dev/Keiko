@@ -20,7 +20,6 @@
 // content.
 
 import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
-import { parseAtlassianJsonValue } from "./atlassian-sync-classify.js";
 import {
   JIRA_ATTACHMENT_MAX_BYTES,
   sanitizeJiraMutationFailureDetail,
@@ -39,6 +38,7 @@ import {
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
 import {
   asRecord,
+  parseAtlassianJsonValue,
   parseJsonArray,
   parseJsonObjectOrArray,
   parseJsonRecord,

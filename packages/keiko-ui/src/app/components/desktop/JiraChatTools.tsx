@@ -368,20 +368,32 @@ function JiraToolExchange({
   const localDenial = jiraLocalAccessDenialNotice(exchange);
   const known = isKnownJiraToolAlias(exchange.call.name);
   const body = (
-    <div
-      className={styles.cmpCardBody}
-      role={known ? "group" : undefined}
-      aria-label={known ? t(jiraToolLabel(exchange)) : undefined}
-    >
+    <JiraCardBody label={known ? t(jiraToolLabel(exchange)) : undefined}>
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {localDenial === undefined ? null : <p>{t(localDenial)}</p>}
       <BatchProgress exchange={exchange} turnState={turnState} />
       <JiraToolContents exchange={exchange} report={report} chatId={chatId} />
-    </div>
+    </JiraCardBody>
   );
   return <JiraCardFrame exchange={exchange}>{body}</JiraCardFrame>;
+}
+/** A known Jira tool's card is a labelled group, carried by the native fieldset (S6819). */
+function JiraCardBody({
+  label,
+  children,
+}: {
+  readonly label: string | undefined;
+  readonly children: ReactNode;
+}): ReactNode {
+  return label === undefined ? (
+    <div className={styles.cmpCardBody}>{children}</div>
+  ) : (
+    <fieldset className={styles.cmpCardBody} aria-label={label}>
+      {children}
+    </fieldset>
+  );
 }
 /**
  * A write receipt keeps the stable "Jira action" region; reads are only grouped, so a message with
