@@ -15,17 +15,21 @@ async function parent(c, f, label) {
   f.lifecycleIssue = issueReview(await createQualificationIssue(c, f, label));
 }
 async function archiveState(c, f, archived) {
+  // Jira 10.3 has no boolean `archived` field; an archived issue carries who archived it and when.
   const actual = await read(
     c,
-    `/rest/api/2/issue/${f.lifecycleIssue.id}?fields=summary,project,issuetype,archived`,
+    `/rest/api/2/issue/${f.lifecycleIssue.id}?fields=summary,project,issuetype,archivedby,archiveddate`,
   );
   assert.deepEqual(issueReview(actual), f.lifecycleIssue);
-  const supplied = Object.hasOwn(actual, "archived") ? actual.archived : actual.fields.archived;
-  assert.equal(
-    supplied,
-    archived,
-    "Only an explicit native archived flag proves the requested state",
-  );
+  const by = actual.fields.archivedby ?? null;
+  const at = actual.fields.archiveddate ?? null;
+  if (archived) {
+    assert.equal(typeof by?.key, "string", "Only the native archived-by record proves archival");
+    assert.ok(at === null || typeof at === "string");
+  } else {
+    assert.equal(by, null, "A restored issue carries no archived-by record");
+    assert.equal(at, null);
+  }
   return proof(6);
 }
 export const API_QUALIFICATION_ISSUE_LIFECYCLE_CASES = [
