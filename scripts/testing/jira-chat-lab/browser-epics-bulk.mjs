@@ -36,7 +36,7 @@ function requireFact(condition, message) {
 function batchPrompt(projectKey, requirements) {
   return [
     `Create exactly one Epic in Jira project ${projectKey} for each of the following requirements, and no others.`,
-    "Use the actual connected Knowledge source and the installed Epic template. Read all required source pages.",
+    "Use the actual connected Knowledge source and the installed Epic template.",
     "The exact summary is [requirement ID] followed by its complete original title. Preserve every acceptance criterion verbatim as its own list item, including false, zero and empty-value semantics.",
     `When the source supplies zero acceptance criteria, put the prose "${GOLDEN_NO_CRITERIA_TEXT}" under Acceptance criteria. Do not invent a criterion or a list item.`,
     `Use only ${GOLDEN_EPIC_SOURCE_DOCUMENT} as source. ${SAME_LASTENHEFT}`,
