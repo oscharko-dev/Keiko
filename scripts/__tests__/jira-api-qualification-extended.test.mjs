@@ -328,6 +328,36 @@ it("requires the native archived-by record instead of a missing-value default", 
   archival = { archived: true };
   await expect(archive.readback(ctx, {}, f)).rejects.toThrow();
 });
+it("grades an issue deletion only with the issue read natively present before the DELETE", async () => {
+  const remove = API_QUALIFICATION_ISSUE_LIFECYCLE_CASES.find(
+    (row) => row.tool === "jira.delete-issue",
+  );
+  const f = fixture(remove.tool);
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-extended-"));
+  roots.push(directory);
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith(`/issue/${f.lifecycleIssue.id}`))
+      return new globalThis.Response("{}", { status: 404 });
+    expect(path).toMatch(/\/project\/KEIKO$/u);
+    return new globalThis.Response(JSON.stringify({ id: f.lifecycleIssue.projectId }), {
+      status: 200,
+    });
+  });
+  const ctx = { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } };
+  // Without the native read before the DELETE, "not found" afterwards proves nothing.
+  await expect(remove.readback(ctx, {}, f)).rejects.toThrow();
+  f.issueBeforeDelete = { ...f.lifecycleIssue, id: "10099" };
+  await expect(remove.readback(ctx, {}, f)).rejects.toThrow();
+  f.issueBeforeDelete = { ...f.lifecycleIssue };
+  await expect(remove.readback(ctx, {}, f)).resolves.toEqual({
+    matched: true,
+    assertionCount: 4,
+    priorPresence: true,
+  });
+});
 it("refuses an auxiliary fixture without the governed dispatcher instead of sending HTTP", async () => {
   const fetch = vi.spyOn(globalThis, "fetch");
   await expect(

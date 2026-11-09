@@ -4,6 +4,14 @@ import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 
 export const proof = (assertionCount) => ({ matched: true, assertionCount });
+/**
+ * The proof of a DELETE whose product read answers "not found": the recipe read the removed object
+ * natively before the DELETE and reads it absent afterwards (api-qualification-evidence.mjs).
+ */
+export const deletionProof = (assertionCount) => ({
+  ...proof(assertionCount),
+  priorPresence: true,
+});
 
 export async function read(context, path) {
   const response = await labRequest(

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
-import { read, proof } from "./api-qualification-read.mjs";
+import { deletionProof, read, proof } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
   createQualificationIssue,
@@ -169,6 +169,7 @@ export const API_QUALIFICATION_ISSUE_LIFECYCLE_CASES = [
     (f) => ({ ...actorArgs(f), expectedIssue: f.lifecycleIssue, expectedSubtasks: [] }),
     async (c, _data, f) => {
       assert.ok(f.lifecycleIssue.id && f.lifecycleIssue.key);
+      assert.deepEqual(f.issueBeforeDelete, f.lifecycleIssue);
       const response = await labRequest(
         c.session,
         "GET",
@@ -178,11 +179,12 @@ export const API_QUALIFICATION_ISSUE_LIFECYCLE_CASES = [
       assert.equal(response.status, 404);
       const project = await read(c, "/rest/api/2/project/KEIKO");
       assert.equal(String(project.id), f.lifecycleIssue.projectId);
-      return proof(3);
+      return deletionProof(4);
     },
     async (c, f) => {
       await ensureAdminProjectPermission(c, "DELETE_ISSUES");
       await parent(c, f, "delete");
+      f.issueBeforeDelete = issueReview(await read(c, `/rest/api/2/issue/${f.lifecycleIssue.id}`));
     },
   ),
 ];

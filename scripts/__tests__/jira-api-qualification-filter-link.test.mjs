@@ -270,9 +270,12 @@ it.each([false, true])(
         default:
           throw new TypeError("Unexpected filter recipe");
       }
-      await expect(entry.readback(c, data, f), entry.tool).resolves.toMatchObject({
-        matched: true,
-      });
+      const result = await entry.readback(c, data, f);
+      expect(result, entry.tool).toMatchObject({ matched: true });
+      // Only the reset removes a layout, which its recipe read natively before the DELETE.
+      expect(result.priorPresence === true, entry.tool).toBe(
+        entry.tool === "jira.reset-filter-columns",
+      );
     }
     expect(layout.columns).toEqual(["key", "summary", "assignee"]);
     expect(permissions).toEqual([]);

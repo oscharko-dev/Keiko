@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { read, readRecord, proof } from "./api-qualification-read.mjs";
+import { deletionProof, read, readRecord, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
@@ -132,7 +132,7 @@ export const API_QUALIFICATION_FILTER_CASES = [
         basicAuth(c.session, c.actor),
       );
       assert.equal(after.status, 404);
-      return proof(4);
+      return deletionProof(4);
     },
     columns,
   ),
