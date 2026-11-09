@@ -25,6 +25,7 @@ export type JiraTemplateInstanceRead<T> =
 
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 const SAMPLE_SIZE = 25;
+const LINK_TYPES_MAX = 1000;
 const ISSUE_TYPES_MAX = 12;
 const SECTIONS_MAX = 8;
 const ROUTING_FIELDS: ReadonlySet<string> = new Set([
@@ -75,11 +76,14 @@ async function readProject(
 
 async function readLinkTypes(
   request: JiraMutationRequest,
-): Promise<JiraTemplateInstanceMetadata["linkTypes"]> {
+): Promise<
+  JiraTemplateInstanceRead<{ readonly linkTypes: JiraTemplateInstanceMetadata["linkTypes"] }>
+> {
   const response = await request("issueLinkType");
   const types = response.ok ? asArray(response.body?.issueLinkTypes) : undefined;
-  if (types === undefined || types.length > 1000) return undefined;
-  return types.flatMap((item) => {
+  if (types === undefined) return { ok: true, linkTypes: undefined };
+  if (types.length > LINK_TYPES_MAX) return { ok: false, reason: "bounds-exceeded" };
+  const linkTypes = types.flatMap((item) => {
     const record = asRecord(item);
     if (typeof record?.name !== "string") return [];
     return [
@@ -90,6 +94,7 @@ async function readLinkTypes(
       },
     ];
   });
+  return { ok: true, linkTypes };
 }
 
 async function readStatuses(
@@ -177,7 +182,9 @@ export async function readJiraTemplateInstanceMetadata(
   const parentTypes = await readParentTypesIfRequired(request, template);
   if (parentTypes !== undefined && !parentTypes.ok) return parentTypes;
   const fields = await readJiraFieldCatalog(request);
-  const linkTypes = await readLinkTypes(request);
+  const links = await readLinkTypes(request);
+  if (!links.ok) return links;
+  const { linkTypes } = links;
   const statuses = await readStatusesIfProject(request, template, project);
   return {
     ok: true,

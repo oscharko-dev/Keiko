@@ -213,6 +213,29 @@ describe("native parent issue-type admission", () => {
 });
 
 describe("native validation of a saved parent-type clause", () => {
+  it.each([
+    [1000, { ok: true }],
+    [1001, { ok: false, reason: "bounds-exceeded" }],
+  ])("reports %i link types as an explicit outcome", async (count, expected) => {
+    const request = vi.fn<JiraMutationRequest>((path) =>
+      Promise.resolve<AtlassianWriteHttpOutcome>(
+        path === "issueLinkType"
+          ? {
+              ok: true,
+              status: 200,
+              body: {
+                issueLinkTypes: Array.from({ length: count }, (_, index) => ({
+                  name: `Link ${String(index)}`,
+                })),
+              },
+            }
+          : path === "project/SYN"
+            ? { ok: true, status: 200, body: { id: "10000", key: "SYN", issueTypes: [] } }
+            : { ok: true, status: 200, body: undefined, items: [] },
+      ),
+    );
+    expect(await readJiraTemplateInstanceMetadata(request, rule())).toMatchObject(expected);
+  });
   it("reports an oversized native parent-type catalog as a bounds failure", async () => {
     const request = vi.fn<JiraMutationRequest>((path) =>
       Promise.resolve<AtlassianWriteHttpOutcome>(
