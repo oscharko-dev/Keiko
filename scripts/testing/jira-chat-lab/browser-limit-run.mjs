@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { loadSession, readPrivateFile } from "./lab-client.mjs";
 import { createLimitLicenseGuard } from "./limit-run-license.mjs";
 import { privateJson } from "./private-json.mjs";
 import { nativePages, projectAgileRead } from "./project-agile-oracles.mjs";
 import { registerLane } from "./requirements/lab-lanes.mjs";
 import { withExclusiveProcessLock } from "./requirements/work-project-lock.mjs";
+import { runLabCliWhenMain } from "./lab-cli.mjs";
 
 const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"];
 const CHAT_SLOTS = ["document", "report", "denied"];
@@ -727,15 +727,4 @@ async function main(argv) {
   );
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main(process.argv.slice(2)).catch((error) => {
-    console.log(
-      JSON.stringify({
-        operation: "jira-browser-limit-run",
-        status: "incomplete",
-        errorType: error instanceof Error ? error.name : "unknown",
-      }),
-    );
-    process.exitCode = 1;
-  });
-}
+await runLabCliWhenMain(import.meta.url, "jira-browser-limit-run", main);

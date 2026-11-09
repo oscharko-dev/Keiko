@@ -3,9 +3,7 @@
 // REST answer is the oracle for what the run said, and the Activity Log is the oracle for where the
 // call came from: `coding-runtime.jira-pod` lines exist only for a Coding run's Jira tools.
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { privateJson } from "../private-json.mjs";
 import { goldenProjectKey } from "./golden-jira-oracle.mjs";
 import {
   flatten,
@@ -13,6 +11,7 @@ import {
   selectRunEvents,
 } from "../../coding-workbench-lab/activity-log-events.mjs";
 import { normalizeRunSuffix } from "../../coding-workbench-lab/lab-common.mjs";
+import { stepEvidence } from "./step-evidence.mjs";
 
 export const CODING_JIRA_STEP = "ac10-coding-jira";
 export const CODING_JIRA_OPERATION = "coding-runtime.jira-pod";
@@ -110,23 +109,11 @@ function contextReady(ctx) {
   );
 }
 
-function publicResult(status, reason, counts = {}, evidenceFile) {
-  return {
-    step: CODING_JIRA_STEP,
-    status,
-    detail: `${reason}; reads=${counts.reads ?? 0}; writes=${counts.writes ?? 0}`,
-    counts,
-    ...(evidenceFile === undefined ? {} : { evidenceFile }),
-  };
-}
-
-async function finish(ctx, status, reason, counts = {}) {
-  const evidenceFile = join(ctx.sessionDir, "coding-jira.json");
-  const result = publicResult(status, reason, counts, evidenceFile);
-  privateJson(evidenceFile, { schemaVersion: 1, ...result });
-  await ctx.intent.record(CODING_JIRA_STEP, result);
-  return result;
-}
+const { publicResult, finish } = stepEvidence(
+  CODING_JIRA_STEP,
+  "coding-jira.json",
+  (counts) => `reads=${counts.reads ?? 0}; writes=${counts.writes ?? 0}`,
+);
 
 /** The log is written asynchronously: wait until a completed read shows, or the settle time ends. */
 async function settledCalls(events, run, deadline) {

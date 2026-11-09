@@ -2,8 +2,6 @@
 // requirement of the Lastenheft and each with one Sub-task. The model creates them in the ordinary
 // Chat; only an independent native Jira readback grades them, never the model's account.
 import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { privateJson } from "../private-json.mjs";
 import { STRUCTURE_RULES } from "./corpus.mjs";
 import {
   goldenProjectKey,
@@ -15,6 +13,7 @@ import {
 import { epicRequirementId, keyValid, nativeId, requiredFieldsValid } from "./hierarchy-bulk.mjs";
 import { draftIdentity, sectionsPresent } from "./oracles.mjs";
 import { STORY_STRUCTURE_RULE } from "./templates.mjs";
+import { stepEvidence } from "./step-evidence.mjs";
 
 export const STORY_STEP = "ac4-story-bulk";
 export const STORY_COUNT = 3;
@@ -315,23 +314,11 @@ function contextReady(ctx) {
   );
 }
 
-function publicResult(status, reason, counts = {}, evidenceFile) {
-  return {
-    step: STORY_STEP,
-    status,
-    detail: `${reason}; stories=${counts.stories ?? 0}; subtasks=${counts.subtasks ?? 0}`,
-    counts,
-    ...(evidenceFile === undefined ? {} : { evidenceFile }),
-  };
-}
-
-async function finish(ctx, status, reason, counts = {}, digest) {
-  const evidenceFile = join(ctx.sessionDir, "story-bulk.json");
-  const result = publicResult(status, reason, counts, evidenceFile);
-  privateJson(evidenceFile, { schemaVersion: 1, ...result, ...(digest ? { digest } : {}) });
-  await ctx.intent.record(STORY_STEP, result);
-  return result;
-}
+const { publicResult, finish } = stepEvidence(
+  STORY_STEP,
+  "story-bulk.json",
+  (counts) => `stories=${counts.stories ?? 0}; subtasks=${counts.subtasks ?? 0}`,
+);
 
 const freshIssues = (ctx) => {
   ctx.signal?.throwIfAborted();

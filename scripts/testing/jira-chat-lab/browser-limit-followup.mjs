@@ -1,8 +1,7 @@
 // Selective follow-up after a completed limit run: the Story step and the Coding Workbench step.
 // It reopens the run's retained product state and its three Chats and repeats none of the earlier
 // steps. Importing this module never starts a live lab.
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { loadSession } from "./lab-client.mjs";
 import {
   createLimitRunContext,
@@ -17,6 +16,7 @@ import {
   runLimitFollowup,
 } from "./limit-run-followup.mjs";
 import { withExclusiveProcessLock } from "./requirements/work-project-lock.mjs";
+import { runLabCliWhenMain } from "./lab-cli.mjs";
 
 const FOLLOWUP_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
@@ -68,15 +68,4 @@ async function main(argv) {
   );
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main(process.argv.slice(2)).catch((error) => {
-    console.log(
-      JSON.stringify({
-        operation: "jira-browser-limit-followup",
-        status: "incomplete",
-        errorType: error instanceof Error ? error.name : "unknown",
-      }),
-    );
-    process.exitCode = 1;
-  });
-}
+await runLabCliWhenMain(import.meta.url, "jira-browser-limit-followup", main);

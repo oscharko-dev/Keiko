@@ -1,7 +1,5 @@
 // AC4 observes the native Jira graph independently of the browser turns that request it.
 import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { privateJson } from "../private-json.mjs";
 import { STRUCTURE_RULES } from "./corpus.mjs";
 import {
   GOLDEN_REQUIREMENT_COUNT,
@@ -11,6 +9,7 @@ import {
 } from "./golden-jira-oracle.mjs";
 import { gradeBug } from "./hierarchy.mjs";
 import { draftIdentity, sectionsPresent } from "./oracles.mjs";
+import { stepEvidence } from "./step-evidence.mjs";
 
 const STEP = "ac4-hierarchy-bulk";
 const TYPES = ["Task", "Bug", "Sub-task"];
@@ -371,23 +370,12 @@ async function checkpoint(ctx, value) {
   return value;
 }
 
-function publicResult(status, reason, counts = {}, evidenceFile) {
-  return {
-    step: STEP,
-    status,
-    detail: `${reason}; epics=${counts.epics ?? 0}; tasks=${counts.tasks ?? 0}; bugs=${counts.bugs ?? 0}; subtasks=${counts.subtasks ?? 0}`,
-    counts,
-    ...(evidenceFile === undefined ? {} : { evidenceFile }),
-  };
-}
-
-async function finish(ctx, status, reason, counts = {}, digest) {
-  const evidenceFile = join(ctx.sessionDir, "hierarchy-bulk.json");
-  const result = publicResult(status, reason, counts, evidenceFile);
-  privateJson(evidenceFile, { schemaVersion: 1, ...result, ...(digest ? { digest } : {}) });
-  await ctx.intent.record(STEP, result);
-  return result;
-}
+const { publicResult, finish } = stepEvidence(
+  STEP,
+  "hierarchy-bulk.json",
+  (counts) =>
+    `epics=${counts.epics ?? 0}; tasks=${counts.tasks ?? 0}; bugs=${counts.bugs ?? 0}; subtasks=${counts.subtasks ?? 0}`,
+);
 
 async function freshIssues(ctx) {
   ctx.signal.throwIfAborted();
