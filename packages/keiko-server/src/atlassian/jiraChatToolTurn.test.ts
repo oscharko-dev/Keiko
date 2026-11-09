@@ -32,7 +32,7 @@ import { readJiraDraftRoute } from "./jiraDraftRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { handleUpdateChat } from "../store-handlers.js";
 import { deriveChatGroundingScopeIdentity } from "../store/chat-grounding-scope-identity.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2371,6 +2371,11 @@ describe.each([false, true])("write approval cancellation (stream=%s)", (stream)
   );
 });
 
+function stoppedSession(
+  sessionId: string,
+): NonNullable<ReturnType<typeof appSessionAuthority.resolveAppSessionReadAuthority>> {
+  return { sessionId, principalLabel: "local", issuedAtMs: 1, lastSeenAtMs: 1, rotationCount: 0 };
+}
 function leasedStream(
   f: ReturnType<typeof fixture>,
   clientTurnId: string,
@@ -2567,6 +2572,42 @@ describe("bounded Jira approval continuation across a page reload", () => {
       });
       expect(f.writes()).toBe(0);
       expectCancelledConsent(f, "cancelled");
+    } finally {
+      for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
+      stream.response.res.destroy();
+      await stream.outcome;
+    }
+  });
+
+  it("answers Stop uniformly for an authenticated caller and never lets another or an unpaired caller cancel", async () => {
+    const f = fixture(true);
+    const stream = leasedStream(f, "leased-uniform-stop");
+    try {
+      await pendingWriteApproval(f);
+      const message = f.deps.store.listMessages(f.chatId)[0];
+      const stop = (body: Record<string, unknown>): Promise<RouteResult> =>
+        handleCancelDesktopChat(context(body), f.deps);
+      const valid = { chatId: f.chatId, canonicalTurnRef: message?.canonicalTurnRef };
+      const stillPending = (): void => {
+        expect(f.deps.store.findMessageById(message?.id ?? "")?.turnState).toBe("pending");
+      };
+      // Unknown chat, unknown turn and a turn of another chat look alike to the paired owner.
+      for (const body of [
+        { ...valid, chatId: "unknown-chat" },
+        { ...valid, canonicalTurnRef: "f".repeat(64) },
+      ])
+        expect(await stop(body)).toMatchObject({ status: 200, body: { cancelled: false } });
+      const authority = vi.spyOn(appSessionAuthority, "resolveAppSessionReadAuthority");
+      authority.mockReturnValue(stoppedSession("sess_999999999999999999999999"));
+      expect(await stop(valid)).toMatchObject({ status: 200, body: { cancelled: false } });
+      stillPending();
+      authority.mockReturnValue(undefined);
+      expect(await stop(valid)).toMatchObject({ status: 404 });
+      stillPending();
+      authority.mockReturnValue(stoppedSession("sess_012345678901234567890123"));
+      expect(await stop(valid)).toMatchObject({ status: 200, body: { cancelled: true } });
+      await stream.outcome;
+      expect(await stop(valid)).toMatchObject({ status: 200, body: { cancelled: false } });
     } finally {
       for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
       stream.response.res.destroy();
@@ -4583,4 +4624,91 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
     );
     expect(progressFrames.length).toBeGreaterThanOrEqual(states.size);
   });
+});
+
+interface HeldTimerSpies {
+  readonly timeouts: MockInstance<typeof setTimeout>;
+  readonly intervals: MockInstance<typeof setInterval>;
+}
+function heldTimers(
+  spies: HeldTimerSpies,
+  first: { readonly timeout: number; readonly interval: number },
+  expiryDelay: number,
+): { readonly expiry: NodeJS.Timeout; readonly session: NodeJS.Timeout } {
+  const { timeouts, intervals } = spies;
+  const expiry = timeouts.mock.results
+    .slice(first.timeout)
+    .find((_, index) => timeouts.mock.calls[first.timeout + index]?.[1] === expiryDelay);
+  const session = intervals.mock.results
+    .slice(first.interval)
+    .find((_, index) => intervals.mock.calls[first.interval + index]?.[1] === 1000);
+  if (expiry === undefined || session === undefined) throw new Error("Missing held worker timers");
+  return { expiry: expiry.value as NodeJS.Timeout, session: session.value as NodeJS.Timeout };
+}
+async function endHeldWorker(
+  ending: "stop" | "expiry" | "session-end",
+  f: ReturnType<typeof fixture>,
+  stream: ReturnType<typeof leasedStream>,
+  expiryDelay: number,
+): Promise<void> {
+  if (ending === "stop") {
+    const message = f.deps.store.listMessages(f.chatId)[0];
+    const stopped = await handleCancelDesktopChat(
+      context({ chatId: f.chatId, canonicalTurnRef: message?.canonicalTurnRef }),
+      f.deps,
+    );
+    expect(stopped).toMatchObject({ status: 200, body: { cancelled: true } });
+  } else if (ending === "expiry") {
+    await vi.advanceTimersByTimeAsync(expiryDelay);
+  } else {
+    stream.setSessionLive(false);
+    await vi.advanceTimersByTimeAsync(1000);
+  }
+}
+
+describe("held approval worker timers", () => {
+  it.each(["stop", "expiry", "session-end"] as const)(
+    "never keeps the process alive and returns the worker inventory to zero after %s",
+    async (ending) => {
+      vi.useFakeTimers();
+      const f = fixture(true);
+      const spies = {
+        timeouts: vi.spyOn(globalThis, "setTimeout"),
+        intervals: vi.spyOn(globalThis, "setInterval"),
+      };
+      const clearedTimeouts = vi.spyOn(globalThis, "clearTimeout");
+      const clearedIntervals = vi.spyOn(globalThis, "clearInterval");
+      const stream = leasedStream(f, `timers-${ending}`);
+      try {
+        const approval = await pendingWriteApproval(f);
+        expect(
+          handleGetChatWriteApproval(context({}, { approvalId: approval.approvalId }), f.deps)
+            .status,
+        ).toBe(200);
+        const first = {
+          timeout: spies.timeouts.mock.calls.length,
+          interval: spies.intervals.mock.calls.length,
+        };
+        stream.response.res.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+        const held = [...(continuations.get(f.deps.store)?.values() ?? [])];
+        expect(held).toHaveLength(1);
+        const expiryDelay = Math.max(0, (held[0]?.expiresAt ?? 0) - Date.now());
+        const timers = heldTimers(spies, first, expiryDelay);
+        expect(timers.expiry.hasRef()).toBe(false);
+        expect(timers.session.hasRef()).toBe(false);
+        await endHeldWorker(ending, f, stream, expiryDelay);
+        await stream.outcome;
+        expect(continuations.get(f.deps.store)?.size ?? 0).toBe(0);
+        expect(clearedTimeouts).toHaveBeenCalledWith(timers.expiry);
+        expect(clearedIntervals).toHaveBeenCalledWith(timers.session);
+        expect(f.writes()).toBe(0);
+      } finally {
+        for (const entry of continuations.get(f.deps.store)?.values() ?? [])
+          entry.controller.abort();
+        await stream.outcome;
+        vi.useRealTimers();
+      }
+    },
+  );
 });

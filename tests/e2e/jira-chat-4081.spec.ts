@@ -75,7 +75,7 @@ test("ordinary Chat restores a pending approval and completed receipt without du
   // replaying the human decision cannot start a second native write.
   const repeated = await api(
     page,
-    `/api/atlassian-connectors/action-approvals/${pending.approvalId}/chat-write-approval`,
+    `/api/atlassian-connectors/chat-write-approval/${pending.approvalId}`,
     "POST",
     { decision: "approve", actionDigest: pending.actionDigest },
   );
@@ -116,7 +116,7 @@ test("Stop revokes a restored pending approval and permits a fresh read without 
     .toBe("cancelled");
   const replay = await api(
     page,
-    `/api/atlassian-connectors/action-approvals/${pending.approvalId}/chat-write-approval`,
+    `/api/atlassian-connectors/chat-write-approval/${pending.approvalId}`,
     "POST",
     { decision: "approve", actionDigest: pending.actionDigest },
   );
@@ -144,7 +144,7 @@ test("a forged decision and a disconnected Chat cannot dispatch the pending writ
     .flatMap((message) => message.toolTranscript?.exchanges ?? [])
     .find((exchange) => exchange.approval)?.approval;
   if (approval === undefined) throw new Error("Missing persisted exact-action approval");
-  const path = `/api/atlassian-connectors/action-approvals/${approval.approvalId}/chat-write-approval`;
+  const path = `/api/atlassian-connectors/chat-write-approval/${approval.approvalId}`;
   const forged = await api(page, path, "POST", {
     decision: "approve",
     actionDigest: "0".repeat(64),

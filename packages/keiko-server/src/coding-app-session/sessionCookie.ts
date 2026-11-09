@@ -39,8 +39,14 @@ export const APP_SESSION_SKILL_DRAFT_COOKIE_PATH = "/api/prompt-enhancement";
 export const APP_SESSION_CHATS_COOKIE_PATH = "/api/chats";
 /** Central MCP configuration and discovery consume the same paired browser authority. */
 export const APP_SESSION_MCP_COOKIE_PATH = "/api/mcp";
-/** Exact Chat review reads and decisions revalidate the original paired app session. */
-export const APP_SESSION_CHAT_APPROVAL_COOKIE_PATH = "/api/atlassian-connectors/action-approvals";
+/**
+ * Chat review observation (GET) and decision (POST) revalidate the original paired app session.
+ * The route carries the approval id as its last segment, so this prefix contains exactly those two
+ * routes (pinned by `chatWriteApprovalCookieScope.test.ts`); the generic connector approval routes
+ * live elsewhere and never receive the cookie.
+ */
+export const APP_SESSION_CHAT_APPROVAL_COOKIE_PATH =
+  "/api/atlassian-connectors/chat-write-approval";
 
 // Issuance and revocation use one list so a new consuming route cannot retain a stale bearer.
 const APP_SESSION_ACTIVE_COOKIE_PATHS = [

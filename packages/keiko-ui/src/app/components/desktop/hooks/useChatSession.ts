@@ -5009,13 +5009,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         if (attempt === undefined) return;
         stoppedToolTurnRef.current = canonicalTurnRef;
         unconfirmedStopTargetRef.current = { chatId, canonicalTurnRef };
-        const outcome = await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
-        if (!outcome.cancelled)
-          throw new ApiError(
-            "CHAT_CANCEL_UNCONFIRMED",
-            "Chat cancellation could not be confirmed.",
-            409,
-          );
+        // The server answers every authenticated Stop with 200. `cancelled: false` means no
+        // worker of this session is running that turn any more, which is the Stop's goal.
+        await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
         if (ownsStoppedTurn(owner, attempt)) {
           unconfirmedStopTargetRef.current = null;
           setError(undefined);
@@ -5044,7 +5040,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       sessionStateRef.current.messages,
       activeChatIdRef.current,
     );
-    const active = sendCanonicalIdentityRef.current;
+    // Only a turn that is visibly waiting for the human's decision can have a retained worker on
+    // the server. Every other in-flight send stops at once by aborting its transport.
+    const active =
+      sendStatusRef.current === "awaiting-decision" ? sendCanonicalIdentityRef.current : null;
     const uncertain = unconfirmedStopTargetRef.current;
     if (active !== null) {
       launchChatWork(

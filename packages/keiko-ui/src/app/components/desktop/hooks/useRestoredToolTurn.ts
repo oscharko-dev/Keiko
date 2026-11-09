@@ -54,11 +54,36 @@ async function restoredTurnSnapshot(
     return undefined;
   return { message: canonical, persisted: full.messages };
 }
+/** Poll spacing grows 1 s, 2 s, 4 s, 8 s (15 polls each), then holds at 10 s. */
+const RESTORED_TURN_POLL_BASE_MS = 1000;
+const RESTORED_TURN_POLL_MAX_DELAY_MS = 10_000;
+const RESTORED_TURN_POLLS_PER_STEP = 15;
+/**
+ * Hard guard. The schedule above spans about 13.75 minutes, longer than the 10 minute approval
+ * lifetime that bounds a held worker, so a live review is always observed to its end. The server
+ * settles a turn whose worker died (database recovery fails every pending turn), which ends the
+ * observation as a terminal state; this cap only covers an unreachable or silent server.
+ */
+export const RESTORED_TURN_POLL_MAX_ATTEMPTS = 120;
+
+export function restoredTurnPollDelayMs(attempt: number): number {
+  return Math.min(
+    RESTORED_TURN_POLL_MAX_DELAY_MS,
+    RESTORED_TURN_POLL_BASE_MS * 2 ** Math.floor(attempt / RESTORED_TURN_POLLS_PER_STEP),
+  );
+}
+
+function reportObservationAbandoned(): void {
+  reportClientDiagnostic("Restored chat turn observation gave up.", { kind: "other" });
+}
+
 function observeRestoredTurn(chat: Chat, reference: string, publish: Publish): () => void {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout>;
   let terminal = false;
+  let attempts = 0;
   const poll = async (): Promise<void> => {
+    attempts += 1;
     try {
       const snapshot = await restoredTurnSnapshot(chat, reference, controller.signal);
       if (snapshot !== undefined && !controller.signal.aborted) {
@@ -74,10 +99,13 @@ function observeRestoredTurn(chat: Chat, reference: string, publish: Publish): (
           errorEvidence: clientErrorEvidence(error),
         });
     } finally {
-      if (!terminal && !controller.signal.aborted)
-        timer = setTimeout(() => {
-          void poll();
-        }, 1000);
+      if (!terminal && !controller.signal.aborted) {
+        if (attempts >= RESTORED_TURN_POLL_MAX_ATTEMPTS) reportObservationAbandoned();
+        else
+          timer = setTimeout(() => {
+            void poll();
+          }, restoredTurnPollDelayMs(attempts));
+      }
     }
   };
   timer = setTimeout(() => {

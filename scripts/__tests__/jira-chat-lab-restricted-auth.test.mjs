@@ -208,7 +208,7 @@ describe("native restricted Jira authentication refusal", () => {
       "request",
       {
         method: "POST",
-        url: "/api/atlassian-connectors/action-approvals/write/chat-write-approval",
+        url: "/api/atlassian-connectors/chat-write-approval/write",
       },
       approval,
     );

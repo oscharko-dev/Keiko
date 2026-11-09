@@ -154,7 +154,7 @@ async function approveWrite(ctx, exchange, decisions, observe) {
   decisions.ids.add(approval.approvalId);
   decisions.writes += 1;
   const id = encodeURIComponent(approval.approvalId);
-  const path = `/api/atlassian-connectors/action-approvals/${id}/chat-write-approval`;
+  const path = `/api/atlassian-connectors/chat-write-approval/${id}`;
   const current = await api(ctx, "write-observe", path, undefined, "GET");
   const observed = await Promise.resolve(observe?.()).catch(() => undefined);
   decisions.records.push({ approval: current.approval, call: exchange.call, observed });

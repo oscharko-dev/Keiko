@@ -265,9 +265,7 @@ function decisionContext(approval: ChatToolWriteApprovalView): RouteContext {
     req,
     res: mockResponse().res,
     params: { approvalId: approval.approvalId },
-    url: new URL(
-      "http://127.0.0.1/api/atlassian-connectors/action-approvals/test/chat-write-approval",
-    ),
+    url: new URL("http://127.0.0.1/api/atlassian-connectors/chat-write-approval/test"),
     correlationId: "continuation-decision",
   };
   queueMicrotask(() =>

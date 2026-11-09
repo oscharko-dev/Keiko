@@ -2,13 +2,22 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { fetchChatMessages } from "@/lib/api";
 import type { Chat, ChatMessage } from "@/lib/types";
-import { useRestoredToolTurn } from "./useRestoredToolTurn";
+import {
+  RESTORED_TURN_POLL_MAX_ATTEMPTS,
+  restoredTurnPollDelayMs,
+  useRestoredToolTurn,
+} from "./useRestoredToolTurn";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 vi.mock("@/lib/api", async (original) => ({
   ...(await original<typeof import("@/lib/api")>()),
   fetchChatMessages: vi.fn(),
 }));
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.useRealTimers();
+  resetClientDiagnosticWriter();
+});
 const chat = { id: "restored-chat", projectPath: "/repo" } as Chat;
 const pending: ChatMessage = {
   id: "turn",
@@ -87,4 +96,59 @@ it("aborts its observation and refuses a late response after unmount", async () 
     resolve({ messages: [completed, assistant] });
   });
   expect(publish).toHaveBeenCalledTimes(1);
+});
+
+it("backs the poll spacing off from one second to a ten second ceiling", () => {
+  const delays = Array.from({ length: RESTORED_TURN_POLL_MAX_ATTEMPTS }, (_, attempt) =>
+    restoredTurnPollDelayMs(attempt),
+  );
+  expect(delays[0]).toBe(1000);
+  expect(delays[14]).toBe(1000);
+  expect(delays[15]).toBe(2000);
+  expect(delays[45]).toBe(8000);
+  expect(Math.max(...delays)).toBe(10_000);
+  expect(delays).toEqual([...delays].sort((left, right) => left - right));
+  // The schedule outlasts the ten minute approval lifetime, so a live review is observed to its end.
+  expect(delays.reduce((total, delay) => total + delay, 0)).toBeGreaterThan(10 * 60 * 1000);
+});
+
+it("gives up after a bounded number of polls when the turn never settles", async () => {
+  vi.useFakeTimers();
+  const diagnostics = vi.fn();
+  setClientDiagnosticWriter(diagnostics);
+  vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+  const publish = vi.fn();
+  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+  });
+  // One recent-window read and one full read per poll while the turn row stays absent.
+  const calls = vi.mocked(fetchChatMessages).mock.calls.length;
+  expect(calls).toBe(RESTORED_TURN_POLL_MAX_ATTEMPTS * 2);
+  expect(diagnostics).toHaveBeenCalledWith(
+    "Restored chat turn observation gave up.",
+    expect.objectContaining({ kind: "other" }),
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+  });
+  expect(vi.mocked(fetchChatMessages).mock.calls.length).toBe(calls);
+  expect(publish).toHaveBeenCalledTimes(1);
+});
+
+it("stops observing once the server settles the turn as failed", async () => {
+  vi.useFakeTimers();
+  const failed = { ...pending, turnState: "failed" as const };
+  vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [failed] });
+  const publish = vi.fn();
+  renderHook(() => useRestoredToolTurn(chat, [pending], false, publish));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(publish).toHaveBeenLastCalledWith(failed, [failed]);
+  const calls = vi.mocked(fetchChatMessages).mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+  expect(vi.mocked(fetchChatMessages).mock.calls.length).toBe(calls);
 });

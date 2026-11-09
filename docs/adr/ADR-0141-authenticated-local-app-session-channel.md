@@ -137,13 +137,22 @@ pairing port is never itself client attestation: an absent, forged, revoked or e
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
 
-The active inventory includes the narrow `/api/atlassian-connectors/action-approvals` projection
-for ordinary Chat Jira review observation and decisions (#4288). It carries the same existing
-HttpOnly, SameSite=Strict bearer, and sign-out clears it through the same inventory. A retained
-pending review checks the original live session, exact action and original expiry before a claim
-and before dispatch. An observed review may keep its bounded worker across page reload; explicit
-Stop targets that canonical turn through the authenticated `/api/desktop/chat/cancel` endpoint.
-The restore route supplies the projection to existing valid sessions after an upgrade.
+The active inventory includes the `/api/atlassian-connectors/chat-write-approval` projection for
+ordinary Chat Jira review observation and decisions (#4288). A cookie Path matches by prefix, and
+the approval id is the last segment of the route, so the Chat review routes (`GET` and `POST`
+`/api/atlassian-connectors/chat-write-approval/:approvalId`) own their own prefix and the generic
+connector approval routes under `/api/atlassian-connectors/action-approvals` never receive the
+cookie. The route table, not a convention, proves this (`chatWriteApprovalCookieScope.test.ts`), and
+no generic approval handler consults the session. The projection carries the same existing HttpOnly,
+SameSite=Strict bearer, and sign-out clears it through the same inventory. A retained pending review
+checks the original live session, exact action and original expiry before a claim and before
+dispatch. An observed review may keep its bounded worker across page reload; the worker's timers are
+unreferenced and released on Stop, expiry and session end. Explicit Stop of a turn awaiting the
+human's decision targets that canonical turn through the authenticated `/api/desktop/chat/cancel`
+endpoint, which answers every authenticated caller with HTTP 200 and `cancelled` (true only for the
+caller's own running worker) and keeps a 404 for a missing session; any other in-flight send stops
+at once by aborting its transport. The restore route supplies the projection to existing valid
+sessions after an upgrade.
 
 #### Simple local browser connection (owner decision, 2026-11-04)
 

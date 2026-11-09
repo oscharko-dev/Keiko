@@ -322,12 +322,20 @@ function checkedWriteApproval(value: unknown, approvalId: string): ChatToolWrite
     );
   return approval;
 }
+/**
+ * Chat reviews live under their own prefix so the browser's app-session cookie projection reaches
+ * only these two routes and never the generic connector approval routes (ADR-0141).
+ */
+const CHAT_WRITE_APPROVAL_PATH = "/api/atlassian-connectors/chat-write-approval";
+function chatWriteApprovalPath(approvalId: string): string {
+  return `${CHAT_WRITE_APPROVAL_PATH}/${encodeURIComponent(approvalId)}`;
+}
 function writeApprovalRequest(
   approvalId: string,
   init?: RequestInit,
 ): Promise<ChatToolWriteApprovalView> {
   return bffFetchJson(
-    approvalPath(approvalId, "/chat-write-approval"),
+    chatWriteApprovalPath(approvalId),
     { ...init, cache: "no-store" },
     {
       parseFailureMessage: friendlyParseFailureMessage,

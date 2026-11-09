@@ -1664,6 +1664,19 @@ describe("useChatSession bootstrap", () => {
     });
     vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [restoredPendingApproval()] });
   }
+  /** Serves a pending review for the sent turn once the test supplies that turn's reference. */
+  function observeReviewOf(): { reference?: string } {
+    const observed: { reference?: string } = {};
+    vi.mocked(fetchChatMessages).mockImplementation(() =>
+      Promise.resolve({
+        messages:
+          observed.reference === undefined
+            ? []
+            : [{ ...restoredPendingApproval(), canonicalTurnRef: observed.reference }],
+      }),
+    );
+    return observed;
+  }
   it("observes a restored pending approval through its completed persisted receipt without resending", async () => {
     bootRestoredPendingApproval();
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
@@ -1769,9 +1782,22 @@ describe("useChatSession bootstrap", () => {
     );
   });
 
-  it("fails closed when Stop cannot confirm a matching worker cancellation", async () => {
+  it("counts a server answer that no worker is running as a successful Stop", async () => {
     bootRestoredPendingApproval();
     vi.mocked(cancelDesktopChatTurn).mockResolvedValueOnce({ cancelled: false });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(result.current.sendStatus).toBe("cancelled"));
+    expect(result.current.error).toBeUndefined();
+    expect(cancelDesktopChatTurn).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when Stop cannot reach the server to confirm a worker cancellation", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(cancelDesktopChatTurn).mockRejectedValueOnce(
+      new ApiError("INTERNAL", "Stop unavailable", 500),
+    );
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     act(() => result.current.cancelSend());
@@ -1781,7 +1807,9 @@ describe("useChatSession bootstrap", () => {
   });
   it("allows an explicit Stop retry after an unconfirmed cancellation without claiming success", async () => {
     bootRestoredPendingApproval();
-    vi.mocked(cancelDesktopChatTurn).mockResolvedValueOnce({ cancelled: false });
+    vi.mocked(cancelDesktopChatTurn).mockRejectedValueOnce(
+      new ApiError("INTERNAL", "Stop unavailable", 500),
+    );
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     act(() => result.current.cancelSend());
@@ -1795,21 +1823,26 @@ describe("useChatSession bootstrap", () => {
     bootRestoredPendingApproval();
     const cancellationB = deferred<{ cancelled: boolean }>();
     vi.mocked(cancelDesktopChatTurn)
-      .mockResolvedValueOnce({ cancelled: false })
+      .mockRejectedValueOnce(new ApiError("INTERNAL", "Stop unavailable", 500))
       .mockImplementationOnce(() => cancellationB.promise);
-    vi.mocked(sendDesktopChatStream).mockImplementation(
-      (_input, signal, handlers) =>
-        new Promise((resolve) =>
-          signal.addEventListener(
-            "abort",
-            () => {
-              handlers.onCancelled();
-              resolve();
-            },
-            { once: true },
-          ),
+    vi.mocked(sendDesktopChatStream).mockImplementation((_input, signal, handlers) => {
+      // The replacement turn shows its own pending review, so its Stop asks the server.
+      handlers.onWriteApproval?.({
+        messageId: "canonical-user",
+        call: { id: "create-1", name: "jira_create", arguments: {} },
+        approval: restoredWriteApproval(),
+      });
+      return new Promise((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            handlers.onCancelled();
+            resolve();
+          },
+          { once: true },
         ),
-    );
+      );
+    });
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     act(() => result.current.cancelSend());
@@ -1834,6 +1867,7 @@ describe("useChatSession bootstrap", () => {
     if (clientTurnId === undefined) throw new TypeError("Missing replacement canonical identity");
     const referenceB = await canonicalTurnReferenceForClient("chat-boot", clientTurnId);
     expect(referenceB).not.toBe("a".repeat(64));
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"));
     act(() => result.current.cancelSend());
     await waitFor(() =>
       expect(cancelDesktopChatTurn).toHaveBeenNthCalledWith(2, {
@@ -2014,7 +2048,38 @@ describe("useChatSession bootstrap", () => {
     );
     resetClientDiagnosticWriter();
   });
-  it.each(["awaiting-decision", "contacting"] as const)(
+  it("aborts an ordinary stream at once when no review was observed, without a server request", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    let activeSignal: AbortSignal | undefined;
+    vi.mocked(sendDesktopChatStream).mockImplementation((_input, signal, handlers) => {
+      activeSignal = signal;
+      return new Promise((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            handlers.onCancelled();
+            resolve();
+          },
+          { once: true },
+        ),
+      );
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      void result.current.sendMessage({ text: "Say hello." });
+    });
+    await waitFor(() => expect(result.current.sendStatus).toBe("contacting"));
+    act(() => result.current.cancelSend());
+    expect(activeSignal?.aborted).toBe(true);
+    expect(cancelDesktopChatTurn).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.sendStatus).toBe("cancelled"));
+    expect(result.current.sending).toBe(false);
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it.each(["awaiting-decision"] as const)(
     "acknowledges exact live Stop before disconnecting an opted-in stream (%s)",
     async (status) => {
       bootRestoredPendingApproval();
@@ -2081,7 +2146,7 @@ describe("useChatSession bootstrap", () => {
         }),
       ],
     });
-    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const observed = observeReviewOf();
     const cancellation = deferred<{ cancelled: boolean }>();
     vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => cancellation.promise);
     let activeSignal: AbortSignal | undefined;
@@ -2107,6 +2172,10 @@ describe("useChatSession bootstrap", () => {
     const turnId = vi.mocked(askGrounded).mock.lastCall?.[0].clientTurnId;
     if (turnId === undefined) throw new TypeError("Missing accepted canonical grounded identity");
     const reference = await canonicalTurnReferenceForClient("chat-boot", turnId);
+    observed.reference = reference;
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"), {
+      timeout: 4000,
+    });
     act(() => result.current.cancelSend());
     await waitFor(() =>
       expect(cancelDesktopChatTurn).toHaveBeenCalledWith({
@@ -2126,7 +2195,7 @@ describe("useChatSession bootstrap", () => {
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live", streaming: false })],
     });
-    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const observed = observeReviewOf();
     const cancellation = deferred<{ cancelled: boolean }>();
     vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => cancellation.promise);
     let activeSignal: AbortSignal | undefined;
@@ -2152,6 +2221,10 @@ describe("useChatSession bootstrap", () => {
     const turnId = vi.mocked(sendDesktopChat).mock.lastCall?.[0].clientTurnId;
     if (turnId === undefined) throw new TypeError("Missing accepted canonical buffered identity");
     const reference = await canonicalTurnReferenceForClient("chat-boot", turnId);
+    observed.reference = reference;
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"), {
+      timeout: 4000,
+    });
     act(() => result.current.cancelSend());
     await waitFor(() =>
       expect(cancelDesktopChatTurn).toHaveBeenCalledWith({
@@ -2164,6 +2237,39 @@ describe("useChatSession bootstrap", () => {
       cancellation.resolve({ cancelled: true });
     });
     await waitFor(() => expect(activeSignal?.aborted).toBe(true));
+  });
+
+  it("aborts an unreviewed buffered turn at once without a server request", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-live", streaming: false })],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    let activeSignal: AbortSignal | undefined;
+    vi.mocked(sendDesktopChat).mockImplementation((_input, signal) => {
+      if (signal === undefined) throw new TypeError("Buffered turn has no request signal");
+      activeSignal = signal;
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("cancelled", "AbortError"));
+          },
+          { once: true },
+        ),
+      );
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      void result.current.sendMessage({ text: "Say hello." });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalled());
+    act(() => result.current.cancelSend());
+    expect(activeSignal?.aborted).toBe(true);
+    expect(cancelDesktopChatTurn).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.sendStatus).toBe("cancelled"));
+    expect(result.current.error).toBeUndefined();
   });
 
   it("says when a grounded turn waits for the human's decision", async () => {
@@ -2579,9 +2685,9 @@ describe("useChatSession stale async landing guards", () => {
     act(() => {
       rendered.result.current.cancelSend();
     });
-    // The authenticated Stop acknowledgement releases the slot; the old provider remains pending.
+    // Without an observed review Stop aborts at once; the old provider remains pending.
     await waitFor(() => expect(rendered.result.current.sendStatus).toBe("cancelled"));
-    expect(cancelDesktopChatTurn).toHaveBeenCalledOnce();
+    expect(cancelDesktopChatTurn).not.toHaveBeenCalled();
     let replacement!: Promise<SendMessageOutcome>;
     act(() => {
       replacement = rendered.result.current.sendMessage({
@@ -2643,7 +2749,7 @@ describe("useChatSession stale async landing guards", () => {
       rendered.result.current.cancelSend();
     });
     await waitFor(() => expect(rendered.result.current.sendStatus).toBe("cancelled"));
-    expect(cancelDesktopChatTurn).toHaveBeenCalledOnce();
+    expect(cancelDesktopChatTurn).not.toHaveBeenCalled();
     firstResponse.resolve(replacementResponse);
     await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
 
@@ -6155,7 +6261,7 @@ describe("useChatSession canonical Voice FIFO", () => {
         intent.settle(true);
       });
       await waitFor(() => expect(signalA?.aborted).toBe(true));
-      expect(cancelDesktopChatTurn).toHaveBeenCalledOnce();
+      expect(cancelDesktopChatTurn).not.toHaveBeenCalled();
       await act(async () => rendered.result.current.openChat(chatB));
       act(() => {
         deliveryB = rendered.result.current.sendMessage({
@@ -6175,7 +6281,7 @@ describe("useChatSession canonical Voice FIFO", () => {
       expect(signalB?.aborted).toBe(false);
       act(() => beginChatScopeTransition("chat-b", "audit-current-source"));
       await waitFor(() => expect(signalB?.aborted).toBe(true));
-      expect(cancelDesktopChatTurn).toHaveBeenCalledTimes(2);
+      expect(cancelDesktopChatTurn).not.toHaveBeenCalled();
     } finally {
       await act(async () => {
         clearChatScopeTransitions("chat-a");

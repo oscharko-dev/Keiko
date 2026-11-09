@@ -61,9 +61,9 @@ function requestWith(headers: Record<string, string>, encrypted = false): Incomi
 }
 
 describe("serializeSessionCookie", () => {
-  it("projects the original paired bearer only to the exact Jira approval route family and clears it on logout", () => {
+  it("projects the original paired bearer only to the Chat review observation and decision routes and clears it on logout", () => {
     const token = "original-paired-session.fixture-proof";
-    const path = "/api/atlassian-connectors/action-approvals";
+    const path = "/api/atlassian-connectors/chat-write-approval";
     const issued = serializeSessionCookies(token, { secure: false, maxAgeSeconds: 60 });
     const projection = issued.find((cookie) => cookie.includes(`Path=${path};`));
     expect(projection).toBe(
@@ -72,7 +72,7 @@ describe("serializeSessionCookie", () => {
     // Feed the producer's actual header into the real request-cookie reader, rather than mocking
     // session resolution. The Chromium journey separately proves browser path selection.
     const request = requestWith({ cookie: projection?.split(";")[0] ?? "" });
-    request.url = `${path}/synthetic-approval/chat-write-approval`;
+    request.url = `${path}/synthetic-approval`;
     expect(readSessionCookie(request)).toBe(token);
     expect(issued.filter((cookie) => cookie.includes("Path=/api/atlassian-connectors;"))).toEqual(
       [],

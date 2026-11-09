@@ -34,9 +34,24 @@ The product fix keeps the original admitted worker only for an opted-in canonica
 review was observed by the original live app session. Observation grants no action and renews no
 expiry. The original authority, binding, action digest and one-use approval remain authoritative.
 Transport detachment stops SSE delivery; it does not resend a model turn or a native operation.
-Explicit Stop cancels the exact canonical turn through an authenticated endpoint. Unleased
-requests preserve their existing disconnect cancellation. Server restart recovery is outside this
-page-reload claim.
+Explicit Stop cancels the exact canonical turn through an authenticated endpoint, but only for a
+turn that visibly awaits the human's decision. Every other in-flight send, including a send the
+server has not yet accepted, stops immediately by aborting its transport; the server then ends the
+request because nothing was observed (`Streaming.test.tsx` pins this, and a review audit found the
+earlier "every send waits for an acknowledgement" behaviour to be a regression). The endpoint
+answers every authenticated caller with HTTP 200 and `cancelled`, true only when the caller's own
+session owned a still-running worker; an unknown chat, absent turn, settled turn or another
+session's turn all answer `cancelled: false`, which the browser treats as a successful Stop. A
+missing or invalid session keeps the existence-concealing 404, and a failed request stays an
+unconfirmed Stop. Held-worker timers are unreferenced and cleared on Stop, expiry and session end.
+Unleased requests preserve their existing disconnect cancellation.
+
+Server restart recovery: the held worker lives only in memory. Opening the UI database fails every
+persisted pending canonical turn (`recoverInterruptedClientTurns`; `db.test.ts` proves it), so a
+restored review is observed as a terminal turn after a restart. The browser observation also has a
+hard guard: poll spacing grows from one second to ten seconds and ends after 120 attempts
+(about 13.75 minutes, longer than the 10 minute approval lifetime), reporting one body-free client
+diagnostic.
 
 | Boundary                                                                                     | Owning code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Hermetic proof                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -49,9 +64,15 @@ page-reload claim.
 The first integrated browser run of the new guard exposed a second boundary mismatch: the
 existing path-scoped app-session cookies did not reach the approval observation endpoint.
 The guard correctly refused that request. The canonical cookie serializer now projects the same
-existing proof only at `/api/atlassian-connectors/action-approvals`, and the canonical sign-out
-inventory clears it. Cookie tests pin HttpOnly, SameSite=Strict, bearer identity and the narrow
-path. The broad `/api` projection remains retired. ADR-0141 records this projection.
+existing proof only at `/api/atlassian-connectors/chat-write-approval`, and the canonical sign-out
+inventory clears it. A cookie Path is a prefix and the approval id is the last route segment, so
+the Chat review routes (`GET`/`POST /api/atlassian-connectors/chat-write-approval/:approvalId`) were
+moved out of the generic `action-approvals` family: the browser now sends the cookie to exactly
+those two routes and never to the generic list, get, approve and reject routes
+(`chatWriteApprovalCookieScope.test.ts` derives this from the live route table, and
+`chatWriteApprovalRoutes.test.ts` proves those routes never consult the session). Cookie tests pin
+HttpOnly, SameSite=Strict, bearer identity and the path. The broad `/api` projection remains
+retired. ADR-0141 records this projection.
 
 Additional valid failing-first runs cover request retention (one failure), session currency
 (six failures), standalone read currency (two), decision validation ordering (one), native/mixed
@@ -186,6 +207,21 @@ the entire persisted tool transcript and canonical turn identity. Local expansio
 checkbox choices are not stored in the Chat record. Submitted exclusions remain part of the exact
 server-recorded approval. These proofs cover canonical proposal, approval, receipt and batch data;
 they do not promise persistence of unsubmitted local view choices.
+
+## Review follow-up: Stop, cookie scope, timers, restart
+
+An independent review of the reload work raised five findings, each repaired at its owning layer:
+
+| Finding                                                   | Repair                                                                                                                                                | Owning proof                                                                                                                                      |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stop waited for the server in ordinary Chat               | Only a turn awaiting the human's decision asks the server; every other send aborts its transport at once, and `cancelled: false` is a successful Stop | `Streaming.test.tsx` (immediate abort, no cancel request, no error); `useChatSession.test.tsx` stream, buffered and grounded immediate-Stop cases |
+| Cookie Path was a prefix over the generic approval routes | Chat review routes moved to `/api/atlassian-connectors/chat-write-approval/:approvalId`, the cookie path is that prefix                               | `chatWriteApprovalCookieScope.test.ts`; `chatWriteApprovalRoutes.test.ts` (generic routes never consult the session)                              |
+| Held-worker timers could keep the process alive           | Expiry and session timers are unreferenced                                                                                                            | `jiraChatToolTurn.test.ts` "held approval worker timers": `hasRef()` false, timers cleared, inventory zero after Stop, expiry and session end     |
+| Unbounded restored-turn polling after a restart           | Existing reopen sweep fails pending turns (proved); browser observation backs off and stops after 120 attempts                                        | `db.test.ts` reopen case; `useRestoredToolTurn.test.tsx` backoff, cap and terminal-failed cases                                                   |
+| Stop answered 200 or 404 depending on the turn            | One closed 200 `{ cancelled }` answer for every authenticated caller; missing session keeps 404                                                       | `jiraChatToolTurn.test.ts` "answers Stop uniformly for an authenticated caller"                                                                   |
+
+Previous Stop pins that treated `cancelled: false` as an unconfirmed Stop now exercise the same
+fail-closed invariant through a failed request, because `cancelled: false` means no worker runs.
 
 ## Limits and claim-table update for the integrator
 

@@ -114,6 +114,7 @@ class ApprovalContinuation implements ChatApprovalContinuation {
       recordContinuation(this.entry, "detached");
       const retained = this.entry;
       retained.expiresAt = expiresAt;
+      // A held worker never keeps the process alive: shutdown must not wait for a review.
       this.expiryTimer = setTimeout(
         () => {
           this.controller.abort("approval continuation expired");
@@ -121,9 +122,11 @@ class ApprovalContinuation implements ChatApprovalContinuation {
         },
         Math.max(0, expiresAt - Date.now()),
       );
+      this.expiryTimer.unref();
       this.sessionTimer = setInterval(() => {
         validateChatApprovalContinuation(this.deps.store, retained.message);
       }, 1000);
+      this.sessionTimer.unref();
       this.controller.signal.addEventListener("abort", this.releaseTimers, { once: true });
       return true;
     } catch (error) {
@@ -197,7 +200,13 @@ function cancellationIdentity(
     return undefined;
   return { chatId: body.chatId, canonicalTurnRef: body.canonicalTurnRef };
 }
-/** Stop targets one existing admitted worker; stale identities cannot cancel another turn. */
+/**
+ * Stop targets one existing admitted worker; stale identities cannot cancel another turn. Every
+ * authenticated caller receives the same closed answer shape with HTTP 200: `cancelled` is true
+ * only when this caller's own session owned the worker and it was still running. An unknown chat,
+ * an absent or settled turn and another session's turn are indistinguishable, so Stop is no
+ * existence oracle. A missing or invalid session keeps the existence-concealing 404.
+ */
 export async function handleCancelDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -210,15 +219,20 @@ export async function handleCancelDesktopChat(
       body: errorBody("BAD_REQUEST", "Invalid Chat cancellation identity."),
     };
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
-  if (session === undefined || deps.store.findChatById(identity.chatId) === undefined)
+  if (session === undefined)
     return { status: 404, body: errorBody("NOT_FOUND", "Chat turn not found.") };
+  return { status: 200, body: { cancelled: cancelOwnedEntry(deps, session.sessionId, identity) } };
+}
+function cancelOwnedEntry(
+  deps: UiHandlerDeps,
+  sessionId: string,
+  identity: { readonly chatId: string; readonly canonicalTurnRef: string },
+): boolean {
   const entry = continuations.get(deps.store)?.get(identity.canonicalTurnRef);
-  if (entry === undefined) return { status: 200, body: { cancelled: false } };
-  if (entry.message.chatId !== identity.chatId || entry.sessionId !== session.sessionId)
-    return { status: 404, body: errorBody("NOT_FOUND", "Chat turn not found.") };
+  if (entry?.message.chatId !== identity.chatId || entry.sessionId !== sessionId) return false;
   return cancelEntry(deps, entry);
 }
-function cancelEntry(deps: UiHandlerDeps, entry: Continuation): RouteResult {
+function cancelEntry(deps: UiHandlerDeps, entry: Continuation): boolean {
   const active =
     deps.store.findMessageById(entry.message.id)?.turnState === "pending" &&
     !entry.controller.signal.aborted;
@@ -226,5 +240,5 @@ function cancelEntry(deps: UiHandlerDeps, entry: Continuation): RouteResult {
     entry.controller.abort("human stopped Chat turn");
     recordContinuation(entry, "cancelled");
   }
-  return { status: 200, body: { cancelled: active } };
+  return active;
 }
