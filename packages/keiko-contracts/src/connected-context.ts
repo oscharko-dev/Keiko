@@ -1309,17 +1309,25 @@ function validatePackOmittedCounts(pack: Record<string, unknown>, reasons: strin
   if (details.length !== Math.min(total, MAX_OMITTED_CONTEXT_ENTRIES)) {
     reasons.push("pack.omitted details do not account for omittedCounts");
   }
-  const retained = details.filter(isRetainedOmission);
-  const retainedCounts = connectedContextOmittedCounts({ omitted: retained });
+  const retainedCounts = retainedOmissionReasonCounts(details);
   for (const reason of CANDIDATE_OMISSION_REASONS) {
-    if (omittedCounts[reason] < retainedCounts[reason]) {
+    if (omittedCounts[reason] < (retainedCounts.get(reason) ?? 0)) {
       reasons.push(`pack.omittedCounts.${reason} below retained details`);
     }
   }
 }
 
-function isRetainedOmission(entry: unknown): entry is OmittedContextEntry {
-  return isRecord(entry) && isCandidateOmissionReason(entry.reason);
+// Counts only the retained details' reasons, the one field this check reads. A detail with an
+// unknown reason, or one that is not a record, counts toward no reason.
+function retainedOmissionReasonCounts(
+  details: readonly unknown[],
+): ReadonlyMap<CandidateOmissionReason, number> {
+  const counts = new Map<CandidateOmissionReason, number>();
+  for (const entry of details) {
+    const reason = isRecord(entry) ? entry.reason : undefined;
+    if (isCandidateOmissionReason(reason)) counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function validateImpactedAtomIds(
