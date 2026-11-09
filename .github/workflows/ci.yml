@@ -797,10 +797,15 @@ jobs:
         run: npm run build:packages
       - name: Measure script coverage shard
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        # #4288: the whole suite in one 30-minute job was cancelled at the limit (about 2475 s of
-        # test time plus about 4 min of setup). Three shards bring each job to roughly a third of
-        # that; the timeout above is deliberately NOT raised. The npm script carries `default` and
-        # `blob`; the annotation reporter is added here for the same reason as in `coverage-packages`.
+        # #4288: the whole suite in one 30-minute job was cancelled at the limit. 2475 s is the
+        # SUMMED per-file test time; the unsharded wall time was 1596 s at `maxWorkers: 2`, plus
+        # about 4 min of setup. Vitest assigns WHOLE files to shards by a sha1 hash of the path, so
+        # the shards are not equal thirds: shard 2 holds release-publish-pipeline (11-12 min) and
+        # op-catalog-drift (about 4 min), shard 1 holds portable-runtime (6-7 min), and the longest
+        # shard is bounded below by the single longest file, about 12 min. The expected wall time of
+        # the longest shard is about 13-14 min plus setup, against the 30-minute limit above, which
+        # is deliberately NOT raised. The npm script carries `default` and `blob`; the annotation
+        # reporter is added here for the same reason as in `coverage-packages`.
         run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
       - name: Upload script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
@@ -814,11 +819,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # KEIKO-1021: the SonarCloud-scope `if:` condition is duplicated at ci.yml:755, 770, 782,
-  # and 796 (four coupled sites in this job). GitHub Actions has no `if:`-level variable
-  # interpolation, so the four expressions must be edited together. Any change to one — adding a
-  # trigger, restricting a branch, or narrowing a base_ref — must be applied to all four to keep
-  # the coverage-sonar scope coherent across the job's four gated steps.
+  # KEIKO-1021: the coverage-scope `if:` condition (`github.event_name != 'pull_request' ||
+  # github.base_ref != 'feat/keiko-editor'`) is repeated on every coverage step of this job: the
+  # evidence downloads, the shard-count guards, the merges, the blob discard and the quality gates.
+  # GitHub Actions has no `if:`-level variable interpolation, so those expressions must be edited
+  # together. Any change to one — adding a trigger, restricting a branch, or narrowing a base_ref —
+  # must be applied to every one of them to keep the coverage-sonar scope coherent. Find them by
+  # searching for `feat/keiko-editor` in this job rather than by a count or a line number.
   coverage-sonar:
     name: Coverage and SonarCloud
     # `!cancelled()` is load-bearing. Without it a failing shard would leave this job SKIPPED, and a
@@ -992,7 +999,7 @@ jobs:
       - name: Discard the shard blobs now that the merged coverage exists
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
-        # `coverage/packages/lcov.info` is what every later step reads. Leaving them in the
+        # `coverage/packages` and `coverage/scripts` are what every later step reads. Leaving them in the
         # workspace puts ~12MB JSON files inside `sonar.sources=.`, and the scanner's
         # "is bigger than 20MB" WARN fails `check-sonar-analysis-log.mjs --require-full-analysis`
         # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
