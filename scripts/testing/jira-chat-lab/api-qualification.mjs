@@ -184,13 +184,14 @@ const prepareFailure = (error) =>
   error instanceof assert.AssertionError ? "prepare-precondition" : "prepare-failed";
 /** Names the recipe line that refused, never a value: a message only when the recipe wrote it. */
 function prepareSite(error) {
-  const frame = String(error?.stack ?? "")
+  const sites = String(error?.stack ?? "")
     .split("\n")
-    .find((line) => line.includes("jira-chat-lab/api-qualification-"));
-  const site = /(api-qualification-[\w-]+\.mjs:\d+)/.exec(frame ?? "")?.[1];
+    .map((line) => /(api-qualification-[\w-]+\.mjs:\d+)/u.exec(line)?.[1])
+    .filter((site) => site !== undefined)
+    .slice(0, 3);
   const message = error instanceof assert.AssertionError && !error.generatedMessage;
   return {
-    ...(site ? { site } : {}),
+    ...(sites.length > 0 ? { sites } : {}),
     ...(message ? { message: String(error.message).slice(0, 160) } : {}),
     errorType: error instanceof Error ? error.name : "unknown",
   };

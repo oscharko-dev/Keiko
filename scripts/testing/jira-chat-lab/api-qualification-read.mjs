@@ -12,7 +12,9 @@ export async function read(context, path) {
     path,
     basicAuth(context.session, context.actor),
   );
-  assert.equal(response.status, 200);
+  // The message names the route shape and status only; identifiers and query values stay out.
+  const shape = path.split("?")[0].replace(/\d+/gu, "#");
+  assert.equal(response.status, 200, `Native read ${shape} answered ${response.status}`);
   return response.value;
 }
 
