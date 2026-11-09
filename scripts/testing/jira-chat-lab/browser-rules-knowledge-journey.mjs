@@ -41,6 +41,8 @@ async function issues(context, fields = `${ISSUE_FIELDS},${context.epicLinkField
   );
 }
 
+// The limit run focuses its Chat in Full access (browser-limit-run.mjs focusLimitChat).
+const RUN_MODE = "autonomous-delivery";
 const RULE_PROBE_MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
 
 function probeDigest(observed) {
@@ -53,7 +55,7 @@ function probePrompt(projectKey) {
     // before the formal template is consulted, and the probe would observe no template rule.
     `Erstelle genau ein Epic im Projekt ${projectKey} mit Epic-Name 'Regelprobe' und Zusammenfassung 'Regelprobe ohne Kennung', ` +
     "Beschreibung 'Absichtlich ohne Abschnitte' und keinen Labels. Keine Elternzuordnung und keine explizite Priorität. " +
-    "Lege es genau mit diesem Inhalt an, ohne Vorabkorrektur. " +
+    "Nutze den Jira-Create-Aufruf genau mit diesem Inhalt, ohne Vorabkorrektur. " +
     "Wenn die formale Vorlage verweigert, melde ihre konkrete Regel und beende den Turn ohne erneuten Schreibversuch."
   );
 }
@@ -169,10 +171,18 @@ async function executeOpenedProbes(ctx, opened, journal, modes, counts) {
     resources: { chatId: opened.chat.id, completedModes: [], baselineDigest },
     counts,
   });
-  for (const mode of modes) {
-    ctx.signal.throwIfAborted();
-    const failure = await probeMode(ctx, opened, journal, mode, counts);
-    if (failure !== undefined) return journal.result("red", failure, counts);
+  let selected;
+  try {
+    for (const mode of modes) {
+      selected = mode;
+      ctx.signal.throwIfAborted();
+      const failure = await probeMode(ctx, opened, journal, mode, counts);
+      if (failure !== undefined) return journal.result("red", failure, counts);
+    }
+  } finally {
+    // The run's later steps focus the Chat in Full access; a probe that stopped early must not
+    // leave the Chat in the mode it last selected.
+    if (selected !== RUN_MODE) await selectAccessMode(opened.page, opened.region, RUN_MODE);
   }
   await journal.checkpoint({ phase: "completed", counts });
   return journal.result("green", "rule-probes-confirmed", counts);

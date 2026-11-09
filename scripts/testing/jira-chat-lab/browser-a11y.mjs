@@ -74,8 +74,9 @@ async function cardLinks(card, origin) {
   return links;
 }
 /**
- * The tool state is the output right after the heading. A report card adds its own read status as
- * a second direct output, so every direct output is read and none may be empty.
+ * The tool state is the first direct output of the card; an approval card places content between
+ * its heading and that output, and a report card adds its own read status as a second one. Every
+ * direct output is read and none may be empty.
  */
 async function statusOutputs(card) {
   const outputs = card.locator(":scope > output");
@@ -86,7 +87,7 @@ async function statusOutputs(card) {
 }
 async function readableCard(card, origin, projectKey) {
   const title = (await card.locator(":scope > strong").innerText()).trim();
-  const outcome = (await card.locator(":scope > strong + output").innerText()).trim();
+  const [outcome = ""] = await statusOutputs(card);
   const text = await card.innerText();
   demand(title.length > 0 && outcome.length > 0);
   demand((await statusOutputs(card)).every((value) => value.length > 0));
@@ -95,7 +96,7 @@ async function readableCard(card, origin, projectKey) {
   const links = await cardLinks(card, origin);
   return { title, outcome, keys: visibleIssueKeys(text, links, projectKey), links };
 }
-async function visibleCards(browser, projectKey) {
+export async function visibleCards(browser, projectKey) {
   const locator = browser.region.locator(RESULT_CARDS);
   const cards = [];
   for (let index = 0; index < (await locator.count()); index += 1) {

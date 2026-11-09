@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { labSessionConnection } from "./lab-client.mjs";
+import { RESULT_CARDS } from "./browser-card-readability.mjs";
 import {
   JourneyStepFailure,
   observedEffects,
@@ -11,8 +12,6 @@ import {
 export { JourneyStepFailure } from "./project-agile-oracles.mjs";
 
 const OUTCOMES = new Set(["succeeded", "succeeded-unconfirmed", "rejected", "unknown"]);
-const RESULT_CARDS =
-  'section[aria-label]:has(> strong):has(> output), [role="group"][aria-label]:has(> strong):has(> output)';
 
 function operationsOf(definition) {
   const supplied = definition.operations ?? [definition.operation];

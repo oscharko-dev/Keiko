@@ -26,11 +26,11 @@ vi.mock("../../tests/e2e/support/axe.ts", async (original) => ({
 }));
 
 import { assertCardsReadable, setUiLanguage } from "../testing/jira-chat-lab/browser-a11y.mjs";
+import { RESULT_CARDS } from "../testing/jira-chat-lab/browser-card-readability.mjs";
 
 const CHAT = "01234567-89ab-4cde-8fab-0123456789ab";
 const OTHER_CHAT = "11234567-89ab-4cde-8fab-0123456789ab";
-const CARD_SELECTOR =
-  'section[aria-label]:has(> strong):has(> output), [role="group"][aria-label]:has(> strong):has(> output)';
+const CARD_SELECTOR = RESULT_CARDS;
 const roots = [];
 let active;
 function card(body = "LIM7-1 and LIM7-2", extra = {}) {

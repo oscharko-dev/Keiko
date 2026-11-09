@@ -1,6 +1,14 @@
 // Shared card grammar for per-turn role checks and the reload/accessibility audit.
-export const RESULT_CARDS =
-  'section[aria-label]:has(> strong):has(> output), [role="group"][aria-label]:has(> strong):has(> output)';
+// Production renders a known Jira tool's card as a native fieldset (implicit group role), an
+// approval or receipt as a section that holds the heading and status directly, and a non-Jira (MCP)
+// receipt as a plain div inside its section (JiraChatTools.tsx, JiraWriteApproval.tsx).
+const CARD_SHAPE = ":has(> strong):has(> output)";
+export const RESULT_CARDS = [
+  `section[aria-label]${CARD_SHAPE}`,
+  `[role="group"][aria-label]${CARD_SHAPE}`,
+  `fieldset[aria-label]${CARD_SHAPE}`,
+  `section[aria-label] > div${CARD_SHAPE}`,
+].join(", ");
 
 const GENERIC = new Set(["Jira action", "Jira-Aktion"]);
 const UNAVAILABLE = [

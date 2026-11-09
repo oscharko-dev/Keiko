@@ -261,6 +261,24 @@ describe("W12 runtime project and formal refusal probes", () => {
     },
   );
 
+  it("names the Jira create call in every probe prompt, like the corrective rule turns", async () => {
+    const ctx = context();
+    await journey.runRuleProbes(ctx, { modes: MODES });
+    for (const call of ports.turn.mock.calls) expect(call[1]).toContain("Jira-Create-Aufruf");
+  });
+
+  it("returns the Chat to Full access when a probe stops before the last mode", async () => {
+    const ctx = context();
+    ports.turn.mockImplementation(async () => ({ decisions: 0, exchanges: [] }));
+    expect((await journey.runRuleProbes(ctx, { modes: MODES })).detail).toBe(
+      "rule-probe-refusal-missing",
+    );
+    expect(ports.mode.mock.calls.map((call) => call[2])).toEqual([
+      "governed-assist",
+      "autonomous-delivery",
+    ]);
+  });
+
   it("reverifies completed native state without resubmitting any browser turn", async () => {
     const ctx = context();
     const first = await journey.runRuleProbes(ctx, { modes: MODES });
