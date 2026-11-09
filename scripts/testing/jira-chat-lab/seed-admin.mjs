@@ -13,9 +13,11 @@ export async function withLabAdmin(session, run) {
     await page.goto(`${session.origin}/secure/admin/ViewFieldLayouts.jspa`, {
       waitUntil: "domcontentloaded",
     });
-    await page.locator("#username-field").fill("keiko-admin");
-    await page.locator("#password-field").fill(password);
-    await page.getByRole("button", { name: "Log in", exact: true }).click();
+    // The authentication plugin's login page and the classic one that legacy mode serves (the
+    // laboratory compose file selects it) use different field identifiers.
+    await page.locator("#username-field, #login-form-username").fill("keiko-admin");
+    await page.locator("#password-field, #login-form-password").fill(password);
+    await page.locator("#login-form-submit, button:text-is('Log in')").first().click();
     await page.waitForURL((url) => url.pathname !== "/login.jsp");
     await page.waitForLoadState("domcontentloaded");
     if (await page.locator("input[name=webSudoPassword]").count()) {
