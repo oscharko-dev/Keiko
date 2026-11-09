@@ -2413,6 +2413,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-contracts/src/governed-tool-lifecycle.ts": {
+      "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 10,
       "anti-slop/no-unknown-parameters": 2,
       "anti-slop/no-unsafe-dictionary-type": 2
@@ -2653,6 +2654,7 @@
     },
     "packages/keiko-contracts/src/mcp-servers.ts": {
       "anti-slop/no-conditional-empty-object-spread": 8,
+      "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 18,
       "anti-slop/no-unknown-parameters": 23,
       "anti-slop/no-unsafe-dictionary-type": 1

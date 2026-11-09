@@ -201,8 +201,7 @@ function capturedLocalCommand(
     if (captured.length === MCP_ARGUMENT_MAX) return undefined;
     captured.push(member);
   }
-  const executable = captured[0];
-  const args = captured.slice(1);
+  const [executable, ...args] = captured;
   if (!isMcpLocalAbsolutePath(executable)) return undefined;
   if (!args.every((part): part is string => boundedText(part) && literal(part))) return undefined;
   return [executable, ...args];
