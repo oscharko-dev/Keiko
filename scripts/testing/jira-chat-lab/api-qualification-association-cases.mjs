@@ -76,7 +76,10 @@ async function nativeFixture(c, method, path, body) {
     },
     body: JSON.stringify(body),
   });
-  assert.ok(response.status === 200 || response.status === 201, "Jira must accept the fixture");
+  assert.ok(
+    response.status === 200 || response.status === 201,
+    `Jira must accept the fixture (HTTP ${response.status} ${method} ${path.replace(/[1-9]\d*/gu, "#")})`,
+  );
   return response.json();
 }
 const customPriorityScheme = (c, f, label) =>
