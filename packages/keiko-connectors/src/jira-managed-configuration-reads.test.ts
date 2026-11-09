@@ -184,6 +184,25 @@ describe("closed native configuration reads", () => {
       });
     },
   );
+  it("reads Jira 10.3's numeric last value update as its exact UTC instant", async () => {
+    // Jira Data Center 10.3.26 reports the instant as epoch milliseconds once a value changed.
+    const read = (lastValueUpdate: unknown): ReturnType<typeof executeJiraConfigurationRead> =>
+      fixture({
+        startAt: 0,
+        maxResults: 25,
+        isLast: true,
+        total: 1,
+        values: [{ ...FIELD, lastValueUpdate }],
+      }).read("jira.custom-fields");
+    expect((await read(1762675200000)).data).toMatchObject({
+      items: [{ id: FIELD.id, lastValueUpdate: "2025-11-09T08:00:00.000Z" }],
+    });
+    expect((await read("2025-11-09T08:00:00.000+0000")).data).toMatchObject({
+      items: [{ id: FIELD.id, lastValueUpdate: "2025-11-09T08:00:00.000+0000" }],
+    });
+    for (const malformed of [-1, 1.5, 8640000000000001, Number.MAX_SAFE_INTEGER + 1])
+      expect((await read(malformed)).isError, String(malformed)).toBe(true);
+  });
   it.each([
     { ...FIELD, numericId: 10001 },
     { ...FIELD, numericId: 9007199254740992 },

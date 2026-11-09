@@ -916,7 +916,10 @@ proven on the core Sprint field: a closed sprint stays there as history, so only
 exactly one closed state are ignored, and an open or unreadable entry remains a conflict.
 `mypreferences` and `monitoring/jmx/getAvailableMetrics` answer `text/plain` and are read as bounded
 text scalars that refuse control characters. A workflow-scheme issue-type read omits `workflow` for
-an unmapped type; only that read accepts the omission.
+an unmapped type; only that read accepts the omission. Once a custom field's value changed,
+`customFields` reports its `lastValueUpdate` as epoch milliseconds; it is read as that exact UTC
+instant in ISO-8601 text, text from other releases stays as observed, and a negative, fractional or
+out-of-range number is malformed.
 
 The same qualification fixed five transport and reading rules, each scoped to the observed case:
 a bodiless native write (`PUT`, `POST` or `DELETE` without a body) carries

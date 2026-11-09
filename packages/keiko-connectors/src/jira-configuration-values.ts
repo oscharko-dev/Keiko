@@ -85,15 +85,25 @@ const CUSTOM_FIELDS = [
   "screensCount",
   "lastValueUpdate",
 ] as const;
+/**
+ * Jira Data Center 10.3 reports a field's last value update as epoch milliseconds once a value
+ * changed; it is read as that exact UTC instant. Text from other releases stays as observed.
+ */
+function lastValueUpdate(value: unknown): string | undefined {
+  if (typeof value === "string") return jiraNativeText(value, 128) ? value : undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return undefined;
+  const instant = new Date(value);
+  return Number.isNaN(instant.getTime()) ? undefined : instant.toISOString();
+}
 const customField: OptionalProjection = (value, field) => {
-  const max = field === "lastValueUpdate" ? 128 : 1024;
   let projected: CatalogJsonValue | undefined;
   if (CUSTOM_FLAGS.has(field)) projected = typeof value === "boolean" ? value : undefined;
   else if (CUSTOM_COUNTS.has(field)) projected = observedCount(value);
   else if (field === "numericId") projected = jiraNativeNumericId(value);
   else if (field === "projectIds" || field === "issueTypeIds") projected = identifiers(value);
   else if (field === "description") projected = description(value);
-  else projected = jiraNativeText(value, max) ? value : undefined;
+  else if (field === "lastValueUpdate") projected = lastValueUpdate(value);
+  else projected = jiraNativeText(value, 1024) ? value : undefined;
   return projected;
 };
 export function jiraCustomFieldProjection(value: unknown): CatalogJsonObject | undefined {
