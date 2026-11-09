@@ -10,6 +10,10 @@ import {
   JIRA_MUTATION_RESULT_STATES,
   type JiraMutationResultState,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  isCanonicalKnowledgeReviewRef,
+  isCanonicalKnowledgeToolRef,
+} from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
 import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
@@ -185,17 +189,7 @@ const KNOWLEDGE_TOOLS: Readonly<
 export function isCanonicalKnowledgeExchange(exchange: ChatToolExchange): boolean {
   const ref = exchange.result?.toolRef;
   if (ref === undefined || ref === null) return false;
-  // Consumer compatibility checks do not declare a second tool registry beside the catalog.
-  switch (exchange.call.name) {
-    case "knowledge_requirements":
-      return ref.canonicalId === "keiko.knowledge.requirements" && ref.contractVersion === 1;
-    case "knowledge_documents":
-      return ref.canonicalId === "keiko.knowledge.documents" && ref.contractVersion === 1;
-    case "knowledge_review":
-      return ref.canonicalId === "keiko.knowledge.review" && ref.contractVersion === 2;
-    default:
-      return false;
-  }
+  return isCanonicalKnowledgeToolRef(exchange.call.name, ref);
 }
 
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
@@ -544,8 +538,8 @@ function canonicalReviewFailureData(
   result: ChatToolExchange["result"],
 ): Record<string, unknown> | undefined {
   if (
-    result?.toolRef?.canonicalId !== "keiko.knowledge.review" ||
-    result.toolRef.contractVersion !== 2 ||
+    result === undefined ||
+    !isCanonicalKnowledgeReviewRef(result.toolRef) ||
     result.status !== "failed" ||
     result.reason !== "provider-reported-error"
   )

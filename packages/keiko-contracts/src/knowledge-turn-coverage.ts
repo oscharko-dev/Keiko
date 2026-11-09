@@ -26,11 +26,50 @@ export const KNOWLEDGE_REVIEW_VALIDATION_REASONS = [
   "clarification-question",
 ] as const;
 export type KnowledgeReviewValidationReason = (typeof KNOWLEDGE_REVIEW_VALIDATION_REASONS)[number];
-const TOOLS = new Set([
-  "keiko.knowledge.requirements",
-  "keiko.knowledge.documents",
-  "keiko.knowledge.review",
-]);
+/** The single table of managed Knowledge tool identities; consumers derive from it, never restate it. */
+export const KNOWLEDGE_REQUIREMENTS_TOOL_ID = "keiko.knowledge.requirements";
+export const KNOWLEDGE_REVIEW_TOOL_ID = "keiko.knowledge.review";
+export const KNOWLEDGE_REVIEW_CONTRACT_VERSION = 2;
+export const KNOWLEDGE_TOOL_IDENTITIES = [
+  {
+    name: "knowledge_requirements",
+    canonicalId: KNOWLEDGE_REQUIREMENTS_TOOL_ID,
+    contractVersion: 1,
+  },
+  { name: "knowledge_documents", canonicalId: "keiko.knowledge.documents", contractVersion: 1 },
+  {
+    name: "knowledge_review",
+    canonicalId: KNOWLEDGE_REVIEW_TOOL_ID,
+    contractVersion: KNOWLEDGE_REVIEW_CONTRACT_VERSION,
+  },
+] as const;
+const TOOLS: ReadonlySet<string> = new Set(KNOWLEDGE_TOOL_IDENTITIES.map((t) => t.canonicalId));
+export interface KnowledgeToolRefLike {
+  readonly canonicalId: string;
+  readonly contractVersion: number;
+}
+/** True only for the exact canonical id and contract version the named Knowledge tool carries. */
+export function isCanonicalKnowledgeToolRef(
+  callName: string,
+  ref: KnowledgeToolRefLike | null | undefined,
+): boolean {
+  if (ref === undefined || ref === null) return false;
+  return KNOWLEDGE_TOOL_IDENTITIES.some(
+    (t) =>
+      t.name === callName &&
+      t.canonicalId === ref.canonicalId &&
+      t.contractVersion === ref.contractVersion,
+  );
+}
+/** True only for the current canonical Knowledge review tool reference. */
+export function isCanonicalKnowledgeReviewRef(
+  ref: KnowledgeToolRefLike | null | undefined,
+): boolean {
+  return (
+    ref?.canonicalId === KNOWLEDGE_REVIEW_TOOL_ID &&
+    ref.contractVersion === KNOWLEDGE_REVIEW_CONTRACT_VERSION
+  );
+}
 function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
@@ -241,12 +280,12 @@ function observeItems(tally: Tally, data: Readonly<Record<string, unknown>>): vo
 }
 function observeReviewTarget(tally: Tally, exchange: ChatToolExchange): void {
   if (
-    exchange.result?.toolRef?.canonicalId === "keiko.knowledge.review" &&
+    exchange.result?.toolRef?.canonicalId === KNOWLEDGE_REVIEW_TOOL_ID &&
     typeof exchange.call.arguments.documentScope === "string"
   )
     tally.reviewTargets.add(exchange.call.arguments.documentScope);
 }
-const REQUIREMENTS_TOOL = "keiko.knowledge.requirements";
+const REQUIREMENTS_TOOL = KNOWLEDGE_REQUIREMENTS_TOOL_ID;
 const DRAFT_BATCH_TOOL = "keiko.jira.draft.batch";
 
 /** A completed, unfiltered new batch that drafted every requirement of the collection. */
@@ -303,7 +342,7 @@ function observe(tally: Tally, exchange: ChatToolExchange): void {
   observeUnavailableSources(tally, data);
   observeCounts(tally, record(data.totals));
   invalidateChangedReviews(tally, data);
-  if (result.toolRef?.canonicalId === "keiko.knowledge.review")
+  if (result.toolRef?.canonicalId === KNOWLEDGE_REVIEW_TOOL_ID)
     observeReview(tally, record(data.coverage));
   observeItems(tally, data);
   observeStream(tally, exchange, data);
@@ -424,8 +463,8 @@ export function knowledgeCoverageIssues(
 
 function isCanonicalReviewFailure(result: ChatToolExchange["result"]): boolean {
   return (
-    result?.toolRef?.canonicalId === "keiko.knowledge.review" &&
-    result.toolRef.contractVersion === 2 &&
+    result !== undefined &&
+    isCanonicalKnowledgeReviewRef(result.toolRef) &&
     result.status === "failed" &&
     result.reason === "provider-reported-error"
   );
