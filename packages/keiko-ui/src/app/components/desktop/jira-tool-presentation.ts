@@ -372,7 +372,18 @@ function mutationOutcome(exchange: ChatToolExchange): JiraMutationResultState | 
     (outcome) => outcome === (exchange.mutationOutcome ?? value),
   );
 }
-function isMutation(exchange: ChatToolExchange): boolean {
+/**
+ * Whether the call only read Jira. Draft staging is listed among the reads because it changes
+ * nothing remotely, but its field refusals concern the prepared change, so it is no plain read.
+ */
+export function jiraToolOnlyReads(exchange: ChatToolExchange): boolean {
+  const name = exchange.call.name;
+  return (
+    !name.startsWith("jira_draft") &&
+    JIRA_MANAGED_READ_TOOLS.some((tool) => tool.replace(/[.-]/gu, "_") === name)
+  );
+}
+function jiraToolIsMutation(exchange: ChatToolExchange): boolean {
   return JIRA_MUTATION_OPERATIONS.some(
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
@@ -442,7 +453,7 @@ export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
   if (mutationIdentityMissing(exchange)) return false;
   if (mutationNoopUnsupported(exchange)) return false;
   return (
-    isMutation(exchange) &&
+    jiraToolIsMutation(exchange) &&
     mutationOutcome(exchange) === "rejected" &&
     data?.outcome === "rejected" &&
     data.reason === "conflict" &&
@@ -456,15 +467,41 @@ const BATCH_REFUSAL_KEYS: Readonly<Record<string, WidgetMessageKey>> = {
   "project-not-found": "chat.jira.batch.refused.projectNotFound",
   "issue-type-not-found": "chat.jira.batch.refused.issueTypeNotFound",
   "no-usable-issue-type": "chat.jira.batch.refused.noUsableIssueType",
+  "requirements-ambiguous": "chat.jira.batch.refused.requirementsAmbiguous",
+  "requirements-cut": "chat.jira.batch.refused.requirementsCut",
+  "scope-unavailable": "chat.jira.batch.refused.scopeUnavailable",
+  "template-unavailable": "chat.jira.batch.refused.templateUnavailable",
+  "model-unavailable": "chat.jira.batch.refused.modelUnavailable",
+  "budget-unavailable": "chat.jira.batch.refused.budgetUnavailable",
+  "unsupported-deployment": "chat.jira.batch.refused.unsupportedDeployment",
+  "draft-unavailable": "chat.jira.batch.refused.draftUnavailable",
+  "draft-mismatch": "chat.jira.batch.refused.draftMismatch",
+  "invalid-input": "chat.jira.batch.refused.invalidInput",
+  "stage-rejection-unchanged": "chat.jira.batch.stopped.rulesRejected",
+  "stage-failed": "chat.jira.batch.stopped.stageFailed",
+  "call-limit": "chat.jira.batch.stopped.callLimit",
+  "model-failed": "chat.jira.batch.stopped.modelFailed",
+  deadline: "chat.jira.batch.stopped.deadline",
+  "too-large": "chat.jira.batch.stopped.tooLarge",
+  "nothing-drafted": "chat.jira.batch.stopped.nothingDrafted",
 };
-function localToolRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+/** The plain-language reason a draft batch was refused or stopped, when Keiko names one. */
+export function jiraBatchRefusalKey(exchange: ChatToolExchange): WidgetMessageKey | undefined {
   const { result } = exchange;
-  if (JIRA_CATALOG_TOOLS.has(exchange.call.name) && plainRecord(result?.data)?.outcome === "failed")
-    return "chat.jira.unavailable";
   if (exchange.call.name !== CHAT_TOOL_BATCH_TOOL_NAME || result?.status !== "failed")
     return undefined;
   const reason = plainRecord(result.data)?.reason;
-  return typeof reason === "string" ? BATCH_REFUSAL_KEYS[reason] : undefined;
+  return typeof reason === "string" && Object.hasOwn(BATCH_REFUSAL_KEYS, reason)
+    ? BATCH_REFUSAL_KEYS[reason]
+    : undefined;
+}
+function localToolRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+  if (
+    JIRA_CATALOG_TOOLS.has(exchange.call.name) &&
+    plainRecord(exchange.result?.data)?.outcome === "failed"
+  )
+    return "chat.jira.unavailable";
+  return jiraBatchRefusalKey(exchange);
 }
 function succeededWithoutConfirmation(exchange: ChatToolExchange): boolean {
   return mutationConfirmationUnavailable(
@@ -505,7 +542,7 @@ export function jiraToolState(
   if (awaitsHumanInput(exchange, turnState)) return "chat.jira.humanInput.waiting";
   if (exchange.call.name.startsWith("mcp_") && exchange.mutationOutcome !== undefined)
     return MCP_OUTCOME_KEYS[exchange.mutationOutcome];
-  if (isMutation(exchange)) return managedMutationState(exchange, turnState);
+  if (jiraToolIsMutation(exchange)) return managedMutationState(exchange, turnState);
   if (exchange.result === undefined)
     return turnState === "pending" ? "chat.jira.running" : "chat.jira.resultUnavailable";
   const refusal = localToolRefusalState(exchange);

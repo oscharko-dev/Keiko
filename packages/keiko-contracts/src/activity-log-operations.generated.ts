@@ -1582,6 +1582,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      unreadableAnswer: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      missingItemCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      missingSectionItemCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      missingFieldItemCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       durationMs: {
         type: "integer",
         dataClass: "duration",

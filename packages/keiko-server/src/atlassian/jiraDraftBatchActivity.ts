@@ -96,6 +96,11 @@ export interface JiraDraftBatchActivity {
   readonly violationRuleCounts?: Partial<Readonly<Record<JiraTemplateRuleId, number>>>;
   readonly durationMs?: number;
   readonly createRequested?: boolean;
+  /** A corrected page: the answer held no readable items object. */
+  readonly unreadableAnswer?: boolean;
+  readonly missingItemCount?: number;
+  readonly missingSectionItemCount?: number;
+  readonly missingFieldItemCount?: number;
   /** The thrown or stopping error, reduced to Keiko frames and a cause chain. */
   readonly error?: unknown;
 }
@@ -154,6 +159,10 @@ const JIRA_DRAFT_BATCH_OPERATION = defineActivityLogOperation({
     guidanceDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     ...JIRA_TEMPLATE_RULE_COUNT_FIELDS,
     createRequested: { type: "boolean", dataClass: "closed-enum", required: false },
+    unreadableAnswer: { type: "boolean", dataClass: "closed-enum", required: false },
+    missingItemCount: COUNT,
+    missingSectionItemCount: COUNT,
+    missingFieldItemCount: COUNT,
     durationMs: { type: "integer", dataClass: "duration", required: false },
     ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -218,6 +227,9 @@ const LINE_FIELDS = [
   "parseAttemptCount",
   "stageAttemptCount",
   "guidanceDigest",
+  "missingItemCount",
+  "missingSectionItemCount",
+  "missingFieldItemCount",
   "durationMs",
 ] as const;
 
@@ -235,6 +247,7 @@ export function recordJiraDraftBatchActivity(
       (typeof LINE_FIELDS)[number]
     >),
     ...(input.createRequested === undefined ? {} : { createRequested: input.createRequested }),
+    ...(input.unreadableAnswer === undefined ? {} : { unreadableAnswer: input.unreadableAnswer }),
     ...(input.error === undefined
       ? {}
       : { frames: keikoStackFrames(input.error), causeChain: causeChain(input.error) }),

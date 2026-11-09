@@ -88,7 +88,18 @@ function runtime(cap: number, transport: typeof embedding, retainCatalog = false
         maxRetries: 0,
       })),
       capabilities: [
-        { ...createDefaultChatCapability(CHAT), contextWindow: 65_536, maxOutputTokens: 512 },
+        {
+          ...createDefaultChatCapability(CHAT),
+          contextWindow: 65_536,
+          maxOutputTokens: 512,
+          // An observed probe result: this model cannot call tools, not merely unchecked.
+          toolCallingVerification: {
+            status: "unsupported",
+            checkedAt: new Date().toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: "0".repeat(64),
+          },
+        },
         createDefaultEmbeddingCapability(EMBEDDING),
       ],
     }),

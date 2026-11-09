@@ -25,6 +25,7 @@ import {
   type DraftBatchMessage,
   type DraftBatchRequirement,
   type DraftItemPlacement,
+  type PageParseFaults,
   type WrittenDraftItem,
 } from "./jiraDraftBatchPrompt.js";
 
@@ -90,6 +91,8 @@ export type DraftBatchObservation =
       readonly guidanceDigest?: string | undefined;
       readonly violationRuleCounts?:
         Partial<Readonly<Record<JiraTemplateRuleId, number>>> | undefined;
+      /** Why a corrected page answer was sent back, as counts only. */
+      readonly parseFaults?: PageParseFaults | undefined;
     };
 
 export interface DraftBatchPorts {
@@ -716,7 +719,13 @@ async function draftAttempt(
   if (!parsed.ok) {
     attempts.parseFailures += 1;
     attempts.parseCorrection = parsed.problems.join(" ");
-    ports.observe({ kind: "page", outcome: "corrected", ...observed, ...attemptFacts(attempts) });
+    ports.observe({
+      kind: "page",
+      outcome: "corrected",
+      ...observed,
+      ...attemptFacts(attempts),
+      parseFaults: parsed.faults,
+    });
     return attempts.parseFailures < 2
       ? undefined
       : { kind: "refused", correction: attempts.stageCorrection };

@@ -109,6 +109,13 @@ function configuredRuntime(
       capabilities: [
         {
           ...createDefaultChatCapability(CHAT),
+          // An observed probe result: this model cannot call tools, not merely unchecked.
+          toolCallingVerification: {
+            status: "unsupported",
+            checkedAt: new Date().toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: "0".repeat(64),
+          },
           contextWindow: 8192,
           maxOutputTokens: 512,
           ...(maxInputTokens === undefined ? {} : { maxInputTokens }),

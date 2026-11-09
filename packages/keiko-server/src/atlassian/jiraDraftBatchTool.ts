@@ -49,7 +49,7 @@ import {
 } from "./jiraDraftBatchArguments.js";
 import { JIRA_DRAFT_BATCH_FAILED_REFS_MAX } from "./jiraDraftBatchDescriptor.js";
 import { createBatchModel, type BatchModel } from "./jiraDraftBatchModel.js";
-import type { DraftBatchRequirement } from "./jiraDraftBatchPrompt.js";
+import type { DraftBatchRequirement, PageParseFaults } from "./jiraDraftBatchPrompt.js";
 
 export type JiraDraftBatchContext = CatalogHandlerContext<JiraChatCatalogConsumer>;
 
@@ -115,6 +115,8 @@ type Collected =
       readonly omittedCount: number;
       /** The filter provably saw every requirement it could select. */
       readonly selectionComplete: boolean;
+      /** Documents left out because they repeat another document's requirements. */
+      readonly copyDocumentCount: number;
     }
   | {
       readonly ok: false;
@@ -154,11 +156,18 @@ function selectedRequirements(
   readonly selectedCount: number;
   /** Documents that share a selected requirement ID, when no documents filter chose one. */
   readonly ambiguousDocuments: readonly string[];
+  /** Documents left out because they repeat another document's requirements. */
+  readonly copyDocumentCount: number;
+  /** Requirements of the Pods once copies are left out: the whole collection to draft. */
+  readonly availableCount: number;
 } {
   let alreadyDrafted = 0;
   const byRef = new Map<string, DraftBatchRequirement>();
   const duplicateRefs = new Set<string>();
-  const selectedUnits = selectUnits(units, args.filter, redact);
+  const copies = args.filter.documents === undefined ? copyDocuments(units) : new Set<string>();
+  const selectedUnits = selectUnits(units, args.filter, redact).filter(
+    ({ entry }) => !copies.has(entry.documentScope),
+  );
   const ambiguousDocuments =
     args.filter.documents === undefined ? sharedIdDocuments(selectedUnits) : [];
   for (const { entry } of selectedUnits) {
@@ -171,13 +180,7 @@ function selectedRequirements(
       duplicateRefs.add(ref);
       continue;
     }
-    byRef.set(ref, {
-      ref,
-      title: clip(redact(entry.title), TITLE_CHARS_MAX),
-      section: clip(entry.sectionPath.map((part) => redact(part)).join(" > "), SECTION_CHARS_MAX),
-      text: clip(redact(entry.statement), REQUIREMENT_TEXT_CHARS_MAX),
-      criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
-    });
+    byRef.set(ref, batchRequirement(ref, entry, redact));
   }
   return {
     requirements: [...byRef.values()],
@@ -185,7 +188,54 @@ function selectedRequirements(
     alreadyDrafted,
     selectedCount: selectedUnits.length,
     ambiguousDocuments,
+    copyDocumentCount: copies.size,
+    availableCount: units.filter(({ entry }) => !copies.has(entry.documentScope)).length,
   };
+}
+
+function batchRequirement(
+  ref: string,
+  entry: Parameters<typeof selectUnits>[0][number]["entry"],
+  redact: (value: string) => string,
+): DraftBatchRequirement {
+  return {
+    ref,
+    title: clip(redact(entry.title), TITLE_CHARS_MAX),
+    section: clip(entry.sectionPath.map((part) => redact(part)).join(" > "), SECTION_CHARS_MAX),
+    text: clip(redact(entry.statement), REQUIREMENT_TEXT_CHARS_MAX),
+    criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
+  };
+}
+
+/** Requirement text compared across formats: extraction differs only in spacing and punctuation. */
+function comparableText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * Documents that are copies of another one, such as one requirements document uploaded as
+ * Markdown, DOCX and PDF: they hold the same requirement IDs with the same titles and statements.
+ * The first copy in stable scope order is drafted; the others would create every issue again.
+ * Documents that share IDs but differ in content are not copies and stay ambiguous (#4288).
+ */
+function copyDocuments(units: Parameters<typeof selectUnits>[0]): ReadonlySet<string> {
+  const contents = new Map<string, string[]>();
+  for (const { entry } of units) {
+    const content = contents.get(entry.documentScope) ?? [];
+    content.push(`${entry.id}\0${comparableText(entry.title)}\0${comparableText(entry.statement)}`);
+    contents.set(entry.documentScope, content);
+  }
+  const firstBySignature = new Map<string, string>();
+  const copies = new Set<string>();
+  for (const scope of [...contents.keys()].sort(compareText)) {
+    const signature = (contents.get(scope) ?? []).sort(compareText).join("\n");
+    if (firstBySignature.has(signature)) copies.add(scope);
+    else firstBySignature.set(signature, scope);
+  }
+  return copies;
 }
 
 /**
@@ -288,7 +338,8 @@ function collectRequirements(
         requirements: selected.requirements,
         duplicateRefs: selected.duplicateRefs,
         // A filter naming every document of the Pod still drafts the whole collection (#4292).
-        wholeCollection: !cut && selected.selectedCount === collection.units.length,
+        wholeCollection: !cut && selected.selectedCount === selected.availableCount,
+        copyDocumentCount: selected.copyDocumentCount,
         omittedCount: collection.unitsOmitted,
         selectionComplete: selectionProven(collection, args),
       };
@@ -435,6 +486,8 @@ interface BatchRun {
   selectionComplete: boolean;
   /** Requirements a cut collection did not list. */
   omittedCount: number;
+  /** Documents left out because they repeat another document's requirements. */
+  copyDocumentCount: number;
 }
 
 function record(run: BatchRun, activity: JiraDraftBatchActivity): void {
@@ -468,7 +521,24 @@ function observation(run: BatchRun, observed: DraftBatchObservation): void {
       ...(observed.violationRuleCounts === undefined
         ? {}
         : { violationRuleCounts: observed.violationRuleCounts }),
+      ...parseFaultFields(observed.parseFaults),
     });
+}
+
+/** Why a page answer was sent back, so a slow batch is explained by its log alone (#4288). */
+function parseFaultFields(
+  faults: PageParseFaults | undefined,
+): Pick<
+  JiraDraftBatchActivity,
+  "unreadableAnswer" | "missingItemCount" | "missingSectionItemCount" | "missingFieldItemCount"
+> {
+  if (faults === undefined) return {};
+  return {
+    unreadableAnswer: faults.unreadable,
+    missingItemCount: faults.missingItemCount,
+    missingSectionItemCount: faults.missingSectionItemCount,
+    missingFieldItemCount: faults.missingFieldItemCount,
+  };
 }
 
 async function stagePage(
@@ -550,6 +620,7 @@ function readWholeCollection(run: BatchRun): boolean {
 /** Facts that keep an incomplete selection from reading as a clean batch. */
 function selectionFacts(run: BatchRun): CatalogJsonObject {
   return {
+    ...(run.copyDocumentCount === 0 ? {} : { copyDocumentsSkipped: run.copyDocumentCount }),
     ...(run.selectionComplete
       ? {}
       : { selectionIncomplete: true, omittedRequirementCount: run.omittedCount }),
@@ -803,6 +874,7 @@ async function runBatch(
   run.wholeCollection = collected.wholeCollection;
   run.selectionComplete = collected.selectionComplete;
   run.omittedCount = collected.omittedCount;
+  run.copyDocumentCount = collected.copyDocumentCount;
   const model = createBatchModel(deps, context);
   if (typeof model === "string") return refusalResult(run, model);
   const rules = await readJiraCreateTemplateRules(
@@ -853,6 +925,7 @@ export function createJiraDraftBatchExecutor(
       wholeCollection: false,
       selectionComplete: true,
       omittedCount: 0,
+      copyDocumentCount: 0,
     };
     if (connection.deployment !== "data-center")
       return refusalResult(run, "unsupported-deployment");

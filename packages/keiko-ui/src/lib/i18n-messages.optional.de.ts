@@ -2352,6 +2352,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Jira lieferte eine unlesbare Antwort. Prüfe die Jira-Verbindung und die angeforderte Aktion.",
   "chat.jira.outcome.failure.fields":
     "Prüfe die erforderlichen Jira-Felder und Vorlagenregeln, bevor du die Änderung erneut anforderst.",
+  "chat.jira.outcome.failure.readParameters":
+    "Jira hat die Werte dieser Abfrage abgelehnt. Prüfe den verwendeten Projektschlüssel, Vorgangstyp oder Filter; es wurde nichts geändert.",
   "chat.jira.outcome.failure.unavailable":
     "Das Jira-Ergebnis ist nicht verfügbar. Prüfe die Verbindung und den Stand in Jira vor einer weiteren Anfrage.",
   "chat.requirements.tool": "Anforderungen",
@@ -2579,6 +2581,33 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.batch.refused.noUsableIssueType":
     "Kein Vorgangstyp zum Entwerfen in diesem Projekt verfügbar",
   "chat.jira.batch.refused.issueTypeNotFound": "Vorgangstyp in diesem Projekt nicht verfügbar",
+  "chat.jira.batch.refused.requirementsAmbiguous":
+    "Dieselben Anforderungs-IDs stehen in Dokumenten mit unterschiedlichem Inhalt. Nenne das Dokument, aus dem entworfen werden soll",
+  "chat.jira.batch.refused.requirementsCut":
+    "Zu viele Anforderungen auf einmal. Grenze die Auswahl ein",
+  "chat.jira.batch.refused.scopeUnavailable":
+    "Der angehängte Knowledge Pod kann nicht gelesen werden",
+  "chat.jira.batch.refused.templateUnavailable":
+    "Die Vorlagenregeln des Projekts konnten nicht aus Jira gelesen werden",
+  "chat.jira.batch.refused.modelUnavailable": "Für das Entwerfen ist kein Modell verfügbar",
+  "chat.jira.batch.refused.budgetUnavailable": "Das Kontingent für diese Anfrage ist aufgebraucht",
+  "chat.jira.batch.refused.unsupportedDeployment":
+    "Das Entwerfen aus Anforderungen braucht eine Jira-Data-Center-Verbindung",
+  "chat.jira.batch.refused.draftUnavailable":
+    "Der frühere Entwurf ist abgelaufen. Das Entwerfen beginnt neu",
+  "chat.jira.batch.refused.draftMismatch":
+    "Der Entwurf gehört zu einem anderen Projekt oder Vorgangstyp",
+  "chat.jira.batch.refused.invalidInput": "Die Anfrage zum Entwerfen war unvollständig",
+  "chat.jira.batch.stopped.rulesRejected":
+    "Die entworfenen Vorgänge erfüllten die Vorlagenregeln des Projekts nicht",
+  "chat.jira.batch.stopped.stageFailed": "Jira hat den Entwurf nicht angenommen",
+  "chat.jira.batch.stopped.callLimit":
+    "Das Kontingent an Modellaufrufen für diese Anfrage ist aufgebraucht",
+  "chat.jira.batch.stopped.modelFailed": "Das Modell hat keine verwendbaren Entwürfe geliefert",
+  "chat.jira.batch.stopped.deadline":
+    "Die Zeit ist abgelaufen. Die übrigen Anforderungen können in einem zweiten Lauf entworfen werden",
+  "chat.jira.batch.stopped.tooLarge": "Der Bestand ist größer, als ein Entwurf fassen kann",
+  "chat.jira.batch.stopped.nothingDrafted": "Es wurde nichts entworfen",
   "browserApproval.title": "Diesen Browser verbinden",
   "browserApproval.close": "Schließen",
   "browserApproval.notice":

@@ -420,3 +420,15 @@ fallback and were discarded. The 14 committed captures remain the complete Liber
 run above, all from one producer run in the reference environment. No record binds capture bytes.
 No updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
 evidence.
+
+## Jira batch refusal and read-failure wording — 2026-11-09 (#4288)
+
+Readable draft-batch refusal and stop reasons and the Jira read-refusal notice added messages to both
+optional catalogs; together with earlier changes on this branch to `api.ts` and both core catalogs,
+the freshness gate rejected five source digests. The complete original nine-case producer ran in the
+Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.8m)**, including the real BFF
+stop and restart, and `npm run check:update-ui-evidence` passes. Only the five source digests and
+`generatedAt` in the three records were taken from this run. Its captures used the container's
+fallback fonts and were discarded; the 14 committed captures remain the complete Liberation set of
+the AC9 run. No record binds capture bytes. No updater behavior, fixture, assertion or numerical
+ceiling changed. This remains updater fixture evidence.

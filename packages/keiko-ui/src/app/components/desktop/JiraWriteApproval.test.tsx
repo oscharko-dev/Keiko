@@ -458,7 +458,12 @@ describe("Jira backlog draft approval (#4178)", () => {
     await ready();
     expect(screen.getByRole("group", { name: "Issues to create (4 of 4 selected)" })).toBeVisible();
     expect(screen.getByRole("checkbox", { name: /Story B/u })).toBeChecked();
-    expect(screen.getByText("Blocks → story")).toBeVisible();
+    // An untraced item names its missing source trace beside its link (#4321).
+    expect(
+      screen.getByText(
+        "No requirement references: approval creates this issue without a source trace. · Blocks → story",
+      ),
+    ).toBeVisible();
     expect(screen.queryByText("description")).toBeNull();
     expect(screen.getByText("Description")).toBeVisible();
     expect(screen.getByText("Synthetic")).toBeVisible();

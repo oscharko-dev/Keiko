@@ -262,11 +262,13 @@ test("a bound unverified model shows actionable unavailability without provider 
   await createAndConnect(page, region, "Jira unavailable fixture");
   const before = counts();
   await send(region, "JIRA_E2E_READ: read the connected Jira projects.");
-  await expect(region.getByText("Model capability unavailable", { exact: true })).toBeVisible();
+  // An unverified model asks for its readiness check instead of claiming it lacks tools (#4321).
+  await expect(region.getByText("Model verification needed", { exact: true })).toBeVisible();
   await expect(
-    region.getByText("Choose an available Chat model that supports the required capabilities.", {
-      exact: true,
-    }),
+    region.getByText(
+      "Open Settings > Models, run the readiness check for the selected model, then send your message again.",
+      { exact: true },
+    ),
   ).toBeVisible();
   expect(counts()).toEqual(before);
   await expect(region.getByRole("button", { name: "Allow reading", exact: true })).toHaveCount(0);

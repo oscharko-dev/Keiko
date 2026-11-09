@@ -47,7 +47,7 @@ describe("dispatch-stage Jira field refusal evidence", () => {
       ok: false,
       reason: "field-validation",
       detail: { fieldId: "labels", validation: "invalid-field" },
-      violations: [{ ruleId: "label-missing" }],
+      violations: [{ ruleId: "label-missing", subject: "anforderung", template: "KER/Story" }],
     });
     const event = sink.events.find(({ op }) => op === "jira.field.admission");
     expect(event?.extra).toMatchObject({

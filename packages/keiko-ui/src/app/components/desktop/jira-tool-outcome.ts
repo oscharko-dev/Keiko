@@ -39,9 +39,11 @@ import {
   isCanonicalKnowledgeExchange,
   isKnownJiraToolAlias,
   JIRA_CATALOG_TOOLS,
+  jiraBatchRefusalKey,
   jiraToolLabel,
   jiraLocalReadFailureNotice,
   jiraMutationUnchanged,
+  jiraToolOnlyReads,
 } from "./jira-tool-presentation";
 import { JIRA_DIRECTORY_TOOLS, jiraDirectoryDetails } from "./jira-directory-presentation";
 import { JIRA_ACCESS_TOOLS, jiraAccessDetails } from "./jira-access-presentation";
@@ -876,28 +878,36 @@ const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   "bounds-exceeded": "chat.jira.outcome.failure.bounds",
   "malformed-payload": "chat.jira.outcome.failure.response",
   "field-validation": "chat.jira.outcome.failure.fields",
+  "read:field-validation": "chat.jira.outcome.failure.readParameters",
   "effect-denied": "chat.jira.outcome.failure.localAuthority",
   cancelled: "chat.jira.outcome.failure.cancelled",
   timeout: "chat.jira.outcome.failure.unavailable",
   unavailable: "chat.jira.outcome.failure.unavailable",
 };
-function failureReason(data: UnknownRecord | undefined, tool: string): string | undefined {
+function failureReason(
+  data: UnknownRecord | undefined,
+  exchange: ChatToolExchange,
+): string | undefined {
   const reason =
     data?.outcome === "rejected" && data.requirementRefusal === "source-changed"
       ? "source-changed"
       : text(data?.reason);
-  return JIRA_CATALOG_TOOLS.has(tool) && reason === "invalid-arguments"
-    ? "catalog:invalid-arguments"
-    : reason;
+  if (JIRA_CATALOG_TOOLS.has(exchange.call.name) && reason === "invalid-arguments")
+    return "catalog:invalid-arguments";
+  // A read changes nothing, so Jira refused the requested values, not fields of a change.
+  if (reason === "field-validation" && jiraToolOnlyReads(exchange)) return "read:field-validation";
+  return reason;
 }
 function failureMessage(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
 ): WidgetMessageKey | undefined {
   if (jiraMutationUnchanged(exchange)) return undefined;
+  // A refused or stopped draft batch names its own reason in the state line.
+  if (jiraBatchRefusalKey(exchange) !== undefined) return undefined;
   const localRead = jiraLocalReadFailureNotice(exchange);
   if (localRead !== undefined) return localRead;
-  const reason = failureReason(data, exchange.call.name);
+  const reason = failureReason(data, exchange);
   if (reason !== undefined && Object.hasOwn(FAILURE_MESSAGES, reason))
     return FAILURE_MESSAGES[reason];
   if (

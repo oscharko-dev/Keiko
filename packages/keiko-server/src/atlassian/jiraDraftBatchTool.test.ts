@@ -273,7 +273,17 @@ async function harness(
           "templates" in runOptions ? runOptions.templates : WITH_TEMPLATE,
           runOptions.createFields ?? CREATE_FIELDS,
         ),
-      );
+      ).then((result) => {
+        // Every result must pass the descriptor the managed MCP host enforces; an undeclared
+        // field refused all 370 drafted Epics in a live run (#4288).
+        expect(
+          describeCatalogSchemaMismatch(
+            JIRA_DRAFT_BATCH_DECLARATION.descriptor.resultSchema,
+            result.data,
+          ),
+        ).toBeUndefined();
+        return result;
+      });
     },
   };
 }
@@ -1310,6 +1320,43 @@ describe("jira.draft-batch against Data Center Epic metadata and repeated docume
     });
   }
 
+  it("logs why a page answer was sent back, as counts and never its text (#4288)", async () => {
+    const spec = specification(3);
+    let calls = 0;
+    const h = await harness(
+      (request) => {
+        calls += 1;
+        if (calls === 1) return "not json at all";
+        if (calls === 2)
+          return JSON.stringify({
+            items: keysOf(request)
+              .slice(1)
+              .map((key) => ({ key, summary: `Summary ${key}`, sections: {} })),
+          });
+        return pageWithFields(request);
+      },
+      [{ capsuleId: "cap-a", text: spec.text }],
+    );
+
+    const result = await h.run({ ...ARGS, requirements: { ids: [...spec.ids] } });
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", itemCount: 3 });
+    const corrected = proofLines(h).filter((line) => line.outcome === "corrected");
+    expect(corrected[0]).toMatchObject({
+      unreadableAnswer: true,
+      missingItemCount: 0,
+      missingSectionItemCount: 0,
+      missingFieldItemCount: 0,
+    });
+    expect(corrected[1]).toMatchObject({
+      unreadableAnswer: false,
+      missingItemCount: 1,
+      missingSectionItemCount: 0,
+      missingFieldItemCount: 0,
+    });
+    expect(JSON.stringify(proofLines(h))).not.toMatch(/not json|Summary /u);
+  });
+
   it("asks the model for the Epic Name Jira requires and stages every Epic with it", async () => {
     const spec = specification(3);
     const h = await harness(pageWithFields, [{ capsuleId: "cap-a", text: spec.text }]);
@@ -1371,11 +1418,37 @@ describe("jira.draft-batch against Data Center Epic metadata and repeated docume
     expect(requiredFieldIds(firstRequest(h))).toEqual([]);
   });
 
-  it("refuses IDs the same requirements document holds twice before any model call", async () => {
+  it("drafts one requirements document held in several formats once", async () => {
     const spec = specification(3);
     const h = await harness(pageWithFields, [
       { capsuleId: "cap-a", text: spec.text },
-      { capsuleId: "cap-b", text: spec.text },
+      { capsuleId: "cap-b", text: spec.text.replaceAll("\n\n", "\n\n\n") },
+      { capsuleId: "cap-c", text: spec.text },
+    ]);
+
+    const result = await h.run({ ...ARGS, create: true, requirements: { ids: [...spec.ids] } });
+
+    // The managed MCP host refuses a result its descriptor does not declare (live run, #4288).
+    expect(
+      describeCatalogSchemaMismatch(
+        JIRA_DRAFT_BATCH_DECLARATION.descriptor.resultSchema,
+        result.data,
+      ),
+    ).toBeUndefined();
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      itemCount: 3,
+      requirementCount: 3,
+      copyDocumentsSkipped: 2,
+    });
+    expect(stagedItems(h)).toHaveLength(3);
+  });
+
+  it("refuses IDs that documents with different content share before any model call", async () => {
+    const spec = specification(3);
+    const h = await harness(pageWithFields, [
+      { capsuleId: "cap-a", text: spec.text },
+      { capsuleId: "cap-b", text: specification(3, { revise: [2] }).text },
     ]);
 
     const result = await h.run({ ...ARGS, create: true, requirements: { ids: [...spec.ids] } });

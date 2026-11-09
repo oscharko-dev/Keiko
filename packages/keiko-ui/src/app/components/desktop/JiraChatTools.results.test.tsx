@@ -932,6 +932,29 @@ describe("Jira tool outcome for a business user (#4173)", () => {
     expect(screen.queryByText(/customfield_10103|required-field/u)).toBeNull();
   });
 
+  it("says a refused Jira read changed nothing instead of asking to review a change (#4288)", () => {
+    const refused = { outcome: "failed", reason: "field-validation" };
+    render(
+      <JiraChatTools
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [resultExchange("jira_issue_types", refused), created(refused)],
+        }}
+        turnState="completed"
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Jira refused the values of this read. Check the project key, issue type or filter it used; nothing was changed.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getAllByText(
+        "Review the required Jira fields and template rules before requesting the change again.",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("shows at most five drafted issues and counts the rest", () => {
     const items = Array.from({ length: 7 }, (_, index) => ({
       ref: `item-${String(index)}`,

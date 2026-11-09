@@ -66,9 +66,25 @@ export interface WrittenDraftItem {
   readonly fields: Readonly<Record<string, string>>;
 }
 
+/** Why a page answer was sent back for correction, as counts only (#4288). */
+export interface PageParseFaults {
+  /** The answer held no readable {"items":[...]} object. */
+  readonly unreadable: boolean;
+  /** Planned keys the answer did not return with a summary. */
+  readonly missingItemCount: number;
+  /** Returned items that lack a section the template requires. */
+  readonly missingSectionItemCount: number;
+  /** Returned items that lack a field the template requires. */
+  readonly missingFieldItemCount: number;
+}
+
 export type ParsedPage =
   | { readonly ok: true; readonly items: ReadonlyMap<string, WrittenDraftItem> }
-  | { readonly ok: false; readonly problems: readonly string[] };
+  | {
+      readonly ok: false;
+      readonly problems: readonly string[];
+      readonly faults: PageParseFaults;
+    };
 
 const SUMMARY_CHARS_MAX = 255;
 const SECTION_CHARS_MAX = 8000;
@@ -350,19 +366,30 @@ function writtenFields(value: unknown, allowed: readonly string[]): Record<strin
   return fields;
 }
 
-function itemProblems(
-  key: string,
+interface ItemGaps {
+  readonly sections: readonly string[];
+  readonly fields: readonly string[];
+}
+
+function itemGaps(
   item: WrittenDraftItem,
   instructions: DraftBatchInstructions,
   sections: readonly string[],
-): readonly string[] {
+): ItemGaps {
   const present = new Set([...item.sections.keys()].map(sectionKey));
   const wanted = instructions.requiredSections.length === 0 ? [FREE_SECTION] : sections;
-  const missing = wanted.filter((name) => !present.has(sectionKey(name)));
-  const fields = instructions.requiredFields.filter((name) => item.fields[name] === undefined);
+  return {
+    sections: wanted.filter((name) => !present.has(sectionKey(name))),
+    fields: instructions.requiredFields.filter((name) => item.fields[name] === undefined),
+  };
+}
+
+function gapProblems(key: string, gaps: ItemGaps): readonly string[] {
   return [
-    ...(missing.length === 0 ? [] : [`${key} lacks sections ${JSON.stringify(missing)}.`]),
-    ...(fields.length === 0 ? [] : [`${key} lacks fields ${JSON.stringify(fields)}.`]),
+    ...(gaps.sections.length === 0
+      ? []
+      : [`${key} lacks sections ${JSON.stringify(gaps.sections)}.`]),
+    ...(gaps.fields.length === 0 ? [] : [`${key} lacks fields ${JSON.stringify(gaps.fields)}.`]),
   ];
 }
 
@@ -396,9 +423,10 @@ function readItems(
   listed: readonly unknown[],
   wanted: ReadonlyMap<string, DraftBatchEntry>,
   instructions: DraftBatchInstructions,
-): { items: Map<string, WrittenDraftItem>; problems: string[] } {
+): { items: Map<string, WrittenDraftItem>; problems: string[]; gaps: ItemGaps[] } {
   const items = new Map<string, WrittenDraftItem>();
   const problems: string[] = [];
+  const gaps: ItemGaps[] = [];
   for (const raw of listed) {
     const key = listedKey(raw);
     const entry = key === undefined ? undefined : wanted.get(key);
@@ -406,9 +434,20 @@ function readItems(
     const item = writtenItem(raw, instructions);
     if (item === undefined) continue;
     items.set(key, item);
-    problems.push(...itemProblems(key, item, instructions, modelSections(entry, instructions)));
+    const itemGap = itemGaps(item, instructions, modelSections(entry, instructions));
+    gaps.push(itemGap);
+    problems.push(...gapProblems(key, itemGap));
   }
-  return { items, problems };
+  return { items, problems, gaps };
+}
+
+function parseFaults(gaps: readonly ItemGaps[], missingItemCount: number): PageParseFaults {
+  return {
+    unreadable: false,
+    missingItemCount,
+    missingSectionItemCount: gaps.filter((gap) => gap.sections.length > 0).length,
+    missingFieldItemCount: gaps.filter((gap) => gap.fields.length > 0).length,
+  };
 }
 
 /** The written item of every planned key, or what to correct; keys outside the page are ignored. */
@@ -419,8 +458,12 @@ export function parsePage(
 ): ParsedPage {
   const listed = listedItems(answerObject(text, "items"));
   if (listed === undefined)
-    return { ok: false, problems: ['Answer with one JSON object {"items":[...]}.'] };
-  const { items, problems } = readItems(
+    return {
+      ok: false,
+      problems: ['Answer with one JSON object {"items":[...]}.'],
+      faults: { ...parseFaults([], 0), unreadable: true },
+    };
+  const { items, problems, gaps } = readItems(
     listed,
     new Map(page.map((entry) => [entry.ref, entry])),
     instructions,
@@ -429,7 +472,11 @@ export function parsePage(
   if (missing.length > 0) problems.push(`Missing keys or summaries: ${missing.join(", ")}.`);
   return problems.length === 0
     ? { ok: true, items }
-    : { ok: false, problems: problems.slice(0, PROBLEMS_LISTED_MAX) };
+    : {
+        ok: false,
+        problems: problems.slice(0, PROBLEMS_LISTED_MAX),
+        faults: parseFaults(gaps, missing.length),
+      };
 }
 
 /**

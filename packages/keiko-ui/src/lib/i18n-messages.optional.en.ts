@@ -2219,6 +2219,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Jira returned an unreadable response. Check the Jira connection and requested operation.",
   "chat.jira.outcome.failure.fields":
     "Review the required Jira fields and template rules before requesting the change again.",
+  "chat.jira.outcome.failure.readParameters":
+    "Jira refused the values of this read. Check the project key, issue type or filter it used; nothing was changed.",
   "chat.jira.outcome.failure.unavailable":
     "The Jira result is unavailable. Check the connection and the remote state before making another request.",
   "chat.requirements.tool": "Requirements",
@@ -2434,6 +2436,29 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.batch.refused.noUsableIssueType":
     "No issue type available for drafting in this project",
   "chat.jira.batch.refused.issueTypeNotFound": "Issue type not available in this project",
+  "chat.jira.batch.refused.requirementsAmbiguous":
+    "The same requirement IDs appear in documents with different content. Name the document to draft from",
+  "chat.jira.batch.refused.requirementsCut":
+    "Too many requirements to read at once. Narrow the selection",
+  "chat.jira.batch.refused.scopeUnavailable": "The attached Knowledge Pod cannot be read",
+  "chat.jira.batch.refused.templateUnavailable":
+    "The project's template rules could not be read from Jira",
+  "chat.jira.batch.refused.modelUnavailable": "No model is available for drafting",
+  "chat.jira.batch.refused.budgetUnavailable": "The allowance for this request is used up",
+  "chat.jira.batch.refused.unsupportedDeployment":
+    "Drafting from requirements needs a Jira Data Center connection",
+  "chat.jira.batch.refused.draftUnavailable": "The earlier draft expired. Drafting starts again",
+  "chat.jira.batch.refused.draftMismatch": "The draft belongs to another project or issue type",
+  "chat.jira.batch.refused.invalidInput": "The drafting request was incomplete",
+  "chat.jira.batch.stopped.rulesRejected":
+    "The drafted issues did not meet the project's template rules",
+  "chat.jira.batch.stopped.stageFailed": "Jira did not accept the draft",
+  "chat.jira.batch.stopped.callLimit": "The model call allowance for this request ran out",
+  "chat.jira.batch.stopped.modelFailed": "The model returned no usable drafts",
+  "chat.jira.batch.stopped.deadline":
+    "Time ran out. The remaining requirements can be drafted in a second run",
+  "chat.jira.batch.stopped.tooLarge": "The backlog is larger than one draft can hold",
+  "chat.jira.batch.stopped.nothingDrafted": "Nothing was drafted",
   "browserApproval.title": "Connect this browser",
   "browserApproval.close": "Close",
   "browserApproval.notice":

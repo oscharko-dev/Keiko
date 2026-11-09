@@ -352,7 +352,44 @@ describe("runJiraDraftBatch recovery", () => {
     expect(h.fillCalls).toHaveLength(2);
     expect(h.fillCalls[1]).toHaveLength(3);
     expect(h.fillCalls[1]?.[2]?.content).toContain("Answer with one JSON object");
-    expect(h.observations.some((o) => o.kind === "page" && o.outcome === "corrected")).toBe(true);
+    expect(h.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "page",
+        outcome: "corrected",
+        parseFaults: {
+          unreadable: true,
+          missingItemCount: 0,
+          missingSectionItemCount: 0,
+          missingFieldItemCount: 0,
+        },
+      }),
+    );
+  });
+
+  it("counts the items a corrected answer left without a required section", async () => {
+    const h = harness({
+      fill: (keys, _messages, call) =>
+        call === 1
+          ? {
+              kind: "text",
+              text: JSON.stringify({ items: keys.map((key) => ({ key, summary: "S" })) }),
+            }
+          : undefined,
+    });
+    const result = await runJiraDraftBatch(input(3), h.ports);
+    expectComplete(result, 3, h);
+    expect(h.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "page",
+        outcome: "corrected",
+        parseFaults: {
+          unreadable: false,
+          missingItemCount: 0,
+          missingSectionItemCount: 3,
+          missingFieldItemCount: 0,
+        },
+      }),
+    );
   });
 
   it("corrects an omitted key and an omitted section", async () => {
