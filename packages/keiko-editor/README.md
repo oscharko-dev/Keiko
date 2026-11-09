@@ -117,7 +117,6 @@ import {
   probeEditorRuntime,
   registerKeikoEditorTheme,
   resolveEditorThemeTokensFromDom,
-  type MonacoGlobalScope,
 } from "@oscharko-dev/keiko-editor";
 
 export function installKeikoMonacoRuntime(): boolean {
@@ -125,10 +124,7 @@ export function installKeikoMonacoRuntime(): boolean {
   if (!status.supported) {
     return false; // No Web Worker / URL support: render the editor's controlled load-error state.
   }
-  installMonacoEnvironment(
-    self as unknown as MonacoGlobalScope,
-    createMonacoEnvironment(defaultMonacoWorkerFactories),
-  );
+  installMonacoEnvironment(self, createMonacoEnvironment(defaultMonacoWorkerFactories));
   configureMonacoLoader(loader, monaco);
   // Do not import `monaco-editor`'s package root, `features/register.all`, or rich language-service
   // contributions. Keiko registers only standalone UX features and grammar/tokenisation definitions;

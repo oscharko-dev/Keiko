@@ -149,14 +149,13 @@ function readUsage(event: HarnessEvent): UsageTotals | null {
       requestCount: 1,
     };
   }
-  // The unit-test and bug workflows report their usage on the event itself.
+  // The unit-test and bug workflows report their usage on the event itself. useSSE does not validate
+  // the stream, so a malformed event with a non-numeric field is skipped, never summed.
   if (event.type === "workflow:model:call:completed" || event.type === "bug:model:call:completed") {
-    return {
-      promptTokens: event.promptTokens,
-      completionTokens: event.completionTokens,
-      latencyMs: event.latencyMs,
-      requestCount: 1,
-    };
+    const { promptTokens, completionTokens, latencyMs } = event;
+    return [promptTokens, completionTokens, latencyMs].every(Number.isFinite)
+      ? { promptTokens, completionTokens, latencyMs, requestCount: 1 }
+      : null;
   }
   return null;
 }

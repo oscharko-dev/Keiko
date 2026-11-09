@@ -58,7 +58,6 @@ import {
   installMonacoEnvironment,
   probeEditorRuntime,
   type EditorRuntimeStatus,
-  type MonacoGlobalScope,
 } from "@oscharko-dev/keiko-editor";
 
 // Embedded editors reuse this client-only runtime boundary, including the package's theme helpers.
