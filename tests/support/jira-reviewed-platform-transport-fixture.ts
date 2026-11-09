@@ -69,7 +69,7 @@ export function reviewedPlatformTransportFixture(
         selected.body === undefined
           ? undefined
           : rawText
-            ? String(selected.body)
+            ? selected.body
             : JSON.stringify(selected.body);
       expect(request.bodyJson).toBe(selected.bodyText ?? expectedBody);
       expect(++writes).toBe(1);

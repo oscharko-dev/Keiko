@@ -27,8 +27,11 @@ beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "keiko-license-restart-"));
   spawned.length = 0;
   vi.spyOn(console, "log").mockImplementation(() => undefined);
+  // The window is computed from the clock; a frozen clock keeps a loaded runner from losing a second.
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-11-09T09:00:00.000Z") });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   rmSync(directory, { recursive: true, force: true });
 });

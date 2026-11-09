@@ -28,13 +28,16 @@ function inventoryReleases(tool) {
  * again independently, belongs to the inventoried releases that do not publish this identity.
  * A resource-specific refusal never enters this proof.
  */
+/** Only route-level 404/405s, or a 400 from a known shadowing sibling route, may enter the proof. */
+function absenceStatuses(statuses, shadow) {
+  if (statuses.length === 0) return undefined;
+  if (statuses.every((status) => status === 404 || status === 405)) return "route";
+  return shadow !== undefined && statuses.every((status) => status === 400) ? "shadow" : undefined;
+}
 export async function missingReleaseCapability(context, tool, statuses, { shadow } = {}) {
-  const routeLevel = statuses.every((status) => status === 404 || status === 405);
-  if (
-    statuses.length === 0 ||
-    !(routeLevel || (shadow !== undefined && statuses.every((s) => s === 400)))
-  )
-    return undefined;
+  const absence = absenceStatuses(statuses, shadow);
+  if (absence === undefined) return undefined;
+  const routeLevel = absence === "route";
   const family = releaseFamily(context.session.jiraVersion);
   const { published, inventoried } = inventoryReleases(tool);
   if (!published || !inventoried.includes(family) || published.includes(family)) return undefined;
