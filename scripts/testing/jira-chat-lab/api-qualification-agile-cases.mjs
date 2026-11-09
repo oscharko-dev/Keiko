@@ -318,8 +318,10 @@ export const API_QUALIFICATION_AGILE_CASES = [
       assert.equal(f.agileFilterReview?.filterId, f.agileFilterId);
       assert.equal(f.agileFilterReview.expectedOwnerKey, f.agileActorKey);
       const r = await labRequest(c.session, "GET", filterPath(f), basicAuth(c.session, c.actor));
-      assert.equal(r.status, 404);
-      return { matched: true, assertionCount: 4, observedStatus: 404, deletionConfirmed: false };
+      // Jira 10.3 answers an absent saved filter with a 400 that names the deletion, never a 404.
+      assert.equal(r.status, 400);
+      assert.match(r.value.errorMessages?.join(" ") ?? "", /perhaps it has been deleted/u);
+      return { matched: true, assertionCount: 5, observedStatus: 400, deletionConfirmed: false };
     },
     filter,
   ),
