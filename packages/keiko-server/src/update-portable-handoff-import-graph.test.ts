@@ -20,10 +20,14 @@ function resolvedModules(entry: string): readonly string[] {
     `await import(${JSON.stringify(entry)});`,
     "process.stdout.write(JSON.stringify(resolved));",
   ].join("\n");
-  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
-    encoding: "utf8",
-    timeout: 60_000,
-  });
+  const child = spawnSync(
+    process.execPath,
+    ["--no-warnings", "--input-type=module", "-e", script],
+    {
+      encoding: "utf8",
+      timeout: 60_000,
+    },
+  );
   expect(child.error).toBeUndefined();
   expect(child.stderr).toBe("");
   expect(child.status).toBe(0);
