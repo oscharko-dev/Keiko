@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "17ff8721f702b63b356830b3fb7d36149aa5ba97125bc6edff52e692583febdc",
+    "catalogDigest": "ddf1965f38ad5307fdceb10460d06fc0a497d6222551ac605edb6c92283df501",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33713,6 +33713,44 @@
             "dataClass": "count",
             "required": true
           },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["pre-approval", "dispatch"]
+          },
+          "fieldClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["system", "custom", "other"]
+          },
+          "systemFieldId": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "summary",
+              "description",
+              "issuetype",
+              "project",
+              "labels",
+              "priority",
+              "components",
+              "fixVersions",
+              "versions",
+              "parent",
+              "assignee",
+              "reporter",
+              "duedate",
+              "environment"
+            ]
+          },
+          "templateViolationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "validations": {
             "type": "string-array",
             "dataClass": "closed-enum",
@@ -33733,8 +33771,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:236",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:359"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:238",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:430"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35486,8 +35524,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:141",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:330"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:143",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:367"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35534,8 +35572,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.metadata.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:101",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:131"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:103",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:133"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -63489,6 +63527,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "fieldClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "operation",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -63505,6 +63549,24 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "systemFieldId",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "templateViolationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "validations",
@@ -119472,7 +119534,7 @@
     {
       "op": "jira.field.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:239",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:241",
       "package": "keiko-server"
     },
     {
@@ -119577,13 +119639,13 @@
     {
       "op": "jira.template.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:144",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:146",
       "package": "keiko-server"
     },
     {
       "op": "jira.template.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:104",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:106",
       "package": "keiko-server"
     },
     {

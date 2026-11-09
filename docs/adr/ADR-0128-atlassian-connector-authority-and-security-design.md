@@ -1599,7 +1599,10 @@ the approval.
   and phase until it changes (2026-11-03: a large report's unchanged decisions were 67% of a lab's log
   bytes); every refusal is written. `jira.field.admission` records a pre-approval refusal by Keiko's own field validation: the
   closed operation class `jira-write`, the SHA-256 `operationDigest` of the exact tool name,
-  the refused count and the closed validation classes, never a field, property key or value.
+  the refused count and the closed validation classes, never a property key or value. A refusal at
+  dispatch also carries `stage=dispatch`, the closed `fieldClass` (`system`, `custom`, `other`), the
+  `systemFieldId` only for a closed allow-list of system fields (never a custom field id) and the
+  `templateViolationCount`.
   This log-only projection leaves the execution and approval identity unchanged. The skill
   library lines gain the actions `jira-template-list`, `-validate` and `-propose`.
 - **Scope.** Comments carry no field state and are not governed; an assignment is an edit of the

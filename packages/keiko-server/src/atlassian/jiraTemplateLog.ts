@@ -4,8 +4,10 @@ import type {
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_LINK_MUTATIONS,
+  JIRA_MUTATION_OPERATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   type JiraFieldValidationFailure,
+  type JiraMutationFailureDetail,
   type JiraMutationAttempt,
   type JiraMutationOperation,
   type JiraTemplateRuleId,
@@ -249,6 +251,41 @@ const FIELD_ADMISSION = defineActivityLogOperation({
     },
     operationDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     refusedCount: { type: "integer", dataClass: "count", required: true },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pre-approval", "dispatch"],
+    },
+    fieldClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["system", "custom", "other"],
+    },
+    systemFieldId: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      // Literal on purpose (the registry reads a closed literal); a test pins it to the allow-list.
+      values: [
+        "summary",
+        "description",
+        "issuetype",
+        "project",
+        "labels",
+        "priority",
+        "components",
+        "fixVersions",
+        "versions",
+        "parent",
+        "assignee",
+        "reporter",
+        "duedate",
+        "environment",
+      ],
+    },
+    templateViolationCount: { type: "integer", dataClass: "count", required: false },
     validations: {
       type: "string-array",
       dataClass: "closed-enum",
@@ -342,6 +379,37 @@ export function recordJiraTemplateRefusal(
   );
 }
 
+/** Jira system fields whose id is a closed word; any other id is only classed, never logged. */
+export const JIRA_LOGGED_SYSTEM_FIELD_IDS = [
+  "summary",
+  "description",
+  "issuetype",
+  "project",
+  "labels",
+  "priority",
+  "components",
+  "fixVersions",
+  "versions",
+  "parent",
+  "assignee",
+  "reporter",
+  "duedate",
+  "environment",
+] as const;
+type LoggedSystemFieldId = (typeof JIRA_LOGGED_SYSTEM_FIELD_IDS)[number];
+const CUSTOM_FIELD_ID = /^customfield_\d{1,16}$/u;
+
+/** The refused field as a closed class and, for a known system field only, its closed id. */
+function refusedFieldFacts(fieldId: string | undefined): {
+  readonly fieldClass?: "system" | "custom" | "other";
+  readonly systemFieldId?: LoggedSystemFieldId;
+} {
+  if (fieldId === undefined) return {};
+  const system = JIRA_LOGGED_SYSTEM_FIELD_IDS.find((id) => id === fieldId);
+  if (system !== undefined) return { fieldClass: "system", systemFieldId: system };
+  return { fieldClass: CUSTOM_FIELD_ID.test(fieldId) ? "custom" : "other" };
+}
+
 /** A proposed write Keiko's own validation refused before a human was asked: closed words, counts. */
 export function recordJiraFieldRefusal(
   correlationId: string | undefined,
@@ -349,6 +417,9 @@ export function recordJiraFieldRefusal(
     readonly operation: JiraMutationOperation;
     readonly refusedCount: number;
     readonly validations: readonly (JiraFieldValidationFailure | undefined)[];
+    readonly stage?: "pre-approval" | "dispatch";
+    readonly fieldId?: string;
+    readonly templateViolationCount?: number;
   },
 ): void {
   const operation = jiraToolLogFields(input.operation);
@@ -363,6 +434,11 @@ export function recordJiraFieldRefusal(
         operation: "jira-write",
         operationDigest: operation.toolDigest,
         refusedCount: input.refusedCount,
+        ...(input.stage === undefined ? {} : { stage: input.stage }),
+        ...refusedFieldFacts(input.fieldId),
+        ...(input.templateViolationCount === undefined
+          ? {}
+          : { templateViolationCount: input.templateViolationCount }),
         validations: [...new Set(input.validations.filter((value) => value !== undefined))],
         completeness: "complete",
         loss: "none",
@@ -381,13 +457,45 @@ export function recordJiraFieldRefusal(
   );
 }
 
+function primaryFieldId(detail: JiraMutationFailureDetail | undefined): string | undefined {
+  return detail?.fieldId ?? detail?.fieldErrors?.[0]?.fieldId;
+}
+
+/** The connector's own refusal before dispatch: which validation fired, never a message or value. */
+function dispatchRefusalFacts(
+  attempt: Extract<JiraMutationAttempt, { ok: false }>,
+): Omit<Parameters<typeof recordJiraFieldRefusal>[1], "operation"> {
+  const fieldId = primaryFieldId(attempt.detail);
+  const violations = attempt.violations;
+  return {
+    refusedCount: Math.max(1, attempt.detail?.fieldErrors?.length ?? 0),
+    validations: [attempt.detail?.validation],
+    stage: "dispatch",
+    ...(fieldId === undefined ? {} : { fieldId }),
+    ...(violations === undefined ? {} : { templateViolationCount: violations.length }),
+  };
+}
+
+function recordDispatchFieldRefusal(
+  correlationId: string | undefined,
+  operation: string,
+  attempt: Extract<JiraMutationAttempt, { ok: false }>,
+): void {
+  const mutation = JIRA_MUTATION_OPERATIONS.find((candidate) => candidate === operation);
+  if (mutation === undefined) return;
+  recordJiraFieldRefusal(correlationId, { operation: mutation, ...dispatchRefusalFacts(attempt) });
+}
+
 /** Record a dispatch-stage refusal carried by a mutation attempt; other failures are not ours. */
 export function recordJiraTemplateAttempt(
   correlationId: string | undefined,
   operation: string,
   attempt: JiraMutationAttempt,
 ): void {
-  if (attempt.ok || attempt.violations === undefined) return;
+  if (attempt.ok) return;
+  if (attempt.reason === "field-validation")
+    recordDispatchFieldRefusal(correlationId, operation, attempt);
+  if (attempt.violations === undefined) return;
   recordJiraTemplateRefusal(correlationId, {
     operation,
     stage: "dispatch",
