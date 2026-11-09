@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { basename, join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import { jsonRequest } from "./chat-read.mjs";
-import { actorDetails, readPrivateFile } from "./lab-client.mjs";
+import { actorDetails, basicAuth, labSessionConnection, readPrivateFile } from "./lab-client.mjs";
 import { read, proof } from "./api-qualification-read.mjs";
 import { qualificationDigest } from "./api-qualification-evidence.mjs";
 
@@ -316,4 +316,29 @@ export async function createQualificationFilter(context, f, label) {
   );
   assert.ok(actual);
   return actual;
+}
+
+/**
+ * Jira answers GET /filter/{id}/columns with a bare 404 until the filter owns an explicit layout, and
+ * the governed column tools refuse that unreviewed state. The recipe therefore seeds one on its own
+ * synthetic filter as native fixture preparation (form-encoded, as Jira reads it); the governed
+ * set/reset cases then run against the seeded, independently read layout.
+ */
+export async function seedQualificationFilterColumns(context, filterId, columns) {
+  assert.match(filterId, /^[1-9]\d*$/u);
+  const origin = labSessionConnection(context.session).origin;
+  const response = await globalThis.fetch(
+    new URL(`/rest/api/2/filter/${filterId}/columns`, origin),
+    {
+      method: "PUT",
+      redirect: "manual",
+      signal: globalThis.AbortSignal.timeout(30_000),
+      headers: {
+        Authorization: basicAuth(context.session, context.actor),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: columns.map((column) => `columns=${encodeURIComponent(column)}`).join("&"),
+    },
+  );
+  assert.equal(response.status, 200, "Jira must accept the synthetic filter's explicit columns");
 }

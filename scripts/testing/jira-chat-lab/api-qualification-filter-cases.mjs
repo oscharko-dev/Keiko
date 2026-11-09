@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { read, readRecord, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
-import { createQualificationFilter, fixtureWrite } from "./api-qualification-fixtures.mjs";
+import {
+  createQualificationFilter,
+  seedQualificationFilterColumns,
+} from "./api-qualification-fixtures.mjs";
 import { labRequest, basicAuth } from "./lab-client.mjs";
 
 const path = (f) => `/rest/api/2/filter/${f.savedFilterId}`;
@@ -90,27 +93,7 @@ export const API_QUALIFICATION_FILTER_CASES = [
     prepare: async (c, f) => {
       await observeAdminActor(c, f);
       f.savedFilterId = String((await createQualificationFilter(c, f, "saved configuration")).id);
-      // Jira answers a bare 404 until the filter owns an explicit layout; the governed write gives
-      // this synthetic filter one before the read case observes it.
-      const seeded = ["issuekey", "summary"];
-      await fixtureWrite(
-        c,
-        "jira.set-filter-columns",
-        {
-          filterId: f.savedFilterId,
-          expectedOwnerKey: f.adminActorKey,
-          expectedColumns: [],
-          expectedColumnConfig: null,
-          columns: seeded,
-        },
-        async (cc) => {
-          assert.deepEqual(
-            filterColumnReview(await read(cc, `${path(f)}/columns`)).columns,
-            seeded,
-          );
-          return proof(1);
-        },
-      );
+      await seedQualificationFilterColumns(c, f.savedFilterId, ["issuekey", "summary"]);
       await columns(c, f);
     },
   },
