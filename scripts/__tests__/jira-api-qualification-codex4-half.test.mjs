@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
-import { expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, it, vi } from "vitest";
+import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 import { API_QUALIFICATION_ALL_CASES } from "../testing/jira-chat-lab/api-qualification-case-list.mjs";
 
 // Fixed handoff scope: operations 1–51 minus the three deferred identities (#4321) from the agreed Codex 4 / integrator split.
@@ -60,3 +64,38 @@ it.each(assigned)(
     expect(entry.mutation === true, tool).toBe(capability.effect === "write");
   },
 );
+
+it("gives the update-myself cleanup write its protected login input owner", async () => {
+  const entry = API_QUALIFICATION_ALL_CASES.find((row) => row.tool === "jira.update-myself");
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-myself-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+  const native = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(
+      async () =>
+        new globalThis.Response(
+          JSON.stringify({ key: "K", name: "keiko-admin", displayName: "D", active: true }),
+          { status: 200 },
+        ),
+    );
+  const written = [];
+  try {
+    await entry.cleanup(
+      {
+        session: { ...DEFAULT_LAB_CONNECTION, directory },
+        actor: "admin",
+        qualificationFixture: async (fixtureEntry) => {
+          written.push(fixtureEntry);
+        },
+      },
+      { adminActorKey: "K", myselfBefore: { displayName: "D" } },
+    );
+    expect(written).toHaveLength(1);
+    expect(written[0].tool).toBe("jira.update-myself");
+    expect(typeof written[0].publishHumanInput).toBe("function");
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

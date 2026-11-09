@@ -337,6 +337,8 @@ async function myselfCleanup(c, f) {
       );
       return proof(1);
     },
+    // The governed update asks a protected input for the account's own login, here as well.
+    protectedInputPublisher(adminLoginInput),
   );
 }
 async function ownPasswordPrepare(c, f) {
