@@ -213,7 +213,10 @@ function localSessionDenied(ctx: RouteContext, deps: UiHandlerDeps): RouteResult
       ),
     );
   });
-  return { status: 401, body: { status: "unavailable" } };
+  // An unpaired browser, a stale cookie and an absent channel are ordinary states of a page load:
+  // the refusal is recorded above and the caller receives the content-free acknowledgement with no
+  // cookie, as before #4321 (a 401 here fails every unpaired page load in the browser console).
+  return ackResult();
 }
 
 const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({

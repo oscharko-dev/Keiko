@@ -64,22 +64,16 @@ async function pairSession(server: AppSessionTestServer): Promise<string> {
   return cookie;
 }
 
-// ADR-0141: a refused local-session repair is a closed 401 `unavailable` with no cookie, never a
-// confirming 200 (it was an acknowledged 200 before #4321).
+// ADR-0141: a refused local-session repair is the content-free acknowledgement with no cookie.
 async function ensureLocalSession(
   server: AppSessionTestServer,
   cookie?: string,
-  expectedStatus: 200 | 401 = 200,
 ): Promise<string | undefined> {
   const response = await fetch(`${server.baseUrl}${APP_SESSION_LOCAL_SESSION_PATH}`, {
     method: "POST",
     headers: postHeaders(cookie),
   });
-  expect(response.status).toBe(expectedStatus);
-  if (expectedStatus === 401) {
-    expect(await response.json()).toEqual({ status: "unavailable" });
-    expect(response.headers.get("set-cookie")).toBeNull();
-  }
+  expect(response.status).toBe(200);
   return extractSessionCookie(response);
 }
 
@@ -134,7 +128,7 @@ describe("authenticated app-session channel journey (ADR-0141, #2477)", () => {
   it("local confirmation restores scoped projections of the same launcher-attested session", async () => {
     const server = await startServer();
     try {
-      await expect(ensureLocalSession(server, undefined, 401)).resolves.toBeUndefined();
+      await expect(ensureLocalSession(server)).resolves.toBeUndefined();
       expect(await snapshotContent(server)).toBeNull();
       const cookie = await pairSession(server);
       await expect(ensureLocalSession(server, cookie)).resolves.toBe(cookie);
@@ -148,7 +142,7 @@ describe("authenticated app-session channel journey (ADR-0141, #2477)", () => {
   it("local-session stays fail-closed when no pairing authority is composed", async () => {
     const server = await startAppSessionTestServer();
     try {
-      await expect(ensureLocalSession(server, undefined, 401)).resolves.toBeUndefined();
+      await expect(ensureLocalSession(server)).resolves.toBeUndefined();
       expect(await snapshotContent(server)).toBeNull();
     } finally {
       await server.close();

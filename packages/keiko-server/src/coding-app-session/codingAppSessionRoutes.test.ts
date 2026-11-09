@@ -4,7 +4,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CodingAppSessionChannelSnapshot } from "./channelContract.js";
+import {
+  codingAppSessionAcknowledgement,
+  type CodingAppSessionChannelSnapshot,
+} from "./channelContract.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import {
@@ -100,10 +103,10 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     expect(result.headers).toBeUndefined();
   });
 
-  it("local-session without a composed channel refuses without issuing a cookie", () => {
+  it("local-session without a composed channel acknowledges without issuing a cookie", () => {
     const result = handleCodingAppSessionLocalSession(ctx(), deps());
-    expect(result.status).toBe(401);
-    expect(result.body).toEqual({ status: "unavailable" });
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual(codingAppSessionAcknowledgement());
     expect(result.headers).toBeUndefined();
   });
 
@@ -118,8 +121,8 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
         handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers,
       ).toBeUndefined();
       expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel))).toMatchObject({
-        status: 401,
-        body: { status: "unavailable" },
+        status: 200,
+        body: codingAppSessionAcknowledgement(),
       });
       expect(channel.sessionCount()).toBe(0);
     },
@@ -391,8 +394,8 @@ describe("app-session lifecycle lines (F65)", () => {
         },
         logDeps,
       );
-      expect(result.status).toBe(401);
-      expect(result.body).toEqual({ status: "unavailable" });
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual(codingAppSessionAcknowledgement());
       expect(result.headers).toBeUndefined();
       const reason = remaining === 0 ? "lifetime" : "lifetime-insufficient";
       expect(events).toMatchObject([
@@ -659,7 +662,7 @@ it("records every unsuccessful local-session repair before its denial aggregate 
   for (const correlationId of ["repair-observation-one", "repair-observation-two"]) {
     expect(
       handleCodingAppSessionLocalSession({ ...ctx(), correlationId }, handlerDeps).status,
-    ).toBe(401);
+    ).toBe(200);
     const event = activityLog.events.find(
       (event) =>
         event.op === "coding-app-session.local-session.refused" &&
@@ -673,7 +676,7 @@ it("records an unsuccessful repair even when the channel is absent", () => {
   const activityLog = createBufferedServerLogSink();
   expect(
     handleCodingAppSessionLocalSession(ctx(), { ...deps(undefined), activityLog }).status,
-  ).toBe(401);
+  ).toBe(200);
   expect(activityLog.events).toMatchObject([
     {
       op: "coding-app-session.local-session.refused",

@@ -128,7 +128,7 @@ The local-session restore route only confirms an existing valid bearer and refre
 scoped cookie projections. Their browser Max-Age is bounded by the verified registry lifetime
 remaining on its own clock and the existing cookie lifetime ceiling. The registered confirmation
 records the actual Max-Age and projection count, without bearer material. Less than one full second
-of remaining lifetime cannot repair a cookie: the route returns its closed HTTP 401 refusal
+of remaining lifetime cannot repair a cookie: the route returns its content-free acknowledgement
 without cookie headers or a confirmed event. The projection count comes from the serializer's active
 path inventory, excluding retired-cookie deletions. It neither mints a session
 nor extends the server-owned absolute lifetime. This repairs
@@ -339,8 +339,9 @@ Rotation requires at least one full second of remaining original authority, matc
 The channel checks this before replacing the original secret and again after minting; if time crosses
 that boundary, it revokes the unusable replacement and cannot report a successful zero-age cookie.
 
-A refused `local-session` cookie repair returns HTTP 401 with the closed `unavailable` status and
-no cookie. The browser records it as a failed repair and never treats it as confirmation. The
+A refused `local-session` cookie repair (an unpaired browser, a stale cookie or no composed channel is
+an ordinary state of a page load) returns the content-free acknowledgement with HTTP 200 and no
+cookie, never a 401 that would surface as a browser console error on every unpaired load. The
 existing Activity Log records `coding-app-session.local-session.denied` with the single closed
 reason `authority-unavailable` and the aggregate `count`, at warning level when the pairing-denial threshold is reached, at most once per minute per composed server. It contains no
 identity, cookie or caller-provided content. Every failed repair also records
