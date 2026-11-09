@@ -1,3 +1,4 @@
+import { withPrototypeField } from "./__tests__/support/prototype-field.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   boundGatewayToolCatalog,
@@ -482,5 +483,16 @@ describe("the native tool name actually consumed for duplicate admission", () =>
     }
     expect(caught).toBe(failure);
     expect(reads).toBe(2);
+  });
+});
+
+describe("native tool own-property description (REVIEW-3918-072)", () => {
+  it("refuses a tool whose description is only inherited", () => {
+    const tool = { name: "read", parameters: { type: "object" }, summary: "Read a file." };
+    expect(
+      withPrototypeField("description", "Read a file.", () =>
+        admits(advertisement({ tools: [tool] })),
+      ),
+    ).toBe(false);
   });
 });

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { withPrototypeField } from "./__tests__/support/prototype-field.js";
+
 import {
   MCP_SERVER_MAX,
   mcpToolAction,
@@ -720,5 +722,67 @@ describe("MCP Settings environment file admission", () => {
     expect(empty).toBeDefined();
     expect(absent).not.toHaveProperty("environmentFiles");
     expect(empty).not.toHaveProperty("environmentFiles");
+  });
+});
+
+// Each field below is absent as an own property, so a polluted Object.prototype must not answer it.
+describe("MCP own-property field reads (REVIEW-3918-072)", () => {
+  function onlyServer(parsed: ReturnType<typeof parseMcpServerRegistry>): McpServerDefinition {
+    if (!parsed.ok || parsed.servers[0] === undefined) throw new Error("registry refused");
+    return parsed.servers[0];
+  }
+
+  it.each([
+    ["enabled", false, true],
+    ["description", "Injected description", undefined],
+  ] as const)("ignores an inherited server %s", (key, injected, expected) => {
+    const server = onlyServer(
+      withPrototypeField(key, injected, () => parseMcpServerRegistry(registry(REMOTE))),
+    );
+    expect(server[key]).toBe(expected);
+  });
+
+  it.each(["clientId", "scope"])("ignores an inherited OAuth %s", (key) => {
+    const server = onlyServer(
+      withPrototypeField(key, "injected", () =>
+        parseMcpServerRegistry(registry(withOAuth({ issuer: ISSUER }))),
+      ),
+    );
+    expect(server.transport).toMatchObject({ kind: "remote", oauth: { issuer: ISSUER } });
+    if (server.transport.kind !== "remote") throw new Error("expected a remote transport");
+    expect(Object.keys(server.transport.oauth ?? {})).toEqual(["issuer"]);
+  });
+
+  it("ignores an inherited secret header prefix", () => {
+    const secretEnv = TOKEN_HEADER.secretEnv;
+    const server = onlyServer(
+      withPrototypeField("prefix", "Injected ", () =>
+        parseMcpServerRegistry(registry(withHeaders({ Authorization: { secretEnv } }))),
+      ),
+    );
+    if (server.transport.kind !== "remote") throw new Error("expected a remote transport");
+    expect(server.transport.headers).toEqual({ Authorization: { secretEnv } });
+  });
+
+  it("refuses a workbench server whose authorization is only inherited", () => {
+    const payload = { session: "active", servers: [{ name: "docs", status: "connected" }] };
+    expect(
+      withPrototypeField("authorization", "none", () =>
+        parseCodingWorkbenchRuntimeMcpChannelPayload(payload),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses an authorization start whose expiry is only inherited", () => {
+    const answer = {
+      outcome: "started",
+      attemptId: "con_attempt1",
+      authorizationUrl: "https://login.example.test/authorize",
+    };
+    expect(
+      withPrototypeField("expiresAtMs", 1_800_000_000_000, () =>
+        parseCodingWorkbenchMcpAuthorizationStart(answer),
+      ),
+    ).toBeUndefined();
   });
 });
