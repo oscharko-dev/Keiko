@@ -386,12 +386,7 @@ export { serializeSupportReport };
 
 // A newer schema may add sections, so its declared minimum analyzer and schema are judged before
 // the closed section set: an unsupported report names the analyzer it needs instead of "unsafe".
-interface SupportReportHeader {
-  readonly value: Record<string, unknown>;
-  readonly minimumAnalyzerVersion: string;
-}
-
-function readHeader(value: unknown): SupportReportHeader {
+function readHeader(value: unknown): Record<string, unknown> {
   if (!reportObject(value) || !isActivityLogProductVersion(value.minimumAnalyzerVersion))
     throw new SupportReportError("unsafe-report");
   validateMinimumAnalyzerVersion(value.minimumAnalyzerVersion);
@@ -399,7 +394,7 @@ function readHeader(value: unknown): SupportReportHeader {
     throw new SupportReportError("unsupported-report");
   }
   if (!reportKeys(value, REPORT_KEYS)) throw new SupportReportError("unsafe-report");
-  return { value, minimumAnalyzerVersion: value.minimumAnalyzerVersion };
+  return value;
 }
 
 function validateMinimumAnalyzerVersion(version: string): void {
@@ -499,9 +494,14 @@ function verifyIntegrity(value: Record<string, unknown>): SupportReport["integri
     integrity.authenticity !== "unknown"
   )
     throw new SupportReportError("unsafe-report");
-  const incidentDigest = verifiedSectionDigest(value, integrity, "incident");
-  const selectionDigest = verifiedSectionDigest(value, integrity, "selection");
-  const evidenceDigest = verifiedSectionDigest(value, integrity, "evidence");
+  const verifiedDigest = (section: "incident" | "selection" | "evidence"): string => {
+    const digest = supportReportDigest(canonicalSupportJson(value[section]));
+    if (integrity[`${section}Digest`] !== digest) throw new SupportReportError("corrupt-report");
+    return digest;
+  };
+  const incidentDigest = verifiedDigest("incident");
+  const selectionDigest = verifiedDigest("selection");
+  const evidenceDigest = verifiedDigest("evidence");
   const { reportDigest, ...sectionIntegrity } = integrity;
   const expectedReportDigest = supportReportDigest(
     canonicalSupportJson({ ...value, integrity: sectionIntegrity }),
@@ -515,16 +515,6 @@ function verifyIntegrity(value: Record<string, unknown>): SupportReport["integri
     evidenceDigest,
     reportDigest: expectedReportDigest,
   };
-}
-
-function verifiedSectionDigest(
-  value: Record<string, unknown>,
-  integrity: Record<string, unknown>,
-  section: "incident" | "selection" | "evidence",
-): string {
-  const digest = supportReportDigest(canonicalSupportJson(value[section]));
-  if (integrity[`${section}Digest`] !== digest) throw new SupportReportError("corrupt-report");
-  return digest;
 }
 
 function validEvent(value: unknown, registry: SupportReaderRegistry): value is SupportReportEvent {
@@ -742,10 +732,13 @@ interface ValidatedSupportReport {
 function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   if (isLegacySupportInput(text)) throw new SupportReportError("legacy-input");
   if (!text.endsWith("\n")) throw new SupportReportError("corrupt-report");
-  const header = readHeader(
+  const value = readHeader(
     parseCanonicalSupportJson(text.slice(0, -1), MAX_SUPPORT_REPORT_BYTES - 1),
   );
-  const value = header.value;
+  // readHeader admitted this version; reading it once more keeps its checked type here.
+  const minimumAnalyzerVersion = value.minimumAnalyzerVersion;
+  if (!isActivityLogProductVersion(minimumAnalyzerVersion))
+    throw new SupportReportError("unsafe-report");
   const incident = parseSupportIncidentPrivateProjection(value.incident);
   const reportSelection = value.selection;
   const evidence = value.evidence;
@@ -765,7 +758,7 @@ function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   const report: SupportReport = {
     kind: SUPPORT_REPORT_KIND,
     schemaVersion: SUPPORT_REPORT_SCHEMA_VERSION,
-    minimumAnalyzerVersion: header.minimumAnalyzerVersion,
+    minimumAnalyzerVersion,
     incident,
     selection: reportSelection,
     evidence,
