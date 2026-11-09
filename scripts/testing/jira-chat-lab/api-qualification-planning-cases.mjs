@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { URLSearchParams } from "node:url";
 import { jiraSprintLifecycleSnapshot } from "../../../packages/keiko-connectors/dist/jira-sprint-lifecycle-values.js";
-import { basicAuth, labRequest } from "./lab-client.mjs";
+import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
@@ -27,8 +27,44 @@ const boardArgs = (f) => ({
   boardId: String(f.planningBoard.id),
   expectedBoardName: f.planningBoard.name,
 });
+/**
+ * The seeded KEIKO project uses the simple issue type scheme (Task and Sub-task). Scrum planning needs
+ * the global Epic and Story types in the project, so the operator fixture adds exactly those two to
+ * the project's own scheme, natively and idempotently, before the governed planning cases run.
+ */
+async function ensureAgileIssueTypes(c, f) {
+  const schemes = await read(c, "/rest/api/2/issuetypescheme");
+  const own = schemes.schemes.filter((scheme) => scheme.name.startsWith("KEIKO: "));
+  assert.equal(own.length, 1, "The seeded project must have exactly one own issue type scheme");
+  const scheme = await read(c, `/rest/api/2/issuetypescheme/${own[0].id}?expand=issueTypes`);
+  const present = new Set(scheme.issueTypes.map((type) => String(type.id)));
+  const global = await read(c, "/rest/api/2/issuetype");
+  const wanted = ["Epic", "Story"].map((name) => {
+    const found = global.filter((type) => type.name === name && !type.subtask);
+    assert.equal(found.length, 1, `The global ${name} issue type must be unique`);
+    return String(found[0].id);
+  });
+  if (wanted.every((id) => present.has(id))) return;
+  const origin = labSessionConnection(c.session).origin;
+  const response = await globalThis.fetch(
+    new URL(`/rest/api/2/issuetypescheme/${own[0].id}`, origin),
+    {
+      method: "PUT",
+      redirect: "manual",
+      signal: globalThis.AbortSignal.timeout(30_000),
+      headers: { Authorization: basicAuth(c.session, c.actor), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: scheme.name,
+        issueTypeIds: [...new Set([...present, ...wanted])],
+        defaultIssueTypeId: String(f.issueTypeId),
+      }),
+    },
+  );
+  assert.equal(response.status, 200, "Jira must accept the project's Agile issue types");
+}
 async function planningBoard(c, f) {
   await observeAdminActor(c, f);
+  await ensureAgileIssueTypes(c, f);
   if (!f.planningBoard) {
     const filter = await createQualificationFilter(c, f, "planning");
     const name = `Synthetic AC7 planning ${f.runId}`;

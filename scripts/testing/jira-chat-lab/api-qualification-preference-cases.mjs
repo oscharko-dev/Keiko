@@ -273,6 +273,36 @@ export const API_QUALIFICATION_PREFERENCE_CASES = [
         },
       );
     },
+    // The renamed Epic term also renames the Epic issue type, which the planning recipes look up.
+    "jira.set-terminology": async (c, f) => {
+      const current = await read(c, "/rest/api/2/terminology/entries");
+      const rows = Array.isArray(current) ? current : current.entries;
+      const original = f.terminologyBefore.find((row) => row.originalName === "epic");
+      await fixtureWrite(
+        c,
+        "jira.set-terminology",
+        {
+          ...actor(f),
+          expectedEntries: rows,
+          entries: [
+            {
+              originalName: original.originalName,
+              newName: original.newName,
+              newNamePlural: original.newNamePlural,
+            },
+          ],
+        },
+        async (context) => {
+          const after = await read(context, "/rest/api/2/terminology/entries");
+          const restored = (Array.isArray(after) ? after : after.entries).find(
+            (row) => row.originalName === "epic",
+          );
+          assert.equal(restored.newName, original.newName);
+          assert.equal(restored.newNamePlural, original.newNamePlural);
+          return proof(2);
+        },
+      );
+    },
     "jira.set-system-columns": async (c, f) => {
       const current = columns(await read(c, "/rest/api/2/settings/columns"));
       await fixtureWrite(
