@@ -30,6 +30,8 @@
  * 7. Outline visibility is additive UI state. Missing persisted values default to visible so older
  *    layout JSON automatically gains the workspace outline without migration.
  */
+import { nullPrototypeRecord } from "./null-prototype-record.js";
+
 export const EDITOR_LAYOUT_SCHEMA_VERSION = 2 as const;
 
 export type EditorSplitDirection = "row" | "column";
@@ -244,9 +246,7 @@ function paneIdsFromTree(node: EditorLayoutNode, out: string[] = []): string[] {
 // and produce the "persisted white screen" class this repository has already paid for (#2802).
 // A null-prototype record closes both at the layer that owns the record, not per call site.
 function emptyPaneRecord(): Record<string, EditorPaneStateV2> {
-  const record: Record<string, EditorPaneStateV2> = {};
-  Object.setPrototypeOf(record, null);
-  return record;
+  return nullPrototypeRecord<EditorPaneStateV2>();
 }
 
 // A pane id that names a prototype member is REJECTED outright, not merely stored safely. A

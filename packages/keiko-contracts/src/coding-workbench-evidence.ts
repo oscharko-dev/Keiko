@@ -674,7 +674,7 @@ export function isCodingWorkbenchEvidenceSafeText(value: unknown): value is stri
 }
 
 export function redactCodingWorkbenchEvidenceText(value: string): string {
-  if (isCodingWorkbenchEvidenceSafeText(value)) return value;
+  if (isSafeEvidenceString(value)) return value;
   const redacted = buildRedactionSummary(value);
   return isSafeEvidenceString(redacted) ? redacted : REDACTED_CONTENT_TOKEN;
 }

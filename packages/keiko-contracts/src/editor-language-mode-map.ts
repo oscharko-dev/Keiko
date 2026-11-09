@@ -17,6 +17,8 @@
 // One source language the editor and server agree on. `fileExtensions` are lower-case and carry no
 // leading dot; `syntaxHighlighting` is true for every entry because the editor can locally tokenise
 // and colour each language via Monaco's bundled grammars.
+import { nullPrototypeRecord } from "./null-prototype-record.js";
+
 export interface EditorLanguageMode {
   readonly languageId: string;
   readonly fileExtensions: readonly string[];
@@ -82,9 +84,7 @@ export const EDITOR_LANGUAGE_MODE_BY_EXTENSION: Readonly<Record<string, string>>
 // inferEditorLanguageModeId answered with a function instead of the documented safe-degrade `null`.
 // This closes the whole prototype-member class, not the two reachable names.
 function emptyExtensionTable(): Record<string, string> {
-  const record: Record<string, string> = {};
-  Object.setPrototypeOf(record, null);
-  return record;
+  return nullPrototypeRecord<string>();
 }
 
 // Final path segment (basename) from a POSIX or Windows path. Pure, allocation-light.

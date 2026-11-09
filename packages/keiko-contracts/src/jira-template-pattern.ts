@@ -49,15 +49,21 @@ const literal =
   (unit) =>
     unit === code;
 
-const CLASS_ESCAPES: Readonly<Record<string, UnitTest>> = {
-  d: isDigit,
-  D: not(isDigit),
-  w: isWord,
-  W: not(isWord),
-  s: isSpace,
-  S: not(isSpace),
-};
-const CONTROL_ESCAPES: Readonly<Record<string, number>> = { t: 9, n: 10, v: 11, f: 12, r: 13 };
+const CLASS_ESCAPES = new Map<string, UnitTest>([
+  ["d", isDigit],
+  ["D", not(isDigit)],
+  ["w", isWord],
+  ["W", not(isWord)],
+  ["s", isSpace],
+  ["S", not(isSpace)],
+]);
+const CONTROL_ESCAPES = new Map<string, number>([
+  ["t", 9],
+  ["n", 10],
+  ["v", 11],
+  ["f", 12],
+  ["r", 13],
+]);
 
 interface Quantifier {
   readonly width: number;
@@ -133,7 +139,7 @@ function numericEscape(chars: readonly string[], index: number): Escape | undefi
 
 function characterEscape(chars: readonly string[], index: number): Escape | undefined {
   const letter = chars[index + 1] ?? "";
-  const controlled = CONTROL_ESCAPES[letter];
+  const controlled = CONTROL_ESCAPES.get(letter);
   if (controlled !== undefined) return { test: literal(controlled), code: controlled, width: 2 };
   if (letter === "0" || letter === "x" || letter === "u") return numericEscape(chars, index);
   // Any other letter or digit is a back-reference, a property or a legacy escape: refused.
@@ -143,7 +149,7 @@ function characterEscape(chars: readonly string[], index: number): Escape | unde
 }
 
 function classEscape(chars: readonly string[], index: number): Escape | undefined {
-  const test = CLASS_ESCAPES[chars[index + 1] ?? ""];
+  const test = CLASS_ESCAPES.get(chars[index + 1] ?? "");
   return test === undefined ? characterEscape(chars, index) : { test, code: undefined, width: 2 };
 }
 
