@@ -693,20 +693,28 @@ interface CreateRequest {
   readonly descriptionConvertedHeadingCount?: number;
   readonly descriptionProjection?: "supported-markdown";
 }
-async function prepareCreateWithMetadata(
-  request: JiraMutationRequest,
-  create: CreateRequest,
+function createFieldState(
   metadata: readonly JiraFieldMetadata[],
-  templates: JiraIssueTemplateSource | undefined,
-): Promise<JiraCreatePreparation> {
-  const validated = validateJiraFieldChanges(
+  create: CreateRequest,
+  requireAll: boolean,
+): ReturnType<typeof validateJiraFieldChanges> {
+  return validateJiraFieldChanges(
     createContextFields(metadata),
     { ...create.fields, project: { id: create.projectId }, issuetype: { id: create.issueTypeId } },
     "create",
     "data-center",
+    [],
+    requireAll,
   );
-  if (!validated.ok) return validationFailure(validated);
-  const gate = await gateJiraMutationByTemplates({
+}
+function createTemplateGate(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+  templates: JiraIssueTemplateSource | undefined,
+  validated: Validated,
+): ReturnType<typeof gateJiraMutationByTemplates> {
+  return gateJiraMutationByTemplates({
     request,
     source: templates,
     operation: "create",
@@ -715,6 +723,37 @@ async function prepareCreateWithMetadata(
     links: create.links,
     target: { projectId: create.projectId, issueTypeId: create.issueTypeId },
   });
+}
+/**
+ * A missing required field must not hide the template rules the rest of the create breaks: the
+ * refusal names both, so one correction can satisfy every rule (#4288). The create is refused
+ * either way; only the supplied fields are judged against the templates.
+ */
+async function createRefusal(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+  templates: JiraIssueTemplateSource | undefined,
+  failure: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
+): Promise<Extract<JiraMutationAttempt, { ok: false }>> {
+  const refusal = validationFailure(failure);
+  if (failure.reason !== "required-field" || templates === undefined) return refusal;
+  const supplied = createFieldState(metadata, create, false);
+  if (!supplied.ok) return refusal;
+  const gate = await createTemplateGate(request, create, metadata, templates, supplied);
+  return gate.ok || gate.violations === undefined
+    ? refusal
+    : { ...refusal, violations: gate.violations };
+}
+async function prepareCreateWithMetadata(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+  templates: JiraIssueTemplateSource | undefined,
+): Promise<JiraCreatePreparation> {
+  const validated = createFieldState(metadata, create, true);
+  if (!validated.ok) return createRefusal(request, create, metadata, templates, validated);
+  const gate = await createTemplateGate(request, create, metadata, templates, validated);
   if (!gate.ok) return gate;
   // The link a template requires rides on the create itself where the screen offers it.
   const links = gate.links ?? create.links;

@@ -711,8 +711,9 @@ function missingRequired(
   metadata: readonly JiraFieldMetadata[],
   fields: Readonly<Record<string, unknown>>,
   purpose: "create" | "edit" | "transition",
+  requireAll: boolean,
 ): FieldFailure | undefined {
-  if (purpose === "edit") return undefined;
+  if (purpose === "edit" || !requireAll) return undefined;
   for (const field of metadata) {
     if (
       !field.required ||
@@ -760,13 +761,18 @@ function validateUpdates(
   return { ok: true, update };
 }
 
-/** No caller-supplied Jira update object is forwarded. Only implemented field/verb pairs survive. */
+/**
+ * No caller-supplied Jira update object is forwarded. Only implemented field/verb pairs survive.
+ * `requireAll: false` judges only the supplied fields, so a refusal for a missing required field
+ * can still name the template rules the rest of the write breaks; it never admits a write.
+ */
 export function validateJiraFieldChanges(
   metadata: readonly JiraFieldMetadata[],
   changes: unknown,
   purpose: "create" | "edit" | "transition",
   deployment: AtlassianConnectorDeployment,
   updates: unknown = [],
+  requireAll = true,
 ): JiraFieldValidationResult {
   const input = asRecord(changes);
   const requestedUpdates = asArray(updates);
@@ -780,7 +786,7 @@ export function validateJiraFieldChanges(
   const byId = new Map(metadata.map((field) => [field.id, field]));
   const sets = validateSets(byId, input, deployment);
   if (!sets.ok) return sets;
-  const missing = missingRequired(metadata, sets.fields, purpose);
+  const missing = missingRequired(metadata, sets.fields, purpose, requireAll);
   if (missing !== undefined) return missing;
   const changesResult = validateUpdates(byId, sets.fields, requestedUpdates);
   if (!changesResult.ok) return changesResult;

@@ -1003,8 +1003,33 @@ describe("a Data Center Epic create against a stored formal rule", () => {
     });
     expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
   });
-  it("names the missing Epic Name field before any rule is evaluated", async () => {
+  it("names the missing Epic Name field and the formal rule the rest breaks in one refusal", async () => {
     const f = fixture(epicRule(), remote);
+    const result = await f.run("jira.create", epic({}));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: EPIC_NAME, validation: "required-field" },
+      violations: [{ ruleId: expect.any(String) as string, template: "SYN/Epic" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+  it("names only the missing Epic Name when the supplied fields satisfy every rule", async () => {
+    const f = fixture(epicRule(), remote);
+    const result = await f.run(
+      "jira.create",
+      epic({ summary: "A sufficiently long Epic summary" }),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: EPIC_NAME, validation: "required-field" },
+    });
+    expect(result).not.toHaveProperty("violations");
+    expect(f.writes()).toEqual([]);
+  });
+  it("still refuses a missing Epic Name without templates, naming only the field", async () => {
+    const f = fixture(undefined, remote);
     const result = await f.run("jira.create", epic({}));
     expect(result).toMatchObject({
       ok: false,
