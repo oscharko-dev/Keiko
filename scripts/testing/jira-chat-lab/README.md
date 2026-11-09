@@ -285,6 +285,10 @@ manifest and accept no port/image overrides.
 
 Start and runtime service inspection refuse a foreign running Compose Jira
 service before proceeding. Docker inspection failures also refuse the start.
+Separate sessions own separate projects, ports and licenses, so an operator may
+declare side-by-side runs with the exact `KEIKO_JIRA_LAB_PARALLEL=allow`, for
+example the model-free API qualification beside one model-driven run; Docker must
+still answer, and any other value keeps the window exclusive.
 Stopping the owned session remains available. This check supplements the
 coordinated exclusive window; it never stops another operator's containers.
 

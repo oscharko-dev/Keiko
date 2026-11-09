@@ -11,7 +11,7 @@ const sessionScript = fileURLToPath(
   new URL("../testing/jira-chat-lab/session.mjs", import.meta.url),
 );
 
-function invokeSession(action, projects, inspectFailure = false) {
+function invokeSession(action, projects, inspectFailure = false, parallel = undefined) {
   const root = mkdtempSync(join(tmpdir(), "keiko-exclusive-lab-"));
   const directory = join(root, "session");
   const tools = join(root, "tools");
@@ -47,7 +47,10 @@ if (args[0] === "ps") {
       encoding: "utf8",
       timeout: 10_000,
       env: {
-        ...process.env,
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([name]) => name !== "KEIKO_JIRA_LAB_PARALLEL"),
+        ),
+        ...(parallel === undefined ? {} : { KEIKO_JIRA_LAB_PARALLEL: parallel }),
         PATH: tools + delimiter + process.env.PATH,
         SYNTHETIC_CALLS: calls,
         SYNTHETIC_PROJECTS: projects.join("\n"),
@@ -86,6 +89,23 @@ it.each([[], ["keiko-jira-4081-owned"]])(
     );
   },
 );
+
+it("starts beside a foreign lab only with the exact parallel declaration", () => {
+  const allowed = invokeSession("start", ["keiko-jira-4081-foreign"], false, "allow");
+  expect(allowed.status).toBe(0);
+  expect(allowed.calls.at(-1)).toEqual(
+    expect.arrayContaining(["compose", "keiko-jira-4081-owned", "up", "-d"]),
+  );
+  const refused = invokeSession("start", ["keiko-jira-4081-foreign"], false, "yes");
+  expect(refused.status).toBe(1);
+  expect(refused.calls.some((args) => args[0] === "compose")).toBe(false);
+});
+
+it("fails closed when Docker cannot answer, even when parallel labs are declared", () => {
+  const result = invokeSession("start", [], true, "allow");
+  expect(result.status).toBe(1);
+  expect(result.calls.some((args) => args[0] === "compose")).toBe(false);
+});
 
 it("fails closed when Docker cannot establish exclusivity", () => {
   const result = invokeSession("start", [], true);

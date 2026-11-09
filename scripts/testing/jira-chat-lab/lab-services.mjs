@@ -58,7 +58,12 @@ export async function labDocker(args) {
   return result.stdout.trim();
 }
 
-/** Read-only admission: a foreign Jira is never stopped or shared by this session. */
+/**
+ * Read-only admission: a foreign Jira is never stopped or shared by this session. Separate
+ * sessions own separate projects, ports and licenses, so an operator may run them side by side
+ * with the exact `KEIKO_JIRA_LAB_PARALLEL=allow`, for example the model-free API qualification
+ * beside one model-driven run. Docker must still answer; any other value keeps the window exclusive.
+ */
 export async function requireExclusiveLab(session) {
   const running = await labDocker([
     "ps",
@@ -67,6 +72,7 @@ export async function requireExclusiveLab(session) {
     "--format",
     '{{.Label "com.docker.compose.project"}}',
   ]);
+  if (process.env.KEIKO_JIRA_LAB_PARALLEL === "allow") return;
   if (running.split("\n").some((project) => project.length > 0 && project !== session.project))
     throw new TypeError("Another Jira laboratory is running; wait for an exclusive window");
 }
