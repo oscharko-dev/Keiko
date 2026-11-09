@@ -11,11 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setImmediate } from "node:timers/promises";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { IncomingMessage } from "node:http";
+import { mockRequest } from "./_support.js";
 
 import type { ContextLaneId } from "@oscharko-dev/keiko-contracts";
 import {
@@ -147,10 +146,6 @@ function asConnectedAnswer(
   return answer as Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>;
 }
 
-function fakeReq(body: string): IncomingMessage {
-  return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
-}
-
 function fakeRes(): RouteContext["res"] {
   const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
   res.writableEnded = false;
@@ -160,7 +155,7 @@ function fakeRes(): RouteContext["res"] {
 function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
     correlationId: undefined,
-    req: fakeReq(body),
+    req: mockRequest({ body }),
     res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),

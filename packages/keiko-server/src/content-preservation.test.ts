@@ -6,9 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { mockRequest } from "./_support.js";
 import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
@@ -101,9 +100,7 @@ function disposeFixture(fixture: Fixture): void {
 function context(chatId: string): RouteContext {
   return {
     correlationId: undefined,
-    req: Readable.from([
-      JSON.stringify({ chatId, content: "Quote customer.txt" }),
-    ]) as IncomingMessage,
+    req: mockRequest({ body: JSON.stringify({ chatId, content: "Quote customer.txt" }) }),
     res: new EventEmitter() as RouteContext["res"],
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
