@@ -160,7 +160,9 @@ async function optionIdFor(io, fieldId, value) {
     "GET",
     `/rest/api/2/customFields/${fieldId.slice(12)}/options?page=1&maxResults=100&useAllContexts=true`,
   );
-  const rows = Array.isArray(page.value?.values) ? page.value.values : [];
+  // Jira 10.3 lists a field's options under `options`; `values` is the page form of other lists.
+  const listed = page.value?.options ?? page.value?.values;
+  const rows = Array.isArray(listed) ? listed : [];
   const found = page.status === 200 ? rows.filter((row) => row.value === value) : [];
   return found.length === 1 && numeric.test(String(found[0].id)) ? String(found[0].id) : undefined;
 }
