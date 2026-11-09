@@ -46,14 +46,18 @@ const EDIT_FIELDS = {
   issuelinks: LINKS_FIELD,
 };
 
-function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTemplate {
+function template(
+  frontMatter: readonly string[],
+  body = SECTIONS,
+  issueType = "Story",
+): JiraIssueTemplate {
   const result = parseJiraIssueTemplate(
     [
       "---",
       "keiko: jira-issue-template",
       "version: 1",
       "project: SYN",
-      "issueType: Story",
+      `issueType: ${issueType}`,
       ...frontMatter,
       "---",
       body,
@@ -271,10 +275,16 @@ interface ReadRoute {
 function readRoutes(remote: Remote): readonly ReadRoute[] {
   return [
     { suffix: "/project/10000", body: { id: "10000", key: "SYN" } },
-    { suffix: "/issuetype/10001", body: { id: "10001", name: "Story" } },
+    { suffix: "/issuetype/10001", body: { id: "10001", name: remote.issueTypeName ?? "Story" } },
     {
       includes: "createmeta",
-      body: { values: CREATE_FIELDS, start: 0, size: 100, last: true, total: CREATE_FIELDS.length },
+      body: {
+        values: remote.createFields ?? CREATE_FIELDS,
+        start: 0,
+        size: 100,
+        last: true,
+        total: (remote.createFields ?? CREATE_FIELDS).length,
+      },
     },
     { suffix: "editmeta", body: { fields: EDIT_FIELDS } },
     { suffix: "assignable/search", body: [{ name: "alice", active: true }] },
@@ -312,6 +322,9 @@ interface Remote {
   /** Jira answered transitions without transition or status names. */
   unnamedTransitions?: boolean;
   parentType?: { id: string; name: string };
+  /** Replaces the create screen, for example with a Data Center Epic's Epic Name. */
+  createFields?: readonly Record<string, unknown>[];
+  issueTypeName?: string;
 }
 function fixture(
   templates: JiraIssueTemplateSet | (() => JiraIssueTemplateSet) | undefined,
@@ -940,6 +953,78 @@ describe("a required link rides on the primary write (#4177, review)", () => {
     );
     const refused = await f.run("jira.create", { ...CREATE, links: links("Blocks", "Relates") });
     expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.writes()).toEqual([]);
+  });
+});
+
+describe("a Data Center Epic create against a stored formal rule", () => {
+  const EPIC_NAME = "customfield_10011";
+  const EPIC_FIELDS = [
+    field("project", "project", true),
+    field("issuetype", "issuetype", true),
+    named("summary", "string", "Summary", true),
+    {
+      ...named("description", "string", "Description"),
+      schema: { type: "string", system: "description" },
+    },
+    {
+      ...named(EPIC_NAME, "string", "Epic Name", true),
+      schema: { type: "string", custom: "com.pyxis.greenhopper.jira:gh-epic-label" },
+    },
+  ];
+  const remote: Remote = {
+    issue: {},
+    fieldCatalog: true,
+    createFields: EPIC_FIELDS,
+    issueTypeName: "Epic",
+  };
+  const epicRule = (): JiraIssueTemplateSet =>
+    SET(template([...ALL_POINTS, "summaryMinLength: 20"], SECTIONS, "Epic"));
+  const epic = (fields: Record<string, unknown>): CatalogJsonObject => ({
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Too short", description: FULL_DESCRIPTION, ...fields },
+  });
+  it("reports the formal rule, not a field error, when the Epic Name is sent by id", async () => {
+    const f = fixture(epicRule(), remote);
+    expect(await f.run("jira.create", epic({ [EPIC_NAME]: "REQ-1" }))).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: expect.any(String) as string, template: "SYN/Epic" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+  it("creates the Epic once the rule holds, sending the Epic Name by id", async () => {
+    const f = fixture(epicRule(), remote);
+    const args = epic({ [EPIC_NAME]: "REQ-1" });
+    await f.run("jira.create", {
+      ...args,
+      fields: { ...(args.fields as object), summary: "A sufficiently long Epic summary" },
+    });
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
+  it("names the missing Epic Name field before any rule is evaluated", async () => {
+    const f = fixture(epicRule(), remote);
+    const result = await f.run("jira.create", epic({}));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: EPIC_NAME, validation: "required-field" },
+    });
+    expect(result).not.toHaveProperty("violations");
+    expect(f.writes()).toEqual([]);
+  });
+  it("tells the model which field id carries a display name it sent instead", async () => {
+    const f = fixture(epicRule(), remote);
+    const result = await f.run("jira.create", epic({ "Epic Name": "REQ-1" }));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        validation: "invalid-field",
+        messages: [expect.stringContaining(EPIC_NAME) as string],
+      },
+    });
     expect(f.writes()).toEqual([]);
   });
 });

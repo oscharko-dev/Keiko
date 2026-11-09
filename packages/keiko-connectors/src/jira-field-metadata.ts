@@ -644,6 +644,31 @@ function setValue(
   if (isEncodedRichText(field, value, deployment)) return invalidWith(ESCAPED_LINE_BREAKS);
   return validateJiraFieldValue(field, value, deployment);
 }
+/**
+ * A key that is not a field id of this screen. A model reliably writes the display name ("Epic
+ * Name") where Jira wants the id; naming the id lets it correct the call in the same turn. The key
+ * is echoed only when it is a safe field id, never an arbitrary string.
+ */
+function unknownFieldFailure(
+  byId: ReadonlyMap<string, JiraFieldMetadata>,
+  key: string,
+): FieldFailure | undefined {
+  if (isJiraFieldId(key) && byId.has(key)) return undefined;
+  const named = [...byId.values()].filter((field) => field.name === key);
+  const [only] = named;
+  const message =
+    only !== undefined && named.length === 1
+      ? `Fields are keyed by field id, not display name: send "${key}" as ${only.id}.`
+      : isJiraFieldId(key)
+        ? undefined
+        : "A key in fields is not a field id. Use the field ids jira.create.fields returns.";
+  return {
+    ok: false,
+    reason: "invalid-field",
+    ...(isJiraFieldId(key) ? { fieldId: key } : {}),
+    ...(message === undefined ? {} : { message }),
+  };
+}
 function validateSets(
   byId: ReadonlyMap<string, JiraFieldMetadata>,
   input: Record<string, unknown>,
@@ -653,7 +678,8 @@ function validateSets(
   let descriptionConvertedHeadingCount = 0;
   let descriptionProjection: "supported-markdown" | undefined;
   for (const [id, value] of Object.entries(input)) {
-    if (!isJiraFieldId(id)) return { ok: false, reason: "invalid-field" };
+    const unknown = unknownFieldFailure(byId, id);
+    if (unknown !== undefined) return unknown;
     const result = setValue(byId.get(id), value, deployment);
     if (!result.ok)
       return {
