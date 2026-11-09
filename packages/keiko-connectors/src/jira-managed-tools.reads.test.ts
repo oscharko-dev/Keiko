@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  JIRA_DESCRIPTION_INPUT_SCHEMA,
   JIRA_MANAGED_READ_TOOLS,
   type JiraManagedReadToolName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -494,8 +495,7 @@ it("advertises explicit Markdown provenance only for Data Center description inp
       nativeFormat: "jira-wiki",
       markdownSerialization: "supported-markdown",
       inputSchema: {
-        description:
-          "Native Jira wiki text is unchanged. Markdown is converted to Jira wiki markup: headings, inline formatting, links, lists, tables and code blocks.",
+        description: JIRA_DESCRIPTION_INPUT_SCHEMA.description,
         oneOf: [
           { type: "string", maxLength: 32768 },
           {

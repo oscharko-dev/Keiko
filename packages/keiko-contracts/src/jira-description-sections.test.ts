@@ -5,6 +5,7 @@ import {
   serializeJiraDescriptionHeadings,
   projectJiraDescriptionInput,
   readJiraMarkdownDescription,
+  JIRA_DESCRIPTION_INPUT_SCHEMA,
 } from "./jira-description-sections.js";
 import { parseJiraIssueTemplate } from "./jira-issue-template.js";
 
@@ -341,5 +342,24 @@ describe("native wiki code and source-content blocks", () => {
         "markdown",
       ),
     ).toEqual(["Actual."]);
+  });
+});
+
+describe("the advertised description contract matches the projection (LIM28)", () => {
+  it("tells the model a string's # lines stay wiki lists and how Markdown headings are sent", () => {
+    // A model followed "Markdown is converted" with a plain string of `## Title` lines; Keiko read
+    // it as native wiki, as ADR-0128 decides, and refused every required section.
+    const markdown = "## Ziel\nDas Portal zeigt die Geräte.";
+    expect(projectJiraDescriptionInput(markdown)).toEqual({
+      text: markdown,
+      convertedHeadingCount: 0,
+    });
+    expect(projectJiraDescriptionInput({ format: "markdown", text: markdown })?.text).toBe(
+      "h2. Ziel\nDas Portal zeigt die Geräte.",
+    );
+    const advertised = JIRA_DESCRIPTION_INPUT_SCHEMA.description;
+    expect(advertised).toContain("a line starting with # or ## is a numbered list item");
+    expect(advertised).toContain('{"format": "markdown", "text": "..."}');
+    expect(advertised).not.toContain("Markdown is converted");
   });
 });

@@ -363,7 +363,7 @@ const MARKDOWN_DESCRIPTION_CHARS_MAX = 32768;
  */
 export const JIRA_DESCRIPTION_INPUT_SCHEMA = {
   description:
-    "Native Jira wiki text is unchanged. Markdown is converted to Jira wiki markup: headings, inline formatting, links, lists, tables and code blocks.",
+    'A string is native Jira wiki text: "h2. Title" is a heading, and a line starting with # or ## is a numbered list item, never a heading. A string is converted only when it uses Markdown-only syntax (**bold**, [text](url) or a code fence) and no wiki syntax. Send Markdown with # headings as {"format": "markdown", "text": "..."}; its headings, inline formatting, links, lists, tables and code blocks become Jira wiki markup.',
   oneOf: [
     { type: "string", maxLength: MARKDOWN_DESCRIPTION_CHARS_MAX },
     {

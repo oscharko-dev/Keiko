@@ -480,7 +480,10 @@ also a valid wiki list marker and never proves Markdown provenance. Owner decisi
 (#4173 AC2): models write Markdown as a plain string, and Data Center rendered it as literal
 asterisks and broken links, so such a string is converted like the strict explicit value
 `{ format: "markdown", text: "..." }`, which remains advertised on the description field's create
-metadata. Both serialize supported ATX and setext headings as native `hN.` wiki headings through
+metadata. That advertised schema states the contract the projection applies: in a string, `h2. Title`
+is a heading and a `#` or `##` line is a numbered-list item, and Markdown headings need the explicit
+object. Its earlier wording ("Markdown is converted") led a model to send `## Title` strings, which
+stayed native wiki and failed every required template section (LIM28). Both serialize supported ATX and setext headings as native `hN.` wiki headings through
 the bounded canonical heading reader, then emphasis, inline code, links, lists, rules, tables and
 fences as wiki markup (`jira-markdown-wiki.ts`); code, fences, wiki macros and quoted lines are
 copied verbatim, and an unterminated fence keeps the heading-only result. It preserves code/fences,
