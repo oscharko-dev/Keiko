@@ -2,7 +2,7 @@
 // upgrade result. Every oracle reads Jira directly with the lab actor; evidence stays body-free.
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { basicAuth, labRequest } from "./lab-client.mjs";
+import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { proof, read } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
@@ -19,7 +19,21 @@ import {
 const POLL_DEADLINE_MS = 120_000;
 const POLL_INTERVAL_MS = 2_000;
 const REQUEST_PROBE_LIMIT = 25;
-const native = (c, path) => labRequest(c.session, "GET", path, basicAuth(c.session, c.actor));
+/** Jira answers an absent reindex task with a plain-text 404, so the body is parsed only when JSON. */
+async function native(c, path) {
+  if (!path.startsWith("/rest/")) throw new TypeError("Unexpected laboratory API path");
+  const response = await globalThis.fetch(new URL(path, labSessionConnection(c.session).origin), {
+    redirect: "manual",
+    signal: globalThis.AbortSignal.timeout(30_000),
+    headers: { Accept: "application/json", Authorization: basicAuth(c.session, c.actor) },
+  });
+  const text = await response.text();
+  try {
+    return { status: response.status, value: text === "" ? undefined : JSON.parse(text) };
+  } catch {
+    return { status: response.status, value: undefined };
+  }
+}
 const admin = (entry) => ({ ...entry, actor: "admin", administration: true });
 const effect = (f) => ({ expectedActorKey: f.adminActorKey, confirmUnverifiedEffect: true });
 
@@ -78,6 +92,9 @@ const nativeRequestIds = async (c) => {
   return rows.filter((row) => row.status === 200).map((row) => row.id);
 };
 const requestId = (f) => f.reindexRequestIds?.[0] ?? "1";
+// The product requires a nonempty selection, so an instance without requests probes the first ID.
+const requestedIds = (f) =>
+  f.reindexRequestIds?.length ? f.reindexRequestIds.slice(0, 10) : ["1"];
 async function discoverRequests(c, f) {
   f.reindexRequestIds = await nativeRequestIds(c);
 }
@@ -167,10 +184,10 @@ const processReindexRequests = adminMutationCase(
 );
 const reindexRequests = admin({
   tool: "jira.reindex-requests",
-  arguments: (f) => ({ requestIds: f.reindexRequestIds?.slice(0, 10) ?? ["1"], maxResults: 100 }),
+  arguments: (f) => ({ requestIds: requestedIds(f), maxResults: 100 }),
   prepare: discoverRequests,
   readback: async (c, data, f) => {
-    const requested = f.reindexRequestIds?.slice(0, 10) ?? ["1"];
+    const requested = requestedIds(f);
     const query = requested.map((id) => `requestId=${id}`).join("&");
     const rows = await read(c, `/rest/api/2/reindex/request/bulk?${query}`);
     assert.ok(Array.isArray(rows));
