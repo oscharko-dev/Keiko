@@ -70,6 +70,8 @@ import {
   type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { podFixture, specification } from "../_requirementSupport.js";
+import { openTraceSession, type TraceResolution } from "../requirement-trace.js";
 import {
   createJiraProviderForCatalog,
   jiraOperationBindingForTool,
@@ -91,7 +93,8 @@ import {
   recordJiraTemplateRefusal,
 } from "./jiraTemplateLog.js";
 
-vi.mock("./jiraChatAuthority.js", () => ({
+vi.mock("./jiraChatAuthority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./jiraChatAuthority.js")>()),
   resolveCurrentJiraChatAuthority: (): unknown => ({
     ok: true,
     credential: { baseUrl: "https://jira.example.invalid/context", deployment: "data-center" },
@@ -653,7 +656,7 @@ describe("the dry run before approval", () => {
       readonly untracedAdvice?: JiraChatTemplatePreflightPorts["untracedAdvice"];
     } = {},
   ): {
-    run: () => Promise<unknown>;
+    run: (trace?: JiraTraceRequest) => Promise<unknown>;
     http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
   } {
     const db = new DatabaseSync(":memory:");
@@ -706,13 +709,17 @@ describe("the dry run before approval", () => {
     });
     return {
       http,
-      run: () =>
-        preflight({ tool, actionId: "a", idempotencyKey: "a", argumentsDigest: "d" }, {
-          chatId: "chat",
-          correlationId: "preflight-1",
-          authorityReference: {},
-          signal: jira.signal ?? new AbortController().signal,
-        } as never),
+      run: (trace) =>
+        preflight(
+          { tool, actionId: "a", idempotencyKey: "a", argumentsDigest: "d" },
+          {
+            chatId: "chat",
+            correlationId: "preflight-1",
+            authorityReference: {},
+            signal: jira.signal ?? new AbortController().signal,
+          } as never,
+          trace,
+        ),
     };
   }
   const CREATE = { projectId: "10000", issueTypeId: "10001", fields: { summary: "Add login" } };
@@ -1022,6 +1029,46 @@ describe("the dry run before approval", () => {
       fields: { summary: "Add login", description: "h2. Acceptance criteria\n* works" },
     });
     expect(await f.run()).toBeUndefined();
+  });
+
+  it("admits requirement references the write will trace, and refuses them untraced (LIM27)", async () => {
+    const pod = await podFixture([{ capsuleId: "cap-preflight", text: specification(1).text }]);
+    cleanup.push(() => {
+      pod.cleanup();
+    });
+    const session = openTraceSession(pod.deps, {
+      chatId: pod.chatId,
+      userMessageId: "m-1",
+      correlationId: "preflight-trace",
+    });
+    let resolution: TraceResolution;
+    try {
+      resolution = session.resolve(["LH-001"]);
+    } finally {
+      session.close();
+    }
+    if (!resolution.ok) throw new TypeError("Expected a resolved requirement trace");
+    const traced = {
+      ...CREATE,
+      fields: { summary: "Add login", description: "h2. Acceptance criteria\n* works" },
+      requirementIds: ["LH-001"],
+    };
+    const jira = {
+      fields: [
+        {
+          ...field("labels", "array"),
+          schema: { type: "array", items: "string", system: "labels" },
+        },
+      ],
+    };
+    const admitted = preflight(TEMPLATE, traced, "jira.create", jira);
+    expect(await admitted.run(resolution.trace)).toBeUndefined();
+    expect(admitted.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(await preflight(TEMPLATE, traced, "jira.create", jira).run()).toMatchObject({
+      outcome: "rejected",
+      reason: "field-validation",
+      fieldId: "requirementIds",
+    });
   });
 
   it("does nothing without proposed arguments or a governing template", async () => {

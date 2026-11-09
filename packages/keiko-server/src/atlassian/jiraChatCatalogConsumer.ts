@@ -32,6 +32,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { JiraTraceRequest } from "@oscharko-dev/keiko-connectors";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../deps.js";
@@ -306,6 +307,8 @@ export interface JiraChatAdmissionOptions {
   readonly preflightWrite?: (
     action: JiraChatCatalogAction,
     context: JiraChatCatalogContext,
+    /** The requirement trace prepared for exactly this action, which its write receives too. */
+    trace: JiraTraceRequest | undefined,
   ) => Promise<CatalogJsonObject | undefined>;
   /** The file a `jira.attach` approval shows the human; absent when it cannot be reviewed (#4176). */
   readonly attachmentPreview?: (
@@ -414,9 +417,12 @@ async function refuseByPreflight(
   context: JiraChatCatalogContext,
 ): Promise<void> {
   if (READ_TOOLS.has(action.tool)) return;
+  const preparation = options.sourcePreparation;
+  // The dry run admits what the write will: the write receives this prepared trace too (LIM27).
+  const trace = preparation?.sourceFor(action.actionId, action.argumentsDigest)?.items[0]?.trace;
   const refusal =
-    options.sourcePreparation?.refusalFor(action.actionId, action.argumentsDigest) ??
-    (await options.preflightWrite?.(action, context));
+    preparation?.refusalFor(action.actionId, action.argumentsDigest) ??
+    (await options.preflightWrite?.(action, context, trace));
   if (refusal !== undefined) {
     const binding = jiraOperationBindingForTool(action.tool);
     requireDispatch(binding !== undefined, "failed", "provider-reported-error");

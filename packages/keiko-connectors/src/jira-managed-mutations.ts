@@ -1928,6 +1928,7 @@ function checkedAttempt(
   source: CatalogJsonObject,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
   if (isJiraAgileMutation(operation))
     return checkJiraAgileMutation(operation, structuredClone(source), context, connection);
@@ -1936,10 +1937,16 @@ function checkedAttempt(
   if (dedicated !== undefined) return dedicated;
   // The check mode must never reach any write.
   if (!TEMPLATE_CHECKED.has(operation)) return Promise.resolve({ ok: true, receipt: {} });
-  return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {
-    templates: connection.issueTemplates,
-    check: true,
-  });
+  // The check admits exactly what the write will: references resolved by the owner arrive as the
+  // same trace the write receives, and references without one are refused the same way.
+  if (untracedReferences(operation, source, trace)) return Promise.resolve(UNTRACED_REFERENCES);
+  return dispatchMutation(
+    operation,
+    structuredClone(source),
+    requestFor(connection, context),
+    { templates: connection.issueTemplates, check: true },
+    trace,
+  );
 }
 export async function checkJiraManagedMutationTemplates(
   operation: JiraMutationOperation,
@@ -2032,8 +2039,9 @@ export async function checkJiraManagedMutation(
   source: CatalogJsonObject,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationCheckResult> {
-  const attempt = await checkedAttempt(operation, source, context, connection);
+  const attempt = await checkedAttempt(operation, source, context, connection, trace);
   if (attempt.ok) return { ok: true };
   if (attempt.violations !== undefined)
     return { ok: false, reason: attempt.reason, violations: attempt.violations };

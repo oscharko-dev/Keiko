@@ -10,6 +10,7 @@ import {
   type JiraDraftFieldRefusal,
   type JiraDraftTemplateRefusal,
   type JiraManagedConnection,
+  type JiraTraceRequest,
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_ENTITY_PROPERTY_MUTATIONS,
@@ -470,12 +471,14 @@ async function dryRun(
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
   correlationId: string,
+  trace: JiraTraceRequest | undefined,
 ): Promise<CatalogJsonObject | undefined> {
   const result = await checkJiraManagedMutation(
     operation,
     args,
     target.invocation,
     target.connection,
+    trace,
   );
   if (result.ok) return undefined;
   recordDryRunRefusal(correlationId, operation, result.violations, result.detail?.validation);
@@ -518,7 +521,7 @@ function recordDryRunRefusal(
 export function createJiraChatTemplatePreflight(
   ports: JiraChatTemplatePreflightPorts,
 ): NonNullable<JiraChatAdmissionOptions["preflightWrite"]> {
-  return async (action, context) => {
+  return async (action, context, trace) => {
     if (action.tool === "jira.draft") return draftPreflight(ports, action, context);
     const operation = fieldOperation(action.tool);
     const args = ports.writeArguments(action);
@@ -527,7 +530,7 @@ export function createJiraChatTemplatePreflight(
     if (access === undefined) return undefined;
     try {
       const target = dryRunTarget(ports, action, context, access.factory, access.current);
-      return await dryRun(target, operation, args, context.correlationId);
+      return await dryRun(target, operation, args, context.correlationId, trace);
     } catch (error) {
       recordPreflightFailure(context.correlationId, error);
       return undefined;

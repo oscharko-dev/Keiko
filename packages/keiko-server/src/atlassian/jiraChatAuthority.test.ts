@@ -28,6 +28,10 @@ import {
   type JiraChatCatalogContext,
 } from "./jiraChatCatalogConsumer.js";
 import { jiraOperationBindingForTool } from "./jiraManagedProvider.js";
+import type {
+  JiraChatSourcePreparation,
+  PreparedJiraSource,
+} from "./jiraChatRequirementBinding.js";
 import {
   createFileServerLogSink,
   createServerLogger,
@@ -1419,6 +1423,55 @@ describe("ordinary Chat catalog read admission", () => {
     });
     await expect(preflight(action(READ_FIXTURE_TOOLS[0]), current)).resolves.toBeUndefined();
     expect(preflightWrite).toHaveBeenCalledOnce();
+  });
+
+  it("hands the approval-free preflight the trace its write will receive (LIM27)", async () => {
+    const current = context();
+    const digest = "a".repeat(64);
+    const trace = {
+      labels: ["requirement"],
+      footer: "trace",
+      footerStart: "start",
+      footerEnd: "end",
+      replaceLabelPrefixes: [],
+    };
+    const prepared: PreparedJiraSource = {
+      operation: "jira.create",
+      argumentsDigest: digest,
+      sourceDigest: "b".repeat(64),
+      items: [{ ref: "single", item: {}, sourceDigest: "b".repeat(64), trace }],
+      itemRefs: ["single"],
+    };
+    const sourcePreparation: JiraChatSourcePreparation = {
+      prepareInvocation: () => Promise.resolve(undefined),
+      sourceFor: (actionId, argumentsDigest) =>
+        actionId === "traced" && argumentsDigest === digest ? prepared : undefined,
+      sourceDigestFor: () => undefined,
+      refusalFor: () => undefined,
+      current: () => true,
+    };
+    const preflightWrite = vi.fn(() => Promise.resolve(undefined));
+    const admission = createJiraChatCatalogAdmission({
+      deps: { ...deps, atlassianActionApprovalRegistry: grants },
+      context: () => current,
+      now: () => now,
+      sourcePreparation,
+      preflightWrite,
+    });
+    const preflight = admission.approvalPort.preflight;
+    if (preflight === undefined) throw new Error("Expected an approval-free preflight");
+    const write = (actionId: string): JiraChatCatalogAction => ({
+      actionId,
+      idempotencyKey: `key-${actionId}`,
+      tool: "jira.create",
+      argumentsDigest: digest,
+    });
+    await expect(preflight(write("traced"), current)).resolves.toBeUndefined();
+    await expect(preflight(write("untraced"), current)).resolves.toBeUndefined();
+    expect(preflightWrite.mock.calls).toEqual([
+      [write("traced"), current, trace],
+      [write("untraced"), current, undefined],
+    ]);
   });
 
   it("leaves a pending grant to expire", () => {
