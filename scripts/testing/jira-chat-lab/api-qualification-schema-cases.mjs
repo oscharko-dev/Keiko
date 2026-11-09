@@ -6,6 +6,7 @@ import {
   observeAdminActor,
   nativeSnapshot,
 } from "./api-qualification-admin-cases.mjs";
+import { basicAuth, labSessionConnection } from "./lab-client.mjs";
 import { createQualificationProject } from "./api-qualification-fixtures.mjs";
 
 function issueTypeReview(value) {
@@ -72,8 +73,35 @@ function nativeSchemeOptions(value, spec) {
   return { ids: raw[spec.ids], defaultId: raw[spec.defaultId] };
 }
 const schemePath = (f, spec) => `/rest/api/2/${spec.path}/${f.optionSchemeIds[spec.kind]}`;
+/**
+ * The governed create case owns the scheme it qualifies. Later cases in a separately selected run
+ * still need a synthetic issue type scheme to review, so the operator fixture creates one natively
+ * when no earlier case in this run did.
+ */
+async function ensureNativeScheme(c, f, spec) {
+  f.optionSchemeIds ??= {};
+  if (f.optionSchemeIds[spec.kind] !== undefined || spec.kind !== "issue-type") return;
+  const origin = labSessionConnection(c.session).origin;
+  const response = await globalThis.fetch(new URL(`/rest/api/2/${spec.path}`, origin), {
+    method: "POST",
+    redirect: "manual",
+    signal: globalThis.AbortSignal.timeout(30_000),
+    headers: { Authorization: basicAuth(c.session, c.actor), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: title(f, `${spec.kind} fixture`),
+      description: "Synthetic AC7 scheme fixture",
+      [spec.ids]: [f.issueTypeId],
+      [spec.defaultId]: f.issueTypeId,
+    }),
+  });
+  assert.ok(response.status === 200 || response.status === 201, "Jira must accept the scheme");
+  const created = await response.json();
+  assert.match(String(created.id), /^[1-9]\d*$/u);
+  f.optionSchemeIds[spec.kind] = String(created.id);
+}
 async function scheme(c, f, spec) {
   await observeAdminActor(c, f);
+  await ensureNativeScheme(c, f, spec);
   f.optionSchemeReview = optionSchemeReview(await read(c, schemePath(f, spec)), spec);
 }
 function optionCases(spec) {
