@@ -1,6 +1,10 @@
 // Isolated synthetic configuration lifecycles through the existing governed qualifier.
 import assert from "node:assert/strict";
-import { readCase } from "./api-qualification-cases.mjs";
+import {
+  dispatchedStatuses,
+  missingReleaseCapability,
+  readCase,
+} from "./api-qualification-cases.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
 import { assertNoRecord, proof, read, readRecord } from "./api-qualification-read.mjs";
 async function actor(context, f) {
@@ -250,6 +254,12 @@ export const API_QUALIFICATION_ADMIN_CASES = [
       newPosition: 1,
     }),
     async (c, _d, f) => {
+      const absent = await missingReleaseCapability(
+        c,
+        "jira.move-link-type",
+        dispatchedStatuses(c),
+      );
+      if (absent !== undefined) return absent;
       const rows = (await read(c, "/rest/api/2/issueLinkType")).issueLinkTypes;
       assert.equal(rows.filter((r) => String(r.id) === f.adminLinkTypeId).length, 1);
       assert.equal(rows.length, f.adminLinkTypes.length);
@@ -261,6 +271,12 @@ export const API_QUALIFICATION_ADMIN_CASES = [
     "jira.reset-link-type-order",
     (f) => ({ ...actorArgs(f), expectedLinkTypes: f.adminLinkTypes, direction: "asc" }),
     async (c, _d, f) => {
+      const absent = await missingReleaseCapability(
+        c,
+        "jira.reset-link-type-order",
+        dispatchedStatuses(c),
+      );
+      if (absent !== undefined) return absent;
       const rows = (await read(c, "/rest/api/2/issueLinkType")).issueLinkTypes;
       assertQualificationJson(
         rows.map((r) => select(r, linkFields)).toSorted((a, b) => a.id.localeCompare(b.id)),

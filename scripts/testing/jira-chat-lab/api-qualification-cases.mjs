@@ -1,5 +1,7 @@
 // Explicit independent oracles; specification documents never become HTTP dispatch authority.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { URLSearchParams } from "node:url";
 import { assertSessionServerInfo, basicAuth, labRequest } from "./lab-client.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
@@ -7,22 +9,37 @@ import { assertQualificationJson } from "./api-qualification-json.mjs";
 async function nativeRead(context, path) {
   return labRequest(context.session, "GET", path, basicAuth(context.session, context.actor));
 }
-const VERSION_SCOPED_READS = new Map([
-  ["jira.search-max-aggregation-buckets", "/rest/api/2/searchLimits/maxAggregationBuckets"],
-  ["jira.search-max-result-window", "/rest/api/2/searchLimits/maxResultWindow"],
-]);
-async function missingVersionCapability(context, tool, path, response) {
-  if (response.status !== 404 || VERSION_SCOPED_READS.get(tool) !== path) return undefined;
-  const family = context.session.jiraVersion?.split(".").slice(0, 2).join(".");
-  if (!new Set(["10.3", "10.4"]).has(family)) return undefined;
-  // These two static identities occur only in the 11.2/11.3 source inventories.
-  // A resource-specific 404 never enters this proof. Verify the running release again.
+const REPOSITORY = resolve(import.meta.dirname, "..", "..", "..");
+const COVERAGE = join(REPOSITORY, "docs/local-knowledge/jira-api-coverage");
+const releaseFamily = (version) => version?.split(".").slice(0, 2).join(".");
+/** The checked-in source inventories name each release that publishes an identity. */
+function inventoryReleases(tool) {
+  const ledger = JSON.parse(readFileSync(join(COVERAGE, "operations.json"), "utf8"));
+  const identity = ledger.currentCapabilities[tool]?.identity;
+  const row = ledger.operations.find((entry) => entry.identity === identity);
+  const provenance = JSON.parse(readFileSync(join(COVERAGE, "provenance.json"), "utf8"));
+  return {
+    published: row?.sources.map((source) => source.release),
+    inventoried: provenance.sources.map((source) => source.release),
+  };
+}
+/**
+ * A native 404/405 proves a missing capability only when the running release itself, observed
+ * again independently, belongs to the inventoried releases that do not publish this identity.
+ * A resource-specific refusal never enters this proof.
+ */
+export async function missingReleaseCapability(context, tool, statuses) {
+  if (statuses.length === 0 || !statuses.every((status) => status === 404 || status === 405))
+    return undefined;
+  const family = releaseFamily(context.session.jiraVersion);
+  const { published, inventoried } = inventoryReleases(tool);
+  if (!published || !inventoried.includes(family) || published.includes(family)) return undefined;
   const observed = await nativeRead(context, "/rest/api/2/serverInfo");
   assert.equal(observed.status, 200);
   assertSessionServerInfo(context.session, observed.value);
   return {
     capabilityAbsent: true,
-    status: response.status,
+    status: statuses[0],
     release: observed.value.version,
     reason: "absent-in-release-inventory",
     sourceReferences: [
@@ -31,6 +48,9 @@ async function missingVersionCapability(context, tool, path, response) {
     ],
   };
 }
+/** The status the qualification witness observed for this case's own native dispatch. */
+export const dispatchedStatuses = (context) =>
+  (context.qualificationWitness?.snapshot().responses ?? []).map((response) => response.status);
 function nativeRows(value, root) {
   if (typeof root === "function") return root(value);
   if (root === "single") return [value];
@@ -80,7 +100,7 @@ export function readCase(
       const selectedPath = typeof path === "function" ? path(fixture) : path;
       const response = await nativeRead(context, selectedPath);
       if (response.status === 403) return { permissionDenied: true, status: response.status };
-      const absent = await missingVersionCapability(context, tool, selectedPath, response);
+      const absent = await missingReleaseCapability(context, tool, [response.status]);
       if (absent !== undefined) return absent;
       assert.equal(response.status, 200);
       const native = nativeRows(response.value, nativeRoot);

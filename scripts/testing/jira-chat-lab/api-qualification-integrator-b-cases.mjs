@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { URL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { basicAuth, labSessionConnection } from "./lab-client.mjs";
-import { readCase } from "./api-qualification-cases.mjs";
+import { missingReleaseCapability, readCase } from "./api-qualification-cases.mjs";
 import { proof, read } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
@@ -233,6 +233,8 @@ const searchError = admin({
   arguments: () => ({}),
   readback: async (c, data) => {
     const response = await native(c, "/rest/api/2/search/error/lookup");
+    const absent = await missingReleaseCapability(c, "jira.search-error", [response.status]);
+    if (absent !== undefined) return absent;
     assert.ok(response.status === 200 || response.status === 204);
     assert.equal(data.scope, "current-user-http-context");
     assert.equal(data.errorPresent, response.status === 200);

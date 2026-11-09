@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { URL } from "node:url";
 import { expect, it, vi } from "vitest";
 import {
+  dispatchedStatuses,
+  missingReleaseCapability,
   observeQualificationFixtures,
   readCase,
 } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
@@ -251,6 +253,51 @@ it("requires independent identity equality even when collection counts match", a
     await expect(
       mapping.readback(context, { issueTypeId: "1", workflow: "Invented default" }, {}),
     ).rejects.toThrow();
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  ["jira.search-error", "10.3.26", true],
+  ["jira.move-link-type", "10.3.26", true],
+  ["jira.reset-link-type-order", "10.3.26", true],
+  ["jira.move-link-type", "10.4.0", false],
+  ["jira.search-error", "11.2.1", false],
+])("binds %s to the inventory of release %s", async (tool, release, absent) => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-absent-tool-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/api-user-password"), "synthetic-api", { mode: 0o600 });
+  const native = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    const server = new URL(url).pathname === "/rest/api/2/serverInfo";
+    return new globalThis.Response(
+      JSON.stringify(
+        server
+          ? {
+              version: release,
+              versionNumbers: release.split(".").map(Number),
+              deploymentType: "Data Center",
+            }
+          : {},
+      ),
+      { status: server ? 200 : 404 },
+    );
+  });
+  const context = {
+    actor: "api",
+    session: { ...DEFAULT_LAB_CONNECTION, directory, jiraVersion: release },
+    qualificationWitness: { snapshot: () => ({ responses: [{ status: 404 }] }) },
+  };
+  try {
+    const result = await missingReleaseCapability(context, tool, dispatchedStatuses(context));
+    if (absent)
+      expect(result).toMatchObject({
+        capabilityAbsent: true,
+        reason: "absent-in-release-inventory",
+      });
+    else expect(result).toBeUndefined();
+    expect(await missingReleaseCapability(context, tool, [200])).toBeUndefined();
   } finally {
     native.mockRestore();
     rmSync(directory, { recursive: true, force: true });

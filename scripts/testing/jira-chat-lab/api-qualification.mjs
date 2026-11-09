@@ -253,6 +253,20 @@ function recordAuxiliaries(attempted, directory, report) {
     return `${row.id}.json`;
   });
 }
+/**
+ * An unsettled or unknown native write stops the run. The one exception is a write the running
+ * release does not publish at all: its settled 404/405 plus the release-inventory proof carried by
+ * the case's readback leave no effect to reconcile.
+ */
+function needsReconcile(journal, evidence) {
+  if (journal?.outcome !== "unknown" && journal?.phase !== "dispatched") return false;
+  const absent =
+    evidence.runtimeAvailability === "unavailable" &&
+    evidence.readback?.capabilityAbsent === true &&
+    journal.phase === "settled" &&
+    new Set([404, 405]).has(journal.httpStatus);
+  return !absent;
+}
 async function gradeCase(
   { context, specification, fixture, witness, directory, report },
   attempted,
@@ -273,8 +287,7 @@ async function gradeCase(
   if (detail !== undefined) evidence.detail = detail;
   evidence.auxiliaryReferences = recordAuxiliaries(attempted, directory, report);
   privateJson(join(directory, `${evidence.id}.json`), evidence, true);
-  if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
-    throw new ReconcileRequiredError();
+  if (needsReconcile(attempted.journal, evidence)) throw new ReconcileRequiredError();
   rmSync(join(directory, `${evidence.id}.pending.json`));
   stage({
     identity: specification.identity,

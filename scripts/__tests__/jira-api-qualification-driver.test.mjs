@@ -153,3 +153,37 @@ it("retains a reconciliation marker for an unsettled native write", async () => 
   ).rejects.toThrow("Uncertain native effect");
   expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(true);
 });
+it("grades a settled 404 write on a release that does not publish it without a reconcile stop", async () => {
+  const output = directory();
+  const selected = {
+    ...specification({}),
+    readback: async () => ({ capabilityAbsent: true, status: 404, matched: undefined }),
+  };
+  const refused = attempt(primary.identity, true);
+  refused.dispatch.result = {
+    status: "failed",
+    data: { operationBinding: refused.binding, outcome: "unknown", reason: "not-found" },
+  };
+  refused.dispatch.receipt.status = "failed";
+  refused.witness.responses = [{ status: 404, truncated: false }];
+  refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 404 };
+  dispatch.mockResolvedValue(refused);
+  const evidence = await runQualificationCase({}, {}, selected, {}, witness, output, report);
+  expect(evidence.runtimeAvailability).toBe("unavailable");
+  expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(false);
+});
+it("still stops on an unknown 404 write that carries no release-absence proof", async () => {
+  const output = directory();
+  const refused = attempt(primary.identity, true);
+  refused.dispatch.result = {
+    status: "failed",
+    data: { operationBinding: refused.binding, outcome: "unknown", reason: "not-found" },
+  };
+  refused.dispatch.receipt.status = "failed";
+  refused.witness.responses = [{ status: 404, truncated: false }];
+  refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 404 };
+  dispatch.mockResolvedValue(refused);
+  await expect(
+    runQualificationCase({}, {}, specification({}), {}, witness, output, report),
+  ).rejects.toThrow("Uncertain native effect");
+});
