@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { emailZipOffsets } from "../../../tests/support/jira-email-template-fixture.js";
 import { readBoundedOoxmlPackage } from "./bounded-ooxml-package.js";
 import { zipTextEntries } from "./parsers/parser-test-fixtures.js";
-import { regularZipEntry, zipEntryKind } from "./zip-entry-kind.js";
+import { regularZipEntry, zipEntryKind } from "@oscharko-dev/keiko-security/zip-entry-kind";
 
 const OPTIONS = {
   maxInputBytes: 4096,

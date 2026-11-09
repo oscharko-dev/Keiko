@@ -1,6 +1,6 @@
 import { Buffer, isUtf8 } from "node:buffer";
 import yauzl from "yauzl";
-import { regularZipEntry } from "../zip-entry-kind.js";
+import { regularZipEntry } from "@oscharko-dev/keiko-security/zip-entry-kind";
 
 export interface StrictZipLayout {
   readonly bytes: Buffer;

@@ -155,7 +155,6 @@ export {
   type BoundedOoxmlPackageOptions,
   type BoundedOoxmlPackageResult,
 } from "./bounded-ooxml-package.js";
-export { zipEntryKind } from "./zip-entry-kind.js";
 
 export {
   DEFAULT_DISCOVERY_OPTIONS,

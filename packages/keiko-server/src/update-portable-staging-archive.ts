@@ -22,7 +22,7 @@ import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { atomicPublishTreeSwap } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import yauzl from "yauzl";
-import { zipEntryKind } from "@oscharko-dev/keiko-local-knowledge";
+import { zipEntryKind } from "@oscharko-dev/keiko-security/zip-entry-kind";
 import {
   MAX_ARCHIVE_ENTRIES,
   MAX_ENTRY_BYTES,
