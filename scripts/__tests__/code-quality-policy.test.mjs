@@ -69,8 +69,13 @@ const ZERO_FINDING_SCOPES = {
   ]),
   "anti-slop/require-safety-comment-for-type-assertion": zeroFindingScopes([
     "git",
+    "memory-capture",
+    "memory-consolidation",
     "memory-governance",
+    "memory-retrieval",
     "sdk",
+    "verification",
+    "workflows",
   ]),
   "anti-slop/no-reflect-get": zeroFindingScopes([
     "connectors",
@@ -91,6 +96,7 @@ const ZERO_FINDING_SCOPES = {
     "sandbox",
     "sdk",
     "tool-catalog",
+    "verification",
     "workflows",
     "workspace",
   ]),
