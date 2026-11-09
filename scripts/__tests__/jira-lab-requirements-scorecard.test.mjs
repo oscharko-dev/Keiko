@@ -855,6 +855,53 @@ describe("S17 long backlog request", () => {
   const createFor = (jira, ids) => ids.map((id) => jira.createEpic(id));
   const keysOf = (jira) => jira.issues.map((issue) => issue.key).join(", ");
 
+  it("leaves a lab-limit-aborted backlog unverified and reports the lab budget separately", async () => {
+    const jira = fakeJira();
+    const ctx = context(jira, () => ({ answer: jira.createEpic(MUSS[0]) }));
+    const turn = ctx.turn;
+    ctx.turn = async (...args) => ({
+      ...(await turn(...args)),
+      failure: "The operation was aborted",
+      termination: "lab-limit",
+      limits: { labTurnMs: 1_800_000, productTurnMs: null },
+      induced: { ok: true, startedOpen: true, turnOpen: true },
+    });
+    const check = await run("S17", ctx);
+    expect(check.status).toBe("unverified");
+    expect(check.covers).toEqual([]);
+    expect(check.detail).toMatch(/lab[^;]*1800000/u);
+    expect(check.detail).toMatch(/product[^;]*unobserved/u);
+    expect(check.detail).toContain("1 epics created");
+  });
+
+  it("keeps a recorded generation refusal red even when the lab later aborts the backlog", async () => {
+    const jira = fakeJira();
+    let refusals = 0;
+    const ctx = context(jira, () => {
+      refusals += 1;
+      return { answer: jira.createEpic(MUSS[0]) };
+    });
+    const turn = ctx.turn;
+    ctx.refusals = () => refusals;
+    ctx.turn = async (...args) => ({
+      ...(await turn(...args)),
+      failure: "The operation was aborted",
+      termination: "lab-limit",
+      limits: { labTurnMs: 1_800_000, productTurnMs: null },
+    });
+    const check = await run("S17", ctx);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("generation-changed refusal logged");
+  });
+
+  it("does not reclassify an ordinary failed product turn as a lab timeout", async () => {
+    const jira = fakeJira();
+    const ctx = context(jira, () => ({ answer: "" }));
+    const turn = ctx.turn;
+    ctx.turn = async (...args) => ({ ...(await turn(...args)), failure: "HTTP 500" });
+    expect((await run("S17", ctx)).status).toBe("red");
+  });
+
   it("is green when new epics map one to one onto the Muss requirements and the answer lists them", async () => {
     const jira = fakeJira();
     const ctx = context(jira, () => {
@@ -957,6 +1004,24 @@ describe("S17 human obligations of #4175", () => {
   });
 
   describe("the unchanged catalog refresh", () => {
+    it("does not blame a completed refresh for the lab's later time-limit abort", () => {
+      expect(
+        gradeCatalogRefresh({
+          induced: settled,
+          refused: false,
+          failure: "The operation was aborted",
+          termination: "lab-limit",
+        }).status,
+      ).toBe("unverified");
+      expect(
+        gradeCatalogRefresh({
+          induced: settled,
+          refused: true,
+          failure: "The operation was aborted",
+          termination: "lab-limit",
+        }).status,
+      ).toBe("red");
+    });
     it.each([
       [undefined, false, undefined, "unverified"],
       [{ ok: false, error: "HTTP 502", turnOpen: true }, false, undefined, "unverified"],

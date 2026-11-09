@@ -1059,7 +1059,7 @@ function providerToolName(step: ProviderStep): string {
   return step === "write" || step === "repair-write" ? "jira_comment" : "jira_projects";
 }
 
-it("discovers a Jira schema on demand while retaining mixed grounding and its read grant", async () => {
+it("offers curated Jira projects and discovers an additional schema while retaining mixed grounding and its read grant", async () => {
   const f = runtime(false, {}, true);
   const requests = provider(["describe", "tool", "answer"]);
   const result = await askFeatureAndProjects(f);
@@ -1072,6 +1072,7 @@ it("discovers a Jira schema on demand while retaining mixed grounding and its re
         }
       ).tools?.map((tool) => tool.function.name) ?? [],
   );
+  expect(requests).toHaveLength(3);
   expect(offered[0]).toContain("jira_describe");
   expect(offered[0]).toContain("jira_projects");
   expect(offered[1]).toContain("jira_projects");
@@ -1079,6 +1080,10 @@ it("discovers a Jira schema on demand while retaining mixed grounding and its re
   expect(offered[1]).toContain("jira_board_configuration");
   expect(f.jiraRequests).toEqual(["GET"]);
   expect(f.acceptedReadGrants).toHaveLength(1);
+  expect(requests.every((request) => request.includes("File: src/Feature.ts"))).toBe(true);
+  expect((result.body as GroundedAnswer).content).toContain(
+    "Jira tool result: project SYN is visible.",
+  );
   expect(
     (result.body as GroundedAnswer).citations.some(
       (citation) => "scopePath" in citation && citation.scopePath === "src/Feature.ts",

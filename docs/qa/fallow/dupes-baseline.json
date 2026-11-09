@@ -130,7 +130,7 @@
     "packages/keiko-activity-log/src/activity-log-loss-summary.ts:38-59|packages/keiko-model-gateway/src/openai-adapter.ts:354-384|packages/keiko-server/src/chat-context-log.ts:93-118",
     "packages/keiko-evidence/src/qualityIntelligence/store.ts:591-604|packages/keiko-local-knowledge/src/chunking/citation-mapper.ts:269-276|packages/keiko-server/src/qualityIntelligence/runRoutes.ts:528-539|packages/keiko-workflows/src/qualityIntelligence/runtimeCommon.ts:404-415",
     "packages/keiko-ui/src/app/components/desktop/widgets/figma/FigmaSnapshotWindow.tsx:531-562|packages/keiko-ui/src/app/components/desktop/widgets/figma/FigmaSnapshotWindow.tsx:750-785",
-    "packages/keiko-server/src/grounded-qa-hybrid.ts:1841-1870|packages/keiko-server/src/local-knowledge-grounded-qa.ts:1334-1361",
+    "packages/keiko-server/src/grounded-qa-hybrid.ts:1841-1870|packages/keiko-server/src/local-knowledge-grounded-qa.ts:1346-1373",
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/CommandsWidget.tsx:268-311|packages/keiko-ui/src/app/components/desktop/widgets/cards/ContainerStatusWidget.tsx:396-439",
     "packages/keiko-evaluations/src/local-knowledge/fixtures.ts:344-423|packages/keiko-evaluations/src/local-knowledge/fixtures.ts:64-144",
     "packages/keiko-memory-consolidation/src/_support.ts:51-101|packages/keiko-memory-governance/src/_support.ts:75-124",
@@ -874,8 +874,6 @@
     "packages/keiko-contracts/src/coding-workbench.ts:654-680|packages/keiko-contracts/src/local-knowledge-pods.ts:182-219",
     "packages/keiko-server/src/memory-conv-handlers.ts:99-122|packages/keiko-server/src/memory-handlers.ts:302-332",
     "packages/keiko-contracts/src/code-task-acceptance.ts:319-344|packages/keiko-contracts/src/code-task-governance.ts:95-111",
-    "packages/keiko-server/src/grounded-citation-log.ts:162-185|packages/keiko-server/src/grounded-plural-synthesis.ts:35-58",
-    "packages/keiko-server/src/grounded-answer.ts:542-560|packages/keiko-server/src/grounded-citation-log.ts:143-162",
     "packages/keiko-contracts/src/atlassian-connectors-validation.ts:199-214|packages/keiko-contracts/src/voice-protocol.ts:957-974"
   ],
   "clone_fingerprints": [
@@ -1752,8 +1750,6 @@
     "dup:71b1f8d1:2",
     "dup:dae85837:2",
     "dup:64d2b5e7:2",
-    "dup:e1254e4b:2",
-    "dup:f096d29e:2",
     "dup:e83ccb1e:2"
   ],
   "normalized_clone_fingerprints": [
@@ -2630,8 +2626,6 @@
     "dup:529b4004:2",
     "dup:f3165646:2",
     "dup:e9eccbe1:2",
-    "dup:70bbbc61:2",
-    "dup:4c4829e3:2",
     "dup:40ce49b1:2"
   ]
 }

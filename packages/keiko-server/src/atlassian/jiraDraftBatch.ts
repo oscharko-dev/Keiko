@@ -1,3 +1,5 @@
+import type { JiraTemplateRuleId } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { criteriaFitDescription } from "./jiraDraftBatchDescription.js";
@@ -29,8 +31,8 @@ import {
 // A Keiko-driven draft batch (#4173): Keiko reads every selected requirement itself, plans the
 // issues (one per requirement, or groups the model proposes), and drafts them page by page into one
 // staged backlog draft. Each page is sized from the model's output budget and the measured cost of
-// the previous pages; a page that runs out of output or is refused twice is split, and a single
-// issue that still fails is reported, never dropped silently. The same draft then goes through the
+// the previous pages. Splits retain the last stage correction; repeating that same rejection
+// after correction stops the batch. Failed issues are reported, never dropped silently. The draft goes through the
 // existing jira.draft approval, so nothing here writes to Jira.
 
 export type DraftBatchGeneration =
@@ -54,6 +56,8 @@ export type DraftBatchStageOutcome =
       readonly kind: "rejected";
       readonly guidance: string;
       readonly owner?: "model" | "keiko" | undefined;
+      readonly violationRuleCounts?:
+        Partial<Readonly<Record<JiraTemplateRuleId, number>>> | undefined;
     }
   /**
    * The draft itself cannot continue (changed connection, size limit, unknown draft). A transient
@@ -81,6 +85,11 @@ export type DraftBatchObservation =
       readonly itemCount: number;
       readonly plannedItemTokens: number;
       readonly completionTokens?: number | undefined;
+      readonly parseAttemptCount?: number | undefined;
+      readonly stageAttemptCount?: number | undefined;
+      readonly guidanceDigest?: string | undefined;
+      readonly violationRuleCounts?:
+        Partial<Readonly<Record<JiraTemplateRuleId, number>>> | undefined;
     };
 
 export interface DraftBatchPorts {
@@ -118,7 +127,12 @@ export interface DraftBatchInput {
 }
 
 export type DraftBatchStopReason =
-  "no-requirements" | "stage-failed" | "call-limit" | "model-failed" | "deadline";
+  | "no-requirements"
+  | "stage-failed"
+  | "stage-rejection-unchanged"
+  | "call-limit"
+  | "model-failed"
+  | "deadline";
 
 export interface DraftBatchResult {
   readonly progress: ChatToolBatchProgress;
@@ -278,12 +292,12 @@ async function outlineChunk(
 ): Promise<OutlineStep> {
   const messages = outlineMessages(chunk, state.input.instructions);
   const generated = await generate(state, ports, messages, "outline");
-  if (generated === undefined) return { groups: chunk.map(singleGroup) };
+  if (generated === undefined) return { groups: chunk.map((item) => singleGroup(item)) };
   const observed = { requirementCount: chunk.length };
   if (generated.kind === "exhausted") {
     ports.observe({ kind: "outline", outcome: "exhausted", ...observed, groupCount: 0 });
     return chunk.length === 1
-      ? { groups: chunk.map(singleGroup) }
+      ? { groups: chunk.map((item) => singleGroup(item)) }
       : { groups: [], halves: splitPage(chunk) };
   }
   const groups = outlineGroups(generated.text, chunk);
@@ -329,44 +343,143 @@ function firstOutlineChunks(state: BatchState): readonly OutlineChunk[] {
  * such round shrinks the chunk. An answer that groups nothing is asked once more, then each
  * requirement left becomes an issue of its own.
  */
-async function groupedEntries(
+function collectOutlineStep(
+  groups: OutlineGroup[],
+  pending: OutlineChunk[],
+  next: OutlineChunk,
+  step: OutlineStep,
+): void {
+  groups.push(...step.groups);
+  for (const half of step.halves ?? []) pending.push({ chunk: half, retried: next.retried });
+  const unassigned = step.unassigned ?? [];
+  if (unassigned.length === 0) return;
+  if (step.groups.length > 0) pending.push({ chunk: unassigned, retried: false });
+  else if (next.retried) groups.push(...unassigned.map((item) => singleGroup(item)));
+  else pending.push({ chunk: unassigned, retried: true });
+}
+
+function remainingOutlineGroups(chunks: readonly OutlineChunk[]): readonly OutlineGroup[] {
+  return chunks.flatMap((item) => item.chunk.map((requirement) => singleGroup(requirement)));
+}
+
+function groupedEntries(
   state: BatchState,
   ports: DraftBatchPorts,
 ): Promise<readonly DraftBatchEntry[]> {
   const groups: OutlineGroup[] = [];
   const pending: OutlineChunk[] = [...firstOutlineChunks(state)];
-  for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
-    if (!fitsDeadline(state, ports)) {
-      // No time for another grouping call: what is left becomes one issue each, drafted later.
-      state.stopReason = "deadline";
-      groups.push(...[next, ...pending].flatMap((chunk) => chunk.chunk.map(singleGroup)));
-      break;
+  return new Promise((resolve, reject) => {
+    function complete(): void {
+      resolve(
+        groups.map((group, index) => ({
+          ref: refFor(state, index),
+          hint: group.summary,
+          requirements: group.requirements,
+        })),
+      );
     }
-    const step = await outlineChunk(state, ports, next.chunk); // NOSONAR typescript:S9382 -- each answer decides what is asked next and spends the shared deadline
-    groups.push(...step.groups);
-    for (const half of step.halves ?? []) pending.push({ chunk: half, retried: next.retried });
-    const unassigned = step.unassigned ?? [];
-    if (unassigned.length === 0) continue;
-    if (step.groups.length > 0) pending.push({ chunk: unassigned, retried: false });
-    else if (next.retried) groups.push(...unassigned.map(singleGroup));
-    else pending.push({ chunk: unassigned, retried: true });
-  }
-  return groups.map((group, index) => ({
-    ref: refFor(state, index),
-    hint: group.summary,
-    requirements: group.requirements,
-  }));
+    function next(): void {
+      const chunk = pending.shift();
+      if (chunk === undefined) {
+        complete();
+        return;
+      }
+      if (!fitsDeadline(state, ports)) {
+        state.stopReason = "deadline";
+        groups.push(...remainingOutlineGroups([chunk, ...pending]));
+        complete();
+        return;
+      }
+      void outlineChunk(state, ports, chunk.chunk)
+        .then((step) => {
+          collectOutlineStep(groups, pending, chunk, step);
+          next();
+        })
+        .catch(reject);
+    }
+    next();
+  });
 }
 
-type Pages = readonly (readonly DraftBatchEntry[])[];
+interface StageCorrection {
+  readonly guidance: string;
+  readonly digest: string;
+}
+interface DraftPage {
+  readonly entries: readonly DraftBatchEntry[];
+  readonly correction?: StageCorrection | undefined;
+}
+interface PageAttempts {
+  parseAttemptCount: number;
+  stageAttemptCount: number;
+  parseFailures: number;
+  stageRejections: number;
+  parseCorrection: string | undefined;
+  stageCorrection: StageCorrection | undefined;
+}
+function pageAttempts(page: DraftPage): PageAttempts {
+  return {
+    parseAttemptCount: 0,
+    stageAttemptCount: 0,
+    parseFailures: 0,
+    stageRejections: 0,
+    parseCorrection: undefined,
+    stageCorrection: page.correction,
+  };
+}
+function stageCorrection(
+  outcome: Extract<DraftBatchStageOutcome, { kind: "rejected" }>,
+): StageCorrection {
+  return { guidance: outcome.guidance, digest: sha256Hex(outcome.guidance) };
+}
+function correctionText(attempts: PageAttempts): string | undefined {
+  const parts = [attempts.stageCorrection?.guidance, attempts.parseCorrection].filter(
+    (part) => part !== undefined,
+  );
+  return parts.length === 0 ? undefined : parts.join("\n");
+}
 
 type PageOutcome =
   | { readonly kind: "staged" }
-  | { readonly kind: "exhausted" }
-  | { readonly kind: "refused" }
+  | { readonly kind: "exhausted" | "refused"; readonly correction?: StageCorrection | undefined }
   /** Keiko staged what it could; the pages left need a new model answer. */
-  | { readonly kind: "redo"; readonly pages: Pages }
+  | { readonly kind: "redo"; readonly pages: readonly DraftPage[] }
   | { readonly kind: "stopped" };
+
+interface PageObservation {
+  readonly itemCount: number;
+  readonly plannedItemTokens: number;
+  readonly completionTokens?: number | undefined;
+}
+function attemptFacts(attempts: PageAttempts): {
+  readonly parseAttemptCount: number;
+  readonly stageAttemptCount: number;
+} {
+  return {
+    parseAttemptCount: attempts.parseAttemptCount,
+    stageAttemptCount: attempts.stageAttemptCount,
+  };
+}
+
+function observeStageResult(
+  ports: DraftBatchPorts,
+  observed: PageObservation,
+  attempts: PageAttempts,
+  outcome: Exclude<DraftBatchStageOutcome, { kind: "fatal" }>,
+): void {
+  ports.observe({
+    kind: "page",
+    outcome: outcome.kind === "staged" ? "staged" : "refused",
+    ...observed,
+    ...attemptFacts(attempts),
+    ...(outcome.kind === "rejected"
+      ? {
+          guidanceDigest: sha256Hex(outcome.guidance),
+          violationRuleCounts: outcome.violationRuleCounts,
+        }
+      : {}),
+  });
+}
 
 function recordStaged(
   state: BatchState,
@@ -428,7 +541,9 @@ async function stageOnce(
   state: BatchState,
   ports: DraftBatchPorts,
   page: readonly DraftBatchEntry[],
+  attempts: PageAttempts,
 ): Promise<DraftBatchStageOutcome> {
+  attempts.stageAttemptCount += 1;
   try {
     return await ports.stage(stageItems(state, page), state.draftId);
   } catch (error) {
@@ -442,15 +557,30 @@ async function stagePage(
   state: BatchState,
   ports: DraftBatchPorts,
   page: readonly DraftBatchEntry[],
+  attempts: PageAttempts,
 ): Promise<DraftBatchStageOutcome> {
-  const first = await stageOnce(state, ports, page);
-  return first.kind === "fatal" && first.transient === true ? stageOnce(state, ports, page) : first;
+  const first = await stageOnce(state, ports, page, attempts);
+  return first.kind === "fatal" && first.transient === true
+    ? stageOnce(state, ports, page, attempts)
+    : first;
 }
 
 function stopStaging(state: BatchState, outcome: { readonly error?: unknown }): PageOutcome {
   state.stopReason = "stage-failed";
   if (outcome.error !== undefined) state.error = outcome.error;
   return { kind: "stopped" };
+}
+
+function stopUnchangedStage(state: BatchState): PageOutcome {
+  state.stopReason = "stage-rejection-unchanged";
+  return { kind: "stopped" };
+}
+
+function correctedHalves(
+  page: readonly DraftBatchEntry[],
+  correction: StageCorrection | undefined,
+): DraftPage[] {
+  return splitPage(page).map((entries) => ({ entries, correction }));
 }
 
 function failEntries(
@@ -470,13 +600,14 @@ function failEntries(
 
 /**
  * A rejection no new answer can change (the trace, the criteria, labels, parent): the cached
- * answers are staged again in halves, with no model call, until the one issue Jira's checks refuse
- * is found and reported. An issue the model can still correct goes back to the model alone.
+ * answers are staged again in halves, with no model call. An unchanged rejection stops further
+ * isolation. An issue the model can still correct goes back to the model with its latest guidance.
  */
-async function bisectPage(
+function bisectPage(
   state: BatchState,
   ports: DraftBatchPorts,
   page: readonly DraftBatchEntry[],
+  correction: StageCorrection,
 ): Promise<PageOutcome> {
   ports.observe({
     kind: "page",
@@ -484,84 +615,158 @@ async function bisectPage(
     itemCount: page.length,
     plannedItemTokens: state.itemTokens,
   });
-  const redo: (readonly DraftBatchEntry[])[] = [];
-  const stack: (readonly DraftBatchEntry[])[] = [...splitPage(page)].reverse();
-  for (let part = stack.pop(); part !== undefined; part = stack.pop()) {
-    ports.signal.throwIfAborted();
-    if (part.length === 0) continue;
-    const outcome = await stagePage(state, ports, part);
-    if (outcome.kind === "staged") recordStaged(state, part, outcome);
-    else if (outcome.kind === "fatal") return stopStaging(state, outcome);
-    else if (part.length > 1) stack.push(...[...splitPage(part)].reverse());
-    else if (outcome.owner === "keiko") failEntries(state, ports, part);
-    else redo.push(part);
-  }
-  return { kind: "redo", pages: redo };
+  const redo: DraftPage[] = [];
+  const stack = correctedHalves(page, correction).reverse();
+  return new Promise((resolve, reject) => {
+    function next(): void {
+      ports.signal.throwIfAborted();
+      const part = stack.pop();
+      if (part === undefined) {
+        resolve({ kind: "redo", pages: redo });
+        return;
+      }
+      void stageBisectedPart(state, ports, { page: part, stack, redo })
+        .then((outcome) => {
+          if (outcome === undefined) next();
+          else resolve(outcome);
+        })
+        .catch(reject);
+    }
+    next();
+  });
 }
 
-/** Writes one page and stages it; one correction follows a wrong answer or a refused page. */
-async function draftPage(
+interface BisectedPart {
+  readonly page: DraftPage;
+  readonly stack: DraftPage[];
+  readonly redo: DraftPage[];
+}
+async function stageBisectedPart(
+  state: BatchState,
+  ports: DraftBatchPorts,
+  step: BisectedPart,
+): Promise<PageOutcome | undefined> {
+  const { page, stack, redo } = step;
+  const part = page.entries;
+  const attempts = pageAttempts(page);
+  const outcome = await stagePage(state, ports, part, attempts);
+  if (outcome.kind === "fatal") return stopStaging(state, outcome);
+  observeStageResult(
+    ports,
+    { itemCount: part.length, plannedItemTokens: state.itemTokens },
+    attempts,
+    outcome,
+  );
+  if (outcome.kind === "staged") {
+    recordStaged(state, part, outcome);
+    return undefined;
+  }
+  const correction = stageCorrection(outcome);
+  if (page.correction?.digest === correction.digest) return stopUnchangedStage(state);
+  if (part.length > 1) stack.push(...correctedHalves(part, correction).reverse());
+  else if (outcome.owner === "keiko") failEntries(state, ports, part);
+  else redo.push({ entries: part, correction });
+  return undefined;
+}
+
+/** Parse repairs and model-owned stage corrections each retain their own bounded allowance. */
+function draftPage(
+  state: BatchState,
+  ports: DraftBatchPorts,
+  page: DraftPage,
+): Promise<PageOutcome> {
+  const attempts = pageAttempts(page);
+  return new Promise((resolve, reject) => {
+    function next(): void {
+      void draftAttempt(state, ports, page.entries, attempts)
+        .then((outcome) => {
+          if (outcome === undefined) next();
+          else resolve(outcome);
+        })
+        .catch(reject);
+    }
+    next();
+  });
+}
+
+async function draftAttempt(
   state: BatchState,
   ports: DraftBatchPorts,
   page: readonly DraftBatchEntry[],
-): Promise<PageOutcome> {
-  const { instructions } = state.input;
-  let correction: string | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const planned = state.itemTokens;
-    const generated = await generate(
-      state,
-      ports,
-      fillMessages(page, instructions, correction),
-      "fill",
-    );
-    if (generated === undefined) return { kind: "stopped" };
-    if (generated.kind === "exhausted") return { kind: "exhausted" };
-    state.itemTokens = measuredItemTokens(planned, generated.completionTokens, page.length);
-    const parsed = parsePage(generated.text, page, instructions);
-    const observed = {
-      itemCount: page.length,
-      plannedItemTokens: planned,
-      completionTokens: generated.completionTokens,
-    };
-    if (!parsed.ok) {
-      correction = parsed.problems.join(" ");
-      ports.observe({ kind: "page", outcome: "corrected", ...observed });
-      continue;
-    }
-    parsed.items.forEach((written, ref) => state.written.set(ref, written));
-    const settled = await stageParsedPage(state, ports, page, observed);
-    if (typeof settled !== "string") return settled;
-    correction = settled;
+  attempts: PageAttempts,
+): Promise<PageOutcome | undefined> {
+  const planned = state.itemTokens;
+  const generated = await generate(
+    state,
+    ports,
+    fillMessages(page, state.input.instructions, correctionText(attempts)),
+    "fill",
+  );
+  if (generated === undefined) return { kind: "stopped" };
+  if (generated.kind === "exhausted")
+    return { kind: "exhausted", correction: attempts.stageCorrection };
+  state.itemTokens = measuredItemTokens(planned, generated.completionTokens, page.length);
+  attempts.parseAttemptCount += 1;
+  const parsed = parsePage(generated.text, page, state.input.instructions);
+  const observed = {
+    itemCount: page.length,
+    plannedItemTokens: planned,
+    completionTokens: generated.completionTokens,
+  };
+  if (!parsed.ok) {
+    attempts.parseFailures += 1;
+    attempts.parseCorrection = parsed.problems.join(" ");
+    ports.observe({ kind: "page", outcome: "corrected", ...observed, ...attemptFacts(attempts) });
+    return attempts.parseFailures < 2
+      ? undefined
+      : { kind: "refused", correction: attempts.stageCorrection };
   }
-  return { kind: "refused" };
+  attempts.parseCorrection = undefined;
+  parsed.items.forEach((written, ref) => state.written.set(ref, written));
+  return stageParsedPage(state, ports, { page, attempts, observed });
 }
 
-/** Stages a parsed page: its final outcome, or the correction text for one more attempt. */
+interface ParsedPage {
+  readonly page: readonly DraftBatchEntry[];
+  readonly attempts: PageAttempts;
+  readonly observed: PageObservation;
+}
+/** Stage once from the parsed content; a transient draft-store failure retains its existing retry. */
 async function stageParsedPage(
   state: BatchState,
   ports: DraftBatchPorts,
-  page: readonly DraftBatchEntry[],
-  observed: { itemCount: number; plannedItemTokens: number; completionTokens?: number | undefined },
-): Promise<PageOutcome | string> {
-  const staged = await stagePage(state, ports, page);
+  parsed: ParsedPage,
+): Promise<PageOutcome | undefined> {
+  const { page, attempts, observed } = parsed;
+  const staged = await stagePage(state, ports, page, attempts);
   if (staged.kind === "fatal") return stopStaging(state, staged);
   if (staged.kind === "staged") {
     recordStaged(state, page, staged);
-    ports.observe({ kind: "page", outcome: "staged", ...observed });
+    observeStageResult(ports, observed, attempts, staged);
     return { kind: "staged" };
   }
-  ports.observe({ kind: "page", outcome: "refused", ...observed });
+  const correction = stageCorrection(staged);
+  observeStageResult(ports, observed, attempts, staged);
+  if (attempts.stageCorrection?.digest === correction.digest) return stopUnchangedStage(state);
   if (staged.owner === "keiko")
-    return page.length === 1 ? { kind: "refused" } : bisectPage(state, ports, page);
-  return staged.guidance;
+    return page.length === 1 ? { kind: "refused" } : bisectPage(state, ports, page, correction);
+  return modelStageRefusal(attempts, correction);
+}
+
+function modelStageRefusal(
+  attempts: PageAttempts,
+  correction: StageCorrection,
+): PageOutcome | undefined {
+  attempts.stageCorrection = correction;
+  attempts.stageRejections += 1;
+  return attempts.stageRejections < 2 ? undefined : { kind: "refused", correction };
 }
 
 function nextPage(
   state: BatchState,
-  retries: (readonly DraftBatchEntry[])[],
+  retries: DraftPage[],
   pending: DraftBatchEntry[],
-): readonly DraftBatchEntry[] | undefined {
+): DraftPage | undefined {
   const retry = retries.pop();
   if (retry !== undefined) return retry;
   if (pending.length === 0) return undefined;
@@ -572,7 +777,7 @@ function nextPage(
     state.fillOverheadChars,
     candidates.map((entry) => entryPromptChars(entry, instructions)),
   );
-  return pending.splice(0, Math.min(candidates.length, fits));
+  return { entries: pending.splice(0, Math.min(candidates.length, fits)) };
 }
 
 /** A page that could not be drafted is retried in halves; a single issue is reported as failed. */
@@ -580,16 +785,15 @@ function settleUndrafted(
   state: BatchState,
   ports: DraftBatchPorts,
   page: readonly DraftBatchEntry[],
-  outcome: PageOutcome,
-  retries: (readonly DraftBatchEntry[])[],
+  outcome: Extract<PageOutcome, { kind: "exhausted" | "refused" }>,
+  retries: DraftPage[],
 ): void {
   if (outcome.kind === "exhausted") state.itemTokens = exhaustedItemTokens(state.itemTokens);
   if (page.length === 1) {
     failEntries(state, ports, page);
     return;
   }
-  const [first, second] = splitPage(page);
-  retries.push(second, first);
+  retries.push(...correctedHalves(page, outcome.correction).reverse());
   ports.observe({
     kind: "page",
     outcome: "split",
@@ -647,27 +851,40 @@ function fitsDeadline(state: BatchState, ports: DraftBatchPorts): boolean {
   return budget.nowMs() + estimate <= budget.deadlineAtMs;
 }
 
-async function draftAll(state: BatchState, ports: DraftBatchPorts): Promise<void> {
+function draftAll(state: BatchState, ports: DraftBatchPorts): Promise<void> {
   const pending = withoutOversized(state, ports);
-  const retries: (readonly DraftBatchEntry[])[] = [];
-  for (
-    let page = nextPage(state, retries, pending);
-    page !== undefined;
-    page = nextPage(state, retries, pending)
-  ) {
-    if (state.stopReason === "deadline" || !fitsDeadline(state, ports)) {
-      state.stopReason = "deadline";
-      break;
+  const retries: DraftPage[] = [];
+  return new Promise((resolve, reject) => {
+    function next(): void {
+      const page = nextPage(state, retries, pending);
+      if (page === undefined) {
+        resolve();
+        return;
+      }
+      if (state.stopReason === "deadline" || !fitsDeadline(state, ports)) {
+        state.stopReason = "deadline";
+        resolve();
+        return;
+      }
+      const startedAt = ports.budget?.nowMs() ?? 0;
+      void draftPage(state, ports, page)
+        .then((outcome) => {
+          if (ports.budget !== undefined)
+            state.slowestPageMs = Math.max(state.slowestPageMs, ports.budget.nowMs() - startedAt);
+          if (outcome.kind === "stopped") {
+            resolve();
+            return;
+          }
+          if (outcome.kind === "redo") retries.push(...[...outcome.pages].reverse());
+          else if (outcome.kind !== "staged")
+            settleUndrafted(state, ports, page.entries, outcome, retries);
+          ports.progress(state.progress("drafting"));
+          next();
+        })
+        .catch(reject);
     }
-    const startedAt = ports.budget?.nowMs() ?? 0;
-    const outcome = await draftPage(state, ports, page);
-    if (ports.budget !== undefined)
-      state.slowestPageMs = Math.max(state.slowestPageMs, ports.budget.nowMs() - startedAt);
-    if (outcome.kind === "stopped") break;
-    if (outcome.kind === "redo") retries.push(...[...outcome.pages].reverse());
-    else if (outcome.kind !== "staged") settleUndrafted(state, ports, page, outcome, retries);
-    ports.progress(state.progress("drafting"));
-  }
+    next();
+  });
 }
 
 function refsOf(entries: readonly DraftBatchEntry[]): readonly string[] {

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type { JiraLivePodCredential } from "./jiraPodAccess.js";
 import { SCREEN_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-screen-configuration-fixture.js";
 import { BOARD_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-board-configuration-fixture.js";
 import { SPRINT_LIFECYCLE_FIXTURE_CASES } from "../../../../tests/support/jira-sprint-lifecycle-fixture.js";
@@ -93,11 +95,39 @@ import {
   recordJiraTemplateRefusal,
 } from "./jiraTemplateLog.js";
 
+const preflightAuthority = vi.hoisted<{ mode: CodingWorkbenchMode }>(() => ({
+  mode: "autonomous-delivery",
+}));
 vi.mock("./jiraChatAuthority.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./jiraChatAuthority.js")>()),
   resolveCurrentJiraChatAuthority: (): unknown => ({
     ok: true,
-    credential: { baseUrl: "https://jira.example.invalid/context", deployment: "data-center" },
+    credential: {
+      schemaVersion: "1",
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      authRef: "preflight-credential",
+      generation: 1,
+      displayName: "Synthetic Jira",
+      baseUrl: "https://jira.example.invalid/context",
+      createdAt: 1,
+      livePod: {
+        podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        ownerDigest: "a".repeat(64),
+        creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
+        verificationRevision: 1,
+        verificationInProgress: false,
+        verificationStatus: "ok",
+      },
+    } satisfies JiraLivePodCredential,
+    envelope: {
+      requestedMode: preflightAuthority.mode,
+      effectiveMode: preflightAuthority.mode,
+      deploymentCeiling: "autonomous-delivery",
+      connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
+      actionClasses: ["connector-access"],
+    },
   }),
 }));
 
@@ -120,6 +150,7 @@ const TEMPLATE = [
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const close of cleanup.splice(0)) close();
+  preflightAuthority.mode = "autonomous-delivery";
   resetServerLogger();
 });
 
@@ -666,6 +697,20 @@ describe("the dry run before approval", () => {
     cleanup.push(() => {
       store.close();
     });
+    const created = store.createChat(store.createProject(process.cwd()).path, "Preflight", "model");
+    const chat = store.updateChat(
+      created.id,
+      {
+        jiraPodId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        toolMode: preflightAuthority.mode,
+      },
+      {
+        verifiedJiraPod: {
+          podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+          authenticationGeneration: 1,
+        },
+      },
+    );
     store.markdownSkills.import({
       fileName: "template.md",
       contentBase64: Buffer.from(templateText).toString("base64"),
@@ -713,7 +758,7 @@ describe("the dry run before approval", () => {
         preflight(
           { tool, actionId: "a", idempotencyKey: "a", argumentsDigest: "d" },
           {
-            chatId: "chat",
+            chatId: chat.id,
             correlationId: "preflight-1",
             authorityReference: {},
             signal: jira.signal ?? new AbortController().signal,
@@ -1154,6 +1199,7 @@ describe("the dry run before approval", () => {
         phase: "refused",
         refusal: "template-violation",
         violationCount: 1,
+        sectionMissingCount: 1,
       });
     });
 
@@ -1168,6 +1214,31 @@ describe("the dry run before approval", () => {
       expect(untracedAdvice).toHaveBeenCalledTimes(1);
       const drafts = sink.events.filter((event) => event.op === "atlassian.jira-draft");
       expect(drafts).toEqual([]);
+    });
+
+    it.each<CodingWorkbenchMode>(["governed-assist", "supervised-coding"])(
+      "allows only the existing human review path to present the untraced draft in %s (S16)",
+      async (mode) => {
+        preflightAuthority.mode = mode;
+        const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+        const untracedAdvice = vi.fn(() => advice);
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          untracedAdvice,
+        });
+        await expect(f.run()).resolves.toBeUndefined();
+        expect(untracedAdvice).toHaveBeenCalledOnce();
+        expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+      },
+    );
+
+    it("keeps an untraced draft refused in allowed mode without inventing human confirmation (S16)", async () => {
+      const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+      const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+        untracedAdvice: () => advice,
+      });
+      expect(await f.run()).toBe(advice);
+      expect(await f.run()).toBe(advice);
+      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     });
 
     it("asks for approval when there is no advice, and gives none on an invalid draft (S05)", async () => {

@@ -1270,6 +1270,71 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      summaryTooShortCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      summaryTooLongCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      summaryPatternCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sectionMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sectionEmptyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      fieldMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      fieldUnavailableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      labelMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      labelPatternCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      labelCountCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      parentMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      parentTypeMismatchCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateUnreadableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       settledCount: {
         type: "integer",
         dataClass: "count",
@@ -1376,7 +1441,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["stage-failed", "call-limit", "model-failed", "deadline", "cancelled"],
+        values: [
+          "stage-failed",
+          "stage-rejection-unchanged",
+          "call-limit",
+          "model-failed",
+          "deadline",
+          "cancelled",
+        ],
       },
       requirementCount: {
         type: "integer",
@@ -1419,6 +1491,87 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       completionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      parseAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      stageAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      guidanceDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      summaryTooShortCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      summaryTooLongCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      summaryPatternCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sectionMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sectionEmptyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      fieldMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      fieldUnavailableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      labelMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      labelPatternCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      labelCountCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      parentMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      parentTypeMismatchCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateUnreadableCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -38258,6 +38411,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      repairLineCountBefore: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      repairLineCountAfter: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",

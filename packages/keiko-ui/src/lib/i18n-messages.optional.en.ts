@@ -978,6 +978,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.draft.empty": "(empty)",
   "chat.jira.draft.cleared": "Cleared",
   "chat.jira.draft.requirements": "Requirements: {ids}",
+  "chat.jira.draft.requirementsMissing":
+    "No requirement references: approval creates this issue without a source trace.",
   "chat.jira.draft.unreadable":
     "This draft cannot be laid out as a list of issues, so its details are shown field by field.",
   "chat.jira.draft.loading": "Loading the draft so you can review every issue before approving…",

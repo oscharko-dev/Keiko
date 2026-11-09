@@ -111,6 +111,18 @@ export const JIRA_TEMPLATE_RULE_IDS = [
 ] as const;
 export type JiraTemplateRuleId = (typeof JIRA_TEMPLATE_RULE_IDS)[number];
 
+/** Body-free counts use only the checker's closed rule vocabulary, never its subjects or text. */
+export function countJiraTemplateViolations(
+  violations: readonly { readonly ruleId: JiraTemplateRuleId }[],
+): Partial<Record<JiraTemplateRuleId, number>> {
+  const counts: Partial<Record<JiraTemplateRuleId, number>> = {};
+  for (const ruleId of JIRA_TEMPLATE_RULE_IDS) {
+    const count = violations.filter((violation) => violation.ruleId === ruleId).length;
+    if (count > 0) counts[ruleId] = count;
+  }
+  return counts;
+}
+
 export interface JiraTemplateViolation {
   readonly ruleId: JiraTemplateRuleId;
   /** The field, section, label or template element the rule names; bounded, never a body. */
@@ -223,7 +235,7 @@ function inlineItems(raw: string): readonly string[] | undefined {
   const items = inner.match(INLINE_ITEM) ?? [];
   // Rejoining must reproduce the text: an empty item or an unbalanced quote does not.
   if (items.join(",") !== inner) return undefined;
-  const values = items.map(unquote);
+  const values = items.map((item) => unquote(item));
   return values.every((value): value is string => value !== undefined && value.length > 0)
     ? values
     : undefined;
@@ -395,7 +407,7 @@ function parseActivation(value: string): JiraTemplateActivation | undefined {
 
 function readActivations(reader: Reader): readonly JiraTemplateActivation[] {
   const values = reader.list("activateOn", JIRA_ISSUE_TEMPLATE_LIMITS.activations, 140);
-  const parsed = values.map(parseActivation);
+  const parsed = values.map((value) => parseActivation(value));
   if (values.length === 0 || parsed.includes(undefined)) {
     reader.errors.push({ code: "invalid-value", key: "activateOn" });
     return [];
@@ -558,7 +570,7 @@ export function parseJiraIssueTemplate(markdown: string): JiraIssueTemplateParse
   );
   const requiredSections = bodySections(
     lines.slice(front.bodyStart),
-    new Set(optional.map(normalizeJiraSectionHeading)),
+    new Set(optional.map((heading) => normalizeJiraSectionHeading(heading))),
   );
   const errors = distinctErrors([...scan.errors, ...reader.errors]);
   if (requiredSections.length > JIRA_ISSUE_TEMPLATE_LIMITS.sections)

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { CatalogLifecycleLogPort } from "../tool-catalog/catalogToolLifecycle.js";
 import { buildUiHandlerDeps } from "../deps.js";
 import {
@@ -10,10 +11,12 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
 import {
   JIRA_DEFAULT_CATALOG_TOOLS,
   createJiraChatCatalogRuntime,
+  isApprovedJiraDraft,
   untracedAdvisory,
 } from "./jiraChatCatalogRuntime.js";
 import {
@@ -56,9 +59,27 @@ function releaseGate(): { promise: Promise<void>; release: () => void } {
   });
   return { promise, release };
 }
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
-  for (const cleanup of cleanups.splice(0)) await cleanup();
+  const pending = cleanups.splice(0).values();
+  const failures: unknown[] = [];
+  return new Promise<void>((resolve, reject) => {
+    const next = (): void => {
+      const cleanup = pending.next();
+      if (cleanup.done) {
+        if (failures.length > 0) reject(new AggregateError(failures, "Fixture cleanup failed"));
+        else resolve();
+        return;
+      }
+      void Promise.resolve()
+        .then(() => cleanup.value())
+        .then(next, (error: unknown) => {
+          failures.push(error);
+          next();
+        });
+    };
+    next();
+  });
 });
 
 function fixture(): {
@@ -445,24 +466,72 @@ describe("the advice about a draft that names no requirement (S16 of #4173)", ()
     userMessageId,
     correlationId: "c-1",
   });
-  const deps = { activityLog: undefined } as unknown as Parameters<typeof untracedAdvisory>[0];
-
-  it("lets the same items pass once advised and advises about other items of the turn", () => {
+  it("deduplicates untraced refusal notifications without returning an admission decision (S16)", () => {
+    const activityLog = createBufferedServerLogSink();
+    const deps = { activityLog };
     const advised = new Set<string>();
     const advise = untracedAdvisory(deps, advised, turn("m-1"));
-    expect(advise(["epic", "task-1", "task-2"])).toBe(true);
-    expect(advise(["task-2", "task-1", "epic"])).toBe(false);
-    expect(advise(["task-1", "task-2"])).toBe(true);
-    expect(advise(["task-1", "task-2"])).toBe(false);
+    advise(["epic", "task-1", "task-2"]);
+    advise(["task-2", "task-1", "epic"]);
+    advise(["task-1", "task-2"]);
+    advise(["task-1", "task-2"]);
     // A separate turn asks again; item names cannot run together across a separator.
-    expect(untracedAdvisory(deps, advised, turn("m-2"))(["task-1", "task-2"])).toBe(true);
-    expect(advise(["task-1,task-2"])).toBe(true);
+    untracedAdvisory(deps, advised, turn("m-2"))(["task-1", "task-2"]);
+    advise(["task-1,task-2"]);
+    expect(activityLog.events.map((event) => event.extra?.itemCount)).toEqual([3, 2, 2, 1]);
+    for (const event of activityLog.events) {
+      expect(event).toMatchObject({
+        op: "atlassian.jira-draft",
+        extra: { phase: "refused", refusal: "requirements-untraced" },
+      });
+    }
   });
 
   it("stays bounded however many drafts a long session advises about", () => {
     const advised = new Set<string>();
-    const advise = untracedAdvisory(deps, advised, turn("m-1"));
+    const advise = untracedAdvisory({}, advised, turn("m-1"));
     for (let index = 0; index < 400; index += 1) advise([`item-${String(index)}`]);
     expect(advised.size).toBe(256);
+  });
+});
+
+function reviewedDraft(
+  state: ChatToolWriteApprovalView["state"],
+): Extract<ChatToolWriteApprovalView, { readonly kind: "jira-chat-write" }> {
+  return {
+    kind: "jira-chat-write",
+    approvalId: "draft-approval",
+    chatId: "chat-1",
+    podId: "11111111-1111-4111-8111-111111111111",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "draft-call",
+    operation: "jira.draft",
+    actionDigest: "a".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state,
+  };
+}
+
+describe("actual human confirmation of an untraced draft (S16)", () => {
+  it.each<{ state: ChatToolWriteApprovalView["state"]; accepted: boolean }>([
+    { state: "pending", accepted: false },
+    { state: "approved", accepted: true },
+    { state: "claimed", accepted: true },
+    { state: "rejected", accepted: false },
+    { state: "expired", accepted: false },
+    { state: "revoked", accepted: false },
+  ])("requires a human-confirmed state: $state", ({ state, accepted }) => {
+    expect(isApprovedJiraDraft(reviewedDraft(state), "a".repeat(64))).toBe(accepted);
+  });
+
+  it("does not substitute a different approved action or changed draft content", () => {
+    const approval = reviewedDraft("approved");
+    expect(
+      isApprovedJiraDraft({ ...approval, operation: "jira.create" }, approval.actionDigest),
+    ).toBe(false);
+    expect(isApprovedJiraDraft(approval, "b".repeat(64))).toBe(false);
+    expect(isApprovedJiraDraft(undefined, approval.actionDigest)).toBe(false);
   });
 });

@@ -31,7 +31,7 @@ import {
   JIRA_REJECTED_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
 } from "./jiraMutationResult.js";
-import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
+import { jiraChatDraftConnection, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
 import { openTraceSession, type TraceSession } from "../requirement-trace.js";
 import { podFixture, specification } from "../_requirementSupport.js";
 import {
@@ -924,6 +924,9 @@ describe("source traceability of a draft (#4179)", () => {
           outcome: "rejected",
           requirementProblems: [{ ref: "traced", reason: "acceptance-criteria-missing" }],
         });
+        expect(result.data.guidance).toContain(
+          "Copy each missing acceptance criterion verbatim into fields.description.",
+        );
         expect(jira.fetch).not.toHaveBeenCalled();
       }
       const declaration = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
@@ -1085,14 +1088,15 @@ describe("source traceability of a draft (#4179)", () => {
     );
   });
 
-  it("returns a draft that names no requirement once with guidance when the Pods hold some (S14)", async () => {
+  it("keeps an untraced draft refused on resubmission without any native write (S16)", async () => {
     const jira = syntheticJira();
-    let advised = false;
-    const adviseUntraced = vi.fn((): boolean => {
-      if (advised) return false;
-      advised = true;
-      return true;
-    });
+    const adviseUntraced = vi.fn(
+      untracedAdvisory({}, new Set(), {
+        chatId: "untraced-chat",
+        userMessageId: "untraced-turn",
+        correlationId: "untraced-correlation",
+      }),
+    );
     const input = {
       ...execution(jira),
       openTrace: (): TraceSession => session(vi.fn()),
@@ -1115,16 +1119,56 @@ describe("source traceability of a draft (#4179)", () => {
     ).toBeUndefined();
     expect(jira.posts()).toHaveLength(0);
 
-    // Sending the same draft again is the person's choice to create it as it is.
+    // Model repetition carries no human confirmation of the missing source trace.
     const second = await executeJiraChatDraft(input);
 
-    expect(second.data).toMatchObject({ outcome: "succeeded", createdCount: 4 });
-    expect(jira.posts()).toHaveLength(4);
+    expect(second.isError).toBe(true);
+    expect(second.data).toMatchObject({ outcome: "rejected", requirementRefusal: "untraced" });
+    expect(jira.fetch).not.toHaveBeenCalled();
     expect(adviseUntraced).toHaveBeenCalledTimes(2);
   });
 
+  it("does not evade a criteria refusal by removing references and repeating the draft (S16)", async () => {
+    const source = await podFixture([{ capsuleId: "trace-retry", text: specification(1).text }]);
+    cleanup.push(source.cleanup);
+    const jira = syntheticJira();
+    const untracedItem = {
+      ref: "traced",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Source requirement", description: "Thema 1 ist verfügbar." },
+    };
+    const context = {
+      chatId: source.chatId,
+      userMessageId: "trace-retry-turn",
+      correlationId: "trace-retry",
+    };
+    const input = {
+      ...execution(jira, { items: [{ ...untracedItem, requirementIds: ["LH-001"] }] }),
+      openTrace: (): TraceSession => openTraceSession(source.deps, context),
+      adviseUntraced: untracedAdvisory(source.deps, new Set(), context),
+    };
+    const invalid = await executeJiraChatDraft(input);
+    expect(invalid.data).toMatchObject({
+      outcome: "rejected",
+      requirementProblems: [{ ref: "traced", reason: "acceptance-criteria-missing" }],
+    });
+    const stripped = { ...input, arguments: { items: [untracedItem] } };
+    const first = await executeJiraChatDraft(stripped);
+    const repeated = await executeJiraChatDraft(stripped);
+    expect(first.data).toMatchObject({ outcome: "rejected", requirementRefusal: "untraced" });
+    expect(repeated.data).toMatchObject({ outcome: "rejected", requirementRefusal: "untraced" });
+    expect(jira.fetch).not.toHaveBeenCalled();
+  });
+
+  it("never instructs the model to bypass trace review by silently repeating an untraced draft (S16)", () => {
+    expect(JIRA_DRAFT_UNTRACED_GUIDANCE).not.toContain("send the same draft again unchanged");
+    expect(JIRA_DRAFT_UNTRACED_GUIDANCE).not.toContain("Do not show this message");
+    expect(JIRA_DRAFT_UNTRACED_GUIDANCE).toContain("explicit human approval");
+  });
+
   it("advises before a human is asked only when the Pods hold requirements (S05 of #4173)", () => {
-    const advise = vi.fn(() => true);
+    const advise = vi.fn<(refs: readonly string[]) => void>();
     const open = (units: number) => (): TraceSession => session(vi.fn(), units);
     const refused = jiraDraftUntracedAdvice(BACKLOG, open(1), advise);
     expect(refused).toMatchObject({
@@ -1135,14 +1179,17 @@ describe("source traceability of a draft (#4179)", () => {
     expect(advise).toHaveBeenCalledWith(["epic", "story", "task", "loose"]);
     expect(jiraDraftUntracedAdvice(BACKLOG, open(0), advise)).toBeUndefined();
     expect(jiraDraftUntracedAdvice(TRACED, open(1), advise)).toBeUndefined();
-    // Sending it again is the choice to have it reviewed as it is.
-    expect(jiraDraftUntracedAdvice(BACKLOG, open(1), () => false)).toBeUndefined();
+    // Repetition alone cannot acknowledge that the source trace is missing.
+    expect(jiraDraftUntracedAdvice(BACKLOG, open(1), advise)).toMatchObject({
+      outcome: "rejected",
+      requirementRefusal: "untraced",
+    });
     expect(jiraDraftUntracedAdvice({}, open(1), advise)).toBeUndefined();
-    expect(advise).toHaveBeenCalledTimes(1);
+    expect(advise).toHaveBeenCalledTimes(2);
   });
 
   it("does not advise when the Pods hold no requirement or an item names one", async () => {
-    const adviseUntraced = vi.fn(() => true);
+    const adviseUntraced = vi.fn<(refs: readonly string[]) => void>();
     const empty = syntheticJira();
     await executeJiraChatDraft({
       ...execution(empty),

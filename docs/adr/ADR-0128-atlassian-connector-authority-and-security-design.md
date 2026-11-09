@@ -1234,9 +1234,14 @@ the draft's invocation and action digest, so an item already sent is never sent 
 The journal keeps no arguments or results, so a replayed refusal cannot repeat its reasons: it says that
 the same request was already refused and cannot pass (2026-11-03, S16, where a model resent a refused
 draft and read bare `failed` rows). A template refusal says how to correct it; a section is a line of
-its own, `h2. Title`. The advice about a draft that names no requirement applies once per set of item
-refs in a turn: corrected items pass as sent, a draft of other items is advised again. Before approval
-it comes after the field checks, so the human reviews the draft the model settled on.
+its own, `h2. Title`. A draft that names no requirement while the Chat holds requirements (S16,
+2026-11-08) stays refused with the `untraced` refusal until its source is corrected (references in
+`requirementIds`, criteria copied verbatim) or the exact draft is approved through the existing
+human review card, where the mode's policy already requires review (`review-required`). Resending the
+same draft never confirms it; the log notes a set of item refs once per turn, the refusal does not
+lapse. No approval card is added in Full access. The review card states the missing trace in plain
+EN/DE words. Before approval the check comes after the field checks, so the human reviews the draft
+the model settled on.
 The draft's one approval is claimed once at the first item's dispatch and covers its remaining
 items; Full access admits the draft under its envelope exactly as it admits a single create. The
 journal's bound of 32 single writes per turn counts records that may have reached Jira and does not
