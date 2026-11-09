@@ -73,6 +73,9 @@ function nativeSchemeOptions(value, spec) {
   return { ids: raw[spec.ids], defaultId: raw[spec.defaultId] };
 }
 const schemePath = (f, spec) => `/rest/api/2/${spec.path}/${f.optionSchemeIds[spec.kind]}`;
+// Jira 10.3 returns an issue type scheme's member types only on request.
+const reviewPath = (f, spec) =>
+  `${schemePath(f, spec)}${spec.kind === "issue-type" ? "?expand=issueTypes,defaultIssueType" : ""}`;
 /**
  * The governed create case owns the scheme it qualifies. Later cases in a separately selected run
  * still need a synthetic issue type scheme to review, so the operator fixture creates one natively
@@ -102,7 +105,7 @@ async function ensureNativeScheme(c, f, spec) {
 async function scheme(c, f, spec) {
   await observeAdminActor(c, f);
   await ensureNativeScheme(c, f, spec);
-  f.optionSchemeReview = optionSchemeReview(await read(c, schemePath(f, spec)), spec);
+  f.optionSchemeReview = optionSchemeReview(await read(c, reviewPath(f, spec)), spec);
 }
 function optionCases(spec) {
   return [
@@ -119,7 +122,7 @@ function optionCases(spec) {
         assert.match(data.schemeId, /^[1-9]\d*$/u);
         f.optionSchemeIds ??= {};
         f.optionSchemeIds[spec.kind] = data.schemeId;
-        const actual = optionSchemeReview(await read(c, schemePath(f, spec)), spec);
+        const actual = optionSchemeReview(await read(c, reviewPath(f, spec)), spec);
         assert.equal(actual.name, title(f, spec.kind));
         assert.equal(actual.description, "Synthetic AC7 scheme");
         assert.deepEqual(actual[spec.ids], [f.optionIdForScheme]);
@@ -153,7 +156,7 @@ function updateOptionCase(spec) {
       [spec.defaultId]: f.optionSchemeReview[spec.defaultId],
     }),
     async (c, _data, f) => {
-      assert.deepEqual(optionSchemeReview(await read(c, schemePath(f, spec)), spec), {
+      assert.deepEqual(optionSchemeReview(await read(c, reviewPath(f, spec)), spec), {
         ...f.optionSchemeReview,
         description: "Synthetic AC7 revised scheme",
       });
@@ -202,7 +205,7 @@ function associationCase(action, present) {
         present ? [f.schemaProject] : [],
       );
       assert.deepEqual(
-        optionSchemeReview(await read(c, schemePath(f, OPTION_SCHEMES[0])), OPTION_SCHEMES[0]),
+        optionSchemeReview(await read(c, reviewPath(f, OPTION_SCHEMES[0])), OPTION_SCHEMES[0]),
         f.optionSchemeReview,
       );
       return proof(3);
@@ -331,7 +334,7 @@ export const API_QUALIFICATION_SCHEMA_CASES = [
           maxResults: 100,
           useAllContexts: true,
         }),
-        nativeRoot: "values",
+        nativeRoot: "options",
       },
     ),
     actor: "admin",
