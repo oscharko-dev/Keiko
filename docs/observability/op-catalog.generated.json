@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8fa6b7696b8296bc0d593155aec19769151c06f52a1b99f3318755bdc4b4b255",
+    "catalogDigest": "7e42916cba27f198a97ab8ccc68af12d2f6adf4f4ac95a53511c5aba902f137f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -23643,6 +23643,12 @@
             "type": "integer",
             "dataClass": "count",
             "required": false
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["unsupported", "unverified", "stale", "configuration-changed"]
           }
         },
         "causal": "correlation",
@@ -23651,8 +23657,8 @@
         "failureClasses": ["gateway-readiness"],
         "proofIds": ["gateway.conversation.admission.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/conversation-readiness-log.ts:19",
-        "emitterSites": ["packages/keiko-server/src/conversation-readiness-log.ts:63"]
+        "registrationSite": "packages/keiko-server/src/conversation-readiness-log.ts:20",
+        "emitterSites": ["packages/keiko-server/src/conversation-readiness-log.ts:71"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -89549,6 +89555,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -115671,7 +115683,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:369",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:401",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -118294,7 +118306,7 @@
     {
       "op": "gateway.conversation.admission",
       "category": "gateway",
-      "site": "packages/keiko-server/src/conversation-readiness-log.ts:22",
+      "site": "packages/keiko-server/src/conversation-readiness-log.ts:23",
       "package": "keiko-server"
     },
     {
