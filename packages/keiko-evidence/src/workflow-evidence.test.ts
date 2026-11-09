@@ -4,7 +4,6 @@ import {
   createInMemoryEvidenceStore,
   loadEvidence,
   persistWorkflowEvidence,
-  type WorkflowEventLike,
   type WorkflowRunIdentity,
 } from "./index.js";
 import type { VerificationAuditSummary } from "@oscharko-dev/keiko-contracts";
@@ -122,7 +121,7 @@ describe("buildWorkflowManifest", () => {
           promptTokens: 3,
           completionTokens: 5,
           latencyMs: 7,
-        } as unknown as WorkflowEventLike,
+        },
       ],
       { workflowId: "bug-investigation", status: "investigation-only" },
     );
