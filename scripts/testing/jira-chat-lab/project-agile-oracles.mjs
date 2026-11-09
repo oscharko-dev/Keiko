@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
 import { JIRA_MANAGED_READ_TOOLS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { sprintIdsOf } from "./requirements/field-correction.mjs";
+import { canonicalToolId } from "./requirements/tool-exchanges.mjs";
 
 /** Read-only native oracle. No product receipt, model answer or fixture creation is ground truth. */
 export async function projectAgileRead(
@@ -448,7 +449,7 @@ function validateBulkReceipt(entry, operation, admit, denied) {
   assert.ok(result !== undefined);
   const data = result.data;
   assert.ok(data !== undefined);
-  assert.equal(result.toolRef?.canonicalId, `keiko.${operation}`);
+  assert.equal(result.toolRef?.canonicalId, canonicalToolId(operation));
   assert.equal(
     admit(entry.call.arguments),
     true,

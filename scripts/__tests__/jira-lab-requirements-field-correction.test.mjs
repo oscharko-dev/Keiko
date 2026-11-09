@@ -9,6 +9,7 @@ import {
   sprintFieldId,
   sprintIdsOf,
 } from "../testing/jira-chat-lab/requirements/field-correction.mjs";
+import { canonicalToolId } from "../testing/jira-chat-lab/requirements/tool-exchanges.mjs";
 import { JOURNEYS } from "../testing/jira-chat-lab/requirements/journey-checks.mjs";
 
 const SPRINT_FIELD = "customfield_10105";
@@ -17,7 +18,7 @@ const CHAT = { id: "chat" };
 
 const write = (operation, status, data, args = {}) => ({
   call: { id: `call-${operation}`, name: operation.replace(".", "_"), arguments: args },
-  result: { toolRef: { canonicalId: `keiko.${operation}` }, status, data },
+  result: { toolRef: { canonicalId: canonicalToolId(operation) }, status, data },
 });
 const jiraRejection = (message = "Number value expected as the Sprint id.") =>
   write("jira.create", "failed", {

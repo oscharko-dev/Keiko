@@ -12,6 +12,7 @@ import {
   gradeEpicVisibility,
 } from "../testing/jira-chat-lab/rules-knowledge-oracles.mjs";
 import { buildCorpus, STRUCTURE_RULES } from "../testing/jira-chat-lab/requirements/corpus.mjs";
+import { canonicalToolId } from "../testing/jira-chat-lab/requirements/tool-exchanges.mjs";
 
 const old = { id: "1", key: "REQ-1", fields: { summary: "Existing", labels: [] } };
 const exchange = (operation, data, args = {}, status = "completed") => ({
@@ -19,7 +20,7 @@ const exchange = (operation, data, args = {}, status = "completed") => ({
   result: {
     schemaVersion: 1,
     invocationId: "synthetic-invocation",
-    toolRef: { canonicalId: `keiko.${operation}`, contractVersion: 1 },
+    toolRef: { canonicalId: canonicalToolId(operation), contractVersion: 1 },
     projectionDigest: null,
     effectStarted: false,
     metrics: { inputBytes: 0, outputBytes: 0, resultCount: 1, durationMs: 0 },
@@ -94,6 +95,20 @@ describe("formal-rule evidence from normal UI turns", () => {
         }),
       ).toBe(false);
     expect(gradeRuleRefusal({ ...evidence, after: [old, nativeEpic("2")] })).toBe(false);
+  });
+  it("accepts the create-metadata reads a model makes before the refused create (LIM18)", () => {
+    const reads = ["jira.issue-types", "jira.create-fields"].map((operation) =>
+      exchange(operation, { items: [] }),
+    );
+    expect(reads.map((read) => read.result.toolRef.canonicalId)).toEqual([
+      "keiko.jira.issue.types",
+      "keiko.jira.create.fields",
+    ]);
+    const evidence = { before: [old], after: [old], template: "REQ/Epic" };
+    expect(gradeRuleRefusal({ ...evidence, exchanges: [...reads, refusal()] })).toBe(true);
+    const unknown = exchange("jira.issue-types", { items: [] });
+    unknown.result.toolRef = { canonicalId: "keiko.jira.issue-types", contractVersion: 1 };
+    expect(gradeRuleRefusal({ ...evidence, exchanges: [unknown, refusal()] })).toBe(false);
   });
   it("requires native non-effect and the actual scoped rule refusal, not assistant prose or a generic failure", () => {
     const evidence = { before: [old], after: [old], template: "REQ/Epic", exchanges: [refusal()] };

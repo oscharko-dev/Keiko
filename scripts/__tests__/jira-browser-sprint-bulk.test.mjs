@@ -17,6 +17,7 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
 }));
 
 import { runSprintBulk } from "../testing/jira-chat-lab/browser-sprint-bulk.mjs";
+import { canonicalToolId } from "../testing/jira-chat-lab/requirements/tool-exchanges.mjs";
 import {
   projectAgileWitness,
   exactSprintBulkIssues,
@@ -35,7 +36,7 @@ const status = (done = false) => ({
 const exchange = (operation, args, data, denied = false) => ({
   call: { name: operation.replaceAll(/[.-]/gu, "_"), arguments: clone(args) },
   result: {
-    toolRef: { canonicalId: `keiko.${operation}` },
+    toolRef: { canonicalId: canonicalToolId(operation) },
     status: denied ? "failed" : "completed",
     data,
   },

@@ -22,7 +22,11 @@ import {
 import { epicConforms, gradeBacklog, sectionsPresent } from "./requirements/oracles.mjs";
 import { STRUCTURE_RULES } from "./requirements/corpus.mjs";
 import { gradeFormatInventory, FORMATS } from "./requirements/formats.mjs";
-import { completedToolExchange, toolExchangeOf } from "./requirements/tool-exchanges.mjs";
+import {
+  canonicalToolId,
+  completedToolExchange,
+  toolExchangeOf,
+} from "./requirements/tool-exchanges.mjs";
 
 const CONTENT_RULES = new Set([
   "summary-pattern",
@@ -445,11 +449,11 @@ function nativeTemplateNames(native, issue, projectKey) {
 }
 
 const BULK_READ_IDS = new Set(
-  [...JIRA_MANAGED_READ_TOOLS, ...KNOWLEDGE_CHAT_TOOLS].map((name) => `keiko.${name}`),
+  [...JIRA_MANAGED_READ_TOOLS, ...KNOWLEDGE_CHAT_TOOLS].map(canonicalToolId),
 );
 const BULK_WRITE_IDS = new Set(
   Object.keys(JIRA_MANAGED_ACTION_TYPES)
-    .map((name) => `keiko.${name}`)
+    .map(canonicalToolId)
     .filter((name) => !BULK_READ_IDS.has(name)),
 );
 
