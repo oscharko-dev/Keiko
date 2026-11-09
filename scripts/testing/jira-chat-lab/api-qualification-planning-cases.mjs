@@ -62,9 +62,51 @@ async function ensureAgileIssueTypes(c, f) {
   );
   assert.equal(response.status, 200, "Jira must accept the project's Agile issue types");
 }
+/**
+ * Jira requires Epic Name and records Story Points on those types, but the simple project's screens
+ * do not list them, so create/edit metadata hides them from the governed tools. The operator fixture
+ * adds exactly those two fields to the project's own create and edit screens, idempotently.
+ */
+async function ensureAgileScreenFields(c) {
+  const fields = await read(c, "/rest/api/2/field");
+  const wanted = [
+    fields.filter((field) => field.schema?.custom === "com.pyxis.greenhopper.jira:gh-epic-label"),
+    fields.filter((field) => field.name === "Story Points" && field.custom === true),
+  ].map((found) => {
+    assert.equal(found.length, 1, "The exact native Agile field must be uniquely available");
+    return found[0].id;
+  });
+  const screens = await read(c, "/rest/api/2/screens");
+  const origin = labSessionConnection(c.session).origin;
+  for (const name of [
+    "KEIKO: Simple Issue Tracking Create Issue Screen",
+    "KEIKO: Simple Issue Tracking Edit/View Issue Screen",
+  ]) {
+    const matches = screens.filter((screen) => screen.name === name);
+    assert.equal(matches.length, 1, "The seeded project must own its simple screens");
+    const tabs = await read(c, `/rest/api/2/screens/${matches[0].id}/tabs`);
+    assert.ok(tabs.length > 0);
+    const tab = `/rest/api/2/screens/${matches[0].id}/tabs/${tabs[0].id}/fields`;
+    const present = new Set((await read(c, tab)).map((field) => field.id));
+    for (const id of wanted.filter((id) => !present.has(id))) {
+      const response = await globalThis.fetch(new URL(tab, origin), {
+        method: "POST",
+        redirect: "manual",
+        signal: globalThis.AbortSignal.timeout(30_000),
+        headers: {
+          Authorization: basicAuth(c.session, c.actor),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ fieldId: id }),
+      });
+      assert.equal(response.status, 200, "Jira must accept the Agile field on the screen");
+    }
+  }
+}
 async function planningBoard(c, f) {
   await observeAdminActor(c, f);
   await ensureAgileIssueTypes(c, f);
+  await ensureAgileScreenFields(c);
   if (!f.planningBoard) {
     const filter = await createQualificationFilter(c, f, "planning");
     const name = `Synthetic AC7 planning ${f.runId}`;
