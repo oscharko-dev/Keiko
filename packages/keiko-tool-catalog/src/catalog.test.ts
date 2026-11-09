@@ -19,7 +19,7 @@ import {
   verifyToolCatalogSnapshot,
   verifyToolDescriptor,
 } from "./index.js";
-import { catalogBytes } from "./json.js";
+import { catalogBytes, measureCatalogFootprint } from "./json.js";
 
 import { declaration, profile, fixture } from "./__fixtures__/catalog.js";
 
@@ -402,7 +402,8 @@ describe("issued descriptor retention", () => {
   // Five descriptions sized so the whole envelope is the catalog's byte bound plus `extra`.
   function atBound(extra: number): ToolDescriptor[] {
     const sizes = [50_000, 50_000, 50_000, 50_000, 50_000];
-    const slack = TOOL_CATALOG_LIMITS.maxArgumentBytes - catalogBytes(envelope(issue(sizes)));
+    const slack =
+      TOOL_CATALOG_LIMITS.maxArgumentBytes - measureCatalogFootprint(envelope(issue(sizes))).bytes;
     return issue([50_000 + slack + extra, ...sizes.slice(1)]);
   }
   function compile(value: object): ReturnType<typeof createToolCatalog> {
@@ -414,7 +415,9 @@ describe("issued descriptor retention", () => {
 
   it("accepts an envelope of exactly the byte bound on the kept and the copied path", () => {
     const issued = atBound(0);
-    expect(catalogBytes(envelope(issued))).toBe(TOOL_CATALOG_LIMITS.maxArgumentBytes);
+    expect(measureCatalogFootprint(envelope(issued)).bytes).toBe(
+      TOOL_CATALOG_LIMITS.maxArgumentBytes,
+    );
     const kept = compile(envelope(issued));
     expect(issued.every((descriptor) => kept.descriptors.includes(descriptor))).toBe(true);
     expect(compile(envelope(copies(issued))).catalogRevision).toBe(kept.catalogRevision);
@@ -422,7 +425,9 @@ describe("issued descriptor retention", () => {
 
   it("refuses one byte over the bound on the kept and the copied path", () => {
     const issued = atBound(1);
-    expect(catalogBytes(envelope(issued))).toBe(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1);
+    expect(measureCatalogFootprint(envelope(issued)).bytes).toBe(
+      TOOL_CATALOG_LIMITS.maxArgumentBytes + 1,
+    );
     expect(() => compile(envelope(issued))).toThrow("input-bound");
     expect(() => compile(envelope(copies(issued)))).toThrow("input-bound");
   });
