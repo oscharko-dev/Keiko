@@ -102,7 +102,9 @@ export const API_QUALIFICATION_ISSUE_LIFECYCLE_CASES = [
       const pinned = await read(c, `/rest/api/2/issue/${f.lifecycleIssue.id}/pinned-comments`);
       assert.ok(Array.isArray(pinned));
       assert.equal(
-        pinned.filter((row) => row.id === f.pinCommentId && row.body === comment.body).length,
+        pinned.filter(
+          (row) => row.comment?.id === f.pinCommentId && row.comment.body === comment.body,
+        ).length,
         1,
       );
       return proof(4);
