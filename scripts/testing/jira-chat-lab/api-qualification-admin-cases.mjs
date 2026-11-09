@@ -317,7 +317,12 @@ export const API_QUALIFICATION_ADMIN_CASES = [
   ),
   mutation(
     "jira.update-permission-scheme",
-    (f) => ({ ...permissionArgs(f), description: "Synthetic permissions revised" }),
+    // Native Jira requires the scheme name in every PUT body; the reviewed name is unchanged.
+    (f) => ({
+      ...permissionArgs(f),
+      name: name(f, "permissions"),
+      description: "Synthetic permissions revised",
+    }),
     (c, d, f) => permissionReadback(c, d, f, "Synthetic permissions revised"),
     permission,
   ),

@@ -92,3 +92,13 @@ it("rejects both a mismatched category and an invented successful removal in the
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it("sends the reviewed scheme name with a permission-scheme update because native Jira requires it", () => {
+  const selected = API_QUALIFICATION_ADMIN_CASES.find(
+    (entry) => entry.tool === "jira.update-permission-scheme",
+  );
+  expect(selected.arguments(fixture)).toMatchObject({
+    name: `Synthetic AC7 permissions ${fixture.runId}`,
+    description: "Synthetic permissions revised",
+  });
+});
