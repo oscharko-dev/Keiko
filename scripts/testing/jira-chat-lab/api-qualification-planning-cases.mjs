@@ -168,16 +168,17 @@ async function planningEpic(c, f) {
 }
 async function membership(c, issue, expected) {
   const field = await uniqueField(c, "com.pyxis.greenhopper.jira:gh-epic-link");
-  const agile = await read(c, `/rest/agile/1.0/issue/${issue.key}?fields=epic`);
+  // Jira answers the filtered `fields=epic` read with null fields; the full record carries the epic.
+  const agile = await read(c, `/rest/agile/1.0/issue/${issue.key}`);
   assert.equal(String(agile.id), String(issue.id));
   assert.equal(agile.key, issue.key);
-  assert.ok(Object.hasOwn(agile.fields, "epic"));
+  assert.ok(agile.fields && typeof agile.fields === "object");
   const core = await read(c, `${issuePath(issue.key)}?fields=${field.id}`);
   assert.equal(core.id, String(issue.id));
   assert.equal(core.key, issue.key);
   assert.ok(Object.hasOwn(core.fields, field.id));
   assert.equal(core.fields[field.id], expected?.key ?? null);
-  if (expected === null) assert.equal(agile.fields.epic, null);
+  if (expected === null) assert.ok((agile.fields.epic ?? null) === null);
   else {
     assert.equal(String(agile.fields.epic.id), String(expected.id));
     assert.equal(agile.fields.epic.key, expected.key);

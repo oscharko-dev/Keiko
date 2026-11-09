@@ -96,6 +96,7 @@ async function observeReadback(context, specification, attempted, fixture) {
   } catch (error) {
     return {
       failure: error instanceof assert.AssertionError ? "readback-mismatch" : "readback-failed",
+      detail: prepareSite(error),
     };
   }
 }
@@ -245,12 +246,11 @@ async function gradeCase(
   { context, specification, fixture, witness, directory, report },
   attempted,
 ) {
-  const { readback, failure: readbackFailure } = await observeReadback(
-    context,
-    specification,
-    attempted,
-    fixture,
-  );
+  const {
+    readback,
+    failure: readbackFailure,
+    detail,
+  } = await observeReadback(context, specification, attempted, fixture);
   const evidence = caseEvidence(
     specification,
     attempted,
@@ -259,6 +259,7 @@ async function gradeCase(
     readbackFailure,
     report,
   );
+  if (detail !== undefined) evidence.detail = detail;
   evidence.auxiliaryReferences = recordAuxiliaries(attempted, directory, report);
   privateJson(join(directory, `${evidence.id}.json`), evidence, true);
   if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
