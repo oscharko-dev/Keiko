@@ -11,7 +11,19 @@ import {
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
-import { createJiraChatCatalogRuntime, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
+import {
+  JIRA_DEFAULT_CATALOG_TOOLS,
+  createJiraChatCatalogRuntime,
+  untracedAdvisory,
+} from "./jiraChatCatalogRuntime.js";
+import {
+  JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_READ_TOOL_FAMILIES,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { isCoreMutationTool } from "./jiraManagedMutationDescriptors.js";
+import { jiraOperationForTool } from "./jiraManagedProvider.js";
+import { JIRA_CATALOG_DISCOVERY_TOOLS } from "./jiraCatalogDiscovery.js";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 
@@ -78,6 +90,54 @@ function fixture(): {
     record,
   };
 }
+
+/** Rebuilds the default catalog from the owning contracts; never from the runtime's own set. */
+function expectedDefaultCatalogTools(): Set<string> {
+  const families = new Set<string>([
+    ...JIRA_READ_TOOL_FAMILIES.projectList,
+    ...JIRA_READ_TOOL_FAMILIES.issueMetadata,
+    ...JIRA_READ_TOOL_FAMILIES.issues,
+    ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
+    ...JIRA_READ_TOOL_FAMILIES.localCompositions,
+  ]);
+  const reads = JIRA_MANAGED_READ_TOOLS.filter(
+    (tool) => families.has(tool) && tool !== "jira.draft-batch",
+  );
+  const writes = JIRA_MUTATION_OPERATIONS.filter((tool) => {
+    if (!isCoreMutationTool(tool)) return false;
+    const definition = jiraOperationForTool(tool)?.definition;
+    return (
+      definition?.kind === "composite" ||
+      (definition?.kind === "native" && /\/issue(?:\/|$)/u.test(definition.pathTemplate))
+    );
+  });
+  return new Set<string>([
+    ...reads,
+    ...writes,
+    "jira.draft-batch",
+    "jira.draft",
+    ...JIRA_CATALOG_DISCOVERY_TOOLS,
+    ...KNOWLEDGE_CHAT_TOOLS,
+  ]);
+}
+
+describe("default Jira catalog set", () => {
+  it("equals the set derived from the owning contract constants", () => {
+    const expected = expectedDefaultCatalogTools();
+    expect(new Set<string>(JIRA_DEFAULT_CATALOG_TOOLS)).toEqual(expected);
+    expect(JIRA_DEFAULT_CATALOG_TOOLS).toHaveLength(expected.size);
+    // Guards against a vacuous derivation: every owning group contributes.
+    for (const tool of [...JIRA_CATALOG_DISCOVERY_TOOLS, ...KNOWLEDGE_CHAT_TOOLS])
+      expect(expected.has(tool)).toBe(true);
+    expect(expected.size).toBeGreaterThan(KNOWLEDGE_CHAT_TOOLS.length + 2);
+  });
+
+  it("detects a tool missing from the runtime set", () => {
+    const expected = expectedDefaultCatalogTools();
+    const dropped = JIRA_DEFAULT_CATALOG_TOOLS.slice(1);
+    expect(new Set<string>(dropped)).not.toEqual(expected);
+  });
+});
 
 describe("application-owned Jira catalog initialization", () => {
   it("advertises all 18 curated Jira tools with discovery, Knowledge and batch before selection", async () => {

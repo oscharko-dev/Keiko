@@ -315,6 +315,43 @@ describe("local Jira operation discovery", () => {
     ).rejects.toBe(defect);
   });
 
+  it("delivers every failure reason as a refusal through the real catalog adapter, never as success", async () => {
+    const f = fixture();
+    const managed = await createManagedProviderCatalog({
+      providers: [f.provider],
+      routes: jiraChatCatalogRoutes(JIRA_CATALOG_DISCOVERY_TOOLS),
+      profile: { id: "discovery-failure-fixture", version: 1 },
+      log: { primary: { write: vi.fn() }, diagnostics: { record: vi.fn() } },
+      correlationId: "discovery-failure-classification",
+      now: () => 0,
+    });
+    const binding = managed.handlerBindings.find(
+      (handler) => handler.toolRef.canonicalId === "keiko.jira.describe",
+    );
+    if (binding === undefined) throw new TypeError("Missing describe binding");
+    const identities = ["GET /rest/api/2/project"];
+    const cases: readonly [string, Error | undefined, CatalogJsonObject][] = [
+      ["invalid-arguments", undefined, { identities: ["jira.create"] }],
+      ["selection-too-large", new ToolCatalogError("input-bound"), { identities }],
+      ["selection-unavailable", new ToolCatalogError("invalid-schema"), { identities }],
+      ["budget-exhausted", new CatalogDispatchFault("denied", "budget-exhausted"), { identities }],
+    ];
+    try {
+      for (const [reason, selectFault, args] of cases) {
+        if (selectFault !== undefined) f.select.mockRejectedValueOnce(selectFault);
+        const direct = await f.describe.execute(args, f.context);
+        expect(direct).toMatchObject({ isError: true, data: { outcome: "failed", reason } });
+        if (selectFault !== undefined) f.select.mockRejectedValueOnce(selectFault);
+        const failure: unknown = await binding.execute(args, f.context).catch((e: unknown) => e);
+        expect(failure).toBeInstanceOf(CatalogDispatchFault);
+        expect(failure).toMatchObject({ status: "failed", reason: "provider-reported-error" });
+        expect((failure as CatalogDispatchFault).providerResult).toMatchObject({ reason });
+      }
+    } finally {
+      await managed.close();
+    }
+  });
+
   it("honors the governed effect boundary even for local schema selection", async () => {
     const f = fixture();
     await expect(

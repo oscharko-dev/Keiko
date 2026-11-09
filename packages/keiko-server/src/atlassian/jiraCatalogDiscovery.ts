@@ -139,13 +139,20 @@ function discover(
       continue;
     items.pop();
     if (items.length === 0)
-      return Promise.resolve({
-        isError: true,
-        data: { outcome: "failed", reason: "budget-exhausted", items: [] },
-      });
+      return Promise.resolve(discoveryFailure({ reason: "budget-exhausted" }));
     break;
   }
   return Promise.resolve({ data: page() });
+}
+
+/**
+ * The one failure shape of the discover/describe tools: always a managed tool error, so the host,
+ * the catalog adapter and the activity log count it as a refusal and never as a success.
+ */
+function discoveryFailure(
+  failure: { readonly reason: string } & CatalogJsonObject,
+): ManagedMcpToolResult {
+  return { isError: true, data: { outcome: "failed", items: [], ...failure } };
 }
 
 const INVALID_DESCRIPTION = {
@@ -173,16 +180,10 @@ async function selectedDescription(
   } catch (error) {
     if (!(error instanceof CatalogDispatchFault) && !(error instanceof ToolCatalogError))
       throw error;
-    if (error.reason === "input-bound")
-      return { isError: true, data: { outcome: "failed", items: [], ...TOO_LARGE_SELECTION } };
-    return {
-      isError: true,
-      data: {
-        outcome: "failed",
-        items: [],
-        reason: error.reason === "budget-exhausted" ? "budget-exhausted" : "selection-unavailable",
-      },
-    };
+    if (error.reason === "input-bound") return discoveryFailure(TOO_LARGE_SELECTION);
+    return discoveryFailure({
+      reason: error.reason === "budget-exhausted" ? "budget-exhausted" : "selection-unavailable",
+    });
   }
 }
 
@@ -193,10 +194,7 @@ async function describe(
 ): Promise<ManagedMcpToolResult> {
   context.signal.throwIfAborted();
   requireDispatch(context.beforeEffect(), "denied", "effect-denied");
-  const invalid: ManagedMcpToolResult = {
-    isError: true,
-    data: { ...INVALID_DESCRIPTION, items: [] },
-  };
+  const invalid = discoveryFailure(INVALID_DESCRIPTION);
   const identities = args.identities;
   if (!Array.isArray(identities) || !identities.every((identity) => typeof identity === "string"))
     return invalid;

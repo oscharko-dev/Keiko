@@ -3959,7 +3959,6 @@ it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", a
     // The default catalog offers exactly the curated production set (curated Jira tools, batch,
     // discovery and the local Knowledge tools); the rest of the canonical set is selected per turn.
     const toolCount = JIRA_DEFAULT_CATALOG_TOOLS.length;
-    expect(toolCount).toBe(24);
     expect(first.handlerBindings.map((handler) => handler.catalogAction).sort()).toEqual(
       [...JIRA_DEFAULT_CATALOG_TOOLS].sort(),
     );
