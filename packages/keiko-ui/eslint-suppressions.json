@@ -201,11 +201,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/format-error.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/hooks/assistant-speech-streaming.ts": {
     "max-lines-per-function": {
       "count": 1
