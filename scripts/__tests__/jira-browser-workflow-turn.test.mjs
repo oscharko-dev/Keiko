@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHAT_SEND_PATHS,
+  enterComposerText,
   isChatSendRequest,
   workflowUser,
   reviewWorkflowExchange,
@@ -75,5 +76,43 @@ describe("Chat send route recognition", () => {
       (route) => route.method === "POST" && sendHandlers.has(route.handler.name),
     ).map((route) => route.pattern);
     expect(new Set(productPaths)).toEqual(CHAT_SEND_PATHS);
+  });
+});
+
+describe("Composer prompt entry", () => {
+  function recordingComposer() {
+    const actions = [];
+    const textbox = {
+      fill: async (value) => void actions.push(["fill", value]),
+      press: async (key) => void actions.push(["press", key]),
+    };
+    const page = {
+      keyboard: { insertText: async (value) => void actions.push(["insert", value]) },
+    };
+    return { actions, page, textbox };
+  }
+
+  it("types each prompt line as its own paragraph and returns the text the composer sends (LIM23)", async () => {
+    const { actions, page, textbox } = recordingComposer();
+    const typed = await enterComposerText(
+      page,
+      textbox,
+      "First line.\nSecond line.\n\nAfter a blank line.",
+    );
+    expect(actions).toEqual([
+      ["fill", "First line."],
+      ["press", "Shift+Enter"],
+      ["insert", "Second line."],
+      ["press", "Shift+Enter"],
+      ["insert", "After a blank line."],
+    ]);
+    expect(actions.some(([, value]) => value.includes("\n"))).toBe(false);
+    expect(typed).toBe("First line.\n\nSecond line.\n\nAfter a blank line.");
+  });
+
+  it("fills a single-line prompt unchanged", async () => {
+    const { actions, page, textbox } = recordingComposer();
+    expect(await enterComposerText(page, textbox, "One line only.")).toBe("One line only.");
+    expect(actions).toEqual([["fill", "One line only."]]);
   });
 });

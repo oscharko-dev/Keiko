@@ -398,18 +398,38 @@ export function isChatSendRequest(request) {
   return request.method() === "POST" && CHAT_SEND_PATHS.has(new URL(request.url()).pathname);
 }
 
+/**
+ * Types a prompt the way a person writes one and returns the text the composer sends for it. The
+ * Markdown composer sends on Enter and starts a new paragraph on Shift+Enter, so every nonempty
+ * prompt line becomes its own paragraph, sent separated by a blank line. `fill` alone would insert
+ * the line breaks as DOM text, a path no human gesture takes (LIM23).
+ */
+export async function enterComposerText(page, textbox, text) {
+  const [first = "", ...rest] = text.split("\n").filter((line) => line.length > 0);
+  await textbox.fill(first);
+  for (const line of rest) {
+    await textbox.press("Shift+Enter");
+    await page.keyboard.insertText(line);
+  }
+  return [first, ...rest].join("\n\n");
+}
+
 /** A visible composer submission and visible exact approvals; observation alone uses the Chat API. */
 export async function sendBrowserTurn(page, region, context, chatId, prompt, options = {}) {
   const before = await workflowHistory(context, chatId);
   const previousIds = new Set(before.messages.map((message) => message.id));
   const decisions = new Set();
   options.persist?.({ phase: "submission-may-have-started" });
-  await region.getByRole("textbox", { name: "Chat message", exact: true }).fill(prompt);
+  const typed = await enterComposerText(
+    page,
+    region.getByRole("textbox", { name: "Chat message", exact: true }),
+    prompt,
+  );
   const outgoing = page.waitForRequest(isChatSendRequest);
   await region.getByRole("button", { name: "Send message", exact: true }).click();
   const body = (await outgoing).postDataJSON();
   assert.equal(body.chatId, chatId);
-  assert.equal(body.content, prompt);
+  assert.equal(body.content, typed);
   assert.match(body.clientTurnId, /^[0-9a-f-]{36}$/u);
   options.persist?.({ phase: "submitted", clientTurnId: body.clientTurnId });
   const deadline = Date.now() + (options.timeoutMs ?? 240000);

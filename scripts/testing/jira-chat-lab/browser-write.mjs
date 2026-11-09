@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { mintLauncherPairingAttestation } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { qualifyBrowserLifecycle } from "./browser-lifecycle.mjs";
-import { isChatSendRequest } from "./browser-workflow-turn.mjs";
+import { enterComposerText, isChatSendRequest } from "./browser-workflow-turn.mjs";
 import {
   connectPodFromPanel,
   requestWorkspaceJiraConnection,
@@ -35,12 +35,16 @@ async function connectChat(page, mode, connection = "dropdown") {
 }
 
 async function sendPrompt(page, chat, prompt, onIntent) {
-  await chat.getByRole("textbox", { name: "Chat message", exact: true }).fill(prompt);
+  const typed = await enterComposerText(
+    page,
+    chat.getByRole("textbox", { name: "Chat message", exact: true }),
+    prompt,
+  );
   const sent = page.waitForRequest(isChatSendRequest);
   await chat.getByRole("button", { name: "Send message", exact: true }).click();
   const request = await sent;
   const body = request.postDataJSON();
-  assert.equal(body.content, prompt);
+  assert.equal(body.content, typed);
   assert.match(body.clientTurnId, /^[0-9a-f-]{36}$/u);
   onIntent(body.clientTurnId, body);
   stage("sent");
