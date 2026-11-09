@@ -214,14 +214,18 @@ function epicIssues(tool, path, args) {
     prepare: planningMember,
   };
 }
-async function boardSubset(c, f, selected, anchor) {
+// Jira keeps epics out of the board issue list, so epic order is read from the same rank-ordered JQL.
+async function boardSubset(c, f, selected, anchor, epic = false) {
   const query = new URLSearchParams({
     jql: `id in (${selected.id},${anchor.id}) ORDER BY cf[${numericId(f.planningBoard.ranking.rankCustomFieldId)}] ASC`,
     startAt: "0",
     maxResults: "100",
     fields: "summary",
   });
-  const value = await read(c, `${boardPath(f)}/issue?${query}`);
+  const value = await read(
+    c,
+    epic ? `/rest/api/2/search?${query}` : `${boardPath(f)}/issue?${query}`,
+  );
   assert.equal(value.startAt, 0);
   assert.equal(value.total, 2);
   assert.equal(value.issues.length, 2);
@@ -246,11 +250,12 @@ async function prepareRank(c, f, epic) {
   const field = await uniqueField(c, "com.pyxis.greenhopper.jira:gh-lexo-rank");
   const fieldId = `customfield_${numericId(f.planningBoard.ranking.rankCustomFieldId)}`;
   assert.equal(field.id, fieldId);
-  const order = await boardSubset(c, f, selected, anchor);
+  const order = await boardSubset(c, f, selected, anchor, epic);
   f.planningRank = {
     selected: await rankIssue(c, selected, fieldId),
     anchor: await rankIssue(c, anchor, fieldId),
     fieldId,
+    epic,
     direction: order[0] === selected.key ? "after" : "before",
   };
 }
@@ -261,8 +266,8 @@ const rankArgs = (f) => ({
   expectedAnchorRank: f.planningRank.anchor.rank,
 });
 async function rankReadback(c, _data, f) {
-  const { selected, anchor, fieldId, direction } = f.planningRank;
-  const order = await boardSubset(c, f, selected, anchor);
+  const { selected, anchor, fieldId, direction, epic } = f.planningRank;
+  const order = await boardSubset(c, f, selected, anchor, epic);
   assert.deepEqual(
     order,
     direction === "before" ? [selected.key, anchor.key] : [anchor.key, selected.key],
@@ -350,7 +355,11 @@ function assertNativeSprintFields(raw, expected) {
     if (key !== "self") assert.ok(Object.hasOwn(expected, key));
   }
   for (const [key, expectedValue] of Object.entries(expected)) {
-    assert.ok(Object.hasOwn(raw, key));
+    // Jira omits a null date, goal or destination from the native sprint record entirely.
+    if (!Object.hasOwn(raw, key)) {
+      assert.equal(expectedValue, null);
+      continue;
+    }
     const value =
       key === "id" ||
       key === "originBoardId" ||
