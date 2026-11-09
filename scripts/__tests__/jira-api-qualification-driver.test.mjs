@@ -212,3 +212,28 @@ it("grades a settled, independently reproduced 403 write as denied without a rec
     runQualificationCase({}, {}, unproven, {}, witness, directory(), report),
   ).rejects.toThrow("Uncertain native effect");
 });
+it.each([
+  [[{ status: 403, truncated: false }], false],
+  [
+    [
+      { status: 403, truncated: false },
+      { status: 200, truncated: false },
+    ],
+    true,
+  ],
+  [[], true],
+])(
+  "continues after a failed dispatch only when every native response was a 4xx refusal",
+  async (responses, stops) => {
+    const output = directory();
+    dispatch.mockRejectedValue(new TypeError("Settled outcome unknown"));
+    const refusing = {
+      arm: vi.fn(),
+      effectsStarted: () => 1,
+      snapshot: () => ({ blocked: 0, responses }),
+    };
+    const outcome = runQualificationCase({}, {}, specification({}), {}, refusing, output, report);
+    if (stops) await expect(outcome).rejects.toThrow("Uncertain native effect");
+    else await expect(outcome).resolves.toMatchObject({ runtimeAvailability: "unknown" });
+  },
+);
