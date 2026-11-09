@@ -79,7 +79,11 @@ function rowValues(rows, fields, names = {}) {
   return rows.map((row) =>
     fields.map((field) => {
       const value = row[names[field] ?? field];
-      assert.notEqual(value, undefined, "The oracle requires an actual observed field");
+      assert.notEqual(
+        value,
+        undefined,
+        `The oracle requires an actual observed field: ${names[field] ?? field}`,
+      );
       return typeof value === "number" ? String(value) : value;
     }),
   );

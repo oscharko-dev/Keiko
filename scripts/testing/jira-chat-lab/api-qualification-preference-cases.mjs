@@ -61,6 +61,11 @@ async function restoreTerminology(c, f) {
     },
   );
 }
+/** Jira answers the stored preference as a bare JSON number or as a quoted string; both mean text. */
+function nativeNumberText(value) {
+  assert.ok(typeof value === "string" || typeof value === "number");
+  return String(value);
+}
 export const API_QUALIFICATION_PREFERENCE_CASES = [
   adminMutationCase(
     "jira.set-application-property",
@@ -199,13 +204,12 @@ export const API_QUALIFICATION_PREFERENCE_CASES = [
       value: f.preferenceTarget,
     }),
     async (c, _data, f) => {
-      assert.equal(await read(c, preferencePath()), String(f.preferenceTarget));
+      assert.equal(nativeNumberText(await read(c, preferencePath())), String(f.preferenceTarget));
       return proof(1);
     },
     async (c, f) => {
       await observeAdminActor(c, f);
-      const raw = await read(c, preferencePath());
-      assert.equal(typeof raw, "string");
+      const raw = nativeNumberText(await read(c, preferencePath()));
       assert.match(raw, /^-?(?:0|[1-9]\d*)$/u);
       f.preferenceOriginal = Number(raw);
       assert.ok(Number.isSafeInteger(f.preferenceOriginal));
@@ -216,8 +220,7 @@ export const API_QUALIFICATION_PREFERENCE_CASES = [
     ...readCase("jira.my-preference", preferencePath, ["key", "integerValue"], {
       args: () => ({ key: preferenceKey() }),
       nativeRoot: (value) => {
-        assert.equal(typeof value, "string");
-        return [{ key: preferenceKey(), integerValue: Number(value) }];
+        return [{ key: preferenceKey(), integerValue: Number(nativeNumberText(value)) }];
       },
       productRoot: "single",
     }),
@@ -236,12 +239,13 @@ export const API_QUALIFICATION_PREFERENCE_CASES = [
         basicAuth(c.session, c.actor),
       );
       assert.ok(response.status === 200 || response.status === 404);
-      if (response.status === 200) assert.equal(response.value, String(f.preferenceOriginal));
+      if (response.status === 200)
+        assert.equal(nativeNumberText(response.value), String(f.preferenceOriginal));
       return proof(2);
     },
     async (c, f) => {
       await observeAdminActor(c, f);
-      f.preferenceBefore = Number(await read(c, preferencePath()));
+      f.preferenceBefore = Number(nativeNumberText(await read(c, preferencePath())));
       assert.equal(f.preferenceBefore, f.preferenceTarget);
     },
   ),
