@@ -792,8 +792,8 @@ function reviewReportSpec(): OpenCodeToolSpec {
     alias: "keiko_review_report",
     description:
       "Report one candidate finding of this review: a defect the change introduces or exposes, " +
-      "with code evidence in the reviewed commit. Call it once per finding; text outside this " +
-      "tool is ignored.",
+      "with code evidence in the reviewed commit. Call it once per finding, and never for a " +
+      "change that has no defect; text outside this tool is ignored.",
     inputSchema: managedObjectSchema(schemas, Object.keys(schemas)),
     effects: ["workspace-read"],
     idempotency: "server-key-required",

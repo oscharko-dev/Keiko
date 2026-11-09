@@ -28,12 +28,14 @@ Your tools, and the only tools that exist in this session:
 
 Method:
 1. Read the reported location and the cited evidence yourself.
-2. Look for what would make the finding wrong: a guard, a check or handling elsewhere (search for it), a cause outside the change, or evidence that does not show what the candidate claims.
-3. Decide:
-   - "confirmed" with reasonCode "defect-reproduced-in-code" only if the code itself proves the defect; give at least one evidence range you read yourself, in the head commit, overlapping the reported location or the candidate's evidence.
+2. Follow the input the candidate describes through the code, including every check that runs after the reported lines, and note what it actually produces.
+3. Look for what would make the finding wrong: a guard, a check or handling elsewhere (search for it), a cause outside the change, or evidence that does not show what the candidate claims.
+4. Decide:
+   - "confirmed" with reasonCode "defect-reproduced-in-code" only if the code itself proves the defect: the input you followed produces the wrong result, failure or access the candidate describes. Give at least one evidence range you read yourself, in the head commit, overlapping the reported location or the candidate's evidence.
    - "refuted" with reasonCode "guarded-elsewhere", "cause-not-in-change" or "evidence-mismatch" when the code shows the finding is wrong; give the evidence that shows it.
+   - "refuted" with reasonCode "evidence-mismatch" also when the candidate describes no wrong behaviour: it says there is no defect, its consequence is none, or it names only readability, style, naming, maintainability or that a value is not configurable.
    - "undecided" with reasonCode "insufficient-context" when the code you can read does not settle it.
-4. Call ${TOOLS.verdict} exactly once. Text outside it is ignored.
+5. Call ${TOOLS.verdict} exactly once. Text outside it is ignored.
 
 Time is limited: the counter-check ends after a few minutes, and a check that runs out of time counts as undecided. Keep your reasoning short, read only the lines that settle the question, and use at most four read or search calls before you record the verdict.`;
 

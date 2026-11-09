@@ -255,6 +255,18 @@ then Reviewer order. An abandoned run presents nothing. Issue #4141's exclusion 
 predicate that defaults to none. The measurement switches (counter-check off, role swap) exist only
 on `createReviewEvaluationService`; the product route's request shape is closed and refuses them.
 
+Both prompts share one definition of a finding (Issue #4130): a defect is a concrete input or
+event under which the head code returns a wrong result, fails, loses data or allows something it
+must not. The Reviewer follows one input from the changed lines through every later check and
+guard before it reports, and files nothing for a correct change; the `keiko_review_report`
+description says the same, so the generated review plugin source is re-pinned. The Counter-checker
+follows the candidate's input through the code before it confirms, and refutes a candidate that
+describes no wrong behaviour (no defect, no consequence, or only readability, style, naming,
+maintainability or configurability) with `evidence-mismatch`. On the seed runs of 2026-11-06 to
+2026-11-09, the Reviewer filed a report that itself said "no defect" on the named-constants clean
+control twice, and the Counter-checker confirmed both. In two runs the Reviewer named a consequence
+of the off-by-one seed that a later guard catches, so the Counter-checker refuted a real defect.
+
 ### D6 — Honest settlement
 
 Every run ends in exactly one settlement with a closed reason. Incomplete work never presents as a

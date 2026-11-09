@@ -18,4 +18,14 @@ describe("COUNTER_CHECK_INSTRUCTION", () => {
     expect(COUNTER_CHECK_INSTRUCTION).toContain("counts as undecided");
     expect(COUNTER_CHECK_INSTRUCTION).toContain("at most four read or search calls");
   });
+
+  it("confirms only a followed input and refutes a candidate that describes no wrong behaviour", () => {
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "including every check that runs after the reported lines",
+    );
+    expect(COUNTER_CHECK_INSTRUCTION).toContain("the input you followed produces the wrong result");
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "it says there is no defect, its consequence is none",
+    );
+  });
 });

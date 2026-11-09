@@ -45,6 +45,13 @@ describe("REVIEW_SYSTEM_PROMPT", () => {
     expect(REVIEW_SYSTEM_PROMPT).toContain("about 15 read or search calls");
   });
 
+  it("defines a finding as a defect an input reaches past every later guard", () => {
+    expect(REVIEW_SYSTEM_PROMPT).toContain("A finding is a defect: a concrete input or event");
+    expect(REVIEW_SYSTEM_PROMPT).toContain("Never file a report that says there is no defect");
+    expect(REVIEW_SYSTEM_PROMPT).toContain("through every check and guard that runs after them");
+    expect(REVIEW_SYSTEM_PROMPT).toContain("fixed rather than configurable");
+  });
+
   it("is the system prompt the review configuration forwards, whatever the repository holds", () => {
     const config = createFixedOpenCodeV2Config(
       { contextWindowTokens: 32_768, maxInputTokens: 28_672, maxOutputTokens: 4_096 },
