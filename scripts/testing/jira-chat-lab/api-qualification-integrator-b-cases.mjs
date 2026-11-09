@@ -52,6 +52,8 @@ const OBSERVED_TEXT_FIELDS = ["currentSubTask", "finishTime", "startTime", "subm
 async function latestReindex(c) {
   const response = await native(c, "/rest/api/2/reindex");
   if (response.status === 404) return { taskState: "no-prior-task" };
+  // Jira redirects to the task's progress page while it runs; a poll keeps waiting for the result.
+  if (response.status === 303) return { taskState: "running" };
   assert.equal(response.status, 200);
   const value = response.value;
   assert.equal(typeof value.type, "string");
