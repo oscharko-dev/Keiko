@@ -29,9 +29,15 @@ it("qualifies the owner-approved unconfirmed filter deletion only after exact na
               description: null,
               owner: { key: "admin-key" },
             }
-          : {},
+          : {
+              errorMessages: [
+                "The selected filter is not available to you, perhaps it has been deleted.",
+              ],
+              errors: {},
+            },
       ),
-      { status: present ? 200 : 404 },
+      // Jira 10.3 answers an absent saved filter with a 400 that names the deletion.
+      { status: present ? 200 : 400 },
     );
   });
   const entry = API_QUALIFICATION_AGILE_CASES.find((row) => row.tool === "jira.delete-filter");
@@ -42,7 +48,7 @@ it("qualifies the owner-approved unconfirmed filter deletion only after exact na
     present = false;
     await expect(
       entry.readback(ctx, { outcome: "succeeded-unconfirmed", reason: "unavailable" }, fixture),
-    ).resolves.toMatchObject({ matched: true, deletionConfirmed: false, observedStatus: 404 });
+    ).resolves.toMatchObject({ matched: true, deletionConfirmed: false, observedStatus: 400 });
     await expect(entry.readback(ctx, {}, { agileFilterId: "11" })).rejects.toThrow();
     await expect(entry.readback(ctx, {}, { ...fixture, agileFilterId: "12" })).rejects.toThrow();
   } finally {
