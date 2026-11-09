@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7e42916cba27f198a97ab8ccc68af12d2f6adf4f4ac95a53511c5aba902f137f",
+    "catalogDigest": "95c8a1489f2f187cce0541eb3f8d21d45f519ba4be2366ba1769658fb56305a2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1331,6 +1331,71 @@
             "dataClass": "count",
             "required": true
           },
+          "summaryTooShortCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "summaryTooLongCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "summaryPatternCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sectionMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sectionEmptyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "fieldMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "fieldUnavailableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "labelMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "labelPatternCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "labelCountCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "parentMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "parentTypeMismatchCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "templateUnreadableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "settledCount": {
             "type": "integer",
             "dataClass": "count",
@@ -1363,8 +1428,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-draft.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:19",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:114"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:20",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:116"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1439,7 +1504,14 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["stage-failed", "call-limit", "model-failed", "deadline", "cancelled"]
+            "values": [
+              "stage-failed",
+              "stage-rejection-unchanged",
+              "call-limit",
+              "model-failed",
+              "deadline",
+              "cancelled"
+            ]
           },
           "requirementCount": {
             "type": "integer",
@@ -1486,6 +1558,87 @@
             "dataClass": "count",
             "required": false
           },
+          "parseAttemptCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "stageAttemptCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "guidanceDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "summaryTooShortCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "summaryTooLongCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "summaryPatternCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sectionMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sectionEmptyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "fieldMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "fieldUnavailableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "labelMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "labelPatternCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "labelCountCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "parentMissingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "parentTypeMismatchCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "templateUnreadableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "createRequested": {
             "type": "boolean",
             "dataClass": "closed-enum",
@@ -1517,8 +1670,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-draft-batch.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:97",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:227"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:104",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:243"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33577,8 +33730,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:189",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:312"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:236",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:359"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35330,8 +35483,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:94",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:283"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:141",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:330"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35378,8 +35531,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.metadata.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:54",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:84"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:101",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:131"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39718,8 +39871,8 @@
         "failureClasses": ["knowledge-citation-reconciliation"],
         "proofIds": ["search.answer.assessed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:379",
-        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:446"]
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:396",
+        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:463"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39862,6 +40015,16 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "repairLineCountBefore": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "repairLineCountAfter": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "diagnosticWhen": [
@@ -39886,8 +40049,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:40",
         "emitterSites": [
-          "packages/keiko-server/src/grounded-citation-log.ts:241",
-          "packages/keiko-server/src/grounded-citation-log.ts:282"
+          "packages/keiko-server/src/grounded-citation-log.ts:258",
+          "packages/keiko-server/src/grounded-citation-log.ts:299"
         ]
       },
       {
@@ -39937,8 +40100,8 @@
         "failureClasses": ["knowledge-citation-reconciliation"],
         "proofIds": ["search.citations.support-settled.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:314",
-        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:357"]
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:331",
+        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:374"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -62587,10 +62750,40 @@
                   "required": true
                 },
                 {
+                  "name": "fieldMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "fieldUnavailableCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "itemCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "labelCountCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "labelMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "labelPatternCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "newDraft",
@@ -62609,6 +62802,18 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "parentMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "parentTypeMismatchCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "pendingCount",
@@ -62641,7 +62846,43 @@
                   "required": false
                 },
                 {
+                  "name": "sectionEmptyCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "sectionMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "settledCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "summaryPatternCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "summaryTooLongCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "summaryTooShortCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "templateUnreadableCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -62719,6 +62960,18 @@
                   "required": false
                 },
                 {
+                  "name": "fieldMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "fieldUnavailableCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "frames",
                   "type": "string-array",
                   "dataClass": "safe-platform-class",
@@ -62737,7 +62990,31 @@
                   "required": false
                 },
                 {
+                  "name": "guidanceDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
                   "name": "itemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "labelCountCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "labelMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "labelPatternCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -62750,6 +63027,24 @@
                 },
                 {
                   "name": "pageItemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "parentMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "parentTypeMismatchCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "parseAttemptCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -62785,9 +63080,51 @@
                   "required": false
                 },
                 {
+                  "name": "sectionEmptyCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "sectionMissingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "stageAttemptCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "stopReason",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "summaryPatternCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "summaryTooLongCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "summaryTooShortCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "templateUnreadableCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 }
               ],
@@ -62795,6 +63132,7 @@
                 "closed-enum",
                 "completeness-state",
                 "count",
+                "digest",
                 "duration",
                 "error-kind",
                 "loss-state",
@@ -99187,6 +99525,18 @@
                   "required": true
                 },
                 {
+                  "name": "repairLineCountAfter",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "repairLineCountBefore",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "repairProseAvailable",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -116241,13 +116591,13 @@
     {
       "op": "atlassian.jira-draft",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:22",
+      "site": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:23",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.jira-draft-batch",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:100",
+      "site": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:107",
       "package": "keiko-server"
     },
     {
@@ -119119,13 +119469,13 @@
     {
       "op": "jira.field.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:192",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:239",
       "package": "keiko-server"
     },
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:326",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:327",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119217,20 +119567,20 @@
     {
       "op": "jira.template-preflight-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts:225",
+      "site": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts:229",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "jira.template.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:97",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:144",
       "package": "keiko-server"
     },
     {
       "op": "jira.template.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:57",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:104",
       "package": "keiko-server"
     },
     {
@@ -119697,7 +120047,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2612",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2624",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119734,7 +120084,7 @@
     {
       "op": "search.answer.assessed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-citation-log.ts:382",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:399",
       "package": "keiko-server"
     },
     {
@@ -119746,7 +120096,7 @@
     {
       "op": "search.citations.support-settled",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-citation-log.ts:317",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:334",
       "package": "keiko-server"
     },
     {
