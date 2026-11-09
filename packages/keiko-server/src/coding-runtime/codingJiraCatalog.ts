@@ -97,6 +97,8 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
   private initial: readonly ExternalMcpTool[];
   tools: readonly ExternalMcpTool[];
   selected: ManagedMcpHost<Context> | undefined;
+  /** Identities of the published selection, which the next describe replaces. */
+  identities: readonly string[] = [];
   selecting = false;
   active = 0;
   closed = false;
@@ -183,6 +185,7 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
       this.selected = candidate;
       candidate = undefined;
       this.tools = Object.freeze(next);
+      this.identities = Object.freeze([...identities]);
       await retire(previous, context.correlationId);
     } catch (error) {
       if (error instanceof ManagedMcpError)
@@ -221,6 +224,7 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
             Buffer.byteLength(JSON.stringify(result)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
           selectJiraOperations: (identities, result) =>
             selection.select(identities, result, context),
+          selectedJiraOperations: () => selection.identities,
         });
       const host = selection.selected;
       if (

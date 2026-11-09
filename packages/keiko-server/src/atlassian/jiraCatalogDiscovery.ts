@@ -24,6 +24,8 @@ export interface JiraCatalogDiscoveryContext extends ManagedMcpInvocationContext
   readonly jiraDiscoveryResultFits?: ((result: CatalogJsonObject) => boolean) | undefined;
   readonly selectJiraOperations?:
     ((identities: readonly string[], result: CatalogJsonObject) => Promise<void>) | undefined;
+  /** Identities of the selection the next describe replaces; absent when none is tracked. */
+  readonly selectedJiraOperations?: (() => readonly string[]) | undefined;
 }
 interface DiscoveryOptions {
   /** Server-owned admitted subset; absent retains Chat's ordinary catalog admission. */
@@ -213,15 +215,25 @@ async function describe(
   );
   requireDispatch(context.selectJiraOperations !== undefined, "failed", "handler-unavailable");
   const selected = new Set(identities);
+  const previous = new Set(context.selectedJiraOperations?.() ?? []);
+  const known = summaries(options);
+  const deselected = known
+    .filter((item) => previous.has(item.identity) && !selected.has(item.identity))
+    .map((item) => ({ identity: item.identity, tool: item.tool }));
   const data: CatalogJsonObject = {
     outcome: "succeeded",
-    items: summaries(options)
+    items: known
       .filter((item) => selected.has(item.identity))
       .map((item) => ({ identity: item.identity, tool: item.tool })),
     selectedFor: "next-round",
+    ...(deselected.length === 0 ? {} : { deselected, guidance: DESELECTED_GUIDANCE }),
   };
   return selectedDescription(context.selectJiraOperations.bind(context), identities, data);
 }
+
+/** A replacing selection names what it dropped, so a model never calls a tool it lost unknowingly. */
+const DESELECTED_GUIDANCE =
+  "This selection replaced the previous one. The operations under deselected are no longer offered in the next round; select them again together with the others if they are still needed.";
 
 const RESULT_SCHEMA = object(
   {
@@ -245,6 +257,11 @@ const RESULT_SCHEMA = object(
     total: { type: "integer", minimum: 0 },
     nextStartAt: { type: "integer", minimum: 0 },
     selectedFor: { type: "string", enum: ["next-round"] },
+    deselected: {
+      type: "array",
+      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+      items: ITEM,
+    },
   },
   ["outcome", "items"],
 );

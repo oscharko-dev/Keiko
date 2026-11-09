@@ -48,6 +48,7 @@ interface LifecycleContext extends CatalogTrustedContext {
     identities: readonly string[],
     result: CatalogJsonObject,
   ) => Promise<void>;
+  readonly selectedJiraOperations?: () => readonly string[];
 }
 // Require the optional hook in this fixture; the actual base call/round/finally code is never mocked.
 type LifecycleOptions = ChatToolTurnOptions<LifecycleContext> & {
@@ -97,6 +98,7 @@ function gateway(): ReturnType<typeof probeVerifiedGatewayConfig> {
 function fixture(
   finalizeTurn: () => Promise<void>,
   selectionClose?: () => Promise<void>,
+  observeSelection?: (selected: readonly string[] | undefined) => void,
 ): {
   readonly turn: LifecycleTurn;
   readonly diagnostics: ServerDiagnosticRecord[];
@@ -136,6 +138,7 @@ function fixture(
               if (selectionClose !== undefined) {
                 if (context.selectJiraOperations === undefined)
                   throw new Error("Missing selection port");
+                observeSelection?.(context.selectedJiraOperations?.());
                 await context.selectJiraOperations(["GET /synthetic"], { text: "selected" });
               }
               return f.handler.execute(args, handlerContext);
@@ -239,6 +242,40 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
     },
   };
 }
+
+describe("ChatToolTurn Jira operation selection", () => {
+  it("tells the next describe which settled selection it replaces (LIM22)", async () => {
+    const observed: (readonly string[] | undefined)[] = [];
+    const f = fixture(
+      () => Promise.resolve(),
+      () => Promise.resolve(),
+      (selected) => observed.push(selected),
+    );
+    let rounds = 0;
+    const model: ModelPort = {
+      call: (round): Promise<NormalizedResponse> => {
+        if (++rounds > 2) return Promise.resolve(answer());
+        const bridge = createGatewayToolCatalogBridge(round, Date.now);
+        return Promise.resolve({
+          ...answer(),
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            bridge.bind({
+              id: `read-${String(rounds)}`,
+              name: "fixture_read",
+              arguments: { path: "fixture.ts" },
+            }),
+          ],
+        });
+      },
+    };
+    await expect(f.turn.call(model, request, new AbortController().signal)).resolves.toMatchObject({
+      content: answer().content,
+    });
+    expect(observed).toEqual([[], ["GET /synthetic"]]);
+  });
+});
 
 describe("ChatToolTurn final lifetime cleanup", () => {
   it.each(terminals)("awaits the finalizer before a %s call settles", async (terminal) => {

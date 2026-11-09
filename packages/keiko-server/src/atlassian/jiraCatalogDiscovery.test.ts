@@ -142,6 +142,37 @@ describe("local Jira operation discovery", () => {
     expect(jiraToolsForIdentities(["GET /rest/api/2/project"])).toEqual(["jira.projects"]);
   });
 
+  it("names the operations a replacing selection drops, so none disappears unannounced (LIM22)", async () => {
+    const f = fixture();
+    const context = {
+      ...f.context,
+      selectedJiraOperations: (): readonly string[] => [
+        "POST /rest/api/2/project",
+        "GET /rest/api/2/project/type",
+      ],
+    };
+    const result = await f.describe.execute(
+      { identities: ["GET /rest/api/2/mypermissions", "GET /rest/api/2/project/type"] },
+      context,
+    );
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      selectedFor: "next-round",
+      deselected: [{ identity: "POST /rest/api/2/project", tool: "jira_create_project" }],
+    });
+    expect(result.data.guidance).toMatch(/no longer offered/u);
+    expect(f.select).toHaveBeenCalledWith(
+      ["GET /rest/api/2/mypermissions", "GET /rest/api/2/project/type"],
+      result.data,
+    );
+    const kept = await f.describe.execute(
+      { identities: ["POST /rest/api/2/project", "GET /rest/api/2/project/type"] },
+      context,
+    );
+    expect(kept.data).not.toHaveProperty("deselected");
+    expect(kept.data).not.toHaveProperty("guidance");
+  });
+
   it("ends a discovery page at the current model budget and reports where to continue", async () => {
     const f = fixture();
     const response = await f.discover.execute(

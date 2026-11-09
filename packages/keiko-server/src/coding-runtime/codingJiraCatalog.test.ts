@@ -182,6 +182,19 @@ it("compiles only selected tools, replaces the subset, and clears it without an 
   expect(f.execute).toHaveBeenCalledOnce();
 });
 
+it("reports the operations a replacing selection drops to the model (LIM22)", async () => {
+  const f = fixture();
+  await f.catalog.ready;
+  expect(await f.select([PROJECTS])).not.toHaveProperty("deselected");
+  expect(await f.select([ISSUE])).toMatchObject({
+    deselected: [{ identity: PROJECTS, tool: "jira.projects" }],
+  });
+  expect(await f.select([ISSUE])).not.toHaveProperty("deselected");
+  expect(await f.select([])).toMatchObject({
+    deselected: [{ identity: ISSUE, tool: "jira.issue" }],
+  });
+});
+
 it("retains the admitted subset after a selected schema fails and surfaces the closed refusal", async () => {
   const f = fixture();
   await f.catalog.ready;

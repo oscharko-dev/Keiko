@@ -89,6 +89,8 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   /** Server-owned selection for the next model round, after the current invocation settles. */
   readonly selectJiraOperations?:
     ((identities: readonly string[], result: CatalogJsonObject) => Promise<void>) | undefined;
+  /** Identities of the current additional selection, which the next selection replaces. */
+  readonly selectedJiraOperations?: (() => readonly string[]) | undefined;
   /** Server-private pure snapshot; never serialized into model/MCP arguments. */
   readonly retainDraftProgress?:
     | ((actionId: string, invocationId: string, snapshot: () => CatalogJsonObject) => void)

@@ -55,6 +55,7 @@ export interface ChatSourcesContext extends ToolConsumerContext {
   readonly confirmModelOperation?: (response: NormalizedResponse) => void;
   readonly retainDraftProgress?: JiraChatCatalogContext["retainDraftProgress"];
   readonly selectJiraOperations?: JiraChatCatalogContext["selectJiraOperations"];
+  readonly selectedJiraOperations?: JiraChatCatalogContext["selectedJiraOperations"];
   readonly jiraDiscoveryResultFits?: JiraChatCatalogContext["jiraDiscoveryResultFits"];
   readonly reportBatchProgress?: JiraChatCatalogContext["reportBatchProgress"];
   readonly remainingModelCalls?: JiraChatCatalogContext["remainingModelCalls"];
@@ -112,6 +113,7 @@ const OPTIONAL_INVOCATION_KEYS = [
   "meterModel",
   "retainDraftProgress",
   "selectJiraOperations",
+  "selectedJiraOperations",
   "jiraDiscoveryResultFits",
   "reportBatchProgress",
   "remainingModelCalls",
@@ -135,6 +137,7 @@ function invocationFields(
   | "confirmModelOperation"
   | "retainDraftProgress"
   | "selectJiraOperations"
+  | "selectedJiraOperations"
   | "jiraDiscoveryResultFits"
   | "reportBatchProgress"
   | "remainingModelCalls"

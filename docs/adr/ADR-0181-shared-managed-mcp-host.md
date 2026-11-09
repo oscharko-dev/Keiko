@@ -44,7 +44,9 @@ complete acceptance remains tracked separately from this architectural decision.
 `jira.describe` and the existing Knowledge tools. Discovery pages the closed registry of
 implemented operations; it does not advertise the unimplemented API inventory as executable.
 Describe accepts only exact registry identities and prepares the selected typed tools for the
-next model round. The selection activates only after that describe invocation completes;
+next model round. A describe replaces the previous additional selection; its result names
+every previously selected operation it drops (`deselected`), so a model never loses a tool
+without being told. The selection activates only after that describe invocation completes;
 failed or timed-out candidates are closed. Neither metadata operation performs Jira HTTP.
 Each round still uses the normal authority-filtered binder offer and the same accepted-turn
 invocation registry, so selection cannot grant authority or replay earlier effects. Other

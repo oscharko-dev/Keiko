@@ -392,12 +392,15 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private managed: ChatRoundCatalog;
   private readonly invocationRegistry = createCodingToolInvocationRegistry({ now: Date.now });
   private selectedCatalog: ChatToolCatalogSelection<Context> | undefined;
+  /** Identities of the latest settled additional selection, which the next describe replaces. */
+  private jiraSelection: readonly string[] = [];
   private pendingCatalog:
     (ChatToolCatalogSelection<Context> & { readonly binder: CatalogToolBinder }) | undefined;
   private preparedCatalog:
     | (ChatToolCatalogSelection<Context> & {
         readonly binder: CatalogToolBinder;
         readonly requestId: string;
+        readonly identities: readonly string[];
       })
     | undefined;
   private activeSelectionRequestId: string | undefined;
@@ -466,6 +469,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       ...options.context,
       signal: AbortSignal.any([options.context.signal, this.abortController.signal]),
       selectJiraOperations: this.selectJiraOperations,
+      selectedJiraOperations: (): readonly string[] => this.jiraSelection,
       jiraDiscoveryResultFits: this.jiraDiscoveryResultFits,
       ...this.turnReadouts(),
       retainDraftProgress: (
@@ -572,7 +576,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       const tools = offeredDefinitions(selection.managed, definitions, offered);
       requireDispatch(this.selectionFits(request, tools, result), "denied", "budget-exhausted");
       requireDispatch(this.activeSelectionRequestId === requestId, "cancelled", "parent-cancelled");
-      this.preparedCatalog = { ...selection, binder, requestId };
+      this.preparedCatalog = { ...selection, binder, requestId, identities: [...identities] };
     } catch (error) {
       await selection.close();
       throw error;
@@ -626,6 +630,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.pendingCatalog = undefined;
     this.selectedCatalog = undefined;
     this.preparedCatalog = undefined;
+    this.jiraSelection = [];
     if (selected !== undefined) {
       this.managed = this.options.managed;
       this.bound = undefined;
@@ -659,6 +664,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     }
     const previous = this.pendingCatalog;
     this.pendingCatalog = prepared;
+    this.jiraSelection = prepared.identities;
     await previous?.close();
   }
   protected abstract reserveAuthorityPrompt(promptTokens: number): boolean;
