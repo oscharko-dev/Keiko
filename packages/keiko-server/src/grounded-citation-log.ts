@@ -174,30 +174,24 @@ function definedCitationMetadata(
   };
 }
 
+const CITATION_COUNT_KEYS = [
+  "repairLineCountBefore",
+  "repairLineCountAfter",
+  "followUpPass",
+  "insufficiencyDeclaredCount",
+  "declaredInScopeCount",
+  "declaredUnreadInScopeCount",
+  "declaredNotInScopeCount",
+] as const satisfies readonly (keyof CitationReconciliationMetadata)[];
+
 function citationCountMetadata(
   metadata: CitationReconciliationMetadata,
 ): Partial<ActivityLogFields<typeof SEARCH_CITATIONS_RECONCILED_OPERATION>> {
-  return {
-    ...(metadata.repairLineCountBefore === undefined
-      ? {}
-      : { repairLineCountBefore: metadata.repairLineCountBefore }),
-    ...(metadata.repairLineCountAfter === undefined
-      ? {}
-      : { repairLineCountAfter: metadata.repairLineCountAfter }),
-    ...(metadata.followUpPass === undefined ? {} : { followUpPass: metadata.followUpPass }),
-    ...(metadata.insufficiencyDeclaredCount === undefined
-      ? {}
-      : { insufficiencyDeclaredCount: metadata.insufficiencyDeclaredCount }),
-    ...(metadata.declaredInScopeCount === undefined
-      ? {}
-      : { declaredInScopeCount: metadata.declaredInScopeCount }),
-    ...(metadata.declaredUnreadInScopeCount === undefined
-      ? {}
-      : { declaredUnreadInScopeCount: metadata.declaredUnreadInScopeCount }),
-    ...(metadata.declaredNotInScopeCount === undefined
-      ? {}
-      : { declaredNotInScopeCount: metadata.declaredNotInScopeCount }),
-  };
+  return Object.fromEntries(
+    CITATION_COUNT_KEYS.flatMap((key) =>
+      metadata[key] === undefined ? [] : [[key, metadata[key]]],
+    ),
+  );
 }
 
 export interface CitationReconciliationEvidence {
