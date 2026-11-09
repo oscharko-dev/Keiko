@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { read, readRecord, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
-import { createQualificationFilter } from "./api-qualification-fixtures.mjs";
+import { createQualificationFilter, fixtureWrite } from "./api-qualification-fixtures.mjs";
+import { labRequest, basicAuth } from "./lab-client.mjs";
 
 const path = (f) => `/rest/api/2/filter/${f.savedFilterId}`;
 export function filterColumnReview(raw) {
@@ -89,8 +90,28 @@ export const API_QUALIFICATION_FILTER_CASES = [
     prepare: async (c, f) => {
       await observeAdminActor(c, f);
       f.savedFilterId = String((await createQualificationFilter(c, f, "saved configuration")).id);
+      // Jira answers a bare 404 until the filter owns an explicit layout; the governed write gives
+      // this synthetic filter one before the read case observes it.
+      const seeded = ["issuekey", "summary"];
+      await fixtureWrite(
+        c,
+        "jira.set-filter-columns",
+        {
+          filterId: f.savedFilterId,
+          expectedOwnerKey: f.adminActorKey,
+          expectedColumns: [],
+          expectedColumnConfig: null,
+          columns: seeded,
+        },
+        async (cc) => {
+          assert.deepEqual(
+            filterColumnReview(await read(cc, `${path(f)}/columns`)).columns,
+            seeded,
+          );
+          return proof(1);
+        },
+      );
       await columns(c, f);
-      f.savedInheritedColumns = f.savedColumns.columns;
     },
   },
   adminMutationCase(
@@ -116,11 +137,16 @@ export const API_QUALIFICATION_FILTER_CASES = [
     columnArgs,
     async (c, _data, f) => {
       await owner(c, f);
-      const after = filterColumnReview(await read(c, `${path(f)}/columns`));
-      assert.deepEqual(after.columns, f.savedInheritedColumns);
-      assert.notDeepEqual(f.savedColumns.columns, after.columns);
-      if (after.columnConfig !== null)
-        assert.ok(new Set(["SYSTEM", "USER", "NONE"]).has(after.columnConfig));
+      // Jira reports a filter without its own layout as a bare 404; the prepared 200 layout proves
+      // the explicit configuration existed before the reset.
+      assert.ok(f.savedColumns.columns.length > 0);
+      const after = await labRequest(
+        c.session,
+        "GET",
+        `${path(f)}/columns`,
+        basicAuth(c.session, c.actor),
+      );
+      assert.equal(after.status, 404);
       return proof(4);
     },
     columns,

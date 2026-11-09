@@ -282,14 +282,10 @@ export async function runQualificationCase(
 ) {
   const failure = await prepareCase(context, chat, specification, fixture);
   if (failure !== undefined)
-    return recordUngraded(
-      specification,
-      directory,
-      {
-        ...ungradedEvidence(specification, report, failure, witness.effectsStarted()),
-        detail: context.qualificationPrepareDetail,
-      },
-    );
+    return recordUngraded(specification, directory, {
+      ...ungradedEvidence(specification, report, failure, witness.effectsStarted()),
+      detail: context.qualificationPrepareDetail,
+    });
   const id = caseId(specification);
   const pending = join(directory, `${id}.pending.json`);
   privateJson(
