@@ -8,6 +8,7 @@ import { readBoundedOoxmlPackage } from "@oscharko-dev/keiko-local-knowledge";
 import { basicAuth, labSessionConnection } from "./lab-client.mjs";
 import { connectQualificationFile } from "./api-qualification-fixtures.mjs";
 import { createZip } from "./requirements/ooxml-zip.mjs";
+import { writeCorpusDocuments } from "./requirements/corpus-documents.mjs";
 
 const assetHash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -80,21 +81,49 @@ function connectAsset(context, f, path) {
 
 export async function prepareAttachmentSource(context, f) {
   const { directory } = assetDirectory(context, f);
-  // Jira expands only recognised archives: an OOXML document is a ZIP but is listed as empty and its
-  // human summary is a 409, so the attachment is a plain synthetic ZIP the existing writer builds.
-  const archive = join(directory, "synthetic-ac7-archive.zip");
-  writeFileSync(
-    archive,
-    createZip(
-      ["a", "b"].map((name) => ({
-        name: `synthetic/${name}.txt`,
-        data: `Synthetic AC7 archive entry ${name} ${f.runId}\n`,
-      })),
-    ),
-    { mode: 0o600 },
+  const [document] = writeCorpusDocuments(directory);
+  f.assetAttachmentFile = await connectAsset(context, f, document);
+}
+
+/**
+ * Keiko refuses to attach archives (it cannot credential-scan them), and Jira lists an OOXML
+ * document as an empty archive. The archive read recipes therefore need a genuine ZIP attached as
+ * native operator fixture preparation, on its own synthetic issue, with an independent entry pack.
+ */
+export async function attachNativeArchive(context, f, issueKey) {
+  const bytes = createZip(
+    ["a", "b"].map((name) => ({
+      name: `synthetic/${name}.txt`,
+      data: `Synthetic AC7 archive entry ${name} ${f.runId}\n`,
+    })),
   );
-  f.assetAttachmentFile = await connectAsset(context, f, archive);
-  f.assetArchivePack = await assetPack(readFileSync(archive));
+  const form = new globalThis.FormData();
+  form.set("file", new globalThis.Blob([bytes], { type: "application/zip" }), "synthetic-ac7.zip");
+  const origin = labSessionConnection(context.session).origin;
+  const response = await globalThis.fetch(
+    new URL(`/rest/api/2/issue/${encodeURIComponent(issueKey)}/attachments`, origin),
+    {
+      method: "POST",
+      redirect: "manual",
+      signal: globalThis.AbortSignal.timeout(30000),
+      headers: {
+        Authorization: basicAuth(context.session, context.actor),
+        "X-Atlassian-Token": "no-check",
+        Accept: "application/json",
+      },
+      body: form,
+    },
+  );
+  assert.equal(response.status, 200, "Jira must accept the synthetic archive attachment");
+  const rows = await response.json();
+  assert.equal(rows.length, 1);
+  f.assetArchivePack = await assetPack(bytes);
+  f.assetArchive = {
+    id: String(rows[0].id),
+    filename: rows[0].filename,
+    size: rows[0].size,
+  };
+  assert.equal(f.assetArchive.size, bytes.byteLength);
 }
 
 /** Defaults are an explicit operator fixture from the fresh owned native image, never inferred. */

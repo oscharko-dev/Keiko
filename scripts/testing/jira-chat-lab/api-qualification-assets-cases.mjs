@@ -7,6 +7,7 @@ import { createQualificationIssue, fixtureWrite } from "./api-qualification-fixt
 import { assertQualificationJson } from "./api-qualification-json.mjs";
 import { proof, read, readRecord } from "./api-qualification-read.mjs";
 import {
+  attachNativeArchive,
   observeEmailPack,
   prepareAttachmentSource,
   prepareEmailSource,
@@ -71,16 +72,22 @@ async function ensureAttachment(context, f) {
     (c, data) => attachmentReadback(c, data, f),
   );
 }
+async function ensureArchive(context, f) {
+  await observeAdminActor(context, f);
+  if (f.assetArchive !== undefined) return;
+  const issue = await createQualificationIssue(context, f, "asset archive");
+  await attachNativeArchive(context, f, issue.key);
+}
 function assetRead(tool, path, fields, options, prepare) {
   return { ...scope, ...readCase(tool, path, fields, options), prepare };
 }
 function archiveRead(tool, suffix, fields, options) {
   const entry = assetRead(
     tool,
-    (f) => `${attachmentPath(f)}/expand/${suffix}`,
+    (f) => `/rest/api/2/attachment/${f.assetArchive.id}/expand/${suffix}`,
     fields,
     options,
-    ensureAttachment,
+    ensureArchive,
   );
   return {
     ...entry,
@@ -282,14 +289,14 @@ export const API_QUALIFICATION_ASSETS_CASES = [
     "human",
     ["attachmentId", "name", "mediaType", "totalEntryCount"],
     {
-      args: (f) => ({ attachmentId: f.assetAttachment.id }),
+      args: (f) => ({ attachmentId: f.assetArchive.id }),
       nativeRoot: "single",
       productRoot: "single",
       nativeNames: { attachmentId: "id" },
     },
   ),
   archiveRead("jira.attachment-archive", "raw", ["entryIndex"], {
-    args: (f) => ({ attachmentId: f.assetAttachment.id, maxResults: 100 }),
+    args: (f) => ({ attachmentId: f.assetArchive.id, maxResults: 100 }),
     nativeRoot: "entries",
     optionalFields: ["name", "size", "mediaType", "abbreviatedName"],
   }),
