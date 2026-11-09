@@ -82,6 +82,7 @@ import {
 } from "../chat-tool-report-coverage.js";
 import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
 import { conversationModelNotReadyResult } from "../conversation-readiness-admission.js";
+import type { ToolCallingReadinessReason } from "../conversation-readiness-error.js";
 import { updateCapsuleState } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
 import {
@@ -140,6 +141,14 @@ vi.mock("../chat-tool-knowledge-coverage.js", async (importOriginal) => {
 });
 
 type ToolProof = boolean | "missing" | "stale" | "unsupported" | "mismatched";
+type ToolProofRefusal = readonly [ToolCallingReadinessReason, string];
+/** ADR-0171: only an unsupported model is unavailable; every other proof failure is not ready. */
+function toolProofRefusal(proof: Exclude<ToolProof, true>): ToolProofRefusal {
+  if (proof === "unsupported") return ["unsupported", "CONVERSATION_UNAVAILABLE_MODEL"];
+  if (proof === "stale") return ["stale", "CONVERSATION_MODEL_NOT_READY"];
+  if (proof === "mismatched") return ["configuration-changed", "CONVERSATION_MODEL_NOT_READY"];
+  return ["unverified", "CONVERSATION_MODEL_NOT_READY"];
+}
 const MODEL = "synthetic-jira-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const cleanups: (() => Promise<void>)[] = [];
@@ -1212,15 +1221,9 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       const f = fixture();
       configure(f.deps, proof);
       const result = await send(f, "unverified-model-turn");
-      expect(result).toMatchObject({
-        status: 400,
-        body: {
-          error: {
-            code: "CONVERSATION_UNAVAILABLE_MODEL",
-          },
-        },
-      });
-      expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling"));
+      const [reason, code] = toolProofRefusal(proof);
+      expect(result).toMatchObject({ status: 400, body: { error: { code } } });
+      expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling", reason));
       expect(f.calls).toHaveLength(0);
       expect(f.requests()).toBe(0);
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
@@ -1248,10 +1251,9 @@ describe("normal streamed Chat through the owned Jira catalog", () => {
         { ...sendContext(f, "unverified-stream"), res: response.res },
         f.deps,
       );
-      expect(result).toMatchObject({
-        status: 400,
-        body: { error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } },
-      });
+      const [reason, code] = toolProofRefusal(proof);
+      expect(result).toMatchObject({ status: 400, body: { error: { code } } });
+      expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling", reason));
       expect(response.body()).toBe("");
       expect(f.calls).toHaveLength(0);
       expect(f.requests()).toBe(0);
@@ -2767,7 +2769,7 @@ it("drains a real buffered HTTP disconnect while the write approval is pending",
 
 type PreparationFailure = "tool-proof" | "authority" | "catalog";
 const PREPARATION_RESPONSES: Record<PreparationFailure, readonly [number, string]> = {
-  "tool-proof": [400, "CONVERSATION_UNAVAILABLE_MODEL"],
+  "tool-proof": [400, toolProofRefusal(false)[1]],
   authority: [403, "FORBIDDEN"],
   catalog: [503, "CHAT_TOOL_UNAVAILABLE"],
 };
@@ -4605,8 +4607,9 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
     vi.spyOn(f.deps.store, "findMessageById").mockImplementation((id) => {
       const found = find(id);
       if (found?.toolTranscript === undefined) return found;
-      // Only the offer's own read finds the stored batch exchange missing.
-      if (!(new Error().stack ?? "").includes("offerBatchDrafts")) return found;
+      // Only the offer's own read finds the stored batch exchange missing. Each call is offered by
+      // `offerBatchDraft` through the settle chain, so the batch caller is no longer on the stack.
+      if (!(new Error().stack ?? "").includes("offerBatchDraft")) return found;
       return { ...found, toolTranscript: { ...found.toolTranscript, exchanges: [] } };
     });
     await send(f, "batch-no-stored-result");
