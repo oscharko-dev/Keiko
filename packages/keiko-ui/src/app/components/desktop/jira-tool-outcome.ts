@@ -879,19 +879,37 @@ const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   "malformed-payload": "chat.jira.outcome.failure.response",
   "field-validation": "chat.jira.outcome.failure.fields",
   "read:field-validation": "chat.jira.outcome.failure.readParameters",
+  "requirement:untraced": "chat.jira.outcome.failure.requirementUntraced",
+  "requirement:criteria-missing": "chat.jira.outcome.failure.requirementCriteria",
+  "requirement:references": "chat.jira.outcome.failure.requirementReferences",
+  "requirement:unavailable": "chat.jira.outcome.failure.requirementUnavailable",
   "effect-denied": "chat.jira.outcome.failure.localAuthority",
   cancelled: "chat.jira.outcome.failure.cancelled",
   timeout: "chat.jira.outcome.failure.unavailable",
   unavailable: "chat.jira.outcome.failure.unavailable",
 };
+/**
+ * A refusal of the requirement trace names which part of the trace failed, so the person reads why
+ * nothing was created instead of the generic field-validation advice.
+ */
+function requirementRefusalReason(data: UnknownRecord | undefined): string | undefined {
+  if (data?.outcome !== "rejected") return undefined;
+  const refusal = data.requirementRefusal;
+  if (refusal === "source-changed") return "source-changed";
+  if (refusal === "untraced") return "requirement:untraced";
+  if (refusal === "unavailable" || refusal === "no-knowledge-pod") return "requirement:unavailable";
+  if (refusal !== "references") return undefined;
+  const problems = Array.isArray(data.requirementProblems) ? data.requirementProblems : [];
+  const criteriaMissing = problems.some(
+    (problem) => record(problem)?.reason === "acceptance-criteria-missing",
+  );
+  return criteriaMissing ? "requirement:criteria-missing" : "requirement:references";
+}
 function failureReason(
   data: UnknownRecord | undefined,
   exchange: ChatToolExchange,
 ): string | undefined {
-  const reason =
-    data?.outcome === "rejected" && data.requirementRefusal === "source-changed"
-      ? "source-changed"
-      : text(data?.reason);
+  const reason = requirementRefusalReason(data) ?? text(data?.reason);
   if (JIRA_CATALOG_TOOLS.has(exchange.call.name) && reason === "invalid-arguments")
     return "catalog:invalid-arguments";
   // A read changes nothing, so Jira refused the requested values, not fields of a change.

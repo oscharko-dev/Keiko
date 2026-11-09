@@ -37,7 +37,11 @@ export const JIRA_APPLICABLE_TEMPLATES_SCHEMA = object(
             },
             ["required"],
           ),
-          parent: object({ field: text(LIMITS.textChars), link: text(LIMITS.textChars) }),
+          parent: object({
+            field: text(LIMITS.textChars),
+            link: text(LIMITS.textChars),
+            issueTypes: strings(LIMITS.textChars),
+          }),
         },
         [
           "project",

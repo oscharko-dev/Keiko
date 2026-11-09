@@ -192,6 +192,34 @@ describe("applicable create template metadata through the managed read", () => {
     expect(JSON.stringify(f.sink.events)).not.toContain("Akzeptanzkriterien");
   });
 
+  it("returns a template that restricts the parent's issue type within the result schema", async () => {
+    const f = fixture();
+    f.add(
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        "issueType: Task",
+        "activateOn: [create]",
+        'parentField: "parent"',
+        "parentIssueTypes: [Story]",
+        "---",
+        "# Task",
+        "## Anforderung",
+      ].join("\n"),
+    );
+    const result = await f.read();
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      applicableTemplates: {
+        matchedCount: 1,
+        complete: true,
+        items: [{ issueType: "Task", parent: { field: "parent", issueTypes: ["Story"] } }],
+      },
+    });
+  });
+
   it("explicitly reports a complete empty rule set using only its existing field read", async () => {
     const f = fixture();
     const result = await f.read();

@@ -2340,6 +2340,14 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Prüfe, ob der angeforderte Jira-Vorgang oder das Projekt existiert und für dieses Konto sichtbar ist.",
   "chat.jira.outcome.failure.rateLimited":
     "Jira hat Anfragen begrenzt. Warte vor einer weiteren Anfrage.",
+  "chat.jira.outcome.failure.requirementUntraced":
+    "Der Entwurf nennt die Anforderung nicht, die er umsetzt. Verweise auf ihre Anforderungs-ID aus dem Knowledge Pod. In Jira wurde nichts angelegt.",
+  "chat.jira.outcome.failure.requirementCriteria":
+    "Ein Abnahmekriterium der genannten Anforderung fehlt in der Beschreibung. Übernimm es wörtlich. In Jira wurde nichts angelegt.",
+  "chat.jira.outcome.failure.requirementReferences":
+    "Eine genannte Anforderungs-ID ist im Knowledge Pod unbekannt oder mehrdeutig. Prüfe die ID. In Jira wurde nichts angelegt.",
+  "chat.jira.outcome.failure.requirementUnavailable":
+    "Die Anforderungen konnten aus keinem Knowledge Pod gelesen werden. Wähle den Knowledge Pod mit dem Lastenheft. In Jira wurde nichts angelegt.",
   "chat.jira.outcome.failure.sourceChanged":
     "Die Quellanforderungen haben sich geändert. Lies sie erneut und bereite den Entwurf neu vor. In Jira wurde nichts geändert.",
   "chat.jira.outcome.failure.conflict":

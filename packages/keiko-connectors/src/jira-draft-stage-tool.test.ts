@@ -64,6 +64,22 @@ function connection(
       return Promise.resolve(response({ id: "10000", key: "SYN" }));
     if (path.endsWith("/issuetype/10001"))
       return Promise.resolve(response({ id: "10001", name: "Story" }));
+    if (path.endsWith("/issue/SYN-3"))
+      return Promise.resolve(
+        response({
+          id: "20003",
+          key: "SYN-3",
+          fields: { issuetype: { id: "10002", name: "Task" } },
+        }),
+      );
+    if (path.endsWith("/issue/SYN-4"))
+      return Promise.resolve(
+        response({
+          id: "20004",
+          key: "SYN-4",
+          fields: { issuetype: { id: "10001", name: "Story" } },
+        }),
+      );
     if (path.includes("createmeta"))
       return Promise.resolve(
         response({
@@ -594,6 +610,71 @@ describe("jira.draft-stage (#4178)", () => {
           violations: [{ ruleId: "parent-missing", subject: "Blocks", template: "SYN/Story" }],
         },
       });
+      expect(h.deps.store.size()).toBe(0);
+    });
+  });
+
+  describe("a template that requires the parent's issue type (parentIssueTypes)", () => {
+    const underTask = (): JiraIssueTemplateSet => ({
+      templates: [template('parentField: "parent"', "parentIssueTypes: [Task]")],
+      unreadable: 0,
+    });
+
+    it("stages an item whose parent is an existing issue of an allowed type", async () => {
+      const h = harness(underTask());
+      const staged = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 1 });
+    });
+
+    it("refuses an item whose existing parent has another issue type, naming the allowed type", async () => {
+      const h = harness(underTask());
+      const refused = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", issueKey: "SYN-4" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(refused).toMatchObject({
+        isError: true,
+        data: {
+          ref: "a",
+          violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task" }],
+        },
+      });
+      expect(h.deps.store.size()).toBe(0);
+    });
+
+    it("leaves the type of a parent that is another draft item to the create gate", async () => {
+      const h = harness(underTask());
+      const staged = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", ref: "b" } }),
+          item("b", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 2 });
+    });
+
+    it("still refuses every other rule of an item whose parent is another draft item", async () => {
+      const h = harness(underTask());
+      const refused = await h.stage({
+        items: [
+          item("a", {
+            parent: { fieldId: "parent", ref: "b" },
+            fields: { summary: "Item a", description: "No sections" },
+          }),
+          item("b", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(refused).toMatchObject({ isError: true, data: { ref: "a" } });
+      const data = refused.data as { readonly violations: readonly { readonly ruleId: string }[] };
+      expect(data.violations.map((violation) => violation.ruleId)).not.toContain(
+        "template-unreadable",
+      );
+      expect(data.violations.length).toBeGreaterThan(0);
       expect(h.deps.store.size()).toBe(0);
     });
   });

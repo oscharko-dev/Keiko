@@ -160,18 +160,46 @@ function standInLinks(item: StagedJiraDraftItem): readonly CatalogJsonObject[] {
  */
 export function jiraDraftTemplateSource(item: StagedJiraDraftItem): CatalogJsonObject {
   const fields = (item.fields ?? {}) as Record<string, unknown>;
-  const parent = item.parent as { readonly fieldId?: unknown } | undefined;
-  const parentFieldId = typeof parent?.fieldId === "string" ? parent.fieldId : undefined;
+  const parent = draftParentOf(item);
   const links = standInLinks(item);
   return {
     projectId: item.projectId,
     issueTypeId: item.issueTypeId,
     fields: {
       ...fields,
-      ...(parentFieldId === undefined ? {} : { [parentFieldId]: JIRA_DRAFT_STAND_IN_KEY }),
+      ...(parent === undefined
+        ? {}
+        : { [parent.fieldId]: parent.issueKey ?? JIRA_DRAFT_STAND_IN_KEY }),
     },
     ...(links.length === 0 ? {} : { links }),
   } as CatalogJsonObject;
+}
+/** The field and, for an issue that already exists in Jira, the key the item's parent has. */
+function draftParentOf(
+  item: StagedJiraDraftItem,
+): { readonly fieldId: string; readonly issueKey?: string } | undefined {
+  const parent = item.parent as
+    { readonly fieldId?: unknown; readonly issueKey?: unknown } | undefined;
+  if (typeof parent?.fieldId !== "string") return undefined;
+  return typeof parent.issueKey === "string"
+    ? { fieldId: parent.fieldId, issueKey: parent.issueKey }
+    : { fieldId: parent.fieldId };
+}
+/**
+ * A parent that is another item of the draft does not exist yet, so its issue type cannot be read
+ * now. That one check stays with the create gate, which reads the created parent before the write;
+ * every other violation, and every violation of an item whose parent already exists, refuses here.
+ */
+function decidableNow(
+  item: StagedJiraDraftItem,
+  violations: readonly JiraTemplateViolation[],
+): readonly JiraTemplateViolation[] {
+  const parent = draftParentOf(item);
+  if (parent === undefined || parent.issueKey !== undefined) return violations;
+  return violations.filter(
+    (violation) =>
+      !(violation.ruleId === "template-unreadable" && violation.subject === parent.fieldId),
+  );
 }
 
 export interface JiraDraftTemplateRefusal {
@@ -197,8 +225,9 @@ export async function firstJiraDraftTemplateRefusal(
     context,
     connection,
   );
-  if (!result.ok && result.violations !== undefined)
-    return { ref: String(item.ref), violations: result.violations };
+  const violations =
+    result.ok || result.violations === undefined ? [] : decidableNow(item, result.violations);
+  if (violations.length > 0) return { ref: String(item.ref), violations };
   return firstJiraDraftTemplateRefusal(items, context, connection, index + 1);
 }
 

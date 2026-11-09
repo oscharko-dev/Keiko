@@ -1479,6 +1479,80 @@ describe.each(["en", "de"] as const)("changed source requirements in %s", (local
   });
 });
 
+describe.each(["en", "de"] as const)("requirement trace refusals in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  function refusal(data: CatalogJsonObject): ChatToolExchange {
+    const receipt = projectExchange(data, "jira_draft");
+    if (receipt.result?.status !== "completed") throw new Error("Missing trace-refusal fixture");
+    return {
+      ...receipt,
+      result: {
+        ...receipt.result,
+        effectStarted: false,
+        status: "failed",
+        reason: "provider-reported-error",
+        page: null,
+        data,
+      },
+    };
+  }
+  const messages = {
+    untraced: {
+      en: "The draft does not name the requirement it implements. Reference its requirement ID from the Knowledge Pod. Nothing was created in Jira.",
+      de: "Der Entwurf nennt die Anforderung nicht, die er umsetzt. Verweise auf ihre Anforderungs-ID aus dem Knowledge Pod. In Jira wurde nichts angelegt.",
+    },
+    criteria: {
+      en: "An acceptance criterion of the referenced requirement is missing from the description. Copy it word for word. Nothing was created in Jira.",
+      de: "Ein Abnahmekriterium der genannten Anforderung fehlt in der Beschreibung. Übernimm es wörtlich. In Jira wurde nichts angelegt.",
+    },
+    references: {
+      en: "A referenced requirement ID is unknown or ambiguous in the Knowledge Pod. Check the ID. Nothing was created in Jira.",
+      de: "Eine genannte Anforderungs-ID ist im Knowledge Pod unbekannt oder mehrdeutig. Prüfe die ID. In Jira wurde nichts angelegt.",
+    },
+    unavailable: {
+      en: "The requirements could not be read from a Knowledge Pod. Select the Knowledge Pod with the requirements document. Nothing was created in Jira.",
+      de: "Die Anforderungen konnten aus keinem Knowledge Pod gelesen werden. Wähle den Knowledge Pod mit dem Lastenheft. In Jira wurde nichts angelegt.",
+    },
+  } as const;
+  const generic = {
+    en: "Review the required Jira fields and template rules before requesting the change again.",
+    de: "Prüfe die erforderlichen Jira-Felder und Vorlagenregeln, bevor du die Änderung erneut anforderst.",
+  } as const;
+  it.each([
+    ["untraced", { requirementRefusal: "untraced" }],
+    [
+      "criteria",
+      {
+        requirementRefusal: "references",
+        requirementProblems: [
+          { ref: "d1", reference: "REQ-OKE-001", reason: "acceptance-criteria-missing" },
+        ],
+      },
+    ],
+    [
+      "references",
+      {
+        requirementRefusal: "references",
+        requirementProblems: [{ ref: "d1", reference: "REQ-OKE-999", reason: "unknown" }],
+      },
+    ],
+    ["references", { requirementRefusal: "references" }],
+    ["unavailable", { requirementRefusal: "unavailable" }],
+    ["unavailable", { requirementRefusal: "no-knowledge-pod" }],
+  ] as const)("names the %s refusal instead of the generic field advice", (kind, extra) => {
+    show(refusal({ outcome: "rejected", reason: "field-validation", ...extra }));
+    expect(screen.getByText(messages[kind][locale])).toBeVisible();
+    expect(screen.queryByText(generic[locale])).toBeNull();
+  });
+  it("keeps the field advice for a field refusal without a trace refusal", () => {
+    show(refusal({ outcome: "rejected", reason: "field-validation" }));
+    expect(screen.getByText(generic[locale])).toBeVisible();
+  });
+});
+
 describe.each(["en", "de"] as const)("explicit unchanged receipts in %s", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);

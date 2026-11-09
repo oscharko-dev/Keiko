@@ -2201,6 +2201,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The parent must have an allowed issue type ({subject}).",
   "chat.jira.outcome.failure.auth":
     "Verify the Jira Pod connection and its credentials before trying again.",
+  "chat.jira.outcome.failure.requirementUntraced":
+    "The draft does not name the requirement it implements. Reference its requirement ID from the Knowledge Pod. Nothing was created in Jira.",
+  "chat.jira.outcome.failure.requirementCriteria":
+    "An acceptance criterion of the referenced requirement is missing from the description. Copy it word for word. Nothing was created in Jira.",
+  "chat.jira.outcome.failure.requirementReferences":
+    "A referenced requirement ID is unknown or ambiguous in the Knowledge Pod. Check the ID. Nothing was created in Jira.",
+  "chat.jira.outcome.failure.requirementUnavailable":
+    "The requirements could not be read from a Knowledge Pod. Select the Knowledge Pod with the requirements document. Nothing was created in Jira.",
   "chat.jira.outcome.failure.sourceChanged":
     "The source requirements changed. Read them again and prepare the draft again. No change was made in Jira.",
   "chat.jira.outcome.failure.permission":
