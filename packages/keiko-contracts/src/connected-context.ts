@@ -718,7 +718,8 @@ function isValidFollowUpPassCap(value: unknown): boolean {
   return value === undefined || value === 0 || value === 1;
 }
 
-export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
+// Accepts untrusted usage and budget values: a missing or malformed field fails closed.
+export function isWithinBudget(usage: unknown, budget: unknown): boolean {
   if (!isRecord(usage) || !isRecord(budget)) return false;
   if (!isValidFollowUpPassCap(budget.followUpPassesMax)) return false;
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
@@ -810,7 +811,7 @@ export function isPathWithinSelectedScope(
   );
 }
 
-export function validateSelectedScope(scope: SelectedScope): ValidationResult {
+export function validateSelectedScope(scope: unknown): ValidationResult {
   const reasons: string[] = [];
   if (!isRecord(scope)) {
     return buildResult(["scope invalid"]);
@@ -825,12 +826,12 @@ export function validateSelectedScope(scope: SelectedScope): ValidationResult {
   if (isNonEmptyTrimmed(scope.workspaceRoot)) {
     pushIf(reasons, !isValidWorkspaceRootPath(scope.workspaceRoot), "scope.workspaceRoot invalid");
   }
-  pushIf(reasons, !SELECTED_SCOPE_KINDS.includes(scope.kind), "scope.kind invalid");
+  pushIf(reasons, !isOneOf(scope.kind, SELECTED_SCOPE_KINDS), "scope.kind invalid");
   if (!Array.isArray(scope.relativePaths)) {
     reasons.push("scope.relativePaths invalid");
   } else if (!hasStringArray(scope.relativePaths)) {
     reasons.push("scope.relativePaths contains an invalid path");
-  } else if (SELECTED_SCOPE_KINDS.includes(scope.kind)) {
+  } else if (isRuntimeSelectedScope(scope)) {
     validateScopeKindPaths(scope, reasons);
   }
   pushIf(reasons, !isFiniteNonNegativeInteger(scope.connectedAtMs), "scope.connectedAtMs invalid");
@@ -989,12 +990,12 @@ function validateEvidenceAtomInput(atom: unknown): ValidationResult {
   return buildResult(reasons);
 }
 
-export function validateRetrievalQuery(query: RetrievalQuery): ValidationResult {
+export function validateRetrievalQuery(query: unknown): ValidationResult {
   const reasons: string[] = [];
   if (!isRecord(query)) {
     return buildResult(["query invalid"]);
   }
-  pushIf(reasons, !RETRIEVAL_QUERY_KINDS.includes(query.kind), "query.kind invalid");
+  pushIf(reasons, !isOneOf(query.kind, RETRIEVAL_QUERY_KINDS), "query.kind invalid");
   pushIf(reasons, !isNonEmptyTrimmed(query.text), "query.text empty");
   pushIf(reasons, !isFinitePositiveInteger(query.maxResults), "query.maxResults invalid");
   pushIf(reasons, !isFiniteNonNegativeInteger(query.emittedAtMs), "query.emittedAtMs invalid");
@@ -1264,8 +1265,8 @@ function validatePackOmitted(
 // Producers validate every known omission before retaining bounded wire details. Prefix sets
 // check overlap in path-depth time; no previously seen path collection is scanned per entry.
 export function validateOmittedContextEntries(
-  entries: readonly OmittedContextEntry[],
-  scope: SelectedScope,
+  entries: unknown,
+  scope: unknown,
   selectedScopePaths: readonly string[],
 ): ValidationResult {
   const reasons: string[] = [];
@@ -1293,27 +1294,32 @@ function validOmissionCountRecord(
   );
 }
 
-function validatePackOmittedCounts(pack: ConnectedContextPack, reasons: string[]): void {
-  if (pack.omittedCounts === undefined) return;
-  if (!validOmissionCountRecord(pack.omittedCounts)) {
+function validatePackOmittedCounts(pack: Record<string, unknown>, reasons: string[]): void {
+  const omittedCounts = pack.omittedCounts;
+  if (omittedCounts === undefined) return;
+  if (!validOmissionCountRecord(omittedCounts)) {
     reasons.push("pack.omittedCounts invalid");
     return;
   }
-  const total = connectedContextOmittedCount(pack);
+  const total = connectedContextOmittedCount({ omitted: [], omittedCounts });
   if (!Number.isSafeInteger(total)) reasons.push("pack.omittedCounts total invalid");
-  if (!Array.isArray(pack.omitted)) return;
-  if (pack.omitted.length !== Math.min(total, MAX_OMITTED_CONTEXT_ENTRIES)) {
+  const omitted: unknown = pack.omitted;
+  if (!Array.isArray(omitted)) return;
+  const details: readonly unknown[] = omitted;
+  if (details.length !== Math.min(total, MAX_OMITTED_CONTEXT_ENTRIES)) {
     reasons.push("pack.omitted details do not account for omittedCounts");
   }
-  const retained = pack.omitted.filter(
-    (entry) => isRecord(entry) && isCandidateOmissionReason(entry.reason),
-  );
+  const retained = details.filter(isRetainedOmission);
   const retainedCounts = connectedContextOmittedCounts({ omitted: retained });
   for (const reason of CANDIDATE_OMISSION_REASONS) {
-    if (pack.omittedCounts[reason] < retainedCounts[reason]) {
+    if (omittedCounts[reason] < retainedCounts[reason]) {
       reasons.push(`pack.omittedCounts.${reason} below retained details`);
     }
   }
+}
+
+function isRetainedOmission(entry: unknown): entry is OmittedContextEntry {
+  return isRecord(entry) && isCandidateOmissionReason(entry.reason);
 }
 
 function validateImpactedAtomIds(
@@ -1381,8 +1387,8 @@ function validatePackUncertainty(
 }
 
 function checkBudgetDimension(
-  used: number,
-  cap: number | null,
+  used: unknown,
+  cap: unknown,
   dimension: keyof ExplorationUsage,
   reasons: string[],
 ): void {
@@ -1400,41 +1406,49 @@ function checkBudgetDimension(
 }
 
 function validatePackBudget(
-  pack: ConnectedContextPack,
+  pack: Record<string, unknown>,
   actualExcerptBytes: number,
   reasons: string[],
 ): void {
-  if (!isRecord(pack.usage)) {
+  const usage = pack.usage;
+  const budget = pack.budget;
+  if (!isRecord(usage)) {
     reasons.push("pack.usage invalid");
     return;
   }
-  if (!isRecord(pack.budget)) {
+  if (!isRecord(budget)) {
     reasons.push("pack.budget invalid");
     return;
   }
   pushIf(
     reasons,
-    !isValidFollowUpPassCap(pack.budget.followUpPassesMax),
+    !isValidFollowUpPassCap(budget.followUpPassesMax),
     "budget.followUpPassesMax invalid",
   );
   for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
-    checkBudgetDimension(pack.usage[dimension], pack.budget[`${dimension}Max`], dimension, reasons);
+    checkBudgetDimension(usage[dimension], budget[`${dimension}Max`], dimension, reasons);
   }
-  if (actualExcerptBytes > pack.usage.excerptBytes) {
+  if (exceedsExcerptBound(actualExcerptBytes, usage.excerptBytes)) {
     reasons.push("pack.files excerpts exceed pack.usage.excerptBytes");
   }
-  if (actualExcerptBytes > pack.budget.excerptBytesMax) {
+  if (exceedsExcerptBound(actualExcerptBytes, budget.excerptBytesMax)) {
     reasons.push("pack.files excerpts exceed budget.excerptBytesMax");
   }
 }
 
-function validatePackScopeAndQuery(pack: ConnectedContextPack, reasons: string[]): void {
+// Converts an untrusted bound exactly as the relational operator does (null reads as zero); the
+// dimension checks above already report a malformed bound itself.
+function exceedsExcerptBound(actualExcerptBytes: number, bound: unknown): boolean {
+  return actualExcerptBytes > Number(bound);
+}
+
+function validatePackScopeAndQuery(pack: Record<string, unknown>, reasons: string[]): void {
   appendPrefixedReasons(validateSelectedScope(pack.scope), "pack.", reasons);
   appendPrefixedReasons(validateRetrievalQuery(pack.query), "pack.", reasons);
 }
 
 function validatePackFileCollection(
-  pack: ConnectedContextPack,
+  pack: Record<string, unknown>,
   reasons: string[],
 ): PackFileValidationSummary {
   if (isRuntimeSelectedScope(pack.scope)) {
@@ -1447,7 +1461,7 @@ function validatePackFileCollection(
 }
 
 function validatePackOmittedCollection(
-  pack: ConnectedContextPack,
+  pack: Record<string, unknown>,
   fileSummary: PackFileValidationSummary,
   reasons: string[],
 ): void {
@@ -1460,7 +1474,7 @@ function validatePackOmittedCollection(
   }
 }
 
-export function validateConnectedContextPack(pack: ConnectedContextPack): ValidationResult {
+export function validateConnectedContextPack(pack: unknown): ValidationResult {
   const reasons: string[] = [];
   if (!isRecord(pack)) {
     return buildResult(["pack invalid"]);
@@ -1503,7 +1517,7 @@ function isContextCoverageReason(value: unknown): value is ContextCoverageTrunca
   return allowed.includes(value);
 }
 
-function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: string[]): void {
+function validatePackDiagnostics(diagnostics: unknown, reasons: string[]): void {
   if (!isRecord(diagnostics) || !Array.isArray(diagnostics.rankedCandidates)) {
     reasons.push("pack.diagnostics.rankedCandidates invalid");
     return;
@@ -1544,24 +1558,35 @@ function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: s
   validateDiagnosticSourceStates(diagnostics, reasons);
 }
 
+const SEMANTIC_PROVIDER_DISPOSITIONS: ReadonlySet<unknown> = new Set([
+  "not-evaluated",
+  "unavailable",
+  "suppressed",
+  "not-used",
+  "used",
+  "rejected",
+]);
+const SCOPE_CONTEXT_STATES: ReadonlySet<unknown> = new Set([
+  "applied",
+  "overflow",
+  "gate-refused",
+  "incomplete-traversal",
+]);
+
 function validateDiagnosticSourceStates(
-  diagnostics: ContextPackDiagnostics,
+  diagnostics: Record<string, unknown>,
   reasons: string[],
 ): void {
   pushIf(
     reasons,
     diagnostics.semanticProviderDisposition !== undefined &&
-      !new Set(["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"]).has(
-        diagnostics.semanticProviderDisposition,
-      ),
+      !SEMANTIC_PROVIDER_DISPOSITIONS.has(diagnostics.semanticProviderDisposition),
     "pack.diagnostics.semanticProviderDisposition invalid",
   );
   pushIf(
     reasons,
     diagnostics.scopeContextState !== undefined &&
-      !new Set(["applied", "overflow", "gate-refused", "incomplete-traversal"]).has(
-        diagnostics.scopeContextState,
-      ),
+      !SCOPE_CONTEXT_STATES.has(diagnostics.scopeContextState),
     "pack.diagnostics.scopeContextState invalid",
   );
 }

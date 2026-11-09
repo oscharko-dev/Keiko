@@ -1803,14 +1803,13 @@
       "anti-slop/no-runtime-typeof": 1
     },
     "packages/keiko-contracts/src/connected-context.test.ts": {
-      "anti-slop/no-chained-type-assertions": 15,
-      "anti-slop/require-safety-comment-for-type-assertion": 42
+      "anti-slop/no-chained-type-assertions": 11,
+      "anti-slop/require-safety-comment-for-type-assertion": 33
     },
     "packages/keiko-contracts/src/connected-context.ts": {
-      "anti-slop/no-known-value-widening": 9,
       "anti-slop/no-runtime-typeof": 26,
-      "anti-slop/no-unknown-parameters": 24,
-      "anti-slop/no-unsafe-dictionary-type": 9
+      "anti-slop/no-unknown-parameters": 35,
+      "anti-slop/no-unsafe-dictionary-type": 15
     },
     "packages/keiko-contracts/src/container-runtime.test.ts": {
       "anti-slop/no-known-value-widening": 1,
