@@ -91,17 +91,26 @@ function rowValues(rows, fields, names = {}) {
     }),
   );
 }
-function assertOptionalFields(actual, native, fields, names) {
+/** Jira 10.3 reports a field's last value update as epoch ms; the product reads that exact UTC instant. */
+export function nativeInstant(value) {
+  if (typeof value !== "number") return value;
+  assert.ok(Number.isSafeInteger(value) && value >= 0);
+  return new Date(value).toISOString();
+}
+function assertOptionalFields(actual, native, fields, names, transforms = {}) {
   for (const [index, row] of native.slice(0, 100).entries()) {
     for (const field of fields) {
-      const observed = row[names?.[field] ?? field];
+      const key = names?.[field] ?? field;
+      const observed = row[key];
       if (observed === undefined || observed === null)
         assert.equal(Object.hasOwn(actual[index], field), false);
-      else
+      else {
+        const expected = { ...row, [key]: (transforms[field] ?? ((value) => value))(observed) };
         assertQualificationJson(
           rowValues([actual[index]], [field]),
-          rowValues([row], [field], names),
+          rowValues([expected], [field], names),
         );
+      }
     }
   }
 }
@@ -120,6 +129,7 @@ export function readCase(
     productRoot,
     nativeNames,
     optionalFields = [],
+    optionalTransforms,
     nonEmpty = false,
     unordered = false,
   } = {},
@@ -148,7 +158,7 @@ export function readCase(
         unordered ? membership(expected) : expected,
         "Keiko's observation must equal the independent native read",
       );
-      assertOptionalFields(projected, native, optionalFields, nativeNames);
+      assertOptionalFields(projected, native, optionalFields, nativeNames, optionalTransforms);
       // Empty collections prove their exact count, not an invented sample row.
       return {
         matched: true,

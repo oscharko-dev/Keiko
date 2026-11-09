@@ -8,6 +8,7 @@ import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian
 import { expressibleGrants } from "../testing/jira-chat-lab/api-qualification-association-cases.mjs";
 import { versionFixtureArguments } from "../testing/jira-chat-lab/api-qualification-fixtures.mjs";
 import { readCase } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
+import { API_QUALIFICATION_OBSERVATION_CASES } from "../testing/jira-chat-lab/api-qualification-observation-cases.mjs";
 import { API_QUALIFICATION_AGILE_CASES } from "../testing/jira-chat-lab/api-qualification-agile-cases.mjs";
 import { API_QUALIFICATION_RELEASE_CASES } from "../testing/jira-chat-lab/api-qualification-release-cases.mjs";
 import { API_QUALIFICATION_PROPERTY_CASES } from "../testing/jira-chat-lab/api-qualification-property-cases.mjs";
@@ -135,3 +136,31 @@ it("copies only permission grants the governed create-permission-scheme schema a
   ).toBeUndefined();
   expect(() => expressibleGrants({ permissions: [review.permissions[0]] })).toThrow();
 });
+it.each([
+  ["epoch ms", 1_794_214_220_465, "2026-11-09T08:50:20.465Z", true],
+  ["epoch ms against a different instant", 1_794_214_220_465, "2026-11-09T08:50:20.466Z", false],
+  ["text", "2026-11-09", "2026-11-09", true],
+  ["text against different text", "2026-11-09", "2026-11-10", false],
+])(
+  "compares the custom-fields lastValueUpdate oracle for %s",
+  async (_label, native, product, ok) => {
+    const { directory, context } = session();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        respond({ values: [{ id: "customfield_10000", name: "F", lastValueUpdate: native }] }),
+      );
+    try {
+      const entry = API_QUALIFICATION_OBSERVATION_CASES.find(
+        (row) => row.tool === "jira.custom-fields",
+      );
+      const data = { items: [{ id: "customfield_10000", name: "F", lastValueUpdate: product }] };
+      const outcome = entry.readback(context, data, {});
+      if (ok) await expect(outcome).resolves.toMatchObject({ matched: true });
+      else await expect(outcome).rejects.toThrow();
+    } finally {
+      spy.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

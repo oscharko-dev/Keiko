@@ -1,5 +1,5 @@
 // Independent field projections are authored here, not imported from the provider's codecs.
-import { readCase } from "./api-qualification-cases.mjs";
+import { nativeInstant, readCase } from "./api-qualification-cases.mjs";
 
 const single = { nativeRoot: "single", productRoot: "single" };
 const page = () => ({ maxResults: 100 });
@@ -146,6 +146,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
     {
       args: page,
       nativeRoot: "values",
+      optionalFields: ["lastValueUpdate"],
+      optionalTransforms: { lastValueUpdate: nativeInstant },
     },
   ),
   readCase(
