@@ -99,3 +99,29 @@ it("gives the update-myself cleanup write its protected login input owner", asyn
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it.each([
+  [403, '{"message":"The request was rejected due to two-step verification being enabled."}', true],
+  [403, '{"message":"CAPTCHA required"}', false],
+  [401, '{"message":"two-step verification"}', false],
+])(
+  "recognizes a two-step-verification login refusal only for %s %s",
+  async (status, body, refused) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-login-"));
+    mkdirSync(join(directory, "secrets"));
+    writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+    const native = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new globalThis.Response(body, { status }));
+    try {
+      const { nativeLoginRefusedByTwoStep } =
+        await import("../testing/jira-chat-lab/api-qualification-integrator-c-cases.mjs");
+      await expect(
+        nativeLoginRefusedByTwoStep({ session: { ...DEFAULT_LAB_CONNECTION, directory } }),
+      ).resolves.toBe(refused);
+    } finally {
+      native.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

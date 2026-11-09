@@ -187,3 +187,28 @@ it("still stops on an unknown 404 write that carries no release-absence proof", 
     runQualificationCase({}, {}, specification({}), {}, witness, output, report),
   ).rejects.toThrow("Uncertain native effect");
 });
+it("grades a settled, independently reproduced 403 write as denied without a reconcile stop", async () => {
+  const output = directory();
+  const selected = {
+    ...specification({}),
+    readback: async () => ({ permissionDenied: true, status: 403 }),
+  };
+  const refused = attempt(primary.identity, true);
+  refused.dispatch.result = {
+    status: "failed",
+    data: { operationBinding: refused.binding, outcome: "unknown", reason: "permission-denied" },
+  };
+  refused.dispatch.receipt.status = "failed";
+  refused.witness.responses = [{ status: 403, truncated: false }];
+  refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 403 };
+  dispatch.mockResolvedValue(refused);
+  const evidence = await runQualificationCase({}, {}, selected, {}, witness, output, report);
+  expect(evidence.runtimeAvailability).toBe("denied");
+  expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(false);
+  // Without the independent reproduction the same 403 still stops the run.
+  const unproven = { ...specification({}), readback: async () => ({ matched: false }) };
+  dispatch.mockResolvedValue(refused);
+  await expect(
+    runQualificationCase({}, {}, unproven, {}, witness, directory(), report),
+  ).rejects.toThrow("Uncertain native effect");
+});

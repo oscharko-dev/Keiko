@@ -253,19 +253,24 @@ function recordAuxiliaries(attempted, directory, report) {
     return `${row.id}.json`;
   });
 }
-/**
- * An unsettled or unknown native write stops the run. The one exception is a write the running
- * release does not publish at all: its settled 404/405 plus the release-inventory proof carried by
- * the case's readback leave no effect to reconcile.
- */
+/** A settled refusal that the case's own readback reproduced independently left nothing to reconcile. */
+function settledRefusal(journal, evidence) {
+  if (journal.phase !== "settled") return false;
+  const { runtimeAvailability, readback } = evidence;
+  // The running release does not publish the write at all (route-level 404/405, or a shadowed route).
+  if (runtimeAvailability === "unavailable")
+    return readback?.capabilityAbsent === true && new Set([400, 404, 405]).has(journal.httpStatus);
+  // A native 403 independently reproduced as a refusal wrote nothing either.
+  return (
+    runtimeAvailability === "denied" &&
+    readback?.permissionDenied === true &&
+    journal.httpStatus === 403
+  );
+}
+/** An unsettled or unknown native write stops the run unless it is such a settled refusal. */
 function needsReconcile(journal, evidence) {
   if (journal?.outcome !== "unknown" && journal?.phase !== "dispatched") return false;
-  const absent =
-    evidence.runtimeAvailability === "unavailable" &&
-    evidence.readback?.capabilityAbsent === true &&
-    journal.phase === "settled" &&
-    new Set([400, 404, 405]).has(journal.httpStatus);
-  return !absent;
+  return !settledRefusal(journal, evidence);
 }
 async function gradeCase(
   { context, specification, fixture, witness, directory, report },
