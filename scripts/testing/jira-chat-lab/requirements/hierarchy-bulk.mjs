@@ -357,8 +357,10 @@ function promptFor(plan, rows, byReference) {
     "Task und Bug gehören über das native Epic-Link-Feld zum genannten Epic. Ein Sub-task " +
     "gehört ausschließlich über parent zur exakt genannten Task, niemals direkt zu einem Epic. " +
     "Setze für jeden Bug eine aktuell erlaubte Priorität und eine Relates-Verknüpfung zur exakt " +
-    "genannten Task. Erstelle keine weiteren Vorgänge und keine fehlenden Eltern. Bei einem " +
-    "Fehler oder unklarem Schreibergebnis stoppe, ohne einen Create-Aufruf zu wiederholen.\n" +
+    "genannten Task. Erstelle keine weiteren Vorgänge und keine fehlenden Eltern. Lehnt Keiko " +
+    "einen Entwurf vor dem Schreiben mit einem Korrekturhinweis ab, folge dem Hinweis und sende " +
+    "ihn erneut. Bei einem fehlgeschlagenen oder unklaren Schreibergebnis stoppe, ohne einen " +
+    "Create-Aufruf zu wiederholen.\n" +
     JSON.stringify(instructions)
   );
 }
