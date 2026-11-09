@@ -270,6 +270,36 @@ describe("bound native issue context reads", () => {
       "json",
     );
   });
+  it.each(["APP-1", "10001"])(
+    "binds a remote link whose native self names the issue by %s, as Jira 10.3 does by key",
+    async (issue) => {
+      const self = `https://public.example.invalid/rest/api/2/issue/${issue}/remotelink/30`;
+      const single = await read(
+        "jira.remote-link",
+        { issueIdOrKey: "APP-1", linkId: "30" },
+        fixture(object({ ...REMOTE, self })),
+        BASE,
+      );
+      expect(single.data.outcome).toBe("succeeded");
+      const many = await read(
+        "jira.remote-links",
+        { issueIdOrKey: "APP-1" },
+        fixture(array([{ ...REMOTE, self }])),
+        BASE,
+      );
+      expect(many.data.outcome).toBe("succeeded");
+    },
+  );
+  it("still refuses a remote link whose native self names another issue key", async () => {
+    const self = "https://public.example.invalid/rest/api/2/issue/APP-99/remotelink/30";
+    const result = await read(
+      "jira.remote-link",
+      { issueIdOrKey: "APP-1", linkId: "30" },
+      fixture(object({ ...REMOTE, self })),
+      BASE,
+    );
+    expect(result.data.reason).toBe("conflict");
+  });
   it.each([
     ["jira.remote-link", { issueIdOrKey: "APP-1", linkId: "31" }, object(REMOTE)],
     ["jira.remote-links", { issueIdOrKey: "APP-1", globalId: "other" }, object(REMOTE)],
