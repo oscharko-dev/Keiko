@@ -385,12 +385,42 @@ function nativeDelegatedRead(
   if (administration !== undefined) return administration;
   return nativeDeletionRead(path, state);
 }
+/** Data Center keeps sprint membership on the core issue's Sprint custom field; the Agile issue
+ * resource omits an empty sprint, so a backlog move is proven on this field (ADR-0128). */
+const NATIVE_SPRINT_FIELD = "customfield_10020";
+function nativeSprintFieldRead(
+  path: string,
+  state: MutationRemoteState,
+): ReturnType<typeof response> | undefined {
+  if (path === "/context/rest/api/2/field")
+    return response([
+      { id: "summary", name: "Summary", schema: { type: "string", system: "summary" } },
+      {
+        id: NATIVE_SPRINT_FIELD,
+        name: "Sprint",
+        schema: { type: "array", items: "string", custom: "com.pyxis.greenhopper.jira:gh-sprint" },
+      },
+    ]);
+  if (path !== "/context/rest/api/2/issue/SYN-1") return undefined;
+  const member = state.agileFields.sprint as { readonly id: number } | null;
+  const sprint =
+    member === null
+      ? null
+      : [{ id: member.id, state: member.id === state.sprint.id ? state.sprint.state : "active" }];
+  return response({
+    id: "10001",
+    key: "SYN-1",
+    fields: { ...state.fields, [NATIVE_SPRINT_FIELD]: sprint },
+  });
+}
 export function nativeRead(
   path: string,
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
   const delegated = nativeDelegatedRead(path, state);
   if (delegated !== undefined) return delegated;
+  const sprintField = nativeSprintFieldRead(path, state);
+  if (sprintField !== undefined) return sprintField;
   if (path === `/context/rest/api/2/issue/10001/worklog/${String(state.worklog.id)}`)
     return state.worklogDeleted ? response({}, 404) : response(state.worklog);
   const person = { name: "synthetic-user", active: true };
