@@ -3131,17 +3131,9 @@ export interface GitDeliveryLocalBranchCreateInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-// Delivery bodies share the existing lazy Git owner. Snapshot before its asynchronous load so
-// caller changes cannot alter the reviewed command; refuse an abort before invoking the HTTP port.
-export async function fetchGitDeliveryLocalBranchCreate(
-  input: GitDeliveryLocalBranchCreateInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryLocalBranchCreate(fetchJson, command, signal);
-}
+export const fetchGitDeliveryLocalBranchCreate = deferGitDelivery(
+  "fetchGitDeliveryLocalBranchCreate",
+);
 
 export interface GitDeliveryLocalBranchSwitchInput {
   readonly projectId: string;
@@ -3149,15 +3141,9 @@ export interface GitDeliveryLocalBranchSwitchInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-export async function fetchGitDeliveryLocalBranchSwitch(
-  input: GitDeliveryLocalBranchSwitchInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryLocalBranchSwitch(fetchJson, command, signal);
-}
+export const fetchGitDeliveryLocalBranchSwitch = deferGitDelivery(
+  "fetchGitDeliveryLocalBranchSwitch",
+);
 
 export interface GitRepositoryInitializeInput {
   readonly projectId: string;
@@ -3188,15 +3174,7 @@ export interface GitDeliveryStageInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-export async function fetchGitDeliveryStage(
-  input: GitDeliveryStageInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryStage(fetchJson, command, signal);
-}
+export const fetchGitDeliveryStage = deferGitDelivery("fetchGitDeliveryStage");
 
 export interface GitDeliveryUnstageInput {
   readonly projectId: string;
@@ -3204,15 +3182,7 @@ export interface GitDeliveryUnstageInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-export async function fetchGitDeliveryUnstage(
-  input: GitDeliveryUnstageInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryUnstage(fetchJson, command, signal);
-}
+export const fetchGitDeliveryUnstage = deferGitDelivery("fetchGitDeliveryUnstage");
 
 export interface GitDeliveryCommitPreviewResponse {
   readonly schemaVersion: "1";
@@ -3234,25 +3204,9 @@ export interface GitDeliveryCommitDraftResponse {
   readonly summary: GitCommitChangeSummary;
 }
 
-export async function fetchGitDeliveryCommitPreview(
-  input: { readonly projectId: string; readonly messageDraft?: string },
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitPreviewResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryCommitPreview(fetchJson, command, signal);
-}
+export const fetchGitDeliveryCommitPreview = deferGitDelivery("fetchGitDeliveryCommitPreview");
 
-export async function fetchGitDeliveryCommitDraft(
-  input: { readonly projectId: string; readonly instruction?: string },
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitDraftResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryCommitDraft(fetchJson, command, signal);
-}
+export const fetchGitDeliveryCommitDraft = deferGitDelivery("fetchGitDeliveryCommitDraft");
 
 export interface GitDeliveryCommitExecuteInput {
   readonly projectId: string;
@@ -3262,15 +3216,7 @@ export interface GitDeliveryCommitExecuteInput {
   readonly userInitiated?: true | undefined;
 }
 
-export async function fetchGitDeliveryCommitExecute(
-  input: GitDeliveryCommitExecuteInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryCommitExecute(fetchJson, command, signal);
-}
+export const fetchGitDeliveryCommitExecute = deferGitDelivery("fetchGitDeliveryCommitExecute");
 
 // ─── Governed remote publish (Issue #476, Epic #470) ────────────────────────────────────────────
 
@@ -3318,25 +3264,9 @@ export interface GitDeliveryPushExecuteResponse extends GitDeliveryMutationRespo
   readonly recoveryActionHint?: string;
 }
 
-export async function fetchGitDeliveryPushPreview(
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushPreviewResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPushPreview(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPushPreview = deferGitDelivery("fetchGitDeliveryPushPreview");
 
-export async function fetchGitDeliveryPushExecute(
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushExecuteResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPushExecute(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPushExecute = deferGitDelivery("fetchGitDeliveryPushExecute");
 
 // ─── Fetch / pull sync (Issue #1573 API, consumed by Issue #1576 UI) ─────────────────────────
 
@@ -3346,6 +3276,50 @@ export interface GitDeliverySyncInput {
   readonly remote?: string | undefined;
   readonly approval?: GitDeliveryApprovalClaim;
   readonly userInitiated?: true | undefined;
+}
+
+type GitWorkbenchApi = typeof import("./coding-workbench-lazy-fetchers");
+type DeferredGitDelivery =
+  | "fetchGitDeliveryLocalBranchCreate"
+  | "fetchGitDeliveryLocalBranchSwitch"
+  | "fetchGitDeliveryStage"
+  | "fetchGitDeliveryUnstage"
+  | "fetchGitDeliveryCommitPreview"
+  | "fetchGitDeliveryCommitDraft"
+  | "fetchGitDeliveryCommitExecute"
+  | "fetchGitDeliveryPushPreview"
+  | "fetchGitDeliveryPushExecute"
+  | "fetchGitDeliveryPrPreview"
+  | "fetchGitDeliveryPrExecute"
+  | "fetchGitDeliveryMergePreview"
+  | "fetchGitDeliveryMergeApprove"
+  | "fetchGitDeliveryMergeExecute"
+  | "fetchGitDeliveryPrMarkReadyApprove"
+  | "fetchGitDeliveryPrMarkReadyExecute"
+  | "fetchGitDeliveryCommitApprove"
+  | "fetchGitDeliveryPushApprove"
+  | "fetchGitDeliveryPrApprove";
+
+type DeferredFn<K extends DeferredGitDelivery> = (
+  input: Parameters<GitWorkbenchApi[K]>[1],
+  signal?: AbortSignal,
+) => ReturnType<GitWorkbenchApi[K]>;
+
+// Delivery bodies share the lazy Git owner. The command is snapshotted before the asynchronous
+// module load so caller changes cannot alter the reviewed command, and an aborted load is refused
+// before the HTTP port is invoked.
+function deferGitDelivery<K extends DeferredGitDelivery>(name: K): DeferredFn<K> {
+  return (async (input: Parameters<GitWorkbenchApi[K]>[1], signal?: AbortSignal) => {
+    const command = structuredClone(input);
+    const api = await loadGitWorkbenchApi();
+    signal?.throwIfAborted();
+    const call = api[name] as (
+      fetchJson: Parameters<GitWorkbenchApi[K]>[0],
+      command: unknown,
+      signal?: AbortSignal,
+    ) => unknown;
+    return call(fetchJson, command, signal);
+  }) as DeferredFn<K>;
 }
 
 async function loadGitWorkbenchApi(
@@ -3479,25 +3453,9 @@ export interface GitDeliveryPrExecuteResponse extends GitDeliveryMutationRespons
   readonly createdPrExternalId?: string;
 }
 
-export async function fetchGitDeliveryPrPreview(
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrPreviewResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPrPreview(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPrPreview = deferGitDelivery("fetchGitDeliveryPrPreview");
 
-export async function fetchGitDeliveryPrExecute(
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrExecuteResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPrExecute(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPrExecute = deferGitDelivery("fetchGitDeliveryPrExecute");
 
 // ─── Governed merge command center (#478, ADR-0087) ──────────────────────────────────────────────────
 
@@ -3574,39 +3532,15 @@ export interface GitDeliveryMergeExecuteResponse extends GitDeliveryMutationResp
   readonly branchDeleted?: boolean;
 }
 
-export async function fetchGitDeliveryMergePreview(
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergePreviewResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryMergePreview(fetchJson, command, signal);
-}
+export const fetchGitDeliveryMergePreview = deferGitDelivery("fetchGitDeliveryMergePreview");
 
 // Mints the server-issued approval claim the default approval-gated merge policy pack requires. The
 // caller must pass the EXACT SAME input (target + strategy + delete flag + expectedHeadRefHash) it
 // will subsequently pass to `fetchGitDeliveryMergeExecute` — the server binds the mint to that exact
 // typed command, and a mismatched execute call is rejected (see mergeRoutes.ts `createHandleMergeApprove`).
-export async function fetchGitDeliveryMergeApprove(
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergeApproveResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryMergeApprove(fetchJson, command, signal);
-}
+export const fetchGitDeliveryMergeApprove = deferGitDelivery("fetchGitDeliveryMergeApprove");
 
-export async function fetchGitDeliveryMergeExecute(
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergeExecuteResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryMergeExecute(fetchJson, command, signal);
-}
+export const fetchGitDeliveryMergeExecute = deferGitDelivery("fetchGitDeliveryMergeExecute");
 
 // ---------------------------------------------------------------------------
 // Coding Workbench journey observation (#3389) — read-only refresh/reconciliation of the accepted
@@ -3814,25 +3748,13 @@ export interface GitDeliveryPrMarkReadyExecuteResponse {
   readonly rejectionReason?: string;
 }
 
-export async function fetchGitDeliveryPrMarkReadyApprove(
-  input: GitDeliveryPrMarkReadyInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrMarkReadyApproveResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPrMarkReadyApprove(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPrMarkReadyApprove = deferGitDelivery(
+  "fetchGitDeliveryPrMarkReadyApprove",
+);
 
-export async function fetchGitDeliveryPrMarkReadyExecute(
-  input: GitDeliveryPrMarkReadyInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPrMarkReadyExecute(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPrMarkReadyExecute = deferGitDelivery(
+  "fetchGitDeliveryPrMarkReadyExecute",
+);
 
 /**
  * Mints then immediately redeems the one-use pr-mark-ready approval — the mint/execute pair a
@@ -3863,15 +3785,7 @@ export interface GitDeliveryCommitApproveResponse {
   readonly expiresAt: string;
 }
 
-export async function fetchGitDeliveryCommitApprove(
-  input: GitDeliveryCommitExecuteInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitApproveResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryCommitApprove(fetchJson, command, signal);
-}
+export const fetchGitDeliveryCommitApprove = deferGitDelivery("fetchGitDeliveryCommitApprove");
 
 export interface GitDeliveryPushApproveResponse {
   readonly schemaVersion: "1";
@@ -3879,15 +3793,7 @@ export interface GitDeliveryPushApproveResponse {
   readonly expiresAt: string;
 }
 
-export async function fetchGitDeliveryPushApprove(
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushApproveResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPushApprove(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPushApprove = deferGitDelivery("fetchGitDeliveryPushApprove");
 
 export interface GitDeliveryPrApproveResponse {
   readonly schemaVersion: "1";
@@ -3895,15 +3801,7 @@ export interface GitDeliveryPrApproveResponse {
   readonly expiresAt: string;
 }
 
-export async function fetchGitDeliveryPrApprove(
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrApproveResponse> {
-  const command = structuredClone(input);
-  const api = await loadGitWorkbenchApi();
-  signal?.throwIfAborted();
-  return api.fetchGitDeliveryPrApprove(fetchJson, command, signal);
-}
+export const fetchGitDeliveryPrApprove = deferGitDelivery("fetchGitDeliveryPrApprove");
 
 /**
  * Mints then immediately redeems the one-use commit approval — the mint/execute pair a single

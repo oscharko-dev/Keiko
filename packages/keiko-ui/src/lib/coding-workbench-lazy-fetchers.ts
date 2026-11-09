@@ -510,6 +510,39 @@ export async function fetchGitDeliveryPrDescriptionStatus(
 // The public wrapper snapshots the command before loading this module and refuses an aborted load
 // before any request. Request bodies, approval claims and route ordering remain owned here.
 
+function gitDeliveryPost<I, R>(
+  path: string,
+  toBody: (input: I) => string,
+): (fetchJson: ApiFetchJson, input: I, signal?: AbortSignal) => Promise<R> {
+  return (fetchJson, input, signal) =>
+    fetchJson<R>(path, {
+      method: "POST",
+      body: toBody(input),
+      ...(signal === undefined ? {} : { signal }),
+    });
+}
+
+function gitDeliveryUserInitiatedBody(
+  input: Pick<GitDeliveryStageInput, "projectId" | "approval">,
+  fields: Readonly<Record<string, unknown>>,
+): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ...fields,
+    userInitiated: true,
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+function gitDeliveryGroup<I>(
+  segment: string,
+  toBody: (input: I) => string,
+): <R>(action: string) => ReturnType<typeof gitDeliveryPost<I, R>> {
+  return <R>(action: string) =>
+    gitDeliveryPost<I, R>(`/api/git-delivery/${segment}/${action}`, toBody);
+}
+
 function gitDeliveryPushBody(input: GitDeliveryPushInput): string {
   return JSON.stringify({
     schemaVersion: "1",
@@ -581,281 +614,124 @@ function gitDeliveryPrMarkReadyBody(input: GitDeliveryPrMarkReadyInput): string 
   });
 }
 
-export async function fetchGitDeliveryLocalBranchCreate(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryLocalBranchCreateInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/local-branch/create", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      branchName: input.branchName,
-      baseBranchName: input.baseBranchName,
-      startPointRefHash: input.startPointRefHash,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryLocalBranchCreate = gitDeliveryPost<
+  GitDeliveryLocalBranchCreateInput,
+  GitDeliveryMutationResponse
+>("/api/git-delivery/local-branch/create", (input) =>
+  gitDeliveryUserInitiatedBody(input, {
+    branchName: input.branchName,
+    baseBranchName: input.baseBranchName,
+    startPointRefHash: input.startPointRefHash,
+  }),
+);
 
-export async function fetchGitDeliveryLocalBranchSwitch(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryLocalBranchSwitchInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/local-branch/switch", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      branchName: input.branchName,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryLocalBranchSwitch = gitDeliveryPost<
+  GitDeliveryLocalBranchSwitchInput,
+  GitDeliveryMutationResponse
+>("/api/git-delivery/local-branch/switch", (input) =>
+  gitDeliveryUserInitiatedBody(input, { branchName: input.branchName }),
+);
 
-export async function fetchGitDeliveryStage(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryStageInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/staging/stage", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      pathspecs: input.pathspecs,
-      includeUntracked: input.includeUntracked,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryStage = gitDeliveryPost<
+  GitDeliveryStageInput,
+  GitDeliveryMutationResponse
+>("/api/git-delivery/staging/stage", (input) =>
+  gitDeliveryUserInitiatedBody(input, {
+    pathspecs: input.pathspecs,
+    includeUntracked: input.includeUntracked,
+  }),
+);
 
-export async function fetchGitDeliveryUnstage(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryUnstageInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/staging/unstage", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      pathspecs: input.pathspecs,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryUnstage = gitDeliveryPost<
+  GitDeliveryUnstageInput,
+  GitDeliveryMutationResponse
+>("/api/git-delivery/staging/unstage", (input) =>
+  gitDeliveryUserInitiatedBody(input, { pathspecs: input.pathspecs }),
+);
 
-export async function fetchGitDeliveryCommitPreview(
-  fetchJson: ApiFetchJson,
-  input: { readonly projectId: string; readonly messageDraft?: string },
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitPreviewResponse> {
-  return fetchJson("/api/git-delivery/commit/preview", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitPreview = gitDeliveryPost<
+  { readonly projectId: string; readonly messageDraft?: string },
+  GitDeliveryCommitPreviewResponse
+>("/api/git-delivery/commit/preview", (input) =>
+  JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
+  }),
+);
 
-export async function fetchGitDeliveryCommitDraft(
-  fetchJson: ApiFetchJson,
-  input: { readonly projectId: string; readonly instruction?: string },
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitDraftResponse> {
-  return fetchJson("/api/git-delivery/commit/draft", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitDraft = gitDeliveryPost<
+  { readonly projectId: string; readonly instruction?: string },
+  GitDeliveryCommitDraftResponse
+>("/api/git-delivery/commit/draft", (input) =>
+  JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
+  }),
+);
 
-export async function fetchGitDeliveryCommitExecute(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryCommitExecuteInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/commit/execute", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      message: input.message,
-      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-      ...(input.userInitiated === true ? { userInitiated: true } : {}),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitExecute = gitDeliveryPost<
+  GitDeliveryCommitExecuteInput,
+  GitDeliveryMutationResponse
+>("/api/git-delivery/commit/execute", (input) =>
+  JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    message: input.message,
+    ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+    ...(input.userInitiated === true ? { userInitiated: true } : {}),
+  }),
+);
 
-export async function fetchGitDeliveryCommitApprove(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryCommitExecuteInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitApproveResponse> {
-  return fetchJson("/api/git-delivery/commit/approve", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      message: input.message,
-      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
-      ...(input.userInitiated === true ? { userInitiated: true } : {}),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitApprove = gitDeliveryPost<
+  GitDeliveryCommitExecuteInput,
+  GitDeliveryCommitApproveResponse
+>("/api/git-delivery/commit/approve", (input) =>
+  JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    message: input.message,
+    ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+    ...(input.userInitiated === true ? { userInitiated: true } : {}),
+  }),
+);
 
-export async function fetchGitDeliveryPushPreview(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushPreviewResponse> {
-  return fetchJson("/api/git-delivery/push/preview", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+const postPush = gitDeliveryGroup<GitDeliveryPushInput>("push", gitDeliveryPushBody);
 
-export async function fetchGitDeliveryPushExecute(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushExecuteResponse> {
-  return fetchJson("/api/git-delivery/push/execute", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPushPreview = postPush<GitDeliveryPushPreviewResponse>("preview");
 
-export async function fetchGitDeliveryPushApprove(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushApproveResponse> {
-  return fetchJson("/api/git-delivery/push/approve", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPushExecute = postPush<GitDeliveryPushExecuteResponse>("execute");
 
-export async function fetchGitDeliveryPrPreview(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrPreviewResponse> {
-  return fetchJson("/api/git-delivery/pr/preview", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPushApprove = postPush<GitDeliveryPushApproveResponse>("approve");
 
-export async function fetchGitDeliveryPrExecute(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrExecuteResponse> {
-  return fetchJson("/api/git-delivery/pr/execute", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+const postPr = gitDeliveryGroup<GitDeliveryPrInput>("pr", gitDeliveryPrBody);
 
-export async function fetchGitDeliveryPrApprove(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrApproveResponse> {
-  return fetchJson("/api/git-delivery/pr/approve", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPrPreview = postPr<GitDeliveryPrPreviewResponse>("preview");
 
-export async function fetchGitDeliveryMergePreview(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergePreviewResponse> {
-  return fetchJson("/api/git-delivery/merge/preview", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPrExecute = postPr<GitDeliveryPrExecuteResponse>("execute");
 
-export async function fetchGitDeliveryMergeApprove(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergeApproveResponse> {
-  return fetchJson("/api/git-delivery/merge/approve", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPrApprove = postPr<GitDeliveryPrApproveResponse>("approve");
 
-export async function fetchGitDeliveryMergeExecute(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergeExecuteResponse> {
-  return fetchJson("/api/git-delivery/merge/execute", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+const postMerge = gitDeliveryGroup<GitDeliveryMergeInput>("merge", gitDeliveryMergeBody);
 
-export async function fetchGitDeliveryPrMarkReadyApprove(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPrMarkReadyInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrMarkReadyApproveResponse> {
-  return fetchJson("/api/git-delivery/pr/mark-ready/approve", {
-    method: "POST",
-    body: gitDeliveryPrMarkReadyBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryMergePreview = postMerge<GitDeliveryMergePreviewResponse>("preview");
 
-export async function fetchGitDeliveryPrMarkReadyExecute(
-  fetchJson: ApiFetchJson,
-  input: GitDeliveryPrMarkReadyInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
-  return fetchJson("/api/git-delivery/pr/mark-ready/execute", {
-    method: "POST",
-    body: gitDeliveryPrMarkReadyBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryMergeApprove = postMerge<GitDeliveryMergeApproveResponse>("approve");
+
+export const fetchGitDeliveryMergeExecute = postMerge<GitDeliveryMergeExecuteResponse>("execute");
+
+const postPrMarkReady = gitDeliveryGroup<GitDeliveryPrMarkReadyInput>(
+  "pr/mark-ready",
+  gitDeliveryPrMarkReadyBody,
+);
+
+export const fetchGitDeliveryPrMarkReadyApprove =
+  postPrMarkReady<GitDeliveryPrMarkReadyApproveResponse>("approve");
+
+export const fetchGitDeliveryPrMarkReadyExecute =
+  postPrMarkReady<GitDeliveryPrMarkReadyExecuteResponse>("execute");
 
 // Governed Git fetch/pull keeps request construction and validation behind the same lazy boundary.
 
