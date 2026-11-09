@@ -10,6 +10,7 @@ import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolI
 import type { CodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { processServerLogSink } from "./process-log-sink.js";
+import { recordJiraCatalogSelection } from "./atlassian/jiraCatalogSelectionActivity.js";
 import {
   defaultServerDiagnosticSink,
   emitServerDiagnostic,
@@ -664,6 +665,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     }
     const previous = this.pendingCatalog;
     this.pendingCatalog = prepared;
+    recordJiraCatalogSelection(processServerLogSink(), {
+      correlationId: this.options.correlationId,
+      surface: "chat",
+      previous: this.jiraSelection,
+      selected: prepared.identities,
+    });
     this.jiraSelection = prepared.identities;
     await previous?.close();
   }

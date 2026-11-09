@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,7 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { CatalogTrustedContext } from "./tool-catalog/catalogToolPorts.js";
 import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
 import { catalogToolFixture } from "./tool-catalog/__fixtures__/catalogToolFixture.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const MODEL = "synthetic-turn-lifecycle";
 const stores: ReturnType<typeof createInMemoryUiStore>[] = [];
@@ -245,6 +246,10 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
 
 describe("ChatToolTurn Jira operation selection", () => {
   it("tells the next describe which settled selection it replaces (LIM22)", async () => {
+    const log = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
+    onTestFinished(() => {
+      log.mockRestore();
+    });
     const observed: (readonly string[] | undefined)[] = [];
     const f = fixture(
       () => Promise.resolve(),
@@ -274,6 +279,14 @@ describe("ChatToolTurn Jira operation selection", () => {
       content: answer().content,
     });
     expect(observed).toEqual([[], ["GET /synthetic"]]);
+    const selections = log.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.op === "jira.catalog.selection")
+      .map((event) => event.extra);
+    expect(selections).toEqual([
+      expect.objectContaining({ surface: "chat", selectedCount: 1, deselectedCount: 0 }),
+      expect.objectContaining({ surface: "chat", selectedCount: 1, retainedCount: 1 }),
+    ]);
   });
 });
 

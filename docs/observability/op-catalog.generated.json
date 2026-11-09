@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "141a64609a5d8cb4ca742c6ed17c2e7ed4a09be5c6fbf79d5e0169094d17aff5",
+    "catalogDigest": "a4d2372b0d24cddde588bf2607681c0ae97125497a4abadb8d2a9857cefd321d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33276,6 +33276,55 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "jira.catalog.selection",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraCatalogSelectionActivity.recordJiraCatalogSelection",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["chat", "coding"]
+          },
+          "selectedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "retainedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "deselectedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["jira.catalog.selection.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:14",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:57"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "jira.citation.markers",
         "category": "process",
         "owner": "keiko-server",
@@ -49225,6 +49274,7 @@
             "atlassian.jira-draft-batch",
             "atlassian.jira-report",
             "jira.attachment.source",
+            "jira.catalog.selection",
             "jira.citation.markers",
             "jira.field.admission",
             "jira.operation.avatars",
@@ -49251,6 +49301,7 @@
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
           "jira.attachment.source",
+          "jira.catalog.selection",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -49274,6 +49325,7 @@
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
           "jira.attachment.source",
+          "jira.catalog.selection",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -49297,6 +49349,7 @@
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
           "jira.attachment.source",
+          "jira.catalog.selection",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -62111,6 +62164,7 @@
               "atlassian.jira-draft-batch",
               "atlassian.jira-report",
               "jira.attachment.source",
+              "jira.catalog.selection",
               "jira.citation.markers",
               "jira.field.admission",
               "jira.operation.avatars",
@@ -62150,6 +62204,10 @@
             },
             {
               "op": "jira.attachment.source",
+              "mode": "correlation"
+            },
+            {
+              "op": "jira.catalog.selection",
               "mode": "correlation"
             },
             {
@@ -62220,6 +62278,7 @@
             "atlassian.jira-draft-batch",
             "atlassian.jira-report",
             "jira.attachment.source",
+            "jira.catalog.selection",
             "jira.citation.markers",
             "jira.field.admission",
             "jira.operation.avatars",
@@ -62784,6 +62843,48 @@
                 "causeChain": false
               },
               "proofIds": ["jira.attachment.source.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "jira.catalog.selection",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "deselectedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "retainedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "selectedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["jira.catalog.selection.line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -115202,7 +115303,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:367",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:368",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -117466,7 +117567,7 @@
     {
       "op": "coding.jira-pod.catalog-cleanup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraCatalog.ts:74",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraCatalog.ts:76",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -118575,6 +118676,12 @@
       "category": "diagnostic",
       "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:283",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.catalog.selection",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:17",
       "package": "keiko-server"
     },
     {
@@ -120547,6 +120654,7 @@
     "jira.attachment.source",
     "jira.attachment.source-log-failed",
     "jira.attachment.source-read-failed",
+    "jira.catalog.selection",
     "jira.citation.markers",
     "jira.field.admission",
     "jira.mutation-execution-failed",

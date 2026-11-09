@@ -1540,6 +1540,7 @@
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
           "jira.attachment.source",
+          "jira.catalog.selection",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -1579,6 +1580,10 @@
         },
         {
           "op": "jira.attachment.source",
+          "mode": "correlation"
+        },
+        {
+          "op": "jira.catalog.selection",
           "mode": "correlation"
         },
         {
@@ -1649,6 +1654,7 @@
         "atlassian.jira-draft-batch",
         "atlassian.jira-report",
         "jira.attachment.source",
+        "jira.catalog.selection",
         "jira.citation.markers",
         "jira.field.admission",
         "jira.operation.avatars",
@@ -2207,6 +2213,48 @@
             "causeChain": false
           },
           "proofIds": ["jira.attachment.source.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.catalog.selection",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "deselectedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "retainedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "selectedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.catalog.selection.line"],
           "replayReferences": [],
           "missingObligations": []
         },

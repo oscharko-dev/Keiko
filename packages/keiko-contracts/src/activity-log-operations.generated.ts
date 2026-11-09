@@ -31902,6 +31902,53 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "jira.catalog.selection",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "atlassian.jiraCatalogSelectionActivity.recordJiraCatalogSelection",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat", "coding"],
+      },
+      selectedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      retainedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      deselectedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["atlassian-action-execution"],
+    proofIds: ["jira.catalog.selection.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "jira.citation.markers",
     category: "process",
     owner: "keiko-server",

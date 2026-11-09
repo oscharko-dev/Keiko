@@ -460,6 +460,7 @@
   "indexing.start.accepted": "memory-knowledge",
   "indexing.start.refused": "memory-knowledge",
   "jira.attachment.source": "bff",
+  "jira.catalog.selection": "bff",
   "jira.citation.markers": "bff",
   "jira.field.admission": "bff",
   "jira.operation.avatars": "bff",

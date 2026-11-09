@@ -22,6 +22,8 @@ import {
   type JiraCatalogDiscoveryContext,
 } from "../atlassian/jiraCatalogDiscovery.js";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { recordJiraCatalogSelection } from "../atlassian/jiraCatalogSelectionActivity.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingJiraTool } from "./codingJiraPodBinding.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
@@ -149,6 +151,22 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
     }
   }
 
+  /** Publishes a selection that replaces the previous one and records the replacement. */
+  private publish(
+    next: readonly ExternalMcpTool[],
+    identities: readonly string[],
+    correlationId: string,
+  ): void {
+    this.tools = Object.freeze(next);
+    recordJiraCatalogSelection(processServerLogSink(), {
+      correlationId,
+      surface: "coding",
+      previous: this.identities,
+      selected: identities,
+    });
+    this.identities = Object.freeze([...identities]);
+  }
+
   async select(
     identities: readonly string[],
     result: CatalogJsonObject,
@@ -184,8 +202,7 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
       const previous = this.selected;
       this.selected = candidate;
       candidate = undefined;
-      this.tools = Object.freeze(next);
-      this.identities = Object.freeze([...identities]);
+      this.publish(next, identities, context.correlationId);
       await retire(previous, context.correlationId);
     } catch (error) {
       if (error instanceof ManagedMcpError)

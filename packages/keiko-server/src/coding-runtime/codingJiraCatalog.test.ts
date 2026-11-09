@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi, type Mock } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpProvider,
@@ -16,6 +16,7 @@ import * as mcp from "@oscharko-dev/keiko-mcp";
 import * as diagnostics from "../diagnostics-log.js";
 import { createCodingJiraCatalog } from "./codingJiraCatalog.js";
 import type { CodingJiraTool } from "./codingJiraPodBinding.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -183,6 +184,10 @@ it("compiles only selected tools, replaces the subset, and clears it without an 
 });
 
 it("reports the operations a replacing selection drops to the model (LIM22)", async () => {
+  const log = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
+  onTestFinished(() => {
+    log.mockRestore();
+  });
   const f = fixture();
   await f.catalog.ready;
   expect(await f.select([PROJECTS])).not.toHaveProperty("deselected");
@@ -193,6 +198,17 @@ it("reports the operations a replacing selection drops to the model (LIM22)", as
   expect(await f.select([])).toMatchObject({
     deselected: [{ identity: ISSUE, tool: "jira.issue" }],
   });
+  expect(
+    log.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.op === "jira.catalog.selection")
+      .map((event) => event.extra),
+  ).toEqual([
+    expect.objectContaining({ surface: "coding", selectedCount: 1, deselectedCount: 0 }),
+    expect.objectContaining({ surface: "coding", selectedCount: 1, deselectedCount: 1 }),
+    expect.objectContaining({ surface: "coding", selectedCount: 1, retainedCount: 1 }),
+    expect.objectContaining({ surface: "coding", selectedCount: 0, deselectedCount: 1 }),
+  ]);
 });
 
 it("retains the admitted subset after a selected schema fails and surfaces the closed refusal", async () => {

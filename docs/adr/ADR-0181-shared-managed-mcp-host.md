@@ -46,7 +46,9 @@ implemented operations; it does not advertise the unimplemented API inventory as
 Describe accepts only exact registry identities and prepares the selected typed tools for the
 next model round. A describe replaces the previous additional selection; its result names
 every previously selected operation it drops (`deselected`), so a model never loses a tool
-without being told. The selection activates only after that describe invocation completes;
+without being told. Each published selection, in Chat and Coding, records
+`jira.catalog.selection` on the Activity Log with selected, retained and dropped counts only.
+The selection activates only after that describe invocation completes;
 failed or timed-out candidates are closed. Neither metadata operation performs Jira HTTP.
 Each round still uses the normal authority-filtered binder offer and the same accepted-turn
 invocation registry, so selection cannot grant authority or replay earlier effects. Other
