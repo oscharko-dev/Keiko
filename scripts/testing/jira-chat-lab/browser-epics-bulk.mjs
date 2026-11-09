@@ -10,6 +10,7 @@ import { toolExchangeOf } from "./requirements/tool-exchanges.mjs";
 import { EPIC_SUMMARY_VIOLATION } from "./requirements/templates.mjs";
 import {
   GOLDEN_ACCEPTANCE_COUNT,
+  GOLDEN_EPIC_SOURCE_DOCUMENT,
   GOLDEN_REQUIREMENT_COUNT,
   GOLDEN_NO_CRITERIA_TEXT,
   goldenJiraReadAdapter,
@@ -23,6 +24,9 @@ import {
 } from "./requirements/golden-jira-oracle.mjs";
 
 const STEP = "ac2-bulk-epics";
+// The Pod holds every format of one Lastenheft, so a bare ID is ambiguous and refused (LIM31).
+const SAME_LASTENHEFT =
+  "The Knowledge Pod holds the same Lastenheft as Markdown, DOCX and PDF, so a bare requirement ID is ambiguous.";
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 function requireFact(condition, message) {
@@ -35,7 +39,8 @@ function batchPrompt(projectKey, requirements) {
     "Use the actual connected Knowledge source and the installed Epic template. Read all required source pages.",
     "The exact summary is [requirement ID] followed by its complete original title. Preserve every acceptance criterion verbatim as its own list item, including false, zero and empty-value semantics.",
     `When the source supplies zero acceptance criteria, put the prose "${GOLDEN_NO_CRITERIA_TEXT}" under Acceptance criteria. Do not invent a criterion or a list item.`,
-    "Bind requirementIds to the one requirement belonging to each Epic so the product writes its own Keiko traceability footer. Preserve the complete section path or exact source page range. Cross-references are not additional requirements to create.",
+    `Use only ${GOLDEN_EPIC_SOURCE_DOCUMENT} as source. ${SAME_LASTENHEFT}`,
+    `Bind requirementIds to the one requirement belonging to each Epic as <documentScope>:<requirement ID> with the documentScope of ${GOLDEN_EPIC_SOURCE_DOCUMENT}, so the product writes its own Keiko traceability footer. Preserve the complete section path or exact source page range. Cross-references are not additional requirements to create.`,
     "Use the ordinary reviewed draft/create actions. Do not create duplicates, silently omit requirements, retry uncertain writes, or write through another channel.",
     ...requirements.map((requirement) => `[${requirement.id}] ${requirement.title}`),
   ].join("\n");
@@ -95,7 +100,7 @@ export function planDeliberateViolations(
         `Attempt exactly one ordinary jira.create for Epic [${requirement.id}] ${requirement.title} in project ${projectKey}.`,
         // Data Center requires an Epic Name; without one field admission refuses before the rule.
         `Set the Epic Name Jira requires to ${requirement.id}.`,
-        `Bind requirementIds to the one requirement [${requirement.id}] so the product writes its own Keiko traceability footer.`,
+        `Bind requirementIds to the one requirement [${requirement.id}] as <documentScope>:${requirement.id} with the documentScope of ${GOLDEN_EPIC_SOURCE_DOCUMENT}, so the product writes its own Keiko traceability footer. ${SAME_LASTENHEFT}`,
         "Use its complete actual source and template except for this deliberate formal violation:",
         bulkViolation.prompt,
         "Expose the real formal rule refusal. Do not correct the proposal, retry, create a replacement, or perform any other write in this turn.",

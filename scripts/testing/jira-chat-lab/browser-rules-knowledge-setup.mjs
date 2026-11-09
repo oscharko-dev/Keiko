@@ -6,6 +6,7 @@ import { fileURLToPath, URL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { expect } from "@playwright/test";
 import { writeCorpusDocuments } from "./requirements/corpus-documents.mjs";
+import { GOLDEN_LASTENHEFT_FILES } from "./requirements/golden-jira-oracle.mjs";
 import { gradeTemplateListing, gradeTemplateValidation } from "./requirements/templates.mjs";
 
 /** The response an action causes; a failed action never leaves the response wait unobserved. */
@@ -365,11 +366,7 @@ export async function createBrowserKnowledgePod(page, region, documents, options
   return capsule;
 }
 
-const LASTENHEFT_FILES = Object.freeze([
-  "lastenheft-kundenportal-zahlungsverkehr.md",
-  "lastenheft-kundenportal-zahlungsverkehr.docx",
-  "lastenheft-kundenportal-zahlungsverkehr.pdf",
-]);
+const LASTENHEFT_FILES = GOLDEN_LASTENHEFT_FILES;
 
 function lastenheftSetup(options) {
   const fixtureRoot =

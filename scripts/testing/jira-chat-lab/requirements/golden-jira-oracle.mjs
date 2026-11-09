@@ -8,6 +8,14 @@ import { nativePages } from "../project-agile-oracles.mjs";
 export const GOLDEN_REQUIREMENT_COUNT = 370;
 export const GOLDEN_ACCEPTANCE_COUNT = 1029;
 export const GOLDEN_NO_CRITERIA_TEXT = "No acceptance criteria are specified in the source.";
+/** The Lastenheft formats one Knowledge Pod stages; every requirement ID occurs in all three. */
+export const GOLDEN_LASTENHEFT_FILES = Object.freeze([
+  "lastenheft-kundenportal-zahlungsverkehr.md",
+  "lastenheft-kundenportal-zahlungsverkehr.docx",
+  "lastenheft-kundenportal-zahlungsverkehr.pdf",
+]);
+/** The one document Epics cite, so each reference is qualified before the first write. */
+export const GOLDEN_EPIC_SOURCE_DOCUMENT = GOLDEN_LASTENHEFT_FILES[0];
 const PAGE_SIZE = 100;
 const REQUIREMENT_ID = /^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-[0-9]+(?:\.[0-9]+)*$/u;
 const DOCUMENT_SCOPE = new RegExp(REQUIREMENT_DOCUMENT_SCOPE_PATTERN, "u");

@@ -581,6 +581,27 @@ describe("separate Epic and ordinary Backlog observations", () => {
 });
 
 describe("ordinary browser bulk orchestration", () => {
+  it("names the one source document and its qualified reference before the first write", () => {
+    // One Knowledge Pod stages the Lastenheft as Markdown, DOCX and PDF, so a bare requirement ID
+    // matches three documents and the product refuses it as ambiguous (LIM31). Every prompt must
+    // therefore name one source document and its qualified <documentScope>:<ID> form up front.
+    const source = goldenOracle.GOLDEN_EPIC_SOURCE_DOCUMENT;
+    expect(goldenOracle.GOLDEN_LASTENHEFT_FILES).toHaveLength(3);
+    expect(goldenOracle.GOLDEN_LASTENHEFT_FILES).toContain(source);
+    const prompts = [
+      ...planEpicBatches(GOLDEN, { projectKey: PROJECT }),
+      ...planDeliberateViolations(GOLDEN, { projectKey: PROJECT, bulkViolation: VIOLATION }),
+    ].map((entry) => entry.prompt);
+    for (const prompt of prompts) {
+      expect(prompt).toContain(source);
+      expect(prompt).toContain("<documentScope>:");
+    }
+    for (const entry of planDeliberateViolations(GOLDEN, {
+      projectKey: PROJECT,
+      bulkViolation: VIOLATION,
+    }))
+      expect(entry.prompt).toContain(`<documentScope>:${entry.requirementId}`);
+  });
   it("plans all 370 exactly once with 1029 criteria and runtime project keys", () => {
     const batches = planEpicBatches(GOLDEN, { projectKey: PROJECT });
     expect(batches).toHaveLength(19);
