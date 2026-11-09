@@ -50,6 +50,8 @@ export interface DraftBatchInstructions {
   readonly rules: string;
   readonly requiredSections: readonly string[];
   readonly requiredFields: readonly string[];
+  /** Jira's display names of required fields named by id, so the model knows what to write. */
+  readonly requiredFieldNames?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface DraftBatchMessage {
@@ -162,6 +164,16 @@ export function fillOverheadChars(instructions: DraftBatchInstructions): number 
   return fillMessages([], instructions).reduce((sum, message) => sum + message.content.length, 0);
 }
 
+/** The required fields, each Jira field id followed by the name Jira gives it. */
+function requiredFieldsLine(instructions: DraftBatchInstructions): string {
+  const names = instructions.requiredFieldNames ?? {};
+  const named = instructions.requiredFields
+    .filter((id) => Object.hasOwn(names, id))
+    .map((id) => `${id} is ${JSON.stringify(names[id] ?? "")}`);
+  const line = `Required fields: ${JSON.stringify(instructions.requiredFields)}`;
+  return named.length === 0 ? line : `${line} (${named.join("; ")}; key each by its id)`;
+}
+
 /** One page of planned issues with their requirements; a correction repeats the same page. */
 export function fillMessages(
   page: readonly DraftBatchEntry[],
@@ -173,7 +185,7 @@ export function fillMessages(
     instructions.requiredSections.length === 0
       ? `Required sections: none; write the issue text into sections.${FREE_SECTION}.`
       : `Required sections: ${JSON.stringify(shared)}`,
-    `Required fields: ${JSON.stringify(instructions.requiredFields)}`,
+    requiredFieldsLine(instructions),
   ].join("\n");
   const keys = page.map((entry) => entry.ref).join(", ");
   const messages: DraftBatchMessage[] = [

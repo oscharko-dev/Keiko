@@ -1426,6 +1426,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "no-knowledge-pod",
           "scope-unavailable",
           "requirements-cut",
+          "requirements-ambiguous",
           "no-requirements",
           "model-unavailable",
           "budget-unavailable",

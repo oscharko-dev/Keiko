@@ -152,11 +152,15 @@ function selectedRequirements(
   readonly alreadyDrafted: number;
   /** Every requirement the filter selected, duplicates and already drafted ones included. */
   readonly selectedCount: number;
+  /** Documents that share a selected requirement ID, when no documents filter chose one. */
+  readonly ambiguousDocuments: readonly string[];
 } {
   let alreadyDrafted = 0;
   const byRef = new Map<string, DraftBatchRequirement>();
   const duplicateRefs = new Set<string>();
   const selectedUnits = selectUnits(units, args.filter, redact);
+  const ambiguousDocuments =
+    args.filter.documents === undefined ? sharedIdDocuments(selectedUnits) : [];
   for (const { entry } of selectedUnits) {
     const ref = requirementReference(entry);
     if (drafted.has(ref)) {
@@ -180,6 +184,45 @@ function selectedRequirements(
     duplicateRefs: [...duplicateRefs],
     alreadyDrafted,
     selectedCount: selectedUnits.length,
+    ambiguousDocuments,
+  };
+}
+
+/**
+ * The documents that hold one requirement ID more than once among the selection, such as the same
+ * requirements document as Markdown, DOCX and PDF. Drafting all of them would create every issue
+ * once per document, so the documents filter has to choose (#4288).
+ */
+function sharedIdDocuments(selected: Parameters<typeof selectUnits>[0]): readonly string[] {
+  const scopesById = new Map<string, Set<string>>();
+  for (const { entry } of selected) {
+    const scopes = scopesById.get(entry.id) ?? new Set<string>();
+    scopes.add(entry.documentScope);
+    scopesById.set(entry.id, scopes);
+  }
+  const shared = new Set<string>();
+  for (const scopes of scopesById.values()) {
+    if (scopes.size < 2) continue;
+    for (const scope of scopes) shared.add(scope);
+  }
+  return [...shared].sort(compareText);
+}
+
+function compareText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function ambiguousRequirements(documents: readonly string[], count: number): Collected {
+  return {
+    ok: false,
+    refusal: "requirements-ambiguous",
+    facts: {
+      availableRequirementCount: count,
+      availableDocuments: documents.slice(0, SCOPES_NAMED_MAX),
+      guidance:
+        "The same requirement IDs appear in several of availableDocuments, for example one requirements document in several formats. Call again with requirements.documents naming the one document to draft from, keeping the other filters; name several documents only when they hold different requirements.",
+    },
   };
 }
 
@@ -236,6 +279,8 @@ function collectRequirements(
     const cut = collection.cutReasons.length > 0 || collection.unitsOmitted > 0;
     if (cut && !args.filtered) return { ok: false, refusal: "requirements-cut" };
     const selected = selectedRequirements(collection.units, args, contentRedact(deps), drafted);
+    if (selected.ambiguousDocuments.length > 0)
+      return ambiguousRequirements(selected.ambiguousDocuments, selected.selectedCount);
     if (selected.requirements.length > 0)
       return {
         ok: true,
@@ -702,6 +747,7 @@ function batchInput(
       rules: rulesText(rules),
       requiredSections: rules.requiredSections,
       requiredFields: rules.requiredFields,
+      requiredFieldNames: rules.requiredFieldNames,
     },
     placement: {
       projectId: placement.projectId,

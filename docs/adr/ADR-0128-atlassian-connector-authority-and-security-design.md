@@ -1582,6 +1582,13 @@ the approval.
   pagination remains authoritative. These are rule facts, not another selected instruction skill;
   the user's explicitly selected skill remains unchanged. Staging, pre-approval and dispatch still
   re-read and enforce the current library independently of this advisory discovery result.
+- **Draft batch inputs (#4288).** `keiko.jira.draft.batch` asks the model for the template's
+  required fields plus every string field the current create metadata requires without a default
+  that neither Keiko nor Jira sets (a Data Center Epic's Epic Name, named with Jira's display
+  name). A failed metadata read adds nothing; staging still validates against current metadata. A
+  selection without a `documents` filter whose requirement IDs occur in more than one document
+  (one Lastenheft as Markdown, DOCX and PDF) is refused as `requirements-ambiguous` before any
+  model call, naming those documents, so a batch never drafts one requirement once per format.
 - **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
   /api/skills/jira-templates/validate` validates a template against the live instance through a
   Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or

@@ -1286,6 +1286,127 @@ describe("jira.draft-batch (#4173)", () => {
   });
 });
 
+describe("jira.draft-batch against Data Center Epic metadata and repeated documents (#4288)", () => {
+  const EPIC_NAME = {
+    ...field("customfield_10103", "string", true),
+    name: "Epic Name",
+    schema: { type: "string", custom: "com.pyxis.greenhopper.jira:gh-epic-label", customId: 10103 },
+  };
+
+  function requiredFieldIds(request: GatewayCallRequest): string[] {
+    const line = /^Required fields: (\[[^\]]*\])/mu.exec(promptOf(request))?.[1];
+    return line === undefined ? [] : (JSON.parse(line) as string[]);
+  }
+
+  function pageWithFields(request: GatewayCallRequest): string {
+    const ids = requiredFieldIds(request);
+    return JSON.stringify({
+      items: keysOf(request).map((key) => ({
+        key,
+        summary: `Summary ${key}`,
+        sections: { "Acceptance criteria": `Criteria ${key}` },
+        fields: Object.fromEntries(ids.map((id) => [id, `Name ${key}`])),
+      })),
+    });
+  }
+
+  it("asks the model for the Epic Name Jira requires and stages every Epic with it", async () => {
+    const spec = specification(3);
+    const h = await harness(pageWithFields, [{ capsuleId: "cap-a", text: spec.text }]);
+
+    const result = await h.run(
+      { ...ARGS, create: true },
+      { createFields: [...CREATE_FIELDS, EPIC_NAME] },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", itemCount: 3, failedCount: 0 });
+    expect(promptOf(firstRequest(h))).toContain(
+      'Required fields: ["customfield_10103"] (customfield_10103 is "Epic Name"; key each by its id)',
+    );
+    const names = stagedItems(h).map(
+      (item) => (item.fields as Record<string, unknown>).customfield_10103,
+    );
+    expect(names).toHaveLength(3);
+    expect(names.every((name) => typeof name === "string" && name.startsWith("Name "))).toBe(true);
+  });
+
+  it("asks once for an Epic Name the template already names by its display name", async () => {
+    const spec = specification(1);
+    const h = await harness(pageWithFields, [{ capsuleId: "cap-a", text: spec.text }]);
+    const named: JiraIssueTemplateSet = {
+      templates: [template("requiredFields: [Epic Name]")],
+      unreadable: 0,
+    };
+
+    await h.run(
+      { ...ARGS, create: true },
+      { createFields: [...CREATE_FIELDS, EPIC_NAME], templates: named },
+    );
+
+    expect(requiredFieldIds(firstRequest(h))).toEqual(["Epic Name"]);
+  });
+
+  it("asks for no field Jira defaults, Keiko writes or the model cannot write as text", async () => {
+    const spec = specification(1);
+    const h = await harness(pageWithFields, [{ capsuleId: "cap-a", text: spec.text }]);
+    const defaulted = { ...field("customfield_10200", "string", true), hasDefaultValue: true };
+    const option = {
+      ...field("customfield_10300", "option", true),
+      schema: {
+        type: "option",
+        custom: "com.atlassian.jira.plugin.system.customfieldtypes:select",
+      },
+      allowedValues: [{ id: "1", value: "A" }],
+    };
+    const reporter = {
+      ...field("reporter", "user", true),
+      schema: { type: "user", system: "reporter" },
+    };
+
+    await h.run(
+      { ...ARGS, create: true },
+      { createFields: [...CREATE_FIELDS, defaulted, option, reporter] },
+    );
+
+    expect(requiredFieldIds(firstRequest(h))).toEqual([]);
+  });
+
+  it("refuses IDs the same requirements document holds twice before any model call", async () => {
+    const spec = specification(3);
+    const h = await harness(pageWithFields, [
+      { capsuleId: "cap-a", text: spec.text },
+      { capsuleId: "cap-b", text: spec.text },
+    ]);
+
+    const result = await h.run({ ...ARGS, create: true, requirements: { ids: [...spec.ids] } });
+
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({
+      outcome: "failed",
+      reason: "requirements-ambiguous",
+      availableRequirementCount: 6,
+    });
+    const documents = result.data.availableDocuments as string[];
+    expect(documents).toHaveLength(2);
+    expect(result.data.guidance).toEqual(expect.stringContaining("requirements.documents"));
+    expect(h.requests).toHaveLength(0);
+    expect(stagedItems(h)).toEqual([]);
+    expect(proofLines(h).at(-1)).toMatchObject({
+      phase: "refused",
+      refusal: "requirements-ambiguous",
+      errorKind: "invalid-request",
+    });
+
+    const chosen = await h.run({
+      ...ARGS,
+      create: true,
+      requirements: { ids: [...spec.ids], documents: [documents[0]] },
+    });
+
+    expect(chosen.data).toMatchObject({ outcome: "succeeded", itemCount: 3, requirementCount: 3 });
+  });
+});
+
 describe("rulesText", () => {
   const rules = (facts: readonly unknown[]): Parameters<typeof rulesText>[0] =>
     ({ facts }) as unknown as Parameters<typeof rulesText>[0];
