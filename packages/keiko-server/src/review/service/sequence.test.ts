@@ -11,6 +11,7 @@ import {
   type ActivityLogCapture,
 } from "../../activityLogCapture.test-support.js";
 import type { CounterCheckInput, CounterCheckOutcome } from "../counter-check/counterCheck.js";
+import type { ReviewServices } from "../services.js";
 import { ReviewRunEventHub } from "./events.js";
 import { counterCheckBy, reportAt } from "./reviewRunHarness.test-support.js";
 import {
@@ -21,6 +22,7 @@ import {
   type ReviewSequenceDeps,
 } from "./sequence.js";
 import { settleReviewRun } from "./settlement.js";
+import type { ReviewRunStore } from "./store.js";
 
 const PHASE_LIMIT_MS = 60_000;
 const RUN_ALLOWANCE = 1_000;
@@ -48,23 +50,27 @@ function sequenceDeps(
 ): ReviewSequenceDeps {
   const answer = counterCheckBy({}, options.effect ?? "none");
   const now = (): number => phase.clock.now;
-  // The phase reads only these ports; the store and the review services are not exercised.
+  // Of the store and the review services the phase calls one method each, and the scripted
+  // counter-check never reads through the runner, so only these two ports are cast. The object
+  // itself is typed: a port added to `ReviewSequenceDeps` fails to compile here.
+  const store = { setPhase: (): void => undefined } as unknown as ReviewRunStore;
+  const reviewServices = { reviewRunner: (): undefined => undefined } as unknown as ReviewServices;
   return {
-    store: { setPhase: (): void => undefined },
-    reviewServices: { reviewRunner: (): undefined => undefined },
+    store,
+    reviewServices,
     reviewRuntime: undefined,
     counterCheck: (input: CounterCheckInput): Promise<CounterCheckOutcome> => {
       phase.checked.push(input.candidate.report.startLine);
       options.onCheck?.(input, phase.clock);
       return answer(input);
     },
-    models: {},
+    models: { capability: (): undefined => undefined },
     activityLog: phase.log.sink,
     events: new ReviewRunEventHub(now),
     now,
     counterCheckRunPromptTokens: RUN_ALLOWANCE,
     counterCheckPhaseWallTimeMs: PHASE_LIMIT_MS,
-  } as unknown as ReviewSequenceDeps;
+  };
 }
 
 async function runPhase(options: PhaseOptions): Promise<Phase> {

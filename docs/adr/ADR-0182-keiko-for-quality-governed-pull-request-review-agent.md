@@ -257,10 +257,13 @@ limit alone bounded one check, so a twelve-part review with 96 candidates could 
 this phase. Once the limit has passed the phase starts no further counter-check; the candidates left
 stay unchecked and the run settles `incomplete/deadline-exceeded`, or `incomplete/budget-exhausted`
 when the prompt allowance ran out as well. A check in flight is not cut and ends at its own limit,
-so the phase overruns by at most one check (600 seconds by default). 60 minutes is six checks at the
-per-candidate limit, the number the run prompt allowance covers. On the offline gate's sets the
-longest single-part phase of the local 4-bit pair took 54 minutes for eight candidates, and a
-30-minute limit would have left candidates unchecked in many measured reviews.
+so the phase overruns by at most one check: the configured per-candidate wall time (600 seconds by
+default) plus the reads that verify that check's evidence in the head commit after its session.
+60 minutes is six checks at the per-candidate limit, the number the run prompt allowance covers. On
+the offline gate's sets the longest single-part phase of the local 4-bit pair took 54 minutes for
+eight candidates, and a 30-minute limit would have left candidates unchecked in many measured
+reviews. The settled line's `candidateCount` minus its three verdict counts is the number of
+candidates left unchecked.
 
 The presentation rule is one pure function (`review/service/presentation.ts`): a candidate is
 presented only when its verdict is `confirmed`, bound to its own fingerprint, every verdict evidence
