@@ -177,7 +177,8 @@ validation keeps refusing a shrink, so an activated scope stays active. Later mi
 for activity-log, cli, quality-intelligence, security, tool-catalog, tools and ui on 2026-11-09. On the same day
 require-safety-comment-for-type-assertion became active for memory-capture, memory-consolidation,
 memory-retrieval, verification and workflows, and no-reflect-get for verification (#3933). On 2026-11-10 no-chained-type-assertions and no-array-filter-map became active for
-sandbox (#3933). The engine refuses an active
+sandbox (#3933), and no-chained-type-assertions became active for harness and model-gateway
+(#3933). The engine refuses an active
 scope without files on the real repository. A hermetic test fixture writes its policy with only the
 scopes its own files certainly fall in.
 

@@ -3829,16 +3829,9 @@
     "packages/keiko-harness/src/catalog-budget.test.ts": {
       "anti-slop/no-known-value-widening": 1
     },
-    "packages/keiko-harness/src/catalog-call.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
-    },
     "packages/keiko-harness/src/catalog-runtime.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 1,
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-runtime-typeof": 1
     },
     "packages/keiko-harness/src/editor-agent-catalog.test.ts": {
       "anti-slop/no-unknown-parameters": 1,
@@ -5415,13 +5408,12 @@
       "anti-slop/require-safety-comment-for-type-assertion": 19
     },
     "packages/keiko-model-gateway/src/realtime-voice-adapter.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 6,
       "anti-slop/no-known-value-widening": 7,
       "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/no-unsafe-dictionary-type": 10,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-unsafe-dictionary-type": 9,
+      "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-model-gateway/src/replay.test.ts": {
       "anti-slop/no-known-value-widening": 1,
@@ -5497,15 +5489,14 @@
       "anti-slop/require-safety-comment-for-type-assertion": 31
     },
     "packages/keiko-model-gateway/src/toolCatalogBridge.ts": {
-      "anti-slop/no-chained-type-assertions": 3,
       "anti-slop/no-conditional-empty-object-spread": 6,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-object-parameters": 1,
       "anti-slop/no-runtime-typeof": 8,
       "anti-slop/no-unknown-parameters": 4,
       "anti-slop/no-unknown-returns": 1,
-      "anti-slop/no-unsafe-dictionary-type": 3,
-      "anti-slop/require-safety-comment-for-type-assertion": 10
+      "anti-slop/no-unsafe-dictionary-type": 1,
+      "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-model-gateway/src/voice-capability.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1
@@ -14416,7 +14407,7 @@
       "anti-slop/no-object-parameters": 2,
       "anti-slop/no-runtime-typeof": 11,
       "anti-slop/no-unknown-parameters": 5,
-      "anti-slop/require-safety-comment-for-type-assertion": 4
+      "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-tool-catalog/src/opencode.test.ts": {
       "anti-slop/no-reflect-apply": 1,
