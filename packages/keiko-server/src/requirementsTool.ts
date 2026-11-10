@@ -7,8 +7,13 @@
 // the bounds that cut, and a cursor until the last page. It is hosted by the existing governed Chat
 // tool catalog like the Jira reads; it adds no tool system of its own.
 
+import {
+  KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION,
+  KNOWLEDGE_REQUIREMENTS_TOOL_ID,
+} from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import type { JiraReportRequirementIds, JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpProvider,
@@ -217,9 +222,9 @@ const DESCRIPTION =
   "Otherwise page view units with nextCursor and report the totals. " +
   "Pass a unit's reference as requirementIds when creating or editing a Jira issue.";
 
-function declaration(): ManagedMcpToolDeclaration {
+function createDeclaration(): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
-    toolRef: createToolRef("keiko.knowledge.requirements", 1),
+    toolRef: createToolRef(KNOWLEDGE_REQUIREMENTS_TOOL_ID, KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION),
     description: DESCRIPTION,
     inputSchema: compileExternalCatalogSchema(ARGUMENTS),
     resultSchema: compileExternalCatalogSchema(RESULT),
@@ -236,13 +241,21 @@ function declaration(): ManagedMcpToolDeclaration {
     idempotency: "server-key-required",
     cancellation: "before-effect",
   });
-  return Object.freeze({
+  // Shared by every provider, so frozen in depth: annotations included.
+  return deepFreeze({
     name: KNOWLEDGE_REQUIREMENTS_TOOL,
     risk: "read",
     title: "Knowledge requirements",
     annotations: { openWorldHint: false, idempotentHint: true },
     descriptor,
   });
+}
+
+// A pure constant: built once per process, not again for every catalog a Chat turn composes.
+let requirementsDeclaration: ManagedMcpToolDeclaration | undefined;
+function declaration(): ManagedMcpToolDeclaration {
+  requirementsDeclaration ??= createDeclaration();
+  return requirementsDeclaration;
 }
 
 interface ParsedArguments {

@@ -1205,6 +1205,7 @@ type RuntimeStartFailureReason =
 
 type RuntimeLifecycleFailureReason =
   | "failure-redacted"
+  | "history-refresh-failed"
   | "runtime-stopped-live"
   // A mutation that awaited found the run's row already moved on by a concurrent stop, takeover or
   // settlement; it abandons its stale write instead of letting the store throw (audit 2026-10).
@@ -2261,6 +2262,20 @@ export class CodingRuntimeOrchestrator {
   getSnapshot(runId: string): PublicSnapshot | undefined {
     const snapshot = this.deps.snapshots.get(runId);
     return snapshot ? this.publicSnapshotWithDescription(snapshot) : undefined;
+  }
+
+  /** Durable private-input metadata changed; publish only the live run's existing status. */
+  async refreshHistory(runId: string): Promise<void> {
+    try {
+      await this.serialValue(() => {
+        const current = this.current();
+        if (current?.runId !== runId || current.state !== "running") return;
+        // This changes the public snapshot revision, never the Authority Envelope or its expiry.
+        this.advanceRevision(current);
+      });
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "history-refresh-failed", error);
+    }
   }
 
   submitFollowUp(
@@ -4581,6 +4596,9 @@ export class CodingRuntimeOrchestrator {
       ...agentField(request.agent),
       ...promptInputFields(request),
       ...jiraPodField(request.jiraPodId),
+      ...(request.connectorScopes === undefined
+        ? {}
+        : { connectorScopes: [...request.connectorScopes] }),
       ...mcpServersField(request.mcpServers),
       workspaceId: active.instance.workspaceId,
       workspaceRoot: active.binding.activeRoot,

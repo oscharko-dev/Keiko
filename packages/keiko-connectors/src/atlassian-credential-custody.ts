@@ -27,6 +27,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { isChatJiraPodId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   isAtlassianConnectionVerificationStatus,
+  isJiraDataCenterCompatibilityFacts,
+  type JiraDataCenterCompatibilityFacts,
   type JiraLivePodMetadata,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { Buffer } from "node:buffer";
@@ -45,6 +47,15 @@ import {
   isSafeAtlassianDisplayName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
+import {
+  createJiraHumanInputCustody,
+  type JiraHumanInputCustody,
+  type JiraHumanInputExecutionResolver,
+} from "./jira-human-input-custody.js";
+import {
+  createJiraPrivateSessionCustody,
+  type JiraPrivateSessionExecutionResolver,
+} from "./jira-private-session-custody.js";
 
 // ─── Bounds for the credential material itself (hostile-input guards) ─────────
 // The account email and API token feed `Authorization: Basic base64(email:token)` downstream, so
@@ -175,6 +186,7 @@ const LIVE_POD_KEYS = new Set([
   "verificationRevision",
   "verificationInProgress",
   "verificationStatus",
+  "compatibility",
 ]);
 
 function ownerDigestIsValid(value: unknown): value is string {
@@ -197,8 +209,19 @@ function validLivePodVerification(value: Record<string, unknown>): boolean {
     Number(value.verificationRevision) >= 0 &&
     typeof value.verificationInProgress === "boolean" &&
     validLivePodOperation(value) &&
+    validLivePodCompatibility(value) &&
     (value.verificationStatus === "unverified" ||
       isAtlassianConnectionVerificationStatus(value.verificationStatus))
+  );
+}
+
+function validLivePodCompatibility(value: Record<string, unknown>): boolean {
+  return (
+    value.compatibility === undefined ||
+    (value.verificationStatus === "ok" &&
+      value.verificationInProgress === false &&
+      value.credentialOperation === undefined &&
+      isJiraDataCenterCompatibilityFacts(value.compatibility))
   );
 }
 
@@ -234,8 +257,12 @@ export function isAtlassianCredentialMetadata(
 }
 
 // ─── Injected ports (implemented by keiko-server, the composition root) ───────
-// Structural subset of keiko-security's LocalSecretVault: custody needs no `replaceAll`/`list`.
-export type AtlassianCredentialVaultPort = Pick<LocalSecretVault, "get" | "set" | "delete">;
+// Enumeration is private and used only for bounded expiration of Jira input/session records.
+export type AtlassianCredentialVaultPort = Pick<
+  LocalSecretVault,
+  "get" | "set" | "delete" | "compareAndSet" | "acquireLease"
+> &
+  Partial<Pick<LocalSecretVault, "list">>;
 
 // Non-secret metadata persistence. keiko-server implements this over a private, 0600-hardened
 // JSON store in the same `<config-dir>/credentials/` custody domain as the vault (ADR-0128 D2) —
@@ -257,6 +284,9 @@ export type AtlassianResolvedCredential =
 // injects it exclusively into the outbound HTTP adapter (ADR-0128 D2 write-only rule), so no
 // route, event, or serialized surface can ever reach the secret.
 export interface AtlassianCredentialExecutionResolver {
+  /** Separate execution-only facet; never exposed through credential routes or tool results. */
+  readonly humanInputs?: JiraHumanInputExecutionResolver;
+  readonly sessions?: JiraPrivateSessionExecutionResolver;
   readonly resolveForExecution: (
     authRef: string,
     expectedGeneration?: number,
@@ -265,6 +295,8 @@ export interface AtlassianCredentialExecutionResolver {
 
 // ─── Custody surface ───────────────────────────────────────────────────────────
 export interface AtlassianCredentialCustody {
+  /** Human-only submissions/readiness; this facet cannot resolve stored values. */
+  readonly humanInputs?: JiraHumanInputCustody;
   // Accepts the raw secret exactly once (unknown-shaped: hostile input is validated here, at the
   // enforcement point). Returns metadata only. Throws AtlassianCredentialCustodyError.
   readonly create: (input: unknown, livePodOwnerDigest?: string) => AtlassianCredentialMetadata;
@@ -283,6 +315,7 @@ export interface AtlassianCredentialCustody {
     revision: number,
     status: JiraLivePodMetadata["verificationStatus"],
     correlationId?: string,
+    compatibility?: JiraDataCenterCompatibilityFacts,
   ) => boolean;
   /** A current authenticated request observed 401; stale responses cannot invalidate newer verification. */
   readonly observeAuthenticationFailure: (
@@ -302,9 +335,18 @@ export interface AtlassianCredentialCustodyDeps {
   readonly metadataStore: AtlassianCredentialMetadataStore;
   // Server-owned invalidation follows durable revocation. null means credential removal.
   readonly onLivePodInvalidated?:
-    | ((podId: string, authenticationGeneration: number | null, correlationId?: string) => void)
+    | ((
+        podId: string,
+        authenticationGeneration: number | null,
+        correlationId?: string,
+        reason?: "authentication-failed",
+      ) => void)
     | undefined;
   readonly now?: () => number;
+  readonly onHumanInputCleared?: (
+    correlationId: string | undefined,
+    phase: "cancelled" | "expired",
+  ) => void;
 }
 
 export interface CreatedAtlassianCredentialCustody {
@@ -614,6 +656,12 @@ function advanceGeneration(value: number): number {
   return next;
 }
 
+function withoutCompatibility(pod: JiraLivePodMetadata): JiraLivePodMetadata {
+  const current = { ...pod };
+  delete current.compatibility;
+  return current;
+}
+
 function beginVerification(
   deps: AtlassianCredentialCustodyDeps,
   authRef: string,
@@ -625,7 +673,11 @@ function beginVerification(
   const revision = advanceGeneration(metadata.livePod.verificationRevision);
   const next = {
     ...metadata,
-    livePod: { ...metadata.livePod, verificationRevision: revision, verificationInProgress: true },
+    livePod: {
+      ...withoutCompatibility(metadata.livePod),
+      verificationRevision: revision,
+      verificationInProgress: true,
+    },
   };
   deps.metadataStore.insert(next);
   return { metadata: next, revision };
@@ -638,6 +690,7 @@ function finishVerification(
   revision: number,
   status: JiraLivePodMetadata["verificationStatus"],
   correlationId?: string,
+  compatibility?: JiraDataCenterCompatibilityFacts,
 ): boolean {
   const metadata = livePodCredential(deps, authRef);
   if (
@@ -648,7 +701,12 @@ function finishVerification(
     return false;
   if (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
     throw new AtlassianCredentialCustodyError("invalid-input");
-  commitVerificationStatus(deps, metadata, status, correlationId);
+  if (
+    compatibility !== undefined &&
+    (status !== "ok" || !isJiraDataCenterCompatibilityFacts(compatibility))
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  commitVerificationStatus(deps, metadata, status, correlationId, compatibility);
   return true;
 }
 
@@ -657,16 +715,29 @@ function commitVerificationStatus(
   metadata: LivePodCredential,
   status: JiraLivePodMetadata["verificationStatus"],
   correlationId?: string,
+  compatibility?: JiraDataCenterCompatibilityFacts,
 ): void {
   const generation = metadata.generation;
   const nextGeneration = status === "ok" ? generation : advanceGeneration(generation);
   deps.metadataStore.insert({
     ...metadata,
     generation: nextGeneration,
-    livePod: { ...metadata.livePod, verificationInProgress: false, verificationStatus: status },
+    livePod: {
+      ...withoutCompatibility(metadata.livePod),
+      verificationInProgress: false,
+      verificationStatus: status,
+      ...(compatibility === undefined ? {} : { compatibility: structuredClone(compatibility) }),
+    },
   });
-  if (nextGeneration !== generation)
-    deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
+  if (nextGeneration === generation) return;
+  if (status === "auth-failed")
+    deps.onLivePodInvalidated?.(
+      metadata.livePod.podId,
+      nextGeneration,
+      correlationId,
+      "authentication-failed",
+    );
+  else deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
 }
 
 function observeAuthenticationFailure(
@@ -769,7 +840,7 @@ function pendingLivePodOperation(
     ...metadata,
     generation: advanceGeneration(metadata.generation),
     livePod: {
-      ...metadata.livePod,
+      ...withoutCompatibility(metadata.livePod),
       credentialOperation: operation,
       verificationRevision: advanceGeneration(metadata.livePod.verificationRevision),
       verificationStatus: "unverified",
@@ -845,19 +916,54 @@ function deleteCredential(
   return deps.metadataStore.delete(authRef);
 }
 
-export function createAtlassianCredentialCustody(
+function privateCustodyVault(deps: AtlassianCredentialCustodyDeps): AtlassianCredentialVaultPort {
+  return {
+    get: (reference) => vaultOp(() => deps.vault.get(reference)),
+    set: (reference, value): void => {
+      vaultOp(() => {
+        deps.vault.set(reference, value);
+      });
+    },
+    delete: (reference): void => {
+      vaultOp(() => {
+        deps.vault.delete(reference);
+      });
+    },
+    ...(deps.vault.compareAndSet === undefined
+      ? {}
+      : {
+          compareAndSet: (
+            reference: string,
+            expected: string | undefined,
+            next: string | undefined,
+          ) => vaultOp(() => deps.vault.compareAndSet?.(reference, expected, next) ?? false),
+        }),
+    ...(deps.vault.acquireLease === undefined
+      ? {}
+      : {
+          acquireLease: (reference: string, scope?: "record" | "collection") =>
+            vaultOp(() => deps.vault.acquireLease?.(reference, scope)),
+        }),
+    ...(deps.vault.list === undefined
+      ? {}
+      : { list: () => vaultOp(() => deps.vault.list?.() ?? []) }),
+  };
+}
+function credentialCustodyPort(
   deps: AtlassianCredentialCustodyDeps,
-): CreatedAtlassianCredentialCustody {
-  const now = deps.now ?? ((): number => Date.now());
-  const custody: AtlassianCredentialCustody = {
+  now: () => number,
+  humanInputs: JiraHumanInputCustody,
+): AtlassianCredentialCustody {
+  return {
+    humanInputs,
     create: (input: unknown, ownerDigest?: string): AtlassianCredentialMetadata =>
       createCredential(deps, now, input, ownerDigest),
     updateLivePod: (authRef, input, correlationId) =>
       updateLivePod(deps, authRef, input, correlationId),
     beginVerification: (authRef, expectedGeneration) =>
       beginVerification(deps, authRef, expectedGeneration),
-    finishVerification: (authRef, generation, revision, status, correlationId) =>
-      finishVerification(deps, authRef, generation, revision, status, correlationId),
+    finishVerification: (authRef, generation, revision, status, correlationId, compatibility) =>
+      finishVerification(deps, authRef, generation, revision, status, correlationId, compatibility),
     observeAuthenticationFailure: (authRef, generation, revision, correlationId) =>
       observeAuthenticationFailure(deps, authRef, generation, revision, correlationId),
     // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that
@@ -879,9 +985,31 @@ export function createAtlassianCredentialCustody(
         .sort(compareAtlassianCredentialMetadata),
     delete: (authRef, correlationId) => deleteCredential(deps, authRef, correlationId),
   };
+}
+export function createAtlassianCredentialCustody(
+  deps: AtlassianCredentialCustodyDeps,
+): CreatedAtlassianCredentialCustody {
+  const now = deps.now ?? ((): number => Date.now());
+  const privateVault = privateCustodyVault(deps);
+  const metadata = (authRef: string): AtlassianCredentialMetadata | undefined => {
+    const raw = deps.metadataStore.get(authRef);
+    return raw !== undefined && isAtlassianCredentialMetadata(raw) ? raw : undefined;
+  };
+  const humanInputs = createJiraHumanInputCustody({
+    vault: privateVault,
+    now,
+    metadata,
+    onCleared: (binding, phase) => {
+      deps.onHumanInputCleared?.(binding.operationCorrelationId, phase);
+    },
+  });
+  const sessions = createJiraPrivateSessionCustody({ vault: privateVault, now, metadata });
+  const custody = credentialCustodyPort(deps, now, humanInputs.custody);
   return {
     custody,
     executionResolver: {
+      humanInputs: humanInputs.executionResolver,
+      sessions,
       resolveForExecution: (
         authRef: string,
         expectedGeneration?: number,

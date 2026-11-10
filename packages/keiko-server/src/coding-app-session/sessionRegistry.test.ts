@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+
 import { createSessionRegistry } from "./sessionRegistry.js";
 
 function fixedClock(startMs: number): { now: () => number; advance: (ms: number) => void } {
@@ -107,7 +113,7 @@ describe("createSessionRegistry", () => {
     expect(registry.sessionCount()).toBe(1);
   });
 
-  it.each(["revocation", "rotation", "absolute-expiry"] as const)(
+  it.each(["revocation", "absolute-expiry"] as const)(
     "never revives authority after %s during an active operation",
     (cause) => {
       const clock = fixedClock(0);
@@ -120,18 +126,63 @@ describe("createSessionRegistry", () => {
       const release = registry.beginOperation(mint.cookieToken);
       clock.advance(50);
       if (cause === "revocation") registry.revoke(mint.session.sessionId);
-      const rotated = cause === "rotation" ? registry.rotate(mint.session.sessionId) : undefined;
       clock.advance(cause === "absolute-expiry" ? 151 : 70);
       expect(registry.inspect(mint.cookieToken)).toBeUndefined();
       release?.();
       expect(registry.inspect(mint.cookieToken)).toBeUndefined();
-      if (rotated !== undefined) {
-        expect(registry.inspect(rotated.cookieToken)?.lastSeenAtMs).toBe(50);
-        clock.advance(31);
-        expect(registry.inspect(rotated.cookieToken)).toBeUndefined();
-      }
     },
   );
+
+  it("carries an active operation through rotation and releases the live entry after 31 minutes", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now });
+    const minted = registry.mint("synthetic");
+    const release = registry.beginOperation(minted.cookieToken);
+    const rotated = registry.rotate(minted.session.sessionId);
+    expect(rotated).toBeDefined();
+    expect(registry.inspect(minted.cookieToken)).toBeUndefined();
+    expect(registry.inspectOperationCount(rotated?.cookieToken)).toBe(1);
+    clock.advance(31 * 60_000);
+    release?.();
+    expect(registry.inspectOperationCount(rotated?.cookieToken)).toBe(0);
+    expect(registry.inspect(rotated?.cookieToken)?.lastSeenAtMs).toBe(clock.now());
+    clock.advance(29 * 60_000);
+    release?.();
+    expect(registry.inspect(rotated?.cookieToken)).toBeDefined();
+    clock.advance(60_000);
+    expect(registry.inspect(rotated?.cookieToken)).toBeUndefined();
+  });
+
+  it("keeps a 40 minute operation valid without rotation", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now });
+    const minted = registry.mint("synthetic");
+    const release = registry.beginOperation(minted.cookieToken);
+    clock.advance(40 * 60_000);
+    expect(registry.inspect(minted.cookieToken)).toBeDefined();
+    release?.();
+    expect(registry.inspectOperationCount(minted.cookieToken)).toBe(0);
+    expect(registry.inspect(minted.cookieToken)?.lastSeenAtMs).toBe(clock.now());
+  });
+
+  it("releases concurrent leases across repeated rotations exactly once", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100 });
+    const minted = registry.mint("synthetic");
+    const first = registry.beginOperation(minted.cookieToken);
+    const second = registry.beginOperation(minted.cookieToken);
+    registry.rotate(minted.session.sessionId);
+    const rotated = registry.rotate(minted.session.sessionId);
+    clock.advance(101);
+    first?.();
+    first?.();
+    expect(registry.inspectOperationCount(rotated?.cookieToken)).toBe(1);
+    clock.advance(101);
+    second?.();
+    expect(registry.inspectOperationCount(rotated?.cookieToken)).toBe(0);
+    clock.advance(100);
+    expect(registry.inspect(rotated?.cookieToken)).toBeUndefined();
+  });
 
   it("mints a cookie token that verifies to the issued session", () => {
     const registry = createSessionRegistry();
@@ -260,3 +311,69 @@ it.each(["idle", "absolute"] as const)(
     expect(registry.sessionCount()).toBe(0);
   },
 );
+
+it("records deferred rotation and observed expiry without session identities or secrets", () => {
+  const clock = fixedClock(0);
+  const activityLog = createBufferedServerLogSink();
+  const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100, activityLog });
+  const mint = registry.mint("private-principal");
+  const release = registry.beginOperation(mint.cookieToken);
+  expect(
+    registry.rotate(mint.session.sessionId, {
+      onlyIfIdle: true,
+      correlationId: "deferred-registry-audit",
+    }),
+  ).toBeUndefined();
+  expect(registry.inspectOperationCount(mint.cookieToken)).toBe(1);
+  const rotated = registry.rotate(mint.session.sessionId);
+  expect(rotated).toBeDefined();
+  release?.();
+  clock.advance(100);
+  expect(registry.inspect(rotated?.cookieToken)).toBeUndefined();
+  expect(activityLog.events.map((event) => event.extra)).toEqual([
+    { activeOperationCount: 1, reason: "active-operation", completeness: "complete", loss: "none" },
+    {
+      expiredSessionCount: 1,
+      sessionCount: 0,
+      reason: "inactivity",
+      completeness: "complete",
+      loss: "none",
+    },
+    {
+      reason: "inactivity",
+      purpose: "inspection",
+      registered: true,
+      sessionCount: 0,
+      completeness: "complete",
+      loss: "none",
+    },
+  ]);
+  expectActivityLogProof(
+    "coding-app-session.rotation.state.observation",
+    formatActivityLogProofLine(activityLog.events[0] ?? {}),
+  );
+  const serialized = JSON.stringify(activityLog.events);
+  for (const privateValue of [mint.cookieToken, mint.session.sessionId, "private-principal"])
+    expect(serialized).not.toContain(privateValue);
+});
+
+it("keeps the browser credential and its lease when rotation evidence cannot be written", () => {
+  const registry = createSessionRegistry({
+    activityLog: {
+      write: (): void => {
+        throw new Error("synthetic-log-failure");
+      },
+    },
+  });
+  const mint = registry.mint("synthetic");
+  const release = registry.beginOperation(mint.cookieToken);
+  expect(() =>
+    registry.rotate(mint.session.sessionId, {
+      onlyIfIdle: true,
+      correlationId: "deferred-log-failure",
+    }),
+  ).toThrow("synthetic-log-failure");
+  expect(registry.inspectOperationCount(mint.cookieToken)).toBe(1);
+  release?.();
+  expect(registry.inspectOperationCount(mint.cookieToken)).toBe(0);
+});

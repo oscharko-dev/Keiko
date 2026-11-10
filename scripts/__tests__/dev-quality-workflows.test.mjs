@@ -558,6 +558,122 @@ describe("dev quality workflows", () => {
     },
   );
 
+  // #4288: the whole `scripts/__tests__` suite ran in ONE 30-minute job and was cancelled at the
+  // limit (about 2475 s of test time plus about 4 min of setup). It is sharded exactly like the
+  // package suite, and the timeout is NOT raised: the shards buy distance to the unchanged limit.
+  describe("script coverage shards (#4288)", () => {
+    const SCRIPT_SHARDS = 3;
+    const job = ciWorkflow.jobs["coverage-scripts"];
+    const sonarSteps = ciWorkflow.jobs["coverage-sonar"].steps;
+    const stepNamed = (name) => sonarSteps.find((step) => step.name === name);
+    const guardName = "Verify every script coverage shard delivered its evidence";
+
+    it("splits the suite across a three-shard matrix without raising the 30-minute limit", () => {
+      expect(job.strategy["fail-fast"]).toBe(false);
+      expect(job.strategy.matrix.shard).toEqual([1, 2, 3]);
+      expect(job.name).toBe(`Coverage shard (scripts \${{ matrix.shard }}/${SCRIPT_SHARDS})`);
+      expect(job["timeout-minutes"]).toBe(30);
+      const measure = job.steps.find((step) => step.name === "Measure script coverage shard");
+      expect(measure.run).toBe(
+        `npm run test:coverage:scripts:shard -- --shard=\${{ matrix.shard }}/${SCRIPT_SHARDS} --reporter=github-actions`,
+      );
+    });
+
+    it("uploads each shard blob under its own artifact name", () => {
+      const upload = job.steps.find(
+        (step) => step.name === "Upload script coverage shard evidence",
+      );
+      expect(upload.with.name).toBe("coverage-blob-scripts-${{ matrix.shard }}");
+      expect(upload.with.path).toBe(".vitest-reports/");
+      expect(upload.with["include-hidden-files"]).toBe(true);
+      expect(upload.with["if-no-files-found"]).toBe("error");
+      expect(upload.with["retention-days"]).toBe(1);
+    });
+
+    it("keeps the shard scripts blob-based, with no explicit blob output path", () => {
+      expect(packageJson.scripts["test:coverage:scripts"]).toContain(
+        "vitest.coverage.scripts.config.ts",
+      );
+      const shard = packageJson.scripts["test:coverage:scripts:shard"];
+      expect(shard).toContain("--config vitest.coverage.scripts.config.ts");
+      expect(shard).toContain("--reporter=blob");
+      expect(shard).not.toContain("--outputFile");
+      expect(packageJson.scripts["test:coverage:scripts:merge"]).toContain(
+        "--config vitest.coverage.scripts.config.ts --coverage --mergeReports=.vitest-reports-scripts",
+      );
+    });
+
+    it("merges script blobs from a directory the package merge can never absorb", () => {
+      const download = stepNamed("Download script coverage shard evidence");
+      expect(download.with.path).toBe(".vitest-reports-scripts");
+      expect(download.with.pattern).toBe("coverage-blob-scripts-*");
+      expect(download.with["merge-multiple"]).toBe(true);
+      const packages = stepNamed("Download package coverage shard evidence");
+      expect(packages.with.path).toBe(".vitest-reports");
+      expect(packages.with.pattern).toBe("coverage-blob-packages-*");
+      expect(download.with.path).not.toBe(packages.with.path);
+      expect(JSON.stringify(sonarSteps)).not.toContain("coverage-report-scripts");
+      const merge = sonarSteps.find((step) => step.run === "npm run test:coverage:scripts:merge");
+      expect(merge, "the scripts merge step must exist").toBeDefined();
+      const order = (name) => sonarSteps.findIndex((step) => step.name === name);
+      expect(order(guardName)).toBeGreaterThan(order(download.name));
+      expect(sonarSteps.indexOf(merge)).toBeGreaterThan(order(guardName));
+      expect(sonarSteps.indexOf(merge)).toBeLessThan(
+        sonarSteps.findIndex((step) => step.run === "npm run check:coverage:quality"),
+      );
+    });
+
+    it.each(["empty", "missing", "complete", "extra"])(
+      "runs the actual script shard evidence guard against a %s blob set",
+      (kind) => {
+        const guard = stepNamed(guardName);
+        expect(guard.run).toMatch(new RegExp(`^expected=${SCRIPT_SHARDS}$`, "mu"));
+        const counts = {
+          empty: 0,
+          missing: SCRIPT_SHARDS - 1,
+          complete: SCRIPT_SHARDS,
+          extra: SCRIPT_SHARDS + 1,
+        };
+        const scratch = mkdtempSync(join(tmpdir(), "keiko-script-shards-"));
+        try {
+          const reports = join(scratch, ".vitest-reports-scripts");
+          mkdirSync(reports);
+          // A package blob must never count toward the script guard.
+          mkdirSync(join(scratch, ".vitest-reports"));
+          writeFileSync(join(scratch, ".vitest-reports", "blob-1-4.json"), "{}");
+          for (let index = 1; index <= counts[kind]; index += 1) {
+            writeFileSync(join(reports, `blob-${index}-${SCRIPT_SHARDS}.json`), "{}");
+          }
+          const result = spawnSync("bash", ["-euo", "pipefail", "-c", guard.run], {
+            cwd: scratch,
+            encoding: "utf8",
+          });
+          expect(result.error).toBeUndefined();
+          expect(result.status).toBe(kind === "complete" ? 0 : 1);
+        } finally {
+          rmSync(scratch, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("discards both blob directories so the Sonar scope never sees them", () => {
+      const discard = stepNamed("Discard the shard blobs now that the merged coverage exists");
+      expect(discard.run).toContain(".vitest-reports");
+      expect(discard.run).toContain(".vitest-reports-scripts");
+      expect(discard.run).toMatch(/^rm -rf /u);
+      const order = (name) => sonarSteps.findIndex((step) => step.name === name);
+      const merge = sonarSteps.find((step) => step.run === "npm run test:coverage:scripts:merge");
+      expect(order(discard.name)).toBeGreaterThan(sonarSteps.indexOf(merge));
+    });
+
+    it("still fails closed on the script matrix result", () => {
+      const gate = stepNamed("Require every coverage suite to have executed");
+      expect(gate.env.SCRIPTS_RESULT).toBe("${{ needs.coverage-scripts.result }}");
+      expect(gate.run).toContain('"scripts:${SCRIPTS_RESULT}"');
+      expect(gate.run).toContain('if [ "${entry#*:}" != "success" ]');
+    });
+  });
+
   // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
   // three jobs is stricter than the single assertion it replaces.
   // KEIKO-1020: the identical `Install sandbox isolation backend (bubblewrap)` + AppArmor-relax

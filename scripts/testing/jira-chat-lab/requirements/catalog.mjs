@@ -82,6 +82,7 @@ export const SCENARIOS = Object.freeze([
       "per-epic-progress",
       "estimate-totals",
       "large-project-report",
+      "unavailable-metrics-labelled",
     ],
   },
   {
@@ -90,6 +91,13 @@ export const SCENARIOS = Object.freeze([
     issue: 4181,
     title: "Compliance of every issue",
     obligations: ["deviating-issues", "deviation-detail"],
+  },
+  {
+    id: "S11b",
+    requirement: "AC3",
+    issue: 4181,
+    title: "Complete large-project compliance",
+    obligations: ["large-deviating-issues", "large-deviation-detail", "independent-paged-jql"],
   },
   {
     id: "S12",

@@ -893,6 +893,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.connectorScope.source-control.write": "Quellcodeverwaltung (schreiben)",
   "codingWorkbench.approval.connectorScope.issue-tracker.read": "Issue-Tracker (lesen)",
   "codingWorkbench.approval.connectorScope.issue-tracker.write": "Issue-Tracker (schreiben)",
+  "codingWorkbench.approval.connectorScope.issue-tracker.admin": "Verwaltung der Jira-Instanz",
   "codingWorkbench.approval.connectorScope.knowledge-base.read": "Wissensbasis (lesen)",
   "codingWorkbench.approval.connectorScope.knowledge-base.write": "Wissensbasis (schreiben)",
   "codingWorkbench.approval.research.title": "Ziel der Recherche",

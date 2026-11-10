@@ -3,18 +3,26 @@ import { DatabaseSync } from "node:sqlite";
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
-import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
+import { MEMORY_VAULT_SCHEMA_VERSION, runMigrations } from "./schema.js";
+import { MemoryStorageError } from "./errors.js";
+import { SqliteStatePathError } from "@oscharko-dev/keiko-security/fs-hardening";
+import {
+  memoryMigrationSnapshot,
+  seedBrokenV12MemoryVault,
+} from "../../../tests/support/memory-migration-fixture.js";
 import { insertMemoryRow } from "./memories.js";
 import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
@@ -41,6 +49,97 @@ function freshDir(): string {
 }
 
 describe("openMemoryDatabase", () => {
+  it("keeps a refused symlinked state path fail-closed instead of withholding Memory", () => {
+    const dir = freshDir();
+    const target = join(dir, "real.sqlite");
+    writeFileSync(target, "");
+    const path = join(dir, "linked.sqlite");
+    symlinkSync(target, path);
+    const events: MemoryVaultLogEvent[] = [];
+    let failure: unknown;
+    try {
+      openMemoryDatabase(path, TEST_CIPHER, { write: (event) => events.push(event) });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SqliteStatePathError);
+    expect(failure).not.toBeInstanceOf(MemoryStorageError);
+    expect(events.map((event) => event.op)).not.toContain("memory-vault.store.open-failed");
+  });
+  it("refuses a directory at the state path fail-closed without replacing it", () => {
+    const path = join(freshDir(), "existing-directory");
+    mkdirSync(path);
+    expect(() => openMemoryDatabase(path, TEST_CIPHER)).toThrow(SqliteStatePathError);
+    expect(statSync(path).isDirectory()).toBe(true);
+    expect(readdirSync(path)).toEqual([]);
+  });
+  it.each(["open", "migrate"] as const)(
+    "classifies a failed V13 %s without changing V12 data or exposing SQL",
+    (operation) => {
+      const path = join(freshDir(), "migration.db");
+      seedBrokenV12MemoryVault(path);
+      const before = memoryMigrationSnapshot(path);
+      const events: MemoryVaultLogEvent[] = [];
+      const sink: MemoryVaultLogSink = {
+        write: (event): void => {
+          events.push(event);
+        },
+      };
+      const close = vi.spyOn(DatabaseSync.prototype, "close");
+      let failure: unknown;
+      try {
+        if (operation === "open") openMemoryDatabase(path, TEST_CIPHER, sink).close();
+        else {
+          const db = new DatabaseSync(path);
+          try {
+            runMigrations(db, TEST_CIPHER, sink);
+          } finally {
+            db.close();
+          }
+        }
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(MemoryStorageError);
+      expect(failure).toMatchObject({ code: "vault-migration-failed" });
+      if (!(failure instanceof Error)) throw new TypeError("Expected classified migration failure");
+      expect(failure.message).not.toMatch(
+        /SELECT|ALTER|memory_access|no such column|migration-row-canary|migration\.db/iu,
+      );
+      expect(close).toHaveBeenCalledTimes(1);
+      close.mockRestore();
+      expect(memoryMigrationSnapshot(path)).toEqual(before);
+      const failures = events.filter(({ op }) => op === "memory-vault.store.open-failed");
+      expect(failures).toHaveLength(1);
+      expect(
+        expectActivityLogProof(
+          "memory-vault.store.open-failed.migration",
+          formatActivityLogProofLine(failures[0] ?? {}),
+        ),
+      ).toMatchObject({ phase: "migration", reason: "vault-migration-failed" });
+      expect(readdirSync(dirname(path)).some((name) => name.includes(".corrupt."))).toBe(false);
+    },
+  );
+
+  it("classifies a newer schema without replacing it", () => {
+    const path = join(freshDir(), "newer.db");
+    const db = new DatabaseSync(path);
+    db.exec(
+      "PRAGMA user_version = 999; CREATE TABLE keep_me(value TEXT); INSERT INTO keep_me VALUES ('retained')",
+    );
+    db.close();
+    expect(() => openMemoryDatabase(path, TEST_CIPHER)).toThrow(
+      expect.objectContaining({ code: "vault-migration-failed" }),
+    );
+    const check = new DatabaseSync(path);
+    try {
+      expect(check.prepare("PRAGMA user_version").get()).toEqual({ user_version: 999 });
+      expect(check.prepare("SELECT * FROM keep_me").all()).toEqual([{ value: "retained" }]);
+    } finally {
+      check.close();
+    }
+  });
+
   it("brings a fresh DB up with WAL mode + FK on + contention-friendly pragmas", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");

@@ -1,5 +1,7 @@
-import { actorDetails, basicAuth, checked } from "./lab-client.mjs";
+import { compareStrings } from "../../lib/compare-strings.mjs";
+import { actorDetails, basicAuth, checked, labNativeId } from "./lab-client.mjs";
 import assert from "node:assert/strict";
+import { URLSearchParams } from "node:url";
 
 const full = [
   "BROWSE_PROJECTS",
@@ -26,7 +28,7 @@ const grantKey = (value) => `${value.permission}:${value.holder.type}:${value.ho
 const normalizeGrants = (values) =>
   values
     .map((value) => grantKey(value))
-    .sort()
+    .sort(compareStrings)
     .join("|");
 
 /** A lab seeded by an earlier fixture gains new grants; anything else in its scheme is drift. */
@@ -173,4 +175,158 @@ async function verifyTransitionDenial(session, actors, path) {
     { transition: { id: transition.id } },
     [400, 403],
   );
+}
+
+const ROLE_DEVELOPER_PERMISSIONS = [
+  "BROWSE_PROJECTS",
+  "CREATE_ISSUES",
+  "EDIT_ISSUES",
+  "ASSIGN_ISSUES",
+  "ASSIGNABLE_USER",
+  "TRANSITION_ISSUES",
+  "WORK_ISSUES",
+  "ADD_COMMENTS",
+  "EDIT_OWN_COMMENTS",
+  "LINK_ISSUES",
+  "RESOLVE_ISSUES",
+  "CLOSE_ISSUES",
+  "VIEW_VOTERS_AND_WATCHERS",
+  "MANAGE_WATCHERS",
+];
+const BROWSER_ROLES = ["projectLead", "developer", "techLead"];
+
+function nativeProjectPermissions(inventory) {
+  if (inventory?.permissions === null || typeof inventory?.permissions !== "object")
+    throw new TypeError("Native permission inventory is unavailable");
+  return Object.entries(inventory.permissions)
+    .map(([key, value]) => {
+      if (value?.key !== undefined && value.key !== key)
+        throw new TypeError("Native permission identity disagrees with its inventory key");
+      return { ...value, key };
+    })
+    .filter((value) => value.type === "PROJECT");
+}
+
+/** The plugin's native sprint permission key comes from Jira, never from a guessed constant. */
+export function browserRolePermissionPlan(inventory) {
+  const native = nativeProjectPermissions(inventory);
+  const sprint = native.filter(
+    (value) =>
+      typeof value.name === "string" && value.name.trim().toLowerCase() === "manage sprints",
+  );
+  if (sprint.length !== 1) throw new TypeError("Manage Sprints is missing or ambiguous");
+  if (
+    new Set(["ADMINISTER", "ADMINISTER_PROJECTS", ...ROLE_DEVELOPER_PERMISSIONS]).has(sprint[0].key)
+  )
+    throw new TypeError("Native sprint and ordinary permission identities overlap");
+  const projectLead = [
+    ...ROLE_DEVELOPER_PERMISSIONS,
+    "SCHEDULE_ISSUES",
+    "ADMINISTER_PROJECTS",
+    sprint[0].key,
+  ];
+  const plan = {
+    admin: projectLead,
+    projectLead,
+    developer: [...ROLE_DEVELOPER_PERMISSIONS],
+    techLead: [
+      "BROWSE_PROJECTS",
+      "EDIT_ISSUES",
+      "LINK_ISSUES",
+      "ADMINISTER_PROJECTS",
+      "ASSIGNABLE_USER",
+    ],
+  };
+  const offered = new Set(native.map((value) => value.key));
+  for (const values of Object.values(plan)) {
+    if (values.some((key) => key === "ADMINISTER" || !offered.has(key)))
+      throw new TypeError("A required native project permission is unavailable");
+  }
+  return { manageSprintsKey: sprint[0].key, byActor: plan };
+}
+
+function browserRoleGrants(plan, actors) {
+  const names = Object.keys(plan.byActor).map((role) => actors[role]?.name);
+  if (
+    names.some((name) => typeof name !== "string" || name.length === 0) ||
+    new Set(names).size !== names.length
+  )
+    throw new TypeError("Role permission holders must be distinct observed native users");
+  return Object.entries(plan.byActor).flatMap(([role, values]) =>
+    values.map((permission) => ({
+      permission,
+      holder: { type: "user", parameter: actors[role].name },
+    })),
+  );
+}
+
+/** A fresh project gets one exact direct-user scheme; inherited/public grants are never accepted. */
+export async function seedBrowserRolePermissions(jira, projectKey, actors) {
+  const inventory = await jira.call("roles-permissions", "GET", "/rest/api/2/permissions");
+  const plan = browserRolePermissionPlan(inventory);
+  const permissions = browserRoleGrants(plan, actors);
+  const scheme = await jira.call(
+    "roles-create-permission-scheme",
+    "POST",
+    "/rest/api/2/permissionscheme",
+    {
+      name: `${projectKey} browser roles`,
+      description: "Synthetic isolated browser roles",
+      permissions,
+    },
+  );
+  const schemeId = labNativeId(scheme?.id);
+  const selected = { ...plan, schemeId };
+  await verifyBrowserRoleGrants(jira, actors, selected);
+  const path = `/rest/api/2/project/${encodeURIComponent(projectKey)}/permissionscheme`;
+  await jira.call("roles-associate-permission-scheme", "PUT", path, { id: scheme.id });
+  await verifyBrowserRoleAssociation(jira, projectKey, selected);
+  return selected;
+}
+
+async function verifyBrowserRoleGrants(jira, actors, plan) {
+  const observed = await jira.call(
+    "roles-observe-permission-scheme",
+    "GET",
+    `/rest/api/2/permissionscheme/${plan.schemeId}?expand=permissions`,
+  );
+  const permissions = browserRoleGrants(plan, actors);
+  if (
+    labNativeId(observed.id) !== plan.schemeId ||
+    !Array.isArray(observed.permissions) ||
+    normalizeGrants(observed.permissions) !== normalizeGrants(permissions)
+  )
+    throw new TypeError("Native role permission grants differ from the exact requested scheme");
+}
+
+async function verifyBrowserRoleAssociation(jira, projectKey, plan) {
+  const selected = await jira.call(
+    "roles-observe-associated-scheme",
+    "GET",
+    `/rest/api/2/project/${encodeURIComponent(projectKey)}/permissionscheme`,
+  );
+  if (labNativeId(selected.id) !== plan.schemeId)
+    throw new TypeError("The fresh project did not retain its role permission scheme");
+}
+
+/** The project share is bounded by this exact direct-user scheme, including its admin oracle. */
+export async function verifyBrowserRoleScheme(jira, projectKey, actors, plan) {
+  await verifyBrowserRoleGrants(jira, actors, plan);
+  await verifyBrowserRoleAssociation(jira, projectKey, plan);
+}
+
+/** Explicit native booleans prove both each role's grants and its withheld administrative rights. */
+export async function verifyBrowserRolePermissions(portFor, projectKey, plan) {
+  const keys = [...new Set(["ADMINISTER", ...Object.values(plan.byActor).flat()])];
+  const query = new URLSearchParams({ projectKey, permissions: keys.join(",") });
+  for (const role of BROWSER_ROLES) {
+    const value = await portFor(role).call(
+      "roles-verify-permissions",
+      "GET",
+      `/rest/api/2/mypermissions?${query}`,
+    );
+    const expected = new Set(plan.byActor[role]);
+    if (keys.some((key) => value.permissions?.[key]?.havePermission !== expected.has(key)))
+      throw new TypeError("Native project permissions do not isolate the requested browser role");
+  }
 }

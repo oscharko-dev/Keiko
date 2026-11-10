@@ -11,6 +11,7 @@ import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
+import { resolveJiraCitationMarkers } from "./atlassian/jiraCitationMarkers.js";
 import { podFixture, specification, type PodFixture } from "./_requirementSupport.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { resetRequirementTurnCache } from "./requirement-inventory.js";
@@ -60,6 +61,68 @@ function scopeOf(references: string): string {
 }
 
 describe("source acceptance criteria before a Jira draft can be staged or approved", () => {
+  it("binds complete source revisions even when displayed short digests stay equal", async () => {
+    const { f: source, open } = await session([
+      { capsuleId: "cap-revision", text: specification(1).text },
+    ]);
+    const update = (suffix: string): void => {
+      source.withStore((store) => {
+        store._internal.db
+          .prepare("UPDATE documents SET content_hash = ? WHERE capsule_id = ?")
+          .run("a".repeat(12) + suffix.repeat(52), "cap-revision");
+        store._internal.db
+          .prepare("UPDATE capsules SET updated_at = updated_at + 1000 WHERE id = ?")
+          .run("cap-revision");
+      });
+    };
+    const resolve = (): Extract<TraceResolution, { ok: true }> => {
+      const trace = open();
+      try {
+        const result = trace.resolve(["LH-001"]);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new TypeError("Expected synthetic requirement trace");
+        return result;
+      } finally {
+        trace.close();
+      }
+    };
+    update("b");
+    const first = resolve();
+    update("c");
+    const second = resolve();
+    expect(first.trace).toEqual(second.trace);
+    expect(first.sourceDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(second.sourceDigest).not.toBe(first.sourceDigest);
+  });
+
+  it("matches exact source punctuation after the canonical Markdown-to-wiki projection", async () => {
+    const text = specification(1).text.replace(
+      "Thema 1 ist verfügbar.",
+      "Datei_a [42] ist verfügbar.",
+    );
+    const { open } = await session([{ capsuleId: "cap-criteria", text }]);
+    const trace = open();
+    try {
+      expect(
+        trace.resolve(["LH-001"], {
+          description: {
+            format: "markdown",
+            text: "## Criteria\n- Datei_a [42] ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet.",
+          },
+        }).ok,
+      ).toBe(true);
+      expect(
+        trace.resolve(["LH-001"], {
+          description: {
+            format: "markdown",
+            text: "## Criteria\n```\nDatei_a [42] ist verfügbar.\nFehler zu Thema 1 werden gemeldet.\n```",
+          },
+        }).ok,
+      ).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
   it("refuses a traced item that omits an original acceptance criterion", async () => {
     const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
     const trace = open();
@@ -115,6 +178,52 @@ describe("source acceptance criteria before a Jira draft can be staged or approv
       trace.close();
     }
   });
+});
+
+describe("criteria that carry Keiko's own source labels (LIM32)", () => {
+  // A grounded model cites `[n]` after each criterion; before review Keiko itself replaces each
+  // marker with its source label. The criterion check must read that text as the criterion plus
+  // a citation, or Keiko refuses the description it wrote itself.
+  const labels = new Map([
+    [1, "cap-criteria.md · Lastenheft > LH-001 Thema 1"],
+    [2, "cap-criteria.md · Seite 3"],
+  ]);
+  const cited = (body: string): unknown =>
+    resolveJiraCitationMarkers({ description: body }, labels).arguments.description;
+
+  it("accepts each criterion followed by the labels the citation rewrite wrote", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      const description = cited(
+        "h2. Abnahmekriterien\n# Thema 1 ist verfügbar. [1]\n# Fehler zu Thema 1 werden gemeldet. [1][2]",
+      );
+      expect(description).toContain("(cap-criteria.md · Lastenheft > LH-001 Thema 1)");
+      expect(trace.resolve(["LH-001"], { description }).ok).toBe(true);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each([
+    "# Thema 1 ist verfügbar. (nur montags)\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (fremd.md · Seite 2)\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (cap-criteria.md · Seite 3) außer montags\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (cap-criteria.md · Seite 3; nur montags)\n# Fehler zu Thema 1 werden gemeldet.",
+  ])(
+    "still refuses trailing text that is not a label of this Chat's documents: %s",
+    async (body) => {
+      const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+      const trace = open();
+      try {
+        expect(trace.resolve(["LH-001"], { description: `h2. Abnahmekriterien\n${body}` }).ok).toBe(
+          false,
+        );
+      } finally {
+        trace.close();
+      }
+    },
+  );
 });
 
 describe("criterion text is active content, not a substring or quotation", () => {
@@ -390,6 +499,24 @@ describe("trace session", () => {
 });
 
 describe("trace results and evidence", () => {
+  it("tells the model to preserve literal missing acceptance criteria in the description (S16)", () => {
+    const refusal = traceRefusalData(
+      {
+        ok: false,
+        reason: "references",
+        problems: [{ reference: "document:LH-001/AC2", reason: "acceptance-criteria-missing" }],
+      },
+      "traced",
+    );
+    expect(refusal.guidance).toContain(
+      "Copy each missing acceptance criterion verbatim into fields.description.",
+    );
+    expect(refusal.guidance).toContain("Keep requirementIds");
+    expect(refusal.requirementProblems).toEqual([
+      { ref: "traced", reference: "document:LH-001/AC2", reason: "acceptance-criteria-missing" },
+    ]);
+  });
+
   it("shapes refusals and outcomes for the tool result without echoing long input", () => {
     const refusal = traceRefusalData(
       {

@@ -1,3 +1,4 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { createHash, createPublicKey, randomBytes, randomInt, verify } from "node:crypto";
 import {
   BROWSER_APPROVAL_CHALLENGE_TTL_MS,
@@ -23,7 +24,7 @@ import {
   type BrowserApprovalRequestResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { BrowserApprovalStore, StoredBrowserApproval } from "../store/browserApprovals.js";
-import type { SessionMint, SessionRegistry } from "./sessionRegistry.js";
+import type { SessionMint, SessionProofObservation, SessionRegistry } from "./sessionRegistry.js";
 import { APP_SESSION_COOKIE_MAX_AGE_SECONDS } from "./sessionCookie.js";
 
 interface ApprovedDecision {
@@ -64,11 +65,26 @@ export type BrowserApprovalCompletion =
 /** Extends the existing app-session owner; no task, mode, or tool authority is granted. */
 export interface BrowserApprovalService {
   readonly request: (input: unknown, origin: string) => BrowserApprovalRequestResult;
-  readonly snapshot: (cookie: string | undefined) => BrowserApprovalManagementSnapshot | undefined;
-  readonly approve: (cookie: string | undefined, input: unknown) => boolean;
+  readonly snapshot: (
+    cookie: string | undefined,
+    observation?: SessionProofObservation,
+  ) => BrowserApprovalManagementSnapshot | undefined;
+  readonly approve: (
+    cookie: string | undefined,
+    input: unknown,
+    observation?: SessionProofObservation,
+  ) => boolean;
   readonly challenge: (input: unknown, origin: string) => BrowserApprovalChallengeResult;
-  readonly prove: (input: unknown, origin: string) => BrowserApprovalCompletion;
-  readonly revoke: (cookie: string | undefined, approvalId: string) => boolean;
+  readonly prove: (
+    input: unknown,
+    origin: string,
+    correlationId?: string,
+  ) => BrowserApprovalCompletion;
+  readonly revoke: (
+    cookie: string | undefined,
+    approvalId: string,
+    observation?: SessionProofObservation,
+  ) => boolean;
 }
 
 function randomId(prefix: string): string {
@@ -216,8 +232,13 @@ function requestForDecision(
   return request;
 }
 
-function approveRequest(state: ApprovalState, cookie: string | undefined, input: unknown): boolean {
-  if (state.registry.verify(cookie) === undefined) return false;
+function approveRequest(
+  state: ApprovalState,
+  cookie: string | undefined,
+  input: unknown,
+  observation?: SessionProofObservation,
+): boolean {
+  if (state.registry.verify(cookie, observation) === undefined) return false;
   const parsed = validateBrowserApprovalDecisionInput(input);
   const now = observedTime(state);
   if (!parsed.ok || now === undefined) return false;
@@ -305,6 +326,7 @@ function finishRequest(
   request: PendingRequest,
   decision: ApprovedDecision,
   now: number,
+  correlationId: string,
 ): BrowserApprovalCompletion {
   const approval = decision.remember ? currentApproval(state, decision.approvalId, now) : undefined;
   if (decision.remember && approval === undefined) return { state: "unavailable" };
@@ -313,11 +335,11 @@ function finishRequest(
   const mint =
     request.sessionId === undefined
       ? state.registry.mintForApproval("Approved browser", decision)
-      : state.registry.rotate(request.sessionId);
+      : state.registry.rotate(request.sessionId, { onlyIfIdle: true, correlationId });
   if (mint === undefined) return { state: "unavailable" };
   request.sessionId = mint.session.sessionId;
   const touched = approval === undefined ? undefined : { ...approval, lastUsedAtMs: now };
-  return completion(state, mint, touched);
+  return completion(state, mint, touched, correlationId);
 }
 
 function completeRequest(
@@ -325,6 +347,7 @@ function completeRequest(
   challenge: BrowserApprovalChallenge,
   signature: string,
   now: number,
+  correlationId: string,
 ): BrowserApprovalCompletion {
   const request = state.requests.get(challenge.subjectId);
   const decision = request?.decision;
@@ -336,15 +359,19 @@ function completeRequest(
   )
     return { state: "unavailable" };
   if (!verifyProof(request.publicKey, challenge, signature)) return { state: "unavailable" };
-  return finishRequest(state, request, decision, now);
+  return finishRequest(state, request, decision, now, correlationId);
 }
 
 function completion(
   state: ApprovalState,
   mint: SessionMint,
   approval: StoredBrowserApproval | undefined,
+  correlationId: string,
 ): BrowserApprovalCompletion {
-  const remaining = state.registry.verifyForCookieRepair(mint.cookieToken);
+  const remaining = state.registry.verifyForCookieRepair(mint.cookieToken, {
+    correlationId,
+    purpose: "repair",
+  });
   if (remaining === undefined || remaining < 1_000) {
     state.registry.revoke(mint.session.sessionId);
     return { state: "unavailable" };
@@ -362,6 +389,7 @@ function renewApproval(
   challenge: BrowserApprovalChallenge,
   signature: string,
   now: number,
+  correlationId: string,
 ): BrowserApprovalCompletion {
   const approval = currentApproval(state, challenge.subjectId, now);
   if (
@@ -370,16 +398,22 @@ function renewApproval(
   )
     return { state: "unavailable" };
   if (!state.store.touch(approval.approvalId, now)) return { state: "unavailable" };
-  return completion(state, state.registry.mintForApproval("Remembered browser", approval), {
-    ...approval,
-    lastUsedAtMs: now,
-  });
+  return completion(
+    state,
+    state.registry.mintForApproval("Remembered browser", approval),
+    {
+      ...approval,
+      lastUsedAtMs: now,
+    },
+    correlationId,
+  );
 }
 
 function proveApproval(
   state: ApprovalState,
   input: unknown,
   origin: string,
+  correlationId: string,
 ): BrowserApprovalCompletion {
   const parsed = validateBrowserApprovalProofInput(input);
   const now = observedTime(state);
@@ -388,15 +422,19 @@ function proveApproval(
   state.challenges.delete(parsed.value.challengeId);
   if (challenge?.origin !== origin || now < challenge.issuedAtMs) return { state: "unavailable" };
   return challenge.purpose === "complete"
-    ? completeRequest(state, challenge, parsed.value.signature, now)
-    : renewApproval(state, challenge, parsed.value.signature, now);
+    ? completeRequest(state, challenge, parsed.value.signature, now, correlationId)
+    : renewApproval(state, challenge, parsed.value.signature, now, correlationId);
 }
 
 function managementSnapshot(
   state: ApprovalState,
   cookie: string | undefined,
+  observation?: SessionProofObservation,
 ): BrowserApprovalManagementSnapshot | undefined {
-  if (state.registry.inspect(cookie) === undefined || observedTime(state) === undefined)
+  if (
+    state.registry.inspect(cookie, observation) === undefined ||
+    observedTime(state) === undefined
+  )
     return undefined;
   return {
     requests: [...state.requests.values()]
@@ -428,8 +466,13 @@ function sessionApprovalDescriptors(state: ApprovalState): readonly BrowserAppro
   return approvals;
 }
 
-function revokeApproval(state: ApprovalState, cookie: string | undefined, id: string): boolean {
-  if (state.registry.verify(cookie) === undefined || observedTime(state) === undefined)
+function revokeApproval(
+  state: ApprovalState,
+  cookie: string | undefined,
+  id: string,
+  observation?: SessionProofObservation,
+): boolean {
+  if (state.registry.verify(cookie, observation) === undefined || observedTime(state) === undefined)
     return false;
   const removed = state.store.remove(id);
   const revokedSessions = state.registry.revokeApproval(id);
@@ -461,12 +504,14 @@ export function createBrowserApprovalService(deps: {
   };
   return {
     request: (input, origin): BrowserApprovalRequestResult => requestApproval(state, input, origin),
-    snapshot: (cookie): BrowserApprovalManagementSnapshot | undefined =>
-      managementSnapshot(state, cookie),
-    approve: (cookie, input): boolean => approveRequest(state, cookie, input),
+    snapshot: (cookie, observation): BrowserApprovalManagementSnapshot | undefined =>
+      managementSnapshot(state, cookie, observation),
+    approve: (cookie, input, observation): boolean =>
+      approveRequest(state, cookie, input, observation),
     challenge: (input, origin): BrowserApprovalChallengeResult =>
       issueChallenge(state, input, origin),
-    prove: (input, origin): BrowserApprovalCompletion => proveApproval(state, input, origin),
-    revoke: (cookie, id): boolean => revokeApproval(state, cookie, id),
+    prove: (input, origin, correlationId = UNKNOWN_CORRELATION_ID): BrowserApprovalCompletion =>
+      proveApproval(state, input, origin, correlationId),
+    revoke: (cookie, id, observation): boolean => revokeApproval(state, cookie, id, observation),
   };
 }

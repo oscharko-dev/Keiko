@@ -1,3 +1,7 @@
+import {
+  KNOWLEDGE_REVIEW_CONTRACT_VERSION,
+  KNOWLEDGE_REVIEW_TOOL_ID,
+} from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import { REQUIREMENT_DOCUMENT_SCOPE_SCHEMA } from "@oscharko-dev/keiko-quality-intelligence";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpTool } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -565,11 +569,11 @@ async function review(
   return continuationFailure ?? selectedReviewResult(cache, key, environment, input, selection);
 }
 
-export function createKnowledgeReviewTool<Context extends RequirementsToolContext>(
-  deps: UiHandlerDeps,
-): ManagedMcpTool<Context> {
-  const descriptor = createToolDescriptor({
-    toolRef: createToolRef("keiko.knowledge.review", 2),
+// A pure constant: built once per process, not again for every catalog a Chat turn composes.
+let reviewDescriptor: ReturnType<typeof createToolDescriptor> | undefined;
+function knowledgeReviewDescriptor(): ReturnType<typeof createToolDescriptor> {
+  reviewDescriptor ??= createToolDescriptor({
+    toolRef: createToolRef(KNOWLEDGE_REVIEW_TOOL_ID, KNOWLEDGE_REVIEW_CONTRACT_VERSION),
     description:
       "Semantically review one window of an attached document, after knowledge.documents inventory. Uses the selected model with the turn's existing budget. Pass documentScope, revisionDigest and returned nextCursor until all windows are reviewed. Reviews are cached per document revision/model/content policy. Returns source-anchored PROPOSALS for obligations, acceptance criteria, conflicts, omissions and targeted clarification questions; never changes original requirements. Review all documents for whole-Pod work; semantic review is not a proof of exhaustiveness.",
     inputSchema: compileExternalCatalogSchema(
@@ -596,6 +600,13 @@ export function createKnowledgeReviewTool<Context extends RequirementsToolContex
     idempotency: "server-key-required",
     cancellation: "before-effect",
   });
+  return reviewDescriptor;
+}
+
+export function createKnowledgeReviewTool<Context extends RequirementsToolContext>(
+  deps: UiHandlerDeps,
+): ManagedMcpTool<Context> {
+  const descriptor = knowledgeReviewDescriptor();
   return {
     name: KNOWLEDGE_REVIEW_TOOL,
     risk: "read",

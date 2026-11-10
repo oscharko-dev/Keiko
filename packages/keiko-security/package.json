@@ -79,6 +79,10 @@
       "types": "./dist/fs-hardening.d.ts",
       "import": "./dist/fs-hardening.js"
     },
+    "./zip-entry-kind": {
+      "types": "./dist/zip-entry-kind.d.ts",
+      "import": "./dist/zip-entry-kind.js"
+    },
     "./fs-atomic-rename": {
       "types": "./dist/fs-atomic-rename.d.ts",
       "import": "./dist/fs-atomic-rename.js"

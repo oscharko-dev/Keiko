@@ -37,6 +37,7 @@ import {
   type CodingWorkbenchValidationResult,
   isCodingWorkbenchModeWidening,
   isCodingWorkbenchNativeRetry,
+  isWriteCapableCodingConnectorScope,
 } from "./coding-workbench.js";
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
@@ -413,10 +414,7 @@ function validateConnectorScopeActionClassConsistency(
 }
 
 function hasWriteCapableConnectorScope(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((scope) => typeof scope === "string" && scope.endsWith(".write"))
-  );
+  return Array.isArray(value) && value.some(isWriteCapableCodingConnectorScope);
 }
 
 function hasHumanApprovalRequiredActionClass(value: unknown): boolean {
@@ -509,7 +507,7 @@ function validatePermissionRequestSupervisedConnectorScopes(
     return;
   }
   value.connectorScopes.forEach((scope, index) => {
-    if (typeof scope === "string" && !scope.endsWith(".write")) {
+    if (typeof scope === "string" && !isWriteCapableCodingConnectorScope(scope)) {
       errors.push(
         `${path}.connectorScopes[${String(index)}] must be write-capable for ${String(value.actionKind)}`,
       );

@@ -43,46 +43,49 @@ const DESCRIPTION =
   "Scope: projectKey and/or jql. Keiko computes every number: quote report.figures verbatim, never recompute. " +
   "requirementsFromPods covers this Chat's Pod requirements. Estimate is seconds of original estimate unless estimateFieldId. " +
   "While status is reading, call again with only the reportId. " +
-  "Name a section on the first call to page its list (maxResults up to 100, then nextStartAt; report every deviation). " +
+  "A call without a section returns the summary and report.figures; a call that names a section returns only that page, not the summary. " +
+  "Page a list with reportId, section and startAt (0, then the returned nextStartAt; maxResults up to 100; report every deviation). " +
   "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them. " +
   "A refusal names invalidArguments or a message.";
 
-export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
-  name: "jira.report",
-  risk: "read",
-  descriptor: createToolDescriptor({
-    toolRef: createToolRef("keiko.jira.report", 1),
-    description: DESCRIPTION,
-    inputSchema: REPORT_INPUT,
-    resultSchema: object(
-      {
-        outcome: { type: "string", enum: ["succeeded", "failed"] },
-        reason: text(64),
-        status: { type: "string", enum: JIRA_REPORT_STATUSES },
-        reportId: text(64),
-        progress: OPEN_OBJECT,
-        report: OPEN_OBJECT,
-        section: OPEN_OBJECT,
-        exports: { type: "array", maxItems: 4, items: text(16) },
-        comment: object({ section: text(16), use: text(256) }, ["section", "use"]),
-        lastFailure: text(64),
-        invalidArguments: { type: "array", maxItems: 16, items: text(64) },
-        message: text(256),
-        nextStartAt: { type: "integer", minimum: 0, maximum: 1000000000 },
+export function jiraReportDeclaration(): ManagedMcpToolDeclaration {
+  return Object.freeze({
+    name: "jira.report",
+    risk: "read",
+    descriptor: createToolDescriptor({
+      toolRef: createToolRef("keiko.jira.report", 1),
+      description: DESCRIPTION,
+      inputSchema: REPORT_INPUT,
+      resultSchema: object(
+        {
+          outcome: { type: "string", enum: ["succeeded", "failed"] },
+          reason: text(64),
+          status: { type: "string", enum: JIRA_REPORT_STATUSES },
+          reportId: text(64),
+          progress: OPEN_OBJECT,
+          report: OPEN_OBJECT,
+          section: OPEN_OBJECT,
+          exports: { type: "array", maxItems: 4, items: text(16) },
+          comment: object({ section: text(16), use: text(256) }, ["section", "use"]),
+          lastFailure: text(64),
+          invalidArguments: { type: "array", maxItems: 16, items: text(64) },
+          message: text(256),
+          nextStartAt: { type: "integer", minimum: 0, maximum: 1000000000 },
+        },
+        ["outcome"],
+      ),
+      effects: ["connector-access"],
+      actionMapping: [{ action: "jira.report", effects: ["connector-access"] }],
+      policyReferences: ["adr-0128.d4"],
+      handlerRequirement: { id: "jira.report", contractVersion: 1 },
+      bounds: {
+        maxArgumentBytes: 65536,
+        maxResultBytes: JIRA_REPORT_RESULT_BYTES_MAX,
+        maxResultCount: 100,
+        maxDurationMs: 30000,
       },
-      ["outcome"],
-    ),
-    effects: ["connector-access"],
-    actionMapping: [{ action: "jira.report", effects: ["connector-access"] }],
-    policyReferences: ["adr-0128.d4"],
-    handlerRequirement: { id: "jira.report", contractVersion: 1 },
-    bounds: {
-      maxArgumentBytes: 65536,
-      maxResultBytes: JIRA_REPORT_RESULT_BYTES_MAX,
-      maxResultCount: 100,
-      maxDurationMs: 30000,
-    },
-    idempotency: "server-key-required",
-    cancellation: "before-effect",
-  }),
-});
+      idempotency: "server-key-required",
+      cancellation: "before-effect",
+    }),
+  });
+}

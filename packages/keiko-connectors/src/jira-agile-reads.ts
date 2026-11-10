@@ -1,0 +1,240 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  ManagedMcpInvocationContext,
+  ManagedMcpToolResult,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type { JiraManagedConnection } from "./jira-managed-connection.js";
+import { asArray } from "./atlassian-sync-classify.js";
+import { jiraReadFailure, projectJiraCollection, remoteJiraPage } from "./jira-managed-metadata.js";
+import {
+  boundJiraReadResult,
+  jiraIssueReadResult,
+  JIRA_MANAGED_SEARCH_FIELDS,
+} from "./jira-managed-issue-reads.js";
+import {
+  agileBoard,
+  agileBoardConfiguration,
+  agileEpic,
+  agileIssueKey,
+  agileSprint,
+  agileText,
+} from "./jira-agile-projection.js";
+import { jiraAgileRequest } from "./jira-agile-request.js";
+import { agileInputId } from "./jira-agile-inputs.js";
+import { jiraBoardBrowseUrl, jiraBrowseUrl } from "./jira-browse-url.js";
+import { jiraSprintLifecycleSnapshot } from "./jira-sprint-lifecycle-values.js";
+
+export const JIRA_AGILE_READ_OPERATIONS = JIRA_READ_TOOL_FAMILIES.agile;
+export type JiraAgileReadOperation = (typeof JIRA_AGILE_READ_OPERATIONS)[number];
+type Projection = (value: unknown) => CatalogJsonObject | undefined;
+const BOARD_LINK_READS: ReadonlySet<string> = new Set([
+  "jira.boards",
+  "jira.board",
+  "jira.board-configuration",
+]);
+const EPIC_LINK_READS: ReadonlySet<string> = new Set(["jira.epic", "jira.board-epics"]);
+function reviewedSprint(value: unknown): CatalogJsonObject | undefined {
+  const item = agileSprint(value);
+  if (item === undefined) return undefined;
+  const reviewSnapshot = jiraSprintLifecycleSnapshot(value, true);
+  return { ...item, ...(reviewSnapshot === undefined ? {} : { reviewSnapshot }) };
+}
+function linkedProjection(operation: string, baseUrl: string, project: Projection): Projection {
+  return (value): CatalogJsonObject | undefined => {
+    const item = project(value);
+    if (item === undefined) return undefined;
+    let browseUrl: string | undefined;
+    if (BOARD_LINK_READS.has(operation)) {
+      browseUrl = jiraBoardBrowseUrl(baseUrl, item.id);
+    } else if (EPIC_LINK_READS.has(operation)) {
+      browseUrl = jiraBrowseUrl(baseUrl, item.key);
+    } else {
+      browseUrl = undefined;
+    }
+
+    const boardBrowseUrl =
+      operation === "jira.sprint" || operation === "jira.sprints"
+        ? jiraBoardBrowseUrl(baseUrl, item.originBoardId)
+        : undefined;
+    return {
+      ...item,
+      ...(browseUrl === undefined ? {} : { browseUrl }),
+      ...(boardBrowseUrl === undefined ? {} : { boardBrowseUrl }),
+    };
+  };
+}
+const BOARD_TYPES: ReadonlySet<unknown> = new Set(["scrum", "kanban"]);
+const SPRINT_STATES: ReadonlySet<unknown> = new Set(["future", "active", "closed"]);
+interface ReadRoute {
+  readonly path: string;
+  readonly keys: readonly string[];
+  readonly project: Projection;
+  readonly mode: "single" | "page" | "issues";
+  readonly identity?: string;
+}
+function entityRoute(name: string, args: CatalogJsonObject): ReadRoute | undefined {
+  if (name === "jira.boards")
+    return {
+      path: "board",
+      keys: ["name", "type", "projectKeyOrId"],
+      project: agileBoard,
+      mode: "page",
+    };
+  const boardId = agileInputId(args.boardId);
+  if (name.startsWith("jira.board") || name === "jira.sprints")
+    return boardId === undefined ? undefined : boardRoute(name, boardId);
+  return otherEntityRoute(name, args);
+}
+function otherEntityRoute(name: string, args: CatalogJsonObject): ReadRoute | undefined {
+  const sprintId = agileInputId(args.sprintId);
+  if (name === "jira.sprint" || name === "jira.sprint-issues") {
+    if (sprintId === undefined) {
+      return undefined;
+    }
+    return {
+      path: `sprint/${sprintId}${name.endsWith("issues") ? "/issue" : ""}`,
+      keys: ["sprintId"],
+      project: reviewedSprint,
+      mode: name.endsWith("issues") ? "issues" : "single",
+      identity: sprintId,
+    };
+  }
+  const epic =
+    agileInputId(args.epicIdOrKey) ??
+    (agileIssueKey(args.epicIdOrKey) ? args.epicIdOrKey : undefined);
+  return epic === undefined ? undefined : epicRoute(name, epic);
+}
+function boardRoute(name: string, boardId: string): ReadRoute | undefined {
+  const routes: Readonly<
+    Record<string, readonly [string, Projection, ReadRoute["mode"], readonly string[]]>
+  > = {
+    "jira.board": ["", agileBoard, "single", []],
+    "jira.board-configuration": ["/configuration", agileBoardConfiguration, "single", []],
+    "jira.board-backlog": ["/backlog", agileBoard, "issues", []],
+    "jira.board-issues": ["/issue", agileBoard, "issues", []],
+    "jira.board-epics": ["/epic", agileEpic, "page", ["done"]],
+    "jira.sprints": ["/sprint", agileSprint, "page", ["state"]],
+  };
+  const route = routes[name];
+  return route === undefined
+    ? undefined
+    : {
+        path: `board/${boardId}${route[0]}`,
+        project: route[1],
+        mode: route[2],
+        keys: ["boardId", ...route[3]],
+        identity: boardId,
+      };
+}
+function epicRoute(name: string, epic: string): ReadRoute | undefined {
+  if (name !== "jira.epic" && name !== "jira.epic-issues") return undefined;
+  return {
+    path: `epic/${encodeURIComponent(epic)}${name.endsWith("issues") ? "/issue" : ""}`,
+    keys: ["epicIdOrKey"],
+    project: agileEpic,
+    mode: name.endsWith("issues") ? "issues" : "single",
+    identity: epic,
+  };
+}
+function paging(value: unknown, fallback: number, min: number, max: number): number | undefined {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max) {
+    return value;
+  }
+  return undefined;
+}
+function textFilters(args: CatalogJsonObject, query: URLSearchParams): boolean {
+  for (const key of ["name", "projectKeyOrId"] as const) {
+    const value = args[key];
+    if (value === undefined) continue;
+    if (!agileText(value, 255)) return false;
+    query.set(key, value);
+  }
+  return true;
+}
+function filters(args: CatalogJsonObject, query: URLSearchParams): boolean {
+  if (!textFilters(args, query)) return false;
+  if (args.type !== undefined) {
+    if (typeof args.type !== "string" || !BOARD_TYPES.has(args.type)) return false;
+    query.set("type", args.type);
+  }
+  if (args.state !== undefined) {
+    if (typeof args.state !== "string" || !SPRINT_STATES.has(args.state)) return false;
+    query.set("state", args.state);
+  }
+  if (args.done !== undefined) {
+    if (typeof args.done !== "boolean") return false;
+    query.set("done", String(args.done));
+  }
+  return true;
+}
+function selection(
+  name: string,
+  args: CatalogJsonObject,
+): { route: ReadRoute; path: string; startAt: number; maxResults: number } | undefined {
+  const route = entityRoute(name, args);
+  if (route === undefined) return undefined;
+  const allowed = new Set([
+    ...route.keys,
+    ...(route.mode === "single" ? [] : ["startAt", "maxResults"]),
+  ]);
+  if (Object.keys(args).some((key) => !allowed.has(key))) return undefined;
+  const startAt = paging(args.startAt, 0, 0, 1_000_000);
+  const maxResults = paging(args.maxResults, 25, 1, 100);
+  if (startAt === undefined || maxResults === undefined) return undefined;
+  const query = new URLSearchParams();
+  if (route.mode !== "single") {
+    query.set("startAt", String(startAt));
+    query.set("maxResults", String(maxResults));
+  }
+  if (!filters(args, query)) return undefined;
+  if (route.mode === "issues") query.set("fields", JIRA_MANAGED_SEARCH_FIELDS);
+  return {
+    route,
+    path: route.path + (query.size === 0 ? "" : `?${query.toString()}`),
+    startAt,
+    maxResults,
+  };
+}
+function single(
+  route: ReadRoute,
+  body: Record<string, unknown>,
+  project: Projection,
+): ManagedMcpToolResult {
+  const item = project(body);
+  if (
+    item === undefined ||
+    (route.identity !== undefined && item.id !== route.identity && item.key !== route.identity)
+  )
+    return jiraReadFailure("malformed-payload");
+  return { data: { outcome: "succeeded", items: [item] } };
+}
+/** Model arguments select only a declared operation's typed parameters, never a URL or root. */
+export async function executeJiraAgileRead(
+  operation: string,
+  args: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<ManagedMcpToolResult> {
+  const selected = selection(operation, args);
+  if (selected === undefined) return jiraReadFailure("invalid-input");
+  if (connection.deployment !== "data-center") return jiraReadFailure("unsupported-deployment");
+  const response = await jiraAgileRequest(connection, context)(selected.path);
+  if (!response.ok) return jiraReadFailure(response.reason, response.remote);
+  if (response.status !== 200 || response.body === undefined)
+    return jiraReadFailure("malformed-payload");
+  const { route, startAt, maxResults } = selected;
+  const project = linkedProjection(operation, connection.baseUrl, route.project);
+  if (route.mode === "single") return single(route, response.body, project);
+  if (route.mode === "issues")
+    return boundJiraReadResult(
+      jiraIssueReadResult("jira.search", connection.baseUrl, response.body, startAt, maxResults),
+    );
+  const values = asArray(response.body.values);
+  const items =
+    values === undefined ? undefined : projectJiraCollection(values, maxResults, project, "id");
+  return boundJiraReadResult(remoteJiraPage(response.body, items, startAt, maxResults));
+}

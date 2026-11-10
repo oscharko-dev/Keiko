@@ -321,6 +321,25 @@ function descriptionContentLine(
   state.paragraph.push(bullet ?? text);
 }
 
+/**
+ * A description block without the trailing group of source labels Keiko writes for a model's `[n]`
+ * evidence markers before review: ` (<document> · …; <document> · …)`. Every label must name one
+ * of `documentNames` (alone or followed by ` · `); otherwise the block is returned unchanged, so a
+ * qualifier such as ` (nur montags)` or a label of another document is never removed.
+ */
+export function withoutJiraSourceLabels(block: string, documentNames: readonly string[]): string {
+  if (!block.endsWith(")")) return block;
+  const named = (label: string): boolean =>
+    documentNames.some(
+      (name) => name.length > 0 && (label === name || label.startsWith(`${name} · `)),
+    );
+  for (let open = block.lastIndexOf(" ("); open > 0; open = block.lastIndexOf(" (", open - 1)) {
+    const labels = block.slice(open + 2, -1).split("; ");
+    if (labels.every((label) => named(label))) return block.slice(0, open);
+  }
+  return block;
+}
+
 /** Full active paragraphs/list items only; headings, quotes and code never prove source content. */
 export function readJiraDescriptionBlocks(
   text: string,
@@ -357,8 +376,13 @@ export interface JiraDescriptionHeadingSerialization {
 }
 
 const MARKDOWN_DESCRIPTION_CHARS_MAX = 32768;
-/** Native strings remain native Jira wiki text; Markdown requires explicit input provenance. */
+/**
+ * Native Jira wiki strings stay unchanged. Markdown is explicit (`format: "markdown"`); a plain
+ * string converts only when it uses constructs wiki markup never writes (`readsAsMarkdownOnly`).
+ */
 export const JIRA_DESCRIPTION_INPUT_SCHEMA = {
+  description:
+    'A string is native Jira wiki text: "h2. Title" is a heading, and a line starting with # or ## is a numbered list item, never a heading. A string is converted only when it uses Markdown-only syntax (**bold**, [text](url) or a code fence) and no wiki syntax. Send Markdown with # headings as {"format": "markdown", "text": "..."}; its headings, inline formatting, links, lists, tables and code blocks become Jira wiki markup.',
   oneOf: [
     { type: "string", maxLength: MARKDOWN_DESCRIPTION_CHARS_MAX },
     {

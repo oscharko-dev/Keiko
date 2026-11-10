@@ -1,3 +1,6 @@
+import { JIRA_READ_TOOL_FAMILIES as READS } from "./jira-read-tools.js";
+import { deepFreeze } from "./deep-freeze.js";
+
 export const JIRA_FIELD_READ_MAX = 20;
 export const JIRA_FIELD_ID_PATTERN = String.raw`^(?:[a-zA-Z][a-zA-Z0-9]*|customfield_\d{1,16})$`;
 /** Bounded capability projection from current Jira create/edit/transition metadata (#4083). */
@@ -21,22 +24,8 @@ export const JIRA_FIELD_KINDS = [
   "unsupported",
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
-export const JIRA_MANAGED_READ_TOOLS = [
-  "jira.projects",
-  "jira.issue-types",
-  "jira.create-fields",
-  "jira.edit-fields",
-  "jira.search",
-  "jira.issue",
-  "jira.comments",
-  "jira.transitions",
-  "jira.assignable-users",
-  "jira.report",
-  /** Appends a page of items to a server-held backlog draft; it changes nothing in Jira. */
-  "jira.draft-stage",
-  /** Drafts a backlog from the Chat's Knowledge requirements in Keiko-sized pages; stages only. */
-  "jira.draft-batch",
-] as const;
+/** Every read family in declaration order of the shared family registry. */
+export const JIRA_MANAGED_READ_TOOLS = deepFreeze(Object.values(READS).flat());
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";
 export interface JiraFieldReference {

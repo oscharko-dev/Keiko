@@ -22,6 +22,8 @@ import {
   catalogString,
   copyCatalogJson,
   exactCatalogKeys,
+  measureCatalogFootprint,
+  type CatalogFootprint,
 } from "./json.js";
 import { catalogBindingReference, semanticDigest, toolRefFrom } from "./identity.js";
 import { requireCatalog } from "./errors.js";
@@ -163,14 +165,22 @@ export function createToolDescriptor(value: unknown, previous?: ToolDescriptor):
       requireCatalog(descriptorDigest === prior.descriptorDigest, "incompatible-version");
   }
   const descriptor = deepFreeze({ ...declaration, descriptorDigest });
-  issuedDescriptors.add(descriptor);
+  // The declaration came from a bounded, data-only copy, so this measuring walk cannot refuse it.
+  issuedDescriptors.set(descriptor, measureCatalogFootprint(descriptor));
   return descriptor;
 }
 
 // Descriptors this module issued: deeply frozen at issue, so they cannot have changed since they
 // were verified, and membership cannot be forged. Re-verifying them on every catalog offer, gateway
 // bridge and stored-transcript read made each tool round copy and hash every descriptor again.
-const issuedDescriptors = new WeakSet();
+// Each carries the footprint its copy measured at issue, so a catalog that keeps it by identity
+// still charges it against the catalog's own bounds (catalog.ts).
+const issuedDescriptors = new WeakMap<object, CatalogFootprint>();
+
+/** The footprint of a descriptor this module issued; undefined for every other value. */
+export function issuedDescriptorFootprint(value: object): CatalogFootprint | undefined {
+  return issuedDescriptors.get(value);
+}
 
 export function verifyToolDescriptor(value: unknown): ToolDescriptor {
   if (typeof value === "object" && value !== null && issuedDescriptors.has(value))

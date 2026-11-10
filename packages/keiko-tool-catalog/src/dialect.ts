@@ -5,6 +5,7 @@ import {
   type CatalogVersionRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { OPENCODE_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
+import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { catalogArray, catalogObject } from "./json.js";
 import { compileCatalogSchema } from "./schema.js";
 import { requireCatalog } from "./errors.js";
@@ -66,13 +67,31 @@ function managedInputSchema(schema: CatalogJsonObject): CatalogJsonObject {
   return schema;
 }
 
+type ProjectionKind = "managed-input" | "compiled";
+
+function compileProjection(schema: CatalogJsonObject, kind: ProjectionKind): CatalogJsonObject {
+  const projected = compileCatalogSchema(schema);
+  return kind === "managed-input" ? managedInputSchema(projected) : projected;
+}
+
+// A catalog's descriptors are deeply frozen at issue, so a projection of one of their schemas
+// cannot change. Every catalog that offers the same descriptor reuses that projection instead of
+// compiling the already compiled schema again: each Jira chat selection composes a new catalog.
+const PROJECTIONS = new WeakMap<object, Partial<Record<ProjectionKind, CatalogJsonObject>>>();
+
 /** The five adapters share the closed core; OpenCode's required-field transform must be lossless. */
 export function projectCatalogSchema(
   schema: CatalogJsonObject,
   dialect: CatalogVersionRef,
   input: boolean,
 ): CatalogJsonObject {
-  const projected = compileCatalogSchema(schema);
-  if (input && dialect.id === "managed-runtime-json-schema") return managedInputSchema(projected);
+  const kind: ProjectionKind =
+    input && dialect.id === "managed-runtime-json-schema" ? "managed-input" : "compiled";
+  if (!isDeepFrozen(schema)) return compileProjection(schema, kind);
+  const known = PROJECTIONS.get(schema);
+  const cached = known?.[kind];
+  if (cached !== undefined) return cached;
+  const projected = deepFreeze(compileProjection(schema, kind));
+  PROJECTIONS.set(schema, { ...known, [kind]: projected });
   return projected;
 }

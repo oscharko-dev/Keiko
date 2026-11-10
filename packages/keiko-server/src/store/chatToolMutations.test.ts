@@ -126,6 +126,26 @@ it("retains a dispatched action across restart and never dispatches it twice", (
   }
 });
 describe("durable mutation admission", () => {
+  it("reads its durable outcome after an ended turn without admitting another effect", () => {
+    const f = fixture();
+    dispatch(f);
+    f.journal.settle(f.intent.invocationId, "unknown");
+    f.store.failChatTurn(f.intent.chatId, "synthetic-turn");
+    expect(f.journal.prepare(f.intent)).toMatchObject({
+      kind: "replayed",
+      record: { outcome: "unknown" },
+    });
+    expect(
+      f.journal.beginDispatch(f.intent.invocationId, () => {
+        throw new TypeError("Must never dispatch a replay");
+      }),
+    ).toBe(false);
+    expect(() => f.journal.prepare({ ...f.intent, actorId: "another-actor" })).toThrow();
+    expect(() =>
+      f.journal.prepare({ ...f.intent, invocationId: "new-action", actionDigest: "c".repeat(64) }),
+    ).toThrow();
+    expect(f.journal.find("new-action")).toBeUndefined();
+  });
   it("deduplicates equivalent actions even when a model supplies a different call identity", () => {
     const f = fixture();
     dispatch(f);

@@ -91,6 +91,7 @@
 }
 
 .cmpStep[data-state="approval"] .cmpIcon,
+.cmpStep[data-state="input"] .cmpIcon,
 .cmpStep[data-state="attention"] .cmpIcon,
 .cmpStep[data-state="blocked"] .cmpIcon {
   color: var(--feedback-warning);

@@ -4,6 +4,7 @@ import type { CodingTaskSession } from "./useCodingTaskSession";
 import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
+import { JiraChatTools } from "../../JiraChatTools";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import { Icons } from "../../Icons";
 import { useHeldNotice } from "./codingWorkbenchPairingHold";
@@ -123,8 +124,8 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
 }
 
 // The previous conversation: every message of the task except the part of the shown run's
-// conversation the timeline already carries (#3876 review). The messages of the shown run the
-// timeline's feed could not hold stay here, so none is shown in neither place.
+// conversation the timeline already carries (#3876 review). Stored tool results remain here even
+// when that message's text is in the timeline: the safe activity feed carries no durable receipts.
 export function CodingTaskTranscript({
   session,
   shownRun,
@@ -136,13 +137,17 @@ export function CodingTaskTranscript({
   readonly onFork?: ((messageId: string) => void) | undefined;
 }): ReactNode {
   const messages =
-    session.detail?.messages.filter((message) => transcriptShows(shownRun, message)) ?? [];
+    session.detail?.messages.filter(
+      (message) =>
+        transcriptShows(shownRun, message) || (message.toolTranscript?.exchanges.length ?? 0) > 0,
+    ) ?? [];
   if (messages.length === 0) return null;
   // Keyed by task: another task starts again from its newest window.
   return (
     <TranscriptMessages
       key={session.detail?.task.id}
       messages={messages}
+      shownRun={shownRun}
       truncated={session.detail?.truncated === true}
       onFork={onFork}
     />
@@ -153,10 +158,12 @@ type TranscriptMessage = NonNullable<CodingTaskSession["detail"]>["messages"][nu
 
 function TranscriptMessages({
   messages,
+  shownRun,
   truncated,
   onFork,
 }: {
   readonly messages: readonly TranscriptMessage[];
+  readonly shownRun: ShownRun | undefined;
   readonly truncated: boolean;
   readonly onFork?: ((messageId: string) => void) | undefined;
 }): ReactNode {
@@ -179,7 +186,12 @@ function TranscriptMessages({
         </button>
       ) : null}
       {shown.map((message) => (
-        <TranscriptMessageCard key={message.id} message={message} onFork={onFork} />
+        <TranscriptMessageCard
+          key={message.id}
+          message={message}
+          showText={transcriptShows(shownRun, message)}
+          onFork={onFork}
+        />
       ))}
     </section>
   );
@@ -200,21 +212,33 @@ function transcriptAuthor(
 
 function TranscriptMessageCard({
   message,
+  showText,
   onFork,
 }: {
   readonly message: TranscriptMessage;
+  readonly showText: boolean;
   readonly onFork?: ((messageId: string) => void) | undefined;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   return (
     <article className={styles.cmpMessage} data-role={message.role}>
-      <strong>{t(transcriptAuthor(message))}</strong>
-      <SafeMarkdownBoundary
-        source={message.content}
-        diagnosticMessageId={message.id}
-        richContent={message.role === "user" ? undefined : CODING_WORKBENCH_RICH_CONTENT}
+      {showText ? (
+        <>
+          <strong>{t(transcriptAuthor(message))}</strong>
+          <SafeMarkdownBoundary
+            source={message.content}
+            diagnosticMessageId={message.id}
+            richContent={message.role === "user" ? undefined : CODING_WORKBENCH_RICH_CONTENT}
+          />
+        </>
+      ) : null}
+      <JiraChatTools
+        transcript={message.toolTranscript}
+        chatId={message.chatId}
+        messageId={message.id}
+        turnState={message.turnState}
       />
-      {message.role === "user" && onFork !== undefined ? (
+      {showText && message.role === "user" && onFork !== undefined ? (
         <button
           type="button"
           className={styles.cmpMessageFork}

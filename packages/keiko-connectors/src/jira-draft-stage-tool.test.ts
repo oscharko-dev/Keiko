@@ -12,6 +12,7 @@ import { parseJiraDraft } from "./jira-draft.js";
 import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
 import {
   executeJiraDraftStageTool,
+  JIRA_DRAFT_READY_GUIDANCE,
   JIRA_DRAFT_TOO_LARGE_GUIDANCE,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
@@ -60,9 +61,26 @@ function connection(
 ): Parameters<typeof executeJiraDraftStageTool>[2] {
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
-    if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+    if (path.endsWith("/project/10000"))
+      return Promise.resolve(response({ id: "10000", key: "SYN" }));
     if (path.endsWith("/issuetype/10001"))
       return Promise.resolve(response({ id: "10001", name: "Story" }));
+    if (path.endsWith("/issue/SYN-3"))
+      return Promise.resolve(
+        response({
+          id: "20003",
+          key: "SYN-3",
+          fields: { issuetype: { id: "10002", name: "Task" } },
+        }),
+      );
+    if (path.endsWith("/issue/SYN-4"))
+      return Promise.resolve(
+        response({
+          id: "20004",
+          key: "SYN-4",
+          fields: { issuetype: { id: "10001", name: "Story" } },
+        }),
+      );
     if (path.includes("createmeta"))
       return Promise.resolve(
         response({
@@ -136,6 +154,45 @@ function text(value: unknown): string {
 }
 
 describe("jira.draft-stage (#4178)", () => {
+  it("refuses unsupported source labels before storing a draft or dispatching a write", async () => {
+    const h = harness();
+    const target = connection();
+    const append = vi.spyOn(h.deps.store, "append");
+    const result = await executeJiraDraftStageTool(
+      {
+        items: [
+          {
+            ref: "source",
+            projectId: "10000",
+            issueTypeId: "10001",
+            fields: { summary: "Source", labels: ["keiko-source-revision"] },
+          },
+        ],
+      },
+      CONTEXT,
+      target,
+      h.deps,
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "source",
+        fieldId: "labels",
+        validation: "invalid-field",
+      },
+    });
+    expect(append).not.toHaveBeenCalled();
+    expect(vi.mocked(target.http).mock.calls.every(([request]) => request.method === "GET")).toBe(
+      true,
+    );
+    expect(h.activity).toMatchObject([
+      { phase: "refused", refusal: "invalid-fields", violationCount: 1 },
+    ]);
+  });
+
   it("refuses source-criterion failure before Jira metadata reads or a staged digest", async () => {
     const h = harness();
     const target = connection();
@@ -158,6 +215,162 @@ describe("jira.draft-stage (#4178)", () => {
     expect(h.activity).toMatchObject([
       { phase: "refused", refusal: "invalid-fields", violationCount: 1 },
     ]);
+  });
+
+  it("stages the prepared description and labels before validation and binds private revisions", async () => {
+    const h = harness({ templates: [template()], unreadable: 0 });
+    const sourceDigest = "a".repeat(64);
+    const description = "h2. Acceptance criteria\n* works\n\nh2. Source\nRevision A";
+    const prepareRequirements = vi.fn((items: readonly Record<string, unknown>[]) => ({
+      ok: true as const,
+      items: items.map((entry) => ({
+        ...entry,
+        fields: { summary: "Prepared", description, labels: ["keiko-source-revision"] },
+      })),
+      sourceBindings: [{ ref: "source", sourceDigest }],
+    }));
+    const result = await executeJiraDraftStageTool(
+      pageOf("source"),
+      CONTEXT,
+      connection(undefined, [
+        ...CREATE_FIELDS,
+        {
+          ...field("labels", "array"),
+          schema: { type: "array", items: "string", system: "labels" },
+        },
+      ]),
+      { ...h.deps, prepareRequirements },
+    );
+    expect(result.isError).toBeUndefined();
+    const held = h.deps.store.get(text(result.data.draftId), "chat-1");
+    expect(prepareRequirements).toHaveBeenCalledExactlyOnceWith(pageOf("source").items, CONTEXT);
+    expect(held).toMatchObject({
+      items: [{ fields: { description, labels: ["keiko-source-revision"] } }],
+      sourceBindings: [{ ref: "source", sourceDigest }],
+    });
+    expect(
+      resolveJiraDraftArguments(
+        {
+          draftId: result.data.draftId,
+          draftDigest: result.data.draftDigest,
+        },
+        () => held,
+      ),
+    ).toEqual({ ok: true, arguments: { items: held?.items } });
+    expect(result.data).not.toHaveProperty("sourceBindings");
+  });
+
+  it("checks template sections against prepared fields rather than the original page", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(
+      pageOf("source"),
+      CONTEXT,
+      connection({ templates: [template()], unreadable: 0 }),
+      {
+        ...h.deps,
+        prepareRequirements: () => ({
+          ok: true,
+          items: [
+            item("source", { fields: { summary: "Prepared", description: "No required section" } }),
+          ],
+          sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+        }),
+      },
+    );
+    expect(result).toMatchObject({ isError: true, data: { reason: "field-validation" } });
+    expect(h.deps.store.size()).toBe(0);
+  });
+
+  it("refuses source preparation before metadata reads and never appends a failed page", async () => {
+    const h = harness();
+    const remote = connection();
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+      ...h.deps,
+      prepareRequirements: () => ({
+        ok: false,
+        data: { outcome: "rejected", reason: "field-validation" },
+        violationCount: 2,
+      }),
+    });
+    expect(result).toMatchObject({ isError: true, data: { reason: "field-validation" } });
+    expect(remote.http).not.toHaveBeenCalled();
+    expect(h.deps.store.size()).toBe(0);
+    expect(h.activity).toMatchObject([{ phase: "refused", violationCount: 2 }]);
+  });
+
+  it.each(["different-ref", "unknown-binding"])(
+    "refuses a prepared page with %s before metadata reads",
+    async (fault) => {
+      const h = harness();
+      const remote = connection();
+      const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+        ...h.deps,
+        prepareRequirements: () => ({
+          ok: true,
+          items: [item(fault === "different-ref" ? "different" : "source")],
+          sourceBindings: [
+            {
+              ref: fault === "unknown-binding" ? "unknown" : "source",
+              sourceDigest: "a".repeat(64),
+            },
+          ],
+        }),
+      });
+      expect(result).toMatchObject({ isError: true, data: { reason: "invalid-input" } });
+      expect(remote.http).not.toHaveBeenCalled();
+      expect(h.deps.store.size()).toBe(0);
+    },
+  );
+
+  it("captures prepared fields before asynchronous metadata reads can change their source", async () => {
+    const h = harness();
+    const prepared = {
+      ref: "source",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Reviewed", description: "h2. Acceptance criteria\n* reviewed" },
+    };
+    const binding = { ref: "source", sourceDigest: "a".repeat(64) };
+    const remote = connection();
+    const delegate = vi.mocked(remote.http).getMockImplementation();
+    if (delegate === undefined) throw new Error("expected fixture HTTP");
+    vi.mocked(remote.http).mockImplementation((request) => {
+      prepared.fields.description = "Changed while checking metadata";
+      binding.sourceDigest = "b".repeat(64);
+      return delegate(request);
+    });
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+      ...h.deps,
+      prepareRequirements: () => ({ ok: true, items: [prepared], sourceBindings: [binding] }),
+    });
+    expect(result.isError).toBeUndefined();
+    const held = h.deps.store.get(text(result.data.draftId), "chat-1");
+    expect(held).toMatchObject({
+      items: [{ fields: { description: "h2. Acceptance criteria\n* reviewed" } }],
+      sourceBindings: [{ sourceDigest: "a".repeat(64) }],
+    });
+    expect(
+      resolveJiraDraftArguments(
+        { draftId: result.data.draftId, draftDigest: result.data.draftDigest },
+        () =>
+          held === undefined
+            ? undefined
+            : {
+                ...held,
+                sourceBindings: [{ ref: "source", sourceDigest: "b".repeat(64) }],
+              },
+      ),
+    ).toEqual({ ok: false, reason: "draft-changed" });
+  });
+
+  it("rejects untrusted model source bindings as extra stage arguments", async () => {
+    const h = harness();
+    const result = await h.stage({
+      ...pageOf("source"),
+      sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+    });
+    expect(result).toMatchObject({ isError: true, data: { reason: "invalid-input" } });
+    expect(h.deps.store.size()).toBe(0);
   });
 
   it("projects every page before the checks, the store and the digest see it (F7)", async () => {
@@ -260,11 +473,25 @@ describe("jira.draft-stage (#4178)", () => {
       items: [item("story", { parent: { fieldId: "parent", ref: "epic" } }) as CatalogJsonObject],
     });
     expect(first.data).toMatchObject({ unresolvedRefCount: 1, unresolvedRefs: ["epic"] });
+    expect(first.data).not.toHaveProperty("guidance");
     const second = await h.stage({
       draftId: text(first.data.draftId),
       items: [item("epic") as CatalogJsonObject],
     });
     expect(second.data).toMatchObject({ unresolvedRefCount: 0, unresolvedRefs: [] });
+  });
+
+  // Live rehearsal (#4287): with the creation already requested and Full access selected, the
+  // model read "reviewable draft" and asked the person to confirm twice before calling jira.draft.
+  it("tells the model that a complete draft goes straight to jira.draft without a second confirmation", async () => {
+    const h = harness();
+    const staged = await h.stage({ items: [item("epic") as CatalogJsonObject] });
+    expect(staged.data).toMatchObject({ outcome: "succeeded", unresolvedRefCount: 0 });
+    expect(staged.data.guidance).toBe(JIRA_DRAFT_READY_GUIDANCE);
+    expect(JIRA_DRAFT_READY_GUIDANCE).toContain(
+      "call jira.draft now with only draftId and draftDigest",
+    );
+    expect(JIRA_DRAFT_READY_GUIDANCE).toContain("do not ask the user to confirm again");
   });
 
   it("has no item-count limit: 1,200 items stage in pages and resolve to exactly those items", async () => {
@@ -398,6 +625,71 @@ describe("jira.draft-stage (#4178)", () => {
           violations: [{ ruleId: "parent-missing", subject: "Blocks", template: "SYN/Story" }],
         },
       });
+      expect(h.deps.store.size()).toBe(0);
+    });
+  });
+
+  describe("a template that requires the parent's issue type (parentIssueTypes)", () => {
+    const underTask = (): JiraIssueTemplateSet => ({
+      templates: [template('parentField: "parent"', "parentIssueTypes: [Task]")],
+      unreadable: 0,
+    });
+
+    it("stages an item whose parent is an existing issue of an allowed type", async () => {
+      const h = harness(underTask());
+      const staged = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 1 });
+    });
+
+    it("refuses an item whose existing parent has another issue type, naming the allowed type", async () => {
+      const h = harness(underTask());
+      const refused = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", issueKey: "SYN-4" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(refused).toMatchObject({
+        isError: true,
+        data: {
+          ref: "a",
+          violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task" }],
+        },
+      });
+      expect(h.deps.store.size()).toBe(0);
+    });
+
+    it("leaves the type of a parent that is another draft item to the create gate", async () => {
+      const h = harness(underTask());
+      const staged = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", ref: "b" } }),
+          item("b", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 2 });
+    });
+
+    it("still refuses every other rule of an item whose parent is another draft item", async () => {
+      const h = harness(underTask());
+      const refused = await h.stage({
+        items: [
+          item("a", {
+            parent: { fieldId: "parent", ref: "b" },
+            fields: { summary: "Item a", description: "No sections" },
+          }),
+          item("b", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(refused).toMatchObject({ isError: true, data: { ref: "a" } });
+      const data = refused.data as { readonly violations: readonly { readonly ruleId: string }[] };
+      expect(data.violations.map((violation) => violation.ruleId)).not.toContain(
+        "template-unreadable",
+      );
+      expect(data.violations.length).toBeGreaterThan(0);
       expect(h.deps.store.size()).toBe(0);
     });
   });

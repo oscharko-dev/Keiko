@@ -103,7 +103,7 @@ export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
   const refuseLinks = new Set<string>();
   const posted: Record<string, unknown>[] = [];
   const read = (url: URL): Response => {
-    if (url.pathname.endsWith("/project/10000")) return json({ key: "SYN" });
+    if (url.pathname.endsWith("/project/10000")) return json({ id: "10000", key: "SYN" });
     if (url.pathname.endsWith("/issuetype/10001")) return json({ id: "10001", name: "Story" });
     if (url.pathname.includes("createmeta"))
       return json({

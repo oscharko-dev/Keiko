@@ -215,6 +215,9 @@ function logEndpointClass(url: string | URL | undefined): LogEndpointClass | und
 export interface GatewayFetchOptions extends RequestInit {
   /** Trusted synchronous admission/header factory, run immediately before each physical request. */
   readonly prepareHeaders?: (() => Headers) | undefined;
+  /** Trusted one-use secret JSON body factory, after final header/admission preparation.
+   * Requires singleAttempt and no static body. Never a model/request-data option. */
+  readonly prepareBody?: (() => string) | undefined;
   /** Use configured native TLS trust initially and never perform an automatic fallback attempt. */
   readonly singleAttempt?: boolean | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
@@ -235,7 +238,8 @@ export interface GatewayFetchOptions extends RequestInit {
   readonly logContext?: ModelGatewayLogContext | undefined;
 }
 
-type PreparedRequestInit = RequestInit & Pick<GatewayFetchOptions, "prepareHeaders">;
+type PreparedRequestInit = RequestInit &
+  Pick<GatewayFetchOptions, "prepareHeaders" | "prepareBody">;
 
 function dispatchHeaderRecord(init: PreparedRequestInit): Record<string, string> {
   init.signal?.throwIfAborted();
@@ -248,9 +252,33 @@ function dispatchHeaderRecord(init: PreparedRequestInit): Record<string, string>
 }
 
 function preparedFetchInit(init: PreparedRequestInit): RequestInit {
-  const { prepareHeaders: _prepareHeaders, ...rest } = init;
+  const { prepareHeaders: _prepareHeaders, prepareBody: _prepareBody, ...rest } = init;
   if (_prepareHeaders === undefined) return rest;
-  return { ...rest, headers: dispatchHeaderRecord(init) };
+  const headers = dispatchHeaderRecord(init);
+  return { ...rest, headers, ...(_prepareBody === undefined ? {} : { body: preparedBody(init) }) };
+}
+
+function preparedBody(init: PreparedRequestInit): string {
+  init.signal?.throwIfAborted();
+  const body = init.prepareBody?.();
+  if (typeof body !== "string")
+    throw new TypeError("Request body preparation must return a string synchronously.");
+  init.signal?.throwIfAborted();
+  return body;
+}
+
+async function preparedWire(init: PreparedRequestInit): Promise<{
+  readonly headers: Record<string, string>;
+  readonly body: Awaited<ReturnType<typeof bodyToWire>>;
+}> {
+  // Preserve static-body validation before credential materialization for every existing caller.
+  if (init.prepareBody === undefined) {
+    const body = await bodyToWire(init.body);
+    return { body, headers: dispatchHeaderRecord(init) };
+  }
+  const headers = dispatchHeaderRecord(init);
+  const body = await bodyToWire(preparedBody(init));
+  return { body, headers };
 }
 
 export type OutboundHttpEgressErrorCode =
@@ -616,8 +644,7 @@ async function fetchWithCaBundle(
   maxResponseBytes?: number,
   lookup?: LookupFunction,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
-  const headers = dispatchHeaderRecord(init);
+  const { body, headers } = await preparedWire(init);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
     const req = httpsRequest(
@@ -650,8 +677,7 @@ async function fetchDirectPinned(
   addresses: readonly LookupAddress[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
-  const headers = dispatchHeaderRecord(init);
+  const { body, headers } = await preparedWire(init);
   const request = usesHttps(url) ? httpsRequest : httpRequest;
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
@@ -1329,8 +1355,7 @@ async function fetchHttpViaProxy(
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
-  const headers = dispatchHeaderRecord(init);
+  const { body, headers } = await preparedWire(init);
   assertNoForwardedCredentialHeader(headers);
   // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs). Read from the
   // ORIGINAL target even when pinned, so the origin server's virtual-hosting still sees the real
@@ -1364,7 +1389,57 @@ async function fetchHttpViaProxy(
   });
 }
 
-// eslint-disable-next-line max-lines-per-function
+function httpsTunnelResponse(
+  target: URL,
+  init: PreparedRequestInit,
+  socket: tls.TLSSocket,
+  headers: Record<string, string>,
+  body: Awaited<ReturnType<typeof bodyToWire>>,
+  tunnelKey: string,
+  cap: number,
+): Promise<Response> {
+  return responseFromClientRequest((resolve, reject) => {
+    const req = httpRequest(
+      {
+        method: init.method ?? "GET",
+        hostname: target.hostname,
+        port: Number(targetPort(target)),
+        path: `${target.pathname}${target.search}`,
+        headers,
+        signal: init.signal ?? undefined,
+        createConnection: () => socket,
+      },
+      (res) => {
+        const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
+        resolveNodeResponse(
+          res,
+          resolve,
+          reject,
+          () => {
+            socket.destroy();
+            req.destroy();
+          },
+          cap,
+          () => {
+            if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
+            else socket.destroy();
+          },
+        );
+      },
+    );
+    req.on("error", (error) => {
+      socket.destroy();
+      reject(mapProxyError(error));
+    });
+    req.end(body);
+  });
+}
+
+function prepareTunnelHeaders(headers: Record<string, string>, target: URL): void {
+  if (!Object.hasOwn(headers, "connection")) headers.connection = "keep-alive";
+  // Match the direct transport's Host spelling, including pre-signed SigV4 URLs.
+  if (!Object.hasOwn(headers, "host")) headers.host = hostHeader(target);
+}
 async function fetchHttpsViaProxy(
   target: URL,
   init: PreparedRequestInit,
@@ -1373,7 +1448,7 @@ async function fetchHttpsViaProxy(
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
+  const staticBody = init.prepareBody === undefined ? await bodyToWire(init.body) : undefined;
   const originalHeaders =
     init.prepareHeaders === undefined ? dispatchHeaderRecord(init) : undefined;
   const tunnelKey = httpsProxyTunnelKey(target, proxy, ca, pinnedAddress);
@@ -1387,51 +1462,11 @@ async function fetchHttpsViaProxy(
   try {
     init.signal?.throwIfAborted();
     const headers = originalHeaders ?? dispatchHeaderRecord(init);
-    if (!Object.hasOwn(headers, "connection")) {
-      headers.connection = "keep-alive";
-    }
-    // Ensure Host header omits :443 so it matches what undici sends directly and
-    // satisfies SigV4 pre-signed S3 URLs behind a proxy.
-    if (!Object.hasOwn(headers, "host")) {
-      headers.host = hostHeader(target);
-    }
+    const body = init.prepareBody === undefined ? staticBody : await bodyToWire(preparedBody(init));
+    prepareTunnelHeaders(headers, target);
     socket.setKeepAlive(true);
     const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
-    return await responseFromClientRequest((resolve, reject) => {
-      const req = httpRequest(
-        {
-          method: init.method ?? "GET",
-          hostname: target.hostname,
-          port: Number(targetPort(target)),
-          path: `${target.pathname}${target.search}`,
-          headers,
-          signal: init.signal ?? undefined,
-          createConnection: () => socket,
-        },
-        (res) => {
-          const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
-          resolveNodeResponse(
-            res,
-            resolve,
-            reject,
-            () => {
-              socket.destroy();
-              req.destroy();
-            },
-            cap,
-            () => {
-              if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
-              else socket.destroy();
-            },
-          );
-        },
-      );
-      req.on("error", (error) => {
-        socket.destroy();
-        reject(mapProxyError(error));
-      });
-      req.end(body);
-    });
+    return await httpsTunnelResponse(target, init, socket, headers, body, tunnelKey, cap);
   } catch (error) {
     socket.destroy();
     throw error;
@@ -1784,6 +1819,7 @@ function gatewayRequestInit(
   rest: RequestInit,
   timeoutMs: number | undefined,
   prepareHeaders: GatewayFetchOptions["prepareHeaders"],
+  prepareBody: GatewayFetchOptions["prepareBody"],
 ): PreparedRequestInit {
   const composedSignal = composeSignal(rest.signal, timeoutMs);
   return {
@@ -1791,6 +1827,27 @@ function gatewayRequestInit(
     redirect: "manual",
     ...(composedSignal === undefined ? {} : { signal: composedSignal }),
     ...(prepareHeaders === undefined ? {} : { prepareHeaders }),
+    ...(prepareBody === undefined ? {} : { prepareBody }),
+  };
+}
+
+function oneUseBody(options: GatewayFetchOptions): GatewayFetchOptions["prepareBody"] {
+  const prepare = options.prepareBody;
+  if (prepare === undefined) return undefined;
+  if (
+    typeof prepare !== "function" ||
+    typeof options.prepareHeaders !== "function" ||
+    options.singleAttempt !== true ||
+    (options.body !== undefined && options.body !== null)
+  )
+    throw new TypeError(
+      "Private body preparation requires one admitted attempt and no static body.",
+    );
+  let consumed = false;
+  return () => {
+    if (consumed) throw new TypeError("Private request body was already prepared.");
+    consumed = true;
+    return prepare();
   };
 }
 
@@ -1802,6 +1859,7 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     useCaFallback = fetchImpl === undefined,
     singleAttempt = false,
     prepareHeaders,
+    prepareBody,
     egress,
     timeoutMs,
     maxResponseBytes,
@@ -1809,7 +1867,12 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     ...rest
   } = options;
   const log = resolveLogSink(logOption);
-  const init = gatewayRequestInit(rest, timeoutMs, prepareHeaders);
+  const init = gatewayRequestInit(
+    rest,
+    timeoutMs,
+    prepareHeaders,
+    oneUseBody({ ...options, prepareBody }),
+  );
   const plan = planGatewayProxy(url, fetchImpl, egress, log);
   refuseUndelegatedProxiedHostnameEgress(plan.target, plan.proxy, egress);
   refuseUnpinnableResearchEgress(plan.proxy, egress);

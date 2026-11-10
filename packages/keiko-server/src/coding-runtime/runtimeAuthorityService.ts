@@ -248,12 +248,13 @@ const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: true,
-      maxItems: 6,
+      maxItems: 7,
       values: [
         "source-control.read",
         "source-control.write",
         "issue-tracker.read",
         "issue-tracker.write",
+        "issue-tracker.admin",
         "knowledge-base.read",
         "knowledge-base.write",
       ],
@@ -489,9 +490,25 @@ export function codingRuntimeConnectorScopesForMode(
   return deliveryScopeGranted(mode) ? DELIVERY_CONNECTOR_SCOPES : [];
 }
 
+/** A ready Pod supplies ordinary Jira access; administration requires a separate human selection. */
+export function codingRuntimeConnectorScopesForSelection(
+  mode: CodingWorkbenchMode,
+  jiraPodSelected: boolean,
+  requested: readonly CodingWorkbenchConnectorScope[] | undefined,
+): readonly CodingWorkbenchConnectorScope[] {
+  const scopes = [...codingRuntimeConnectorScopesForMode(mode)];
+  if (!jiraPodSelected) return scopes;
+  scopes.push("issue-tracker.read", "issue-tracker.write");
+  if (requested?.includes("issue-tracker.admin") === true) scopes.push("issue-tracker.admin");
+  return scopes;
+}
+
 export function codingRuntimeNetworkPolicyForMode(
   mode: CodingWorkbenchMode,
   researchEgressEnabled: boolean | undefined,
+  connectorScopes: readonly CodingWorkbenchConnectorScope[] = codingRuntimeConnectorScopesForMode(
+    mode,
+  ),
 ): CodingWorkbenchNetworkPolicy {
   // The connector scopes a mode carries follow deliveryScopeGranted (see
   // codingRuntimeConnectorScopesForMode), but the envelope contract
@@ -500,7 +517,6 @@ export function codingRuntimeNetworkPolicyForMode(
   // autonomous-delivery without research egress the mint therefore stays deny-all with no scopes;
   // an approved connector-scoped request (git ci, "connector") is redeemed through the approval
   // proof, never through a scope smuggled onto a deny-all policy.
-  const connectorScopes = codingRuntimeConnectorScopesForMode(mode);
   if (mode === "autonomous-delivery") {
     return { mode: "connector-scoped-egress", allowLoopback: false, connectorScopes };
   }
@@ -541,16 +557,21 @@ function narrowAuthorityToMode(
   if (authority.effectiveMode === mode) return authority;
   const retainGovernedResearch = authority.networkPolicy.mode === "governed-egress";
   const allowedActionClasses = codingRuntimeActionClassesForMode(mode, retainGovernedResearch);
-  const allowedConnectorScopes = codingRuntimeConnectorScopesForMode(mode);
+  const allowedConnectorScopes = codingRuntimeConnectorScopesForSelection(
+    mode,
+    authority.connectorScopes.includes("issue-tracker.read"),
+    authority.connectorScopes,
+  );
+  const connectorScopes = authority.connectorScopes.filter((value) =>
+    allowedConnectorScopes.includes(value),
+  );
   return {
     ...authority,
     effectiveMode: mode,
     actionClasses: authority.actionClasses.filter((value) => allowedActionClasses.includes(value)),
-    connectorScopes: authority.connectorScopes.filter((value) =>
-      allowedConnectorScopes.includes(value),
-    ),
+    connectorScopes,
     commandPolicy: narrowedCommandPolicy(authority.commandPolicy, mode),
-    networkPolicy: codingRuntimeNetworkPolicyForMode(mode, retainGovernedResearch),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(mode, retainGovernedResearch, connectorScopes),
   };
 }
 
@@ -1147,6 +1168,12 @@ export class CodingRuntimeAuthorityService {
    */
   public promptAllowanceExhausted(runId: string): boolean {
     return this.lastPromptRefusal(runId) === "prompt-allowance";
+  }
+
+  /** Server-private lifetime boundary already accepted at minting; never a new grant or TTL. */
+  public runtimeDeadline(runId: string): number | undefined {
+    const deadline = this.mintedRuntimeDeadline;
+    return deadline?.runId === runId ? deadline.deadlineMs : undefined;
   }
 
   /**

@@ -12,8 +12,30 @@ import { toolExchangeOf, completedToolExchange } from "./tool-exchanges.mjs";
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const sameSet = (left, right) => left.size === right.size && [...left].every((id) => right.has(id));
 
+/** Runtime runs require an explicit key; the reusable Markdown builders retain their inputs. */
+export function runtimeTemplateProjectKey(projectKey) {
+  if (typeof projectKey !== "string" || !/^[A-Z][A-Z0-9_]{1,31}$/u.test(projectKey)) {
+    throw new TypeError("Invalid runtime template project key");
+  }
+  return projectKey;
+}
+
 /** The summary every epic of the lab starts with: `[LH-001] <title>`. */
 export const EPIC_SUMMARY_PATTERN = String.raw`^\[LH-\d{3}\] \S`;
+
+/**
+ * The Epic summary rule of the golden Lastenheft run: the bracketed requirement ID, then the title.
+ * The Lastenheft numbers its requirements in several schemes (REQ-FA-017, NFA-SEC-003, MIG_DAT-002,
+ * ABN-45.1), so the rule names the ID shape, not one scheme. It is flat because the product refuses
+ * a quantified group that holds a quantifier (ADR-0128 D4).
+ */
+const REQUIREMENT_EPIC_SUMMARY_PATTERN = String.raw`^\[[A-Z][A-Z0-9_.-]*[0-9]\] \S`;
+
+/** The one formal rule the bulk run breaks on purpose: the installed Epic template's summary pattern. */
+export const EPIC_SUMMARY_VIOLATION = Object.freeze({
+  ruleId: "summary-pattern",
+  prompt: "Deliberately omit the required bracketed requirement ID from the summary.",
+});
 
 /**
  * The Markdown template a lead would write for `issueType` from the lab's structure rule: the
@@ -26,6 +48,7 @@ export function templateMarkdown({
   rule,
   summaryPattern,
   parentField,
+  parentIssueTypes,
   requiredFields = [],
 }) {
   const quoted = (value) => JSON.stringify(value);
@@ -41,6 +64,9 @@ export function templateMarkdown({
       ? [`requiredLabels: [${rule.labels.map((label) => quoted(label)).join(", ")}]`]
       : []),
     ...(parentField === undefined ? [] : [`parentField: ${quoted(parentField)}`]),
+    ...(parentIssueTypes === undefined
+      ? []
+      : [`parentIssueTypes: [${parentIssueTypes.map(quoted).join(", ")}]`]),
     ...(requiredFields.length > 0
       ? [`requiredFields: [${requiredFields.map((field) => quoted(field)).join(", ")}]`]
       : []),
@@ -51,13 +77,69 @@ export function templateMarkdown({
 }
 
 /** The template of the lab's work project for epics. */
-export const epicTemplateMarkdown = (project) =>
+export const epicTemplateMarkdown = (project, summaryPattern = EPIC_SUMMARY_PATTERN) =>
   templateMarkdown({
     project,
     issueType: "Epic",
     rule: STRUCTURE_RULES.Epic,
-    summaryPattern: EPIC_SUMMARY_PATTERN,
+    summaryPattern,
   });
+
+/** The structure a project lead defines for Stories: a user goal, the criteria and the done list. */
+export const STORY_STRUCTURE_RULE = Object.freeze({
+  sections: ["Nutzerziel", "Akzeptanzkriterien", "Definition of Done"],
+  parent: true,
+});
+
+/** The Story template of the work project: its sections, and the epic link the lead requires. */
+export const storyTemplateMarkdown = (project, epicLinkFieldId) =>
+  templateMarkdown({
+    project,
+    issueType: "Story",
+    rule: STORY_STRUCTURE_RULE,
+    parentField: epicLinkFieldId,
+  });
+
+/** The Sub-task template of the work project; `parentIssueTypes` names the types it may hang under. */
+export const subtaskTemplateMarkdown = (project, parentIssueTypes = ["Task"]) =>
+  templateMarkdown({
+    project,
+    issueType: "Sub-task",
+    rule: STRUCTURE_RULES.Task,
+    parentField: "parent",
+    parentIssueTypes,
+  });
+
+/** The issue types whose templates the limit run installs for its work project. */
+const LIMIT_TEMPLATE_TYPES = Object.freeze(["Epic", "Task", "Bug", "Sub-task"]);
+
+function limitTemplateMarkdown(project, issueType, epicLinkFieldId) {
+  if (issueType === "Epic") return epicTemplateMarkdown(project, REQUIREMENT_EPIC_SUMMARY_PATTERN);
+  if (issueType === "Sub-task") return subtaskTemplateMarkdown(project, ["Task"]);
+  return templateMarkdown({
+    project,
+    issueType,
+    rule: STRUCTURE_RULES[issueType],
+    parentField: epicLinkFieldId,
+    requiredFields: issueType === "Bug" ? ["priority"] : [],
+  });
+}
+
+/**
+ * The four templates the limit run installs for its work project, as the lead defines them. The
+ * Epic rule is the golden Lastenheft one, so every correctly traced golden Epic can meet it.
+ */
+export function limitTemplateDefinitions(project, epicLinkFieldId) {
+  return LIMIT_TEMPLATE_TYPES.map((issueType) => {
+    const subtask = issueType === "Sub-task";
+    const parentIssueTypes = subtask ? ["Task"] : undefined;
+    return {
+      issueType,
+      markdown: limitTemplateMarkdown(project, issueType, epicLinkFieldId),
+      formal: { project, issueType, ...(subtask ? { parentIssueTypes } : {}) },
+    };
+  });
+}
 
 /**
  * The templates a lead defines for the report project before judging its compliance (S11): the

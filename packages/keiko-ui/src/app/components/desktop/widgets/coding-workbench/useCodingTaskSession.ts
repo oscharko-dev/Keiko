@@ -605,6 +605,9 @@ function useFollowedRun(
     snapshot?.conversationId,
     snapshot?.runId,
     snapshot?.state,
+    // Native input can be published while the same run stays running. Its durable transcript
+    // is re-read on the existing server revision; the UI never invents a pending turn.
+    snapshot?.revision,
     activeWorkspaceId,
     active,
     load,

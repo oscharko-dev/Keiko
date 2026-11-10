@@ -1190,6 +1190,7 @@ describe("weakly supported citations", () => {
         onTranscript: (): void => undefined,
         hasUsableObservation: (): boolean => true,
         reportsToolAction: false,
+        readOnlySynthesisRequest: (request): Parameters<ModelPort["call"]>[0] => request,
         meter: (model): ModelPort => model,
         stream: (): never => {
           throw new TypeError("Streaming was not requested");

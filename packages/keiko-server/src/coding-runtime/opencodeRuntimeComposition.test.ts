@@ -4318,7 +4318,10 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         relay: createMcpCredentialRelay(),
         origin: "http://127.0.0.1:1983",
         secrets: {},
-        managed: pods.connections(undefined, binding),
+        managed: pods.connections(undefined, binding, {
+          runId: FIXTURE_RUN_ID,
+          currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+        }),
       },
       mcpGrantedServers: new Set(["jira"]),
     });
@@ -4367,7 +4370,10 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         relay: createMcpCredentialRelay(),
         origin: "http://127.0.0.1:1983",
         secrets: {},
-        managed: pods.connections(undefined, binding),
+        managed: pods.connections(undefined, binding, {
+          runId: FIXTURE_RUN_ID,
+          currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+        }),
       },
       mcpGrantedServers: new Set(["jira"]),
     });

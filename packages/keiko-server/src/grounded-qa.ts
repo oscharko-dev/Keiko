@@ -19,6 +19,7 @@ import {
   scopeChatToolTurn,
 } from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import {
   assertCitationRepairTurnActive,
   callGroundedSynthesisModel,
@@ -244,7 +245,7 @@ import {
   canonicalChatTurnMemorySemantics,
 } from "./chat-turn-identity.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
-import { createRequestCancellation } from "./request-cancellation.js";
+import { createChatApprovalRequest } from "./chat-approval-continuation.js";
 import {
   beginAppSessionOperation,
   resolveAppSessionReadAuthority,
@@ -2271,6 +2272,7 @@ interface AskWorkerCtx extends GroundedRetrievalContinuityInput {
 }
 
 interface PreparedGroundedAsk {
+  readonly onAdmitted?: ((message: ChatMessage) => void) | undefined;
   readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly messageCountBeforeTurn?: number;
   readonly continuityStartedAt?: number;
@@ -3121,6 +3123,7 @@ function admitGroundedUser(
     identityContent: frozenGroundedTurnIdentity(prepared),
   });
   if (admission.kind === "admitted") {
+    prepared.onAdmitted?.(admission.userMessage);
     return {
       ...prepared,
       commitTurnId,
@@ -3595,7 +3598,23 @@ async function executeGroundedAsk(
     },
     generation,
   );
-  return result === CHAT_TURN_WAIT_CANCELLED ? groundedCancelledResult() : result;
+  return groundedTurnResult(result, prepared, deps);
+}
+
+function groundedTurnResult(
+  result: RouteResult | typeof CHAT_TURN_WAIT_CANCELLED,
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
+  return (
+    chatAuthenticationInterruption(
+      prepared.signal,
+      deps,
+      prepared.correlationId,
+      "POST /api/chats/messages/grounded",
+    ) ?? groundedCancelledResult()
+  );
 }
 
 function groundedCancelledResult(): RouteResult {
@@ -3680,6 +3699,8 @@ export async function runGroundedAskInput(
   options: {
     readonly signal?: AbortSignal | undefined;
     readonly correlationId?: string | undefined;
+    readonly request?: IncomingMessage | undefined;
+    readonly onAdmitted?: ((message: ChatMessage) => void) | undefined;
     readonly runner?: GroundedRunner | undefined;
     readonly multiSource?: MultiSourceSeam | undefined;
     readonly hybrid?: HybridSeam | undefined;
@@ -3693,6 +3714,8 @@ export async function runGroundedAskInput(
       input,
       signal: options.signal ?? new AbortController().signal,
       correlationId: options.correlationId,
+      request: options.request,
+      onAdmitted: options.onAdmitted,
     },
     deps,
     options.runner,
@@ -3707,6 +3730,10 @@ export async function runMixedGroundedChat(
   deps: UiHandlerDeps,
   signal: AbortSignal,
   correlationId: string | undefined,
+  admission?: {
+    readonly request: IncomingMessage;
+    readonly onAdmitted: (message: ChatMessage) => void;
+  },
 ): Promise<RouteResult> {
   const { request, chat } = parsed;
   if (request.attachments.length > 0 || request.documentContext.length > 0)
@@ -3722,7 +3749,7 @@ export async function runMixedGroundedChat(
       expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
     },
     deps,
-    { signal, correlationId },
+    { signal, correlationId, request: admission?.request, onAdmitted: admission?.onAdmitted },
   );
   if (result.status !== 200 || !groundedAnswerBody(result.body)) return result;
   const user = deps.store.findMessageById(result.body.userMessageId);
@@ -3862,12 +3889,18 @@ export async function handleGroundedAsk(
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
   const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
-  const cancellation = createRequestCancellation(ctx, "grounded request cancelled");
+  const cancellation = createChatApprovalRequest(ctx, deps, "grounded request cancelled");
   try {
     const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return groundedCancelledResult();
     if ("status" in prepared) return prepared;
-    const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+    const result = await executeGroundedAsk(
+      { ...prepared, onAdmitted: cancellation.admit },
+      deps,
+      runner,
+      multiSource,
+      hybrid,
+    );
     if (result.status === 200 && groundedAnswerBody(result.body)) {
       logChatResponseMessage(
         result.body.assistantMessageId,

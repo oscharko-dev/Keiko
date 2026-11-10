@@ -23,6 +23,8 @@ import type {
 import {
   captureToolInvocationReceipt,
   type ToolInvocationReceipt,
+  TOOL_PROVIDER_REASONS,
+  type ToolProviderReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
@@ -368,6 +370,7 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
       reason: result.reason,
       ...result.metrics,
       truncated: result.page?.truncated ?? false,
+      ...providerReasonOf(result),
       ...(result.status === "failed"
         ? {
             errorKind: result.reason === "provider-reported-error" ? "unknown" : "internal",
@@ -413,4 +416,12 @@ export function mintCatalogId<Consumer extends CatalogConsumer = CodingCatalogCo
   const id = state.options.mintId();
   requireDispatch(/^[A-Za-z0-9_-]{1,128}$/u.test(id), "invalid", "recovery-required");
   return id;
+}
+
+/** The provider's closed refusal word behind a provider-reported error, or nothing. */
+function providerReasonOf(result: ToolResultEnvelope): { providerReason?: ToolProviderReason } {
+  if (result.status !== "failed" || result.reason !== "provider-reported-error") return {};
+  const reason = result.data.reason;
+  const known = TOOL_PROVIDER_REASONS.find((value) => value === reason);
+  return known === undefined ? {} : { providerReason: known };
 }

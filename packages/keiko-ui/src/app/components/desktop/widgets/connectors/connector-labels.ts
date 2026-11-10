@@ -128,34 +128,9 @@ export function syncFailureReasonKey(reason: AtlassianSyncFailureReason): Messag
   return SYNC_REASON[reason];
 }
 
-const ACTION_LABEL: Readonly<Record<AtlassianConnectorActionType, MessageKey>> = {
-  "jira.projects": "atlassianConnectors.action.jira.projects",
-  "jira.issue-types": "atlassianConnectors.action.jira.issue-types",
-  "jira.create-fields": "atlassianConnectors.action.jira.create-fields",
-  "jira.edit-fields": "atlassianConnectors.action.jira.edit-fields",
-  "jira.search": "atlassianConnectors.action.jira.search",
-  "jira.issue": "atlassianConnectors.action.jira.issue",
-  "jira.comments": "atlassianConnectors.action.jira.comments",
-  "jira.transitions": "atlassianConnectors.action.jira.transitions",
-  "jira.assignable-users": "atlassianConnectors.action.jira.assignable-users",
-  "jira.report": "atlassianConnectors.action.jira.report",
-  "jira.draft-stage": "atlassianConnectors.action.jira.draft-stage",
-  "jira.draft-batch": "atlassianConnectors.action.jira.draft-batch",
-  "assign-issue": "atlassianConnectors.action.assign-issue",
-  "sync-space": "atlassianConnectors.action.sync-space",
-  "sync-project": "atlassianConnectors.action.sync-project",
-  "search-issues-live": "atlassianConnectors.action.search-issues-live",
-  "create-issue": "atlassianConnectors.action.create-issue",
-  "update-issue-fields": "atlassianConnectors.action.update-issue-fields",
-  "transition-issue": "atlassianConnectors.action.transition-issue",
-  "add-issue-comment": "atlassianConnectors.action.add-issue-comment",
-  "create-page": "atlassianConnectors.action.create-page",
-  "update-page": "atlassianConnectors.action.update-page",
-  "add-page-comment": "atlassianConnectors.action.add-page-comment",
-};
-
+/** Every native action has the same catalog prefix; the return type checks the whole union. */
 export function actionTypeLabelKey(actionType: AtlassianConnectorActionType): MessageKey {
-  return ACTION_LABEL[actionType];
+  return `atlassianConnectors.action.${actionType}`;
 }
 
 const RISK_LABEL: Readonly<Record<CodingWorkbenchApprovalRisk, MessageKey>> = {
@@ -192,6 +167,8 @@ export function reviewReasonCopyKey(reason: AtlassianConnectorActionReviewReason
 const WRITE_FAILURE_REASON: Readonly<Record<AtlassianConnectorWriteFailureReason, MessageKey>> = {
   "auth-failed": "atlassianConnectors.result.reason.auth-failed",
   "permission-denied": "atlassianConnectors.result.reason.permission-denied",
+  "effect-denied": "atlassianConnectors.result.reason.effect-denied",
+  cancelled: "atlassianConnectors.result.reason.cancelled",
   "not-found": "atlassianConnectors.result.reason.not-found",
   "rate-limited": "atlassianConnectors.result.reason.rate-limited",
   timeout: "atlassianConnectors.result.reason.timeout",

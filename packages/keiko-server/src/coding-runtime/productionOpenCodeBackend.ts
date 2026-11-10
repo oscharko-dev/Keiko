@@ -1,7 +1,8 @@
 import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import { codingRunMcpServers, selectedRunMcpServers } from "./codingJiraPodBinding.js";
-import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import type { CodingJiraPods, CodingJiraRunAuthority } from "./codingJiraPodMcp.js";
+import { codingJiraCatalogFits } from "./codingJiraCatalogBudget.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -533,24 +534,48 @@ function mcpRelayFor(
       managed:
         jira === undefined
           ? input.mcpConnections
-          : jira.pods.connections(input.mcpConnections, jira.binding),
+          : jira.pods.connections(input.mcpConnections, jira.binding, jira.authority),
     },
   };
 }
 
 interface BoundJira {
   readonly pods: CodingJiraPods;
+  readonly authority: CodingJiraRunAuthority;
   readonly binding: NonNullable<ProductionRuntimeBackendInput["request"]["jiraPod"]>;
 }
 
 // A run the human started with a Jira Pod: the resolver bound it, and this composition must be able
 // to serve it. A run that cannot be served as asked fails closed instead of starting without Jira.
-function boundJira(input: LaunchInput, run: ProductionRuntimeBackendInput): BoundJira | undefined {
+function boundJira(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  geometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
+): BoundJira | undefined {
   const binding = run.request.jiraPod;
   if (binding === undefined) return undefined;
-  if (input.codingJiraPods === undefined || input.mcpRelay === undefined)
+  if (
+    input.codingJiraPods === undefined ||
+    input.mcpRelay === undefined ||
+    run.jiraAuthority === undefined
+  )
     throw new Error("jira-pod-unavailable");
-  return { pods: input.codingJiraPods, binding };
+  const authority = run.jiraAuthority;
+  return {
+    pods: input.codingJiraPods,
+    binding,
+    authority: {
+      ...authority,
+      catalogFits: (tools, result) =>
+        codingJiraCatalogFits({
+          tools,
+          result,
+          geometry,
+          usage: run.contextUsage?.read(run.request.runId),
+          promptFits: authority.promptFits,
+        }),
+    },
+  };
 }
 
 // The registry's servers the human selected, plus the Pod's tools for a bound run.
@@ -588,7 +613,7 @@ function nativeRunInputs(
   | "agentModelCatalog"
 > {
   if (toolProfile !== "native") return {};
-  const jira = boundJira(input, run);
+  const jira = boundJira(input, run, contextGeometry);
   return {
     repositoryItems: repositoryItemsFor(input, run),
     configDocuments: configDocumentsFor(input, run),

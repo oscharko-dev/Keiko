@@ -3,6 +3,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS, SCHEMA_VERSION } from "./schema.js";
 
 const V13_SCHEMA_VERSION = 13;
+const RELATIONSHIP_ENDPOINT_KINDS = `'memory','capsule','capsule-set','workflow-run','evidence-run',
+  'workspace-path','chat','tool','patch-proposal','agent','connector','data-source','skill','mcp-tool'`;
+const RELATIONSHIP_LIFECYCLES = `'draft','active','archived','superseded','revoked','blocked','stale'`;
 
 function userVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
@@ -24,7 +27,10 @@ interface VersionRollback {
 // migration is covered the moment its own rollback fragment is appended here.
 //
 // V48 only conservatively repairs mutation outcomes; no structural rollback applies. V57 only
-// widens the journal operation CHECK (no column added), so a rewind keeps the wider table.
+// widens the journal operation CHECK (no column added), as does V62 for project/Agile writes;
+// V63 admits component/version metadata writes, V64 comment updates, and V65 worklog/watch/vote
+// operations without a structural change. A rewind keeps
+// the wider table; these rebuilds preserve the existing V58 batch digest.
 // V20/V30/V33/V37/V40 have no fragments: they only widen a `failure_code` CHECK on
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
@@ -148,20 +154,10 @@ const ROLLBACKS: readonly VersionRollback[] = [
             'reads-context','proposes-patch','uses-tool','starts-workflow',
             'produces-evidence','references-document','depends-on'
           )
-          AND lifecycle IN (
-            'draft','active','archived','superseded','revoked','blocked','stale'
-          )
+          AND lifecycle IN (${RELATIONSHIP_LIFECYCLES})
           AND scope_kind IN ('user','workspace','project','workflow','global')
-          AND source_kind IN (
-            'memory','capsule','capsule-set','workflow-run','evidence-run',
-            'workspace-path','chat','tool','patch-proposal',
-            'agent','connector','data-source','skill','mcp-tool'
-          )
-          AND target_kind IN (
-            'memory','capsule','capsule-set','workflow-run','evidence-run',
-            'workspace-path','chat','tool','patch-proposal',
-            'agent','connector','data-source','skill','mcp-tool'
-          )
+          AND source_kind IN (${RELATIONSHIP_ENDPOINT_KINDS})
+          AND target_kind IN (${RELATIONSHIP_ENDPOINT_KINDS})
           AND created_at >= 0
           AND updated_at >= created_at
           AND (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
@@ -200,8 +196,8 @@ const ROLLBACKS: readonly VersionRollback[] = [
         occurred_at     INTEGER NOT NULL,
         summary         TEXT,
         CHECK (
-          from_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
-          AND to_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+          from_state IN (${RELATIONSHIP_LIFECYCLES})
+          AND to_state IN (${RELATIONSHIP_LIFECYCLES})
           AND occurred_at >= 0
           AND (summary IS NULL OR length(summary) <= 240)
         )

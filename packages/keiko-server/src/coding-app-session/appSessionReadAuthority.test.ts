@@ -10,7 +10,10 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { beginAppSessionOperation } from "./appSessionReadAuthority.js";
+import {
+  beginAppSessionOperation,
+  resolveAppSessionReadAuthority,
+} from "./appSessionReadAuthority.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
@@ -45,6 +48,17 @@ function operationFixture(): {
     },
   };
 }
+
+describe("app-session read authority", () => {
+  it("grants nothing and reads nothing from the request when no channel is composed", () => {
+    // A header-less request proves the cookie is never touched without a channel.
+    const request = { url: "/api/chat" } as IncomingMessage;
+    expect(resolveAppSessionReadAuthority({}, request)).toBeUndefined();
+    expect(
+      resolveAppSessionReadAuthority({ codingAppSessionChannel: undefined }, request),
+    ).toBeUndefined();
+  });
+});
 
 describe("explicit app-session request operation", () => {
   afterEach(() => {

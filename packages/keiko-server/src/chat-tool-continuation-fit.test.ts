@@ -5,6 +5,7 @@ import type { ChatMessage as GatewayMessage } from "@oscharko-dev/keiko-contract
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
+import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import {
   estimateGatewayMessageTokens,
   fitToolContinuation,
@@ -372,6 +373,22 @@ function forcedStageCompaction(stage: ChatToolExchange): Record<string, unknown>
   return JSON.parse(fitted.messages[1]?.content ?? "") as Record<string, unknown>;
 }
 describe("stored Jira stage receipt compaction", () => {
+  it("retains the current registry-bound stage reference while refusing a mismatched binding", () => {
+    const contract = jiraOperationForTool("jira.draft-stage");
+    if (contract === undefined) throw new TypeError("Missing staged draft contract");
+    const receipt = { toolRef: contract.declaration.descriptor.toolRef };
+    expect(
+      forcedStageCompaction(stageExchange({ operationBinding: contract.binding }, receipt)),
+    ).toMatchObject(STAGED_REFERENCE);
+    expect(
+      forcedStageCompaction(
+        stageExchange(
+          { operationBinding: { ...contract.binding, contractDigest: "b".repeat(64) } },
+          receipt,
+        ),
+      ),
+    ).not.toHaveProperty("draftId");
+  });
   it("retains exact stored ID, digest and counts after real forced compaction without claiming a mutation", () => {
     const stage = stageExchange();
     const before = JSON.stringify(stage);
@@ -404,7 +421,7 @@ describe("stored Jira stage receipt compaction", () => {
   });
   it.each([
     [{}, { toolRef: { canonicalId: "external.tool", contractVersion: 1 } }],
-    [{}, { toolRef: { canonicalId: "keiko.jira.draft.stage", contractVersion: 2 } }],
+    [{}, { toolRef: { canonicalId: "keiko.jira.draft.stage", contractVersion: 3 } }],
     [{}, { toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 } }],
     [{}, { status: "failed" }],
     [{ outcome: "rejected" }, {}],

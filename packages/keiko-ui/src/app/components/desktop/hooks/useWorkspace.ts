@@ -99,6 +99,7 @@ const CONN_LS = "keiko.conns.v1";
 const VIEW_LS = "keiko.view";
 const WORKSPACE_STATE_API = "/api/workspace/state";
 const WORKSPACE_STATE_POLL_MS = 1_500;
+const WORKSPACE_STATE_IDLE_POLL_MS = 6_000;
 // Exported so the zoom controls in Workspace.tsx can disable themselves at the
 // clamp limits instead of swallowing clicks silently (audit C132/C361).
 export const MIN_ZOOM = 0.3;
@@ -1185,7 +1186,7 @@ function revisionFromWorkspaceEtag(value: string | null): number | null {
 async function fetchServerWorkspaceSnapshot(
   knownRevision: number,
   storageScope: string | undefined,
-): Promise<ServerWorkspaceSnapshot | null> {
+): Promise<ServerWorkspaceSnapshot | "unchanged" | null> {
   if (typeof fetch !== "function") return null;
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -1194,7 +1195,7 @@ async function fetchServerWorkspaceSnapshot(
     const response = await fetch(WORKSPACE_STATE_API, { headers });
     if (response.status === 304) {
       noteWorkspaceSyncRecovered();
-      return null;
+      return "unchanged";
     }
     if (!response.ok) {
       surfaceWorkspaceSyncFailure("pull", `failed with status ${String(response.status)}`);
@@ -1639,6 +1640,102 @@ function useWorkspaceStorageSync({
   ]);
 }
 
+interface WorkspacePullPoller {
+  readonly sync: () => void;
+  readonly stop: () => void;
+  readonly changed: () => void;
+}
+
+// A timer never supersedes an owned read. Visibility catch-up is one trailing read;
+// local changes keep the fast cadence even when their PUT settles before that read.
+class WorkspacePullPolling implements WorkspacePullPoller {
+  private stopped = false;
+  private pending = false;
+  private catchup = false;
+  private deferredReported = false;
+  private generation = 0;
+  private idleCount = 0;
+  private intervalMs = WORKSPACE_STATE_POLL_MS;
+  private readonly poller: ReturnType<typeof createVisibilityPoller>;
+
+  constructor(
+    private readonly pull: () => Promise<boolean>,
+    private readonly isDirty: () => boolean,
+  ) {
+    this.poller = createVisibilityPoller(
+      () => {
+        void this.refresh();
+      },
+      () => this.intervalMs,
+    );
+  }
+
+  private cadence(idle: boolean): void {
+    this.idleCount = idle ? this.idleCount + 1 : 0;
+    const next =
+      idle && this.idleCount >= 2
+        ? Math.min(this.intervalMs * 2, WORKSPACE_STATE_IDLE_POLL_MS)
+        : WORKSPACE_STATE_POLL_MS;
+    if (next === this.intervalMs) return;
+    this.intervalMs = next;
+    reportClientDiagnostic(
+      idle
+        ? "Workspace polling slowed while idle."
+        : "Workspace polling resumed its active interval.",
+      { composerActivity: idle ? "workspace-sync-idle" : "workspace-sync-active" },
+    );
+    this.poller.reset();
+  }
+  private async refresh(): Promise<void> {
+    if (this.pending) {
+      if (!this.deferredReported) {
+        this.deferredReported = true;
+        reportClientDiagnostic("Workspace polling deferred while a pull is pending.", {
+          composerActivity: "workspace-sync-pull-pending",
+        });
+      }
+      return;
+    }
+    this.pending = true;
+    this.catchup = false;
+    this.deferredReported = false;
+    const startedGeneration = this.generation;
+    try {
+      const unchanged = await this.pull();
+      if (!this.stopped)
+        this.cadence(unchanged && !this.isDirty() && startedGeneration === this.generation);
+    } finally {
+      this.pending = false;
+      if (!this.stopped && this.catchup && document.visibilityState !== "hidden")
+        void this.refresh();
+    }
+  }
+  readonly sync = (): void => {
+    if (document.visibilityState !== "hidden" && this.pending) this.catchup = true;
+    this.poller.sync();
+  };
+  readonly stop = (): void => {
+    this.stopped = true;
+    this.poller.stop();
+  };
+  readonly changed = (): void => {
+    this.generation += 1;
+    this.cadence(false);
+  };
+}
+
+function preserveRestoredWorkspace(
+  serverSnapshot: ServerWorkspaceSnapshot,
+  revisionRef: CurrentRef<number>,
+  winsRef: CurrentRef<AppWindow[] | null>,
+): boolean {
+  return (
+    revisionRef.current === 0 &&
+    serverSnapshot.windows.length === 0 &&
+    (winsRef.current?.length ?? 0) > 0
+  );
+}
+
 interface UseServerSyncArgs {
   readonly storageScope: string | undefined;
   readonly retireAutomaticGeometry: () => void;
@@ -1682,6 +1779,7 @@ function useWorkspaceServerSync({
   const serverSyncStoppedRef = useRef(false);
   const putAbortRef = useRef<AbortController | null>(null);
   const localDirtyRef = useRef(false);
+  const pullPollerRef = useRef<WorkspacePullPoller | null>(null);
   const lastAcknowledgedSnapshotRef = useRef<string | null>(null);
   if (wins !== null && wins.length > 0 && lastAcknowledgedSnapshotRef.current === null) {
     localDirtyRef.current = true;
@@ -1761,16 +1859,13 @@ function useWorkspaceServerSync({
   useEffect(() => {
     if (!serverSyncEnabled) return;
     let stopped = false;
-    const pull = async (): Promise<void> => {
+    const pull = async (): Promise<boolean> => {
       const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current, storageScope);
-      if (stopped || serverSnapshot === null) return;
-      if (serverSnapshot.revision <= revisionRef.current) return;
-      if (
-        revisionRef.current === 0 &&
-        serverSnapshot.windows.length === 0 &&
-        (winsRef.current?.length ?? 0) > 0
-      ) {
-        return;
+      if (stopped || serverSnapshot === null) return false;
+      if (serverSnapshot === "unchanged") return true;
+      if (serverSnapshot.revision <= revisionRef.current) return true;
+      if (preserveRestoredWorkspace(serverSnapshot, revisionRef, winsRef)) {
+        return false;
       }
       if (localDirtyRef.current) {
         adoptPolledRevisionWhileDirty(
@@ -1780,17 +1875,18 @@ function useWorkspaceServerSync({
           putDebounceRef,
           runServerPutRef,
         );
-        return;
+        return false;
       }
       applyServerSnapshot(serverSnapshot);
+      return false;
     };
-    const poller = createVisibilityPoller(() => {
-      void pull();
-    }, WORKSPACE_STATE_POLL_MS);
+    const poller = new WorkspacePullPolling(pull, () => localDirtyRef.current);
+    pullPollerRef.current = poller;
     poller.sync();
     document.addEventListener("visibilitychange", poller.sync);
     return () => {
       stopped = true;
+      pullPollerRef.current = null;
       poller.stop();
       document.removeEventListener("visibilitychange", poller.sync);
     };
@@ -1822,6 +1918,7 @@ function useWorkspaceServerSync({
       return;
     }
     localDirtyRef.current = true;
+    pullPollerRef.current?.changed();
     putDebounceRef.current?.schedule(() => runServerPut(false));
   }, [wins, conns, suppressNextPersistRef, serverSyncEnabled, runServerPut]);
 

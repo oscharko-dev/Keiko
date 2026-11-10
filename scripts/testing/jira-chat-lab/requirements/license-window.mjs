@@ -60,9 +60,19 @@ async function waitForLicense(session, minimumSeconds) {
  * lane as using Jira.
  */
 export async function ensureLicenseWindow(session, directory, minimumSeconds) {
-  const remaining = await renewedLicense(session, directory, minimumSeconds);
+  return (await renewLicenseWindow(session, directory, minimumSeconds)).remainingAfter;
+}
+
+/**
+ * Same renewal, with what happened: whether this call restarted the owned laboratory, the license
+ * seconds left before it and after it. Only this session's own compose project is restarted.
+ */
+export async function renewLicenseWindow(session, directory, minimumSeconds) {
+  if (!Number.isSafeInteger(minimumSeconds) || minimumSeconds < 1 || minimumSeconds > 7200)
+    throw new TypeError("Invalid laboratory license window");
+  const renewal = await renewedLicense(session, directory, minimumSeconds);
   await enterActive(directory);
-  return remaining;
+  return renewal;
 }
 
 /**
@@ -84,7 +94,7 @@ async function renewedLicense(session, directory, minimumSeconds) {
     console.log(
       JSON.stringify({ operation: "jira-lab-license-window", restarted: false, remaining }),
     );
-    return remaining;
+    return { restarted: false, remainingBefore: remaining, remainingAfter: remaining };
   }
   // Another lane may be mid-turn on this Jira: restart only when no other lane is active.
   const restarted = await withExclusiveRestart(
@@ -104,5 +114,9 @@ async function renewedLicense(session, directory, minimumSeconds) {
       remaining: renewed,
     }),
   );
-  return renewed;
+  return {
+    restarted: restarted !== undefined,
+    remainingBefore: remaining,
+    remainingAfter: renewed,
+  };
 }

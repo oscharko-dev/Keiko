@@ -105,7 +105,8 @@ function issue(
         ...details,
       };
 }
-function comment(value: unknown): CatalogJsonObject | undefined {
+/** Shared read projection; no rendered HTML, remote URLs or author email enters the result. */
+export function jiraCommentProjection(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (
     raw === undefined ||
@@ -121,6 +122,10 @@ function comment(value: unknown): CatalogJsonObject | undefined {
     created: raw.created,
     ...(author === undefined ? {} : { author }),
   };
+}
+/** Reuse the existing issue-summary boundary for native issue-reference collections. */
+export function jiraIssueSummary(value: unknown, baseUrl: string): CatalogJsonObject | undefined {
+  return issue(value, false, baseUrl);
 }
 /** A search result with the fields the caller asked for, typed by the instance's own names/schema. */
 function searchIssue(
@@ -216,7 +221,7 @@ export function jiraIssueReadResult(
         startAt,
         maxResults,
       )
-    : page(body, items(body.comments, comment), startAt, maxResults);
+    : page(body, items(body.comments, jiraCommentProjection), startAt, maxResults);
 }
 
 /** Retain a fitting prefix and resume at its first unreturned item; never silently skip a page. */

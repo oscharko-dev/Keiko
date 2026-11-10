@@ -1,3 +1,4 @@
+import { jiraOperationBindingForTool } from "./atlassian/jiraManagedProvider.js";
 import type {
   CatalogConsumer,
   CatalogBoundAuthorityPort,
@@ -28,6 +29,7 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
+import { validateChatApprovalContinuation } from "./chat-approval-continuation-state.js";
 
 export interface ChatToolApprovalContext {
   readonly deps: Pick<UiHandlerDeps, "store" | "atlassianActionApprovalRegistry">;
@@ -82,6 +84,13 @@ export async function acceptChatToolReadGrant(
   );
   await input.publish();
 }
+function approvalOperationBinding(approval: ChatToolWriteApprovalView): {
+  readonly operationBinding?: NonNullable<ReturnType<typeof jiraOperationBindingForTool>>;
+} {
+  const binding = jiraOperationBindingForTool(approval.operation);
+  return binding === undefined ? {} : { operationBinding: binding };
+}
+
 export async function waitForChatToolWriteConsent(
   input: ChatToolApprovalContext,
   approval: ChatToolWriteApprovalView,
@@ -93,13 +102,19 @@ export async function waitForChatToolWriteConsent(
   const save = (view: ChatToolWriteApprovalView): void => {
     deps.store.updateChatToolTranscript(
       message.id,
-      { kind: "write-approval", callId: exchange.call.id, approval: view },
+      {
+        kind: "write-approval",
+        callId: exchange.call.id,
+        approval: view,
+        ...approvalOperationBinding(view),
+      },
       correlationId,
     );
   };
   save(approval);
   await input.publish();
   await registry.waitForChatWriteApproval(approval.approvalId, signal);
+  validateChatApprovalContinuation(deps.store, message);
   if (signal.aborted) registry.revokeChatWriteApproval(approval.approvalId, correlationId);
   save(
     registry.getChatWriteApproval(approval.approvalId, correlationId)?.approval ?? {
@@ -129,7 +144,7 @@ export function refreshChatToolWriteApproval(
     return;
   deps.store.updateChatToolTranscript(
     message.id,
-    { kind: "write-approval", callId, approval: observed },
+    { kind: "write-approval", callId, approval: observed, ...approvalOperationBinding(observed) },
     correlationId,
   );
 }

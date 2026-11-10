@@ -282,6 +282,7 @@ const BFF_CODE_ERROR_KINDS: ReadonlyMap<string, ActivityLogErrorKind> = new Map(
   ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
   ["REQUEST_CANCELLED", "cancelled"],
   ["GROUNDING_SCOPE_CHANGED", "conflict"],
+  ["JIRA_AUTHENTICATION_FAILED", "authority-denied"],
   ["PAYLOAD_TOO_LARGE", "invalid-request"],
   ["INVALID_REQUEST", "invalid-request"],
   ["VALIDATION_FAILED", "invalid-request"],
@@ -316,13 +317,17 @@ export function bffCodeErrorKind(code: string | undefined): ActivityLogErrorKind
  * The closed error kind of a failed BFF request, for evidence (#3557 review): an HTTP refusal by its
  * status, a cancellation, a transport failure. Never the error's message.
  */
+function apiErrorKind(error: ApiError): ActivityLogErrorKind {
+  // The local app session is valid; a revoked Jira credential invalidated this turn's binding.
+  // Its 409 must retain the same authentication classification after serialization.
+  if (error.code === "JIRA_AUTHENTICATION_FAILED") return bffCodeErrorKind(error.code);
+  const exact = HTTP_STATUS_ERROR_KINDS[error.status];
+  if (exact !== undefined) return exact;
+  if (error.status >= 500) return "unavailable";
+  return error.status >= 400 ? "invalid-request" : bffCodeErrorKind(error.code);
+}
 export function bffRequestErrorKind(error: unknown): ActivityLogErrorKind {
-  if (error instanceof ApiError) {
-    const exact = HTTP_STATUS_ERROR_KINDS[error.status];
-    if (exact !== undefined) return exact;
-    if (error.status >= 500) return "unavailable";
-    return error.status >= 400 ? "invalid-request" : bffCodeErrorKind(error.code);
-  }
+  if (error instanceof ApiError) return apiErrorKind(error);
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
   if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
   // `fetch` rejects a transport failure (refused connection, lost network) with a TypeError.

@@ -50,6 +50,8 @@ export interface DraftBatchInstructions {
   readonly rules: string;
   readonly requiredSections: readonly string[];
   readonly requiredFields: readonly string[];
+  /** Jira's display names of required fields named by id, so the model knows what to write. */
+  readonly requiredFieldNames?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface DraftBatchMessage {
@@ -64,9 +66,25 @@ export interface WrittenDraftItem {
   readonly fields: Readonly<Record<string, string>>;
 }
 
+/** Why a page answer was sent back for correction, as counts only (#4288). */
+export interface PageParseFaults {
+  /** The answer held no readable {"items":[...]} object. */
+  readonly unreadable: boolean;
+  /** Planned keys the answer did not return with a summary. */
+  readonly missingItemCount: number;
+  /** Returned items that lack a section the template requires. */
+  readonly missingSectionItemCount: number;
+  /** Returned items that lack a field the template requires. */
+  readonly missingFieldItemCount: number;
+}
+
 export type ParsedPage =
   | { readonly ok: true; readonly items: ReadonlyMap<string, WrittenDraftItem> }
-  | { readonly ok: false; readonly problems: readonly string[] };
+  | {
+      readonly ok: false;
+      readonly problems: readonly string[];
+      readonly faults: PageParseFaults;
+    };
 
 const SUMMARY_CHARS_MAX = 255;
 const SECTION_CHARS_MAX = 8000;
@@ -79,7 +97,8 @@ const OUTLINE_SYSTEM =
 
 const FILL_SYSTEM =
   'You write Jira issue drafts from requirements. Answer with one JSON object only: {"items":[{"key":"<key>","summary":"...","sections":{"<section>":"..."},"fields":{"<field>":"..."}}]}. ' +
-  "Write exactly one item for every listed key and copy each key exactly. In sections, give every required section a substantive text in Markdown without headings. " +
+  "Write exactly one item for every listed key and copy each key exactly. " +
+  "Each key is Keiko's internal draft key: never write it into a summary or a section; a summary rule that asks for an identifier means the requirement's own reference. In sections, give every required section a substantive text in Markdown without headings. " +
   "In fields, give only the listed required fields as plain text. State only what the listed requirements support. Keiko appends each requirement's acceptance criteria verbatim, so do not list acceptance criteria unless a section asks for them. " +
   "Write in the language of the requirements unless the instructions name another.";
 
@@ -162,6 +181,16 @@ export function fillOverheadChars(instructions: DraftBatchInstructions): number 
   return fillMessages([], instructions).reduce((sum, message) => sum + message.content.length, 0);
 }
 
+/** The required fields, each Jira field id followed by the name Jira gives it. */
+function requiredFieldsLine(instructions: DraftBatchInstructions): string {
+  const names = instructions.requiredFieldNames ?? {};
+  const named = instructions.requiredFields
+    .filter((id) => Object.hasOwn(names, id))
+    .map((id) => `${id} is ${JSON.stringify(names[id] ?? "")}`);
+  const line = `Required fields: ${JSON.stringify(instructions.requiredFields)}`;
+  return named.length === 0 ? line : `${line} (${named.join("; ")}; key each by its id)`;
+}
+
 /** One page of planned issues with their requirements; a correction repeats the same page. */
 export function fillMessages(
   page: readonly DraftBatchEntry[],
@@ -173,7 +202,7 @@ export function fillMessages(
     instructions.requiredSections.length === 0
       ? `Required sections: none; write the issue text into sections.${FREE_SECTION}.`
       : `Required sections: ${JSON.stringify(shared)}`,
-    `Required fields: ${JSON.stringify(instructions.requiredFields)}`,
+    requiredFieldsLine(instructions),
   ].join("\n");
   const keys = page.map((entry) => entry.ref).join(", ");
   const messages: DraftBatchMessage[] = [
@@ -338,19 +367,30 @@ function writtenFields(value: unknown, allowed: readonly string[]): Record<strin
   return fields;
 }
 
-function itemProblems(
-  key: string,
+interface ItemGaps {
+  readonly sections: readonly string[];
+  readonly fields: readonly string[];
+}
+
+function itemGaps(
   item: WrittenDraftItem,
   instructions: DraftBatchInstructions,
   sections: readonly string[],
-): readonly string[] {
+): ItemGaps {
   const present = new Set([...item.sections.keys()].map(sectionKey));
   const wanted = instructions.requiredSections.length === 0 ? [FREE_SECTION] : sections;
-  const missing = wanted.filter((name) => !present.has(sectionKey(name)));
-  const fields = instructions.requiredFields.filter((name) => item.fields[name] === undefined);
+  return {
+    sections: wanted.filter((name) => !present.has(sectionKey(name))),
+    fields: instructions.requiredFields.filter((name) => item.fields[name] === undefined),
+  };
+}
+
+function gapProblems(key: string, gaps: ItemGaps): readonly string[] {
   return [
-    ...(missing.length === 0 ? [] : [`${key} lacks sections ${JSON.stringify(missing)}.`]),
-    ...(fields.length === 0 ? [] : [`${key} lacks fields ${JSON.stringify(fields)}.`]),
+    ...(gaps.sections.length === 0
+      ? []
+      : [`${key} lacks sections ${JSON.stringify(gaps.sections)}.`]),
+    ...(gaps.fields.length === 0 ? [] : [`${key} lacks fields ${JSON.stringify(gaps.fields)}.`]),
   ];
 }
 
@@ -384,9 +424,10 @@ function readItems(
   listed: readonly unknown[],
   wanted: ReadonlyMap<string, DraftBatchEntry>,
   instructions: DraftBatchInstructions,
-): { items: Map<string, WrittenDraftItem>; problems: string[] } {
+): { items: Map<string, WrittenDraftItem>; problems: string[]; gaps: ItemGaps[] } {
   const items = new Map<string, WrittenDraftItem>();
   const problems: string[] = [];
+  const gaps: ItemGaps[] = [];
   for (const raw of listed) {
     const key = listedKey(raw);
     const entry = key === undefined ? undefined : wanted.get(key);
@@ -394,9 +435,20 @@ function readItems(
     const item = writtenItem(raw, instructions);
     if (item === undefined) continue;
     items.set(key, item);
-    problems.push(...itemProblems(key, item, instructions, modelSections(entry, instructions)));
+    const itemGap = itemGaps(item, instructions, modelSections(entry, instructions));
+    gaps.push(itemGap);
+    problems.push(...gapProblems(key, itemGap));
   }
-  return { items, problems };
+  return { items, problems, gaps };
+}
+
+function parseFaults(gaps: readonly ItemGaps[], missingItemCount: number): PageParseFaults {
+  return {
+    unreadable: false,
+    missingItemCount,
+    missingSectionItemCount: gaps.filter((gap) => gap.sections.length > 0).length,
+    missingFieldItemCount: gaps.filter((gap) => gap.fields.length > 0).length,
+  };
 }
 
 /** The written item of every planned key, or what to correct; keys outside the page are ignored. */
@@ -407,8 +459,12 @@ export function parsePage(
 ): ParsedPage {
   const listed = listedItems(answerObject(text, "items"));
   if (listed === undefined)
-    return { ok: false, problems: ['Answer with one JSON object {"items":[...]}.'] };
-  const { items, problems } = readItems(
+    return {
+      ok: false,
+      problems: ['Answer with one JSON object {"items":[...]}.'],
+      faults: { ...parseFaults([], 0), unreadable: true },
+    };
+  const { items, problems, gaps } = readItems(
     listed,
     new Map(page.map((entry) => [entry.ref, entry])),
     instructions,
@@ -417,7 +473,11 @@ export function parsePage(
   if (missing.length > 0) problems.push(`Missing keys or summaries: ${missing.join(", ")}.`);
   return problems.length === 0
     ? { ok: true, items }
-    : { ok: false, problems: problems.slice(0, PROBLEMS_LISTED_MAX) };
+    : {
+        ok: false,
+        problems: problems.slice(0, PROBLEMS_LISTED_MAX),
+        faults: parseFaults(gaps, missing.length),
+      };
 }
 
 /**

@@ -5,6 +5,7 @@ import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UiStoreError } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import {
   acknowledgedStatus,
   journalConflict,
@@ -121,6 +122,27 @@ export function readChatToolMutationTurn(
       `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND consumer_kind = 'chat' AND batch_digest IS NULL LIMIT 33`,
     )
     .all(chatId, turnRef)
+    .map((row) => rowRecord(row))
+    .filter((row): row is ChatToolMutationRecord => row !== undefined);
+}
+
+/** Existing native Coding journal rows, for the already owned History message only. */
+export function readCodingJiraMutationMessage(
+  db: DatabaseSync,
+  chatId: string,
+  userMessageId: string,
+  invocationIds: readonly string[],
+): readonly ChatToolMutationRecord[] {
+  if (invocationIds.length === 0) return [];
+  if (invocationIds.length > CHAT_TOOL_TURN_BUDGET.maxToolCalls) throw journalConflict();
+  return db
+    .prepare(
+      `SELECT ${COLUMNS} FROM chat_tool_mutations
+     WHERE chat_id = ? AND user_message_id = ? AND consumer_kind = 'coding'
+       AND source_kind = 'configured-mcp' AND server_name = 'jira'
+       AND invocation_id IN (${invocationIds.map(() => "?").join(",")})`,
+    )
+    .all(chatId, userMessageId, ...invocationIds)
     .map((row) => rowRecord(row))
     .filter((row): row is ChatToolMutationRecord => row !== undefined);
 }
@@ -300,7 +322,6 @@ class MutationStore implements ChatToolMutationStore {
   prepare(intent: ChatToolMutationIntent): ChatToolMutationPreparation {
     validateMutationIntent(intent);
     const result = durableWrite(this.db, (): ChatToolMutationPreparation => {
-      assertCurrentTurn(this.db, intent);
       const prior = rowRecord(
         this.db
           .prepare(
@@ -308,11 +329,14 @@ class MutationStore implements ChatToolMutationStore {
           )
           .get(intent.chatId, intent.turnRef, intent.actionDigest),
       );
-      if (prior !== undefined && retryableAttachment(prior, intent)) this.retire(prior);
-      else if (prior !== undefined) {
+      if (prior !== undefined && !retryableAttachment(prior, intent)) {
         if (!sameMutationIdentity(prior, intent)) throw journalConflict();
         return { kind: "replayed", record: prior };
       }
+      // Reading this exact durable outcome grants no new effect, including after turn recovery.
+      // Retiring/retrying an attachment and preparing any new write still require a current turn.
+      assertCurrentTurn(this.db, intent);
+      if (prior !== undefined) this.retire(prior);
       const blocked = blockedTurn(this.db, intent);
       if (blocked !== undefined) return blocked;
       const existingInvocation = this.find(intent.invocationId);

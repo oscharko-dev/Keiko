@@ -137,6 +137,23 @@ pairing port is never itself client attestation: an absent, forged, revoked or e
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
 
+The active inventory includes the `/api/atlassian-connectors/chat-write-approval` projection for
+ordinary Chat Jira review observation and decisions (#4288). A cookie Path matches by prefix, and
+the approval id is the last segment of the route, so the Chat review routes (`GET` and `POST`
+`/api/atlassian-connectors/chat-write-approval/:approvalId`) own their own prefix and the generic
+connector approval routes under `/api/atlassian-connectors/action-approvals` never receive the
+cookie. The route table, not a convention, proves this (`chatWriteApprovalCookieScope.test.ts`), and
+no generic approval handler consults the session. The projection carries the same existing HttpOnly,
+SameSite=Strict bearer, and sign-out clears it through the same inventory. A retained pending review
+checks the original live session, exact action and original expiry before a claim and before
+dispatch. An observed review may keep its bounded worker across page reload; the worker's timers are
+unreferenced and released on Stop, expiry and session end. Explicit Stop of a turn awaiting the
+human's decision targets that canonical turn through the authenticated `/api/desktop/chat/cancel`
+endpoint, which answers every authenticated caller with HTTP 200 and `cancelled` (true only for the
+caller's own running worker) and keeps a 404 for a missing session; any other in-flight send stops
+at once by aborting its transport. The restore route supplies the projection to existing valid
+sessions after an upgrade.
+
 #### Simple local browser connection (owner decision, 2026-11-04)
 
 The normal launcher still opens an authenticated browser automatically. An unpaired desktop offers
@@ -219,6 +236,8 @@ removes the durable approval, pending completion state and every associated live
 the same registry. Within the single BFF owner, verification, store mutation and mint/revocation
 contain no asynchronous gap. A lost completion response can rotate its existing session with a
 fresh proof during the original request window; it cannot mint again after revocation or eviction.
+While that browser has an active operation, the registry atomically defers this completion retry
+without replacing its secret. A later fresh proof can complete after the operation releases.
 
 Management distinguishes remembered and session-only approvals explicitly. Approved session-only
 decisions are manageable during their original request window. After successful completion, their
@@ -322,7 +341,13 @@ successful persisted observation.
 Secret rotation preserves the original issuance time and absolute deadline, including repeated
 rotations. The registry rejects direct rotation of idle-expired or absolutely expired authority;
 knowing an old session id cannot revive it. A valid replacement starts a new inactivity window,
-but does not inherit an old operation lease, and releasing an old lease cannot touch the replacement.
+and inherits the exact active operation count. Each idempotent release resolves the live entry by
+session id, so it decrements that inherited count and refreshes inactivity after completion.
+Revoked, evicted or expired sessions cannot be revived. The registry records the count and a closed
+deferred-rotation reason under the originating request correlation, without bearer material.
+Both browser completion retries and the ordinary rotate route defer while an operation is active;
+the rotate route returns the closed `deferred` status without replacing any cookie. Only the
+existing successful rotation event records its operation count, avoiding duplicate success lines.
 Snapshots, repaired cookies and replacement live streams all remain bounded by the original
 absolute lifetime. Rotated HTTP cookie projections use only that lifetime's remaining full seconds,
 clamped by the existing cookie ceiling; the registered rotation event records the actual
@@ -330,6 +355,25 @@ clamped by the existing cookie ceiling; the registered rotation event records th
 Rotation requires at least one full second of remaining original authority, matching cookie repair.
 The channel checks this before replacing the original secret and again after minting; if time crosses
 that boundary, it revokes the unusable replacement and cannot report a successful zero-age cookie.
+
+A refused `local-session` cookie repair (an unpaired browser, a stale cookie or no composed channel is
+an ordinary state of a page load) returns the content-free acknowledgement with HTTP 200 and no
+cookie, never a 401 that would surface as a browser console error on every unpaired load. The
+existing Activity Log records `coding-app-session.local-session.denied` with the single closed
+reason `authority-unavailable` and the aggregate `count`, at warning level when the pairing-denial threshold is reached, at most once per minute per composed server. It contains no
+identity, cookie or caller-provided content. A missing, malformed, foreign or wrong proof and an
+absent channel are caller-controlled: any page that reaches the loopback server can repeat them
+without limit, so they never write a line per request and remain only in that aggregate. A refusal
+only a registered session's holder can reach is recorded for its request:
+`coding-app-session.proof.refused` names the closed expiry reason (`approval`, `inactivity`,
+`invalid-clock`, `lifetime`) once, because the expiry removes the session, and
+`coding-app-session.local-session.refused` records that expiry or `lifetime-insufficient` (the final
+second of the absolute lifetime) with count one. These lines carry only the request correlation,
+closed purpose, registered flag and counts (including presented/distinct cookie counts where
+available).
+They expose no bearer, session identity or personal content. Repeated observations of the same
+HTTP request reuse its canonical generated correlation. These diagnostics do not widen authority
+or refresh rejected proofs. Pairing acknowledgement semantics remain unchanged.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation
 refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification
@@ -341,9 +385,10 @@ bodies, rejected plaintext requests and replay responses do not acquire protecti
 expiry through this activity path. Existing protected image or workspace authority checks remain
 independent. Pre-admission queue waits do not acquire protection. Completion and request abort release the count
 idempotently. While a valid operation is pending the session is active, even during a long provider
-wait. The last release starts the normal inactivity window from completion. Revocation, rotation,
-process restart, capacity eviction and the absolute lifetime still invalidate authority immediately;
-release cannot revive a removed or replaced session. At capacity, admission first removes expired
+wait. The last release starts the normal inactivity window from completion. Rotation invalidates the old
+secret while preserving the replacement session's admitted operations. Revocation, process restart,
+capacity eviction and the absolute lifetime still invalidate authority immediately; release cannot
+revive a removed session. At capacity, admission first removes expired
 sessions, then prefers the oldest inactive session over a valid active operation. If every session
 is active, the existing bounded capacity remains authoritative and evicts the oldest session. The
 registered pairing result records expired-session count and a closed eviction class, without IDs.
@@ -360,10 +405,11 @@ states (paused by the human, settled, taken over, recovery-required or gone); it
 extends or re-acquires anything, and holding the session again after a pause takes a new admitted
 mutation. A run paused for an operator decision (a `pauseReason` is recorded) is waiting on the human
 exactly like `awaiting-approval`, so it keeps the lease; a pause the human chose does not.
-A rotation replaces the session record without its operations, so the rotated credential holds the
-lease again on its next admitted mutation, which first ends the predecessor's lease. An unreadable
+A rotation preserves the run's existing lease even before another mutation. On the next admitted
+mutation, the lease owner transfers its tracked credential by releasing the preserved lease and
+acquiring exactly one replacement lease. An unreadable
 run state counts as settled, each lease releases independently, and either failure records a
-body-free server diagnostic. The lease protects only inactivity, like every other: revocation, rotation, restart, capacity
+body-free server diagnostic. The lease protects only inactivity, like every other: revocation, restart, capacity
 eviction and the absolute lifetime still end the session at once. Leases are bounded per composed
 channel (eight runs, four sessions per run); a session the registry revoked, evicted or expired
 gives up its place before that bound refuses another session, and graph disposal releases every one

@@ -5,6 +5,8 @@ import {
 } from "./actionApprovals.js";
 import type { JiraLivePodMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import type { JiraManagedMutationExecutor } from "@oscharko-dev/keiko-connectors";
 import { createHarnessCatalogBudget, DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
 import type { ChatToolReadGrantView, RunCounters } from "@oscharko-dev/keiko-contracts";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
@@ -13,7 +15,7 @@ import { createCatalogToolBinder } from "../tool-catalog/catalogToolDispatch.js"
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
-import { JIRA_MANAGED_READ_TOOLS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { UiHandlerDeps } from "../deps.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 import { createKnowledgeRequirementsProvider } from "../requirementsTool.js";
@@ -21,11 +23,15 @@ import {
   createJiraChatCatalogAdmission,
   jiraChatCatalogConsumerPort,
   jiraChatCatalogRoutes,
-  jiraChatReadCatalogRoutes,
   type JiraChatCatalogAction,
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
 } from "./jiraChatCatalogConsumer.js";
+import { jiraOperationBindingForTool } from "./jiraManagedProvider.js";
+import type {
+  JiraChatSourcePreparation,
+  PreparedJiraSource,
+} from "./jiraChatRequirementBinding.js";
 import {
   createFileServerLogSink,
   createServerLogger,
@@ -69,6 +75,13 @@ import {
   type JiraChatAuthorityEnvelope as ChatToolAuthorityEnvelope,
 } from "./jiraChatAuthority.js";
 
+const READ_FIXTURE_TOOLS = [
+  ...JIRA_READ_TOOL_FAMILIES.projectList,
+  ...JIRA_READ_TOOL_FAMILIES.issueMetadata,
+  ...JIRA_READ_TOOL_FAMILIES.issues,
+  ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
+  ...JIRA_READ_TOOL_FAMILIES.localCompositions,
+] as const;
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 let store: UiStore;
 let project: string;
@@ -184,6 +197,71 @@ describe("accepted ordinary Chat turn authority", () => {
       correlationId: "accepted-chat-authority",
     });
   }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "mints administration only from the stored explicit selection in %s",
+    (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      const ordinary = mint(acceptedMessage());
+      if (!ordinary.ok) throw new Error("Expected ordinary authority");
+      expect(ordinary.envelope.connectorScopes).toEqual([
+        "issue-tracker.read",
+        "issue-tracker.write",
+      ]);
+      expect(
+        decideGovernedJiraChatAction(
+          "set-app-monitoring",
+          deps,
+          chat.id,
+          ordinary.reference,
+          CHAT_AUTHORITY_TEST_NOW,
+          "admin-default-denied",
+        ).kind,
+      ).toBe("policy-denied");
+      store.updateChat(
+        chat.id,
+        { jiraAdministrationEnabled: true },
+        { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
+      );
+      const enabled = mint(acceptedMessage());
+      if (!enabled.ok) throw new Error("Expected explicit administration authority");
+      expect(enabled.envelope.connectorScopes).toEqual([
+        "issue-tracker.read",
+        "issue-tracker.write",
+        "issue-tracker.admin",
+      ]);
+      expect(
+        decideGovernedJiraChatAction(
+          "set-app-monitoring",
+          deps,
+          chat.id,
+          enabled.reference,
+          CHAT_AUTHORITY_TEST_NOW,
+          "admin-explicit",
+        ).kind,
+      ).toBe(mode === "autonomous-delivery" ? "allowed" : "review-required");
+      store.updateChat(chat.id, { jiraAdministrationEnabled: false });
+      expect(
+        resolveCurrentJiraChatAuthority(
+          deps,
+          chat.id,
+          enabled.reference,
+          CHAT_AUTHORITY_TEST_NOW,
+          "admin-withdrawn",
+        ).ok,
+      ).toBe(false);
+      expect(
+        decideGovernedJiraChatAction(
+          "set-app-monitoring",
+          deps,
+          chat.id,
+          enabled.reference,
+          CHAT_AUTHORITY_TEST_NOW,
+          "admin-withdrawn",
+        ).kind,
+      ).toBe("authority-denied");
+    },
+  );
 
   it("mints from the stored human turn and current binding with one exact deadline", () => {
     const result = mint(acceptedMessage());
@@ -555,6 +633,14 @@ describe("ordinary Chat composes the existing Atlassian policy", () => {
     },
   );
 
+  it("refuses an administration scope injected without the stored human selection", () => {
+    registerCurrentAuthority({
+      connectorScopes: ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
+    });
+    expect(resolve().ok).toBe(false);
+    expect(decide("set-app-monitoring").kind).toBe("authority-denied");
+  });
+
   it("never widens read-only authority in Full access", () => {
     store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
     registerCurrentAuthority({ connectorScopes: ["issue-tracker.read"] });
@@ -603,12 +689,12 @@ it("reconstructs Chat policy and reservation through the real Activity Log", () 
     expect(
       records
         .filter((line) => line.phase === "action-policy")
-        .map((line) => [line.actionType, line.outcome]),
+        .map((line) => [line.actionType, line.actionTypeDigest, line.outcome]),
     ).toEqual([
-      ["jira.issue", "review-required"],
-      ["jira.issue", "allowed"],
-      ["create-issue", "allowed"],
-      ["create-page", "policy-denied"],
+      ["jira-read", sha256Hex("jira.issue"), "review-required"],
+      ["jira-read", sha256Hex("jira.issue"), "allowed"],
+      ["jira-write", sha256Hex("create-issue"), "allowed"],
+      ["create-page", sha256Hex("create-page"), "policy-denied"],
     ]);
     expect(records.find((line) => line.outcome === "review-required")).toMatchObject({
       level: "info",
@@ -846,12 +932,14 @@ describe("ordinary Chat catalog read admission", () => {
     maxToolCalls = 3,
     primary: import("@oscharko-dev/keiko-activity-log").ServerLogSink = createBufferedServerLogSink(),
     withKnowledge = false,
+    adminTool = false,
   ): Promise<{
     binder: ReturnType<typeof createCatalogToolBinder>;
     budget: ReturnType<typeof createHarnessCatalogBudget>;
     counters: RunCounters;
     managed: Awaited<ReturnType<typeof createManagedProviderCatalog<JiraChatCatalogConsumer>>>;
     handlers: readonly { execute: ReturnType<typeof vi.fn> }[];
+    executeMutation: ReturnType<typeof vi.fn>;
   }> {
     const current = context();
     const counters: RunCounters = {
@@ -873,6 +961,9 @@ describe("ordinary Chat catalog read admission", () => {
       primary,
       diagnostics: { record: (): void => undefined },
     };
+    const executeMutation = vi.fn<
+      JiraManagedMutationExecutor<CatalogHandlerContext<JiraChatCatalogConsumer>>
+    >(() => Promise.reject(new TypeError("Administration must not execute in this read fixture")));
     const provider = createJiraProviderForCatalog<CatalogHandlerContext<JiraChatCatalogConsumer>>(
       () => {
         beforeConnection();
@@ -895,6 +986,8 @@ describe("ordinary Chat catalog read admission", () => {
           },
         };
       },
+      adminTool ? ["jira.set-app-monitoring"] : READ_FIXTURE_TOOLS,
+      executeMutation,
     );
     const managed = await createManagedProviderCatalog<JiraChatCatalogConsumer>({
       providers: withKnowledge
@@ -905,8 +998,10 @@ describe("ordinary Chat catalog read admission", () => {
       correlationId: current.correlationId,
       now: () => now,
       routes: withKnowledge
-        ? jiraChatCatalogRoutes([...JIRA_MANAGED_READ_TOOLS, ...KNOWLEDGE_CHAT_TOOLS])
-        : jiraChatReadCatalogRoutes(),
+        ? jiraChatCatalogRoutes([...READ_FIXTURE_TOOLS, ...KNOWLEDGE_CHAT_TOOLS])
+        : adminTool
+          ? jiraChatCatalogRoutes(["jira.set-app-monitoring"])
+          : jiraChatCatalogRoutes(READ_FIXTURE_TOOLS),
     });
     hosts.push(managed);
     const admission = createJiraChatCatalogAdmission({
@@ -941,7 +1036,7 @@ describe("ordinary Chat catalog read admission", () => {
         invocationRegistry: createCodingToolInvocationRegistry({ now: () => now }),
       },
     );
-    return { binder, budget, counters, managed, handlers };
+    return { binder, budget, counters, managed, handlers, executeMutation };
   }
 
   async function dispatch(
@@ -969,6 +1064,28 @@ describe("ordinary Chat catalog read admission", () => {
     if (result.kind === "settled") f.budget.acceptReceipt(result.receipt, descriptor);
     return result;
   }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "does not offer or execute administration with ordinary write scope in %s",
+    async (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      registerCurrentAuthority();
+      const f = await catalogFixture(3, createBufferedServerLogSink(), false, true);
+      expect(f.binder.offer().toolRefs).toEqual([]);
+      expect(
+        await dispatch(
+          f,
+          "admin-denied",
+          { expectedEnabled: false, enabled: true },
+          "keiko.jira.set.app.monitoring",
+        ),
+      ).not.toMatchObject({ result: { status: "completed" } });
+      expect(requests).toBe(0);
+      expect(notifications).toBe(0);
+      expect(f.handlers.every((handler) => handler.execute.mock.calls.length === 0)).toBe(true);
+      expect(f.executeMutation).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "reads through the SDK only after consent in %s",
@@ -1043,7 +1160,7 @@ describe("ordinary Chat catalog read admission", () => {
 
     // The Jira reads and the canonical Knowledge read catalog share this offer.
     expect(f.binder.offer().toolRefs).toHaveLength(
-      JIRA_MANAGED_READ_TOOLS.length + KNOWLEDGE_CHAT_TOOLS.length,
+      READ_FIXTURE_TOOLS.length + KNOWLEDGE_CHAT_TOOLS.length,
     );
     const result = await dispatch(f, "knowledge", {}, "keiko.knowledge.requirements");
 
@@ -1273,10 +1390,88 @@ describe("ordinary Chat catalog read admission", () => {
     now = start + 120_000;
     expect(guardOf(KNOWLEDGE_CHAT_TOOLS[0]).check()).toBe(true);
     expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(before);
-    expect(guardOf(JIRA_MANAGED_READ_TOOLS[0]).check()).toBe(true);
+    expect(guardOf(READ_FIXTURE_TOOLS[0]).check()).toBe(true);
     expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(
       now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
     );
+  });
+
+  it("refuses a violating write in its approval-free preflight and never dry-runs a read (#4321)", async () => {
+    const current = context();
+    const preflightWrite = vi.fn(() => Promise.resolve({ outcome: "rejected" }));
+    const admission = createJiraChatCatalogAdmission({
+      deps: { ...deps, atlassianActionApprovalRegistry: grants },
+      context: () => current,
+      now: () => now,
+      preflightWrite,
+    });
+    const action = (tool: JiraChatCatalogAction["tool"]): JiraChatCatalogAction => ({
+      actionId: `preflight-${tool}`,
+      idempotencyKey: `preflight-key-${tool}`,
+      tool,
+      argumentsDigest: "a".repeat(64),
+    });
+    const preflight = admission.approvalPort.preflight;
+    if (preflight === undefined) throw new Error("Expected an approval-free preflight");
+    await expect(preflight(action("jira.create"), current)).rejects.toMatchObject({
+      status: "failed",
+      reason: "provider-reported-error",
+      providerResult: {
+        outcome: "rejected",
+        operationBinding: jiraOperationBindingForTool("jira.create"),
+      },
+    });
+    await expect(preflight(action(READ_FIXTURE_TOOLS[0]), current)).resolves.toBeUndefined();
+    expect(preflightWrite).toHaveBeenCalledOnce();
+  });
+
+  it("hands the approval-free preflight the trace its write will receive (LIM27)", async () => {
+    const current = context();
+    const digest = "a".repeat(64);
+    const trace = {
+      labels: ["requirement"],
+      footer: "trace",
+      footerStart: "start",
+      footerEnd: "end",
+      replaceLabelPrefixes: [],
+    };
+    const prepared: PreparedJiraSource = {
+      operation: "jira.create",
+      argumentsDigest: digest,
+      sourceDigest: "b".repeat(64),
+      items: [{ ref: "single", item: {}, sourceDigest: "b".repeat(64), trace }],
+      itemRefs: ["single"],
+    };
+    const sourcePreparation: JiraChatSourcePreparation = {
+      prepareInvocation: () => Promise.resolve(undefined),
+      sourceFor: (actionId, argumentsDigest) =>
+        actionId === "traced" && argumentsDigest === digest ? prepared : undefined,
+      sourceDigestFor: () => undefined,
+      refusalFor: () => undefined,
+      current: () => true,
+    };
+    const preflightWrite = vi.fn(() => Promise.resolve(undefined));
+    const admission = createJiraChatCatalogAdmission({
+      deps: { ...deps, atlassianActionApprovalRegistry: grants },
+      context: () => current,
+      now: () => now,
+      sourcePreparation,
+      preflightWrite,
+    });
+    const preflight = admission.approvalPort.preflight;
+    if (preflight === undefined) throw new Error("Expected an approval-free preflight");
+    const write = (actionId: string): JiraChatCatalogAction => ({
+      actionId,
+      idempotencyKey: `key-${actionId}`,
+      tool: "jira.create",
+      argumentsDigest: digest,
+    });
+    await expect(preflight(write("traced"), current)).resolves.toBeUndefined();
+    await expect(preflight(write("untraced"), current)).resolves.toBeUndefined();
+    expect(preflightWrite.mock.calls).toEqual([
+      [write("traced"), current, trace],
+      [write("untraced"), current, undefined],
+    ]);
   });
 
   it("leaves a pending grant to expire", () => {
@@ -1536,6 +1731,54 @@ describe("ordinary Chat exact-action write approval admission", () => {
       expect(request().kind).toBe(mode === "autonomous-delivery" ? "allowed" : "review-required");
     },
   );
+
+  it("refuses admin approval without opt-in and invalidates it on scope withdrawal", () => {
+    grantRead();
+    const adminAction = { ...action, operation: "jira.create-screen-tab" as const };
+    const requestAdmin = (): ReturnType<typeof requestJiraChatWriteApproval> =>
+      requestJiraChatWriteApproval(
+        { ...deps, atlassianActionApprovalRegistry: approvals },
+        chat.id,
+        reference,
+        adminAction,
+        CHAT_AUTHORITY_TEST_NOW,
+        "admin-approval",
+      );
+    expect(requestAdmin()).toEqual({ kind: "denied", reason: "authority-denied" });
+    store.updateChat(
+      chat.id,
+      { jiraAdministrationEnabled: true },
+      { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
+    );
+    registerCurrentAuthority({
+      runId: "admin-approval-turn",
+      connectorScopes: ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
+    });
+    grantRead();
+    const requested = requestAdmin();
+    if (requested.kind !== "review-required") throw new Error("Expected admin review");
+    const entry = approvals.getChatWriteApproval(requested.approval.approvalId);
+    if (entry === undefined) throw new Error("Expected stored admin approval");
+    expect(
+      approvals.acceptChatWriteApproval(
+        entry.approval.approvalId,
+        entry.subject,
+        entry.authority,
+        adminAction,
+        "c".repeat(64),
+      ).ok,
+    ).toBe(true);
+    store.updateChat(chat.id, { jiraAdministrationEnabled: false });
+    expect(
+      isCurrentJiraChatWriteApproval(
+        { ...deps, atlassianActionApprovalRegistry: approvals },
+        entry,
+        CHAT_AUTHORITY_TEST_NOW,
+        "admin-withdrawn",
+      ),
+    ).toBe(false);
+    expect(requestAdmin()).toEqual({ kind: "denied", reason: "authority-denied" });
+  });
 
   it("reuses the exact pending, approved and claimed action without authorizing changed arguments", () => {
     grantRead();

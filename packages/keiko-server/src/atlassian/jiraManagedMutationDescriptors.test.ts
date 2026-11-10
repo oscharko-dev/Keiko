@@ -19,9 +19,12 @@ import {
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import { checkJiraDraft } from "@oscharko-dev/keiko-connectors";
-import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { jiraDraftStageDeclaration } from "./jiraDraftDescriptor.js";
+import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
 import { JIRA_REJECTED_GUIDANCE, jiraAttemptToolResult } from "./jiraMutationResult.js";
+
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
+const JIRA_DRAFT_STAGE_DECLARATION = jiraDraftStageDeclaration();
 
 const PROJECTION = "c".repeat(64) as CatalogDigest;
 

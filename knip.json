@@ -31,6 +31,8 @@
         "native/**/test-*.mjs",
         "docs/design-system/evidence/1300/browser/capture.mjs",
         "scripts/testing/jira-chat-lab/browser-disconnect.mjs",
+        "scripts/testing/jira-chat-lab/api-qualification-prepare.mjs",
+        "scripts/testing/jira-chat-lab/browser-limit-followup.mjs",
         "scripts/testing/jira-chat-lab/catalog-chat.mjs",
         "scripts/testing/jira-chat-lab/chat-faults.mjs",
         "scripts/testing/jira-chat-lab/mixed-chat.mjs",

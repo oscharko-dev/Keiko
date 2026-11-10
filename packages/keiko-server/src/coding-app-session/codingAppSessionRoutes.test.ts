@@ -4,7 +4,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CodingAppSessionChannelSnapshot } from "./channelContract.js";
+import {
+  codingAppSessionAcknowledgement,
+  type CodingAppSessionChannelSnapshot,
+} from "./channelContract.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import {
@@ -28,6 +31,7 @@ import {
   APP_SESSION_ACTIVE_COOKIE_COUNT,
   serializeSessionCookies,
 } from "./sessionCookie.js";
+import { CodingAppSessionDenialWindows, DENIAL_ALERT_THRESHOLD } from "./denialWindows.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -101,6 +105,8 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
 
   it("local-session without a composed channel acknowledges without issuing a cookie", () => {
     const result = handleCodingAppSessionLocalSession(ctx(), deps());
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual(codingAppSessionAcknowledgement());
     expect(result.headers).toBeUndefined();
   });
 
@@ -114,6 +120,10 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       expect(
         handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers,
       ).toBeUndefined();
+      expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel))).toMatchObject({
+        status: 200,
+        body: codingAppSessionAcknowledgement(),
+      });
       expect(channel.sessionCount()).toBe(0);
     },
   );
@@ -259,7 +269,11 @@ describe("app-session lifecycle lines (F65)", () => {
   } {
     const activityLog = createBufferedServerLogSink();
     return {
-      deps: { codingAppSessionChannel: channel, activityLog } as unknown as UiHandlerDeps,
+      deps: {
+        codingAppSessionChannel: channel,
+        activityLog,
+        codingAppSessionDenialWindows: new CodingAppSessionDenialWindows(),
+      } as unknown as UiHandlerDeps,
       events: activityLog.events,
     };
   }
@@ -381,9 +395,24 @@ describe("app-session lifecycle lines (F65)", () => {
         logDeps,
       );
       expect(result.status).toBe(200);
+      expect(result.body).toEqual(codingAppSessionAcknowledgement());
       expect(result.headers).toBeUndefined();
-      expect(events).toEqual([]);
-      expect(channel.ensureLocalSession(mint.cookieToken)).toEqual({ status: "unavailable" });
+      const reason = remaining === 0 ? "lifetime" : "lifetime-insufficient";
+      expect(events).toMatchObject([
+        {
+          op: "coding-app-session.local-session.refused",
+          correlationId: "repair-boundary",
+          extra: { reason, count: 1 },
+        },
+      ]);
+      expectActivityLogProof(
+        "coding-app-session.local-session.refused.reason",
+        formatActivityLogProofLine(events[0] ?? {}),
+      );
+      expect(channel.ensureLocalSession(mint.cookieToken)).toEqual({
+        status: "unavailable",
+        reason: remaining === 0 ? "session-unregistered" : reason,
+      });
     },
   );
 
@@ -456,6 +485,36 @@ describe("app-session lifecycle lines (F65)", () => {
     const { deps: logDeps, events } = logged(channel);
     handleCodingAppSessionLocalSession(ctx(), logDeps);
     expect(events).toEqual([]);
+  });
+
+  it("aggregates a flood of caller-controlled local-session denials without bearer material", () => {
+    const { channel } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+    const presented = [
+      undefined,
+      "attacker-private-cookie",
+      `${APP_SESSION_COOKIE_NAME}=sess_${"f".repeat(24)}.synthetic-foreign`,
+    ];
+    for (let index = 0; index < 1_000; index += 1)
+      expect(handleCodingAppSessionLocalSession(ctx(presented[index % 3]), logDeps).status).toBe(
+        200,
+      );
+    // One aggregate per minute, whatever the caller sends; no line per refused request.
+    expect(events).toMatchObject([
+      {
+        op: "coding-app-session.local-session.denied",
+        level: "warn",
+        extra: { reason: "authority-unavailable", count: DENIAL_ALERT_THRESHOLD },
+      },
+    ]);
+    expect(events).toHaveLength(1);
+    expectActivityLogProof(
+      "coding-app-session.local-session.denied.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    const persisted = JSON.stringify(events);
+    for (const value of ["sess_", "attacker-private-cookie", "synthetic-foreign"])
+      expect(persisted).not.toContain(value);
   });
 
   it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {
@@ -568,5 +627,60 @@ it("rotation cookies retain the original remaining absolute lifetime", () => {
   const active = projections.filter((projection) => !projection.includes("Max-Age=0"));
   expect(active).toHaveLength(APP_SESSION_ACTIVE_COOKIE_COUNT);
   for (const cookie of active) expect(/(?:^|; )Max-Age=(\d+)/u.exec(cookie)?.[1]).toBe("50");
-  expect(events[0]?.extra).toMatchObject({ cookieMaxAgeSeconds: 50 });
+  expect(events[0]?.extra).toMatchObject({ cookieMaxAgeSeconds: 50, activeOperationCount: 0 });
+});
+
+it("defers rotation during an active turn even when its response is discarded", () => {
+  let now = 0;
+  const activityLog = createBufferedServerLogSink();
+  const registry = createSessionRegistry({ now: () => now, activityLog });
+  const mint = registry.mint("synthetic");
+  const release = registry.beginOperation(mint.cookieToken);
+  const channel = createCodingAppSessionChannel({ registry });
+  const result = handleCodingAppSessionRotate(
+    {
+      ...ctx(`${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`),
+      correlationId: "rotation-held-audit",
+    },
+    { ...deps(channel), activityLog },
+  );
+  expect(result).toEqual({ status: 200, body: { status: "deferred" } });
+  expect(activityLog.events).toMatchObject([
+    {
+      op: "coding-app-session.rotation.state",
+      correlationId: "rotation-held-audit",
+      extra: { activeOperationCount: 1, reason: "active-operation" },
+    },
+  ]);
+  now = 40 * 60_000;
+  expect(registry.inspect(mint.cookieToken)).toBeDefined();
+  release?.();
+  expect(registry.inspectOperationCount(mint.cookieToken)).toBe(0);
+  expect(registry.inspect(mint.cookieToken)).toBeDefined();
+});
+
+it("records no caller-controlled repair individually, even while a session is registered", () => {
+  const activityLog = createBufferedServerLogSink();
+  const registry = createSessionRegistry({ activityLog });
+  registry.mint("synthetic");
+  const channel = createCodingAppSessionChannel({ registry });
+  const handlerDeps = {
+    ...deps(channel),
+    activityLog,
+    codingAppSessionDenialWindows: new CodingAppSessionDenialWindows(),
+  };
+  for (const correlationId of ["repair-observation-one", "repair-observation-two"]) {
+    expect(
+      handleCodingAppSessionLocalSession({ ...ctx(), correlationId }, handlerDeps).status,
+    ).toBe(200);
+  }
+  expect(activityLog.events).toEqual([]);
+});
+
+it("records an absent channel only in the denial aggregate", () => {
+  const activityLog = createBufferedServerLogSink();
+  expect(
+    handleCodingAppSessionLocalSession(ctx(), { ...deps(undefined), activityLog }).status,
+  ).toBe(200);
+  expect(activityLog.events).toEqual([]);
 });

@@ -15,14 +15,19 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   describeCatalogSchemaMismatch,
+  gatewayToolDefinitions,
   validateToolArguments,
 } from "@oscharko-dev/keiko-tool-catalog";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps } from "../deps.js";
 import { createJiraChatCatalogRuntime } from "./jiraChatCatalogRuntime.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL } from "../requirementsToolName.js";
 
-// Preserve the previously admitted catalog exactly; only the two scoped Knowledge additions join it.
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
+
+// Explicitly selecting these operations preserves their typed schemas alongside local discovery.
 const ORIGINAL_TOOL_ALIASES = [
   "jira_projects",
   "jira_issue_types",
@@ -130,15 +135,23 @@ const runtime = createJiraChatCatalogRuntime(deps, {
 const descriptor = JIRA_MUTATION_DECLARATIONS.find(
   (entry) => entry.name === "jira.draft",
 )?.descriptor;
+let selectedDefinitions: readonly ToolDefinition[] = [];
 
 function parameters(alias: string): CatalogJsonObject {
-  const schema = runtime.toolDefinitions().find((tool) => tool.name === alias)?.parameters;
+  const schema = selectedDefinitions.find((tool) => tool.name === alias)?.parameters;
   if (schema === undefined) throw new Error("Missing Jira tool definition");
   return schema as CatalogJsonObject;
 }
 
 beforeAll(async () => {
-  await runtime.get(); // Admit the same declarations through the real managed MCP SDK host.
+  const original: ReadonlySet<string> = new Set(ORIGINAL_TOOL_ALIASES);
+  // Select from discovery metadata: only the selected declarations compile, as in a real Chat.
+  const selected = await runtime.select(
+    jiraOperationDefinitions()
+      .filter((definition) => original.has(definition.tool.replaceAll(/[.-]/gu, "_")))
+      .map((definition) => definition.identity),
+  );
+  selectedDefinitions = gatewayToolDefinitions(selected.catalog, selected.projection.profile);
 });
 afterAll(async () => {
   await runtime.close();
@@ -213,11 +226,8 @@ describe("the Jira draft schema actually offered to Chat", () => {
     );
     addedAliases.push("jira_draft_batch");
     expect(
-      runtime
-        .toolDefinitions()
-        .map((tool) => tool.name)
-        .sort((left, right) => left.localeCompare(right)),
-    ).toEqual([...ORIGINAL_TOOL_ALIASES, ...addedAliases].sort());
+      selectedDefinitions.map((tool) => tool.name).sort((left, right) => left.localeCompare(right)),
+    ).toEqual([...ORIGINAL_TOOL_ALIASES, ...addedAliases, "jira_describe", "jira_discover"].sort());
     expect(parameters("jira_draft")).toEqual(descriptor?.inputSchema);
     expect(parameters("jira_draft").oneOf).toHaveLength(2);
     expect(parameters("jira_create")).toMatchObject({

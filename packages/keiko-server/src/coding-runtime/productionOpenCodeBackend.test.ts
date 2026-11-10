@@ -46,6 +46,8 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import {
   devLaneCheckoutRoot,
   discoverDevLaneOpenCode,
@@ -620,6 +622,75 @@ describe("production OpenCode backend composition", () => {
       }
     },
   );
+
+  it("composes Jira selection with this run's observed context and live prompt budget", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-jira-model-budget-")));
+    try {
+      const binding = {
+        podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        authenticationGeneration: 3,
+        verificationRevision: 1,
+      };
+      const connections = vi.fn<CodingJiraPods["connections"]>(() => ({
+        generation: (): AbortSignal => new AbortController().signal,
+        serve: (): Promise<Response> => Promise.resolve(new Response(null, { status: 403 })),
+      }));
+      const pods: CodingJiraPods = {
+        currentInputContext: () => undefined,
+        resolve: () => ({ ok: true, binding }),
+        recordBind: () => undefined,
+        connections,
+        attach: () => undefined,
+        close: () => Promise.resolve(),
+        closeRun: () => Promise.resolve(),
+      };
+      const input = runInput(root);
+      const contextUsage = createCodingRuntimeContextUsageRegistry();
+      const promptFits = vi.fn<(tokens: number) => boolean>(() => true);
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      const run = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        codingJiraPods: pods,
+        mcpRelay: createMcpCredentialRelay(),
+      }).createRun({
+        ...input,
+        contextUsage,
+        request: { ...input.request, jiraPod: binding },
+        jiraAuthority: {
+          runId: input.request.runId,
+          currentScopes: () => ["issue-tracker.read"],
+          promptFits,
+        },
+      });
+      const fits = connections.mock.calls[0]?.[2]?.catalogFits;
+      const geometry = compose.mock.calls[0]?.[0].contextGeometry;
+      if (fits === undefined || geometry === undefined)
+        throw new TypeError("Missing composed model budget");
+      const tools = [
+        { name: "jira.issue", description: "Read issue", inputSchema: { type: "object" } },
+      ];
+      const result = { outcome: "succeeded", items: [] };
+      expect(fits(tools, result)).toBeUndefined();
+      const sample = {
+        sampleId: "observed",
+        capacityTokens: geometry.contextWindowTokens,
+        reservedOutputTokens: geometry.maxOutputTokens,
+        inputTokens: 1000,
+        updatedAt: "2026-11-08T05:00:00.000Z",
+      };
+      contextUsage.recordProviderSample("foreign-run", sample);
+      expect(fits(tools, result)).toBeUndefined();
+      contextUsage.recordProviderSample(input.request.runId, sample);
+      expect(fits(tools, result)).toBe(true);
+      promptFits.mockReturnValue(false);
+      expect(fits(tools, result)).toBe(false);
+      expect(promptFits.mock.calls.at(-1)?.[0]).toBeGreaterThan(sample.inputTokens);
+      await run.dispose?.();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   // #3903: the native composition is handed the repository items admission, bound to the host's
   // secure read and to this run's own workspace identity; the mapped profiles are handed none.

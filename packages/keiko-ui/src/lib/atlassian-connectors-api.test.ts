@@ -269,7 +269,7 @@ it("observes a Chat write approval with GET and posts only its concrete decision
   expect(await getJiraChatWriteApproval(approval.approvalId)).toEqual(approval);
   expect(getCalls).toHaveLength(1);
   expect(getCalls[0]).toMatchObject({
-    url: "/api/atlassian-connectors/action-approvals/approval-1/chat-write-approval",
+    url: "/api/atlassian-connectors/chat-write-approval/approval-1",
     method: "GET",
     body: undefined,
   });
@@ -279,7 +279,7 @@ it("observes a Chat write approval with GET and posts only its concrete decision
   });
   expect(postCalls).toHaveLength(1);
   expect(postCalls[0]).toMatchObject({
-    url: "/api/atlassian-connectors/action-approvals/approval-1/chat-write-approval",
+    url: "/api/atlassian-connectors/chat-write-approval/approval-1",
     method: "POST",
     headers: { "X-Keiko-CSRF": "1" },
   });

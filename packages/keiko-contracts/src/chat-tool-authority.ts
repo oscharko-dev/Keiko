@@ -1,6 +1,7 @@
 import {
   JIRA_MUTATION_OPERATIONS,
   isJiraAttachmentPreview,
+  isJiraAvatarUploadOperation,
   isJiraDraftRef,
   type JiraAttachmentPreview,
   type JiraMutationOperation,
@@ -66,7 +67,11 @@ export interface ChatToolAuthorityEnvelope {
   readonly actionClasses:
     readonly ["connector-access"] | readonly ["connector-access", "network-egress"];
   readonly connectorScopes: readonly (
-    "issue-tracker.read" | "issue-tracker.write" | "mcp.tools" | "knowledge.read"
+    | "issue-tracker.read"
+    | "issue-tracker.write"
+    | "issue-tracker.admin"
+    | "mcp.tools"
+    | "knowledge.read"
   )[];
   readonly budget: CodingWorkbenchBudget & { readonly maxPatchBytes: 0 };
   readonly expiresAt: string;
@@ -97,7 +102,11 @@ const ENVELOPE_KEYS = [
   "approvalProofDigest",
 ] as const;
 const BUDGET_KEYS = ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"] as const;
-const CONNECTOR_SCOPES = new Set(["issue-tracker.read", "issue-tracker.write"]);
+const CONNECTOR_SCOPES = new Set([
+  "issue-tracker.read",
+  "issue-tracker.write",
+  "issue-tracker.admin",
+]);
 
 function validateKeys(
   value: Record<string, unknown>,
@@ -182,7 +191,7 @@ function validateCapabilities(value: Record<string, unknown>, errors: string[]):
   if (
     !Array.isArray(scopes) ||
     scopes.length < 1 ||
-    scopes.length > 2 ||
+    scopes.length > allowed.size ||
     !scopes.every((scope: unknown) => typeof scope === "string" && allowed.has(scope)) ||
     new Set(scopes).size !== scopes.length
   ) {
@@ -456,6 +465,18 @@ function validateWriteApprovalSubject(value: Record<string, unknown>, errors: st
       errors.push("chatWriteApproval.operation is invalid");
   }
 }
+function uploadWriteApproval(value: Record<string, unknown>): boolean {
+  return (
+    value.operation === "jira.upload-email-template-pack" ||
+    (typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation))
+  );
+}
+function validateWriteApprovalAttachment(value: Record<string, unknown>, errors: string[]): void {
+  if (!isJiraAttachmentPreview(value.attachment))
+    errors.push("chatWriteApproval.attachment is invalid");
+  if (value.operation !== "jira.attach" && !uploadWriteApproval(value))
+    errors.push("chatWriteApproval.operation is invalid");
+}
 function validateWriteApprovalKeys(
   value: Record<string, unknown>,
   mcp: boolean,
@@ -467,6 +488,8 @@ function validateWriteApprovalKeys(
   }
   const excluded = Object.hasOwn(value, "excludedItemRefs");
   const attached = Object.hasOwn(value, "attachment");
+  if (!attached && uploadWriteApproval(value))
+    errors.push("chatWriteApproval.attachment is required");
   validateKeys(
     value,
     [
@@ -481,11 +504,7 @@ function validateWriteApprovalKeys(
     validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
     if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
   }
-  if (attached) {
-    if (!isJiraAttachmentPreview(value.attachment))
-      errors.push("chatWriteApproval.attachment is invalid");
-    if (value.operation !== "jira.attach") errors.push("chatWriteApproval.operation is invalid");
-  }
+  if (attached) validateWriteApprovalAttachment(value, errors);
 }
 export function validateChatToolWriteApprovalView(
   value: unknown,

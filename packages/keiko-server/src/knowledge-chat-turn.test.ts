@@ -88,7 +88,15 @@ function configure(
                   configurationFingerprint: toolCallingConfigurationFingerprint(provider),
                 },
               }
-            : {}),
+            : {
+                // An observed probe result: this model cannot call tools, not merely unchecked.
+                toolCallingVerification: {
+                  status: "unsupported",
+                  checkedAt: new Date().toISOString(),
+                  probe: "gateway-tool-calling-v1",
+                  configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+                },
+              }),
         },
       ],
     }),

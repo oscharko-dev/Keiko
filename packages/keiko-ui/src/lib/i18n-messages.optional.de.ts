@@ -2,6 +2,925 @@ import { DE_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
   ...DE_AUTONOMY_MODE_LABELS,
+  "atlassianConnectors.action.unlock-user-anonymization":
+    "Entsperren der Jira-Anonymisierung anfordern",
+  "chat.jira.accountWrite.executingNode": "Beobachteter Eigentümerknoten des Auftrags",
+  "chat.jira.accountWrite.unlockScope":
+    "Entsperren wurde angefordert. Die Bestätigung des Herunterfahrens ist eine menschliche Auskunft, kein nativer Nachweis eines gestoppten Prozesses. Entsperren und anschließende Anonymisierungsfolgen bleiben unbestätigt; nicht automatisch wiederholen.",
+  "chat.jira.accountWrite.taskReviewAvailable":
+    "Gebundener nativer Prüfstand des Anonymisierungsauftrags verfügbar",
+  "chat.jira.accountWrite.taskReviewUnavailable":
+    "Vollständiger gebundener Prüfstand des Anonymisierungsauftrags nicht verfügbar",
+  "chat.jira.accountWrite.taskOwnerNotShutdown":
+    "Ein beobachteter Auftragseigentümer oder unterbrochener Status beweist weder einen heruntergefahrenen Knoten noch einen gestoppten Worker.",
+  "atlassianConnectors.action.upload-temporary-avatar": "Temporären Jira-Avatar hochladen",
+  "atlassianConnectors.action.crop-temporary-avatar": "Temporären Jira-Avatar zuschneiden",
+  "atlassianConnectors.action.upload-issue-type-avatar": "Jira-Vorgangstyp-Avatar hochladen",
+  "atlassianConnectors.action.create-issue-type-avatar": "Jira-Vorgangstyp-Avatar erstellen",
+  "atlassianConnectors.action.upload-project-avatar": "Jira-Projektavatar hochladen",
+  "atlassianConnectors.action.create-project-avatar": "Jira-Projektavatar erstellen",
+  "atlassianConnectors.action.set-project-avatar": "Jira-Projektavatar auswählen",
+  "atlassianConnectors.action.delete-project-avatar": "Jira-Projektavatar löschen",
+  "atlassianConnectors.action.upload-owned-avatar": "Zugeordneten Jira-Avatar hochladen",
+  "atlassianConnectors.action.create-owned-avatar": "Zugeordneten Jira-Avatar erstellen",
+  "atlassianConnectors.action.delete-owned-avatar": "Zugeordneten Jira-Avatar löschen",
+  "atlassianConnectors.action.upload-user-avatar": "Jira-Benutzeravatar hochladen",
+  "atlassianConnectors.action.create-user-avatar": "Jira-Benutzeravatar erstellen",
+  "atlassianConnectors.action.set-user-avatar": "Jira-Benutzeravatar auswählen",
+  "atlassianConnectors.action.delete-user-avatar": "Jira-Benutzeravatar löschen",
+  "atlassianConnectors.action.create-user": "Jira-Benutzer erstellen",
+  "atlassianConnectors.action.update-user": "Jira-Benutzer aktualisieren",
+  "atlassianConnectors.action.delete-user": "Jira-Benutzer löschen",
+  "atlassianConnectors.action.invalidate-user-session":
+    "Jira-Benutzersitzungen zur Aufhebung anfordern",
+  "atlassianConnectors.action.schedule-user-anonymization": "Jira-Benutzeranonymisierung einplanen",
+  "atlassianConnectors.action.rerun-user-anonymization": "Jira-Anonymisierung erneut anfordern",
+  "atlassianConnectors.action.archive-issues": "Ausgewählte Jira-Vorgänge archivieren",
+  "atlassianConnectors.action.delete-issue": "Jira-Vorgang löschen",
+  "atlassianConnectors.action.archive-issue": "Jira-Vorgang archivieren",
+  "atlassianConnectors.action.restore-issue": "Jira-Vorgang wiederherstellen",
+  "atlassianConnectors.action.move-subtask": "Jira-Unteraufgaben umsortieren",
+  "atlassianConnectors.action.create-issues": "Jira-Vorgänge gemeinsam erstellen",
+  "atlassianConnectors.action.create-reciprocal-remote-link":
+    "Gegenseitige entfernte Jira-Verknüpfung anfordern",
+  "atlassianConnectors.action.delete-project": "Jira-Projekt löschen",
+  "atlassianConnectors.action.archive-project": "Jira-Projekt archivieren",
+  "atlassianConnectors.action.restore-project": "Jira-Projekt wiederherstellen",
+  "atlassianConnectors.action.update-project-type": "Jira-Projekttyp ändern",
+  "atlassianConnectors.action.set-project-permission-scheme":
+    "Jira-Projektberechtigungsschema zuweisen",
+  "atlassianConnectors.action.set-project-priority-scheme": "Jira-Projektprioritätsschema zuweisen",
+  "atlassianConnectors.action.remove-project-priority-scheme":
+    "Jira-Projektprioritätsschema entfernen",
+  "atlassianConnectors.action.update-myself": "Verbundenes Jira-Profil aktualisieren",
+  "atlassianConnectors.action.update-my-password": "Passwort des verbundenen Jira-Benutzers ändern",
+  "atlassianConnectors.action.update-user-password": "Jira-Benutzerpasswort ändern",
+  "atlassianConnectors.action.login": "Private Jira-Sitzung herstellen",
+  "atlassianConnectors.action.logout": "Private Jira-Sitzung beenden",
+  "atlassianConnectors.action.release-websudo": "Erhöhte Jira-Sitzung freigeben",
+  "atlassianConnectors.action.jira.validate-create-user-password":
+    "Passwortrichtlinie für neuen Benutzer prüfen",
+  "atlassianConnectors.action.jira.validate-update-user-password":
+    "Passwortrichtlinie für Änderung prüfen",
+  "atlassianConnectors.action.jira.validate-license": "Jira-Lizenz privat prüfen",
+  "chat.jira.resourceWrite.requestedPresence": "Angeforderter Ressourcenbestand",
+  "chat.jira.resourceWrite.requestedArchive": "Angeforderter Archivzustand",
+  "chat.jira.resourceWrite.requestedAssociation": "Angeforderte Schemazuweisung",
+  "chat.jira.resourceWrite.previousScheme": "Zuvor beobachtete Schema-ID",
+  "chat.jira.resourceWrite.nativeIssueId": "Native Vorgangs-ID",
+  "chat.jira.resourceWrite.reviewedSubtask": "Geprüfte Unteraufgabenreihenfolge",
+  "chat.jira.resourceWrite.failedElement": "Native Nummer des fehlgeschlagenen Elements",
+  "chat.jira.resourceWrite.failureStatus": "Nativer HTTP-Fehlerstatus",
+  "chat.jira.resourceWrite.applicationLink": "ID der konfigurierten Anwendungsverknüpfung",
+  "chat.jira.resourceWrite.destinationDigest": "Digest des konfigurierten Ziels",
+  "chat.jira.resourceWrite.selectedRemoteIssue":
+    "Ausgewählte entfernte Vorgangs-ID (nicht unabhängig beobachtet)",
+  "chat.jira.resourceWrite.requestedCount": "Angeforderte Vorgangsanzahl",
+  "chat.jira.resourceWrite.originalPosition": "Beobachtete ursprüngliche Position",
+  "chat.jira.resourceWrite.currentPosition": "Beobachtete aktuelle Position",
+  "chat.jira.resourceWrite.createdUnknown":
+    "Neue Vorgangsidentitäten wurden nicht zurückgegeben. IDs oder Zuordnungen zu Eingabezeilen werden nicht abgeleitet.",
+  "chat.jira.resourceWrite.bulkScope":
+    "Ein nativer Sammelaufruf wurde angefordert. Zurückgegebene Vorgangs-IDs und native Teilfehler bleiben ohne Erfolgszuordnung zu Eingabezeilen erhalten. Vollständige Erstellung und Folgeeffekte bleiben unbestätigt; den Sammelaufruf nicht wiederholen.",
+  "chat.jira.resourceWrite.delegationScope":
+    "Jira wurde über die frisch gebundene konfigurierte Anwendungsverknüpfung zu einer delegierten gegenseitigen Verknüpfung aufgefordert. Entfernter Akteur und Vorgang sind nicht unabhängig beobachtet; lokale und entfernte Folgen können teilweise eingetreten sein.",
+  "chat.jira.resourceWrite.subtaskScope":
+    "Diese Aktion sortiert bestehende Unteraufgaben und ändert nicht deren Elternvorgang. Native Positionen und die geprüfte Menge beweisen nicht sämtliche Reihenfolgeeffekte.",
+  "chat.jira.resourceWrite.projectScope":
+    "Folgen für Projekt, Vorgänge, Berechtigungen und Schemata bleiben unbestätigt. Eine fehlende Ressource oder sichtbare Teilmenge beweist keine vollständige Löschung oder Migration. Wiederherstellung startet keinen Reindex automatisch.",
+  "chat.jira.resourceWrite.issueScope":
+    "Archivierungs-, Wiederherstellungs- und Löschfolgen bleiben unbestätigt. Fehlende Vorgänge und sichtbare Suchergebnisse beweisen weder vollständige Folgen noch Abwesenheit.",
+  "chat.jira.accountWrite.avatarType": "Avatar-Eigentümertyp",
+  "chat.jira.accountWrite.avatarId": "Beobachtete Avatar-ID",
+  "chat.jira.accountWrite.uploadDigest": "Geprüfter Upload-Digest",
+  "chat.jira.accountWrite.uploadBytes": "Geprüfte Upload-Bytes",
+  "chat.jira.accountWrite.newOwner": "Beobachteter Schlüssel des neuen Eigentümers",
+  "chat.jira.accountWrite.requestedActive": "Angeforderter Aktivzustand des Kontos",
+  "chat.jira.accountWrite.observedSelection": "Unabhängig beobachtete Avatarauswahl",
+  "chat.jira.accountWrite.requestedSelection": "Angeforderte Avatarauswahl",
+  "chat.jira.accountWrite.temporaryRequested": "Temporärer Avatarersatz angefordert",
+  "chat.jira.accountWrite.ackNeedsCrop": "Native Bestätigung: Zuschnitt erforderlich",
+  "chat.jira.accountWrite.cropX": "Bestätigter X-Versatz des Zuschnitts",
+  "chat.jira.accountWrite.cropY": "Bestätigter Y-Versatz des Zuschnitts",
+  "chat.jira.accountWrite.cropWidth": "Bestätigte Zuschnittbreite",
+  "chat.jira.accountWrite.avatarSelectionScope":
+    "Bestätigung betrifft nur die unabhängig beobachtete Avatarauswahl dieses gebundenen Eigentümers, nicht Bildbytes oder jede sichtbare Verwendung.",
+  "chat.jira.accountWrite.temporaryScope":
+    "Temporäre Upload-/Zuschnittmetadaten sind eine Empfangsbestätigung, kein Nachweis eines gespeicherten Avatars, Bildinhalts oder einer Auswahl. Bilder und Sitzungsdaten werden nicht angezeigt.",
+  "chat.jira.accountWrite.avatarConsequences":
+    "Avatarerstellung oder -löschung bleibt hinsichtlich aller Bild- und Zuordnungsfolgen unbestätigt. Eine zurückgegebene ID bleibt ohne abgeleitete Auswahl oder Bildinhalte erhalten.",
+  "chat.jira.accountWrite.identityConsequences":
+    "Nur eine exakte Änderung ausschließlich des Anzeigenamens kann Metadaten bestätigen. Kontozugriff, Verzeichnisvorgaben, erzeugte Zugangsdaten und Löschfolgen bleiben unbestätigt.",
+  "chat.jira.accountWrite.anonymizationScope":
+    "Anonymisierung wurde angefordert, nicht als abgeschlossen bewiesen. Der neue Eigentümer wurde separat beobachtet; globale Verweise oder ein abgeschlossener Worker werden nicht abgeleitet.",
+  "chat.jira.accountWrite.sessionInvalidationScope":
+    "Sitzungsaufhebung wurde angefordert; dieses Ergebnis beweist nicht, dass alle Sitzungen beendet sind.",
+  "chat.jira.accountWrite.createdIdentityUnknown":
+    "Die Empfangsbestätigung enthielt keine neue Identität. Namensbasierte Wiederherstellung oder erneute Erstellung werden nicht angeboten.",
+  "chat.jira.accountWrite.privateValuesOmitted":
+    "Passwörter, Lizenzwerte und Sitzungscookies sind aus diesem Ergebnis und seiner gespeicherten Karte ausgeschlossen.",
+  "chat.jira.accountWrite.profileScope":
+    "Bestätigung betrifft den unabhängig beobachteten Anzeigenamen bei unveränderter Kontoidentität und unverändertem Aktivzustand.",
+  "chat.jira.accountWrite.privateEffectScope":
+    "Passwortänderungen, Abmeldung und Freigabe erhöhter Rechte bleiben nach Empfangsbestätigung unbestätigt. Eine Garantie über Zugangsdaten oder beendete Sitzungen wird nicht abgeleitet.",
+  "chat.jira.accountWrite.sessionObserved":
+    "Der private Sitzungsakteur wurde unabhängig mit dieser Sitzung beobachtet. Cookies oder wiederverwendbare Zugangsdaten werden nicht angezeigt.",
+  "chat.jira.accountWrite.sessionUnconfirmed":
+    "Eine unabhängig gebundene private Sitzung ist für dieses Ergebnis nicht bestätigt.",
+  "chat.jira.accountWrite.passwordValidationScope":
+    "Nur Beobachtung der nativen Passwortrichtlinie: Benutzer und Passwort wurden nicht geändert; Gültigkeit des alten Passworts oder Kontoverfügbarkeit wurden nicht festgestellt.",
+  "chat.jira.accountWrite.licenseValidationScope":
+    "Nur Beobachtung der nativen Lizenzprüfung: Keine Lizenz wurde aktiviert und kein Lizenzwert wird angezeigt.",
+  "chat.jira.accountWrite.validationAccepted": "Native Validierung akzeptiert",
+  "chat.jira.accountWrite.violationCount": "Anzahl nativer Validierungsverstöße",
+  "chat.jira.humanInput.ownerShutdownConfirmation":
+    "Ich habe den Jira-Knoten {node} heruntergefahren und überprüft, dass sein Anonymisierungsprozess beendet ist.",
+  "chat.jira.humanInput.attestationPrivate":
+    "Deine Bestätigung gilt nur für diesen geprüften Auftrag und Knoten. Keiko erfasst sie als menschliche Auskunft; Jira führt die native Entsperrung aus.",
+  "chat.jira.humanInput.ownerUnavailable":
+    "Der geprüfte ausführende Knoten ist nicht verfügbar. Aktualisiere den Auftrag in Jira vor einer neuen Entsperranfrage.",
+  "chat.jira.humanInput.title": "Geschützte Jira-Eingabe",
+  "chat.jira.humanInput.review.server": "Verbundener Jira-Server",
+  "chat.jira.humanInput.review.purpose": "Zweck dieser Eingabe",
+  "chat.jira.humanInput.review.actorUsername": "Verbundener Benutzername",
+  "chat.jira.humanInput.review.actorKey": "Verbundener Benutzerschlüssel",
+  "chat.jira.humanInput.review.target": "Ziel",
+  "chat.jira.humanInput.review.targetUsername": "Geprüfter Zielbenutzername",
+  "chat.jira.humanInput.review.targetKey": "Geprüfter Zielbenutzerschlüssel",
+  "chat.jira.humanInput.review.proposedUsername":
+    "Vorgeschlagener Benutzername (kein beobachtetes Konto)",
+  "chat.jira.humanInput.review.executingNode": "Beobachteter ausführender Knoten",
+  "chat.jira.humanInput.review.instance": "Verbundene Jira-Instanz",
+  "chat.jira.humanInput.review.profile":
+    "Die Profiländerung des verbundenen Benutzers mit dessen aktuellem Passwort bestätigen.",
+  "chat.jira.humanInput.review.ownPassword": "Das Passwort des verbundenen Benutzers ändern.",
+  "chat.jira.humanInput.review.userPassword":
+    "Ein neues Passwort für den unten angezeigten geprüften Zielbenutzer setzen.",
+  "chat.jira.humanInput.review.createValidation":
+    "Ein vorgeschlagenes Passwort gegen Jiras Erstellungsrichtlinie prüfen; es wird kein Konto angelegt.",
+  "chat.jira.humanInput.review.updateValidation":
+    "Jiras Passwortänderungsrichtlinie für das geprüfte Ziel prüfen; kein Passwort wird geändert.",
+  "chat.jira.humanInput.review.licenseValidation":
+    "Eine Lizenz beim verbundenen Jira-Server prüfen; keine Lizenz wird aktiviert.",
+  "chat.jira.humanInput.review.login":
+    "Eine private Jira-Sitzung für den verbundenen Benutzer erstellen.",
+  "chat.jira.humanInput.review.unlock":
+    "Die menschliche Auskunft zum Herunterfahren für den beobachteten Anonymisierungsauftrag und Knoten geben.",
+  "chat.jira.humanInput.review.unavailable":
+    "Verbundener Server und Ziel konnten nicht geprüft werden. Aktualisiere vor der Eingabe geschützter Werte.",
+  "chat.jira.humanInput.password": "Passwort",
+  "chat.jira.humanInput.currentPassword": "Aktuelles Passwort",
+  "chat.jira.humanInput.newPassword": "Neues Passwort",
+  "chat.jira.humanInput.oldPassword": "Bisheriges Passwort",
+  "chat.jira.humanInput.license": "Lizenzschlüssel",
+  "chat.jira.humanInput.waiting": "Diese Jira-Aktion benötigt deine Eingabe.",
+  "chat.jira.humanInput.ready": "Deine Eingabe ist verschlüsselt für diese Aktion hinterlegt.",
+  "chat.jira.humanInput.consumed":
+    "Deine Eingabe wurde einmal verwendet. Das Aktionsergebnis steht in der Ergebniskarte.",
+  "chat.jira.humanInput.cancelled": "Du hast diese Eingabe abgebrochen.",
+  "chat.jira.humanInput.expired":
+    "Das Eingabefenster ist abgelaufen. Aktualisiere das Aktionsergebnis, bevor du über das weitere Vorgehen entscheidest.",
+  "chat.jira.humanInput.private":
+    "Nur Jira erhält diese Werte. Sie erscheinen weder beim Modell noch im Chat oder in gespeicherten Entwürfen. Die bestehenden Aktionsberechtigungen gelten weiterhin.",
+  "chat.jira.humanInput.failed":
+    "Der Eingabestatus konnte nicht bestätigt werden. Aktualisiere vor einer erneuten Eingabe; die Übermittlung wird nicht automatisch wiederholt.",
+  "chat.jira.humanInput.fields": "Benötigte geschützte Felder",
+  "chat.jira.humanInput.optional": "Optional",
+  "chat.jira.humanInput.required": "Erforderlich",
+  "chat.jira.humanInput.submit": "Geschützt übermitteln",
+  "chat.jira.humanInput.cancel": "Eingabe abbrechen",
+  "chat.jira.humanInput.refresh": "Eingabestatus aktualisieren",
+  "chat.jira.jobs.noPriorTask":
+    "Jira meldet keinen früheren Reindex-Auftrag für die Abfrage des aktuellen oder letzten Auftrags. Auftrags-ID, Fortschritt oder Abschluss werden nicht abgeleitet.",
+  "atlassianConnectors.action.create-group": "Jira-Gruppe erstellen",
+  "atlassianConnectors.action.delete-group": "Jira-Gruppe löschen",
+  "atlassianConnectors.action.add-group-user": "Jira-Gruppenmitglied hinzufügen",
+  "atlassianConnectors.action.remove-group-user": "Jira-Gruppenmitglied entfernen",
+  "atlassianConnectors.action.pin-comment": "Jira-Kommentar anheften",
+  "atlassianConnectors.action.notify-issue": "Jira-Vorgangsbenachrichtigung anfordern",
+  "atlassianConnectors.action.request-cluster-index-snapshot":
+    "Jira-Knotenindex-Snapshot anfordern",
+  "atlassianConnectors.action.delete-cluster-node": "Jira-Clusterknoten löschen",
+  "atlassianConnectors.action.mark-cluster-node-offline": "Jira-Clusterknoten offline setzen",
+  "atlassianConnectors.action.approve-cluster-upgrade": "Jira-Clusterupgrade bestätigen",
+  "atlassianConnectors.action.cancel-cluster-upgrade": "Jira-Clusterupgrade abbrechen",
+  "atlassianConnectors.action.retry-cluster-upgrade": "Jira-Clusterupgrade erneut anfordern",
+  "atlassianConnectors.action.start-cluster-upgrade": "Jira-Clusterupgrade starten",
+  "atlassianConnectors.action.create-index-snapshot": "Jira-Index-Snapshot anfordern",
+  "atlassianConnectors.action.start-reindex": "Jira-Neuindexierung anfordern",
+  "atlassianConnectors.action.reindex-issues": "Jira-Vorgangsindexierung anfordern",
+  "atlassianConnectors.action.process-reindex-requests": "Jira-Indexierungsaufträge verarbeiten",
+  "atlassianConnectors.action.run-upgrade": "Verzögerte Jira-Upgradearbeiten anfordern",
+  "atlassianConnectors.action.set-application-role": "Jira-Anwendungsrollengruppen ersetzen",
+  "atlassianConnectors.action.set-application-roles":
+    "Ausgewählte Jira-Anwendungsrollengruppen ersetzen",
+  "atlassianConnectors.action.add-user-application": "Jira-Anwendungszugang hinzufügen",
+  "atlassianConnectors.action.remove-user-application": "Jira-Anwendungszugang entfernen",
+  "atlassianConnectors.action.set-user-columns": "Jira-Benutzerspalten setzen",
+  "atlassianConnectors.action.reset-user-columns": "Jira-Benutzerspalten zurücksetzen",
+  "atlassianConnectors.action.create-custom-field": "Benutzerdefiniertes Jira-Feld erstellen",
+  "atlassianConnectors.action.delete-custom-fields": "Benutzerdefinierte Jira-Felder löschen",
+  "atlassianConnectors.action.create-issue-type": "Jira-Vorgangstyp erstellen",
+  "atlassianConnectors.action.update-issue-type": "Jira-Vorgangstyp ändern",
+  "atlassianConnectors.action.delete-issue-type": "Jira-Vorgangstyp löschen",
+  "atlassianConnectors.action.create-link-type": "Jira-Verknüpfungstyp erstellen",
+  "atlassianConnectors.action.update-link-type": "Jira-Verknüpfungstyp ändern",
+  "atlassianConnectors.action.delete-link-type": "Jira-Verknüpfungstyp löschen",
+  "atlassianConnectors.action.reset-link-type-order": "Jira-Verknüpfungstypen sortieren",
+  "atlassianConnectors.action.move-link-type": "Jira-Verknüpfungstyp verschieben",
+  "atlassianConnectors.action.set-terminology": "Jira-Terminologie setzen",
+  "chat.jira.systemAction.actorKey": "Beobachteter Schlüssel des handelnden Kontos",
+  "chat.jira.systemAction.targetUser": "Schlüssel des ausgewählten Zielkontos",
+  "chat.jira.systemAction.swapGroup": "Geprüfte Ersatzgruppe",
+  "chat.jira.systemAction.requestedPresence": "Angeforderter Existenzzustand",
+  "chat.jira.systemAction.observedPresence": "Unabhängig beobachteter Konfigurationszustand",
+  "chat.jira.systemAction.directMembershipTarget": "Angeforderte direkte Gruppenzuordnung",
+  "chat.jira.systemAction.observedPinned": "Unabhängig beobachteter angehefteter Kommentar",
+  "chat.jira.systemAction.requestedPinned": "Angefordertes Anheften des Kommentars",
+  "chat.jira.systemAction.notificationDigest": "Digest der Benachrichtigungsanforderung",
+  "chat.jira.systemAction.recipientKey": "Angeforderter Empfängerschlüssel",
+  "chat.jira.systemAction.requestedRecipientCount": "Anzahl ausdrücklich ausgewählter Empfänger",
+  "chat.jira.systemAction.requestedIssueCount": "Anzahl ausgewählter Vorgänge",
+  "chat.jira.systemAction.ackRequestId": "Auftrags-ID aus nativer Bestätigung",
+  "chat.jira.systemAction.ackRequestCount": "In der Bestätigung zurückgegebene IDs",
+  "chat.jira.systemAction.applicationRoleKey": "Schlüssel der ausgewählten Anwendungsrolle",
+  "chat.jira.systemAction.selectedRoleCount": "Anzahl ausgewählter Anwendungsrollen",
+  "chat.jira.systemAction.applicationTarget": "Angeforderter Anwendungszugang",
+  "chat.jira.systemAction.resetTarget": "Angeforderte Spaltenrücksetzung",
+  "chat.jira.systemAction.replacementType": "ID des geprüften Ersatzvorgangstyps",
+  "chat.jira.systemAction.selectedFieldCount": "Anzahl ausgewählter benutzerdefinierter Felder",
+  "chat.jira.systemAction.reviewedLinkTypeCount": "Länge der geprüften Verknüpfungstypfolge",
+  "chat.jira.systemAction.originalTerm": "Ursprünglicher Begriff",
+  "chat.jira.systemAction.selectedTermCount": "Anzahl ausgewählter Begriffe",
+  "chat.jira.systemAction.maintenanceUnconfirmed":
+    "Eine Wartungsbestätigung allein bestätigt weder Auftragsabschluss noch Indexinhalt, Clusterfolgen oder Löschung.",
+  "chat.jira.systemAction.currentJobNotCorrelated":
+    "Die Beobachtung des aktuellen oder letzten Auftrags beweist keine Zuordnung zu dieser Anforderung. Abschlussprozente oder Zeiteinheiten werden nicht abgeleitet.",
+  "chat.jira.systemAction.groupConsequences":
+    "Beobachtete Gruppenexistenz und Mitgliedschaft belegen keine wirksamen Berechtigungen oder sämtliche Folgen einer Einschränkungsübertragung.",
+  "chat.jira.systemAction.inheritedMembership":
+    "Die native Mitgliederliste enthält Untergruppen. Beobachtete Mitgliedschaft beweist keine direkte Zuordnung; Belegkennzeichen beschreiben die angeforderte direkte Mitgliedschaft.",
+  "chat.jira.systemAction.directoryConsequences":
+    "Konfiguration beweist keine wirksamen Benutzerrechte. Handelndes Konto und Zielkonto bleiben getrennt; unklare Auswirkungen dürfen nicht erneut ausgeführt werden.",
+  "chat.jira.systemAction.namedUserLayout":
+    "Dies ist die geordnete Spaltenansicht des ausgewählten Kontos; wiederholte IDs bleiben wiederholt. Eine Rücksetzbestätigung beweist keine Standardvererbung.",
+  "chat.jira.systemAction.selectedRolesOnly":
+    "Nur Gruppen und Standardgruppen der ausgewählten Anwendungsrollen werden ersetzt. Ausdrücklich leere Listen entfernen sie; ausgelassene Rollen gehören nicht zur Anforderung.",
+  "chat.jira.systemAction.applicationAssignment":
+    "Dies fordert Anwendungszugang für genau das geprüfte Konto und die geprüfte Anwendungsrolle an. Rollenkonfiguration und Empfangsbestätigung beweisen keinen wirksamen Zugriff des Kontos.",
+  "chat.jira.systemAction.schemaConsequences":
+    "Native Schemakonfiguration beweist keine vollständige Vorgangsmigration. Betroffene gespeicherte Formalregeln gelten weiterhin für tatsächliche Feld-, Typauswahl- und Elternverknüpfungsänderungen.",
+  "chat.jira.systemAction.orderUnconfirmed":
+    "Die geprüfte sichtbare Folge beweist weder Jiras dauerhafte Sortierung noch dessen Sortierregeln. Ein Index oder Name wird nicht als neue Identität behandelt.",
+  "chat.jira.systemAction.notificationUnconfirmed":
+    "Die native Antwort bestätigt nur eine Benachrichtigungsanforderung. Die Zustellung an Empfänger bleibt unbestätigt; bei Unklarheit nicht erneut senden.",
+  "chat.jira.systemAction.pinScope":
+    "Nur der genaue geprüfte Kommentar desselben Vorgangs wird angeheftet. Diese Aktion sendet keine Benachrichtigung und löst keinen anderen Kommentar.",
+  "chat.jira.systemAction.requestIdsUnknown":
+    "Bestätigte Auftrags-IDs wurden nicht geliefert. Daraus werden weder eine Auftragsidentität noch eine leere Warteschlange abgeleitet.",
+  "chat.jira.systemAction.acceptAccess": "Globale Zugangsfolgen akzeptieren",
+  "chat.jira.systemAction.reviewedUser": "Geprüftes Zielkonto: Schlüssel und nativer Benutzername",
+  "chat.jira.systemAction.explicitRecipients":
+    "Ausdrückliche Empfänger: Schlüssel und native Benutzernamen",
+  "chat.jira.systemAction.observedInheritedMembership":
+    "Geprüfte Mitgliedschaft einschließlich Untergruppen",
+  "chat.jira.systemAction.reviewedComment": "Genauer geprüfter Kommentartext",
+  "chat.jira.systemAction.reviewedVisibility": "Geprüfte Kommentarsichtbarkeit",
+  "chat.jira.systemAction.subject": "Betreff der Benachrichtigung",
+  "chat.jira.systemAction.plainBody": "Benachrichtigung als Klartext",
+  "chat.jira.systemAction.acceptNotification": "Diese einmalige Benachrichtigung anfordern",
+  "chat.jira.systemAction.reviewedNode": "Geprüfter nativer Knotenzustand",
+  "chat.jira.systemAction.reviewedCluster": "Geprüfter nativer Clusterzustand",
+  "chat.jira.systemAction.reviewedRunning": "Beobachteter laufender Snapshot-Auftrag",
+  "chat.jira.systemAction.reviewedReindex":
+    "Geprüfte Beobachtung der aktuellen oder letzten Indexierung",
+  "chat.jira.systemAction.reviewedUpgrade": "Geprüfte native Upgrade-Beobachtung",
+  "chat.jira.systemAction.reviewedIssues": "Genaue geprüfte Vorgangsidentitäten",
+  "chat.jira.systemAction.acceptMaintenance": "Unbestätigte Wartungsfolgen akzeptieren",
+  "chat.jira.systemAction.nativeKind": "Ausdrücklicher nativer Typ",
+  "chat.jira.systemAction.indexComments": "Kommentare indexieren",
+  "chat.jira.systemAction.indexHistory": "Änderungsverlauf indexieren",
+  "chat.jira.systemAction.indexWorklogs": "Arbeitsprotokolle indexieren",
+  "chat.jira.systemAction.roleReplacement":
+    "Geprüfte und angeforderte Anwendungsrollenkonfiguration",
+  "chat.jira.systemAction.roleReplacements": "Ausgewählte Rollenersetzungen",
+  "chat.jira.systemAction.reviewedApplicationRole": "Geprüfte Anwendungsrollenkonfiguration",
+  "chat.jira.systemAction.reviewedIssueType": "Vollständiger beobachteter Vorgangstyp-Prüfstand",
+  "chat.jira.systemAction.reviewedAlternative":
+    "Geprüfte Migrationsalternative (null übermittelt keine)",
+  "chat.jira.systemAction.reviewedFields": "Geprüfte Identitäten benutzerdefinierter Felder",
+  "chat.jira.systemAction.reviewedLinkType": "Geprüfte Verknüpfungstyp-Metadaten",
+  "chat.jira.systemAction.reviewedLinkOrder": "Vollständige geprüfte Verknüpfungstypfolge",
+  "chat.jira.systemAction.reviewedTerms": "Beide beobachteten Terminologieeinträge",
+  "chat.jira.systemAction.requestedTerms": "Angeforderte native Begriffsersetzungen",
+  "chat.jira.systemAction.acceptMigration": "Unbestätigte Migrationsfolgen akzeptieren",
+  "chat.jira.systemAction.searcherKey": "Nativer Suchmodulschlüssel",
+  "chat.jira.systemAction.explicitProjectIds": "Ausdrückliche nichtleere Projektkontext-IDs",
+  "chat.jira.systemAction.inward": "Bezeichnung der eingehenden Beziehung",
+  "chat.jira.systemAction.outward": "Bezeichnung der ausgehenden Beziehung",
+  "chat.jira.systemAction.orderDirection": "Native alphabetische Sortierrichtung",
+  "chat.jira.systemAction.newPosition": "Angeforderte native Position (ab 1)",
+  "chat.jira.systemAction.nativePrincipalKey": "Nativer Konto- oder Anwendungsschlüssel",
+  "chat.jira.systemAction.reviewedRole": "Geprüfte aktuelle Rollenkonfiguration",
+  "chat.jira.systemAction.requestedRole": "Angeforderte vollständige Rollenkonfiguration",
+  "chat.jira.systemAction.applicationGroups": "Anwendungsrollengruppen",
+  "chat.jira.systemAction.defaultGroups": "Standardgruppen der Anwendungsrolle",
+  "chat.jira.systemAction.subtask": "Beobachtete Unteraufgabenklassifikation",
+  "chat.jira.systemAction.customField": "Beobachtete Klassifikation als benutzerdefiniertes Feld",
+  "chat.jira.systemAction.originalPlural": "Ursprünglicher Pluralbegriff",
+  "chat.jira.systemAction.newTerm": "Angeforderter kanonischer Begriff",
+  "chat.jira.systemAction.newPlural": "Angeforderter kanonischer Plural",
+  "chat.jira.systemAction.defaultTerm": "Beobachteter nativer Standardbegriff",
+  "chat.jira.systemAction.nativeState": "Beobachteter nativer Zustand",
+  "chat.jira.systemAction.observedAlive": "Beobachtetes Aktivitätskennzeichen des Knotens",
+  "chat.jira.systemAction.buildNumber": "Beobachtete Buildnummer",
+  "chat.jira.systemAction.version": "Beobachtete native Version",
+  "chat.jira.systemAction.stateTimestamp": "Nativer Zeitwert der Zustandsänderung",
+  "chat.jira.systemAction.reviewedBuild": "Beobachtete Buildmetadaten",
+  "chat.jira.systemAction.taskObservation": "Art der nativen Auftragsbeobachtung",
+  "chat.jira.systemAction.nativeProgress": "Nativer Fortschrittswert (Einheit nicht abgeleitet)",
+  "chat.jira.systemAction.nativeSuccess": "Native Beobachtung des Auftragserfolgs",
+  "chat.jira.systemAction.subTask": "Beobachtete aktuelle Teilaufgabe",
+  "chat.jira.systemAction.finishTime": "Nativer Abschlusszeitwert",
+  "chat.jira.systemAction.startTime": "Nativer Startzeitwert",
+  "chat.jira.systemAction.submittedTime": "Nativer Einreichungszeitwert",
+  "chat.jira.systemAction.upgradeObservation": "Art der nativen Upgrade-Beobachtung",
+  "chat.jira.systemAction.upgradeOutcome": "Natives Upgrade-Ergebnis",
+  "chat.jira.systemAction.duration": "Native Dauer (Einheit nicht abgeleitet)",
+  "chat.jira.systemAction.nativeMessage": "Native Meldung",
+  "chat.jira.systemAction.reviewAvailable": "Vollständiger nativer Vorgangstyp-Prüfstand verfügbar",
+  "chat.jira.systemAction.reviewUnavailable":
+    "Vollständiger nativer Vorgangstyp-Prüfstand nicht verfügbar",
+  "atlassianConnectors.action.create-issue-type-scheme": "Jira-Vorgangstypschema erstellen",
+  "atlassianConnectors.action.update-issue-type-scheme": "Jira-Vorgangstypschema ändern",
+  "atlassianConnectors.action.delete-issue-type-scheme": "Jira-Vorgangstypschema löschen",
+  "atlassianConnectors.action.add-issue-type-scheme-projects": "Jira-Schemaprojekte hinzufügen",
+  "atlassianConnectors.action.set-issue-type-scheme-projects": "Jira-Schemaprojekte ersetzen",
+  "atlassianConnectors.action.clear-issue-type-scheme-projects": "Jira-Schemaprojekte leeren",
+  "atlassianConnectors.action.remove-issue-type-scheme-project": "Jira-Schemaprojekt entfernen",
+  "atlassianConnectors.action.create-priority-scheme": "Jira-Prioritätsschema erstellen",
+  "atlassianConnectors.action.update-priority-scheme": "Jira-Prioritätsschema ändern",
+  "atlassianConnectors.action.delete-priority-scheme": "Jira-Prioritätsschema löschen",
+  "atlassianConnectors.action.create-workflow-scheme": "Jira-Workflowschema erstellen",
+  "atlassianConnectors.action.update-workflow-scheme": "Jira-Workflowschema ändern",
+  "atlassianConnectors.action.delete-workflow-scheme": "Jira-Workflowschema löschen",
+  "atlassianConnectors.action.create-workflow-scheme-draft": "Jira-Workflowschemaentwurf erstellen",
+  "atlassianConnectors.action.update-workflow-scheme-draft": "Jira-Workflowschemaentwurf ändern",
+  "atlassianConnectors.action.delete-workflow-scheme-draft": "Jira-Workflowschemaentwurf löschen",
+  "atlassianConnectors.action.set-workflow-scheme-default": "Jira-Schema-Standardworkflow setzen",
+  "atlassianConnectors.action.delete-workflow-scheme-default":
+    "Jira-Schema-Standardworkflow entfernen",
+  "atlassianConnectors.action.set-workflow-scheme-draft-default":
+    "Jira-Entwurfsstandardworkflow setzen",
+  "atlassianConnectors.action.delete-workflow-scheme-draft-default":
+    "Jira-Entwurfsstandardworkflow entfernen",
+  "atlassianConnectors.action.set-workflow-scheme-issue-type":
+    "Jira-Schema-Vorgangstypzuordnung setzen",
+  "atlassianConnectors.action.delete-workflow-scheme-issue-type":
+    "Jira-Schema-Vorgangstypzuordnung entfernen",
+  "atlassianConnectors.action.set-workflow-scheme-draft-issue-type":
+    "Jira-Entwurfs-Vorgangstypzuordnung setzen",
+  "atlassianConnectors.action.delete-workflow-scheme-draft-issue-type":
+    "Jira-Entwurfs-Vorgangstypzuordnung entfernen",
+  "atlassianConnectors.action.set-workflow-scheme-workflow":
+    "Jira-Schema-Workflowreferenzen ersetzen",
+  "atlassianConnectors.action.delete-workflow-scheme-workflow":
+    "Jira-Schema-Workflowreferenzen entfernen",
+  "atlassianConnectors.action.set-workflow-scheme-draft-workflow":
+    "Jira-Entwurfs-Workflowreferenzen ersetzen",
+  "atlassianConnectors.action.delete-workflow-scheme-draft-workflow":
+    "Jira-Entwurfs-Workflowreferenzen entfernen",
+  "atlassianConnectors.action.set-application-property": "Jira-Anwendungseigenschaft setzen",
+  "atlassianConnectors.action.set-system-columns": "Jira-Systemspalten setzen",
+  "atlassianConnectors.action.set-instance-base-url": "Jira-Instanz-Basis-URL setzen",
+  "atlassianConnectors.action.set-read-only-mode": "Jira-Schreibschutzkonfiguration setzen",
+  "atlassianConnectors.action.jira.email-template-pack": "Jira-E-Mail-Vorlagenexport prüfen",
+  "atlassianConnectors.action.upload-email-template-pack": "Jira-E-Mail-Vorlagenpaket hochladen",
+  "atlassianConnectors.action.apply-email-template-pack":
+    "Bereitgestellte Jira-E-Mail-Vorlagen anwenden",
+  "atlassianConnectors.action.revert-email-template-pack":
+    "Jira-Standard-E-Mail-Vorlagen wiederherstellen",
+  "chat.jira.schemeWrite.reviewedScheme": "Vollständiger geprüfter Schemaprüfstand",
+  "chat.jira.schemeWrite.reviewedDraft": "Vollständiger geprüfter Entwurfsprüfstand",
+  "chat.jira.schemeWrite.issueTypeOrder": "Vollständige geordnete Vorgangstyp-IDs",
+  "chat.jira.schemeWrite.defaultIssueType": "Konfigurierte Standardvorgangstyp-ID",
+  "chat.jira.schemeWrite.priorityOrder": "Vollständige geordnete Prioritäts-IDs",
+  "chat.jira.schemeWrite.reviewedProjects": "Vollständige geprüfte Projektzuordnungen",
+  "chat.jira.schemeWrite.requestedProjects": "Angeforderte Projektzuordnungen",
+  "chat.jira.schemeWrite.projectTargetCount": "Anzahl geprüfter oder angeforderter Projekte",
+  "chat.jira.schemeWrite.configuredDefault": "Konfigurierter Standardworkflow",
+  "chat.jira.schemeWrite.mappings": "Vollständige ausdrückliche Vorgangstypzuordnungen",
+  "chat.jira.schemeWrite.originalMappings": "Vollständige ursprüngliche Vorgangstypzuordnungen",
+  "chat.jira.schemeWrite.requestedDefaultMapping": "Angeforderte ausdrückliche Standardzuordnung",
+  "chat.jira.schemeWrite.draftFlag": "Natives Entwurfskennzeichen",
+  "chat.jira.schemeWrite.defaultScheme": "Natives Kennzeichen für das globale Standardschema",
+  "chat.jira.schemeWrite.draftId": "Beobachtete Entwurfsschema-ID",
+  "chat.jira.schemeWrite.configurationOnly":
+    "Konfigurationsdaten belegen weder Bereitstellung, Vorgangsmigration, wirksame Berechtigungen noch sämtliche Projektfolgen.",
+  "chat.jira.schemeWrite.baseOnly":
+    "Konfiguration des Basisschemas; das Kennzeichen ohne Entwurf belegt weder Veröffentlichung noch Inaktivität.",
+  "chat.jira.schemeWrite.draftOnly":
+    "Nur Entwurfskonfiguration; keine Veröffentlichung oder Statusmigration.",
+  "chat.jira.schemeWrite.configuredNotEffective":
+    "Ein konfigurierter Standard unterscheidet sich von Jiras wirksamem Rückfallwert. Fehlende Angaben sind weder null noch eine leere Zuordnung.",
+  "chat.jira.schemeWrite.mappingRequested": "Angeforderter Zuordnungszustand: vorhanden",
+  "chat.jira.schemeWrite.mappingRemovalRequested": "Angeforderter Zuordnungszustand: entfernt",
+  "chat.jira.schemeWrite.associationConsequences":
+    "Projekt-IDs beschreiben geprüfte oder angeforderte Konfiguration, keine vollständige sichtbare Vorgangsmenge und keine nachgewiesenen Standardschemafolgen.",
+  "chat.jira.schemeWrite.replaceMappings":
+    "Die übergebene Zuordnungsliste ersetzt sämtliche ausdrücklichen Zuordnungen; eine leere Liste entfernt sie.",
+  "chat.jira.schemeWrite.replaceProjects":
+    "Dies ersetzt oder leert die vollständige Projektzuordnung; eine leere Liste ist beabsichtigt.",
+  "chat.jira.schemeWrite.consequencesUnconfirmed":
+    "Native Bestätigung und lesbare Konfiguration bestätigen nicht unabhängig sämtliche Folgen dieser Operation.",
+  "chat.jira.schemeWrite.removeConfiguredDefault":
+    "Konfigurierten Standard entfernen (ausdrücklich null); kein wirksamer Rückfallwert wird erfunden.",
+  "chat.jira.schemeWrite.reviewAvailable": "Vollständiger nativer Schemaprüfstand verfügbar",
+  "chat.jira.schemeWrite.reviewUnavailable":
+    "Vollständiger nativer Schemaprüfstand nicht verfügbar",
+  "chat.jira.schemeWrite.mappingCount": "Anzahl ausdrücklicher Zuordnungen",
+  "chat.jira.schemeWrite.mapping": "Ausdrückliche Zuordnung von Vorgangstyp zu Workflow",
+  "chat.jira.schemeWrite.originalMapping": "Ursprüngliche Zuordnung von Vorgangstyp zu Workflow",
+  "chat.jira.adminReview.emptyList": "Ausdrücklich leere Liste (0 Einträge)",
+  "chat.jira.adminReview.instanceWide": "Instanzweite Konfigurationsänderung akzeptieren",
+  "chat.jira.instanceWrite.propertyKey": "Nativer Anwendungseigenschaftsschlüssel",
+  "chat.jira.instanceWrite.valueDigest": "SHA-256 des angeforderten nativen Werts",
+  "chat.jira.instanceWrite.reviewedValue": "Geprüfter typisierter nativer Wert",
+  "chat.jira.instanceWrite.requestedValue": "Angeforderter typisierter nativer Wert",
+  "chat.jira.instanceWrite.reviewedColumns": "Vollständige geprüfte Systemspaltenfolge",
+  "chat.jira.instanceWrite.requestedColumns": "Vollständige angeforderte Systemspaltenfolge",
+  "chat.jira.instanceWrite.columnPosition": "Systemspaltenposition und ID",
+  "chat.jira.instanceWrite.reviewedBaseUrl": "Geprüfte native Basis-URL (nur Vergleich)",
+  "chat.jira.instanceWrite.requestedBaseUrl":
+    "Angeforderte native Basis-URL (kein Verbindungsziel)",
+  "chat.jira.instanceWrite.baseUrlDigest": "SHA-256 der angeforderten Basis-URL",
+  "chat.jira.instanceWrite.reviewedReadOnly": "Geprüftes natives Schreibschutzkennzeichen",
+  "chat.jira.instanceWrite.requestedReadOnly": "Angefordertes natives Schreibschutzkennzeichen",
+  "chat.jira.instanceWrite.observedReadOnly": "Unabhängig beobachtetes Schreibschutzkennzeichen",
+  "chat.jira.instanceWrite.baseUrlConsequences":
+    "Globale URL-, Proxy-, Routing- und Benachrichtigungsfolgen bleiben unbestätigt; das vertrauenswürdige Verbindungsziel ändert sich nicht.",
+  "chat.jira.instanceWrite.noNavigation":
+    "URLs sind wörtliche Prüfmetadaten, niemals Navigationslinks oder neue Anfrageziele.",
+  "chat.jira.instanceWrite.noEnforcementProof":
+    "Das native Kennzeichen ist Konfiguration, kein Beweis, dass jeder wirksame Schreibpfad gesperrt oder freigegeben ist.",
+  "chat.jira.instanceWrite.systemSequence":
+    "Vollständige Systemstandardfolge ersetzen; Reihenfolge und wiederholte IDs bleiben erhalten. Daraus folgt keine Änderung einzelner Benutzer- oder Filteransichten.",
+  "chat.jira.instanceWrite.closedProperties":
+    "Nur die vier dokumentierten nicht geheimen Anwendungseigenschaften sind schreibbar; false und leerer Text behalten ihre genaue Bedeutung.",
+  "chat.jira.instanceWrite.configuredBaseUrlUnavailable":
+    "Sichere native Basis-URL-Prüfmetadaten nicht verfügbar",
+  "chat.jira.emailPack.connectedSource": "Verbundene Quelldatei",
+  "chat.jira.emailPack.connectedPath": "Pfad innerhalb der verbundenen Auswahl",
+  "chat.jira.emailPack.sourceKind": "Governancegebundene Quellenart",
+  "chat.jira.emailPack.reviewedFile": "Genauer Dateiintegritätsprüfstand",
+  "chat.jira.emailPack.rawDigest": "SHA-256 der rohen ZIP-Datei",
+  "chat.jira.emailPack.byteCount": "Byteanzahl",
+  "chat.jira.emailPack.manifest": "SHA-256 des vollständigen kanonischen Eintragsmanifests",
+  "chat.jira.emailPack.priorManifest": "Geprüfter SHA-256 des aktiven Eintragsmanifests",
+  "chat.jira.emailPack.observedManifest":
+    "Unabhängig beobachteter SHA-256 des aktiven Eintragsmanifests",
+  "chat.jira.emailPack.entryCount": "Vollständige Anzahl exportierter Einträge",
+  "chat.jira.emailPack.entryPath": "Archiveintragspfad (nur Daten)",
+  "chat.jira.emailPack.entryDigest": "SHA-256 des Archiveintrags",
+  "chat.jira.emailPack.acceptStaged":
+    "Ersetzung des bereitgestellten Jira-Vorlagenordners akzeptieren",
+  "chat.jira.emailPack.acceptGlobal": "Globale Ersetzung der Benachrichtigungsvorlagen akzeptieren",
+  "chat.jira.emailPack.acceptUnverifiedStaged":
+    "Akzeptieren, dass Jira das bereitgestellte Paket nicht atomar identifizieren kann",
+  "chat.jira.emailPack.integrityNotAuthority":
+    "Die genauen Bytes müssen zu einem servereigenen Prüfstand passen. Diese Integritätsprüfung bewahrt die bestehenden Freigaberegeln des gewählten Modus; Modelldateimetadaten erteilen niemals Autorität.",
+  "chat.jira.emailPack.unconfirmed":
+    "Das bereitgestellte Paket oder sämtliche globalen Vorlagenfolgen können nicht unabhängig bestätigt werden. Bekannte Prüfsummen bleiben erhalten; unsichere Operationen niemals wiederholen.",
+  "chat.jira.emailPack.noDelivery":
+    "Es wird keine E-Mail-Zustellung behauptet. Vorlageninhalte werden hier weder angezeigt noch ausgeführt.",
+  "chat.jira.emailPack.metadataOnly":
+    "Nur vollständige begrenzte Archivmetadaten; rohe ZIP-Identität und kanonische Eintragsidentität sind verschieden und belegen beide keine Bereitstellungsidentität.",
+  "chat.jira.emailPack.exportSideEffect":
+    "Jira erstellt für diesen Lesezugriff eine temporäre Export-ZIP auf seinem Server; aktive Vorlagen werden nicht ersetzt.",
+  "chat.jira.emailPack.metadataUnavailable":
+    "Vollständige Archivmetadaten nicht verfügbar; weder ein leeres Paket noch fehlende Einträge werden daraus abgeleitet.",
+  "atlassianConnectors.action.create-permission-scheme": "Jira-Berechtigungsschema erstellen",
+  "atlassianConnectors.action.update-permission-scheme": "Jira-Berechtigungsschema ändern",
+  "atlassianConnectors.action.delete-permission-scheme": "Jira-Berechtigungsschema löschen",
+  "atlassianConnectors.action.add-permission-grant": "Jira-Berechtigungseintrag hinzufügen",
+  "atlassianConnectors.action.delete-permission-grant": "Jira-Berechtigungseintrag löschen",
+  "atlassianConnectors.action.set-permission-scheme-attribute":
+    "Jira-Berechtigungsschema-Attribut setzen",
+  "atlassianConnectors.action.create-role": "Jira-Rolle erstellen",
+  "atlassianConnectors.action.update-role": "Jira-Rolle ändern",
+  "atlassianConnectors.action.replace-role": "Jira-Rollenmetadaten ersetzen",
+  "atlassianConnectors.action.delete-role": "Jira-Rolle löschen",
+  "atlassianConnectors.action.add-role-default-actors": "Jira-Rollenvorgaben hinzufügen",
+  "atlassianConnectors.action.delete-role-default-actor": "Jira-Rollenvorgabe entfernen",
+  "atlassianConnectors.action.add-project-role-actors": "Jira-Projektrollenakteure hinzufügen",
+  "atlassianConnectors.action.set-project-role-actors": "Jira-Projektrollenakteure ersetzen",
+  "atlassianConnectors.action.delete-project-role-actor": "Jira-Projektrollenakteur entfernen",
+  "chat.jira.accessWrite.reviewedScheme":
+    "Geprüftes Berechtigungsschema mit vollständigen Einträgen",
+  "chat.jira.accessWrite.permissions": "Angeforderte vollständige Berechtigungseinträge",
+  "chat.jira.accessWrite.reviewedGrants": "Vollständige geprüfte Berechtigungseinträge",
+  "chat.jira.accessWrite.requestedPresent": "Angeforderter Ressourcenzustand: vorhanden",
+  "chat.jira.accessWrite.requestedAbsent": "Angeforderter Ressourcenzustand: nicht vorhanden",
+  "chat.jira.accessWrite.addActors": "Angeforderte Änderung: ausgewählte Akteure hinzufügen",
+  "chat.jira.accessWrite.replaceActorTarget":
+    "Angeforderte Änderung: vollständige Akteursmenge ersetzen",
+  "chat.jira.accessWrite.removeActor": "Angeforderte Änderung: ausgewählten Akteur entfernen",
+  "chat.jira.accessWrite.grant": "Angeforderter Berechtigungseintrag",
+  "chat.jira.accessWrite.holder": "Nativer Berechtigungsinhaber",
+  "chat.jira.accessWrite.nativeType": "Nativer Inhaber- oder Akteurstyp",
+  "chat.jira.accessWrite.attributeKey": "Attributschlüssel des Berechtigungsschemas",
+  "chat.jira.accessWrite.reviewedAttribute": "Geprüfter nativer Attributtext",
+  "chat.jira.accessWrite.requestedAttribute": "Angeforderter boolescher Attributwert",
+  "chat.jira.accessWrite.observedAttribute": "Unabhängig bestätigter boolescher Attributwert",
+  "chat.jira.accessWrite.reviewedRole": "Geprüfte Rollenmetadaten",
+  "chat.jira.accessWrite.reviewedActors": "Vollständige geprüfte Akteursmenge",
+  "chat.jira.accessWrite.reviewedSwapRole": "Geprüfte Ersatzrolle",
+  "chat.jira.accessWrite.reviewedSwapActors": "Vollständige geprüfte Akteure der Ersatzrolle",
+  "chat.jira.accessWrite.swapRoleId": "ID der Ersatzrolle",
+  "chat.jira.accessWrite.principals": "Angeforderte Akteure nach Namensraum",
+  "chat.jira.accessWrite.users": "Benutzer: nativer Schlüssel und Benutzername",
+  "chat.jira.accessWrite.groups": "Gruppen: genaue native Namen",
+  "chat.jira.accessWrite.userKey": "Angeforderter Benutzerschlüssel",
+  "chat.jira.accessWrite.groupName": "Angeforderter Gruppenname",
+  "chat.jira.accessWrite.userCount": "Anzahl angeforderter Benutzer",
+  "chat.jira.accessWrite.groupCount": "Anzahl angeforderter Gruppen",
+  "chat.jira.accessWrite.emptySet": "Ausdrücklich leere Menge (0 Einträge)",
+  "chat.jira.accessWrite.admin":
+    "Erfordert eine ausdrückliche Jira-Administrationsfreigabe; Vollzugriff allein erteilt keine Administration.",
+  "chat.jira.accessWrite.holderNamespaces":
+    "Berechtigungsinhaber behalten ihren genauen nativen Typ und Parameter. Gruppe, Benutzer, Projektrolle und benutzerdefiniertes Feld sind verschiedene Namensräume; Konfiguration belegt keine wirksamen Rechte einer Person.",
+  "chat.jira.accessWrite.principalNamespaces":
+    "Benutzerschlüssel und Benutzername werden gemeinsam geprüft; Gruppennamen bilden einen eigenen Namensraum. Die ausgewählten Akteure belegen weder Gruppenmitgliedschaft noch wirksame Rechte.",
+  "chat.jira.accessWrite.replaceGrants":
+    "Die übergebene Liste ersetzt ALLE Berechtigungseinträge. Eine leere Liste entfernt sie alle; native Eintrags-IDs können sich ändern.",
+  "chat.jira.accessWrite.retainGrants":
+    "Es wurde keine Ersatzliste übergeben. Bestehende Berechtigungseinträge bleiben erhalten.",
+  "chat.jira.accessWrite.replaceActors":
+    "Beide übergebenen Namensräume ersetzen die vollständige Akteursmenge dieser Projektrolle. Zwei leere Listen entfernen ALLE Akteure aus dieser Projektrolle.",
+  "chat.jira.accessWrite.actorTargets":
+    "Akteurslisten benennen angeforderte Ziele, keine unabhängig bestätigte Mitgliedschaft oder wirksamen Rechte.",
+  "chat.jira.accessWrite.actorUnconfirmed":
+    "Nach Empfangsbestätigung einer Akteursänderung bleibt die Prüfung unvollständig, auch wenn die sichtbare Konfiguration übereinstimmt.",
+  "chat.jira.accessWrite.roleDeleteUnconfirmed":
+    "Die Rollenlöschung bleibt nach Empfangsbestätigung unbestätigt: Vollständige Zuordnungs- und Berechtigungsfolgen lassen sich nicht nachweisen.",
+  "chat.jira.accessWrite.schemeDeleteUnconfirmed":
+    "Die Schemalöschung bleibt nach Empfangsbestätigung unbestätigt: Abwesenheit allein belegt nicht alle Folgen für Projektzuordnungen und Berechtigungen.",
+  "chat.jira.accessWrite.ackUnconfirmed":
+    "Diese Aktion kann nach Empfangsbestätigung nicht als unabhängig bestätigt gemeldet werden. Bekannte IDs bleiben erhalten; die Aktion wird niemals automatisch wiederholt.",
+  "chat.jira.accessWrite.reviewAvailable":
+    "Nativer Rollenprüfstand verfügbar. Vollständigkeit der Akteure und wirksame Rechte bleiben getrennt.",
+  "chat.jira.accessWrite.reviewUnavailable":
+    "Vollständiger nativer Rollenprüfstand nicht verfügbar. Fehlende Metadaten sind kein leerer Wert.",
+  "atlassianConnectors.action.epic-remove-issues": "Vorgänge aus Jira-Epics entfernen",
+  "atlassianConnectors.action.rank-epic": "Jira-Epic einordnen",
+  "atlassianConnectors.action.rank-issues": "Jira-Vorgänge einordnen",
+  "atlassianConnectors.action.set-issue-estimation": "Jira-Vorgang schätzen",
+  "atlassianConnectors.action.upsert-version-remote-link": "Externen Jira-Versionslink setzen",
+  "atlassianConnectors.action.upsert-version-remote-link-by-global-id":
+    "Externen Jira-Versionslink über globale ID setzen",
+  "atlassianConnectors.action.delete-version-remote-link": "Externen Jira-Versionslink löschen",
+  "atlassianConnectors.action.delete-version-remote-links":
+    "Alle externen Jira-Versionslinks löschen",
+  "atlassianConnectors.action.create-project-category": "Jira-Projektkategorie erstellen",
+  "atlassianConnectors.action.update-project-category": "Jira-Projektkategorie aktualisieren",
+  "atlassianConnectors.action.delete-project-category": "Jira-Projektkategorie löschen",
+  "chat.jira.planning.categoryId": "Projektkategorie-ID",
+  "chat.jira.planning.nativeId": "Native ID",
+  "chat.jira.planning.anchorId": "ID des Anker-Vorgangs",
+  "chat.jira.planning.anchorKey": "Anker-Vorgang",
+  "chat.jira.planning.anchorEpic": "Anker-Epic",
+  "chat.jira.planning.epicSelection": "Ausgewähltes Epic",
+  "chat.jira.planning.rankField": "Geprüfte native Rangfeldnummer",
+  "chat.jira.planning.direction": "Angeforderte relative Richtung",
+  "chat.jira.planning.before": "Vor dem ausgewählten Anker",
+  "chat.jira.planning.after": "Nach dem ausgewählten Anker",
+  "chat.jira.planning.reviewedAnchorRank": "Geprüfter opaker Rang des Ankers",
+  "chat.jira.planning.reviewedRank": "Geprüfter opaker Rang",
+  "chat.jira.planning.reviewedEmptyRank": "Ausdrücklich beobachteter leerer Rang (null)",
+  "chat.jira.planning.reviewedIssues": "Geprüfte Vorgänge in der angeforderten Reihenfolge",
+  "chat.jira.planning.reviewedEpic": "Geprüftes aktuelles Epic",
+  "chat.jira.planning.reviewedNoEpic": "Ausdrücklich ohne Epic beobachtet (null)",
+  "chat.jira.planning.epicTargetAbsent":
+    "Angefordertes Ziel: keine Epic-Zuordnung. Ein unsicherer Beleg beweist die Entfernung nicht.",
+  "chat.jira.planning.epicRemovalHelp":
+    "Nur die ausgewählten Vorgänge werden aus ihren geprüften Epics entfernt. Ein bekanntes null-Epic unterscheidet sich von einer nicht lesbaren Zuordnung. Formale Vorgangsregeln gelten weiterhin vor dem Schreiben.",
+  "chat.jira.planning.rankUnconfirmed":
+    "Die Einordnung bleibt nach Empfangsbestätigung unbestätigt: der sichtbare Board-Ausschnitt und opake Rangwerte beweisen keine globale Reihenfolge. Native Teilergebnisse können nur einige Vorgänge betreffen. Die Aktion nicht wiederholen.",
+  "chat.jira.planning.observedEstimate": "Unabhängig bestätigter Schätzwert",
+  "chat.jira.planning.requestedEstimate":
+    "Angeforderter Schätzwert; Bestätigung hängt vom Ergebnis ab",
+  "chat.jira.planning.reviewedEstimate": "Geprüfter aktueller nativer Schätzwert",
+  "chat.jira.planning.reviewedEmptyEstimate":
+    "Ausdrücklich beobachteter leerer Schätzwert (null); dies fordert keine Löschung an",
+  "chat.jira.planning.inputUnit": "Angeforderte Eingabeeinheit",
+  "chat.jira.planning.minutes": "Minuten",
+  "chat.jira.planning.seconds": "Native Verifikationseinheit: Sekunden",
+  "chat.jira.planning.nativeBoardNumber":
+    "Native Board-Zahl; keine Punkte- oder Zeiteinheit abgeleitet",
+  "chat.jira.planning.unitUnknown": "Schätzeinheit unbekannt",
+  "chat.jira.planning.estimateInputHelp":
+    "Der angeforderte Dezimaltext wird als nativer Wert gesendet. Die ursprüngliche Schätzung nimmt Minuten entgegen und wird unabhängig in Sekunden geprüft; andere Board-Zahlen bedeuten keine Story Points. Null bezeichnet einen geprüften leeren Wert, keine unterstützte Löschanforderung. Restschätzungs- und Zeiterfassungsfolgen werden nicht abgeleitet.",
+  "chat.jira.versionLinkWrite.reviewedLinks": "Vollständige geprüfte Versionslink-Menge",
+  "chat.jira.versionLinkWrite.reviewedEmpty":
+    "Die vollständige geprüfte Versionslink-Menge ist leer.",
+  "chat.jira.versionLinkWrite.deleteAll": "Jeden Link im geprüften Versionskontext löschen",
+  "chat.jira.versionLinkWrite.completeSet":
+    "Eine Bestätigung erfordert die vollständige unabhängig lesbare Linkmenge derselben Version und unveränderte erhaltene Werte. Ein fehlender Link oder 404 allein beweist keine Löschung; bekannte globale IDs bleiben Klartext.",
+  "chat.jira.versionLinkWrite.replaceValue":
+    "Ein angegebener Wert ersetzt den vollständigen Linkwert. Typisiertes null, false, 0, leerer Text und leere Container sind echte Werte. Keine URL wird verfolgt und Text wird nicht erneut als JSON ausgewertet.",
+  "chat.jira.versionLinkWrite.identityAvailable":
+    "Diese Zeile hat eine gebundene native globale ID; die vollständige Menge und der Wert müssen weiterhin geprüft werden.",
+  "chat.jira.versionLinkWrite.identityUnavailable":
+    "Native globale ID nicht verfügbar: ein Name oder eine opake self-URL identifiziert keinen Link für eine Schreibaktion.",
+  "chat.jira.categoryWrite.reviewed": "Vollständige geprüfte Projektkategorie",
+  "chat.jira.categoryWrite.acceptUnconfirmed":
+    "Löschung ohne unabhängig belegte Zuordnungsfolgen akzeptieren",
+  "chat.jira.categoryWrite.admin":
+    "Dies erfordert eine ausdrückliche Jira-Administrationsfreigabe und Jiras eigene native Administrationsberechtigung. Zugangsdaten oder Vollzugriff allein sind keine solche Freigabe.",
+  "chat.jira.categoryWrite.metadataOnly":
+    "Nur Metadaten der Projektkategorie werden geändert. Eine leere angeforderte Beschreibung löscht diesen Text; dies erzeugt keine Vorgangsregel und gewährt keinen Projektzugriff.",
+  "chat.jira.categoryWrite.deleteUnconfirmed":
+    "Die Kategorienlöschung bleibt nach Empfangsbestätigung unbestätigt. Auslassung aus sichtbaren Listen und 404 belegen nicht sämtliche Löschungs- oder Projektzuordnungsfolgen. Bekannte ID und angeforderte Abwesenheit bleiben gespeichert; nicht wiederholen.",
+  "atlassianConnectors.action.replace-sprint": "Jira-Sprintmetadaten ersetzen",
+  "atlassianConnectors.action.delete-sprint": "Jira-Sprint löschen",
+  "atlassianConnectors.action.swap-sprints": "Jira-Sprints tauschen",
+  "atlassianConnectors.action.unmap-sprints":
+    "Synchronisierung ausgewählter Jira-Sprints entfernen",
+  "atlassianConnectors.action.unmap-all-sprints": "Synchronisierung aller Jira-Sprints entfernen",
+  "chat.jira.sprintLifecycle.originBoard": "Ursprungsboard-ID",
+  "chat.jira.sprintLifecycle.swapSprint": "ID des anderen Sprints",
+  "chat.jira.sprintLifecycle.sampleIds":
+    "Sprint-IDs der geprüften Stichprobe (nicht alle betroffenen Sprints)",
+  "chat.jira.sprintLifecycle.selectedIds": "Ausgewählte Sprint-IDs",
+  "chat.jira.sprintLifecycle.reviewedSprint": "Geprüfte aktuelle Sprintmetadaten",
+  "chat.jira.sprintLifecycle.replacement": "Vollständiger angeforderter Sprint-Ersatz",
+  "chat.jira.sprintLifecycle.reviewedDestination": "Geprüfte Metadaten des Zielsprints",
+  "chat.jira.sprintLifecycle.reviewedSwap": "Geprüfte Metadaten des anderen Sprints",
+  "chat.jira.sprintLifecycle.visibleOrder":
+    "Vollständige für diesen Akteur sichtbare geprüfte Reihenfolge",
+  "chat.jira.sprintLifecycle.reviewedSelection": "Geprüfte ausgewählte Sprints",
+  "chat.jira.sprintLifecycle.reviewedSample":
+    "Geprüfte Stichprobe; begrenzt nicht die instanzweite Wirkung",
+  "chat.jira.sprintLifecycle.confirmInstanceWide":
+    "Bereinigung der gesamten Jira-Instanz bestätigen",
+  "chat.jira.sprintLifecycle.autoStartStop": "Automatischer Start und Stopp",
+  "chat.jira.sprintLifecycle.incompleteDestination": "Zielsprint-ID für unvollständige Vorgänge",
+  "chat.jira.sprintLifecycle.synced": "Natives Synchronisierungskennzeichen",
+  "chat.jira.sprintLifecycle.metadataOmitted": "Native Metadaten ausgelassen; Wert unbekannt.",
+  "chat.jira.sprintLifecycle.snapshotAvailable":
+    "Nativer Sprint-Prüfstand: ausgelassene Felder bleiben unbekannt. Dieser Prüfstand belegt nicht den vollständigen Bestand betroffener Vorgänge.",
+  "chat.jira.sprintLifecycle.snapshotUnavailable":
+    "Ein vollständiger nativer Sprint-Prüfstand ist nicht verfügbar; gewöhnliche lesbare Sprintfakten bleiben sichtbar.",
+  "chat.jira.sprintLifecycle.clearValue":
+    "Angeforderter Ersatz: diesen nullable Wert löschen (null).",
+  "chat.jira.sprintLifecycle.requestedUnsynced":
+    "Angefordertes Ziel: Synchronisierungskennzeichen falsch.",
+  "chat.jira.sprintLifecycle.replacementLimit":
+    "Die Bestätigung gilt nur für unabhängig beobachtete Ersatzmetadaten. Auswirkungen auf Vorgangszuordnungen durch Abschließen oder automatische Lebenszyklusänderungen bleiben unbestätigt.",
+  "chat.jira.sprintLifecycle.fullReplacement":
+    "Dies ersetzt jedes übergebene Sprintfeld; ausdrückliches null löscht nullable Werte. Native Identität, Ursprungsboard und beobachtete Synchronisierung bleiben erhalten. Abschließen oder automatische Lebenszyklusänderungen können Vorgangszuordnungen beeinflussen; ihre vollständige Wirkung bleibt unbestätigt.",
+  "chat.jira.sprintLifecycle.deleteUnconfirmed":
+    "Jira verschiebt die Vorgänge des Sprints ins Backlog. Löschung und vollständige Vorgangsneuzuordnung bleiben nach Empfangsbestätigung unbestätigt; sichtbare Vorgänge oder eine 404 belegen nicht die gesamte Wirkung.",
+  "chat.jira.sprintLifecycle.swapUnconfirmed":
+    "Die geprüfte Reihenfolge ist nur für diesen Akteur sichtbar. Der Tausch bleibt unbestätigt, weil Jira keine unabhängigen absoluten Positionen aller Sprints bereitstellt.",
+  "chat.jira.sprintLifecycle.selectedOnly":
+    "Nur die Synchronisierung der genau ausgewählten Sprints wird geändert. Vorgangszuordnungen und Ursprungsboard bleiben durch diesen Vorgang unverändert.",
+  "chat.jira.sprintLifecycle.instanceWide":
+    "UNUMKEHRBARE INSTANZWEITE BEREINIGUNG: Jeder Sprint dieser Jira-Instanz ist betroffen, auch außerhalb der geprüften Stichprobe. Ausdrückliche Jira-Administrationsautorität ist erforderlich. Die Stichprobe ist weder Gesamtbestand noch Schreibbegrenzung; die gesamte Wirkung bleibt unbestätigt.",
+  "chat.jira.sprintLifecycle.experimental":
+    "Dies nutzt Jiras experimentelle Synchronisierungs-API über Keikos feste serverseitige Freigabe. Diese Argumente wählen keine Anfrageheader oder weiteren Endpunkte aus.",
+  "atlassianConnectors.action.add-default-screen-field":
+    "Feld zum Jira-Standardbildschirm hinzufügen",
+  "atlassianConnectors.action.add-screen-tab-field": "Feld zum Jira-Bildschirmtab hinzufügen",
+  "atlassianConnectors.action.remove-screen-tab-field": "Feld aus Jira-Bildschirmtab entfernen",
+  "atlassianConnectors.action.move-screen-tab-field": "Feld im Jira-Bildschirmtab umordnen",
+  "atlassianConnectors.action.set-screen-field-show-when-empty":
+    "Jira-Feldanzeige bei leerem Wert festlegen",
+  "atlassianConnectors.action.move-screen-tab": "Jira-Bildschirmtab umordnen",
+  "atlassianConnectors.action.delete-board": "Jira-Board löschen",
+  "atlassianConnectors.action.set-board-refined-velocity":
+    "Verfeinerte Velocity des Jira-Boards festlegen",
+  "chat.jira.configuration.fieldId": "Feld-ID",
+  "chat.jira.configuration.fieldType": "Nativer Feldtyp",
+  "chat.jira.configuration.reviewedTabs": "Vollständige geprüfte Tabs in ihrer genauen Reihenfolge",
+  "chat.jira.configuration.reviewedFields":
+    "Vollständige geprüfte Felder in ihrer genauen Reihenfolge",
+  "chat.jira.configuration.reviewedFieldName": "Geprüfter Feldname",
+  "chat.jira.configuration.acceptDefault": "Unbestätigtes Standardziel von Jira akzeptieren",
+  "chat.jira.configuration.showWhenEmpty": "Feld bei leerem Wert anzeigen",
+  "chat.jira.configuration.reviewedBoardName": "Geprüfter Boardname",
+  "chat.jira.configuration.reviewedBoardType": "Geprüfter Boardtyp",
+  "chat.jira.configuration.reviewedFilter": "Geprüfte Boardfilter-ID",
+  "chat.jira.configuration.reviewedVelocity": "Geprüfte Einstellung der verfeinerten Velocity",
+  "chat.jira.configuration.requestedVelocity": "Angeforderte Einstellung der verfeinerten Velocity",
+  "chat.jira.configuration.zeroBasedPosition": "Angeforderte Tabposition (nullbasiert)",
+  "chat.jira.configuration.zeroBasedHelp":
+    "Die native Tabposition 0 bezeichnet den ersten Tab. Die Bestätigung erfordert die vollständige angeforderte Reihenfolge und unveränderte Tabnamen.",
+  "chat.jira.configuration.observedBoolean": "Unabhängig beobachtete Einstellung",
+  "chat.jira.configuration.requestedBoolean":
+    "Angeforderte Einstellung; aktueller Wert unbestätigt",
+  "chat.jira.configuration.requestedFieldPresent":
+    "Angefordertes Ziel: Feld auf dem ausgewählten Tab vorhanden.",
+  "chat.jira.configuration.requestedDefaultFieldPresent":
+    "Angefordertes Ziel: Feld zum von Jira gewählten Standardlayout hinzugefügt.",
+  "chat.jira.configuration.requestedFieldAbsent":
+    "Angefordertes Ziel: Feld auf dem ausgewählten Tab nicht vorhanden.",
+  "chat.jira.configuration.defaultUnconfirmed":
+    "Jira wählt den Standardbildschirm und Tab. Ihre Identitäten und das resultierende Layout bleiben auch nach Empfangsbestätigung unbestätigt. Den Schreibvorgang nicht automatisch wiederholen.",
+  "chat.jira.configuration.boardDeleteUnconfirmed":
+    "Angefordertes Ziel: Board nicht vorhanden. Die Löschung bleibt nach Empfangsbestätigung unbestätigt; eine 404 oder das Fehlen in sichtbaren Boards kann auch Zugriffsverlust bedeuten. Filter und Vorgangsdaten sind eigene Ressourcen.",
+  "chat.jira.configuration.velocitySettingOnly":
+    "Dies ist nur die Einstellung der verfeinerten Velocity; sie belegt weder Velocity-Messwerte noch Schätzeinheiten.",
+  "chat.jira.configuration.displayOnly":
+    "Bildschirm-Anzeigemetadaten belegen weder Pflichtfelder noch Bearbeitungsrechte oder tatsächlichen Vorgangszugriff.",
+  "chat.jira.configuration.explicitAdmin":
+    "Diese Bildschirmänderung erfordert eine ausdrückliche Jira-Administrationsfreigabe; der gewählte Modus erteilt sie nicht automatisch.",
+  "chat.jira.configuration.addPositionUnspecified":
+    "Das Hinzufügen verspricht keine Einfügeposition. Für die Platzierung ist eine getrennt geprüfte Verschiebung nötig.",
+  "chat.jira.configuration.removeMembershipOnly":
+    "Dies entfernt das Feld nur aus diesem Tab. Felddefinition und bestehende Vorgangswerte werden nicht gelöscht.",
+  "atlassianConnectors.action.delete-component": "Jira-Komponente löschen",
+  "atlassianConnectors.action.merge-version": "Jira-Versionen zusammenführen",
+  "atlassianConnectors.action.move-version": "Jira-Version umordnen",
+  "atlassianConnectors.action.remove-and-swap-version":
+    "Jira-Version entfernen und Referenzen ersetzen",
+  "atlassianConnectors.action.create-issue-link": "Jira-Vorgangsverknüpfung erstellen",
+  "atlassianConnectors.action.delete-issue-link": "Jira-Vorgangsverknüpfung löschen",
+  "atlassianConnectors.action.upsert-remote-link": "Jira-Remote-Link erstellen oder ersetzen",
+  "atlassianConnectors.action.update-remote-link": "Jira-Remote-Link ersetzen",
+  "atlassianConnectors.action.delete-remote-link": "Jira-Remote-Link löschen",
+  "atlassianConnectors.action.delete-remote-link-by-global-id":
+    "Jira-Remote-Link anhand globaler ID löschen",
+  "chat.jira.structural.nativeNotProvided":
+    "Native Metadaten nicht angegeben (null); dies ist weder leerer Text noch falsch.",
+  "chat.jira.outcome.failure.localAuthority":
+    "Die lokale Autorität erlaubt diese Jira-Anfrage nicht mehr. Vor einer erneuten Anfrage den ausgewählten Pod und die erlaubten Connector-Scopes prüfen.",
+  "chat.jira.outcome.failure.cancelled":
+    "Diese Jira-Anfrage wurde abgebrochen. Vor einer weiteren Anfrage den angezeigten Ausgang prüfen.",
+  "chat.jira.outcome.failure.localHandler":
+    "Keiko konnte diesen Jira-Lesevorgang wegen eines internen Handlerfehlers nicht abschließen. Vor einem neuen Lesevorgang das Activity Log prüfen.",
+  "chat.jira.outcome.failure.readDeadline":
+    "Dieser Jira-Lesevorgang hat sein lokales Zeitlimit erreicht und ist unvollständig. Einen weiteren Lesevorgang nur bei weiter bestehendem Bedarf starten.",
+  "chat.jira.structural.clearReference": "Diese Referenz entfernen; kein Ersatzziel.",
+  "chat.jira.structural.whitespaceText":
+    "Genauer Text aus Leerraum (Steuerzeichen als Escape-Darstellung)",
+  "chat.jira.structural.reviewedProject": "Geprüfte native Projekt-ID",
+  "chat.jira.structural.reviewedComponent": "Geprüfte vollständige Metadaten der Quellkomponente",
+  "chat.jira.structural.reviewedVersion": "Geprüfte vollständige Metadaten der Quellversion",
+  "chat.jira.structural.reviewedReplacementComponent":
+    "Geprüfte vollständige Metadaten der Ersatzkomponente",
+  "chat.jira.structural.reviewedTargetVersion": "Geprüfte vollständige Metadaten der Zielversion",
+  "chat.jira.structural.reviewedVersionOrder":
+    "Geprüfte vollständige Versions-IDs in ihrer genauen Reihenfolge",
+  "chat.jira.structural.reviewedReplacementVersions":
+    "Geprüfte Ersatzversionen mit vollständigen Metadaten",
+  "chat.jira.structural.replacementTarget": "Ersatzziel-ID",
+  "chat.jira.structural.requestedPosition":
+    "Angeforderte Position in der Versionsreihenfolge des Projekts",
+  "chat.jira.structural.afterVersion": "Hinter dieser Versions-ID einordnen",
+  "chat.jira.structural.fixVersionTarget": "Ersatz für Fix-Version-Referenzen",
+  "chat.jira.structural.affectedVersionTarget": "Ersatz für Referenzen betroffener Versionen",
+  "chat.jira.structural.customReplacements": "Ersetzungen in benutzerdefinierten Versionsfeldern",
+  "chat.jira.structural.inwardIssue": "Geprüfter eingehender Vorgang (Quelle)",
+  "chat.jira.structural.outwardIssue": "Geprüfter ausgehender Vorgang (Ziel)",
+  "chat.jira.structural.reviewedLinkType": "Geprüfter Verknüpfungstyp mit Richtungsbezeichnungen",
+  "chat.jira.structural.reviewedRemoteLink": "Geprüfter vollständiger bestehender Remote-Link-Wert",
+  "chat.jira.structural.newRemoteLink": "Angeforderter vollständiger Remote-Link-Ersatzwert",
+  "chat.jira.structural.reviewedLinkAbsent": "Geprüfte Abwesenheit dieser globalen ID am Vorgang",
+  "chat.jira.structural.nativeName": "Nativer Name",
+  "chat.jira.structural.nativeDescription": "Native Beschreibung",
+  "chat.jira.structural.deleted": "Gelöscht-Flag",
+  "chat.jira.structural.customFieldId": "ID des benutzerdefinierten Feldes",
+  "chat.jira.structural.first": "An erster Stelle (nativ First)",
+  "chat.jira.structural.last": "An letzter Stelle (nativ Last)",
+  "chat.jira.structural.earlier": "Eine Position früher (nativ Earlier)",
+  "chat.jira.structural.later": "Eine Position später (nativ Later)",
+  "chat.jira.structural.noReplacementVersions": "Es sind keine Ersatzversionen ausgewählt.",
+  "chat.jira.structural.clearAllCustomReferences":
+    "Die leere Ersatzliste entfernt diese Version aus ALLEN benutzerdefinierten Versionsfeldern.",
+  "chat.jira.structural.noAtomicSnapshot":
+    "Jira bindet den Schreibvorgang nicht atomar an diese geprüften Werte. Geänderte Nachweise verweigern vor dem Senden; unsichere Wirkungen nach dem Senden werden nie wiederholt.",
+  "chat.jira.releaseLifecycle.referencesUnconfirmed":
+    "Die vollständige Wirkung auf Vorgangsreferenzen bleibt unbestätigt. Auch eine angenommene Anfrage und die Abwesenheit der Quelle belegen nicht, dass jede betroffene Referenz ersetzt oder entfernt wurde.",
+  "chat.jira.releaseLifecycle.orderConfirmed":
+    "Die vollständige angeforderte Versionsreihenfolge und unveränderte Metadaten wurden unabhängig bestätigt.",
+  "chat.jira.releaseLifecycle.orderOnly":
+    "Dies ändert nur die Versionsreihenfolge im selben Projekt; Vorgänge werden nicht verschoben und Versionen nicht umbenannt.",
+  "chat.jira.releaseLifecycle.knownTargets":
+    "Bekannte Quell- und Ersatz-IDs kennzeichnen die Anfrage; sie belegen für sich keine Wirkung.",
+  "chat.jira.releaseLifecycle.replacementComponent": "ID der Ersatzkomponente",
+  "chat.jira.releaseLifecycle.targetVersion": "Zielversions-ID",
+  "chat.jira.releaseLifecycle.replacementVersions": "Ersatzversions-IDs",
+  "chat.jira.releaseLifecycle.replacementCount": "Anzahl ausgewählter Ersatzversionen",
+  "chat.jira.linkMutation.url": "Remote-Ziel-URL (nur Text)",
+  "chat.jira.linkMutation.title": "Remote-Link-Titel",
+  "chat.jira.linkMutation.summary": "Remote-Link-Zusammenfassung",
+  "chat.jira.linkMutation.iconUrl": "Symbol-URL (nur Text)",
+  "chat.jira.linkMutation.iconTitle": "Symboltitel",
+  "chat.jira.linkMutation.resolved": "Erledigt-Flag",
+  "chat.jira.linkMutation.statusIconUrl": "Statussymbol-URL (nur Text)",
+  "chat.jira.linkMutation.statusIconTitle": "Statussymboltitel",
+  "chat.jira.linkMutation.statusIconLink": "Statussymbol-Ziel (nur Text)",
+  "chat.jira.linkMutation.linkedIssueId": "Native ID des verknüpften Vorgangs",
+  "chat.jira.linkMutation.knownTargets":
+    "Bekannte Vorgangs- und Link-IDs bewahren den Anfragekontext. Das angeforderte Vorhandensein belegt keine aktuelle Zugehörigkeit.",
+  "chat.jira.linkMutation.requestedAbsent": "Angeforderter Verknüpfungszustand: nicht vorhanden",
+  "chat.jira.linkMutation.requestedPresent": "Angeforderter Verknüpfungszustand: vorhanden",
+  "chat.jira.linkMutation.snapshotAvailable":
+    "Es folgt der vollständige native Remote-Link-Prüfstand. Nullable-Felder werden ausdrücklich angezeigt.",
+  "chat.jira.linkMutation.snapshotUnavailable":
+    "Ein vollständiger nativer Remote-Link-Prüfstand ist nicht verfügbar. Fehlende Werte dürfen vor Ersetzung oder Löschung nicht geraten werden.",
+  "chat.jira.linkMutation.urlsMetadata":
+    "Keiko zeigt diese URLs als Prüfdialogtext an und öffnet oder lädt sie nicht. Jira kann Symbol-URLs im Browser jeder betrachtenden Person laden und dabei deren Netzwerkadresse an diesen Server übertragen.",
+  "chat.jira.linkMutation.upsertHelp":
+    "Jira POST erstellt oder ersetzt den Link mit dieser globalen ID. Dies ist keine bedingungslose Erstellung; geprüft wird entweder die genaue Abwesenheit oder der vollständige bestehende Wert.",
+  "chat.jira.linkMutation.fullReplacement":
+    "Die Remote-Link-Ersetzung umfasst jedes unterstützte Feld. Explizites null bedeutet, dass das angeforderte Feld keinen Wert hat; das Weglassen früherer Metadaten darf sie niemals stillschweigend erhalten.",
+  "chat.jira.linkMutation.requestedNull": "Angeforderter Feldwert: nicht vorhanden (null).",
+  "chat.jira.linkMutation.directionHelp":
+    "Der eingehende Vorgang ist die Quelle und der ausgehende Vorgang das Ziel. Beide nativen Richtungsbezeichnungen werden geprüft; kein zusätzlicher Kommentar oder gegenseitiger Remote-Link-Schreibvorgang wird ergänzt.",
+  "atlassianConnectors.action.jira.anonymization-validation":
+    "Jira-Anonymisierungsvalidierung lesen",
+  "atlassianConnectors.action.jira.anonymization-rerun-validation":
+    "Validierung einer Jira-Anonymisierungswiederholung lesen",
+  "atlassianConnectors.action.jira.anonymization-progress": "Jira-Anonymisierungsfortschritt lesen",
+  "atlassianConnectors.action.jira.current-session": "Aktuelle Jira-Sitzung lesen",
+  "atlassianConnectors.action.jira.search-post": "Jira-Vorgänge suchen",
+  "atlassianConnectors.action.jira.worklogs-by-id": "Ausgewählte Jira-Arbeitsprotokolle lesen",
+  "chat.jira.identity.validationOnly":
+    "Dies ist eine native Validierungsbeobachtung. Es wurde keine Anonymisierung gestartet und keine Identität geändert.",
+  "chat.jira.identity.rerunValidationOnly":
+    "Es wurde nur die Wiederholbarkeit geprüft. Kein vorhandener Auftrag wurde fortgesetzt oder wiederholt.",
+  "chat.jira.identity.validationTrue":
+    "Natives Validierungserfolgsflag: wahr. Damit ist keine abgeschlossene Anonymisierung bestätigt.",
+  "chat.jira.identity.validationFalse":
+    "Natives Validierungserfolgsflag: falsch. Die gemeldeten Fehler und Warnungen prüfen.",
+  "chat.jira.identity.validationUnknown":
+    "Das native Validierungserfolgsflag wurde nicht angegeben.",
+  "chat.jira.identity.deletedTrue": "Natives Konto-gelöscht-Flag: wahr",
+  "chat.jira.identity.deletedFalse": "Natives Konto-gelöscht-Flag: falsch",
+  "chat.jira.identity.deletedUnknown": "Natives Konto-gelöscht-Flag: unbekannt",
+  "chat.jira.identity.businessFailedTrue":
+    "Natives Geschäftslogik-Validierung-fehlgeschlagen-Flag: wahr",
+  "chat.jira.identity.businessFailedFalse":
+    "Natives Geschäftslogik-Validierung-fehlgeschlagen-Flag: falsch",
+  "chat.jira.identity.businessFailedUnknown":
+    "Natives Geschäftslogik-Validierung-fehlgeschlagen-Flag: unbekannt",
+  "chat.jira.identity.rerunTrue": "Natives Wiederholungsflag: wahr",
+  "chat.jira.identity.rerunFalse": "Natives Wiederholungsflag: falsch",
+  "chat.jira.identity.rerunUnknown": "Natives Wiederholungsflag: unbekannt",
+  "chat.jira.identity.operations": "Beobachtete native Operationen",
+  "chat.jira.identity.operationCount": "Zurückgegebene native Operationsnamen",
+  "chat.jira.identity.operationsUnknown": "Die native Operationsliste wurde nicht angegeben.",
+  "chat.jira.identity.errorGroups": "Zurückgegebene native Fehlergruppen",
+  "chat.jira.identity.warningGroups": "Zurückgegebene native Warngruppen",
+  "chat.jira.identity.errorsUnknown":
+    "Die native Fehlersammlung wurde nicht angegeben; Fehlerfreiheit ist damit nicht belegt.",
+  "chat.jira.identity.warningsUnknown":
+    "Die native Warnungssammlung wurde nicht angegeben; Warnungsfreiheit ist damit nicht belegt.",
+  "chat.jira.identity.nativeError": "Nativer Fehler",
+  "chat.jira.identity.nativeWarning": "Native Warnung",
+  "chat.jira.identity.displayName": "Beobachteter Anzeigename",
+  "chat.jira.identity.blankUsername":
+    "Der native Benutzername ist leer oder besteht nur aus Leerraum.",
+  "chat.jira.identity.blankDisplayName":
+    "Der native Anzeigename ist leer oder besteht nur aus Leerraum.",
+  "chat.jira.identity.progressOnly":
+    "Eine native Fortschrittsbeobachtung; kein Auftrag wurde gestartet, fortgesetzt, entsperrt oder automatisch wiederholt abgefragt.",
+  "chat.jira.identity.progressUnitsUnknown":
+    "Die native Fortschrittseinheit wurde nicht bestimmt. Der Wert wird nicht als Prozentzahl dargestellt.",
+  "chat.jira.identity.completionCaveat":
+    "COMPLETED allein belegt keine fehlerfreie Anonymisierung; native Fehler und Warnungen bleiben relevant.",
+  "chat.jira.identity.requestedTaskOnly":
+    "Die Aufgaben-ID ist der angeforderte Selektor. Die native Antwort enthält keine unabhängige Aufgaben-ID zur Gegenprüfung.",
+  "chat.jira.identity.emptySubtask": "Der native Teilaufgabentext ist ausdrücklich leer.",
+  "chat.jira.identity.sessionOnly":
+    "Sitzungsinformationen für den gebundenen aktuellen Jira-Benutzer. Dadurch entstehen weder eine neue Anmeldung noch erneuerte Zugangsdaten oder Berechtigungen.",
+  "chat.jira.identity.failedLoginCount": "Beobachtete fehlgeschlagene Anmeldungen",
+  "chat.jira.identity.loginCount": "Beobachtete Anmeldungen",
+  "chat.jira.identity.failedLoginCountUnknown":
+    "Die Anzahl fehlgeschlagener Anmeldungen wurde nicht angegeben.",
+  "chat.jira.identity.loginCountUnknown": "Die Anzahl der Anmeldungen wurde nicht angegeben.",
+  "chat.jira.identity.lastFailedLoginTime":
+    "Nativer Zeitpunkt der letzten fehlgeschlagenen Anmeldung",
+  "chat.jira.identity.previousLoginTime": "Nativer Zeitpunkt der vorherigen Anmeldung",
+  "chat.jira.selectedWorklogs.scope":
+    "Dieses Ergebnis umfasst nur ausdrücklich angeforderte Arbeitsprotokoll-IDs, die Jira unter der Sichtbarkeit des aktuellen Benutzers zurückgegeben hat. Es ist kein vollständiges Arbeitsprotokoll-Inventar.",
+  "chat.jira.selectedWorklogs.unreturnedMeaning":
+    "Nicht zurückgegebene IDs können fehlen oder unzugänglich sein. Dies belegt weder Löschung noch Abwesenheit.",
+  "chat.jira.selectedWorklogs.requestedCount": "Angeforderte Arbeitsprotokoll-IDs",
+  "chat.jira.selectedWorklogs.returnedCount": "Zurückgegebene angeforderte Arbeitsprotokolle",
+  "chat.jira.selectedWorklogs.unreturnedIds":
+    "Nicht zurückgegebene angeforderte Arbeitsprotokoll-IDs",
+  "chat.jira.selectedWorklogs.unreturnedCount": "Anzahl nicht zurückgegebener angeforderter IDs",
+  "chat.jira.selectedWorklogs.requestedUnknown":
+    "Die Anzahl angeforderter Arbeitsprotokolle wurde nicht angegeben.",
+  "chat.jira.selectedWorklogs.returnedUnknown":
+    "Die Anzahl zurückgegebener Arbeitsprotokolle wurde nicht angegeben.",
+  "chat.jira.selectedWorklogs.unreturnedUnknown":
+    "Die Liste nicht zurückgegebener angeforderter IDs wurde nicht angegeben.",
+  "chat.jira.selectedWorklogs.itemsUnknown":
+    "Die Sammlung ausgewählter Arbeitsprotokolle wurde nicht angegeben.",
   // File preview is loaded with the Files and Editor window bodies.
   "filePreview.showSource": "Quellenvorschau anzeigen",
   "filePreview.linesAdded": "{count} Zeilen hinzugefügt.",
@@ -114,6 +1033,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.draft.empty": "(leer)",
   "chat.jira.draft.cleared": "Geleert",
   "chat.jira.draft.requirements": "Anforderungen: {ids}",
+  "chat.jira.draft.requirementsMissing":
+    "Keine Anforderungsreferenzen: Die Freigabe erstellt dieses Issue ohne Quellnachverfolgung.",
   "chat.jira.draft.unreadable":
     "Dieser Entwurf lässt sich nicht als Vorgangsliste darstellen; seine Details werden Feld für Feld angezeigt.",
   "chat.jira.draft.loading":
@@ -121,10 +1042,1249 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.draft.unavailable":
     "Dieser Entwurf ist nicht mehr verfügbar und kann deshalb nicht freigegeben werden. Bitte Keiko, ihn erneut vorzubereiten.",
   "chat.jira.fact.issue": "Vorgang",
+  "chat.jira.field.summary": "Zusammenfassung",
+  "chat.jira.field.description": "Beschreibung",
+  "chat.jira.field.environment": "Umgebung",
+  "chat.jira.field.labels": "Schlagwörter",
+  "chat.jira.field.priority": "Priorität",
+  "chat.jira.field.reporter": "Gemeldet von",
+  "chat.jira.field.dueDate": "Fälligkeitsdatum",
+  "chat.jira.field.components": "Komponenten",
+  "chat.jira.field.affectedVersions": "Betroffene Versionen",
+  "chat.jira.field.fixVersions": "Zielversionen",
+  "chat.jira.field.status": "Status",
+  "chat.jira.field.resolution": "Lösung",
+  "chat.jira.field.timeTracking": "Zeiterfassung",
+  "chat.jira.field.security": "Sicherheitsstufe",
+  "chat.jira.field.parent": "Übergeordneter Vorgang",
+  "chat.jira.field.attachments": "Anhänge",
   "chat.jira.fact.project": "Projekt",
+  "chat.jira.fact.projectKey": "Projektschlüssel",
+  "chat.jira.fact.projectIdOrKey": "Projekt-ID oder Schlüssel",
+  "chat.jira.fact.projectName": "Projektname",
+  "chat.jira.fact.projectLead": "Projektleitung",
+  "chat.jira.fact.projectType": "Projekttyp",
+  "chat.jira.fact.projectTemplate": "Projektvorlage",
+  "chat.jira.fact.boardId": "Board-ID",
+  "chat.jira.fact.sprintId": "Sprint-ID",
+  "chat.jira.fact.filterId": "Gespeicherte Filter-ID",
+  "chat.jira.fact.filterQuery": "Filterabfrage",
+  "chat.jira.agile.filterSharingUnknown": "Freigabestatus des Filters nicht verfügbar",
+  "chat.jira.agile.filterPrivate": "Privater Filter",
+  "chat.jira.agile.filterShared": "Freigegebener Filter",
+  "chat.jira.fact.boardName": "Board-Name",
+  "chat.jira.fact.boardType": "Board-Typ",
+  "chat.jira.fact.sprintName": "Sprint-Name",
+  "chat.jira.fact.sprintGoal": "Sprint-Ziel",
+  "chat.jira.fact.sprintState": "Sprint-Status",
+  "chat.jira.fact.startDate": "Startdatum",
+  "chat.jira.fact.endDate": "Enddatum",
+  "chat.jira.fact.completeDate": "Abschlussdatum",
+  "chat.jira.fact.activatedDate": "Aktivierungsdatum",
+  "chat.jira.fact.epicIdOrKey": "Epic-ID oder Schlüssel",
+  "chat.jira.fact.epicName": "Epic-Name",
+  "chat.jira.fact.epicSummary": "Epic-Zusammenfassung",
+  "chat.jira.fact.epicDone": "Epic als erledigt markiert",
+  "chat.jira.fact.epicColor": "Epic-Farbe",
+  "chat.jira.fact.projectId": "Projekt-ID",
+  "chat.jira.fact.versionId": "Versions-ID",
+  "chat.jira.fact.versionName": "Versionsname",
+  "chat.jira.fact.versionDescription": "Versionsbeschreibung",
+  "chat.jira.fact.componentId": "Komponenten-ID",
+  "chat.jira.fact.componentName": "Komponentenname",
+  "chat.jira.fact.componentDescription": "Komponentenbeschreibung",
+  "chat.jira.fact.componentLead": "Komponentenleitung",
+  "chat.jira.fact.releaseDate": "Veröffentlichungsdatum",
+  "chat.jira.fact.released": "Veröffentlicht",
+  "chat.jira.fact.archived": "Archiviert",
+  "chat.jira.metadata.released": "Veröffentlichte Version",
+  "chat.jira.metadata.unreleased": "Unveröffentlichte Version",
+  "chat.jira.metadata.releaseUnknown": "Veröffentlichungsstatus nicht verfügbar",
+  "chat.jira.metadata.archived": "Archiviert",
+  "chat.jira.metadata.notArchived": "Nicht archiviert",
+  "chat.jira.metadata.archiveUnknown": "Archivierungsstatus nicht verfügbar",
+  "chat.jira.metadata.deleted": "Gelöschte Komponente",
+  "chat.jira.metadata.notDeleted": "Komponente als nicht gelöscht gemeldet",
+  "chat.jira.metadata.deletionUnknown": "Löschstatus der Komponente nicht verfügbar",
+  "chat.jira.metadata.assigneeProjectDefault": "Zuständigkeit: Projektstandard",
+  "chat.jira.metadata.assigneeComponentLead": "Zuständigkeit: Komponentenleitung",
+  "chat.jira.metadata.assigneeProjectLead": "Zuständigkeit: Projektleitung",
+  "chat.jira.metadata.assigneeUnassigned": "Zuständigkeit: nicht zugewiesen",
+  "chat.jira.fact.issueKeys": "Vorgangsschlüssel",
+  "chat.jira.agile.future": "Geplanter Sprint",
+  "chat.jira.agile.active": "Aktiver Sprint",
+  "chat.jira.agile.closed": "Abgeschlossener Sprint",
+  "chat.jira.agile.scrum": "Scrum-Board",
+  "chat.jira.agile.kanban": "Kanban-Board",
+  "chat.jira.agile.epicDone": "Epic als erledigt markiert",
+  "chat.jira.agile.epicOpen": "Epic nicht als erledigt markiert",
+  "chat.jira.fact.projectDescription": "Projektbeschreibung",
+  "chat.jira.fact.projectWebsite": "Projektwebseite",
+  "chat.jira.fact.projectAssignee": "Standardbearbeiter",
   "chat.jira.fact.issueType": "Vorgangstyp",
   "chat.jira.fact.transition": "Statusübergang",
   "chat.jira.fact.comment": "Kommentar",
+  "chat.jira.fact.commentId": "Kommentar-ID",
+  "chat.jira.access.schemeId": "Schema-ID",
+  "chat.jira.access.grantId": "ID der Berechtigungszuweisung",
+  "chat.jira.access.permission": "Konfigurierte Berechtigung",
+  "chat.jira.access.holderType": "Typ des Berechtigungsträgers",
+  "chat.jira.access.holderParameter": "Parameter des Berechtigungsträgers",
+  "chat.jira.access.grantCount": "Konfigurierte Berechtigungszuweisungen",
+  "chat.jira.access.levelId": "Sicherheitsstufen-ID",
+  "chat.jira.access.defaultLevelId": "ID der Standardsicherheitsstufe",
+  "chat.jira.access.levelCount": "Konfigurierte Sicherheitsstufen",
+  "chat.jira.access.eventId": "Benachrichtigungsereignis-ID",
+  "chat.jira.access.parentEventId": "Übergeordnete Ereignis-ID",
+  "chat.jira.access.eventCount": "Konfigurierte Benachrichtigungsereignisse",
+  "chat.jira.access.recipientId": "Benachrichtigungsempfänger-ID",
+  "chat.jira.access.recipientCount": "Konfigurierte Empfänger",
+  "chat.jira.access.recipientParameter": "Empfängerparameter",
+  "chat.jira.access.recipientEmail": "Konfigurierte Empfänger-E-Mail-Adresse",
+  "chat.jira.access.fieldId": "ID des Empfängerfelds",
+  "chat.jira.access.fieldName": "Name des Empfängerfelds",
+  "chat.jira.access.configurationOnly":
+    "Dies sind konfigurierte Zugriffsregeln. Wirksame Berechtigungen des aktuellen Benutzers wurden nicht ermittelt.",
+  "chat.jira.access.notificationsConfigurationOnly":
+    "Dies sind konfigurierte Benachrichtigungsempfänger. Die Zustellung wurde nicht geprüft.",
+  "chat.jira.access.grantsUnknown":
+    "Details der Berechtigungszuweisungen wurden nicht bereitgestellt.",
+  "chat.jira.access.levelsUnknown": "Details der Sicherheitsstufen wurden nicht bereitgestellt.",
+  "chat.jira.access.eventsNotRequested":
+    "Details der Benachrichtigungsereignisse wurden nicht angefordert.",
+  "chat.jira.access.eventsUnavailable":
+    "Angeforderte Details der Benachrichtigungsereignisse sind nicht verfügbar.",
+  "chat.jira.access.notificationEvent": "Benachrichtigungsereignis",
+  "chat.jira.access.templateEvent": "Vorlagenereignis",
+  "chat.jira.access.templateDetailsUnavailable":
+    "Weitere Details zu Vorlagenereignissen sind nicht verfügbar.",
+  "chat.jira.access.recipientsUnknown":
+    "Empfängerdetails wurden für dieses Ereignis nicht bereitgestellt.",
+  "chat.jira.access.recipientUnknown": "Der Empfängertyp wurde nicht erkannt.",
+  "chat.jira.access.recipient.currentAssignee": "Aktuell zuständige Person",
+  "chat.jira.access.recipient.reporter": "Melder",
+  "chat.jira.access.recipient.currentUser": "Aktueller Benutzer",
+  "chat.jira.access.recipient.projectLead": "Projektleitung",
+  "chat.jira.access.recipient.componentLead": "Komponentenleitung",
+  "chat.jira.access.recipient.allWatchers": "Alle Beobachter",
+  "chat.jira.access.recipient.user": "Konfigurierter Benutzer",
+  "chat.jira.access.recipient.group": "Konfigurierte Gruppe",
+  "chat.jira.access.recipient.emailAddress": "Konfigurierte E-Mail-Adresse",
+  "chat.jira.access.recipient.userCustomField": "Benutzer aus einem benutzerdefinierten Feld",
+  "chat.jira.access.recipient.groupCustomField": "Gruppen aus einem benutzerdefinierten Feld",
+  "chat.jira.access.recipient.projectRole": "Konfigurierte Projektrolle",
+  "atlassianConnectors.action.jira.permission-schemes": "Jira-Berechtigungsschemata lesen",
+  "atlassianConnectors.action.jira.permission-scheme": "Jira-Berechtigungsschema lesen",
+  "atlassianConnectors.action.jira.permission-grants": "Jira-Berechtigungszuweisungen lesen",
+  "atlassianConnectors.action.jira.permission-grant": "Jira-Berechtigungszuweisung lesen",
+  "atlassianConnectors.action.jira.issue-security-schemes":
+    "Sicherheitsschemata für Jira-Vorgänge lesen",
+  "atlassianConnectors.action.jira.issue-security-scheme":
+    "Sicherheitsschema für Jira-Vorgänge lesen",
+  "atlassianConnectors.action.jira.security-level": "Jira-Sicherheitsstufe lesen",
+  "atlassianConnectors.action.jira.notification-schemes": "Jira-Benachrichtigungsschemata lesen",
+  "atlassianConnectors.action.jira.notification-scheme": "Jira-Benachrichtigungsschema lesen",
+  "atlassianConnectors.action.jira.project-notification-scheme":
+    "Benachrichtigungsschema eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.project-permission-scheme":
+    "Berechtigungsschema eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.project-issue-security-scheme":
+    "Vorgangssicherheitsschema eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.project-security-levels":
+    "Zugängliche Sicherheitsstufen eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.project-workflow-scheme":
+    "Workflowschema eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.project-priority-scheme":
+    "Prioritätsschema eines Jira-Projekts lesen",
+  "chat.jira.association.accessibleLevelCount": "Zugängliche Sicherheitsstufen",
+  "chat.jira.association.accessibleLevelsScope":
+    "Es werden nur zugängliche Sicherheitsstufen gezeigt. Ein leeres Ergebnis bedeutet nicht, dass keine Stufen konfiguriert sind; der Zugriff kann von der Berechtigung zum Festlegen der Vorgangssicherheit abhängen.",
+  "chat.jira.association.levelsScopeUnknown":
+    "Der Geltungsbereich dieser Sicherheitsstufen wurde nicht bereitgestellt.",
+  "chat.jira.association.priorityOptionsUnknown":
+    "Konfigurierte Prioritätsoptionen wurden nicht bereitgestellt.",
+  "chat.jira.association.defaultPriorityScheme": "Dies ist das Standardprioritätsschema.",
+  "chat.jira.association.notDefaultPriorityScheme": "Dies ist nicht das Standardprioritätsschema.",
+  "chat.jira.association.defaultPriorityId": "Konfigurierte Standardprioritäts-ID",
+  "chat.jira.association.priorityIds": "Konfigurierte Prioritäts-IDs",
+  "chat.jira.association.priorityCount": "Anzahl konfigurierter Prioritäten",
+  "chat.jira.core.priorityId": "Prioritäts-ID",
+  "chat.jira.core.resolutionId": "Beobachtete Lösungs-ID",
+  "chat.jira.core.requestedResolutionId": "Angeforderte Lösungs-ID",
+  "chat.jira.core.resolutionIdUnknown": "Die Lösungs-ID wurde von Jira nicht geliefert.",
+  "chat.jira.core.statusId": "Status-ID",
+  "chat.jira.core.statusCategoryId": "Statuskategorie-ID",
+  "chat.jira.core.statusCategoryKey": "Statuskategorieschlüssel",
+  "chat.jira.core.statusCategoryName": "Statuskategoriename",
+  "chat.jira.core.statusCategoryUnknown":
+    "Details der Statuskategorie wurden nicht bereitgestellt.",
+  "chat.jira.core.projectCategoryId": "Projektkategorie-ID",
+  "chat.jira.core.sourceIssueTypeId": "Ausgangsvorgangstyp-ID",
+  "chat.jira.core.subtaskType": "Unteraufgabentyp",
+  "chat.jira.core.standardType": "Standardvorgangstyp",
+  "chat.jira.core.typeKindUnknown": "Die Einordnung als Unteraufgabentyp ist unbekannt.",
+  "chat.jira.core.statusColor": "Farbwert",
+  "chat.jira.core.colorName": "Farbname",
+  "chat.jira.core.descriptionTranslationKey": "Übersetzungsschlüssel der Beschreibung",
+  "chat.jira.core.configuredStatusCount": "Konfigurierte Status dieses Vorgangstyps",
+  "chat.jira.core.statusesUnknown": "Status dieses Vorgangstyps wurden nicht bereitgestellt.",
+  "chat.jira.core.projectStatusesScope":
+    "Für dieses Projekt und diesen Vorgangstyp konfigurierte Status; verfügbare Übergänge und Berechtigungen des aktuellen Benutzers wurden nicht ermittelt.",
+  "atlassianConnectors.action.jira.global-issue-types": "Globale Jira-Vorgangstypen lesen",
+  "atlassianConnectors.action.jira.issue-type": "Jira-Vorgangstyp lesen",
+  "atlassianConnectors.action.jira.issue-type-page": "Eine Seite mit Jira-Vorgangstypen lesen",
+  "atlassianConnectors.action.jira.issue-type-alternatives": "Alternative Jira-Vorgangstypen lesen",
+  "atlassianConnectors.action.jira.priorities": "Jira-Prioritäten lesen",
+  "atlassianConnectors.action.jira.priority": "Jira-Priorität lesen",
+  "atlassianConnectors.action.jira.priority-page": "Eine Seite mit Jira-Prioritäten lesen",
+  "atlassianConnectors.action.jira.resolutions": "Jira-Lösungen lesen",
+  "atlassianConnectors.action.jira.resolution": "Jira-Lösung lesen",
+  "atlassianConnectors.action.jira.resolution-page": "Eine Seite mit Jira-Lösungen lesen",
+  "atlassianConnectors.action.jira.statuses": "Jira-Status lesen",
+  "atlassianConnectors.action.jira.status": "Jira-Statusdetails lesen",
+  "atlassianConnectors.action.jira.status-page": "Eine Seite mit Jira-Status lesen",
+  "atlassianConnectors.action.jira.status-categories": "Jira-Statuskategorien lesen",
+  "atlassianConnectors.action.jira.status-category": "Jira-Statuskategorie lesen",
+  "atlassianConnectors.action.jira.project-categories": "Jira-Projektkategorien lesen",
+  "atlassianConnectors.action.jira.project-category": "Jira-Projektkategorie lesen",
+  "atlassianConnectors.action.jira.project-statuses": "Status eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.project-types": "Jira-Projekttypen lesen",
+  "atlassianConnectors.action.jira.project-type-definition":
+    "Definition eines Jira-Projekttyps lesen",
+  "atlassianConnectors.action.jira.server-info": "Jira-Serverinformationen lesen",
+  "atlassianConnectors.action.jira.instance-configuration": "Konfiguration der Jira-Instanz lesen",
+  "atlassianConnectors.action.jira.permission-definitions": "Jira-Berechtigungsdefinitionen lesen",
+  "atlassianConnectors.action.jira.myself": "Das aktuelle Jira-Konto lesen",
+  "chat.jira.instance.version": "Gemeldete Version",
+  "chat.jira.instance.versionNumbers": "Gemeldete Versionsbestandteile",
+  "chat.jira.instance.deploymentType": "Gemeldeter Bereitstellungstyp",
+  "chat.jira.instance.buildNumber": "Buildnummer",
+  "chat.jira.instance.databaseBuildNumber": "Datenbank-Buildnummer",
+  "chat.jira.instance.buildPartnerName": "Buildpartner",
+  "chat.jira.instance.serverObservation":
+    "Gemeldete Metadaten der Instanz. Dieser Abruf verifiziert weder die Verbindung noch die Unterstützung einzelner Operationen.",
+  "chat.jira.instance.attachmentsOn": "Anhänge: aktiviert",
+  "chat.jira.instance.attachmentsOff": "Anhänge: deaktiviert",
+  "chat.jira.instance.attachmentsUnknown": "Anhänge: Einstellung unbekannt",
+  "chat.jira.instance.issueLinkingOn": "Vorgangsverknüpfungen: aktiviert",
+  "chat.jira.instance.issueLinkingOff": "Vorgangsverknüpfungen: deaktiviert",
+  "chat.jira.instance.issueLinkingUnknown": "Vorgangsverknüpfungen: Einstellung unbekannt",
+  "chat.jira.instance.subtasksOn": "Unteraufgaben: aktiviert",
+  "chat.jira.instance.subtasksOff": "Unteraufgaben: deaktiviert",
+  "chat.jira.instance.subtasksUnknown": "Unteraufgaben: Einstellung unbekannt",
+  "chat.jira.instance.timeTrackingOn": "Zeiterfassung: aktiviert",
+  "chat.jira.instance.timeTrackingOff": "Zeiterfassung: deaktiviert",
+  "chat.jira.instance.timeTrackingUnknown": "Zeiterfassung: Einstellung unbekannt",
+  "chat.jira.instance.unassignedOn": "Nicht zugewiesene Vorgänge: erlaubt",
+  "chat.jira.instance.unassignedOff": "Nicht zugewiesene Vorgänge: nicht erlaubt",
+  "chat.jira.instance.unassignedUnknown": "Nicht zugewiesene Vorgänge: Einstellung unbekannt",
+  "chat.jira.instance.votingOn": "Abstimmungen: aktiviert",
+  "chat.jira.instance.votingOff": "Abstimmungen: deaktiviert",
+  "chat.jira.instance.votingUnknown": "Abstimmungen: Einstellung unbekannt",
+  "chat.jira.instance.watchingOn": "Beobachten: aktiviert",
+  "chat.jira.instance.watchingOff": "Beobachten: deaktiviert",
+  "chat.jira.instance.watchingUnknown": "Beobachten: Einstellung unbekannt",
+  "chat.jira.instance.hoursPerDay": "Arbeitsstunden pro Tag",
+  "chat.jira.instance.daysPerWeek": "Arbeitstage pro Woche",
+  "chat.jira.instance.timeSettingsUnknown":
+    "Einstellungen zur Zeiterfassung wurden nicht bereitgestellt.",
+  "chat.jira.instance.timeSettingsPartial":
+    "Einige Einstellungen zur Zeiterfassung wurden nicht bereitgestellt.",
+  "chat.jira.instance.unitMinute": "Standardzeiteinheit: Minuten",
+  "chat.jira.instance.unitHour": "Standardzeiteinheit: Stunden",
+  "chat.jira.instance.unitDay": "Standardzeiteinheit: Tage",
+  "chat.jira.instance.unitWeek": "Standardzeiteinheit: Wochen",
+  "chat.jira.instance.formatPretty": "Zeitanzeige: formatierte Dauer",
+  "chat.jira.instance.formatDays": "Zeitanzeige: Tage",
+  "chat.jira.instance.formatHours": "Zeitanzeige: Stunden",
+  "chat.jira.instance.definitionKey": "Berechtigungsdefinitionsschlüssel",
+  "chat.jira.instance.nativePermissionKey": "Nativer Berechtigungsschlüssel",
+  "chat.jira.instance.definitionId": "Berechtigungsdefinitions-ID",
+  "chat.jira.instance.globalDefinition": "Globale Berechtigungsdefinition",
+  "chat.jira.instance.projectDefinition": "Projektbezogene Berechtigungsdefinition",
+  "atlassianConnectors.action.jira.roles": "Jira-Rollen lesen",
+  "atlassianConnectors.action.jira.role": "Jira-Rolle lesen",
+  "atlassianConnectors.action.jira.role-default-actors": "Standardakteure einer Jira-Rolle lesen",
+  "atlassianConnectors.action.jira.project-roles": "Rollennamen eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.project-role": "Rollenmitgliedschaft eines Jira-Projekts lesen",
+  "atlassianConnectors.action.jira.priority-schemes": "Jira-Prioritätsschemata lesen",
+  "atlassianConnectors.action.jira.priority-scheme": "Jira-Prioritätsschema lesen",
+  "chat.jira.role.configurationScope":
+    "Rollenkonfiguration. Wirksame Berechtigungen wurden nicht ermittelt.",
+  "chat.jira.role.defaultsScope":
+    "Standardakteure der Rolle. Diese Vorgaben belegen weder die Mitgliedschaft in einem bestimmten Projekt noch wirksame Berechtigungen.",
+  "chat.jira.role.membershipScope":
+    "Konfigurierte Projektrollenmitgliedschaft. Die Mitgliedschaft und wirksamen Berechtigungen des aktuellen Benutzers wurden nicht ermittelt.",
+  "chat.jira.role.indexScope":
+    "Nur Projektrollennamen. Rollen-IDs und Mitglieder wurden nicht geliefert.",
+  "chat.jira.role.scopeUnknown":
+    "Der Geltungsbereich der Rollenakteure wurde nicht bereitgestellt.",
+  "chat.jira.role.actorsUnknown": "Details der Rollenakteure wurden nicht bereitgestellt.",
+  "chat.jira.role.actorCount": "Konfigurierte Rollenakteure",
+  "chat.jira.role.actorId": "Rollenakteur-ID",
+  "chat.jira.role.actorName": "Rollenakteurname",
+  "chat.jira.role.actorType": "Rollenakteurtyp",
+  "atlassianConnectors.action.jira.component-related-issue-counts":
+    "Vorgangszahlen einer Jira-Komponente lesen",
+  "atlassianConnectors.action.jira.version-related-issue-counts":
+    "Vorgangszahlen einer Jira-Version lesen",
+  "atlassianConnectors.action.jira.version-unresolved-issue-count":
+    "Zahl ungelöster Vorgänge einer Jira-Version lesen",
+  "atlassianConnectors.action.jira.project-version-page":
+    "Eine Seite mit Versionen eines Jira-Projekts lesen",
+  "chat.jira.release.relatedIssues": "Von Jira gemeldete zugehörige Vorgänge",
+  "chat.jira.release.affectedIssues": "Vorgänge mit dieser betroffenen Version",
+  "chat.jira.release.fixedIssues": "Vorgänge mit dieser Lösungsversion",
+  "chat.jira.release.customFieldIssues":
+    "Vorgänge mit dieser Version in benutzerdefinierten Feldern",
+  "chat.jira.release.unresolvedIssues": "Von Jira gemeldete ungelöste Vorgänge",
+  "chat.jira.release.fieldIssues": "Vorgänge mit dieser Version in diesem Feld",
+  "chat.jira.release.customFieldCount": "Gelieferte benutzerdefinierte Felder",
+  "chat.jira.release.nativeCountScope":
+    "Zählwerte aus der Jira-Antwort ohne unabhängigen JQL-Abgleich. Die einzelnen Zählkategorien können sich überschneiden.",
+  "chat.jira.release.countScopeUnknown":
+    "Der Geltungsbereich dieser Zählwerte wurde nicht bereitgestellt.",
+  "chat.jira.release.countsUnknown":
+    "Einige angeforderte Zählwerte wurden nicht bereitgestellt; fehlende Werte bleiben unbekannt.",
+  "chat.jira.release.customUsageUnknown":
+    "Details zur Verwendung in benutzerdefinierten Feldern wurden nicht bereitgestellt.",
+  "atlassianConnectors.action.jira.multi-project-assignable-users":
+    "Zuweisbare Benutzer mehrerer Jira-Projekte suchen",
+  "atlassianConnectors.action.jira.permission-users": "Jira-Benutzer nach Berechtigung suchen",
+  "atlassianConnectors.action.jira.browse-permission-users":
+    "Jira-Benutzer mit Anzeigeberechtigung suchen",
+  "atlassianConnectors.action.jira.group-user-picker": "Jira-Benutzer und -Gruppen vorschlagen",
+  "atlassianConnectors.action.jira.project-picker": "Jira-Projekte vorschlagen",
+  "atlassianConnectors.action.jira.fields": "Jira-Felddefinitionen lesen",
+  "atlassianConnectors.action.jira.custom-field-option":
+    "Option eines benutzerdefinierten Jira-Felds lesen",
+  "chat.jira.lookup.customField": "Benutzerdefiniertes Feld",
+  "chat.jira.lookup.systemField": "Systemfeld",
+  "chat.jira.lookup.fieldKindUnknown": "Feldart unbekannt",
+  "chat.jira.lookup.orderable": "Sortierbar: ja",
+  "chat.jira.lookup.notOrderable": "Sortierbar: nein",
+  "chat.jira.lookup.orderableUnknown": "Sortierbar: unbekannt",
+  "chat.jira.lookup.navigable": "Navigierbar: ja",
+  "chat.jira.lookup.notNavigable": "Navigierbar: nein",
+  "chat.jira.lookup.navigableUnknown": "Navigierbar: unbekannt",
+  "chat.jira.lookup.searchable": "Durchsuchbar: ja",
+  "chat.jira.lookup.notSearchable": "Durchsuchbar: nein",
+  "chat.jira.lookup.searchableUnknown": "Durchsuchbar: unbekannt",
+  "chat.jira.lookup.schemaType": "Schematyp",
+  "chat.jira.lookup.schemaItems": "Schemaelementtyp",
+  "chat.jira.lookup.schemaSystem": "Systemfeldschema",
+  "chat.jira.lookup.schemaCustom": "Schema des benutzerdefinierten Felds",
+  "chat.jira.lookup.schemaCustomId": "Schema-ID des benutzerdefinierten Felds",
+  "chat.jira.lookup.schemaUnknown": "Das Feldschema wurde nicht bereitgestellt.",
+  "chat.jira.lookup.clauseNames": "JQL-Klauselnamen",
+  "chat.jira.lookup.clauseCount": "Gelieferte JQL-Klauselnamen",
+  "chat.jira.lookup.clausesUnknown": "JQL-Klauselnamen wurden nicht bereitgestellt.",
+  "chat.jira.lookup.fieldScope":
+    "Nur Felddefinition. Pflichtangabe und Bearbeitbarkeit für einen bestimmten Vorgang wurden nicht ermittelt.",
+  "chat.jira.lookup.optionId": "Options-ID des benutzerdefinierten Felds",
+  "chat.jira.lookup.optionDisabled": "Option deaktiviert",
+  "chat.jira.lookup.optionEnabled": "Option aktiviert",
+  "chat.jira.lookup.optionStateUnknown": "Optionsstatus unbekannt",
+  "chat.jira.lookup.emptyOptionValue": "Leerer Optionswert",
+  "chat.jira.lookup.childOptionIds": "IDs untergeordneter Optionen",
+  "chat.jira.lookup.childOptionCount": "Gelieferte untergeordnete Optionen",
+  "chat.jira.lookup.childrenUnknown": "IDs untergeordneter Optionen wurden nicht bereitgestellt.",
+  "chat.jira.lookup.usersUnknown": "Benutzervorschläge wurden nicht bereitgestellt.",
+  "chat.jira.lookup.groupsUnknown": "Gruppenvorschläge wurden nicht bereitgestellt.",
+  "chat.jira.lookup.usersReturned": "Gelieferte Benutzervorschläge",
+  "chat.jira.lookup.groupsReturned": "Gelieferte Gruppenvorschläge",
+  "chat.jira.lookup.usersTotal": "Gemeldete Benutzertreffer",
+  "chat.jira.lookup.groupsTotal": "Gemeldete Gruppentreffer",
+  "chat.jira.lookup.usersTotalUnknown": "Die Anzahl passender Benutzer wurde nicht bereitgestellt.",
+  "chat.jira.lookup.groupsTotalUnknown": "Die Anzahl passender Gruppen wurde nicht bereitgestellt.",
+  "atlassianConnectors.action.jira.jql-autocomplete":
+    "Jira-Metadaten zur JQL-Vervollständigung lesen",
+  "atlassianConnectors.action.jira.global-version-page": "Jira-Versionsseite lesen",
+  "atlassianConnectors.action.jira.component-page": "Jira-Komponentenseite lesen",
+  "atlassianConnectors.action.jira.link-type": "Jira-Vorgangsverknüpfungstyp lesen",
+  "atlassianConnectors.action.jira.accessibility-settings":
+    "Jira-Barrierefreiheitseinstellungen lesen",
+  "atlassianConnectors.action.jira.system-columns": "Jira-Systemspalten lesen",
+  "atlassianConnectors.action.jira.user-columns": "Jira-Benutzerspalten lesen",
+  "atlassianConnectors.action.jira.filter-columns": "Jira-Filterspalten lesen",
+  "atlassianConnectors.action.jira.reindex-status": "Jira-Reindexierungsstatus lesen",
+  "atlassianConnectors.action.jira.password-policy": "Jira-Passwortanforderungen lesen",
+  "atlassianConnectors.action.jira.duplicate-user-count":
+    "Zwischengespeicherte Anzahl doppelter Jira-Konten lesen",
+  "atlassianConnectors.action.jira.duplicate-users":
+    "Zwischengespeicherte doppelte Jira-Konten lesen",
+  "atlassianConnectors.action.jira.search-error": "Gespeicherten Jira-Suchfehler lesen",
+  "atlassianConnectors.action.jira.application-properties": "Jira-Anwendungseigenschaften lesen",
+  "atlassianConnectors.action.jira.advanced-settings": "Erweiterte Jira-Einstellungen lesen",
+  "atlassianConnectors.action.jira.my-preference": "Einstellung des verbundenen Jira-Kontos lesen",
+  "atlassianConnectors.action.jira.remote-version-links":
+    "Jira-Versionslinks anhand globaler ID lesen",
+  "atlassianConnectors.action.jira.version-remote-links": "Remote-Links einer Jira-Version lesen",
+  "atlassianConnectors.action.jira.version-remote-link":
+    "Ausgewählten Remote-Link einer Jira-Version lesen",
+  "atlassianConnectors.action.jira.deleted-worklogs":
+    "Beobachtete Jira-Arbeitsprotokoll-Löschungen lesen",
+  "atlassianConnectors.action.jira.updated-worklogs":
+    "Beobachtete Jira-Arbeitsprotokoll-Änderungen lesen",
+  "chat.jira.outcome.openFilter": "Jira-Filter öffnen",
+  "atlassianConnectors.action.create-filter": "Jira-Filter erstellen",
+  "atlassianConnectors.action.update-filter": "Jira-Filter ändern",
+  "atlassianConnectors.action.delete-filter": "Jira-Filter löschen",
+  "atlassianConnectors.action.set-filter-share-scope": "Jira-Standardfreigabe für Filter ändern",
+  "atlassianConnectors.action.set-filter-columns": "Jira-Filterspalten festlegen",
+  "atlassianConnectors.action.reset-filter-columns": "Jira-Filterspalten zurücksetzen",
+  "atlassianConnectors.action.add-filter-permission": "Jira-Filterfreigabe hinzufügen",
+  "atlassianConnectors.action.delete-filter-permission": "Jira-Filterfreigabe entfernen",
+  "atlassianConnectors.action.set-my-preference":
+    "Einstellung des verbundenen Jira-Kontos festlegen",
+  "atlassianConnectors.action.delete-my-preference":
+    "Einstellung des verbundenen Jira-Kontos löschen",
+  "chat.jira.savedConfiguration.private": "Privat",
+  "chat.jira.savedConfiguration.authenticated": "Angemeldete Konten",
+  "chat.jira.savedConfiguration.global": "Global",
+  "chat.jira.savedConfiguration.identityUnknown":
+    "Die vollständige Identität oder der Bestätigungskontext fehlt. Diese Karte belegt keine erfolgreiche Änderung.",
+  "chat.jira.savedConfiguration.deletionUnconfirmed":
+    "Diese native API kann eine vollständige Entfernung nicht unabhängig belegen. Eine angenommene Löschung bleibt unbestätigt; ein unzugänglicher Eintrag oder geerbter Standardwert belegt keine Abwesenheit. Die Löschung nicht automatisch wiederholen.",
+  "chat.jira.savedConfiguration.confirmed":
+    "Die angeforderte Änderung wurde für diese Identität unabhängig bestätigt.",
+  "chat.jira.savedConfiguration.unchanged":
+    "Der unabhängig beobachtete Zustand entsprach bereits der Anfrage. Es wurde nichts geschrieben.",
+  "chat.jira.savedConfiguration.unconfirmed":
+    "Die bekannte Identität bleibt erhalten. Die angeforderte Änderung ist unbestätigt; sie nicht automatisch wiederholen.",
+  "chat.jira.savedConfiguration.nonAtomicCreate":
+    "Jira erstellt diesen Filter mit der Standardfreigabe des verbundenen Kontos. Der Endpunkt kann die Erstellung nicht atomar an den geprüften Standard binden oder einen privaten Start garantieren. Eine gleichzeitige Standardänderung kann den Filter anders veröffentlichen.",
+  "chat.jira.savedConfiguration.futureDefaults":
+    "Dies ändert nur die Standardfreigabe des verbundenen Kontos für künftige Filter. Bestehende Filter und Jira-Berechtigungen werden dadurch nicht geändert.",
+  "chat.jira.savedConfiguration.resetProof":
+    "Das Zurücksetzen wird erst bestätigt, wenn eine neue native Antwort eine System-, Benutzer- oder fehlende Filterkonfiguration belegt. Ein älteres Spaltenarray allein beweist das Zurücksetzen nicht.",
+  "chat.jira.savedConfiguration.currentUserOnly":
+    "Diese Einstellung gehört zum gebundenen verbundenen Jira-Konto.",
+  "chat.jira.savedConfiguration.targetPresent": "Angeforderter Einstellungszustand: vorhanden",
+  "chat.jira.savedConfiguration.targetAbsent": "Angeforderter Einstellungszustand: nicht vorhanden",
+  "chat.jira.savedConfiguration.returnedScope": "Durch unabhängiges Lesen zurückgegebene Freigabe:",
+  "chat.jira.savedConfiguration.reviewedActor": "Geprüfter Schlüssel des verbundenen Kontos",
+  "chat.jira.savedConfiguration.reviewedOwner": "Geprüfter Schlüssel des Filterbesitzers",
+  "chat.jira.savedConfiguration.reviewedName": "Geprüfter Filtername",
+  "chat.jira.savedConfiguration.reviewedJql": "Geprüfte Filter-JQL",
+  "chat.jira.savedConfiguration.reviewedDescription": "Geprüfte Filterbeschreibung",
+  "chat.jira.savedConfiguration.newName": "Angeforderter Filtername",
+  "chat.jira.savedConfiguration.newJql": "Angeforderte Filter-JQL",
+  "chat.jira.savedConfiguration.newDescription": "Angeforderte Filterbeschreibung",
+  "chat.jira.savedConfiguration.reviewedDefaultScope": "Geprüfte Standardfreigabe",
+  "chat.jira.savedConfiguration.requestedDefaultScope": "Angeforderte Standardfreigabe",
+  "chat.jira.savedConfiguration.acceptDefaultSharing":
+    "Native Standardfreigabe ohne Garantie eines atomar privaten Starts akzeptieren",
+  "chat.jira.savedConfiguration.acceptGlobalReplacement":
+    "Ersetzung aller bestehenden Filterfreigaben akzeptieren",
+  "chat.jira.savedConfiguration.reviewedColumns": "Geprüfte Spalten in nativer Reihenfolge",
+  "chat.jira.savedConfiguration.requestedColumns": "Angeforderte Spalten in exakter Reihenfolge",
+  "chat.jira.savedConfiguration.reviewedColumnConfig": "Geprüfte native Spaltenkonfiguration",
+  "chat.jira.savedConfiguration.reviewedPermissions": "Vollständige geprüfte Filterfreigabeliste",
+  "chat.jira.savedConfiguration.requestedPermission": "Angeforderter Empfänger und Freigaberechte",
+  "chat.jira.savedConfiguration.reviewedValue": "Geprüfter Einstellungswert",
+  "chat.jira.savedConfiguration.requestedValue": "Angeforderter Einstellungswert",
+  "chat.jira.savedConfiguration.integerValue": "Ganzzahl: {value}",
+  "chat.jira.savedConfiguration.reviewedEmptyList": "Die geprüfte geordnete Liste ist leer.",
+  "chat.jira.savedConfiguration.reviewedEmptyPermissions":
+    "Die vollständige geprüfte Freigabeliste ist leer.",
+  "chat.jira.savedConfiguration.viewUnknown":
+    "Das Leserecht wurde nicht angegeben und ist unbekannt.",
+  "chat.jira.savedConfiguration.editUnknown":
+    "Das Änderungsrecht wurde nicht angegeben und ist unbekannt.",
+  "chat.jira.savedConfiguration.sharingRights": "Beobachtete oder ausdrücklich angeforderte Rechte",
+  "chat.jira.savedConfiguration.reviewedUsername": "Geprüfter Benutzername des Empfängers",
+  "chat.jira.savedConfiguration.descriptionNotProvided":
+    "Die native Filterbeschreibung wurde nicht angegeben (null).",
+  "chat.jira.savedConfiguration.descriptionEmpty":
+    "Die beobachtete Filterbeschreibung ist leerer Text.",
+  "chat.jira.savedConfiguration.descriptionWhitespace":
+    "Die beobachtete Filterbeschreibung enthält nur Leerraum.",
+  "chat.jira.savedConfiguration.provenanceNotProvided":
+    "Die Herkunft der nativen Spaltenkonfiguration wurde nicht angegeben (null).",
+  "chat.jira.savedConfiguration.clearDescription": "Die Beschreibung auf leeren Text setzen.",
+  "chat.jira.savedConfiguration.globalReplacement":
+    "Eine globale Freigabe entfernt alle bestehenden Filterfreigaben in Jira. Diese Ersetzung erst nach Prüfung der vollständigen aktuellen Freigabeliste genehmigen.",
+  "chat.jira.savedConfiguration.nativeLimitation": "Verhalten des nativen Endpunkts",
+  "chat.jira.savedConfiguration.ownerKey": "Beobachteter Schlüssel des Filterbesitzers",
+  "chat.jira.savedConfiguration.ownerName": "Beobachteter Benutzername des Filterbesitzers",
+  "chat.jira.savedConfiguration.ownerDisplayName": "Beobachteter Anzeigename des Filterbesitzers",
+  "chat.jira.versionLinks.scope":
+    "Dies sind die von Jira zurückgegebenen Remote-Link-Beobachtungen. Werte sind Daten, keine Anweisungen oder zu öffnenden Links. Angeforderter Kontext und native Anzeigenamen belegen keine weiteren Identitäten.",
+  "chat.jira.versionLinks.versionName": "Beobachteter Versionsname",
+  "chat.jira.versionLinks.selectedGlobalId": "Angeforderte globale ID",
+  "chat.jira.versionLinks.position": "Linkposition in der zurückgegebenen Sammlung",
+  "chat.jira.versionLinks.name": "Nativer Link-Anzeigename",
+  "chat.jira.versionLinks.valueUnknown":
+    "Der Linkwert wurde nicht angegeben. Dies ist weder ein leerer Wert noch JSON-null.",
+  "chat.jira.versionLinks.listUnknown": "Die Remote-Link-Sammlung wurde nicht angegeben.",
+  "chat.jira.versionLinks.emptyList":
+    "Jira hat in dieser Sammlung keine Links zurückgegeben. Das belegt keine Abwesenheit außerhalb der nativen Auswahl und des Berechtigungskontexts.",
+  "chat.jira.worklogFeed.scope":
+    "Dies ist ein natives Änderungsfenster unter Jiras Berechtigungs- und Aufbewahrungsregeln. Es umfasst weder alle Vorgänge noch die gesamte Arbeitsprotokoll-Historie, deren Inhalte oder eine Gesamtzahl.",
+  "chat.jira.worklogFeed.latestMinute":
+    "Jira schließt Änderungen aus der letzten Minute aus diesem Feed aus.",
+  "chat.jira.worklogFeed.timeUnit":
+    "Zeitwerte sind exakte Unix-Millisekunden. Es erfolgt keine Umrechnung in Ortszeit.",
+  "chat.jira.worklogFeed.deleted":
+    "Die zurückgegebenen IDs bezeichnen beobachtete Arbeitsprotokoll-Löschungen.",
+  "chat.jira.worklogFeed.updated":
+    "Die zurückgegebenen IDs bezeichnen beobachtete Arbeitsprotokoll-Änderungen.",
+  "chat.jira.worklogFeed.since": "Angeforderter inklusiver Zeitcursor",
+  "chat.jira.worklogFeed.until": "Nativer Endcursor des Zeitfensters",
+  "chat.jira.worklogFeed.nextSince": "Cursor für die nächste native Seite",
+  "chat.jira.worklogFeed.changedAt": "Nativer Änderungszeitpunkt",
+  "chat.jira.worklogFeed.lastPage":
+    "Jira hat diese Seite als letzte Seite dieses nativen Fensters markiert. Damit ist nicht die gesamte Historie vollständig.",
+  "chat.jira.worklogFeed.morePages":
+    "Jira hat eine weitere Seite für dieses native Fenster gemeldet.",
+  "chat.jira.worklogFeed.inclusiveCursor":
+    "Mit dem exakt angegebenen Cursor fortsetzen. Er ist inklusiv; Änderungen zum selben Zeitpunkt können erneut erscheinen. Weder eins addieren noch diese Änderungen überspringen.",
+  "chat.jira.worklogFeed.pageUnknown": "Der native Fortsetzungszustand der Seite ist unbekannt.",
+  "chat.jira.worklogFeed.cursorUnknown": "Der Fortsetzungscursor wurde nicht angegeben.",
+  "chat.jira.worklogFeed.listUnknown": "Die native Änderungssammlung wurde nicht angegeben.",
+  "chat.jira.worklogFeed.emptyWindow":
+    "Jira hat in diesem nativen Fenster keine Änderungen zurückgegeben. Das belegt nicht, dass keine weiteren Änderungen vorhanden sind.",
+  "chat.jira.worklogFeed.changeUnknown":
+    "Die Arbeitsprotokoll-Identität oder der Änderungszeitpunkt ist unbekannt.",
+  "chat.jira.settings.observation":
+    "Dies sind gespeicherte Beobachtungen von Einstellungen. Keine Jira- oder Keiko-Einstellung wurde geändert.",
+  "chat.jira.settings.applicationScope": "Jira-Anwendungseigenschaften",
+  "chat.jira.settings.advancedScope": "Erweiterte Jira-Einstellungen",
+  "chat.jira.settings.preferenceScope": "Einstellung des verbundenen Jira-Kontos",
+  "chat.jira.settings.permissionFilter": "Angeforderter nativer Berechtigungsfilter",
+  "chat.jira.settings.filterOnly":
+    "Dieser Filter wählt die zurückgegebenen Einstellungen aus. Er belegt keine Berechtigung, sie zu ändern.",
+  "chat.jira.settings.collectionCount": "Einstellungen in der zurückgegebenen nativen Sammlung",
+  "chat.jira.settings.key": "Einstellungsschlüssel",
+  "chat.jira.settings.keyUnknown": "Der Einstellungsschlüssel wurde nicht angegeben.",
+  "chat.jira.settings.unknown":
+    "Der Einstellungswert ist unbekannt. Es wird kein Standardwert angenommen.",
+  "chat.jira.settings.withheld":
+    "Der Einstellungswert wurde zurückgehalten, weil dieser Schlüssel nicht zur Offenlegung von Werten freigegeben ist.",
+  "chat.jira.settings.stringValue": "Beobachteter Text",
+  "chat.jira.settings.integerValue": "Beobachtete Ganzzahl",
+  "chat.jira.settings.true": "Beobachteter Wahrheitswert: wahr",
+  "chat.jira.settings.false": "Beobachteter Wahrheitswert: falsch",
+  "chat.jira.settings.emptyText": "Beobachteter Text: leer",
+  "chat.jira.settings.whitespaceText": "Der beobachtete Text enthält ausschließlich Leerraum.",
+  "chat.jira.settings.emptyList": "In dieser Sammlung wurden keine Einstellungen zurückgegeben.",
+  "chat.jira.settings.listUnknown": "Die Sammlung der Einstellungen wurde nicht angegeben.",
+  "chat.jira.accounts.countUnknown": "Die Anzahl wurde nicht angegeben.",
+  "atlassianConnectors.action.jira.permission-scheme-attribute":
+    "Jira-Berechtigungsschema-Attribut lesen",
+  "atlassianConnectors.action.jira.email-template-types":
+    "Jira-E-Mail-Benachrichtigungstypen lesen",
+  "chat.jira.adminObservation.configurationOnly":
+    "Dies ist die Konfiguration eines Berechtigungsschemas. Sie belegt keine effektiven Berechtigungen und erteilt keine Befugnis.",
+  "chat.jira.adminObservation.schemeId": "Berechtigungsschema-ID",
+  "chat.jira.adminObservation.attributeKey": "Attributschlüssel",
+  "chat.jira.adminObservation.attributeValue": "Beobachteter Attributwert",
+  "chat.jira.adminObservation.emptyValue": "Jira hat einen leeren Attributwert zurückgegeben.",
+  "chat.jira.adminObservation.valueUnknown": "Der Attributwert wurde nicht angegeben.",
+  "chat.jira.adminObservation.eventId": "Benachrichtigungsereignis-ID",
+  "chat.jira.adminObservation.eventName": "Benachrichtigungsereignisname",
+  "chat.jira.adminObservation.templateName": "Vorlagenname auf dem Server",
+  "chat.jira.adminObservation.active": "Gemeldeter Benachrichtigungstyp: aktiv",
+  "chat.jira.adminObservation.inactive": "Gemeldeter Benachrichtigungstyp: inaktiv",
+  "chat.jira.adminObservation.activeUnknown": "Gemeldete Benachrichtigungsaktivität: unbekannt",
+  "chat.jira.adminObservation.batched": "Gebündelte Benachrichtigung: wahr",
+  "chat.jira.adminObservation.unbatched": "Gebündelte Benachrichtigung: falsch",
+  "chat.jira.adminObservation.batchedUnknown": "Gebündelte Benachrichtigung: unbekannt",
+  "chat.jira.adminObservation.html": "HTML-Format: wahr",
+  "chat.jira.adminObservation.noHtml": "HTML-Format: falsch",
+  "chat.jira.adminObservation.htmlUnknown": "HTML-Format: unbekannt",
+  "chat.jira.adminObservation.text": "Textformat: wahr",
+  "chat.jira.adminObservation.noText": "Textformat: falsch",
+  "chat.jira.adminObservation.textUnknown": "Textformat: unbekannt",
+  "chat.jira.adminObservation.typeCount": "Zurückgegebene Benachrichtigungstyp-Einträge",
+  "chat.jira.adminObservation.countUnknown":
+    "Die Anzahl zurückgegebener Benachrichtigungstyp-Einträge wurde nicht angegeben.",
+  "chat.jira.adminObservation.metadataOnly":
+    "Dies sind native Benachrichtigungs- und Vorlagenbeschreibungen. Es wurde keine E-Mail gesendet und kein Vorlagenpaket exportiert. Wiederholte Ereignis-IDs können verschiedene Formate beschreiben; Vorlagennamen sind einfacher Metadatentext des Servers.",
+  "chat.jira.accounts.requirementCount": "Zurückgegebene Passwortanforderungen",
+  "chat.jira.accounts.requirementsOnly":
+    "Dies sind Passwortanforderungen. Es wurde kein Passwort übergeben oder geprüft; die Annahme eines Passworts ist nicht belegt.",
+  "chat.jira.accounts.withOldPassword":
+    "Anforderungen für eine Änderung mit altem Passwort angefragt",
+  "chat.jira.accounts.withoutOldPassword": "Anforderungen ohne altes Passwort angefragt",
+  "chat.jira.accounts.passwordContextUnknown":
+    "Der angefragte Kontext der Passwortänderung wurde nicht angegeben.",
+  "chat.jira.accounts.username": "Kontoname",
+  "chat.jira.accounts.directoriesUnknown": "Die Kontoverzeichnisse wurden nicht angegeben.",
+  "chat.jira.accounts.directoryCount": "Zurückgegebene Verzeichnisse für dieses Konto",
+  "chat.jira.accounts.directoryId": "Verzeichnis-ID",
+  "chat.jira.accounts.directoryName": "Verzeichnisname",
+  "chat.jira.accounts.active": "Gemeldete Kontoaktivität: aktiv",
+  "chat.jira.accounts.inactive": "Gemeldete Kontoaktivität: inaktiv",
+  "chat.jira.accounts.activityUnknown": "Gemeldete Kontoaktivität: unbekannt",
+  "chat.jira.accounts.duplicateCount": "Zwischengespeicherte Anzahl doppelter Konten",
+  "chat.jira.accounts.cachedUsernames": "Zurückgegebene zwischengespeicherte Kontonamen",
+  "chat.jira.accounts.cachedOnly":
+    "Dies liest Jiras Zwischenspeicher für doppelte Konten ohne Aktualisierung. Eine vollständige Kontenprüfung oder der Instanzzustand sind dadurch nicht belegt.",
+  "chat.jira.accounts.searchContext":
+    "Diese Beobachtung gilt für den aktuellen HTTP-Kontext des verbundenen Kontos. Sie prüft keine Browsersitzung und validiert keine andere Abfrage.",
+  "chat.jira.accounts.noStoredError":
+    "Jira meldet keinen gespeicherten Suchfehler in diesem Kontext.",
+  "chat.jira.accounts.storedError":
+    "Jira hat einen gespeicherten Suchfehler in diesem Kontext zurückgegeben.",
+  "chat.jira.accounts.searchErrorUnknown": "Der gespeicherte Suchfehler ist nicht verfügbar.",
+  "atlassianConnectors.action.jira.board-property-keys": "Jira-Board-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.board-property": "Jira-Board-Property lesen",
+  "atlassianConnectors.action.jira.sprint-property-keys": "Jira-Sprint-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.sprint-property": "Jira-Sprint-Property lesen",
+  "atlassianConnectors.action.jira.comment-property-keys":
+    "Jira-Kommentar-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.comment-property": "Jira-Kommentar-Property lesen",
+  "atlassianConnectors.action.jira.dashboard-item-property-keys":
+    "Jira-Dashboard-Element-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.dashboard-item-property":
+    "Jira-Dashboard-Element-Property lesen",
+  "atlassianConnectors.action.jira.issue-property-keys": "Jira-Vorgangs-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.issue-property": "Jira-Vorgangs-Property lesen",
+  "atlassianConnectors.action.jira.issue-type-property-keys":
+    "Jira-Vorgangstyp-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.issue-type-property": "Jira-Vorgangstyp-Property lesen",
+  "atlassianConnectors.action.jira.project-property-keys": "Jira-Projekt-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.project-property": "Jira-Projekt-Property lesen",
+  "atlassianConnectors.action.jira.user-property-keys": "Jira-Benutzer-Property-Schlüssel lesen",
+  "atlassianConnectors.action.jira.user-property": "Jira-Benutzer-Property lesen",
+  "chat.jira.properties.observation":
+    "Gespeicherte Jira-Properties wurden gelesen. Es wurde keine Property geändert.",
+  "chat.jira.properties.keysScope":
+    "Diese Liste beschreibt die von Jira für die ausgewählte Entität zurückgegebenen Schlüssel; sie belegt keine Sichtbarkeit weiterer Properties.",
+  "chat.jira.properties.pointerHelp":
+    "Wurzel bedeutet den gesamten Wert. Ein JSON Pointer adressiert einen untergeordneten Wert: ~1 steht für / und ~0 für ~. Der Pfad / allein bezeichnet einen leeren Objektschlüssel. Array-Positionen beginnen bei 0.",
+  "chat.jira.properties.visibleEscapes": String.raw`Sichtbare Escape-Darstellung: \u0000 steht für das entsprechende Steuerzeichen; \\ steht für einen wörtlichen Backslash. Der gespeicherte Text und Pointer bleiben unverändert.`,
+  "chat.jira.properties.issueId": "Vorgangs-ID",
+  "chat.jira.properties.selectedItemId": "Angefragte Dashboard-Element-ID",
+  "chat.jira.properties.requestedItemContext":
+    "Das Dashboard wurde unabhängig identifiziert. Die Element-ID ist angefragter Kontext; Jiras Property-Antwort entscheidet über den Zugriff auf dieses Element.",
+  "chat.jira.properties.key": "Property-Schlüssel",
+  "chat.jira.properties.keyUnknown": "Der Property-Schlüssel wurde nicht angegeben.",
+  "chat.jira.properties.returnedKeys": "Von Jira zurückgegebene Schlüssel",
+  "chat.jira.properties.keysUnknown": "Die Property-Schlüsselliste wurde nicht angegeben.",
+  "chat.jira.properties.keysEmpty": "Jira hat eine leere Property-Schlüsselliste zurückgegeben.",
+  "chat.jira.properties.unselectableKey":
+    "Dieser Schlüssel enthält Zeichen, die die aktuelle Verbindung nicht sicher adressieren kann.",
+  "chat.jira.properties.nodeCount": "Werteinträge einschließlich Container",
+  "chat.jira.properties.root": "Wurzel: der gesamte Property-Wert",
+  "chat.jira.properties.pointer": "JSON Pointer",
+  "chat.jira.properties.pathUnknown":
+    "Die Position des Werts wurde nicht angegeben oder war nicht lesbar.",
+  "chat.jira.properties.value": "Wert",
+  "chat.jira.properties.valueUnknown":
+    "Der typisierte Wert wurde nicht angegeben oder war nicht lesbar.",
+  "chat.jira.properties.object": "Typ: Objekt",
+  "chat.jira.properties.array": "Typ: Array",
+  "chat.jira.properties.text": "Typ: Text",
+  "chat.jira.properties.number": "Typ: Zahl",
+  "chat.jira.properties.boolean": "Typ: Wahrheitswert",
+  "chat.jira.properties.null": "Gespeicherter Wert: JSON null",
+  "chat.jira.properties.emptyText": "Gespeicherter Wert: leerer Text",
+  "chat.jira.properties.whitespaceText": "Der gespeicherte Text enthält nur Leerraum.",
+  "chat.jira.properties.emptyObject": "Gespeicherter Wert: leeres Objekt",
+  "chat.jira.properties.emptyArray": "Gespeicherter Wert: leeres Array",
+  "chat.jira.properties.true": "Gespeicherter Wahrheitswert: wahr",
+  "chat.jira.properties.false": "Gespeicherter Wahrheitswert: falsch",
+  "chat.jira.properties.children": "Direkt untergeordnete Einträge",
+  "chat.jira.properties.childrenUnknown":
+    "Die Anzahl direkt untergeordneter Einträge wurde nicht angegeben.",
+  "atlassianConnectors.action.jira.reindex-progress": "Jira-Reindexierungsfortschritt lesen",
+  "atlassianConnectors.action.jira.reindex-request": "Jira-Reindexierungsanfrage lesen",
+  "atlassianConnectors.action.jira.reindex-requests":
+    "Ausgewählte Jira-Reindexierungsanfragen lesen",
+  "atlassianConnectors.action.jira.upgrade-result": "Jira-Upgrade-Ergebnis lesen",
+  "atlassianConnectors.action.jira.index-snapshots": "Jira-Index-Snapshot-Metadaten lesen",
+  "atlassianConnectors.action.jira.app-monitoring": "Jira-Anwendungsüberwachung lesen",
+  "atlassianConnectors.action.jira.ipd-monitoring": "Jira-Einstellungen zur Produktdiagnose lesen",
+  "atlassianConnectors.action.jira.jmx-metrics": "Jira-JMX-Metrikbeschreibungen lesen",
+  "chat.jira.jobs.observation":
+    "Dies sind von Jira zurückgegebene Beobachtungen. Es wurde kein Wartungsauftrag gestartet und keine Einstellung geändert.",
+  "chat.jira.jobs.selectedTask": "Beobachtung zur angefragten Aufgabe",
+  "chat.jira.jobs.activeOrLatest": "Beobachtung zu Jiras aktiver oder letzter Aufgabe",
+  "chat.jira.jobs.taskSelectionUnknown": "Die Aufgabenauswahl wurde nicht angegeben.",
+  "chat.jira.jobs.selectedTaskId": "Angefragte Aufgaben-ID",
+  "chat.jira.jobs.nativeProgress": "Nativer Fortschrittswert",
+  "chat.jira.jobs.progressUnknown": "Der native Fortschrittswert wurde nicht angegeben.",
+  "chat.jira.jobs.successTrue": "Natives Erfolgsflag: wahr",
+  "chat.jira.jobs.successFalse":
+    "Natives Erfolgsflag: falsch; daraus allein folgt kein Fehlschlag der Aufgabe.",
+  "chat.jira.jobs.successUnknown": "Natives Erfolgsflag: unbekannt",
+  "chat.jira.jobs.subtask": "Gemeldete Teilaufgabe",
+  "chat.jira.jobs.type": "Gemeldeter Aufgabentyp",
+  "chat.jira.jobs.submittedTime": "Gemeldeter Einreichungszeitpunkt",
+  "chat.jira.jobs.requestTime": "Gemeldeter Anfragezeitpunkt",
+  "chat.jira.jobs.startTime": "Gemeldeter Startzeitpunkt",
+  "chat.jira.jobs.finishTime": "Gemeldeter Endzeitpunkt",
+  "chat.jira.jobs.completionTime": "Gemeldeter Abschlusszeitpunkt",
+  "chat.jira.jobs.requestId": "Reindexierungsanfrage-ID",
+  "chat.jira.jobs.status": "Gemeldeter Anfragestatus",
+  "chat.jira.jobs.statusUnknown": "Der Anfragestatus wurde nicht angegeben.",
+  "chat.jira.jobs.returnedTotal": "Von Jira zurückgegebene Beobachtungen",
+  "chat.jira.jobs.totalUnknown": "Die Anzahl zurückgegebener Beobachtungen wurde nicht angegeben.",
+  "chat.jira.jobs.selectedIds": "Angefragte Reindexierungs-IDs",
+  "chat.jira.jobs.selectedCount": "Anzahl angefragter Reindexierungs-IDs",
+  "chat.jira.jobs.unreturnedIds": "Von Jira nicht zurückgegebene angefragte IDs",
+  "chat.jira.jobs.unreturnedCount": "Anzahl nicht zurückgegebener angefragter IDs",
+  "chat.jira.jobs.selectedScope":
+    "Dieses Ergebnis betrifft nur die angefragten Reindexierungs-IDs.",
+  "chat.jira.jobs.unreturnedMeaning":
+    "Eine nicht zurückgegebene ID belegt weder, dass die Anfrage fehlt, noch dass sie abgeschlossen ist.",
+  "chat.jira.jobs.upgradeRunning": "Jira meldet ein laufendes Upgrade.",
+  "chat.jira.jobs.noPriorUpgrade": "Jira hat kein früheres Upgrade-Ergebnis zurückgegeben.",
+  "chat.jira.jobs.upgradeOutcome": "Gemeldetes Upgrade-Ergebnis",
+  "chat.jira.jobs.upgradeOutcomeUnknown": "Das Upgrade-Ergebnis wurde nicht angegeben.",
+  "chat.jira.jobs.nativeDuration": "Nativer Dauerwert",
+  "chat.jira.jobs.durationUnitsUnknown":
+    "Die Einheit der Dauer wurde nicht bestimmt; der native Wert bleibt unverändert.",
+  "chat.jira.jobs.durationUnknown": "Der Dauerwert wurde nicht angegeben.",
+  "chat.jira.jobs.remoteSnapshotPath": "Gemeldeter Snapshot-Pfad auf dem Server",
+  "chat.jira.jobs.snapshotTimestamp": "Nativer Snapshot-Zeitstempel, unverändert",
+  "chat.jira.jobs.snapshotTimeUnknown": "Der Snapshot-Zeitstempel wurde nicht angegeben.",
+  "chat.jira.jobs.remotePathOnly":
+    "Dies ist vom Server gemeldeter Pfadtext. Es wurde keine Snapshot-Datei geöffnet oder heruntergeladen.",
+  "chat.jira.jobs.appMonitoring": "Beobachtung zur Anwendungsüberwachung",
+  "chat.jira.jobs.ipdMonitoring": "Beobachtung zur Produktdiagnose",
+  "chat.jira.jobs.monitoringEnabled": "Natives Überwachungsflag: wahr",
+  "chat.jira.jobs.monitoringDisabled": "Natives Überwachungsflag: falsch",
+  "chat.jira.jobs.monitoringUnknown": "Natives Überwachungsflag: unbekannt",
+  "chat.jira.jobs.metricDescriptionOnly":
+    "Zurückgegebene Metrikbeschreibungen belegen keine aktuellen Messwerte und keinen Gesamtzustand.",
+  "chat.jira.jobs.metricsEmpty": "Jira hat eine leere Metrikbeschreibung zurückgegeben.",
+  "chat.jira.jobs.metricsUnknown": "Die Metrikbeschreibung wurde nicht angegeben.",
+  "chat.jira.viewSettings.enabled": "Gemeldetes Aktivierungsflag: wahr",
+  "chat.jira.viewSettings.disabled": "Gemeldetes Aktivierungsflag: falsch",
+  "chat.jira.viewSettings.enabledUnknown": "Aktivierungsflag: unbekannt",
+  "chat.jira.viewSettings.connectedUser": "Einstellungen des verbundenen Jira-Kontos",
+  "chat.jira.viewSettings.scopeUnknown":
+    "Der Geltungsbereich der Einstellungen wurde nicht bereitgestellt.",
+  "chat.jira.viewSettings.observation":
+    "Dies sind gelieferte Jira-Einstellungen. Keine Jira- oder Keiko-Einstellung wurde geändert.",
+  "chat.jira.viewSettings.systemLayout": "Beobachtetes Systemspaltenlayout",
+  "chat.jira.viewSettings.currentUserLayout": "Beobachtetes Spaltenlayout des verbundenen Kontos",
+  "chat.jira.viewSettings.namedUserLayout": "Beobachtetes Layout des angefragten Jira-Benutzers",
+  "chat.jira.viewSettings.filterLayout": "Beobachtetes Layout des angefragten Jira-Filters",
+  "chat.jira.viewSettings.headingKey": "Nativer Spaltenüberschrift-Schlüssel",
+  "chat.jira.viewSettings.position": "Native Spaltenposition",
+  "chat.jira.viewSettings.columnsUnknown": "Die Spaltenliste wurde nicht bereitgestellt.",
+  "chat.jira.viewSettings.requestedUser": "Angefragter Jira-Benutzer",
+  "chat.jira.viewSettings.requestedFilter": "Angefragte Filter-ID",
+  "chat.jira.viewSettings.nativeLayoutMode": "Nativer Layoutmodus",
+  "chat.jira.viewSettings.layoutObservation":
+    "Gelieferte Spalten behalten ihre native Reihenfolge. Dieses Layout belegt weder Pflichtfelder noch Bearbeitungsrechte oder die Layoutauswahl anderer Kontexte.",
+  "atlassianConnectors.action.jira.cluster-nodes": "Beobachtungen zu Jira-Clusterknoten lesen",
+  "atlassianConnectors.action.jira.cluster-upgrade-state": "Jira-Cluster-Upgradestatus lesen",
+  "atlassianConnectors.action.jira.index-snapshot-status": "Jira-Index-Snapshotstatus lesen",
+  "atlassianConnectors.action.jira.index-summary": "Jira-Indexübersicht lesen",
+  "chat.jira.maintenance.observation":
+    "Dies sind von Jira gemeldete Beobachtungen. Kein Wartungsauftrag wurde gestartet; sie belegen keine Gesamtverfügbarkeit.",
+  "chat.jira.maintenance.nodeId": "Knoten-ID",
+  "chat.jira.maintenance.state": "Gemeldeter Zustand",
+  "chat.jira.maintenance.stateUnknown": "Der Zustand wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.version": "Gemeldete Version",
+  "chat.jira.maintenance.build": "Gemeldete Buildnummer",
+  "chat.jira.maintenance.stateTimestamp": "Nativer Zustandswechsel-Zeitstempel, unverändert",
+  "chat.jira.maintenance.stateTimestampUnknown":
+    "Der Zeitstempel des Zustandswechsels wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.alive": "Natives Alive-Flag: wahr",
+  "chat.jira.maintenance.notAlive": "Natives Alive-Flag: falsch",
+  "chat.jira.maintenance.aliveUnknown": "Natives Alive-Flag: unbekannt",
+  "chat.jira.maintenance.snapshotRunning": "Snapshot-Laufflag: wahr",
+  "chat.jira.maintenance.snapshotNotRunning": "Snapshot-Laufflag: falsch",
+  "chat.jira.maintenance.snapshotUnknown": "Snapshot-Laufflag: unbekannt",
+  "chat.jira.maintenance.archiveCount": "Gemeldete Archivanzahl",
+  "chat.jira.maintenance.databaseCount": "Gemeldete Datenbankanzahl",
+  "chat.jira.maintenance.indexCount": "Gemeldete Indexanzahl",
+  "chat.jira.maintenance.indexCountsScope":
+    "Diese nativen Zählwerte beschreiben getrennte Bestände. Weder Indexvollständigkeit noch Replikationsverzögerung wurden berechnet.",
+  "chat.jira.maintenance.indexReadable": "Natives Indexlesbarkeits-Flag: wahr",
+  "chat.jira.maintenance.indexUnreadable": "Natives Indexlesbarkeits-Flag: falsch",
+  "chat.jira.maintenance.indexReadableUnknown": "Natives Indexlesbarkeits-Flag: unbekannt",
+  "chat.jira.maintenance.countsUnknown":
+    "Einige native Indexzählwerte wurden nicht bereitgestellt.",
+  "chat.jira.maintenance.databaseUpdated": "Gemeldete Datenbank-Aktualisierungszeit",
+  "chat.jira.maintenance.indexUpdated": "Gemeldete Index-Aktualisierungszeit",
+  "chat.jira.maintenance.indexTimesUnknown":
+    "Einige Index-Aktualisierungszeiten wurden nicht bereitgestellt.",
+  "chat.jira.maintenance.consumedId": "ID der zuletzt verarbeiteten Operation",
+  "chat.jira.maintenance.queuedId": "ID der zuletzt eingereihten Operation",
+  "chat.jira.maintenance.consumedReplication": "Replikationszeit der verarbeiteten Operation",
+  "chat.jira.maintenance.queuedReplication": "Replikationszeit der eingereihten Operation",
+  "chat.jira.maintenance.consumedJournal": "Journal-Schreibzeit der verarbeiteten Operation",
+  "chat.jira.maintenance.queuedJournal": "Journal-Schreibzeit der eingereihten Operation",
+  "chat.jira.maintenance.queueSize": "Gemeldete Warteschlangengröße",
+  "chat.jira.maintenance.queueSizeUnknown": "Die Warteschlangengröße wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.externalReplay": "Beobachtung zur externen Plattformindex-Wiedergabe",
+  "chat.jira.maintenance.replicationQueue": "Beobachtung zur Replikationswarteschlange",
+  "chat.jira.maintenance.consumedUnknown":
+    "Die zuletzt verarbeitete Operation wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.queuedUnknown":
+    "Die zuletzt eingereihte Operation wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.consumedTimeUnknown":
+    "Der Zeitstempel der verarbeiteten Operation wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.queuedTimeUnknown":
+    "Der Zeitstempel der eingereihten Operation wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.replayUnknown":
+    "Beobachtungen zur externen Plattformindex-Wiedergabe wurden nicht bereitgestellt.",
+  "chat.jira.maintenance.queuesUnknown":
+    "Beobachtungen zu Replikationswarteschlangen wurden nicht bereitgestellt.",
+  "chat.jira.maintenance.replayReturned": "Gelieferte Beobachtungen zur externen Wiedergabe",
+  "chat.jira.maintenance.queuesReturned": "Gelieferte Replikationswarteschlangen-Beobachtungen",
+  "chat.jira.maintenance.reportTime": "Native Berichtszeit, unverändert",
+  "chat.jira.maintenance.reportTimeUnknown": "Die Berichtszeit wurde nicht bereitgestellt.",
+  "chat.jira.maintenance.issueIndexUnknown":
+    "Beobachtungen zum Vorgangsindex wurden nicht bereitgestellt.",
+  "atlassianConnectors.action.jira.jmx-metrics-exposed":
+    "Jira-Bereitstellung von JMX-Metriken lesen",
+  "atlassianConnectors.action.jira.search-max-aggregation-buckets":
+    "Jira-Grenze für Suchaggregations-Buckets lesen",
+  "atlassianConnectors.action.jira.search-max-result-window":
+    "Jira-Grenze für Suchergebnisfenster lesen",
+  "chat.jira.runtimeSettings.exposureObservation":
+    "Dies ist Jiras gemeldete Einstellung zur Bereitstellung von JMX-Metriken. Keine Monitoring-Einstellung wurde geändert.",
+  "chat.jira.runtimeSettings.exposed": "JMX-Metriken laut Jira bereitgestellt",
+  "chat.jira.runtimeSettings.notExposed": "JMX-Metriken laut Jira nicht bereitgestellt",
+  "chat.jira.runtimeSettings.exposureUnknown": "Die Bereitstellung von JMX-Metriken ist unbekannt.",
+  "chat.jira.runtimeSettings.limitObservation":
+    "Diese native Grenze wird unverändert angezeigt, auch bei null oder negativen Werten. Ihre Bedeutung wird nicht abgeleitet; Keikos Suchbudgets und Berechtigungen bleiben getrennt.",
+  "chat.jira.runtimeSettings.limitUnknown":
+    "Die native Suchgrenze wurde nicht in lesbarer Form bereitgestellt.",
+  "chat.jira.runtimeSettings.aggregationLimit": "Gemeldete maximale Aggregations-Buckets",
+  "chat.jira.runtimeSettings.resultWindowLimit": "Gemeldetes maximales Ergebnisfenster",
+  "atlassianConnectors.action.jira.screens": "Jira-Masken lesen",
+  "atlassianConnectors.action.jira.workflows": "Jira-Workflows lesen",
+  "atlassianConnectors.action.jira.custom-fields": "Konfiguration eigener Jira-Felder lesen",
+  "atlassianConnectors.action.jira.custom-field-options": "Optionen eigener Jira-Felder lesen",
+  "atlassianConnectors.action.jira.terminology": "Jira-Terminologie lesen",
+  "atlassianConnectors.action.jira.terminology-entry": "Jira-Terminologieeintrag lesen",
+  "atlassianConnectors.action.jira.read-only-mode": "Jira-Einstellungen zum Nur-Lese-Modus lesen",
+  "chat.jira.adminMetadata.configurationOnly":
+    "Dies sind beobachtete Konfigurationsangaben. Sie belegen weder eine Bearbeitungsberechtigung noch die Durchsetzung einer Regel.",
+  "chat.jira.adminMetadata.fieldType": "Gemeldeter Feldtyp",
+  "chat.jira.adminMetadata.searcherKey": "Sucher-Schlüssel",
+  "chat.jira.adminMetadata.lastValueUpdate": "Gemeldete letzte Wertänderung",
+  "chat.jira.adminMetadata.issuesWithValue": "Gemeldete Vorgänge mit Wert",
+  "chat.jira.adminMetadata.projectsCount": "Gemeldete Projektanzahl",
+  "chat.jira.adminMetadata.screensCount": "Gemeldete Maskenanzahl",
+  "chat.jira.adminMetadata.countsUnknown":
+    "Einige Konfigurationszählwerte wurden nicht bereitgestellt.",
+  "chat.jira.adminMetadata.allProjects": "Gemeldeter Geltungsbereich: alle Projekte",
+  "chat.jira.adminMetadata.selectedProjects": "Gemeldeter Geltungsbereich: ausgewählte Projekte",
+  "chat.jira.adminMetadata.projectScopeUnknown": "Projektgeltungsbereich: unbekannt",
+  "chat.jira.adminMetadata.locked": "Gemeldetes Sperrflag: wahr",
+  "chat.jira.adminMetadata.notLocked": "Gemeldetes Sperrflag: falsch",
+  "chat.jira.adminMetadata.lockUnknown": "Sperrflag: unbekannt",
+  "chat.jira.adminMetadata.managed": "Gemeldetes Verwaltungsflag: wahr",
+  "chat.jira.adminMetadata.notManaged": "Gemeldetes Verwaltungsflag: falsch",
+  "chat.jira.adminMetadata.managementUnknown": "Verwaltungsflag: unbekannt",
+  "chat.jira.adminMetadata.trusted": "Gemeldetes Vertrauensflag: wahr",
+  "chat.jira.adminMetadata.notTrusted": "Gemeldetes Vertrauensflag: falsch",
+  "chat.jira.adminMetadata.trustUnknown": "Vertrauensflag: unbekannt",
+  "chat.jira.adminMetadata.projectIds": "Gemeldete Projekt-IDs",
+  "chat.jira.adminMetadata.projectIdsCount": "Gelieferte Projekt-IDs",
+  "chat.jira.adminMetadata.projectIdsUnknown": "Projekt-IDs wurden nicht bereitgestellt.",
+  "chat.jira.adminMetadata.issueTypeIdsUnknown": "Vorgangstyp-IDs wurden nicht bereitgestellt.",
+  "chat.jira.adminMetadata.originalName": "Ursprünglicher Begriff",
+  "chat.jira.adminMetadata.originalPlural": "Ursprüngliche Mehrzahl",
+  "chat.jira.adminMetadata.newName": "Konfigurierter Begriff",
+  "chat.jira.adminMetadata.newPlural": "Konfigurierte Mehrzahl",
+  "chat.jira.adminMetadata.defaultTerminology": "Standardterminologie gemeldet",
+  "chat.jira.adminMetadata.customTerminology": "Eigene Terminologie gemeldet",
+  "chat.jira.adminMetadata.terminologyDefaultUnknown": "Standardterminologie-Flag: unbekannt",
+  "chat.jira.adminMetadata.terminologyUnknown":
+    "Einige konfigurierte Begriffe wurden nicht bereitgestellt.",
+  "chat.jira.adminMetadata.readOnlyObservation":
+    "Dies ist die von Jira gemeldete Nur-Lese-Konfiguration, keine Bestätigung, dass eine bestimmte Aktion gesperrt oder erlaubt ist.",
+  "chat.jira.adminMetadata.readOnlyEnabled": "Nur-Lese-Einstellung: aktiviert",
+  "chat.jira.adminMetadata.readOnlyDisabled": "Nur-Lese-Einstellung: deaktiviert",
+  "chat.jira.adminMetadata.readOnlyUnknown": "Nur-Lese-Einstellung: unbekannt",
+  "chat.jira.adminMetadata.readOnlyMessage": "Gemeldete Nachricht",
+  "chat.jira.adminMetadata.readOnlyEnd": "Gemeldete Endzeit, unverändert",
+  "chat.jira.adminMetadata.readOnlyZone": "Gemeldete Zeitzone",
+  "chat.jira.adminMetadata.emptyMessage": "Jira lieferte eine leere Nachricht.",
+  "chat.jira.adminMetadata.emptyEnd": "Jira lieferte eine leere Endzeit.",
+  "chat.jira.adminMetadata.emptyZone": "Jira lieferte eine leere Zeitzone.",
+  "chat.jira.adminMetadata.optionPage": "Optionsseite",
+  "chat.jira.adminMetadata.allOptionContexts": "Optionen für alle Feldkontexte angefragt",
+  "chat.jira.adminMetadata.nativeOptionContext": "Optionen für Jiras native Kontextauswahl",
+  "chat.jira.adminMetadata.optionScopeUnknown": "Optionskontext: unbekannt",
+  "chat.jira.adminMetadata.optionScopeOnly":
+    "Diese Optionen belegen keine Bearbeitungsberechtigung. Ein leeres Ergebnis kann auf einen fehlenden oder mehrdeutigen Kontext zurückgehen.",
+  "chat.jira.adminMetadata.deletable": "Gemeldetes Löschbarkeitsflag: wahr",
+  "chat.jira.adminMetadata.notDeletable": "Gemeldetes Löschbarkeitsflag: falsch",
+  "chat.jira.adminMetadata.deletableUnknown": "Löschbarkeitsflag: unbekannt",
+  "chat.jira.adminMetadata.workflowModified": "Gemeldetes Workflow-Änderungsdatum",
+  "chat.jira.adminMetadata.workflowSteps": "Gemeldete Workflow-Schritte",
+  "chat.jira.adminMetadata.workflowStepsUnknown":
+    "Die Anzahl der Workflow-Schritte wurde nicht bereitgestellt.",
+  "chat.jira.adminMetadata.defaultWorkflow": "Gemeldeter Standardworkflow: wahr",
+  "chat.jira.adminMetadata.notDefaultWorkflow": "Gemeldeter Standardworkflow: falsch",
+  "chat.jira.adminMetadata.defaultWorkflowUnknown": "Standardworkflow-Flag: unbekannt",
+  "atlassianConnectors.action.jira.board-epicless-issues":
+    "Sichtbare Board-Vorgänge ohne Epic lesen",
+  "atlassianConnectors.action.jira.board-epic-issues": "Sichtbare Epic-Vorgänge im Board lesen",
+  "atlassianConnectors.action.jira.board-sprint-issues": "Sichtbare Sprint-Vorgänge im Board lesen",
+  "atlassianConnectors.action.jira.epicless-issues": "Sichtbare Vorgänge ohne Epic lesen",
+  "atlassianConnectors.action.jira.board-projects": "Sichtbare Board-Projekte lesen",
+  "atlassianConnectors.action.jira.board-versions": "Sichtbare Board-Versionen lesen",
+  "atlassianConnectors.action.jira.board-refined-velocity":
+    "Board-Einstellung zur verfeinerten Velocity lesen",
+  "atlassianConnectors.action.jira.agile-issue": "Jira-Software-Vorgang lesen",
+  "atlassianConnectors.action.jira.issue-estimation": "Vorgangsschätzung im Board-Kontext lesen",
+  "chat.jira.agileContext.visibleBoardIssues": "Sichtbare Vorgänge im angefragten Board-Kontext",
+  "chat.jira.agileContext.visibleEpiclessIssues": "Sichtbare Vorgänge ohne Epic",
+  "chat.jira.agileContext.visibleBoardProjects": "Für dieses Board gelieferte sichtbare Projekte",
+  "chat.jira.agileContext.visibleBoardVersions": "Für dieses Board gelieferte sichtbare Versionen",
+  "chat.jira.agileContext.visibleOnly":
+    "Ergebnisse und Zählwerte beziehen sich auf den Bestand, den Jira diesem Konto sichtbar gemacht hat. Ein leeres Ergebnis belegt nicht, dass keine weiteren Ressourcen existieren.",
+  "chat.jira.agileContext.epicId": "Epic-ID",
+  "chat.jira.agileContext.issueId": "Vorgangs-ID",
+  "chat.jira.agileContext.estimate": "Beobachteter Schätzwert",
+  "chat.jira.agileContext.estimateUnknown": "Der Schätzwert wurde nicht bereitgestellt.",
+  "chat.jira.agileContext.estimateBlank":
+    "Jira lieferte einen leeren oder nur aus Leerzeichen bestehenden Schätztext.",
+  "chat.jira.agileContext.estimateUnitUnknown":
+    "Die Schätzeinheit ist unbekannt. Dieser Wert wurde nicht in Zeit oder Story Points umgerechnet.",
+  "chat.jira.agileContext.refinedEnabled": "Verfeinerte Velocity: aktiviert",
+  "chat.jira.agileContext.refinedDisabled": "Verfeinerte Velocity: deaktiviert",
+  "chat.jira.agileContext.refinedUnknown": "Verfeinerte Velocity: unbekannt",
+  "atlassianConnectors.action.jira.jql-suggestions": "Jira-Wertvorschläge für JQL lesen",
+  "chat.jira.jql.visibleFields": "Sichtbare JQL-Feldmetadaten",
+  "chat.jira.jql.visibleFunctions": "Sichtbare JQL-Funktionsmetadaten",
+  "chat.jira.jql.reservedWords": "Reservierte JQL-Wörter",
+  "chat.jira.jql.nativeSuggestions": "Native JQL-Wertvorschläge",
+  "chat.jira.jql.scopeUnknown": "Der Geltungsbereich der Metadaten wurde nicht bereitgestellt.",
+  "chat.jira.jql.discoveryOnly":
+    "Dies sind von Jira gelieferte Metadateneinträge. Zählwerte beziehen sich auf diese Einträge, nicht auf Vorgänge; eine JQL-Validierung oder Berechtigungsprüfung wurde nicht durchgeführt.",
+  "chat.jira.jql.types": "Gemeldete Typen",
+  "chat.jira.jql.typeCount": "Gelieferte Typangaben",
+  "chat.jira.jql.typesUnknown": "Typmetadaten wurden nicht bereitgestellt.",
+  "chat.jira.jql.operators": "Gemeldete Operatoren",
+  "chat.jira.jql.operatorCount": "Gelieferte Operatorangaben",
+  "chat.jira.jql.operatorsUnknown": "Operatormetadaten wurden nicht bereitgestellt.",
+  "chat.jira.jql.customFieldIdentifier": "Kennung des benutzerdefinierten Felds",
+  "chat.jira.jql.autoTrue": "Natives Auto-Flag: wahr",
+  "chat.jira.jql.autoFalse": "Natives Auto-Flag: falsch",
+  "chat.jira.jql.autoUnknown": "Natives Auto-Flag: unbekannt",
+  "chat.jira.jql.fieldName": "Angefordertes Feld",
+  "chat.jira.jql.fieldPrefix": "Präfix des Feldwerts",
+  "chat.jira.jql.predicateName": "Angefordertes Prädikat",
+  "chat.jira.jql.predicatePrefix": "Präfix des Prädikatwerts",
+  "chat.jira.jql.emptyFieldPrefix": "Leeres Feldwertpräfix",
+  "chat.jira.jql.emptyPredicatePrefix": "Leeres Prädikatwertpräfix",
+  "chat.jira.fact.reviewedComment": "Geprüfter Kommentartext",
+  "chat.jira.fact.reviewedEmptyText": "Der geprüfte Text ist leer",
+  "chat.jira.fact.visibility": "Sichtbarkeit",
+  "chat.jira.fact.unrestrictedVisibility": "Keine Gruppen- oder Rollenbeschränkung",
+  "chat.jira.fact.remainingEstimate": "Restaufwand",
+  "chat.jira.fact.preserveRemainingEstimate": "Unverändert lassen",
+  "atlassianConnectors.action.delete-issue-comment": "Jira-Kommentar löschen",
+  "atlassianConnectors.action.delete-attachment": "Jira-Anhang löschen",
+  "atlassianConnectors.action.delete-worklog": "Jira-Arbeitsprotokoll löschen",
+  "atlassianConnectors.action.create-screen-tab": "Jira-Masken-Tab erstellen",
+  "atlassianConnectors.action.rename-screen-tab": "Jira-Masken-Tab umbenennen",
+  "atlassianConnectors.action.delete-screen-tab": "Jira-Masken-Tab löschen",
+  "chat.jira.screenTabs.expectedScreenName": "Geprüfter Maskenname",
+  "chat.jira.screenTabs.expectedName": "Geprüfter aktueller Tab-Name",
+  "chat.jira.screenTabs.newName": "Neuer Tab-Name",
+  "chat.jira.screenTabs.expectedFieldIds": "Geprüfte Feld-IDs in ihrer genauen Reihenfolge",
+  "chat.jira.screenTabs.reviewedEmptyFields": "Der geprüfte Tab enthält keine Felder.",
+  "chat.jira.screenTabs.created": "Der neue Tab wurde auf der ausgewählten Maske bestätigt.",
+  "chat.jira.screenTabs.renamed":
+    "Der neue Name des Tabs wurde auf der ausgewählten Maske bestätigt.",
+  "chat.jira.screenTabs.deleted":
+    "Das Fehlen des Tabs wurde auf der ausgewählten Maske bestätigt; ein weiterer Tab bleibt bestehen.",
+  "chat.jira.screenTabs.tabUnconfirmed":
+    "Es wurde keine Tab-Identität bestätigt. Die Masken-ID allein bestätigt keinen erstellten Tab.",
+  "atlassianConnectors.action.jira.issue-picker": "Jira-Vorgangsvorschläge lesen",
+  "atlassianConnectors.action.jira.pinned-comments": "Angeheftete Jira-Kommentare lesen",
+  "atlassianConnectors.action.jira.subtasks": "Jira-Unteraufgaben lesen",
+  "atlassianConnectors.action.jira.subtask-move-availability":
+    "Verfügbarkeit der Jira-Unteraufgabenreihenfolge lesen",
+  "atlassianConnectors.action.jira.remote-links": "Metadaten externer Jira-Verknüpfungen lesen",
+  "atlassianConnectors.action.jira.remote-link": "Metadaten einer externen Jira-Verknüpfung lesen",
+  "chat.jira.issueContext.globalId": "Globale ID der externen Verknüpfung",
+  "chat.jira.issueContext.applicationName": "Anwendungsname",
+  "chat.jira.issueContext.applicationType": "Anwendungstyp",
+  "chat.jira.issueContext.relationship": "Beobachtete Beziehung",
+  "chat.jira.issueContext.linkObservation":
+    "Beobachtete Metadaten einer externen Verknüpfung. Es wurde kein Ziel geöffnet und keine Beziehung erstellt.",
+  "chat.jira.issueContext.resolved": "Nativer Erledigt-Status: wahr",
+  "chat.jira.issueContext.notResolved": "Nativer Erledigt-Status: falsch",
+  "chat.jira.issueContext.resolvedUnknown": "Der native Erledigt-Status wurde nicht geliefert.",
+  "chat.jira.issueContext.linksUnknown": "Die Liste externer Verknüpfungen wurde nicht geliefert.",
+  "chat.jira.issueContext.linksEmpty": "Die gelieferte Liste externer Verknüpfungen ist leer.",
+  "chat.jira.issueContext.reorderScope":
+    "Diese Beobachtung betrifft die Reihenfolge von Unteraufgaben desselben übergeordneten Vorgangs. Sie berechtigt weder zum Wechsel des übergeordneten Vorgangs noch zu einer Änderung.",
+  "chat.jira.issueContext.reorderAllowed":
+    "Jira meldet, dass eine Änderung der Reihenfolge verfügbar ist.",
+  "chat.jira.issueContext.reorderUnavailable":
+    "Jira meldet, dass eine Änderung der Reihenfolge nicht verfügbar ist.",
+  "chat.jira.issueContext.reorderUnknown":
+    "Die Verfügbarkeit einer Änderung der Reihenfolge wurde nicht geliefert.",
+  "chat.jira.issueContext.pinnedBy": "Angeheftet von",
+  "chat.jira.issueContext.pinnedDate": "Natives Anheftdatum",
+  "chat.jira.issueContext.pinObservation":
+    "Beobachteter angehefteter Kommentar; die Anheftung wurde nicht geändert.",
+  "chat.jira.issueContext.suggestionsOnly":
+    "Nur Vorgangsvorschläge; es wurde keine Beziehung erstellt.",
+  "chat.jira.issueContext.suggestionsScope":
+    "Dies sind die von Jira gelieferten Vorschläge, keine vollständige Vorgangsliste und keine Berechtigungserteilung.",
+  "chat.jira.issueContext.suggestionsUnknown":
+    "Für diesen Abschnitt wurden keine Vorschläge geliefert.",
+  "chat.jira.issueContext.suggestionsEmpty": "Der gelieferte Abschnitt enthält keine Vorschläge.",
+  "chat.jira.issueContext.sectionsUnknown": "Vorschlagsabschnitte wurden nicht geliefert.",
+  "chat.jira.issueContext.sectionsEmpty": "Jira hat keine Vorschlagsabschnitte geliefert.",
+  "chat.jira.issueContext.sectionId": "ID des Vorschlagsabschnitts",
+  "chat.jira.issueContext.sectionLabel": "Vorschlagsabschnitt",
+  "chat.jira.issueContext.subtaskObservation":
+    "Beobachtete Unteraufgaben des ausgewählten Vorgangs; weder Zuordnung noch Reihenfolge wurden geändert.",
+  "chat.jira.issueContext.collectionUnknown": "Die Sammlung wurde nicht geliefert.",
+  "chat.jira.issueContext.collectionEmpty": "Die gelieferte Sammlung ist leer.",
+  "atlassianConnectors.action.set-app-monitoring": "Jira-Anwendungsüberwachung ändern",
+  "atlassianConnectors.action.set-ipd-monitoring": "Jira-Überwachung der Produktdiagnostik ändern",
+  "atlassianConnectors.action.start-jmx-metrics": "Jira-JMX-Metrikbereitstellung aktivieren",
+  "atlassianConnectors.action.stop-jmx-metrics": "Jira-JMX-Metrikbereitstellung deaktivieren",
+  "chat.jira.monitoring.reviewedState": "Geprüfter aktueller Aktivierungszustand",
+  "chat.jira.monitoring.requestedState": "Angeforderter Aktivierungszustand",
+  "chat.jira.monitoring.enabled": "Aktiviert",
+  "chat.jira.monitoring.disabled": "Deaktiviert",
+  "chat.jira.monitoring.scope": "Geltungsbereich dieser Änderung",
+  "chat.jira.monitoring.instanceScope":
+    "Die angeforderte Änderung betrifft diese Überwachungseinstellung der Jira-Instanz. Es werden keine Metriken abgerufen; andere Einstellungen liegen außerhalb ihres Geltungsbereichs.",
+  "chat.jira.monitoring.jmxExposure": "JMX-Metrikbereitstellung",
+  "chat.jira.monitoring.confirmed":
+    "Eine unabhängige Leseabfrage hat den angeforderten Überwachungszustand bestätigt.",
+  "chat.jira.monitoring.observedEnabled": "Bestätigter Zustand: aktiviert",
+  "chat.jira.monitoring.observedDisabled": "Bestätigter Zustand: deaktiviert",
+  "chat.jira.monitoring.observedNoop":
+    "Der geprüfte Zustand entsprach bereits dem angeforderten Zustand; es wurde nichts geschrieben.",
+  "chat.jira.monitoring.targetUnconfirmed":
+    "Der gespeicherte Wert ist nur der angeforderte Zielzustand. Der aktuelle Überwachungszustand wurde nicht bestätigt.",
+  "chat.jira.monitoring.targetEnabled": "Angeforderter Zielzustand: aktiviert",
+  "chat.jira.monitoring.targetDisabled": "Angeforderter Zielzustand: deaktiviert",
+  "chat.jira.monitoring.stateUnknown": "Es wurde kein gültiger Überwachungszustand gespeichert.",
+  "atlassianConnectors.action.set-board-property": "Jira-Board-Property setzen",
+  "atlassianConnectors.action.delete-board-property": "Jira-Board-Property löschen",
+  "atlassianConnectors.action.set-sprint-property": "Jira-Sprint-Property setzen",
+  "atlassianConnectors.action.delete-sprint-property": "Jira-Sprint-Property löschen",
+  "atlassianConnectors.action.set-comment-property": "Jira-Kommentar-Property setzen",
+  "atlassianConnectors.action.delete-comment-property": "Jira-Kommentar-Property löschen",
+  "atlassianConnectors.action.set-dashboard-item-property":
+    "Jira-Dashboard-Element-Property setzen",
+  "atlassianConnectors.action.delete-dashboard-item-property":
+    "Jira-Dashboard-Element-Property löschen",
+  "atlassianConnectors.action.set-issue-property": "Jira-Vorgangs-Property setzen",
+  "atlassianConnectors.action.delete-issue-property": "Jira-Vorgangs-Property löschen",
+  "atlassianConnectors.action.set-issue-type-property": "Jira-Vorgangstyp-Property setzen",
+  "atlassianConnectors.action.delete-issue-type-property": "Jira-Vorgangstyp-Property löschen",
+  "atlassianConnectors.action.set-project-property": "Jira-Projekt-Property setzen",
+  "atlassianConnectors.action.delete-project-property": "Jira-Projekt-Property löschen",
+  "atlassianConnectors.action.set-user-property": "Jira-Benutzer-Property setzen",
+  "atlassianConnectors.action.delete-user-property": "Jira-Benutzer-Property löschen",
+  "chat.jira.propertyMutation.issueSelection": "Ausgewählte Vorgangs-ID oder Vorgangsschlüssel",
+  "chat.jira.propertyMutation.node": "Werttyp und Position",
+  "chat.jira.propertyMutation.reviewedValue": "Geprüfter bestehender Property-Wert",
+  "chat.jira.propertyMutation.requestedValue": "Angeforderter neuer Property-Wert",
+  "chat.jira.propertyMutation.reviewedAbsence": "Geprüfte Abwesenheit",
+  "chat.jira.propertyMutation.absenceExpected":
+    "Die Property wurde als nicht vorhanden geprüft. Dies bedeutet weder JSON-null noch einen leeren Wert.",
+  "chat.jira.propertyMutation.null": "Wert: JSON-null",
+  "chat.jira.propertyMutation.emptyText": "Wert: leerer Text",
+  "chat.jira.propertyMutation.emptyObject": "Wert: leeres Objekt",
+  "chat.jira.propertyMutation.emptyArray": "Wert: leeres Array",
+  "chat.jira.propertyMutation.true": "Wahrheitswert: wahr",
+  "chat.jira.propertyMutation.false": "Wahrheitswert: falsch",
+  "chat.jira.propertyMutation.confirmedPresent":
+    "Die Property und ihr angeforderter Wert wurden an der ausgewählten Entität unabhängig bestätigt.",
+  "chat.jira.propertyMutation.confirmedAbsent":
+    "Die Abwesenheit der Property wurde an der ausgewählten Entität unabhängig bestätigt.",
+  "chat.jira.propertyMutation.alreadyPresent":
+    "Die geprüfte Property hatte bereits den angeforderten Wert; es wurde nichts geschrieben.",
+  "chat.jira.propertyMutation.alreadyAbsent":
+    "Die geprüfte Property war bereits nicht vorhanden; es wurde nichts geschrieben.",
+  "chat.jira.propertyMutation.targetUnconfirmed":
+    "Nur der angeforderte Property-Zustand ist gespeichert. Der aktuell gespeicherte Zustand wurde nicht bestätigt.",
+  "chat.jira.propertyMutation.requestedPresent":
+    "Angeforderter Zielzustand: Property mit neuem Wert vorhanden",
+  "chat.jira.propertyMutation.requestedAbsent":
+    "Angeforderter Zielzustand: Property nicht vorhanden",
+  "chat.jira.propertyMutation.presenceUnknown":
+    "Es wurde keine gültige Bestätigung des Property-Zustands gespeichert.",
+  "chat.jira.fact.dashboardId": "Dashboard-ID",
+  "chat.jira.fact.sharePermissionId": "Freigabeeintrag-ID",
+  "chat.jira.fact.shareType": "Freigabetyp",
+  "chat.jira.fact.groupName": "Gruppe",
+  "chat.jira.fact.roleId": "Rollen-ID",
+  "chat.jira.fact.roleName": "Rolle",
+  "chat.jira.fact.userName": "Benutzername",
+  "chat.jira.fact.userKey": "Benutzerschlüssel",
+  "chat.jira.fact.applicationRoleKey": "Anwendungsrollenschlüssel",
+  "chat.jira.fact.roleGroups": "Gruppen mit dieser Anwendungsrolle",
+  "chat.jira.fact.roleGroupCount": "Gruppenanzahl",
+  "chat.jira.fact.roleDefaultGroups": "Standardgruppen",
+  "chat.jira.fact.roleDefaultGroupCount": "Anzahl der Standardgruppen",
+  "chat.jira.fact.roleSeats": "Von Jira gemeldete Platzgrenze",
+  "chat.jira.fact.roleRemainingSeats": "Von Jira gemeldete verbleibende Plätze",
+  "chat.jira.fact.roleUserCount": "Von Jira gemeldete Benutzeranzahl",
+  "chat.jira.directory.roleDefined": "Rolle ist definiert",
+  "chat.jira.directory.roleNotDefined": "Rolle ist nicht definiert",
+  "chat.jira.directory.unlimitedSeats": "Unbegrenzte Plätze",
+  "chat.jira.directory.limitedSeats": "Begrenzte Plätze",
+  "chat.jira.directory.platformRole": "Plattformrolle",
+  "chat.jira.directory.notPlatformRole": "Keine Plattformrolle",
+  "chat.jira.directory.defaultOnCreation": "Für neue Benutzer standardmäßig ausgewählt",
+  "chat.jira.directory.notDefaultOnCreation": "Für neue Benutzer nicht standardmäßig ausgewählt",
+  "chat.jira.directory.activityUnknown": "Kontoaktivität wurde nicht angegeben",
+  "chat.jira.directory.userDeleted": "Konto ist gelöscht",
+  "chat.jira.directory.userNotDeleted": "Konto ist nicht gelöscht",
+  "chat.jira.directory.deletionUnknown": "Löschstatus des Kontos wurde nicht angegeben",
+  "chat.jira.directory.includesSubgroups": "Mitglieder von Untergruppen sind eingeschlossen.",
+  "chat.jira.directory.searchWindow":
+    "Diese Suche umfasst höchstens die ersten 100 passenden Benutzer. Sie ist kein vollständiges Benutzerverzeichnis.",
+  "chat.jira.directory.lastPage":
+    "Dies ist die letzte Seite dieser Verzeichnisabfrage. Etwaige frühere Seiten werden hier nicht angezeigt.",
+  "chat.jira.directory.morePages":
+    "Weitere Verzeichnisseiten sind verfügbar. Diese Benutzer gehören nur zur aktuellen Seite.",
+  "chat.jira.directory.pageStateUnknown":
+    "Jira hat nicht bestätigt, ob weitere Verzeichnisseiten existieren.",
+  "chat.jira.directory.pickerTotalUnknown":
+    "Jira hat die Gesamtzahl der Treffer nicht angegeben. Diese Vorschläge können unvollständig sein.",
+  "chat.jira.directory.pickerPartial":
+    "Nur ein Teil der passenden Vorschläge wird angezeigt. Grenze die Suche ein, um weitere Treffer zu finden.",
+  "atlassianConnectors.action.jira.user": "Jira-Benutzer lesen",
+  "atlassianConnectors.action.jira.users": "Jira-Benutzer suchen",
+  "atlassianConnectors.action.jira.user-directory": "Eine Jira-Benutzerverzeichnisseite lesen",
+  "atlassianConnectors.action.jira.user-picker": "Jira-Benutzer vorschlagen",
+  "atlassianConnectors.action.jira.group-members": "Jira-Gruppenmitglieder lesen",
+  "atlassianConnectors.action.jira.groups": "Jira-Gruppen vorschlagen",
+  "atlassianConnectors.action.jira.application-roles": "Jira-Anwendungsrollen lesen",
+  "atlassianConnectors.action.jira.application-role": "Jira-Anwendungsrolle lesen",
+  "chat.jira.fact.userDisplayName": "Anzeigename",
+  "chat.jira.fact.avatarId": "Avatar-ID",
+  "chat.jira.fact.avatarOwner": "Avatar-Besitzer",
+  "chat.jira.fact.mediaType": "Medientyp",
+  "chat.jira.fact.sizeBytes": "Größe in Bytes",
+  "chat.jira.fact.entryIndex": "Archiveintragsindex",
+  "chat.jira.fact.archiveTotal": "Einträge im gesamten Archiv",
+  "chat.jira.fact.uploadLimit": "Natives Uploadlimit in Bytes",
+  "chat.jira.fact.attachmentMaxBytes": "Verwaltetes Uploadlimit in Bytes",
+  "chat.jira.fact.attachmentId": "Anhang-ID",
+  "chat.jira.asset.systemAvatar": "Systemavatar",
+  "chat.jira.asset.customAvatar": "Benutzerdefinierter Avatar",
+  "chat.jira.asset.selected": "Ausgewählt",
+  "chat.jira.asset.notSelected": "Nicht ausgewählt",
+  "chat.jira.asset.selectionUnknown": "Auswahl unbekannt",
+  "chat.jira.asset.archiveComplete":
+    "Jira hat die Metadaten aller Archiveinträge geliefert. Die angezeigte Seite kann nur einen Teil enthalten.",
+  "chat.jira.asset.archivePartial": "Jira hat nur für einen Teil des Archivs Metadaten geliefert.",
+  "chat.jira.asset.archiveCoverageUnknown":
+    "Der Gesamtumfang des Archivs ist unbekannt; diese Einträge können unvollständig sein.",
+  "chat.jira.asset.attachmentsEnabled": "Anhänge aktiviert",
+  "chat.jira.asset.attachmentsDisabled": "Anhänge deaktiviert",
+  "atlassianConnectors.action.jira.attachment-settings": "Jira-Anhangseinstellungen lesen",
+  "atlassianConnectors.action.jira.attachment": "Jira-Anhangsmetadaten lesen",
+  "atlassianConnectors.action.jira.attachment-archive": "Jira-Archiveintragsmetadaten lesen",
+  "atlassianConnectors.action.jira.attachment-archive-summary": "Jira-Archivübersicht lesen",
+  "atlassianConnectors.action.jira.system-avatars": "Jira-Systemavatar-Metadaten lesen",
+  "atlassianConnectors.action.jira.project-avatars": "Jira-Projektavatar-Metadaten lesen",
+  "atlassianConnectors.action.jira.user-avatars": "Jira-Benutzeravatar-Metadaten lesen",
+  "atlassianConnectors.action.jira.avatars": "Jira-Avatar-Metadaten lesen",
+  "chat.jira.fact.clearWorklogComment": "Vorhandenen Kommentar leeren",
+  "chat.jira.fact.worklogComment": "Kommentar zur Arbeitszeit",
+  "chat.jira.fact.watchCount": "Beobachter insgesamt",
+  "chat.jira.fact.voteCount": "Stimmen insgesamt",
+  "chat.jira.participation.watching": "Dein Konto beobachtet diesen Vorgang.",
+  "chat.jira.participation.notWatching": "Dein Konto beobachtet diesen Vorgang nicht.",
+  "chat.jira.participation.watchingUnknown":
+    "Der Beobachtungsstatus deines Kontos ist nicht bestätigt.",
+  "chat.jira.participation.voted": "Dein Konto hat für diesen Vorgang abgestimmt.",
+  "chat.jira.participation.notVoted": "Dein Konto hat für diesen Vorgang nicht abgestimmt.",
+  "chat.jira.participation.voteUnknown": "Die Stimme deines Kontos ist nicht bestätigt.",
+  "chat.jira.participation.membersPartial":
+    "Jira hat die vollständige Mitgliederliste nicht offengelegt. Die Gesamtzahl kann hier nicht angezeigte Personen einschließen.",
+  "atlassianConnectors.action.create-worklog": "Arbeitszeit für einen Jira-Vorgang erfassen",
+  "atlassianConnectors.action.update-worklog": "Jira-Arbeitszeiteintrag ändern",
+  "atlassianConnectors.action.watch-issue": "Jira-Vorgang mit deinem Konto beobachten",
+  "atlassianConnectors.action.unwatch-issue": "Jira-Vorgang mit deinem Konto nicht mehr beobachten",
+  "atlassianConnectors.action.vote-issue": "Mit deinem Konto für einen Jira-Vorgang abstimmen",
+  "atlassianConnectors.action.unvote-issue": "Deine Stimme für einen Jira-Vorgang entfernen",
+  "atlassianConnectors.action.jira.watchers": "Beobachter eines Jira-Vorgangs lesen",
+  "atlassianConnectors.action.jira.votes": "Stimmen eines Jira-Vorgangs lesen",
+  "chat.jira.fact.screenId": "Masken-ID",
+  "chat.jira.fact.screenTabId": "Masken-Tab-ID",
+  "chat.jira.fact.screenFieldId": "Feld-ID",
+  "chat.jira.fact.screenFieldType": "Nativer Feldtyp",
+  "chat.jira.fact.requestedSchemeId": "Angefragte Schema-ID",
+  "chat.jira.fact.returnedSchemeId": "Zurückgegebene Schema-ID",
+  "chat.jira.fact.issueTypeId": "Vorgangstyp-ID",
+  "chat.jira.fact.workflow": "Workflow",
+  "chat.jira.fact.originalWorkflow": "Ursprünglicher Workflow",
+  "chat.jira.fact.defaultWorkflow": "Standardworkflow",
+  "chat.jira.fact.originalDefaultWorkflow": "Ursprünglicher Standardworkflow",
+  "chat.jira.fact.lastModified": "Zuletzt geändert",
+  "chat.jira.fact.defaultIssueType": "Standardvorgangstyp",
+  "chat.jira.fact.subtaskTypes": "Unteraufgabentypen",
+  "chat.jira.fact.standardTypes": "Standardvorgangstypen",
+  "chat.jira.fact.unknownTypeKind": "Vorgangstypen ohne angegebene Art",
+  "chat.jira.fact.issueTypeCount": "Gelieferte Vorgangstypen",
+  "chat.jira.fact.mappedIssueTypeIds": "Zugeordnete Vorgangstyp-IDs",
+  "chat.jira.fact.mappedIssueTypeCount": "Gelieferte zugeordnete Vorgangstypen",
+  "chat.jira.administration.showWhenEmpty": "Wird leer angezeigt",
+  "chat.jira.administration.hideWhenEmpty": "Wird leer ausgeblendet",
+  "chat.jira.administration.defaultMapping": "Standardzuordnung",
+  "chat.jira.administration.notDefaultMapping": "Keine Standardzuordnung",
+  "chat.jira.administration.draft": "Schemaentwurf",
+  "chat.jira.administration.published": "Gespeichertes Schema, kein Entwurf",
+  "chat.jira.administration.currentMappingUnknown":
+    "Die aktuelle Zuordnung wurde nicht geliefert; die ursprüngliche Zuordnung wird separat angezeigt.",
+  "chat.jira.administration.mappingsUnknown":
+    "Vorgangstypzuordnungen wurden nicht geliefert; ihr Inhalt ist unbekannt.",
+  "atlassianConnectors.action.jira.screen-tabs": "Jira-Masken-Tabs lesen",
+  "atlassianConnectors.action.jira.screen-tab-fields": "Felder eines Jira-Masken-Tabs lesen",
+  "atlassianConnectors.action.jira.screen-available-fields": "Verfügbare Jira-Maskenfelder lesen",
+  "atlassianConnectors.action.jira.issue-type-schemes": "Jira-Vorgangstyp-Schemata lesen",
+  "atlassianConnectors.action.jira.issue-type-scheme": "Jira-Vorgangstyp-Schema lesen",
+  "atlassianConnectors.action.jira.issue-type-scheme-projects":
+    "Projekte eines Jira-Vorgangstyp-Schemas lesen",
+  "atlassianConnectors.action.jira.workflow-scheme": "Jira-Workflow-Schema lesen",
+  "atlassianConnectors.action.jira.workflow-scheme-draft": "Jira-Workflow-Schemaentwurf lesen",
+  "atlassianConnectors.action.jira.workflow-scheme-default":
+    "Jira-Standardworkflow-Zuordnung lesen",
+  "atlassianConnectors.action.jira.workflow-scheme-draft-default":
+    "Jira-Standardworkflow-Zuordnung im Entwurf lesen",
+  "atlassianConnectors.action.jira.workflow-scheme-issue-type":
+    "Jira-Vorgangstyp-Workflow-Zuordnung lesen",
+  "atlassianConnectors.action.jira.workflow-scheme-draft-issue-type":
+    "Jira-Vorgangstyp-Workflow-Zuordnung im Entwurf lesen",
+  "atlassianConnectors.action.jira.workflow-scheme-workflows": "Jira-Workflow-Zuordnungen lesen",
+  "atlassianConnectors.action.jira.workflow-scheme-draft-workflows":
+    "Jira-Workflow-Zuordnungen im Entwurf lesen",
+  "chat.jira.savedView.scopeGlobal": "Standardfreigabe: global",
+  "chat.jira.savedView.scopeAuthenticated": "Standardfreigabe: angemeldete Benutzer",
+  "chat.jira.savedView.scopePrivate": "Standardfreigabe: privat",
+  "chat.jira.savedView.defaultScopeHelp":
+    "Dies ist die Voreinstellung für künftige Filter, nicht der Freigabestatus eines vorhandenen Filters.",
+  "chat.jira.savedView.permissionHelp":
+    "Dieser konfigurierte Freigabeeintrag weist deine wirksamen Berechtigungen nicht nach.",
+  "chat.jira.savedView.editGranted": "Eintrag erlaubt Bearbeiten",
+  "chat.jira.savedView.editNotGranted": "Eintrag erlaubt kein Bearbeiten",
+  "chat.jira.savedView.viewGranted": "Eintrag erlaubt Anzeigen",
+  "chat.jira.savedView.viewNotGranted": "Eintrag erlaubt kein Anzeigen",
+  "chat.jira.fact.worklogId": "Arbeitsprotokoll-ID",
+  "chat.jira.fact.linkId": "Verknüpfungs-ID",
+  "chat.jira.fact.linkTypeId": "Verknüpfungstyp-ID",
+  "chat.jira.fact.created": "Erstellt",
+  "chat.jira.fact.updated": "Aktualisiert",
+  "chat.jira.fact.workStarted": "Arbeitsbeginn",
+  "chat.jira.fact.linkInward": "Eingehende Beziehung",
+  "chat.jira.fact.linkOutward": "Ausgehende Beziehung",
+  "chat.jira.fact.inwardIssue": "Eingehender Vorgang",
+  "chat.jira.fact.outwardIssue": "Ausgehender Vorgang",
+  "chat.jira.fact.timeSpentSeconds": "Zeitaufwand (Sekunden)",
+  "chat.jira.fact.visibleToGroup": "Sichtbar für Gruppe",
+  "chat.jira.fact.visibleToRole": "Sichtbar für Rolle",
   "chat.jira.fact.assignee": "Bearbeiter",
   "chat.jira.fact.assigneeCleared": "Geleert (nicht zugewiesen)",
   "chat.jira.fact.file": "Datei",
@@ -136,7 +2296,76 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.fact.updateRemove": "Aus {fieldId} entfernen: {value}",
 
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
+  "chat.requirements.details": "Anforderungen ansehen",
+  "chat.documents.details": "Dokumentergebnis ansehen",
+  "chat.review.details": "Bewertungsergebnis ansehen",
+  "chat.mcp.details": "MCP-Ergebnis anzeigen",
+  "chat.jira.details": "Jira-Ergebnis ansehen",
+  "chat.tool.readableResultUnavailable": "Für dieses Ergebnis ist keine lesbare Ansicht verfügbar.",
+  "chat.tool.readableResultHelp":
+    "Bitte um eine unterstützte Ergebnisansicht. Wiederhole eine Aktion nicht nur wegen der fehlenden Darstellung; prüfe zuerst ihren bisherigen Ausgang.",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+  "chat.jira.outcome.results": "Jira-Ergebnisse",
+  "chat.jira.outcome.projectId": "Projekt-ID: {id}",
+  "chat.jira.outcome.keyAvailable": "Dieser Projektschlüssel ist verfügbar.",
+  "chat.jira.outcome.keyUnavailable":
+    "Dieser Projektschlüssel ist nicht verwendbar. Wähle einen anderen Schlüssel.",
+  "chat.jira.outcome.permissionGranted": "Berechtigung erteilt",
+  "chat.jira.outcome.permissionDenied": "Berechtigung nicht erteilt",
+  "chat.jira.outcome.moreResults": "{count} weitere Ergebnisse anzeigen",
+  "chat.jira.outcome.openBoard": "Board öffnen",
+  "chat.jira.outcome.returned": "Zurückgegebene Ergebnisse: {count}.",
+  "chat.jira.outcome.returnedTotal": "{count} von {total} Ergebnissen zurückgegeben.",
+  "chat.jira.outcome.staged": "Vorgänge im gespeicherten Entwurf: {count}.",
+  "chat.jira.outcome.unresolved": "Noch ungeklärte Entwurfsverweise: {count}.",
+  "chat.jira.outcome.unreadable": "Gespeicherte Ergebnisse ohne lesbare Details: {count}.",
+  "chat.jira.outcome.required": "Erforderlich",
+  "chat.jira.outcome.optional": "Optional",
+  "chat.jira.outcome.active": "Aktiv",
+  "chat.jira.outcome.inactive": "Inaktiv",
+  "chat.jira.outcome.state.pending": "Ausstehend",
+  "chat.jira.outcome.state.created": "Erstellt",
+  "chat.jira.outcome.state.existing": "Bereits vorhanden",
+  "chat.jira.outcome.state.failed": "Fehlgeschlagen",
+  "chat.jira.outcome.state.uncertain": "Unklar",
+  "chat.jira.outcome.state.skipped": "Übersprungen",
+  "chat.jira.outcome.state.excluded": "Ausgeschlossen",
+  "chat.jira.outcome.rule.parent-type-mismatch":
+    "Das übergeordnete Issue muss einen erlaubten Vorgangstyp haben ({subject}).",
+  "chat.jira.outcome.failure.auth":
+    "Prüfe die Verbindung des Jira-Pods und seine Zugangsdaten, bevor du es erneut versuchst.",
+  "chat.jira.outcome.failure.permission":
+    "Prüfe die Berechtigung des Jira-Kontos für das angeforderte Projekt und die Aktion.",
+  "chat.jira.outcome.failure.notFound":
+    "Prüfe, ob der angeforderte Jira-Vorgang oder das Projekt existiert und für dieses Konto sichtbar ist.",
+  "chat.jira.outcome.failure.rateLimited":
+    "Jira hat Anfragen begrenzt. Warte vor einer weiteren Anfrage.",
+  "chat.jira.outcome.failure.requirementUntraced":
+    "Der Entwurf nennt die Anforderung nicht, die er umsetzt. Verweise auf ihre Anforderungs-ID aus dem Knowledge Pod. In Jira wurde nichts angelegt.",
+  "chat.jira.outcome.failure.requirementCriteria":
+    "Ein Abnahmekriterium der genannten Anforderung fehlt in der Beschreibung. Übernimm es wörtlich. In Jira wurde nichts angelegt.",
+  "chat.jira.outcome.failure.requirementReferences":
+    "Eine genannte Anforderungs-ID ist im Knowledge Pod unbekannt oder mehrdeutig. Prüfe die ID. In Jira wurde nichts angelegt.",
+  "chat.jira.outcome.failure.requirementUnavailable":
+    "Die Anforderungen konnten aus keinem Knowledge Pod gelesen werden. Wähle den Knowledge Pod mit dem Lastenheft. In Jira wurde nichts angelegt.",
+  "chat.jira.outcome.failure.sourceChanged":
+    "Die Quellanforderungen haben sich geändert. Lies sie erneut und bereite den Entwurf neu vor. In Jira wurde nichts geändert.",
+  "chat.jira.outcome.failure.conflict":
+    "Der Jira-Stand hat sich geändert. Lies den aktuellen Vorgang, bevor du eine weitere Änderung anforderst.",
+  "chat.jira.outcome.failure.transition":
+    "Dieser Statusübergang ist nicht verfügbar. Lies die aktuellen Übergänge des Vorgangs.",
+  "chat.jira.outcome.failure.bounds":
+    "Das angeforderte Ergebnis überschritt eine Grenze. Grenze die Anfrage ein oder fordere eine kleinere Seite an.",
+  "chat.jira.outcome.failure.response":
+    "Jira lieferte eine unlesbare Antwort. Prüfe die Jira-Verbindung und die angeforderte Aktion.",
+  "chat.jira.outcome.failure.fields":
+    "Prüfe die erforderlichen Jira-Felder und Vorlagenregeln, bevor du die Änderung erneut anforderst.",
+  "chat.jira.outcome.failure.readParameters":
+    "Jira hat die Werte dieser Abfrage abgelehnt. Prüfe den verwendeten Projektschlüssel, Vorgangstyp oder Filter; es wurde nichts geändert.",
+  "chat.jira.outcome.failure.invalidInput":
+    "Keiko hat die Werte dieser Anfrage abgelehnt; es wurde nichts geändert.",
+  "chat.jira.outcome.failure.unavailable":
+    "Das Jira-Ergebnis ist nicht verfügbar. Prüfe die Verbindung und den Stand in Jira vor einer weiteren Anfrage.",
   "chat.requirements.tool": "Anforderungen",
   "chat.requirements.partial": "Nicht alle Anforderungen wurden gelesen.",
   "chat.requirements.read": "Anforderungen gelesen: {done} von {total}",
@@ -163,6 +2392,52 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.documents.tool": "Dokumente",
   "chat.review.tool": "Dokumentenbewertung",
   "chat.knowledge.partial": "Teilergebnis. Nicht alle Dokumentinformationen sind enthalten.",
+  "chat.knowledge.outcome.results": "Wissensergebnisse",
+  "chat.knowledge.outcome.detected": "Erkannte Anforderungen",
+  "chat.knowledge.outcome.matched": "Passende Anforderungen",
+  "chat.knowledge.outcome.scanned": "Gelesene Dokumente",
+  "chat.knowledge.outcome.documents": "Dokumente im gewählten Bestand",
+  "chat.knowledge.outcome.notExtracted": "Dokumente ohne extrahierten Text",
+  "chat.knowledge.outcome.documentsOmitted": "Ausgelassene Dokumente",
+  "chat.knowledge.outcome.unitsOmitted": "Ausgelassene Anforderungen",
+  "chat.knowledge.outcome.documentReference": "Dokumentreferenz",
+  "chat.knowledge.outcome.document": "Dokument",
+  "chat.knowledge.outcome.page": "Quellseite",
+  "chat.knowledge.outcome.characters": "Zeichenbereich",
+  "chat.knowledge.outcome.section": "Abschnitt",
+  "chat.knowledge.outcome.criteria": "Akzeptanzkriterien aus der Quelle",
+  "chat.knowledge.outcome.sourceUnavailable":
+    "Der Quelltext war für dieses Ergebnis nicht verfügbar.",
+  "chat.knowledge.outcome.emptyText": "Der zurückgegebene Text ist leer.",
+  "chat.knowledge.outcome.originalPositions":
+    "Die Positionen beziehen sich auf den ursprünglichen Dokumenttext.",
+  "chat.knowledge.outcome.redactedPositions":
+    "Die Positionen beziehen sich auf den redigierten Dokumenttext.",
+  "chat.knowledge.outcome.extraction": "Extraktionsstatus",
+  "chat.knowledge.outcome.sources": "Zitierte Dokumentreferenzen und Zeichenbereiche",
+  "chat.knowledge.outcome.quoteTruncated": "Mindestens ein Quellenzitat ist gekürzt.",
+  "chat.knowledge.outcome.question": "Klärungsfrage",
+  "chat.knowledge.outcome.proposal": "Modellvorschlag; die Quelle bleibt unverändert.",
+  "chat.knowledge.outcome.obligation": "Vorgeschlagene Verpflichtung",
+  "chat.knowledge.outcome.criterion": "Vorgeschlagenes Akzeptanzkriterium",
+  "chat.knowledge.outcome.conflict": "Möglicher Widerspruch",
+  "chat.knowledge.outcome.omission": "Mögliche Lücke",
+  "chat.knowledge.outcome.clarification": "Klärung erforderlich",
+  "chat.knowledge.outcome.reviewScope":
+    "Dies sind Prüfungsvorschläge für den zurückgegebenen Quellausschnitt. Sie belegen keine vollständige Prüfung des Dokuments oder Knowledge Pods.",
+  "chat.knowledge.outcome.requirements": "Anforderungsreferenzen",
+  "chat.knowledge.outcome.query": "Vorgeschlagene Änderungsabfrage",
+  "chat.knowledge.outcome.changed": "Geänderte Anforderung",
+  "chat.knowledge.outcome.removed": "Entfernte Anforderung",
+  "chat.knowledge.outcome.untraced": "Anforderung ohne Nachverfolgung",
+  "chat.knowledge.outcome.unchanged": "Unveränderte Anforderung",
+  "chat.knowledge.outcome.changedCount": "Geänderte Anforderungen",
+  "chat.knowledge.outcome.removedCount": "Entfernte Anforderungen",
+  "chat.knowledge.outcome.untracedCount": "Anforderungen ohne Nachverfolgung",
+  "chat.knowledge.outcome.unchangedCount": "Unveränderte Anforderungen",
+  "chat.knowledge.outcome.linkedIssues": "Referenzierte Vorgänge",
+  "chat.knowledge.outcome.returnedChars": "Zurückgegebene Zeichen",
+  "chat.knowledge.outcome.documentChars": "Zeichen im gewählten Dokument",
   "chat.review.invalidModelOutput":
     "Das Dokument wurde gelesen, aber die Modellantwort war ungültig. Die Prüfung wurde nicht abgeschlossen.",
   "chat.review.modelUnavailable":
@@ -194,6 +2469,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.processing.active": "In Bearbeitung",
   "chat.processing.upcoming": "Als Nächstes",
   "chat.processing.approval": "Wartet auf Genehmigung",
+  "chat.processing.input": "Wartet auf deine Eingabe",
   "chat.processing.failed": "Fehlgeschlagen",
   "chat.processing.cancelled": "Abgebrochen",
   "chat.processing.attention": "Ergebnis unbestätigt",
@@ -212,6 +2488,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.processing.changeQueries": "Anforderungsänderungen suchen",
   "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
   "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
+  "chat.jira.write.unchanged": "Bereits aktuell",
+  "chat.jira.write.unchangedHelp":
+    "Die gewünschten Werte stimmen bereits mit Jira überein. Es wurde nichts geändert.",
   "chat.jira.write.succeeded": "Jira-Änderung bestätigt",
   "chat.jira.write.unconfirmed": "Jira hat die Änderung angenommen; Bestätigung unvollständig",
   "chat.jira.write.unknown": "Ausgang der Jira-Aktion unbekannt",
@@ -236,6 +2515,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.connectors.active": "Konnektoren: {count} aktiv",
   "chat.connectors.mcp": "MCP-Server",
   "chat.connectors.jira": "Jira-Pods",
+  "chat.connectors.jiraAdministration": "Jira-Instanz administrieren",
+  "chat.connectors.jiraAdministrationHelp":
+    "Änderungen an gemeinsamer Jira-Konfiguration, etwa Masken und Monitoring, für diesen ausgewählten Pod gesondert erlauben. Gewöhnliche Jira-Schreibaktionen folgen weiterhin dem gewählten Modus. Vollzugriff aktiviert die Instanzverwaltung nicht; Jiras eigene Berechtigungen gelten weiterhin.",
   "chat.connectors.manage": "Verwalten",
   "chat.connectors.noServers": "Keine MCP-Server eingerichtet",
   "chat.connectors.noPods": "Noch keine Jira-Pods",
@@ -290,6 +2572,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.rule.template-unreadable":
     "Die Vorlage „{subject}“ konnte nicht gelesen werden.",
   "chat.jira.tool": "Jira-Aktion",
+  "chat.jira.catalog.discover": "Jira-Aktionen finden",
+  "chat.jira.catalog.describe": "Jira-Aktionen auswählen",
+  "chat.jira.catalog.actions": "Jira-Aktionen",
+  "chat.jira.catalog.read": "Liest Jira",
+  "chat.jira.catalog.write": "Ändert Jira",
+  "chat.jira.catalog.local": "Lokale Vorbereitung",
+  "chat.jira.catalog.selected": "Aktionsauswahl aktualisiert",
+  "chat.jira.catalog.invalidArguments":
+    "Die Jira-Aktionsauswahl war ungültig. Suche verfügbare Aktionen und wähle sie erneut aus.",
   "chat.jira.complete": "Abgeschlossen",
   "chat.jira.running": "Wird ausgeführt",
   "chat.jira.unavailable": "Konnte nicht abgeschlossen werden",
@@ -300,6 +2591,33 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.batch.refused.noUsableIssueType":
     "Kein Vorgangstyp zum Entwerfen in diesem Projekt verfügbar",
   "chat.jira.batch.refused.issueTypeNotFound": "Vorgangstyp in diesem Projekt nicht verfügbar",
+  "chat.jira.batch.refused.requirementsAmbiguous":
+    "Dieselben Anforderungs-IDs stehen in Dokumenten mit unterschiedlichem Inhalt. Nenne das Dokument, aus dem entworfen werden soll",
+  "chat.jira.batch.refused.requirementsCut":
+    "Zu viele Anforderungen auf einmal. Grenze die Auswahl ein",
+  "chat.jira.batch.refused.scopeUnavailable":
+    "Der angehängte Knowledge Pod kann nicht gelesen werden",
+  "chat.jira.batch.refused.templateUnavailable":
+    "Die Vorlagenregeln des Projekts konnten nicht aus Jira gelesen werden",
+  "chat.jira.batch.refused.modelUnavailable": "Für das Entwerfen ist kein Modell verfügbar",
+  "chat.jira.batch.refused.budgetUnavailable": "Das Kontingent für diese Anfrage ist aufgebraucht",
+  "chat.jira.batch.refused.unsupportedDeployment":
+    "Das Entwerfen aus Anforderungen braucht eine Jira-Data-Center-Verbindung",
+  "chat.jira.batch.refused.draftUnavailable":
+    "Der frühere Entwurf ist abgelaufen. Das Entwerfen beginnt neu",
+  "chat.jira.batch.refused.draftMismatch":
+    "Der Entwurf gehört zu einem anderen Projekt oder Vorgangstyp",
+  "chat.jira.batch.refused.invalidInput": "Die Anfrage zum Entwerfen war unvollständig",
+  "chat.jira.batch.stopped.rulesRejected":
+    "Die entworfenen Vorgänge erfüllten die Vorlagenregeln des Projekts nicht",
+  "chat.jira.batch.stopped.stageFailed": "Jira hat den Entwurf nicht angenommen",
+  "chat.jira.batch.stopped.callLimit":
+    "Das Kontingent an Modellaufrufen für diese Anfrage ist aufgebraucht",
+  "chat.jira.batch.stopped.modelFailed": "Das Modell hat keine verwendbaren Entwürfe geliefert",
+  "chat.jira.batch.stopped.deadline":
+    "Die Zeit ist abgelaufen. Die übrigen Anforderungen können in einem zweiten Lauf entworfen werden",
+  "chat.jira.batch.stopped.tooLarge": "Der Bestand ist größer, als ein Entwurf fassen kann",
+  "chat.jira.batch.stopped.nothingDrafted": "Es wurde nichts entworfen",
   "browserApproval.title": "Diesen Browser verbinden",
   "browserApproval.close": "Schließen",
   "browserApproval.notice":
@@ -3148,7 +5466,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Diese Verbindung unterstützt Jira Data Center 10.3.26. Prüfe Bereitstellung und Version.",
+    "Jira meldet eine nicht unterstützte Bereitstellung oder Version oder widersprüchliche Versionsangaben. Prüfe die Adresse und den REST-v2-Zugriff auf Jira Server oder Data Center ab Version 10.3 und verifiziere erneut.",
   "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
   "atlassianConnectors.verify.tls-failed.copy":
     "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
@@ -3228,6 +5546,51 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.approvals.rejected": "Abgelehnt. Die Aktion wurde nicht ausgeführt.",
   "atlassianConnectors.action.sync-space": "Confluence-Bereich synchronisieren",
   "atlassianConnectors.action.jira.projects": "Jira-Projekte lesen",
+  "atlassianConnectors.action.jira.project": "Jira-Projekt lesen",
+  "atlassianConnectors.action.jira.validate-project-key": "Jira-Projektschlüssel prüfen",
+  "atlassianConnectors.action.jira.project-permissions": "Jira-Projektberechtigungen prüfen",
+  "atlassianConnectors.action.jira.project-type": "Jira-Projekttyp lesen",
+  "atlassianConnectors.action.jira.versions": "Jira-Projektversionen lesen",
+  "atlassianConnectors.action.jira.version": "Jira-Version lesen",
+  "atlassianConnectors.action.jira.components": "Jira-Projektkomponenten lesen",
+  "atlassianConnectors.action.jira.component": "Jira-Komponente lesen",
+  "atlassianConnectors.action.jira.get-comment": "Jira-Kommentar lesen",
+  "atlassianConnectors.action.jira.dashboards": "Jira-Dashboards lesen",
+  "atlassianConnectors.action.jira.dashboard": "Jira-Dashboard lesen",
+  "atlassianConnectors.action.jira.filter-share-scope": "Jira-Filter-Standardfreigabe lesen",
+  "atlassianConnectors.action.jira.filter-permissions": "Jira-Filter-Freigabeeinträge lesen",
+  "atlassianConnectors.action.jira.filter-permission": "Jira-Filter-Freigabeeintrag lesen",
+  "atlassianConnectors.action.jira.link-types": "Jira-Verknüpfungstypen lesen",
+  "atlassianConnectors.action.jira.issue-link": "Jira-Vorgangsverknüpfung lesen",
+  "atlassianConnectors.action.jira.worklogs": "Jira-Arbeitsprotokolle lesen",
+  "atlassianConnectors.action.jira.worklog": "Jira-Arbeitsprotokoll lesen",
+  "atlassianConnectors.action.update-issue-comment": "Jira-Kommentar ändern",
+  "atlassianConnectors.action.create-version": "Jira-Version erstellen",
+  "atlassianConnectors.action.update-version": "Jira-Version aktualisieren",
+  "atlassianConnectors.action.create-component": "Jira-Komponente erstellen",
+  "atlassianConnectors.action.update-component": "Jira-Komponente aktualisieren",
+  "atlassianConnectors.action.create-project": "Jira-Projekt erstellen",
+  "atlassianConnectors.action.update-project": "Jira-Projekt aktualisieren",
+  "atlassianConnectors.action.jira.boards": "Jira-Boards lesen",
+  "atlassianConnectors.action.jira.filter": "Jira-Filter lesen",
+  "atlassianConnectors.action.jira.favourite-filters": "Favorisierte Jira-Filter lesen",
+  "atlassianConnectors.action.jira.board": "Jira-Board lesen",
+  "atlassianConnectors.action.jira.board-configuration": "Jira-Board-Konfiguration lesen",
+  "atlassianConnectors.action.jira.board-backlog": "Jira-Board-Backlog lesen",
+  "atlassianConnectors.action.jira.board-issues": "Vorgänge des Jira-Boards lesen",
+  "atlassianConnectors.action.jira.board-epics": "Epics des Jira-Boards lesen",
+  "atlassianConnectors.action.jira.epic": "Jira-Epic lesen",
+  "atlassianConnectors.action.jira.epic-issues": "Vorgänge des Jira-Epics lesen",
+  "atlassianConnectors.action.jira.sprints": "Jira-Sprints lesen",
+  "atlassianConnectors.action.jira.sprint": "Jira-Sprint lesen",
+  "atlassianConnectors.action.jira.sprint-issues": "Vorgänge des Jira-Sprints lesen",
+  "atlassianConnectors.action.create-board": "Jira-Board erstellen",
+  "atlassianConnectors.action.create-sprint": "Jira-Sprint erstellen",
+  "atlassianConnectors.action.update-sprint": "Jira-Sprint aktualisieren",
+  "atlassianConnectors.action.move-issues-to-sprint": "Vorgänge einem Jira-Sprint zuordnen",
+  "atlassianConnectors.action.move-issues-to-backlog": "Vorgänge ins Jira-Backlog verschieben",
+  "atlassianConnectors.action.update-epic": "Jira-Epic aktualisieren",
+  "atlassianConnectors.action.move-issues-to-epic": "Vorgänge einem Jira-Epic zuordnen",
   "atlassianConnectors.action.jira.issue-types": "Jira-Vorgangstypen lesen",
   "atlassianConnectors.action.jira.create-fields": "Jira-Erstellungsfelder lesen",
   "atlassianConnectors.action.jira.edit-fields": "Jira-Bearbeitungsfelder lesen",
@@ -3240,6 +5603,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
   "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
   "atlassianConnectors.action.jira.draft-batch": "Jira-Vorgänge aus Anforderungen entwerfen",
+  "chat.jira.report.estimateField": "Schätzfeld: {name} ({id})",
+  "chat.jira.report.estimateUnavailable": "Schätzung nicht verfügbar: {reason}",
+  "chat.jira.report.estimateReason.project-not-specified": "kein Projekt angegeben",
+  "chat.jira.report.estimateReason.field-not-found":
+    "auf den Boards oder Masken des Projekts ist kein Schätzfeld konfiguriert",
+  "chat.jira.report.estimateReason.ambiguous-field":
+    "das Projekt hat widersprüchliche Schätzfelder",
+  "chat.jira.report.estimateReason.metadata-unavailable":
+    "die Schätzkonfiguration des Projekts konnte nicht gelesen werden",
   "chat.jira.report.figures":
     "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
   "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",
@@ -3247,6 +5619,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.report.complete": "Vollständig: {read} Vorgänge gelesen",
   "chat.jira.report.incomplete":
     "Unvollständig ({reason}): {read} von {total} Vorgängen gelesen. Die Zahlen beschreiben nur die gelesenen Vorgänge.",
+  "chat.jira.report.incompleteUnknown":
+    "Unvollständig ({reason}): {read} Vorgänge gelesen; die Gesamtzahl ist unbekannt. Die Zahlen beschreiben nur die gelesenen Vorgänge.",
   "chat.jira.report.reason.read-failed": "Jira konnte nicht weiter gelesen werden",
   "chat.jira.report.reason.scope-changed": "die Vorgänge haben sich während des Lesens geändert",
   "chat.jira.report.reason.memory-budget": "Speichergrenze erreicht",
@@ -3300,6 +5674,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.result.reason.not-found": "Das Ziel existiert nicht mehr.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian hat die Anfrage gedrosselt.",
   "atlassianConnectors.result.reason.timeout": "Zeitüberschreitung der Anfrage.",
+  "atlassianConnectors.result.reason.effect-denied":
+    "Die lokale Autorität erlaubt diese Anfrage nicht mehr. Vor einer weiteren Anfrage die erlaubten Connector-Scopes und den gespeicherten Ausgang prüfen.",
+  "atlassianConnectors.result.reason.cancelled":
+    "Die Anfrage wurde abgebrochen. Vor einer weiteren Anfrage den gespeicherten Ausgang prüfen; ein Abbruch macht eine bestätigte Änderung nicht rückgängig.",
   "atlassianConnectors.result.reason.unavailable": "Atlassian war vorübergehend nicht verfügbar.",
   "atlassianConnectors.result.reason.malformed-payload":
     "Die Anfrage konnte nicht verarbeitet werden.",

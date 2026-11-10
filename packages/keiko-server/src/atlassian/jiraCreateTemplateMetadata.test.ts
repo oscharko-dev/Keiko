@@ -181,7 +181,7 @@ describe("applicable create template metadata through the managed read", () => {
     expect(
       createJiraProviderForCatalog(() => f.connection, ["jira.create-fields"]).tools()[0]
         ?.descriptor.toolRef.contractVersion,
-    ).toBe(3);
+    ).toBe(4);
     expect(JSON.stringify(result.data)).not.toContain("PRIVATE_TEMPLATE_BODY_NOT_IN_METADATA");
     const metadata = f.sink.events.find((event) => event.op === "jira.template.metadata");
     expect(metadata?.extra).toMatchObject({ matchedCount: 1, returnedCount: 1, omittedCount: 0 });
@@ -190,6 +190,34 @@ describe("applicable create template metadata through the managed read", () => {
       formatActivityLogProofLine(metadata ?? {}),
     );
     expect(JSON.stringify(f.sink.events)).not.toContain("Akzeptanzkriterien");
+  });
+
+  it("returns a template that restricts the parent's issue type within the result schema", async () => {
+    const f = fixture();
+    f.add(
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        "issueType: Task",
+        "activateOn: [create]",
+        'parentField: "parent"',
+        "parentIssueTypes: [Story]",
+        "---",
+        "# Task",
+        "## Anforderung",
+      ].join("\n"),
+    );
+    const result = await f.read();
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      applicableTemplates: {
+        matchedCount: 1,
+        complete: true,
+        items: [{ issueType: "Task", parent: { field: "parent", issueTypes: ["Story"] } }],
+      },
+    });
   });
 
   it("explicitly reports a complete empty rule set using only its existing field read", async () => {
@@ -213,7 +241,7 @@ describe("applicable create template metadata through the managed read", () => {
         {
           id: "description",
           nativeFormat: "jira-wiki",
-          markdownSerialization: "headings-only",
+          markdownSerialization: "supported-markdown",
           inputSchema: {
             oneOf: [
               { type: "string", maxLength: 32768 },

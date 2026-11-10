@@ -59,15 +59,46 @@ function compiler(dialect: CatalogJsonValue | undefined): Ajv {
   validator.addKeyword({ keyword: "x-mcp-header", schemaType: "string", valid: true });
   return validator;
 }
+// Building an Ajv instance compiles its meta-schema, which dominated every distinct schema's cost
+// (about 3.8 ms against 0.15 ms to compile on an existing instance). One instance per dialect
+// compiles every schema; each is removed from the instance right after, so no schema, `$id` or
+// anchor outlives its own compilation and a repeated `$id` cannot collide. External schemas cannot
+// carry `$id`, `$anchor` or dynamic anchors at all (`isBoundedExternalJsonSchema`), so a `$ref` can
+// only resolve inside its own schema, as on a fresh instance.
+const SHARED_COMPILERS = new Map<string, Ajv>();
+function sharedCompiler(dialect: CatalogJsonValue | undefined): Ajv {
+  const key = typeof dialect === "string" ? dialect : "";
+  const existing = SHARED_COMPILERS.get(key);
+  if (existing !== undefined) return existing;
+  const created = compiler(dialect);
+  SHARED_COMPILERS.set(key, created);
+  return created;
+}
+function compileValidator(schema: CatalogJsonObject): ValidateFunction {
+  const shared = sharedCompiler(schema.$schema);
+  try {
+    return shared.compile(schema);
+  } catch (sharedError) {
+    // A refusal is only ever decided by a fresh instance, exactly as before sharing: its own
+    // compile error propagates and the caller reports the closed `unsupported-schema` refusal.
+    compiler(schema.$schema).compile(schema);
+    // The fresh instance accepted what the shared one refused, so sharing itself is defective.
+    // That is never a valid schema's compilation: it fails closed and keeps its cause.
+    throw new Error("Shared external-schema compiler refused a schema a fresh one accepts", {
+      cause: sharedError,
+    });
+  } finally {
+    shared.removeSchema(schema);
+  }
+}
 const VALIDATORS = new Map<string, ValidateFunction>();
-function validationFor(schema: CatalogJsonObject): ValidateFunction {
-  requireCatalog(isBoundedExternalJsonSchema(schema), "unsupported-schema");
+function validationFor(schema: CatalogJsonObject, bounded = false): ValidateFunction {
+  requireCatalog(bounded || isBoundedExternalJsonSchema(schema), "unsupported-schema");
   const identity = canonicalise(schema);
   const cached = VALIDATORS.get(identity);
   if (cached !== undefined) return cached;
   try {
-    const validator = compiler(schema.$schema);
-    const validate = validator.compile(schema);
+    const validate = compileValidator(schema);
     if (VALIDATORS.size >= 64) {
       const oldest = VALIDATORS.keys().next().value;
       if (oldest !== undefined) VALIDATORS.delete(oldest);
@@ -83,6 +114,12 @@ function validationFor(schema: CatalogJsonObject): ValidateFunction {
 export function compileExternalCatalogSchema(value: unknown): CatalogJsonObject {
   requireCatalog(isBoundedExternalJsonSchema(value), "unsupported-schema");
   const schema = catalogObject(copyCatalogJson(value));
+  const declared = { ...schema, $schema: schema.$schema ?? EXTERNAL_JSON_SCHEMA_DEFAULT };
+  validationFor(declared, true);
+  return declared;
+}
+/** The caller already owns a bounded private copy; no second copy or bound walk is needed. */
+export function compileOwnedExternalCatalogSchema(schema: CatalogJsonObject): CatalogJsonObject {
   const declared = { ...schema, $schema: schema.$schema ?? EXTERNAL_JSON_SCHEMA_DEFAULT };
   validationFor(declared);
   return declared;

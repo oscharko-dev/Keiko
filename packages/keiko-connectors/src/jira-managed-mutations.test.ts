@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
-import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import { executeJiraManagedMutation, nativeRequestBody } from "./jira-managed-mutations.js";
 import type { JiraAttachmentSource } from "./jira-attachments.js";
 import { jiraEditAlreadyHeld } from "./jira-mutation-confirmation.js";
 
@@ -21,7 +21,7 @@ const ALREADY_HELD = {
   ok: false,
   reason: "conflict",
   receipt: { issueKey: "SYN-1" },
-  detail: { messages: ["SYN-1 already holds this. Nothing was written."] },
+  detail: { unchanged: true, messages: ["SYN-1 already holds this. Nothing was written."] },
 };
 function fixture(attachmentSource?: JiraAttachmentSource): {
   controller: AbortController;
@@ -381,6 +381,24 @@ it("writes Data Center plain text comments and requires the returned comment ide
     body: "Synthetic\ncomment",
   });
 });
+it("retains the acknowledged comment identity when readback admission is revoked", async () => {
+  const f = fixture();
+  const original = f.http.getMockImplementation();
+  if (original === undefined) throw new Error("Expected fixture");
+  f.http.mockImplementation(async (request) => {
+    const result = await original(request);
+    if (request.method === "POST") f.beforeEffect.mockReturnValue(false);
+    return result;
+  });
+  expect(await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" })).toEqual({
+    ok: false,
+    reason: "effect-denied",
+    receipt: { issueKey: "SYN-1", commentId: "10002" },
+  });
+  expect(
+    f.http.mock.calls.map(([request]) => [request.method, new URL(request.url).pathname]),
+  ).toEqual([["POST", "/context/rest/api/2/issue/SYN-1/comment"]]);
+});
 it.each(["jira.create", "jira.transition"] as const)(
   "refuses missing required fields for %s before any mutation",
   async (operation) => {
@@ -679,14 +697,17 @@ it("rechecks admission between fresh metadata and mutation dispatch", async () =
   const f = fixture();
   f.beforeEffect.mockReturnValueOnce(true).mockReturnValue(false);
   expect(
-    (await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Approved" } })).ok,
-  ).toBe(false);
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Approved" } }),
+  ).toMatchObject({ ok: false, reason: "effect-denied" });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 it("does not access Jira after cancellation", async () => {
   const f = fixture();
   f.controller.abort();
-  expect((await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic" })).ok).toBe(false);
+  expect(await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic" })).toMatchObject({
+    ok: false,
+    reason: "cancelled",
+  });
   expect(f.http).not.toHaveBeenCalled();
 });
 it("does not route Data Center writes into a Cloud connection", async () => {
@@ -758,20 +779,35 @@ it.each(CONFIRMED_OPERATIONS)(
     const f = fixture();
     const original = f.http.getMockImplementation();
     if (original === undefined) throw new Error("Expected fixture");
-    f.http.mockImplementation((request) => {
+    const readbackPath =
+      operation === "jira.comment"
+        ? "/context/rest/api/2/issue/SYN-1/comment/10002"
+        : "/context/rest/api/2/issue/SYN-1";
+    const ackStatus = operation === "jira.create" || operation === "jira.comment" ? 201 : 204;
+    let acknowledged = false;
+    const deniedReadbacks: AtlassianHttpBodyResult[] = [];
+    f.http.mockImplementation(async (request) => {
       const path = new URL(request.url).pathname;
-      const afterWrite = f.http.mock.calls.some(([call]) => call.method !== "GET");
-      return afterWrite &&
-        request.method === "GET" &&
-        (path.endsWith("/issue/SYN-1") || path.endsWith("/comment/10002"))
-        ? Promise.resolve(response({}, 403))
-        : original(request);
+      if (acknowledged && request.method === "GET" && path === readbackPath) {
+        const denied = response({}, 403);
+        deniedReadbacks.push(denied);
+        return denied;
+      }
+      const result = await original(request);
+      if (request.method !== "GET" && result.kind === "response" && result.status === ackStatus)
+        acknowledged = true;
+      return result;
     });
     expect(await f.run(operation, args)).toEqual({
       ok: false,
       reason: "permission-denied",
-      httpStatus: 403,
+      // Issue observations use dispatchFailure's domain projection; comments retain HTTP facts.
+      ...(operation === "jira.comment"
+        ? { httpStatus: 403, receipt: { issueKey: "SYN-1", commentId: "10002" } }
+        : {}),
     });
+    expect(acknowledged).toBe(true);
+    expect(deniedReadbacks).toMatchObject([{ kind: "response", status: 403 }]);
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
@@ -801,7 +837,13 @@ it.each(CONFIRMED_OPERATIONS)(
         );
       return original(request);
     });
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "conflict" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "conflict",
+      ...(operation === "jira.comment"
+        ? { receipt: { issueKey: "SYN-1", commentId: "10002" } }
+        : {}),
+    });
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
@@ -873,9 +915,12 @@ it("does not repeat an acknowledged edit when authority is lost before readback"
     .mockReturnValueOnce(true)
     .mockReturnValueOnce(true)
     .mockReturnValue(false);
-  expect((await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } })).ok).toBe(
-    false,
-  );
+  expect(
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } }),
+  ).toMatchObject({
+    ok: false,
+    reason: "effect-denied",
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "PUT"]);
 });
 it("refuses an edit before PUT when its prior issue state cannot be read", async () => {
@@ -918,7 +963,13 @@ it.each(["jira.create", "jira.comment"] as const)(
             fields: { summary: "Synthetic", customfield_10000: "Required" },
           }
         : { issueKey: "SYN-1", body: "Synthetic" };
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "conflict" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "conflict",
+      ...(operation === "jira.comment"
+        ? { receipt: { issueKey: "SYN-1", commentId: "10002" } }
+        : {}),
+    });
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
@@ -1620,6 +1671,7 @@ it("refuses a create a Keiko draft already made, naming the existing key (S19 of
     reason: "conflict",
     receipt: { issueKey: "SYN-4", issueId: "10004" },
     detail: {
+      unchanged: true,
       messages: [
         "SYN-4 already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report SYN-4 as the result; do not create it again.",
       ],
@@ -1712,4 +1764,47 @@ it("never reconciles a create with links", async () => {
     links: [{ type: "Relates", direction: "outward", issueKey: "SYN-2" }],
   });
   expect(f.searches()).toEqual([]);
+});
+
+it.each([
+  ["jira.create-component", { projectIdOrKey: "SYN", name: "New component" }, "component", "20000"],
+  ["jira.update-component", { componentId: "20000", name: "New component" }, "component", "20000"],
+  ["jira.create-version", { projectId: "10000", name: "New version" }, "version", "30000"],
+  ["jira.update-version", { versionId: "30000", name: "New version" }, "version", "30000"],
+] as const)(
+  "routes %s through one native effect and independent readback",
+  async (operation, args, entity, id) => {
+    const f = fixture();
+    let written = false;
+    f.http.mockImplementation((request) => {
+      if (request.method !== "GET") written = true;
+      const path = new URL(request.url).pathname;
+      const body = path.includes("/project/")
+        ? { id: "10000", key: "SYN" }
+        : { id, project: "SYN", projectId: 10000, name: written ? args.name : "Old name" };
+      return Promise.resolve(response(body, request.method === "POST" ? 201 : 200));
+    });
+    expect(await f.run(operation, args)).toMatchObject({
+      ok: true,
+      receipt: { [`${entity}Id`]: id },
+    });
+    const writes = f.http.mock.calls.filter(([request]) => request.method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(new URL(writes[0]?.[0].url ?? "").pathname).toBe(
+      `/context/rest/api/2/${entity}${operation.startsWith("jira.create-") ? "" : `/${id}`}`,
+    );
+    expect(f.http.mock.calls.at(-1)?.[0].method).toBe("GET");
+    expect(new URL(f.http.mock.calls.at(-1)?.[0].url ?? "").pathname).toBe(
+      `/context/rest/api/2/${entity}/${id}`,
+    );
+  },
+);
+
+it("sends only the base-URL string as raw text and every other body, even a string, as JSON", () => {
+  expect(nativeRequestBody("settings/baseUrl", "https://jira.example/ctx")).toBe(
+    "https://jira.example/ctx",
+  );
+  expect(nativeRequestBody("comment/7/properties/k", "text")).toBe('"text"');
+  expect(nativeRequestBody("readonly-mode", { enabled: true })).toBe('{"enabled":true}');
+  expect(nativeRequestBody("x", ["a"])).toBe('["a"]');
 });

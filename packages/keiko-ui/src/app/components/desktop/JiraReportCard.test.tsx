@@ -79,6 +79,88 @@ beforeEach(() => {
 });
 
 describe("Jira report card", () => {
+  it("names the resolved estimate field before and after transcript serialization", () => {
+    const result = data({
+      report: {
+        ...report,
+        scope: {
+          estimateFieldId: "customfield_10200",
+          estimateFieldName: "Story Points",
+          estimateUnit: "custom-field",
+          estimateSource: "board-configuration",
+        },
+      },
+    });
+    const live = render(<JiraChatTools transcript={transcript(result)} />);
+    expect(
+      screen.getByText("Estimate field: Story Points (customfield_10200)"),
+    ).toBeInTheDocument();
+    const text = live.container.textContent;
+    live.unmount();
+    const saved = JSON.parse(JSON.stringify(transcript(result))) as ChatToolTranscript;
+    const restored = render(<JiraChatTools transcript={saved} />);
+    expect(restored.container.textContent).toBe(text);
+  });
+
+  it.each([
+    ["field-not-found", "no estimate field is configured on the project's boards or screens"],
+    ["ambiguous-field", "the project has conflicting estimate fields"],
+    ["metadata-unavailable", "the project's estimate configuration could not be read"],
+    ["project-not-specified", "no project was specified"],
+  ])(
+    "explains an unavailable estimate (%s) without presenting zero estimates",
+    (reason, explanation) => {
+      const result = data({
+        report: {
+          ...report,
+          scope: {
+            estimateUnit: "unavailable",
+            estimateSource: "unavailable",
+            estimateUnavailableReason: reason,
+          },
+          progress: { ...report.progress, project: { ...report.progress.project, estimate: null } },
+        },
+      });
+      render(<JiraChatTools transcript={transcript(result)} />);
+      expect(screen.getByText(`Estimate unavailable: ${explanation}`)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Estimate field:|0 total|without an estimate/u),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("Complete: 2350 issues read")).toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ["effect-denied", "Local authority no longer permits this Jira request."],
+    ["cancelled", "This Jira request was cancelled."],
+  ] as const)(
+    "retains local %s guidance and an unknown denominator after reload",
+    (failure, guidance) => {
+      const interrupted = data({
+        status: "incomplete",
+        progress: { issuesRead: 1 },
+        report: {
+          completeness: {
+            complete: false,
+            reason: "read-failed",
+            failure,
+            issuesRead: 1,
+            pageCount: 1,
+          },
+        },
+      });
+      const saved = JSON.parse(JSON.stringify(transcript(interrupted))) as ChatToolTranscript;
+      const first = render(<JiraChatTools transcript={saved} />);
+      const before = first.container.textContent;
+      first.unmount();
+      const next = render(<JiraChatTools transcript={saved} />);
+      expect(next.container.textContent).toBe(before);
+      expect(next.container.textContent).toContain(guidance);
+      expect(next.container.textContent).toContain("1 issues read; the total is unknown");
+      expect(next.container.textContent).not.toContain("1 of 1 issues");
+      expect(next.container.querySelector("pre, a, button")).toBeNull();
+    },
+  );
   it("shows the computed figures and no export while the report is still being read", async () => {
     const reading = data({
       status: "reading",

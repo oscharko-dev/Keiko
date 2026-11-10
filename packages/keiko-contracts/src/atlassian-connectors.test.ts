@@ -84,7 +84,7 @@ interface D4Row {
   readonly dispositions: Readonly<Record<CodingWorkbenchMode, AtlassianConnectorActionDisposition>>;
 }
 
-const D4_TABLE: readonly D4Row[] = [
+const LEGACY_D4_TABLE: readonly D4Row[] = [
   {
     action: "sync-space",
     provider: "confluence",
@@ -363,6 +363,287 @@ const D4_TABLE: readonly D4Row[] = [
   },
 ];
 
+const ADMIN_READ_ACTIONS = [
+  "jira.email-template-pack",
+  "jira.anonymization-validation",
+  "jira.anonymization-rerun-validation",
+  "jira.anonymization-progress",
+] as const;
+const ADMIN_HIGH_READ_ACTIONS = ["jira.validate-license"] as const;
+const ADMIN_READ_SET: ReadonlySet<string> = new Set([
+  ...ADMIN_READ_ACTIONS,
+  ...ADMIN_HIGH_READ_ACTIONS,
+]);
+// Explicit expectations for the added native writes; no production policy table supplies values.
+const ADMIN_ACTIONS = [
+  "upload-temporary-avatar",
+  "crop-temporary-avatar",
+  "upload-issue-type-avatar",
+  "create-issue-type-avatar",
+  "upload-project-avatar",
+  "create-project-avatar",
+  "set-project-avatar",
+  "delete-project-avatar",
+  "upload-owned-avatar",
+  "create-owned-avatar",
+  "delete-owned-avatar",
+  "upload-user-avatar",
+  "create-user-avatar",
+  "set-user-avatar",
+  "delete-user-avatar",
+  "create-user",
+  "update-user",
+  "delete-user",
+  "invalidate-user-session",
+  "schedule-user-anonymization",
+  "rerun-user-anonymization",
+  "create-reciprocal-remote-link",
+  "delete-project",
+  "archive-project",
+  "restore-project",
+  "update-project-type",
+  "set-project-permission-scheme",
+  "set-project-priority-scheme",
+  "remove-project-priority-scheme",
+  "update-user-password",
+  "unlock-user-anonymization",
+  "create-group",
+  "delete-group",
+  "add-group-user",
+  "remove-group-user",
+  "request-cluster-index-snapshot",
+  "delete-cluster-node",
+  "mark-cluster-node-offline",
+  "approve-cluster-upgrade",
+  "cancel-cluster-upgrade",
+  "retry-cluster-upgrade",
+  "start-cluster-upgrade",
+  "create-index-snapshot",
+  "start-reindex",
+  "reindex-issues",
+  "process-reindex-requests",
+  "run-upgrade",
+  "create-custom-field",
+  "delete-custom-fields",
+  "create-issue-type",
+  "update-issue-type",
+  "delete-issue-type",
+  "create-link-type",
+  "update-link-type",
+  "delete-link-type",
+  "reset-link-type-order",
+  "move-link-type",
+  "set-terminology",
+  "set-application-role",
+  "set-application-roles",
+  "add-user-application",
+  "remove-user-application",
+  "set-user-columns",
+  "reset-user-columns",
+  "create-issue-type-scheme",
+  "update-issue-type-scheme",
+  "delete-issue-type-scheme",
+  "add-issue-type-scheme-projects",
+  "set-issue-type-scheme-projects",
+  "clear-issue-type-scheme-projects",
+  "remove-issue-type-scheme-project",
+  "create-priority-scheme",
+  "update-priority-scheme",
+  "delete-priority-scheme",
+  "create-workflow-scheme",
+  "update-workflow-scheme",
+  "delete-workflow-scheme",
+  "create-workflow-scheme-draft",
+  "update-workflow-scheme-draft",
+  "delete-workflow-scheme-draft",
+  "set-workflow-scheme-default",
+  "delete-workflow-scheme-default",
+  "set-workflow-scheme-draft-default",
+  "delete-workflow-scheme-draft-default",
+  "set-workflow-scheme-issue-type",
+  "delete-workflow-scheme-issue-type",
+  "set-workflow-scheme-draft-issue-type",
+  "delete-workflow-scheme-draft-issue-type",
+  "set-workflow-scheme-workflow",
+  "delete-workflow-scheme-workflow",
+  "set-workflow-scheme-draft-workflow",
+  "delete-workflow-scheme-draft-workflow",
+  "set-application-property",
+  "set-system-columns",
+  "set-instance-base-url",
+  "set-read-only-mode",
+  "upload-email-template-pack",
+  "apply-email-template-pack",
+  "revert-email-template-pack",
+  "create-permission-scheme",
+  "update-permission-scheme",
+  "delete-permission-scheme",
+  "add-permission-grant",
+  "delete-permission-grant",
+  "set-permission-scheme-attribute",
+  "create-role",
+  "update-role",
+  "replace-role",
+  "delete-role",
+  "add-role-default-actors",
+  "delete-role-default-actor",
+  "add-project-role-actors",
+  "set-project-role-actors",
+  "delete-project-role-actor",
+  "create-project-category",
+  "update-project-category",
+  "delete-project-category",
+  "add-default-screen-field",
+  "add-screen-tab-field",
+  "remove-screen-tab-field",
+  "move-screen-tab-field",
+  "set-screen-field-show-when-empty",
+  "move-screen-tab",
+  "unmap-all-sprints",
+  "create-screen-tab",
+  "rename-screen-tab",
+  "delete-screen-tab",
+  "set-app-monitoring",
+  "set-ipd-monitoring",
+  "start-jmx-metrics",
+  "stop-jmx-metrics",
+  "set-issue-type-property",
+  "delete-issue-type-property",
+  "create-filter",
+  "set-filter-share-scope",
+  "add-filter-permission",
+  "delete-filter-permission",
+] as const satisfies readonly AtlassianConnectorActionType[];
+const USER_PROPERTY_ADMIN_ACTIONS = [
+  "set-user-property",
+  "delete-user-property",
+] as const satisfies readonly AtlassianConnectorActionType[];
+const HIGH_WRITES = [
+  "archive-issues",
+  "delete-issue",
+  "archive-issue",
+  "restore-issue",
+  "move-subtask",
+  "create-issues",
+  "update-myself",
+  "update-my-password",
+  "login",
+  "logout",
+  "release-websudo",
+  "notify-issue",
+  "epic-remove-issues",
+  "rank-epic",
+  "rank-issues",
+  "set-issue-estimation",
+  "delete-version-remote-link",
+  "delete-version-remote-links",
+  "delete-board",
+  "set-board-refined-velocity",
+  "replace-sprint",
+  "delete-sprint",
+  "swap-sprints",
+  "unmap-sprints",
+  "delete-issue-link",
+  "delete-remote-link",
+  "delete-remote-link-by-global-id",
+  "delete-component",
+  "merge-version",
+  "move-version",
+  "remove-and-swap-version",
+  "delete-filter",
+  "create-project",
+  "create-component",
+  "create-version",
+  "update-version",
+  "create-board",
+  "create-sprint",
+  "update-sprint",
+  "move-issues-to-sprint",
+  "move-issues-to-backlog",
+  "update-epic",
+  "move-issues-to-epic",
+  "delete-issue-comment",
+  "delete-attachment",
+  "delete-worklog",
+  "set-board-property",
+  "delete-board-property",
+  "set-sprint-property",
+  "delete-sprint-property",
+  "set-comment-property",
+  "delete-comment-property",
+  "set-dashboard-item-property",
+  "delete-dashboard-item-property",
+  "set-issue-property",
+  "delete-issue-property",
+  "set-project-property",
+  "delete-project-property",
+] as const satisfies readonly AtlassianConnectorActionType[];
+const MEDIUM_WRITES = [
+  "pin-comment",
+  "upsert-version-remote-link",
+  "upsert-version-remote-link-by-global-id",
+  "create-issue-link",
+  "upsert-remote-link",
+  "update-remote-link",
+  "update-filter",
+  "set-filter-columns",
+  "reset-filter-columns",
+  "set-my-preference",
+  "delete-my-preference",
+  "update-project",
+  "update-component",
+  "update-issue-comment",
+  "create-worklog",
+  "update-worklog",
+  "watch-issue",
+  "unwatch-issue",
+  "vote-issue",
+  "unvote-issue",
+] as const satisfies readonly AtlassianConnectorActionType[];
+const MANAGED_DISPOSITIONS = {
+  "governed-assist": "review-required",
+  "supervised-coding": "review-required",
+  "autonomous-delivery": "allowed",
+} as const;
+function expectedJiraRows(
+  actions: readonly AtlassianConnectorActionType[],
+  actionClass: AtlassianConnectorActionClass,
+  scope: CodingWorkbenchConnectorScope,
+  risk: CodingWorkbenchApprovalRisk,
+): D4Row[] {
+  return actions.map((action) => ({
+    action,
+    provider: "jira",
+    actionClass,
+    scope,
+    risk,
+    dispositions: MANAGED_DISPOSITIONS,
+  }));
+}
+const legacyActions = new Set(LEGACY_D4_TABLE.map(({ action }) => action));
+const D4_TABLE: readonly D4Row[] = [
+  ...LEGACY_D4_TABLE,
+  ...expectedJiraRows(
+    JIRA_MANAGED_READ_TOOLS.filter(
+      (action) => !legacyActions.has(action) && !ADMIN_READ_SET.has(action),
+    ),
+    "connector-access",
+    "issue-tracker.read",
+    "low",
+  ),
+  ...expectedJiraRows(HIGH_WRITES, "connector-write", "issue-tracker.write", "high"),
+  ...expectedJiraRows(MEDIUM_WRITES, "connector-write", "issue-tracker.write", "medium"),
+  ...expectedJiraRows(ADMIN_READ_ACTIONS, "connector-admin", "issue-tracker.admin", "low"),
+  ...expectedJiraRows(ADMIN_HIGH_READ_ACTIONS, "connector-admin", "issue-tracker.admin", "high"),
+  ...expectedJiraRows(ADMIN_ACTIONS, "connector-admin", "issue-tracker.admin", "high"),
+  ...expectedJiraRows(
+    USER_PROPERTY_ADMIN_ACTIONS,
+    "connector-admin",
+    "issue-tracker.admin",
+    "high",
+  ),
+];
+
 const ALL_SCOPES: readonly CodingWorkbenchConnectorScope[] = CODING_WORKBENCH_CONNECTOR_SCOPES;
 
 function scopesWithout(
@@ -378,6 +659,7 @@ describe("CodingWorkbenchConnectorScope extension (ADR-0128 D4)", () => {
       "source-control.write",
       "issue-tracker.read",
       "issue-tracker.write",
+      "issue-tracker.admin",
       "knowledge-base.read",
       "knowledge-base.write",
     ]);
@@ -398,8 +680,43 @@ describe("CodingWorkbenchConnectorScope extension (ADR-0128 D4)", () => {
 });
 
 describe("D4 effect-class mapping table (ADR-0128)", () => {
+  it("keeps all 137 established administration writes outside ordinary scope and class sets", () => {
+    expect(ADMIN_ACTIONS).toHaveLength(137);
+    expect(new Set(ADMIN_ACTIONS).size).toBe(137);
+    const ordinaryActions = new Set(
+      ATLASSIAN_CONNECTOR_ACTION_TYPES.filter(
+        (action) =>
+          ATLASSIAN_CONNECTOR_ACTION_CLASS[action] !== "connector-admin" ||
+          ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE[action] !== "issue-tracker.admin",
+      ),
+    );
+    expect(ADMIN_ACTIONS.filter((action) => ordinaryActions.has(action))).toEqual([]);
+    for (const action of ADMIN_ACTIONS) {
+      expect(ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK[action], action).toBe("high");
+    }
+  });
+
+  it("pins the exact 139 administration writes independently of policy-map spread order", () => {
+    const mutations = new Set(
+      JIRA_MUTATION_OPERATIONS.map((tool) => JIRA_MANAGED_ACTION_TYPES[tool]),
+    );
+    const expected = new Set([...ADMIN_ACTIONS, ...USER_PROPERTY_ADMIN_ACTIONS]);
+    expect(expected.size).toBe(139);
+    const byClass = [...mutations].filter(
+      (action) => ATLASSIAN_CONNECTOR_ACTION_CLASS[action] === "connector-admin",
+    );
+    const byScope = [...mutations].filter(
+      (action) => ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE[action] === "issue-tracker.admin",
+    );
+    expect(new Set(byClass)).toEqual(expected);
+    expect(new Set(byScope)).toEqual(expected);
+  });
+
   it("covers every D4 action row including managed Jira capabilities", () => {
-    expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toEqual(D4_TABLE.map((row) => row.action));
+    expect(new Set(ATLASSIAN_CONNECTOR_ACTION_TYPES)).toEqual(
+      new Set(D4_TABLE.map((row) => row.action)),
+    );
+    expect(D4_TABLE).toHaveLength(ATLASSIAN_CONNECTOR_ACTION_TYPES.length);
   });
 
   it("reproduces the D4 action-class column verbatim", () => {
@@ -426,27 +743,53 @@ describe("D4 effect-class mapping table (ADR-0128)", () => {
     }
   });
 
-  it("maps both connector classes onto the shared Workbench vocabulary without new members", () => {
+  it("maps connector classes onto the shared Workbench vocabulary without new members", () => {
     expect(ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS).toEqual({
       "connector-access": "connector-access",
       "connector-write": "connector-access",
+      "connector-admin": "connector-access",
     });
     expect(ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND).toEqual({
       "connector-access": null,
       "connector-write": "connector-write",
+      "connector-admin": "connector-write",
     });
     expect(ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE).toEqual({
       "connector-access": "internet",
       "connector-write": "internet",
+      "connector-admin": "internet",
     });
     expect(ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON).toEqual({
       "connector-access": "connector-access-denied",
       "connector-write": "connector-write-denied",
+      "connector-admin": "connector-write-denied",
     });
   });
 });
 
 describe("decideAtlassianConnectorAction — full D4 matrix (action × mode × scope)", () => {
+  it.each(USER_PROPERTY_ADMIN_ACTIONS)(
+    "requires explicit administration for %s in every mode",
+    (action) => {
+      for (const mode of CODING_WORKBENCH_MODES) {
+        const denied = decideAtlassianConnectorAction(action, mode, [
+          "issue-tracker.read",
+          "issue-tracker.write",
+        ]);
+        expect(denied).toMatchObject({
+          disposition: "denied",
+          actionClass: "connector-admin",
+          requiredScope: "issue-tracker.admin",
+          risk: "high",
+          denyReason: "connector-write-denied",
+        });
+        const admitted = decideAtlassianConnectorAction(action, mode, ["issue-tracker.admin"]);
+        expect(admitted.disposition).toBe(MANAGED_DISPOSITIONS[mode]);
+        expect(admitted.denyReason).toBeUndefined();
+      }
+    },
+  );
+
   it("reproduces every D4 disposition cell when the required scope is present", () => {
     for (const row of D4_TABLE) {
       for (const mode of CODING_WORKBENCH_MODES) {
@@ -475,7 +818,10 @@ describe("decideAtlassianConnectorAction — full D4 matrix (action × mode × s
 
   it("denies every write action with connector-write-denied when the write scope is absent, including Full access", () => {
     const writeRows = D4_TABLE.filter((row) => row.actionClass === "connector-write");
-    expect(writeRows).toHaveLength(8);
+    const declaredWrites = ATLASSIAN_CONNECTOR_ACTION_TYPES.filter(
+      (action) => ATLASSIAN_CONNECTOR_ACTION_CLASS[action] === "connector-write",
+    );
+    expect(new Set(writeRows.map((row) => row.action))).toEqual(new Set(declaredWrites));
     for (const row of writeRows) {
       for (const mode of CODING_WORKBENCH_MODES) {
         const decision = decideAtlassianConnectorAction(row.action, mode, scopesWithout(row.scope));
@@ -636,7 +982,7 @@ describe("closed enums and guards", () => {
     expect(isAtlassianConnectorProvider("bitbucket")).toBe(false);
     expect(isAtlassianConnectorProvider(1)).toBe(false);
     expect(isAtlassianConnectorAuthScheme("oauth-3lo")).toBe(false);
-    expect(isAtlassianConnectorActionType("delete-issue")).toBe(false);
+    expect(isAtlassianConnectorActionType("not-an-action")).toBe(false);
     expect(isAtlassianSyncJobStatus("paused")).toBe(false);
     expect(isAtlassianSyncTerminalStatus("running")).toBe(false);
     expect(isAtlassianSyncFailureReason("unknown-error")).toBe(false);
@@ -883,6 +1229,8 @@ describe("write-action failure and authority reason vocabulary (Issue #2244)", (
     expect(ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS).toEqual([
       "auth-failed",
       "permission-denied",
+      "effect-denied",
+      "cancelled",
       "not-found",
       "rate-limited",
       "timeout",

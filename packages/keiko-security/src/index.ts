@@ -50,6 +50,7 @@ export {
 export {
   createSecretSpellingStreamRedactor,
   SecretSpellingOverflowError,
+  UnsupportedSecretSpellingError,
   type SecretSpellingStreamRedactor,
 } from "./redaction-spelling.js";
 

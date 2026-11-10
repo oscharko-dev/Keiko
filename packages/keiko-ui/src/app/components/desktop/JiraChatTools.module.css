@@ -41,6 +41,15 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.cmpCardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
 .cmpCard p {
   margin: 0;
 }
@@ -63,6 +72,38 @@
 }
 .cmpProblems li {
   padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--feedback-warning);
+}
+.cmpResultItems,
+.cmpResultProblems {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cmpResultTitle,
+.cmpResultTitle a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.cmpResultText {
+  white-space: pre-wrap;
+}
+.cmpResultMore summary {
+  min-block-size: 24px;
+  padding-block: var(--space-1);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+.cmpResultMore summary:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpResultProblems li {
+  padding-inline-start: var(--space-3);
   border-inline-start: 2px solid var(--feedback-warning);
 }
 

@@ -427,6 +427,9 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-restored",
   "workspace-layout-empty",
   "workspace-layout-unowned",
+  "workspace-sync-idle",
+  "workspace-sync-active",
+  "workspace-sync-pull-pending",
   "literal-input-preserved",
   "draft-resynchronized",
   "context-details-expanded",
@@ -707,6 +710,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
+  readonly jiraResultPresentation?: ClientJiraResultPresentation | undefined;
+  readonly jiraFieldPresentation?: ClientJiraFieldPresentation | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -897,6 +902,8 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
 const CLOSED_CLIENT_REPORT_KEYS = [
   "selectDismissal",
   "knowledgeCatalog",
+  "jiraResultPresentation",
+  "jiraFieldPresentation",
   "answerCopy",
   "answerSpeech",
   "citationActivation",
@@ -956,10 +963,18 @@ function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
 }
 
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
+function hasValidCountedPresentationContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    isOptional(value.jiraResultPresentation, isClientJiraResultPresentation) &&
+    isOptional(value.jiraFieldPresentation, isClientJiraFieldPresentation)
+  );
+}
+
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
-    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    hasValidCountedPresentationContext(value) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
     hasExclusiveClosedReportContext(value) &&
@@ -1071,6 +1086,7 @@ export const CLIENT_STAGE_IDS = [
   "transcript navigation",
   "browser approval",
   "knowledge pod selection",
+  "jira human input",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -1987,6 +2003,83 @@ export function isClientDiagnosticKnowledgeCatalog(
   );
 }
 
+/** Closed presentation facts; the digest joins the existing parent transcript update event. */
+export const CLIENT_JIRA_RESULT_FAILURES = [
+  "none",
+  "auth",
+  "permission",
+  "not-found",
+  "rate-limited",
+  "conflict",
+  "transition",
+  "bounds",
+  "response",
+  "fields",
+  "unavailable",
+  "mixed",
+] as const;
+export type ClientJiraResultFailure = (typeof CLIENT_JIRA_RESULT_FAILURES)[number];
+export interface ClientJiraResultPresentation {
+  readonly messageDigest: string;
+  readonly exchangeCount: number;
+  readonly itemCount: number;
+  readonly shownCount: number;
+  readonly returnedCount: number;
+  readonly unreadableCount: number;
+  readonly problemCount: number;
+  readonly ruleCount: number;
+  readonly failure: ClientJiraResultFailure;
+  readonly restored: boolean;
+}
+const JIRA_RESULT_COUNT_KEYS = [
+  "exchangeCount",
+  "itemCount",
+  "shownCount",
+  "returnedCount",
+  "unreadableCount",
+  "problemCount",
+  "ruleCount",
+] as const;
+const JIRA_RESULT_KEYS = new Set<string>([
+  ...JIRA_RESULT_COUNT_KEYS,
+  "messageDigest",
+  "failure",
+  "restored",
+]);
+const JIRA_RESULT_FAILURE_SET: ReadonlySet<string> = new Set(CLIENT_JIRA_RESULT_FAILURES);
+export function isClientJiraResultPresentation(
+  value: unknown,
+): value is ClientJiraResultPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== JIRA_RESULT_KEYS.size) return false;
+  return (
+    Object.keys(value).every((key) => JIRA_RESULT_KEYS.has(key)) &&
+    JIRA_RESULT_COUNT_KEYS.every((key) => isBoundedNonNegativeInteger(value[key], 1_000_000_000)) &&
+    isReportDigest(value.messageDigest) &&
+    typeof value.failure === "string" &&
+    JIRA_RESULT_FAILURE_SET.has(value.failure) &&
+    typeof value.restored === "boolean" &&
+    (value.shownCount as number) <= (value.itemCount as number)
+  );
+}
+
+/** Routine presentation counts only: labels, ids and field values never cross this boundary. */
+export interface ClientJiraFieldPresentation {
+  readonly fieldCount: number;
+  readonly localizedCount: number;
+}
+export function isClientJiraFieldPresentation(
+  value: unknown,
+): value is ClientJiraFieldPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== 2) return false;
+  return (
+    Object.hasOwn(value, "fieldCount") &&
+    Object.hasOwn(value, "localizedCount") &&
+    isBoundedNonNegativeInteger(value.fieldCount, 1000) &&
+    isBoundedNonNegativeInteger(value.localizedCount, 1000) &&
+    value.localizedCount <= value.fieldCount
+  );
+}
+
 // ─── Chat answer copy (PR #3678 review) ─────────────────────────────────────────
 //
 // The copy button removes a grounded answer's in-range citation markers and keeps every other
@@ -2637,11 +2730,30 @@ export interface ActivityLogReadinessSnapshot {
   readonly diagnosticCapacity?: number | undefined;
 }
 
-/** The `GET /api/health` body. `diagnostics` is additive; `status`/`version` keep their meaning. */
+export type MemoryReadinessSnapshot =
+  | { readonly readiness: "ready"; readonly reason: "none" }
+  | {
+      readonly readiness: "withheld";
+      readonly reason: "vault-unreadable" | "vault-migration-failed";
+    };
+
+export function isMemoryReadinessSnapshot(value: unknown): value is MemoryReadinessSnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  if (Object.keys(snapshot).length !== 2) return false;
+  if (snapshot.readiness === "ready") return snapshot.reason === "none";
+  return (
+    snapshot.readiness === "withheld" &&
+    (snapshot.reason === "vault-unreadable" || snapshot.reason === "vault-migration-failed")
+  );
+}
+
+/** The `GET /api/health` body. Readiness projections are additive; `status` stays server liveness. */
 export interface HealthResponse {
   readonly status: "ok";
   readonly version: string;
   readonly diagnostics: ActivityLogReadinessSnapshot;
+  readonly memory?: MemoryReadinessSnapshot;
   /** The server-owned instance identity, when this process was started by a modern launcher. */
   readonly launchId?: string;
 }

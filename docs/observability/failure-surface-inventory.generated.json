@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ddea0508b033f2683642a051f42ebd1eb5e2776c3892963a081134cb990c7bee"
+    "catalogDigest": "005f9a4d1acc92b50521abf2cfdefe135584146735ac089832d4166034e18ab2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,10 +71,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 660,
-    "proofCount": 682,
-    "resolvedProofCount": 682,
-    "failureClassCount": 393,
+    "operationCount": 684,
+    "proofCount": 707,
+    "resolvedProofCount": 707,
+    "failureClassCount": 396,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -109,9 +109,11 @@
         "atlassian.credential.listed",
         "atlassian.credential.rejected",
         "atlassian.credential.updated",
+        "atlassian.http.credential-reflection",
         "atlassian.jira-draft",
         "atlassian.jira-draft-batch",
         "atlassian.jira-report",
+        "atlassian.jira.human-input",
         "atlassian.target.admission",
         "chat.compaction.facts.classified",
         "chat.compaction.summary.work",
@@ -147,8 +149,22 @@
         "http.request.body.received",
         "http.request.body.rejected",
         "jira.attachment.source",
+        "jira.catalog.selection",
         "jira.citation.markers",
         "jira.field.admission",
+        "jira.operation.avatars",
+        "jira.operation.configuration",
+        "jira.operation.core",
+        "jira.operation.identities",
+        "jira.operation.issues",
+        "jira.operation.local",
+        "jira.operation.maintenance",
+        "jira.operation.metadata",
+        "jira.operation.planning",
+        "jira.operation.projects",
+        "jira.operation.properties",
+        "jira.operation.saved-views",
+        "jira.operation.schemes",
         "jira.template.admission",
         "jira.template.metadata",
         "pr-description.chat.turn.admitted",
@@ -203,6 +219,8 @@
         "client.files-scope.decision",
         "client.git-operation.attempted",
         "client.git-operation.settled",
+        "client.jira-fields.presented",
+        "client.jira-result.presented",
         "client.knowledge-catalog.unavailable",
         "client.markdown.layout",
         "client.scope.notice",
@@ -342,15 +360,20 @@
       "owners": ["keiko-mcp", "keiko-server"],
       "ports": ["ManagedMcpLogPort", "ServerLogSink"],
       "operations": [
+        "chat.approval-continuation.state",
         "coding-app-session.browser-approval.state",
         "coding-app-session.browser-open",
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
         "coding-app-session.expired",
         "coding-app-session.local-session.confirmed",
+        "coding-app-session.local-session.denied",
+        "coding-app-session.local-session.refused",
         "coding-app-session.operation.state",
         "coding-app-session.paired",
+        "coding-app-session.proof.refused",
         "coding-app-session.rotated",
+        "coding-app-session.rotation.state",
         "coding-app-session.signed-out",
         "coding-context.github-authorization.changed",
         "coding-context.github-authorization.evaluated",
@@ -582,6 +605,7 @@
         "memory-vault.log.sink-failed",
         "memory-vault.store.encryption-checkpoint-degraded",
         "memory-vault.store.encryption-migrated",
+        "memory-vault.store.open-failed",
         "memory-vault.store.opened",
         "memory-vault.store.quarantined",
         "memory.capture.novelty-gate",
@@ -895,6 +919,9 @@
     "client-git-operation": ["client-diagnostics.dependency-failure"],
     "client-answer-copy": ["client-diagnostics.dependency-failure"],
     "client-answer-speech": ["client-diagnostics.dependency-failure"],
+    "chat-approval-continuation": ["tools-workflows.dependency-failure"],
+    "client-jira-fields": ["client-diagnostics.dependency-failure"],
+    "client-jira-result": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-citation-activation": ["client-diagnostics.dependency-failure"],
     "client-citation-highlight": ["client-diagnostics.dependency-failure"],
@@ -905,7 +932,7 @@
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
     "coding-app-session-channel": ["tools-workflows.dependency-failure"],
-    "coding-app-session-pairing": ["tools-workflows.dependency-failure"],
+    "coding-app-session-pairing": ["tools-workflows.rejection"],
     "coding-app-session-rotation": ["tools-workflows.dependency-failure"],
     "coding-app-session-sign-out": ["tools-workflows.dependency-failure"],
     "coding-context-linked-issue": ["tools-workflows.dependency-failure"],
@@ -1303,6 +1330,9 @@
     "atlassian.connection.checked.observed-authentication": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
+    "atlassian.connection.checked.compatibility": [
+      "packages/keiko-server/src/atlassian/credentialVerification.compatibility.test.ts"
+    ],
     "atlassian.credential.created.line": [
       "packages/keiko-server/src/atlassian/credentialActivity.test.ts"
     ],
@@ -1315,6 +1345,9 @@
     "atlassian.credential.updated.line": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
+    "atlassian.http.credential-reflection.line": [
+      "packages/keiko-server/src/atlassian/jiraClaimCredentialReflection.test.ts"
+    ],
     "atlassian.jira-draft.line": [
       "packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts",
       "packages/keiko-server/src/atlassian/jiraOpenDraft.test.ts"
@@ -1326,8 +1359,16 @@
       "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
+    "atlassian.jira.human-input.line": [
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts",
+      "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts",
+      "packages/keiko-server/src/chat-tool-runtime.test.ts"
+    ],
     "atlassian.target.admission.line": [
       "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts"
+    ],
+    "chat.approval-continuation.state.line": [
+      "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts"
     ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
@@ -1398,7 +1439,8 @@
       "packages/keiko-server/src/editor/agentAuthorityRegistry.test.ts"
     ],
     "chat.tool-authority.operation.read-grant": [
-      "packages/keiko-server/src/atlassian/actionApprovals.test.ts"
+      "packages/keiko-server/src/atlassian/actionApprovals.test.ts",
+      "packages/keiko-server/src/editor/chatAuthorityActivity.test.ts"
     ],
     "chat.tool-authority.operation.read-grant-admission": [
       "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts",
@@ -1434,6 +1476,7 @@
     ],
     "chat.tool-turn.corrected.line": [
       "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
     "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
@@ -1546,6 +1589,12 @@
     "client.git-operation.settled.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
+    "client.jira-fields.presented.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.jira-result.presented.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.knowledge-catalog.unavailable.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
@@ -1600,6 +1649,12 @@
     "coding-app-session.local-session.confirmed.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
+    "coding-app-session.local-session.denied.request": [
+      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
+    "coding-app-session.local-session.refused.reason": [
+      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
     "coding-app-session.operation.state.line": [
       "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.test.ts",
       "packages/keiko-server/src/coding-app-session/codingRunSessionLease.test.ts"
@@ -1607,8 +1662,14 @@
     "coding-app-session.paired.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
+    "coding-app-session.proof.refused.reason": [
+      "packages/keiko-server/src/coding-app-session/sessionRegistry.proof.test.ts"
+    ],
     "coding-app-session.rotated.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
+    "coding-app-session.rotation.state.observation": [
+      "packages/keiko-server/src/coding-app-session/sessionRegistry.test.ts"
     ],
     "coding-app-session.signed-out.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
@@ -1738,6 +1799,7 @@
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
     "coding-runtime.jira-pod.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
     "coding-runtime.linked-files.resolved.emitted-line": [
@@ -2216,6 +2278,7 @@
       "packages/keiko-server/src/gateway-context-window.test.ts"
     ],
     "gateway.conversation.admission.line": [
+      "packages/keiko-server/src/chat-tool-model-readiness.test.ts",
       "packages/keiko-server/src/conversation-readiness-admission.test.ts"
     ],
     "gateway.discovery.alias-intersection.line": [
@@ -2619,11 +2682,57 @@
     "jira.attachment.source.line": [
       "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts"
     ],
+    "jira.catalog.selection.line": [
+      "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.test.ts"
+    ],
     "jira.citation.markers.line": [
       "packages/keiko-server/src/atlassian/jiraCitationMarkers.test.ts"
     ],
     "jira.field.admission.line": [
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
+    ],
+    "jira.operation.avatars.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.configuration.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.core.line": [
+      "packages/keiko-server/src/atlassian/jiraManagedProvider.test.ts",
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
+    ],
+    "jira.operation.identities.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.issues.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
+    ],
+    "jira.operation.local.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.maintenance.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.metadata.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.planning.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.projects.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.properties.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.saved-views.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+    ],
+    "jira.operation.schemes.line": [
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.template.admission.line": [
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
@@ -2632,12 +2741,14 @@
       "packages/keiko-server/src/atlassian/jiraCreateTemplateMetadata.test.ts"
     ],
     "knowledge.documents.operation.line": [
+      "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",
       "packages/keiko-server/src/knowledgeDocumentsTool.test.ts"
     ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
     ],
     "knowledge.requirement-trace.applied.line": [
+      "packages/keiko-server/src/atlassian/jiraChatRequirementBinding.test.ts",
       "packages/keiko-server/src/atlassian/jiraChatTracedMutation.test.ts",
       "packages/keiko-server/src/requirement-trace.test.ts"
     ],
@@ -2685,6 +2796,7 @@
     "memory-vault.store.encryption-migrated.rows": [
       "packages/keiko-memory-vault/src/migrate-encrypt.test.ts"
     ],
+    "memory-vault.store.open-failed.migration": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
@@ -2806,6 +2918,7 @@
     "search.answer.assessed.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
     "search.citations.reconciled.line": [
       "packages/keiko-server/src/grounded-citation-log.test.ts",
+      "packages/keiko-server/src/grounded-jira-read-repair.public-handler.test.ts",
       "packages/keiko-server/src/grounded-qa-hybrid.test.ts"
     ],
     "search.citations.support-settled.line": [
@@ -3004,6 +3117,7 @@
       "packages/keiko-activity-log/src/server-log.writer-rejection.test.ts"
     ],
     "server.diagnostic.failure.activity-log-line": [
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",

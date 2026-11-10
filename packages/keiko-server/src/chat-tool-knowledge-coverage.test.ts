@@ -11,6 +11,7 @@ import {
   knowledgeCoverageIssues,
   knowledgeCoverageReceipt,
 } from "./chat-tool-knowledge-coverage.js";
+import { draftResult } from "./atlassian/jiraChatDraft.js";
 
 function isResultDataObject(value: CatalogJsonValue): value is CatalogJsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -399,5 +400,280 @@ describe("a completed draft batch covers the requirements it drafted (#4292)", (
     const later = batch({ coveredRequirementCount: 12 });
     expect(requiredCoverage([partialRead, batch({}), later]).pendingPageCount).toBe(1);
     expect(knowledgeTurnCoverage([batch({})])).toBeUndefined();
+  });
+});
+
+describe("incidental Knowledge inventory while creating a named complete draft (#4321)", () => {
+  const context = { incidentalReadCallIds: ["runtime-inventory"] };
+  const partialRead: ChatToolExchange = {
+    ...exchange(
+      {
+        outcome: "succeeded",
+        view: "inventory",
+        totals: { documentCount: 3, documentsNotExtracted: 1 },
+        items: [],
+        coverage: { inventoryComplete: false, atEnd: false },
+        nextCursor: "inventory-next",
+      },
+      { view: "inventory" },
+      "keiko.knowledge.documents",
+    ),
+    call: {
+      id: "runtime-inventory",
+      name: "knowledge_documents",
+      arguments: { view: "inventory" },
+    },
+  };
+  const reference = {
+    draftId: "b0e5678a-2974-4a6b-a56c-9e74fc989a85",
+    draftDigest: "a".repeat(64),
+  };
+  const stageData = {
+    outcome: "succeeded",
+    ...reference,
+    newDraft: true,
+    itemCount: 1,
+    pageCount: 1,
+    unresolvedRefCount: 0,
+    unresolvedRefs: [],
+  };
+  const stage = exchange(
+    stageData,
+    {
+      items: [
+        { ref: "task", projectId: "100", issueTypeId: "10", fields: { summary: "Reviewed item" } },
+      ],
+    },
+    "keiko.jira.draft.stage",
+  );
+  const create = exchange(
+    { outcome: "succeeded", issueId: "101", issueKey: "SYN-1" },
+    { projectId: "100", issueTypeId: "10", fields: { summary: "Reviewed item" } },
+    "keiko.jira.create",
+  );
+  const draftData = {
+    outcome: "succeeded",
+    createdCount: 1,
+    existingCount: 0,
+    failedCount: 0,
+    uncertainCount: 0,
+    skippedCount: 0,
+    excludedCount: 0,
+    pendingCount: 0,
+    items: [{ ref: "task", state: "created", issueKey: "SYN-1" }],
+  };
+  const draft = exchange(draftData, reference, "keiko.jira.draft");
+
+  it("settles incidental inventory for the real named existing-only draft replay", () => {
+    const produced = draftResult("https://jira.example.invalid", [
+      { ref: "first", state: "existing", issueKey: "SYN-1" },
+      { ref: "second", state: "existing", issueKey: "SYN-2" },
+    ]);
+    expect(produced.isError).toBeUndefined();
+    expect(produced.data).toMatchObject({
+      outcome: "not-dispatched",
+      createdCount: 0,
+      existingCount: 2,
+      pendingCount: 0,
+      uncertainCount: 0,
+    });
+    const replay: ChatToolExchange = {
+      ...exchange(produced.data, reference, "keiko.jira.draft"),
+      mutationOutcome: "not-dispatched",
+    };
+
+    const coverage = knowledgeTurnCoverage([partialRead, replay], context);
+
+    expect(coverage?.pendingPageCount).toBe(0);
+    expect(coverage?.draftBatchCoveredRequirementCount).toBeUndefined();
+    expect(knowledgeCoverageReceipt(partialRead)).toMatchObject({ nextCursor: "inventory-next" });
+  });
+
+  it("keeps an existing-only replay strict when unnamed or durably uncertain", () => {
+    const produced = draftResult("https://jira.example.invalid", [
+      { ref: "task", state: "existing", issueKey: "SYN-1" },
+    ]);
+    const unnamed: ChatToolExchange = {
+      ...exchange(produced.data, {}, "keiko.jira.draft"),
+      mutationOutcome: "not-dispatched",
+    };
+    const uncertain: ChatToolExchange = {
+      ...exchange(produced.data, reference, "keiko.jira.draft"),
+      mutationOutcome: "unknown",
+    };
+
+    expect(knowledgeTurnCoverage([partialRead, unnamed], context)?.pendingPageCount).toBe(1);
+    expect(knowledgeTurnCoverage([partialRead, uncertain], context)?.pendingPageCount).toBe(1);
+  });
+
+  it.each(["pending", "uncertain"] as const)(
+    "keeps a real existing-item replay strict with another %s item",
+    (state) => {
+      const produced = draftResult("https://jira.example.invalid", [
+        { ref: "first", state: "existing", issueKey: "SYN-1" },
+        { ref: "second", state },
+      ]);
+      expect(produced.isError).toBe(true);
+      const observed = exchange(produced.data, reference, "keiko.jira.draft");
+      if (observed.result === undefined) throw new Error("Missing draft result fixture");
+      const replay: ChatToolExchange = {
+        ...observed,
+        result: {
+          ...observed.result,
+          status: "failed",
+          reason: "provider-reported-error",
+          page: null,
+          data: produced.data,
+        },
+        mutationOutcome: state === "pending" ? "not-dispatched" : "unknown",
+      };
+
+      expect(knowledgeTurnCoverage([partialRead, replay], context)?.pendingPageCount).toBe(1);
+    },
+  );
+
+  it.each([
+    { name: "create", settled: create },
+    { name: "stage", settled: stage },
+    { name: "named draft", settled: draft },
+  ])(
+    "does not make the attested supporting inventory a collection task after $name",
+    ({ settled }) => {
+      const coverage = knowledgeTurnCoverage([partialRead, settled], context);
+
+      expect(coverage).toMatchObject({
+        documentCount: 3,
+        requirementCount: 0,
+        readRequirementCount: 0,
+        reviewedDocumentCount: 0,
+        unavailableDocumentCount: 1,
+        pendingPageCount: 0,
+      });
+      expect(coverage?.draftBatchCoveredRequirementCount).toBeUndefined();
+      expect(knowledgeCoverageIssues(coverage)).toEqual([
+        { kind: "unavailable-documents", count: 1 },
+      ]);
+      expect(knowledgeCoverageReceipt(partialRead)).toMatchObject({
+        nextCursor: "inventory-next",
+        coverage: { inventoryComplete: false, atEnd: false },
+      });
+    },
+  );
+
+  it("keeps the same unfinished inventory pending without successful creation or staging", () => {
+    expect(knowledgeTurnCoverage([partialRead], context)?.pendingPageCount).toBe(1);
+    expect(knowledgeTurnCoverage([partialRead])?.pendingPageCount).toBe(1);
+  });
+
+  it("does not infer incidental origin from a call ID, display alias or missing context", () => {
+    expect(knowledgeTurnCoverage([partialRead, create])?.pendingPageCount).toBe(1);
+    expect(
+      knowledgeTurnCoverage([partialRead, create], {
+        incidentalReadCallIds: ["another-call"],
+      })?.pendingPageCount,
+    ).toBe(1);
+  });
+
+  it.each([
+    { name: "whole-document read", tool: "keiko.knowledge.documents", args: { view: "read" } },
+    {
+      name: "whole-Pod requirements",
+      tool: "keiko.knowledge.requirements",
+      args: { view: "units" },
+    },
+    {
+      name: "semantic review",
+      tool: "keiko.knowledge.review",
+      args: { documentScope: "aaaaaaaa" },
+    },
+  ])("retains every strict stream when the model requests $name", ({ tool, args }) => {
+    const requested = exchange(
+      { outcome: "succeeded", view: args.view ?? "review", nextCursor: "model-next" },
+      args,
+      tool,
+    );
+    const strict = requiredCoverage([partialRead, requested, stage]);
+    const observed = knowledgeTurnCoverage([partialRead, requested, stage], context);
+
+    expect(strict.pendingPageCount).toBe(2);
+    expect(observed).toEqual(strict);
+    expect(knowledgeCoverageCorrection(strict)).toContain("same selection");
+  });
+
+  it("keeps the inventory required even after a completed model-origin page", () => {
+    const requested = exchange({ outcome: "succeeded", view: "units", items: [] });
+    expect(knowledgeTurnCoverage([partialRead, requested, stage], context)?.pendingPageCount).toBe(
+      1,
+    );
+  });
+
+  it.each([
+    { name: "another Jira mutation", tool: "keiko.jira.comment" },
+    { name: "a foreign write", tool: "external.write" },
+  ])("keeps incidental inventory pending when a create is mixed with $name", ({ tool }) => {
+    const otherWrite: ChatToolExchange = {
+      ...exchange({ outcome: "succeeded" }, {}, tool),
+      mutationOutcome: "succeeded",
+    };
+
+    expect(
+      knowledgeTurnCoverage([partialRead, create, otherWrite], context)?.pendingPageCount,
+    ).toBe(1);
+  });
+
+  it("keeps incidental inventory pending when a whole-Pod batch precedes a named draft", () => {
+    const batch = exchange(
+      {
+        outcome: "succeeded",
+        requirementCount: 1,
+        coveredRequirementCount: 1,
+        wholeCollection: true,
+      },
+      {},
+      "keiko.jira.draft.batch",
+    );
+    const coverage = knowledgeTurnCoverage([partialRead, batch, draft], context);
+
+    expect(coverage?.pendingPageCount).toBe(1);
+    expect(coverage?.draftBatchCoveredRequirementCount).toBe(1);
+  });
+
+  it.each([
+    { name: "failed create", value: exchange({ outcome: "rejected" }, {}, "keiko.jira.create") },
+    {
+      name: "foreign create",
+      value: exchange({ outcome: "succeeded", issueKey: "SYN-1" }, {}, "external.create"),
+    },
+    {
+      name: "unrelated write",
+      value: exchange({ outcome: "succeeded", issueKey: "SYN-1" }, {}, "keiko.jira.comment"),
+    },
+    {
+      name: "unresolved stage",
+      value: exchange(
+        { ...stageData, unresolvedRefCount: 1, unresolvedRefs: ["parent"] },
+        {},
+        "keiko.jira.draft.stage",
+      ),
+    },
+    {
+      name: "unfinished draft",
+      value: exchange({ ...draftData, pendingCount: 1 }, reference, "keiko.jira.draft"),
+    },
+    { name: "unnamed draft", value: exchange(draftData, {}, "keiko.jira.draft") },
+  ])("does not discharge the inventory for $name", ({ value }) => {
+    expect(knowledgeTurnCoverage([partialRead, value], context)?.pendingPageCount).toBe(1);
+  });
+
+  it("never exempts a requirements read merely because its ID was attested", () => {
+    const requested: ChatToolExchange = {
+      ...exchange(units(["doc:REQ-1"], "next")),
+      call: {
+        id: "runtime-inventory",
+        name: "knowledge_requirements",
+        arguments: { view: "units" },
+      },
+    };
+    expect(knowledgeTurnCoverage([requested, stage], context)?.pendingPageCount).toBe(1);
   });
 });

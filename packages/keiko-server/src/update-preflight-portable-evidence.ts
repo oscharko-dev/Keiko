@@ -14,7 +14,7 @@ import {
   type UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayEgressConfig } from "./deps.js";
+import { currentGatewayEgressConfig } from "./redaction-secrets.js";
 import {
   recordPortableFetchFailure,
   recordPortableRedirectRefusal,

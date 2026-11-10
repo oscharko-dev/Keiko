@@ -64,6 +64,26 @@ describe("keiko-ui tsconfig include list", () => {
     expect(required.filter((glob) => !include.includes(glob))).toStrictEqual([]);
   });
 
+  // The production build type-checks through its own tsconfig (shipped sources only, so the
+  // build fits a 2 GB V8 heap). Next's verifier rewrites that file as well when a glob is missing,
+  // so it carries the same pinned include list, and the path is read from Next's loaded config.
+  it("pins the include list of the tsconfig next build actually uses", async () => {
+    const productionBuild = await loadConfig(PHASE_PRODUCTION_BUILD, UI_DIR);
+    const buildTsconfigPath = resolve(UI_DIR, productionBuild.typescript.tsconfigPath);
+    expect(buildTsconfigPath).not.toBe(TSCONFIG_PATH);
+    const build = JSON.parse(readFileSync(buildTsconfigPath, "utf8"));
+    const include = JSON.parse(readFileSync(TSCONFIG_PATH, "utf8")).include;
+    expect(build.extends).toBe("./tsconfig.json");
+    expect(build.include).toStrictEqual(include);
+    const devServer = await loadConfig(PHASE_DEVELOPMENT_SERVER, UI_DIR);
+    const required = [
+      ...typeGlobsUnder(nextChildEnv(0).NODE_ENV, devServer.distDir),
+      ...typeGlobsUnder("production", productionBuild.distDir),
+    ];
+    expect(required.filter((glob) => !build.include.includes(glob))).toStrictEqual([]);
+    expect(build.exclude).toEqual(expect.arrayContaining(["**/*.test.ts", "**/*.test.tsx"]));
+  });
+
   it("would be rewritten if next dev inherited the e2e harness's NODE_ENV", async () => {
     const include = JSON.parse(readFileSync(TSCONFIG_PATH, "utf8")).include;
     const devServer = await loadConfig(PHASE_DEVELOPMENT_SERVER, UI_DIR);

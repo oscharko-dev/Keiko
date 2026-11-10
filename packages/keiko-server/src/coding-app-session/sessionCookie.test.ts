@@ -18,6 +18,7 @@ import {
   APP_SESSION_SKILLS_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
   APP_SESSION_MCP_COOKIE_PATH,
+  APP_SESSION_CHAT_APPROVAL_COOKIE_PATH,
   APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
   clearSessionCookie,
   clearSessionCookies,
@@ -43,6 +44,7 @@ const activeCookiePaths = [
   APP_SESSION_SKILLS_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
   APP_SESSION_MCP_COOKIE_PATH,
+  APP_SESSION_CHAT_APPROVAL_COOKIE_PATH,
   APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
 ];
 const retiredCookiePaths = ["/api/editor/local-history", "/api"];
@@ -59,6 +61,31 @@ function requestWith(headers: Record<string, string>, encrypted = false): Incomi
 }
 
 describe("serializeSessionCookie", () => {
+  it("projects the original paired bearer only to the Chat review observation and decision routes and clears it on logout", () => {
+    const token = "original-paired-session.fixture-proof";
+    const path = "/api/atlassian-connectors/chat-write-approval";
+    const issued = serializeSessionCookies(token, { secure: false, maxAgeSeconds: 60 });
+    const projection = issued.find((cookie) => cookie.includes(`Path=${path};`));
+    expect(projection).toBe(
+      `${APP_SESSION_COOKIE_NAME}=${token}; Path=${path}; HttpOnly; SameSite=Strict; Max-Age=60`,
+    );
+    // Feed the producer's actual header into the real request-cookie reader, rather than mocking
+    // session resolution. The Chromium journey separately proves browser path selection.
+    const request = requestWith({ cookie: projection?.split(";")[0] ?? "" });
+    request.url = `${path}/synthetic-approval`;
+    expect(readSessionCookie(request)).toBe(token);
+    expect(issued.filter((cookie) => cookie.includes("Path=/api/atlassian-connectors;"))).toEqual(
+      [],
+    );
+    const expired = clearSessionCookies(false).find((cookie) => cookie.includes(`Path=${path};`));
+    expect(expired).toBe(
+      `${APP_SESSION_COOKIE_NAME}=; Path=${path}; HttpOnly; SameSite=Strict; Max-Age=0`,
+    );
+    expect(
+      readSessionCookie(requestWith({ cookie: expired?.split(";")[0] ?? "" })),
+    ).toBeUndefined();
+  });
+
   it("marks the cookie HttpOnly, SameSite=Strict, and path-scoped, without Secure on plain HTTP", () => {
     const cookie = serializeSessionCookie("sess_abc.secret", {
       secure: false,

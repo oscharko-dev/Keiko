@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  JIRA_DESCRIPTION_INPUT_SCHEMA,
   JIRA_MANAGED_READ_TOOLS,
   type JiraManagedReadToolName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -186,6 +187,16 @@ const READS: readonly {
 ];
 
 describe("source managed Jira read dispatch", () => {
+  it("encodes hostile JQL as one exact query value without injecting URL parameters or fragments", async () => {
+    const f = fixture({ startAt: 0, maxResults: 25, total: 0, issues: [] });
+    const jql = 'summary ~ "A &maxResults=100000#fragment? / 雪"';
+    expect((await f.run("jira.search", { jql })).isError).toBeUndefined();
+    const url = new URL(f.http.mock.calls[0]?.[0].url ?? "");
+    expect(url.searchParams.get("jql")).toBe(jql);
+    expect(url.searchParams.getAll("maxResults")).toEqual(["25"]);
+    expect(url.hash).toBe("");
+    expect(url.pathname).toBe("/context/rest/api/2/search");
+  });
   it.each(READS)(
     "executes $name through the context-bound DC v2 HTTP port",
     async ({ name, args, body, path }) => {
@@ -235,10 +246,30 @@ describe("source managed Jira read dispatch", () => {
     const f = fixture(PROJECTS);
     if (mode === "denied") f.beforeEffect.mockReturnValue(false);
     else f.controller.abort();
-    expect((await f.run("jira.projects")).isError).toBe(true);
+    expect(await f.run("jira.projects")).toEqual({
+      data: { outcome: "failed", reason: mode === "denied" ? "effect-denied" : "cancelled" },
+      isError: true,
+    });
     expect(f.http).not.toHaveBeenCalled();
   });
 });
+
+it.each([200, 401])(
+  "retains ordinary Jira issue HTTP%s after late cancellation",
+  async (status) => {
+    const f = fixture(ISSUE);
+    f.http.mockImplementation(() => {
+      f.controller.abort();
+      return Promise.resolve(
+        response(status === 200 ? ISSUE : { errorMessages: ["Native refusal"] }, status),
+      );
+    });
+    const result = await f.run("jira.issue", { issueKey: "SYN-1" });
+    expect(result.data.outcome).toBe(status === 200 ? "succeeded" : "failed");
+    if (status === 401) expect(result.data.reason).toBe("auth-failed");
+    expect(f.http).toHaveBeenCalledTimes(1);
+  },
+);
 
 it.each([
   ["jira.projects", { extra: true }],
@@ -472,8 +503,9 @@ it("advertises explicit Markdown provenance only for Data Center description inp
     expect.objectContaining({
       id: "description",
       nativeFormat: "jira-wiki",
-      markdownSerialization: "headings-only",
+      markdownSerialization: "supported-markdown",
       inputSchema: {
+        description: JIRA_DESCRIPTION_INPUT_SCHEMA.description,
         oneOf: [
           { type: "string", maxLength: 32768 },
           {
@@ -511,7 +543,7 @@ it("offers the same isolated Markdown input contract when editing a description"
   expect(firstItems[0]).toMatchObject({
     id: "description",
     nativeFormat: "jira-wiki",
-    markdownSerialization: "headings-only",
+    markdownSerialization: "supported-markdown",
   });
   expect(firstItems[1]).not.toHaveProperty("inputSchema");
   const originalSchema = structuredClone(descriptionSchemaOf(first));
@@ -752,3 +784,39 @@ it("names a comment beyond the catalog byte limit a bounds failure, not a malfor
   expect(result.isError).toBe(true);
   expect(result.data).toMatchObject({ outcome: "failed", reason: "bounds-exceeded" });
 });
+
+it.each([
+  ["jira.components", { projectIdOrKey: "SYN" }, "component", "20000"],
+  ["jira.component", { componentId: "20000" }, "component", "20000"],
+  ["jira.versions", { projectIdOrKey: "SYN" }, "version", "30000"],
+  ["jira.version", { versionId: "30000" }, "version", "30000"],
+] as const)(
+  "routes advertised %s through the fixed REST v2 metadata read",
+  async (name, args, entity, id) => {
+    const f = fixture(undefined);
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      const item = { id, project: "SYN", projectId: 10000, name: "Metadata" };
+      const body = path.endsWith(`/${entity}s`)
+        ? [item]
+        : path.includes("/project/")
+          ? { id: "10000", key: "SYN" }
+          : item;
+      return Promise.resolve(response(body));
+    });
+    const tool = f.provider.tools().find((entry) => entry.name === name);
+    expect(tool).toBeDefined();
+    const result = await tool?.execute(args, {
+      invocationId: "metadata-read",
+      correlationId: "metadata-read",
+      signal: f.controller.signal,
+      beforeEffect: f.beforeEffect,
+    });
+    expect(result?.data.outcome).toBe("succeeded");
+    expect(f.http).toHaveBeenCalled();
+    for (const [request] of f.http.mock.calls) {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname.startsWith("/context/rest/api/2/")).toBe(true);
+    }
+  },
+);

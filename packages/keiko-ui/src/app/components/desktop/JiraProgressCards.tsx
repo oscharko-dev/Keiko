@@ -45,6 +45,7 @@ function ProgressBar({
         aria-valuemin={0}
         max={max > 0 ? max : undefined}
         value={value}
+        data-complete={value === max ? "true" : undefined}
         {...counted}
       />
     </div>

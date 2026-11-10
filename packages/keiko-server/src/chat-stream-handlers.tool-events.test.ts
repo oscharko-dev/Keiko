@@ -1,5 +1,5 @@
 import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { isDesktopChatStreamEvent } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isDesktopChatStreamEvent } from "@oscharko-dev/keiko-contracts/runtime/desktop-chat-stream-wire";
 import { describe, expect, it } from "vitest";
 import { toolEventIdentity, toolTranscriptEvents } from "./chat-stream-handlers.js";
 import type { ChatMessage } from "./store/index.js";

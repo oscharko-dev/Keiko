@@ -33,6 +33,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
     gitChangeSourceCount: { type: "integer", dataClass: "count", required: true },
     jiraSourceCount: { type: "integer", dataClass: "count", required: false },
     jiraBindingGeneration: { type: "integer", dataClass: "count", required: false },
+    jiraAdministrationEnabled: { type: "boolean", dataClass: "closed-enum", required: false },
     toolMode: {
       type: "string",
       dataClass: "closed-enum",
@@ -94,12 +95,14 @@ export function logChatScopeUpdate(
 function jiraStateEvidence(chat: Chat): {
   readonly jiraSourceCount?: number;
   readonly jiraBindingGeneration?: number;
+  readonly jiraAdministrationEnabled?: boolean;
   readonly toolMode?: NonNullable<Chat["toolMode"]>;
 } {
   if ((chat.jiraBindingGeneration ?? 0) === 0) return {};
   return {
     jiraSourceCount: Number(chat.jiraPodBinding !== undefined),
     jiraBindingGeneration: chat.jiraBindingGeneration ?? 0,
+    jiraAdministrationEnabled: chat.jiraAdministrationEnabled === true,
     toolMode: chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
   };
 }

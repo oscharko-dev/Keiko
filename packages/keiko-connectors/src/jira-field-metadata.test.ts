@@ -7,6 +7,56 @@ import {
 } from "./jira-field-metadata.js";
 
 describe("Data Center description serialization", () => {
+  it("uses the canonical supported Markdown projection before validation and preparation", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const fields = {
+      description: { format: "markdown", text: "## Criteria\n- **Exact**\n  1. `detail`" },
+    };
+    const expected = {
+      ok: true,
+      fields: { description: "h2. Criteria\n* *Exact*\n*# {{detail}}" },
+      update: {},
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
+    };
+    expect(validateJiraFieldChanges(parsed.fields, fields, "edit", "data-center")).toEqual(
+      expected,
+    );
+    expect(prepareJiraDescriptionFields(fields, parsed.fields)).toMatchObject(expected);
+  });
+
+  it("projects supported Markdown images through the shared dev wiki writer", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const result = prepareJiraDescriptionFields(
+      {
+        description: {
+          format: "markdown",
+          text: "## Heading\n![Image](https://example.invalid/image.png)",
+        },
+      },
+      parsed.fields,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      fields: { description: "h2. Heading\n!https://example.invalid/image.png!" },
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
+    });
+  });
+  it("refuses an oversized Markdown projection without returning partially converted fields", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const text = `## Heading\n${"{".repeat(32752)}`;
+    expect(text.length).toBeLessThan(32768);
+    const result = prepareJiraDescriptionFields(
+      { description: { format: "markdown", text } },
+      parsed.fields,
+    );
+    expect(result).toMatchObject({ ok: false, fieldId: "description", reason: "invalid-field" });
+    expect(result).not.toHaveProperty("fields");
+  });
   it("serializes only the description and carries an internal actual conversion count", () => {
     const parsed = parseJiraFieldMetadata([
       field("description", "string"),
@@ -28,6 +78,7 @@ describe("Data Center description serialization", () => {
       fields: { description: "h2. Criteria\n* exact", environment: "## Literal environment" },
       update: {},
       descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
     });
   });
 
@@ -1044,6 +1095,7 @@ describe("description admission before requirement trace", () => {
       fields: { description: "h2. Criteria\n* exact" },
       update: {},
       descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
     });
   });
 });

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { workspaceStorageArgs } from "../../lib/workspace-storage-fixture.mjs";
-import { readPrivateFile } from "./lab-client.mjs";
+import { labSessionConnection, readPrivateFile } from "./lab-client.mjs";
 import { assertVerifiedPod, connectPodFromPanel, verifyPodAction } from "./browser-connections.mjs";
 import { consentCardCount, establishedReadGrant } from "./read-grant.mjs";
 
@@ -18,52 +18,79 @@ export async function openBrowser(chat, origin) {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(20000);
-  await page.addInitScript(
-    ({ argument: { id, title }, storageKeys }) => {
-      const seeded = "keiko.jira-browser-fixture.seeded.v1";
-      if (globalThis.window.sessionStorage.getItem(seeded) !== "true") {
-        globalThis.window.localStorage.setItem(
-          storageKeys.workspace,
-          JSON.stringify([
-            {
-              id: "jira-browser-chat",
-              type: "chat",
-              x: 32,
-              y: 30,
-              w: 1000,
-              h: 900,
-              z: 10,
-              cfg: { chatId: id, title },
-              max: false,
-            },
-          ]),
-        );
-        globalThis.window.localStorage.removeItem(storageKeys.connections);
-        globalThis.window.sessionStorage.setItem(seeded, "true");
-      }
-    },
-    await workspaceStorageArgs(page, { id: chat.id, title: chat.title }),
-  );
+  if (chat !== undefined)
+    await page.addInitScript(
+      ({ argument: { id, title }, storageKeys }) => {
+        const seeded = "keiko.jira-browser-fixture.seeded.v1";
+        if (globalThis.window.sessionStorage.getItem(seeded) !== "true") {
+          globalThis.window.localStorage.setItem(
+            storageKeys.workspace,
+            JSON.stringify([
+              {
+                id: "jira-browser-chat",
+                type: "chat",
+                x: 32,
+                y: 30,
+                w: 1000,
+                h: 900,
+                z: 10,
+                cfg: { chatId: id, title },
+                max: false,
+              },
+            ]),
+          );
+          globalThis.window.localStorage.removeItem(storageKeys.connections);
+          globalThis.window.sessionStorage.setItem(seeded, "true");
+        }
+      },
+      await workspaceStorageArgs(page, { id: chat.id, title: chat.title }),
+    );
   return { browser, page };
 }
-export async function createPod(page, session) {
-  await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
-  const hub = page.getByRole("region", { name: /Local Knowledge/ });
+async function createPodThroughForm(page, hub, session, options, label) {
+  const tokenFile = options.tokenFile ?? join(session.directory, "secrets", "api-token");
   await hub.getByRole("button", { name: "Create Jira Pod", exact: true }).click();
   stage("hub-open");
   const form = hub.getByTestId("acx-add-form");
-  await form.getByLabel("Label", { exact: true }).fill("Browser Jira");
-  await form.getByLabel("Base URL", { exact: true }).fill("https://127.0.0.1:18443");
+  await form.getByLabel("Label", { exact: true }).fill(label);
   await form
-    .getByLabel("API token", { exact: true })
-    .fill(readPrivateFile(join(session.directory, "secrets", "api-token")).trim());
-  const verified = await verifyPodAction(page, () =>
+    .getByLabel("Base URL", { exact: true })
+    .fill(labSessionConnection(session).httpsOrigin);
+  await form.getByLabel("API token", { exact: true }).fill(readPrivateFile(tokenFile).trim());
+  await options.onPhase?.({ phase: "pod-creation-may-have-started" });
+  return verifyPodAction(page, () =>
     form.getByRole("button", { name: "Create Jira Pod", exact: true }).click(),
   );
-  const card = hub.getByTestId("acx-connector").filter({ hasText: "Browser Jira" });
-  await assertVerifiedPod(page, card, verified);
-  stage("pod-verified");
-  await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
+}
+/** Reuse a recorded verified Pod by identity; creation still goes through the existing UI. */
+export async function createPod(page, session, options = {}) {
+  const label = options.label ?? "Browser Jira";
+  const trigger = page.getByRole("button", { name: "Local Knowledge", exact: true });
+  await trigger.click();
+  const hub = page.getByRole("region", { name: /Local Knowledge/ });
+  try {
+    const identity =
+      options.podId === undefined
+        ? await createPodThroughForm(page, hub, session, options, label)
+        : { podId: options.podId };
+    const card = hub.getByTestId("acx-connector").filter({
+      has: page.getByText(label, { exact: true }),
+    });
+    // The Hub re-renders its card list after verification; wait for the card before counting it.
+    await card.first().waitFor({ state: "attached" });
+    assert.equal(await card.count(), 1, "The verified Pod has one exact Hub card");
+    const credential = await assertVerifiedPod(page, card, { ...identity, displayName: label });
+    assert.ok(
+      (await card.getAttribute("data-auth-ref")) === credential.authRef,
+      "The observed Hub card is the verified native Pod",
+    );
+    const pod = { podId: credential.livePod.podId };
+    await options.onPod?.(pod);
+    stage("pod-verified");
+    return pod;
+  } finally {
+    await trigger.click();
+  }
 }
 async function connectAndSend(page) {
   const chat = page.getByRole("region", {

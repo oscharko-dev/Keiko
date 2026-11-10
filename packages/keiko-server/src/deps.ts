@@ -29,6 +29,7 @@ import {
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
+import { jiraEmailTemplateInspection } from "./atlassian/jiraEmailTemplateComposition.js";
 import {
   createStateCodingSessionContinuity,
   KEIKO_CODING_SESSION_RETENTION_ENV,
@@ -303,6 +304,7 @@ import {
 } from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { CapturePolicyOptions } from "@oscharko-dev/keiko-memory-capture";
 import type {
   MemoryRecord,
@@ -819,6 +821,9 @@ interface AgentAuthorityRegistryDependency {
 }
 
 export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
+  /** Revalidates the held native Jira call; secrets remain in credential custody. */
+  readonly codingJiraInputContext?: import("./coding-runtime/codingJiraHumanInput.js").CodingJiraCurrentInputResolver;
+
   readonly mcpSettings?: McpSettingsStore;
   readonly mcpAuthorization?: McpAuthorization;
   readonly mcpConnections?: ConfiguredMcpConnections;
@@ -1123,6 +1128,7 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  readonly memoryReadiness?: MemoryReadinessSnapshot | undefined;
   // Server-private, single-use content attestations minted only by a trusted transcript observer.
   // Without this port, recap submissions remain review-gated and can never auto-accept.
   readonly voiceRecapContentAttestations?: VoiceRecapContentAttestationStore | undefined;
@@ -2625,30 +2631,39 @@ export function redactEvidenceString(redactor: Redactor, value: string): string 
   return redacted;
 }
 
+type MemoryWithheldReason = Extract<
+  MemoryReadinessSnapshot,
+  { readonly readiness: "withheld" }
+>["reason"];
+
 function buildMemoryVault(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
   env: EnvSource,
   diagnostics: ServerDiagnosticSink | undefined,
   bootstrapCorrelationId: string,
+  onWithheld?: (reason: MemoryWithheldReason) => void,
 ): MemoryVaultStore | undefined {
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
-  const vault = openMemoryVaultOrWithhold(diagnostics, () =>
-    createBffMemoryVault(
-      redactString,
-      // #214 — wire every successful vault mutation into the audit ledger. The handler
-      // shares the same redactString closure as the live-payload redactor so audit
-      // summaries inherit the same secret-shape scrubbing as wire traffic.
-      (event) => {
-        if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
-          return;
-        }
-        postCommitAudit(event);
-      },
-      createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
-      env,
-      bootstrapCorrelationId,
-    ),
+  const vault = openMemoryVaultOrWithhold(
+    diagnostics,
+    () =>
+      createBffMemoryVault(
+        redactString,
+        // #214 — wire every successful vault mutation into the audit ledger. The handler
+        // shares the same redactString closure as the live-payload redactor so audit
+        // summaries inherit the same secret-shape scrubbing as wire traffic.
+        (event) => {
+          if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
+            return;
+          }
+          postCommitAudit(event);
+        },
+        createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
+        env,
+        bootstrapCorrelationId,
+      ),
+    onWithheld,
   );
   if (vault === undefined) return undefined;
   // Issue #3189 — seed only the transition classifier's body-free pre-image fields after the
@@ -2703,20 +2718,28 @@ function serverOperatorPrincipal(options: BuildHandlerDepsOptions): () => string
  * directory moved to another device) leaves memory unavailable for this process instead of making
  * the whole local server crash-loop at startup. Memory routes then answer 503 `MEMORY_UNAVAILABLE`
  * and Chat runs without memory, while the vault stays untouched for the key that opens it. Every
- * other open failure still fails composition closed.
+ * classified migration/open failure withholds only Memory too. Unrelated failures still propagate.
  */
 function openMemoryVaultOrWithhold(
   diagnostics: ServerDiagnosticSink | undefined,
   open: () => MemoryVaultStore,
+  onWithheld?: (reason: MemoryWithheldReason) => void,
 ): MemoryVaultStore | undefined {
   try {
     return open();
   } catch (error) {
-    if (!(error instanceof MemoryStorageError) || error.code !== "vault-unreadable") throw error;
+    if (
+      !(error instanceof MemoryStorageError) ||
+      (error.code !== "vault-unreadable" && error.code !== "vault-migration-failed")
+    )
+      throw error;
+    onWithheld?.(error.code);
     emitCompositionDiagnostic(
       diagnostics,
       "memory-vault.open",
-      "The memory vault could not be opened with the available key.",
+      error.code === "vault-unreadable"
+        ? "The memory vault could not be opened with the available key."
+        : "The memory vault could not be opened or migrated. Memory is withheld.",
       error,
     );
     return undefined;
@@ -3380,6 +3403,7 @@ interface PeripheralManagers {
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore | undefined;
+  readonly memoryReadiness: MemoryReadinessSnapshot;
   readonly editorHotExitStore: EditorHotExitStore;
   readonly editorLocalHistoryStore: EditorLocalHistoryStore;
   readonly managedLspControl: ManagedLspControlService;
@@ -3967,12 +3991,16 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     diagnostics: args.options.diagnostics,
     redactString: args.redactString,
   });
+  let memoryReadiness: MemoryReadinessSnapshot = { readiness: "ready", reason: "none" };
   const memoryVault = buildMemoryVault(
     args.redactString,
     args.evidenceStore,
     args.options.env,
     args.options.diagnostics,
     args.bootstrapCorrelationId,
+    (reason): void => {
+      memoryReadiness = { readiness: "withheld", reason };
+    },
   );
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
@@ -4057,6 +4085,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       diagnostics: args.options.diagnostics,
     }),
     memoryVault,
+    memoryReadiness,
     editorHotExitStore:
       args.options.editorHotExitStore ??
       createEditorHotExitStore({
@@ -4631,8 +4660,15 @@ function atlassianConnectorCredentialFields(
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
-      onLivePodInvalidated: (podId, generation, correlationId) => {
-        invalidateJiraPodChats(args.bundle.uiStore, podId, generation, correlationId, accessOwners);
+      onLivePodInvalidated: (podId, generation, correlationId, reason) => {
+        invalidateJiraPodChats(
+          args.bundle.uiStore,
+          podId,
+          generation,
+          correlationId,
+          accessOwners,
+          reason,
+        );
       },
       configPath: args.runtimeConfig.storagePath,
       env: args.options.env,
@@ -5086,9 +5122,13 @@ function installCodingJiraPods(
   pods: CodingJiraPods | undefined,
 ): UiHandlerDeps {
   if (pods === undefined) return deps;
-  pods.attach(deps);
+  pods.attach({
+    ...deps,
+    emailTemplateInspection: (signal) => jiraEmailTemplateInspection(deps, signal),
+  });
   const previousDispose = deps.dispose;
   return Object.assign(deps, {
+    codingJiraInputContext: pods.currentInputContext,
     dispose: async (): Promise<void> => {
       try {
         await pods.close();

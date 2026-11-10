@@ -1,9 +1,10 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { ensureFixtureToken } from "./fixture-tokens.mjs";
 import { actorDetails, basicAuth, checked, labRequest, readPrivateFile } from "./lab-client.mjs";
 
-export async function ensureFixtureIdentity(session, actor) {
+export async function ensureFixtureIdentity(session, actor, lifecycle = {}) {
   if (actor === "admin") throw new TypeError("Administrator is provisioned by Jira setup");
   const details = actorDetails(actor);
   const path = join(session.directory, "secrets", details.passwordFile);
@@ -19,7 +20,7 @@ export async function ensureFixtureIdentity(session, actor) {
   if (result.status !== 200 && result.status !== 404)
     throw new TypeError("Unexpected synthetic identity state");
   if (result.status === 404)
-    await checked(session, "create-user", "POST", "/rest/api/2/user", admin, {
+    await identityWrite(session, actor, lifecycle, "create-user", "/rest/api/2/user", admin, {
       name: details.name,
       password: readPrivateFile(path),
       emailAddress: `${actor}@example.invalid`,
@@ -27,7 +28,7 @@ export async function ensureFixtureIdentity(session, actor) {
       applicationKeys: ["jira-software"],
       notification: false,
     });
-  const auth = await ensureToken(session, actor);
+  const auth = await ensureFixtureToken(session, actor);
   const identity = await checked(session, "pat-identity", "GET", "/rest/api/2/myself", auth);
   if (identity.name !== details.name || identity.active !== true)
     throw new TypeError("Unexpected PAT identity");
@@ -43,22 +44,33 @@ export async function ensureFixtureIdentity(session, actor) {
   return auth;
 }
 
-async function ensureToken(session, actor) {
-  const path = join(session.directory, "secrets", `${actor}-token`);
-  if (existsSync(path)) return `Bearer ${readPrivateFile(path)}`;
-  // Persist intent before dispatch; a lost response must never create another PAT implicitly.
-  const marker = actor === "api" ? "pat-creation-started" : `${actor}-pat-creation-started`;
-  writeFileSync(join(session.directory, "secrets", marker), "1\n", { mode: 0o600, flag: "wx" });
-  const token = await checked(
+async function identityWrite(session, actor, lifecycle, name, path, auth, body) {
+  const intent = { actor, name, method: "POST", path };
+  await lifecycle.beforeWrite?.(intent);
+  const value = await checked(session, name, "POST", path, auth, body);
+  await lifecycle.afterWrite?.(intent);
+  return value;
+}
+
+/** Own disposable qualification sessions only: reuse normal PAT creation and verify native admin. */
+export async function ensureFixtureAdminToken(session) {
+  const auth = await ensureFixtureToken(session, "admin");
+  const identity = await checked(
     session,
-    "create-pat",
-    "POST",
-    "/rest/pat/latest/tokens",
-    basicAuth(session, actor),
-    { name: "Keiko synthetic 4081 session", expirationDuration: 1 },
+    "qualification-admin-identity",
+    "GET",
+    "/rest/api/2/myself",
+    auth,
   );
-  if (typeof token?.rawToken !== "string" || token.rawToken.length === 0)
-    throw new TypeError("Missing laboratory PAT");
-  writeFileSync(path, token.rawToken, { mode: 0o600, flag: "wx" });
-  return `Bearer ${token.rawToken}`;
+  if (identity.name !== "keiko-admin" || identity.active !== true)
+    throw new TypeError("Unexpected qualification administrator identity");
+  const permissions = await checked(
+    session,
+    "qualification-admin-permission",
+    "GET",
+    "/rest/api/2/mypermissions?permissions=ADMINISTER",
+    auth,
+  );
+  if (permissions.permissions?.ADMINISTER?.havePermission !== true)
+    throw new TypeError("Qualification requires actual native administration permission");
 }

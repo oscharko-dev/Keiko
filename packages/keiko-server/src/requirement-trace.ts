@@ -11,17 +11,20 @@ import {
   REQUIREMENT_TRACE_FOOTER_START,
   REQUIREMENT_REVISION_LABEL_PREFIX,
   requirementTrace,
+  requirementReference,
   resolveRequirementReferences,
   normaliseText,
   type RequirementReferenceProblem,
   type RequirementTraceUnit,
   type ResolvedRequirementReference,
 } from "@oscharko-dev/keiko-quality-intelligence";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { JiraTraceOutcome, JiraTraceRequest } from "@oscharko-dev/keiko-connectors";
 import {
   projectJiraDescriptionInput,
   JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
   readJiraDescriptionBlocks,
+  withoutJiraSourceLabels,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
@@ -58,7 +61,7 @@ interface TraceDescriptionCheck {
 }
 
 export type TraceResolution =
-  | { readonly ok: true; readonly trace: ItemTrace }
+  | { readonly ok: true; readonly trace: ItemTrace; readonly sourceDigest: string }
   | {
       readonly ok: false;
       readonly reason: "no-knowledge-pod" | "unavailable" | "references";
@@ -127,18 +130,30 @@ function criterionForms(text: string): readonly string[] {
   // No readable block (for example a literal `{code}` macro marker): it has no checkable
   // representation, so the caller refuses it instead of treating it as present.
   if (blocks.length === 0) return [];
-  const converted = blocks.map(criterionText).join(" ");
+  const converted = blocks.map((block) => criterionText(block)).join(" ");
   return converted === text ? [text] : [text, converted];
+}
+
+/** Each description block as checked text, and again without Keiko's own source labels. */
+function descriptionBlocks(description: unknown, documents: readonly string[]): Set<string> {
+  const projected = projectJiraDescriptionInput(description)?.text ?? "";
+  return new Set(
+    readJiraDescriptionBlocks(projected, "jira-wiki").flatMap((block) => {
+      const text = block.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1");
+      // Keiko's own source labels for the model's `[n]` markers add no criterion text (LIM32).
+      const bare = withoutJiraSourceLabels(text, documents);
+      return bare === text ? [criterionText(text)] : [criterionText(text), criterionText(bare)];
+    }),
+  );
 }
 
 function acceptanceCriteriaProblems(
   resolved: readonly ResolvedRequirementReference[],
   description: TraceDescriptionCheck,
   redact: (value: string) => string,
+  documents: readonly string[],
 ): readonly TraceProblem[] {
-  const projected = projectJiraDescriptionInput(description.description)?.text ?? "";
-  const syntax = typeof description.description === "string" ? "jira-wiki" : "markdown";
-  const blocks = new Set(readJiraDescriptionBlocks(projected, syntax).map(criterionText));
+  const blocks = descriptionBlocks(description.description, documents);
   const criteria = new Map<string, string>();
   for (const item of resolved) {
     const required =
@@ -174,7 +189,13 @@ function resolveAgainst(
   const resolution = resolveRequirementReferences(references, opened.collection.units);
   if (!resolution.ok) return { ok: false, reason: "references", problems: resolution.problems };
   if (description !== undefined) {
-    const problems = acceptanceCriteriaProblems(resolution.resolved, description, redact);
+    const documents = opened.collection.documents.flatMap(({ name }) => [name, redact(name)]);
+    const problems = acceptanceCriteriaProblems(
+      resolution.resolved,
+      description,
+      redact,
+      documents,
+    );
     if (problems.length > 0) return { ok: false, reason: "references", problems };
   }
   const located = resolution.resolved.map((item) => ({
@@ -184,6 +205,19 @@ function resolveAgainst(
   const { labels, footer } = requirementTrace(located, redact);
   return {
     ok: true,
+    sourceDigest: sha256Hex(
+      canonicalise(
+        located.map(({ unit, criterion }) => ({
+          reference: requirementReference(unit.entry),
+          requirementDigest: unit.entry.digest,
+          source: unit.source,
+          sectionPath: unit.entry.sectionPath,
+          characterStart: unit.entry.characterStart,
+          characterEnd: unit.entry.characterEnd,
+          criterion: criterion?.id ?? null,
+        })),
+      ),
+    ),
     trace: {
       labels,
       footer,
@@ -240,13 +274,29 @@ export function openTraceSession(deps: UiHandlerDeps, turn: TraceTurn): TraceSes
 
 // ─── Results and evidence ────────────────────────────────────────────────────
 
+/** Fixed repair instructions; never substitute references or labels for the source criteria. */
+export function traceRefusalGuidance(
+  resolution: Extract<TraceResolution, { ok: false }>,
+): string | undefined {
+  if (!resolution.problems.some((problem) => problem.reason === "acceptance-criteria-missing"))
+    return undefined;
+  return (
+    "Nothing was changed. Read the referenced requirements with knowledge.requirements. " +
+    "Copy each missing acceptance criterion verbatim into fields.description. " +
+    "Keep requirementIds beside fields; IDs, labels and paraphrases do not replace the literal criteria. " +
+    "For a draft, stage the corrected traced items before submitting them. Do not remove requirementIds to bypass this refusal."
+  );
+}
+
 export function traceRefusalData(
   resolution: Extract<TraceResolution, { ok: false }>,
   ref?: string,
 ): CatalogJsonObject {
+  const guidance = traceRefusalGuidance(resolution);
   return {
     reason: "field-validation",
     requirementRefusal: resolution.reason,
+    ...(guidance === undefined ? {} : { guidance }),
     requirementProblems: resolution.problems.map((problem): CatalogJsonObject => ({
       ...(ref === undefined ? {} : { ref }),
       reference: problem.reference.slice(0, JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),

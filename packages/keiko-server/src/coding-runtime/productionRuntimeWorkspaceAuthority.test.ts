@@ -853,3 +853,36 @@ function liveFixture() {
     },
   };
 }
+
+it("mints explicit Jira admin scope only beside a selected Pod, without changing mode defaults", () => {
+  const { input, request } = liveFixture();
+  const jiraPodId = "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10";
+  for (const requestedMode of [
+    "governed-assist",
+    "supervised-coding",
+    "autonomous-delivery",
+  ] as const) {
+    const ordinary = resolveProductionRuntimeContext(input, {
+      ...request,
+      requestedMode,
+      jiraPodId,
+    });
+    expect(ordinary.connectorScopes).toContain("issue-tracker.read");
+    expect(ordinary.connectorScopes).toContain("issue-tracker.write");
+    expect(ordinary.connectorScopes).not.toContain("issue-tracker.admin");
+    const admin = resolveProductionRuntimeContext(input, {
+      ...request,
+      requestedMode,
+      jiraPodId,
+      connectorScopes: ["issue-tracker.admin"],
+    });
+    expect(admin.connectorScopes).toEqual([...ordinary.connectorScopes, "issue-tracker.admin"]);
+    expect(
+      resolveProductionRuntimeContext(input, {
+        ...request,
+        requestedMode,
+        connectorScopes: ["issue-tracker.admin"],
+      }).connectorScopes,
+    ).not.toContain("issue-tracker.admin");
+  }
+});

@@ -19,12 +19,20 @@ interface JiraChatState {
   readonly generation: number;
   readonly mode: CodingWorkbenchMode;
   readonly binding?: ChatJiraPodBinding | undefined;
+  readonly jiraAdministrationEnabled?: boolean;
   /** MCP servers the Chat offers its model; absent keeps every enabled server. */
   readonly mcpServers?: readonly string[] | undefined;
 }
 
 const EMPTY: JiraChatState = { schemaVersion: 2, generation: 0, mode: CHAT_TOOL_DEFAULT_MODE };
-const STATE_KEYS = new Set(["schemaVersion", "generation", "mode", "binding", "mcpServers"]);
+const STATE_KEYS = new Set([
+  "schemaVersion",
+  "generation",
+  "mode",
+  "binding",
+  "mcpServers",
+  "jiraAdministrationEnabled",
+]);
 const BINDING_KEYS = new Set([
   "podId",
   "bindingGeneration",
@@ -55,19 +63,33 @@ function validBinding(value: unknown, generation: number): value is ChatJiraPodB
 type StoredJiraChatState = Omit<JiraChatState, "schemaVersion"> & {
   readonly schemaVersion: 1 | 2;
 };
+function validStateGeneration(value: Record<string, unknown>): boolean {
+  return (
+    (value.schemaVersion === 1 || value.schemaVersion === 2) &&
+    Number.isSafeInteger(value.generation) &&
+    Number(value.generation) >= 0 &&
+    isCodingWorkbenchMode(value.mode)
+  );
+}
 
 function validState(value: unknown): value is StoredJiraChatState {
   if (!record(value) || !Object.keys(value).every((key) => STATE_KEYS.has(key))) return false;
-  if (
-    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
-    !Number.isSafeInteger(value.generation) ||
-    Number(value.generation) < 0 ||
-    !isCodingWorkbenchMode(value.mode)
-  )
-    return false;
+  if (!validStateGeneration(value)) return false;
   return (
     validMcpSelection(value.mcpServers) &&
+    validAdministrationState(value) &&
     (value.binding === undefined || validBinding(value.binding, Number(value.generation)))
+  );
+}
+
+function validAdministrationState(value: Record<string, unknown>): boolean {
+  const selected = value.jiraAdministrationEnabled;
+  if (selected === undefined) return true;
+  // Schema 1 predates the selection and can never carry an explicit administration grant.
+  return (
+    value.schemaVersion === 2 &&
+    typeof selected === "boolean" &&
+    (!selected || value.binding !== undefined)
   );
 }
 
@@ -107,11 +129,19 @@ function migratedState(value: StoredJiraChatState): JiraChatState {
 
 export function jiraChatFields(
   state: JiraChatState,
-): Pick<Chat, "toolMode" | "jiraBindingGeneration" | "jiraPodBinding" | "mcpServers"> {
+): Pick<
+  Chat,
+  | "toolMode"
+  | "jiraBindingGeneration"
+  | "jiraPodBinding"
+  | "mcpServers"
+  | "jiraAdministrationEnabled"
+> {
   return {
     toolMode: state.mode,
     jiraBindingGeneration: state.generation,
     jiraPodBinding: state.binding,
+    jiraAdministrationEnabled: state.jiraAdministrationEnabled === true,
     ...(state.mcpServers === undefined ? {} : { mcpServers: state.mcpServers }),
   };
 }
@@ -157,8 +187,31 @@ function nextMode(existing: Chat, patch: UpdateChatPatch): CodingWorkbenchMode {
 
 function patchesJiraChatState(patch: UpdateChatPatch): boolean {
   return (
-    patch.jiraPodId !== undefined || patch.toolMode !== undefined || patch.mcpServers !== undefined
+    patch.jiraPodId !== undefined ||
+    patch.toolMode !== undefined ||
+    patch.mcpServers !== undefined ||
+    patch.jiraAdministrationEnabled !== undefined
   );
+}
+
+function nextAdministrationSelection(
+  existing: Chat,
+  patch: UpdateChatPatch,
+  binding: ChatJiraPodBinding | undefined,
+  options: UpdateChatOptions | undefined,
+): boolean {
+  const requested = patch.jiraAdministrationEnabled;
+  if (requested !== undefined && typeof requested !== "boolean")
+    throw invalidRequest("Invalid Jira administration selection.");
+  if (requested === true) {
+    if (binding === undefined || binding !== existing.jiraPodBinding)
+      throw invalidRequest("Select the current Jira Pod before enabling administration.");
+    const verified = verifiedTarget(binding.podId, options);
+    if (verified.authenticationGeneration !== binding.authenticationGeneration)
+      throw invalidRequest("The Jira Pod credential generation has changed.");
+  }
+  if (binding === undefined || binding !== existing.jiraPodBinding) return false;
+  return requested ?? existing.jiraAdministrationEnabled === true;
 }
 
 export function updatedJiraChatState(
@@ -170,9 +223,11 @@ export function updatedJiraChatState(
   if (!patchesJiraChatState(patch)) return undefined;
   const mode = nextMode(existing, patch);
   const binding = selectedBinding(existing, patch, options, now);
+  const jiraAdministrationEnabled = nextAdministrationSelection(existing, patch, binding, options);
   const mcpServers = nextMcpServers(existing, patch);
   const changed =
     binding !== existing.jiraPodBinding ||
+    jiraAdministrationEnabled !== (existing.jiraAdministrationEnabled === true) ||
     mode !== (existing.toolMode ?? CHAT_TOOL_DEFAULT_MODE) ||
     !sameMcpSelection(mcpServers, existing.mcpServers);
   const generation = (existing.jiraBindingGeneration ?? 0) + Number(changed);
@@ -182,6 +237,7 @@ export function updatedJiraChatState(
     schemaVersion: 2,
     generation,
     mode,
+    jiraAdministrationEnabled,
     ...(binding === undefined ? {} : { binding: { ...binding, bindingGeneration: generation } }),
     ...(mcpServers === undefined ? {} : { mcpServers }),
   };
@@ -223,6 +279,7 @@ export function invalidatedJiraChatState(
     schemaVersion: 2,
     generation,
     mode: existing.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
+    jiraAdministrationEnabled: false,
     ...(existing.mcpServers === undefined ? {} : { mcpServers: existing.mcpServers }),
     ...(authenticationGeneration === null
       ? {}

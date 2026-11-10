@@ -138,6 +138,9 @@ function protocolAnnotations(tool: ManagedMcpToolDeclaration): NonNullable<Tool[
   };
 }
 
+/** One host's registry bound. Callers that choose a tool set check it before building a host. */
+export const MANAGED_MCP_TOOLS_MAX = 320;
+
 export function toolsOf<Context extends ManagedMcpInvocationContext>(
   providers: readonly ManagedMcpProvider<Context>[],
 ): readonly ManagedMcpTool<Context>[] {
@@ -145,7 +148,7 @@ export function toolsOf<Context extends ManagedMcpInvocationContext>(
   if (
     tools.length === 0 ||
     tools.some((tool) => typeof tool.execute !== "function") ||
-    tools.length > 320 ||
+    tools.length > MANAGED_MCP_TOOLS_MAX ||
     new Set(tools.map((tool) => tool.name)).size !== tools.length ||
     new Set(providers.map((provider) => provider.id)).size !== providers.length
   )

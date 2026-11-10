@@ -31,9 +31,254 @@ import {
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
+import {
+  ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS,
+  isSafeAtlassianConnectorBaseUrl,
+} from "./atlassian-connector-url.js";
+export {
+  ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS,
+  canonicalAtlassianConnectorBaseUrl,
+  isSafeAtlassianConnectorBaseUrl,
+} from "./atlassian-connector-url.js";
 
+import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
-import type { JiraMutationOperation } from "./jira-tool-execution.js";
+import {
+  JIRA_GROUP_MUTATIONS,
+  type JiraGroupMutation,
+  JIRA_ISSUE_ACTION_MUTATIONS,
+  type JiraIssueActionMutation,
+  JIRA_MAINTENANCE_MUTATIONS,
+  type JiraMaintenanceMutation,
+  JIRA_SCHEMA_MUTATIONS,
+  type JiraSchemaMutation,
+  JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  type JiraDirectoryAccessMutation,
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  type JiraOptionSchemeMutation,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  type JiraWorkflowSchemeMutation,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  type JiraInstanceSettingMutation,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  type JiraEmailTemplateMutation,
+  JIRA_AGILE_PLANNING_MUTATIONS,
+  JIRA_PERMISSION_SCHEME_MUTATIONS,
+  JIRA_ROLE_MUTATIONS,
+  type JiraPermissionSchemeMutation,
+  type JiraRoleMutation,
+  JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  JIRA_PROJECT_CATEGORY_MUTATIONS,
+  type JiraAgilePlanningMutation,
+  type JiraVersionRemoteLinkMutation,
+  type JiraProjectCategoryMutation,
+  JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  type JiraScreenConfigurationMutation,
+  type JiraBoardConfigurationMutation,
+  type JiraSprintLifecycleMutation,
+  JIRA_LINK_MUTATIONS,
+  JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  type JiraLinkMutation,
+  type JiraReleaseLifecycleMutation,
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
+  type JiraEntityPropertyMutation,
+  type JiraMutationOperation,
+} from "./jira-tool-execution.js";
+
+const JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS = Object.freeze([
+  "unlock-user-anonymization",
+  "upload-temporary-avatar",
+  "crop-temporary-avatar",
+  "upload-issue-type-avatar",
+  "create-issue-type-avatar",
+  "upload-project-avatar",
+  "create-project-avatar",
+  "set-project-avatar",
+  "delete-project-avatar",
+  "upload-owned-avatar",
+  "create-owned-avatar",
+  "delete-owned-avatar",
+  "upload-user-avatar",
+  "create-user-avatar",
+  "set-user-avatar",
+  "delete-user-avatar",
+  "create-user",
+  "update-user",
+  "delete-user",
+  "invalidate-user-session",
+  "schedule-user-anonymization",
+  "rerun-user-anonymization",
+  "create-reciprocal-remote-link",
+  "delete-project",
+  "archive-project",
+  "restore-project",
+  "update-project-type",
+  "set-project-permission-scheme",
+  "set-project-priority-scheme",
+  "remove-project-priority-scheme",
+  "update-user-password",
+] as const);
+const JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS = Object.freeze([
+  "archive-issues",
+  "delete-issue",
+  "archive-issue",
+  "restore-issue",
+  "move-subtask",
+  "create-issues",
+  "update-myself",
+  "update-my-password",
+  "login",
+  "logout",
+  "release-websudo",
+] as const);
+type JiraResourceAccountAction =
+  | (typeof JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS)[number]
+  | (typeof JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS)[number];
+
+type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
+function jiraPropertyAction(name: JiraEntityPropertyMutation): JiraEntityPropertyAction {
+  return name.slice(5) as JiraEntityPropertyAction;
+}
+const JIRA_PROPERTY_ACTIONS = Object.freeze(JIRA_ENTITY_PROPERTY_MUTATIONS.map(jiraPropertyAction));
+const JIRA_SAVED_ADMIN_ACTIONS = Object.freeze([
+  "create-filter",
+  "set-filter-share-scope",
+  "add-filter-permission",
+  "delete-filter-permission",
+] as const);
+const JIRA_SAVED_WRITE_ACTIONS = Object.freeze([
+  "update-filter",
+  "delete-filter",
+  "set-filter-columns",
+  "reset-filter-columns",
+  "set-my-preference",
+  "delete-my-preference",
+] as const);
+const JIRA_SAVED_ACTIONS = Object.freeze([
+  ...JIRA_SAVED_ADMIN_ACTIONS,
+  ...JIRA_SAVED_WRITE_ACTIONS,
+]);
+type JiraSavedConfigurationAction = (typeof JIRA_SAVED_ACTIONS)[number];
+
+type JiraRelationshipOrReleaseMutation = JiraLinkMutation | JiraReleaseLifecycleMutation;
+type JiraRelationshipOrReleaseAction =
+  JiraRelationshipOrReleaseMutation extends `jira.${infer Action}` ? Action : never;
+function relationshipOrReleaseAction(
+  name: JiraRelationshipOrReleaseMutation,
+): JiraRelationshipOrReleaseAction {
+  return name.slice(5) as JiraRelationshipOrReleaseAction;
+}
+const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze(
+  [...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS].map(relationshipOrReleaseAction),
+);
+
+type JiraConfigurationMutation =
+  JiraScreenConfigurationMutation | JiraBoardConfigurationMutation | JiraSprintLifecycleMutation;
+type JiraConfigurationAction = JiraConfigurationMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
+function configurationAction(name: JiraConfigurationMutation): JiraConfigurationAction {
+  return name.slice(5) as JiraConfigurationAction;
+}
+const JIRA_CONFIGURATION_ACTIONS = Object.freeze(
+  [
+    ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+    ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
+    ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  ].map(configurationAction),
+);
+const JIRA_CONFIGURATION_ADMIN_ACTIONS = Object.freeze([
+  "add-default-screen-field",
+  "add-screen-tab-field",
+  "remove-screen-tab-field",
+  "move-screen-tab-field",
+  "set-screen-field-show-when-empty",
+  "move-screen-tab",
+  "unmap-all-sprints",
+] as const satisfies readonly JiraConfigurationAction[]);
+
+type JiraPlanningVersionOrCategoryMutation =
+  JiraAgilePlanningMutation | JiraVersionRemoteLinkMutation | JiraProjectCategoryMutation;
+type JiraPlanningVersionOrCategoryAction =
+  JiraPlanningVersionOrCategoryMutation extends `jira.${infer Action}` ? Action : never;
+function planningVersionOrCategoryAction(
+  name: JiraPlanningVersionOrCategoryMutation,
+): JiraPlanningVersionOrCategoryAction {
+  return name.slice(5) as JiraPlanningVersionOrCategoryAction;
+}
+const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze(
+  [
+    ...JIRA_AGILE_PLANNING_MUTATIONS,
+    ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+    ...JIRA_PROJECT_CATEGORY_MUTATIONS,
+  ].map(planningVersionOrCategoryAction),
+);
+const JIRA_PROJECT_CATEGORY_ACTIONS = Object.freeze([
+  "create-project-category",
+  "update-project-category",
+  "delete-project-category",
+] as const satisfies readonly JiraPlanningVersionOrCategoryAction[]);
+
+type JiraAccessConfigurationMutation = JiraPermissionSchemeMutation | JiraRoleMutation;
+type JiraAccessConfigurationAction = JiraAccessConfigurationMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
+function accessConfigurationAction(
+  name: JiraAccessConfigurationMutation,
+): JiraAccessConfigurationAction {
+  return name.slice(5) as JiraAccessConfigurationAction;
+}
+const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze(
+  [...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS].map(accessConfigurationAction),
+);
+
+type JiraDirectorySchemaOrMaintenanceMutation =
+  JiraGroupMutation | JiraMaintenanceMutation | JiraSchemaMutation | JiraDirectoryAccessMutation;
+type JiraDirectorySchemaOrMaintenanceAction =
+  JiraDirectorySchemaOrMaintenanceMutation extends `jira.${infer Action}` ? Action : never;
+type JiraIssueAction = JiraIssueActionMutation extends `jira.${infer Action}` ? Action : never;
+function directorySchemaOrMaintenanceAction(
+  name: JiraDirectorySchemaOrMaintenanceMutation,
+): JiraDirectorySchemaOrMaintenanceAction {
+  return name.slice(5) as JiraDirectorySchemaOrMaintenanceAction;
+}
+function issueAction(name: JiraIssueActionMutation): JiraIssueAction {
+  return name.slice(5) as JiraIssueAction;
+}
+const JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS = Object.freeze(
+  [
+    ...JIRA_GROUP_MUTATIONS,
+    ...JIRA_MAINTENANCE_MUTATIONS,
+    ...JIRA_SCHEMA_MUTATIONS,
+    ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  ].map(directorySchemaOrMaintenanceAction),
+);
+const JIRA_ISSUE_ACTIONS = Object.freeze(JIRA_ISSUE_ACTION_MUTATIONS.map(issueAction));
+
+type JiraSchemeRuntimeOrEmailMutation =
+  | JiraOptionSchemeMutation
+  | JiraWorkflowSchemeMutation
+  | JiraInstanceSettingMutation
+  | JiraEmailTemplateMutation;
+type JiraSchemeRuntimeOrEmailAction =
+  JiraSchemeRuntimeOrEmailMutation extends `jira.${infer Action}` ? Action : never;
+function schemeRuntimeOrEmailAction(
+  name: JiraSchemeRuntimeOrEmailMutation,
+): JiraSchemeRuntimeOrEmailAction {
+  return name.slice(5) as JiraSchemeRuntimeOrEmailAction;
+}
+const JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS = Object.freeze(
+  [
+    ...JIRA_OPTION_SCHEME_MUTATIONS,
+    ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+    ...JIRA_INSTANCE_SETTING_MUTATIONS,
+    ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  ].map(schemeRuntimeOrEmailAction),
+);
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -63,6 +308,52 @@ export interface AtlassianNetworkConfig {
   readonly privateTargets: readonly AtlassianPrivateTarget[];
 }
 
+/** Observed REST v2 identity on Jira >=10.3.0; this grants no operation or Jira permission. */
+export interface JiraDataCenterCompatibilityFacts {
+  readonly schemaVersion: 1;
+  readonly deploymentType: "Server" | "Data Center";
+  readonly versionNumbers: readonly [number, number, number];
+  readonly restApi: "v2";
+  readonly agileApi: "unverified";
+}
+
+const JIRA_COMPATIBILITY_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "deploymentType",
+  "versionNumbers",
+  "restApi",
+  "agileApi",
+]);
+
+function isJiraReleaseNumbers(value: unknown): value is readonly [number, number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    Object.keys(value).length === 3 &&
+    [value[0], value[1], value[2]].every(
+      (part) => Number.isSafeInteger(part) && Number(part) >= 0,
+    ) &&
+    // 10.3 is the oldest supported source baseline, not an exact release allow-list.
+    (Number(value[0]) > 10 || (value[0] === 10 && Number(value[1]) >= 3))
+  );
+}
+
+/** Exact private metadata shape: unknown fields and unverified capabilities fail closed. */
+export function isJiraDataCenterCompatibilityFacts(
+  value: unknown,
+): value is JiraDataCenterCompatibilityFacts {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) => JIRA_COMPATIBILITY_KEYS.has(key)) &&
+    record.schemaVersion === 1 &&
+    (record.deploymentType === "Server" || record.deploymentType === "Data Center") &&
+    isJiraReleaseNumbers(record.versionNumbers) &&
+    record.restApi === "v2" &&
+    record.agileApi === "unverified"
+  );
+}
+
 interface AtlassianCredentialMetadataBase {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
   readonly authRef: string;
@@ -83,6 +374,8 @@ export interface JiraLivePodMetadata {
   readonly verificationRevision: number;
   readonly verificationInProgress: boolean;
   readonly verificationStatus: "unverified" | AtlassianConnectionVerificationStatus;
+  /** Bound to this credential generation and verification revision; absent on legacy records. */
+  readonly compatibility?: JiraDataCenterCompatibilityFacts;
 }
 
 /** A secret-free projection. An absent legacy deployment always means Cloud. */
@@ -202,7 +495,6 @@ export function isAtlassianConnectorAuthRef(value: unknown): value is string {
 }
 
 // ─── Bounded identifiers and display text ─────────────────────────────────────
-export const ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS = 2048;
 export const ATLASSIAN_CONNECTOR_DISPLAY_NAME_MAX_CHARS = 100;
 export const ATLASSIAN_CONNECTOR_IDENTIFIER_MAX_CHARS = 128;
 
@@ -233,48 +525,6 @@ export function isSafeAtlassianDisplayName(value: unknown): value is string {
   if (stripUnsafeFormatChars(value) !== value) return false;
   if (containsAbsolutePath(value) || containsPseudoRoleMarker(value)) return false;
   return !containsUrlOrCredentialMarker(value);
-}
-
-// ─── Base URL validation (ADR-0128 D3) ────────────────────────────────────────
-// The WHATWG parser guarantees a non-empty host for `https:` URLs (an empty host is a parse
-// error), so no separate hostname check is needed after a successful parse.
-function isSafeParsedBaseUrl(url: URL): boolean {
-  return (
-    url.protocol === "https:" &&
-    url.username.length === 0 &&
-    url.password.length === 0 &&
-    url.search.length === 0 &&
-    url.hash.length === 0
-  );
-}
-
-// HTTPS only; no embedded credentials; no query; no fragment. A path is allowed (Data Center
-// context paths). The parsed-URL checks catch real userinfo/query/fragment components; the
-// string-level scan afterwards is fail-closed defense in depth for the empty-marker forms
-// (`https://:@host`, trailing `?` or `#`) that parse with empty userinfo/search/hash. The same
-// validation runs again at request-construction time downstream (ADR-0128 D3).
-export function isSafeAtlassianConnectorBaseUrl(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0) return false;
-  if (value.length > ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS) return false;
-  if (/\s/u.test(value)) return false;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  if (!isSafeParsedBaseUrl(url)) return false;
-  return !value.includes("@") && !value.includes("?") && !value.includes("#");
-}
-
-/** Exact target identity; ambiguous path encodings and normalizing traversal are not admitted. */
-export function canonicalAtlassianConnectorBaseUrl(value: unknown): string | undefined {
-  if (!isSafeAtlassianConnectorBaseUrl(value)) return undefined;
-  const url = new URL(value);
-  const normalized = url.toString().replace(/\/$/, "");
-  if (normalized !== value.replace(/\/$/, "")) return undefined;
-  if (url.pathname.includes("%") || url.pathname.includes("//")) return undefined;
-  return normalized;
 }
 
 // ─── Connector descriptor (ADR-0128 D2) ───────────────────────────────────────
@@ -538,6 +788,36 @@ export type AtlassianSyncJobState =
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
+  | JiraResourceAccountAction
+  | JiraEntityPropertyAction
+  | JiraSavedConfigurationAction
+  | JiraRelationshipOrReleaseAction
+  | JiraConfigurationAction
+  | JiraPlanningVersionOrCategoryAction
+  | JiraAccessConfigurationAction
+  | JiraSchemeRuntimeOrEmailAction
+  | JiraDirectorySchemaOrMaintenanceAction
+  | JiraIssueAction
+  | "set-app-monitoring"
+  | "set-ipd-monitoring"
+  | "start-jmx-metrics"
+  | "stop-jmx-metrics"
+  | "create-screen-tab"
+  | "rename-screen-tab"
+  | "delete-screen-tab"
+  | "create-project"
+  | "update-project"
+  | "create-component"
+  | "update-component"
+  | "create-version"
+  | "update-version"
+  | "create-board"
+  | "create-sprint"
+  | "update-sprint"
+  | "move-issues-to-sprint"
+  | "move-issues-to-backlog"
+  | "update-epic"
+  | "move-issues-to-epic"
   | "assign-issue"
   | "sync-space"
   | "sync-project"
@@ -546,12 +826,40 @@ export type AtlassianConnectorActionType =
   | "update-issue-fields"
   | "transition-issue"
   | "add-issue-comment"
+  | "update-issue-comment"
+  | "delete-issue-comment"
+  | "delete-attachment"
+  | "delete-worklog"
+  | "create-worklog"
+  | "update-worklog"
+  | "watch-issue"
+  | "unwatch-issue"
+  | "vote-issue"
+  | "unvote-issue"
   | "create-page"
   | "update-page"
   | "add-page-comment";
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS,
+    ...JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS,
+    ...JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS,
+    ...JIRA_ISSUE_ACTIONS,
+    ...JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS,
+    ...JIRA_ACCESS_CONFIGURATION_ACTIONS,
+    ...JIRA_PLANNING_VERSION_CATEGORY_ACTIONS,
+    ...JIRA_CONFIGURATION_ACTIONS,
+    ...JIRA_RELATIONSHIP_RELEASE_ACTIONS,
+    ...JIRA_SAVED_ACTIONS,
+    ...JIRA_PROPERTY_ACTIONS,
+    "set-app-monitoring",
+    "set-ipd-monitoring",
+    "start-jmx-metrics",
+    "stop-jmx-metrics",
+    "create-screen-tab",
+    "rename-screen-tab",
+    "delete-screen-tab",
     "sync-space",
     "sync-project",
     "search-issues-live",
@@ -559,60 +867,179 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "update-issue-fields",
     "transition-issue",
     "add-issue-comment",
+    "update-issue-comment",
+    "delete-issue-comment",
+    "delete-attachment",
+    "delete-worklog",
+    "create-worklog",
+    "update-worklog",
+    "watch-issue",
+    "unwatch-issue",
+    "vote-issue",
+    "unvote-issue",
     "create-page",
     "update-page",
     "add-page-comment",
     ...JIRA_MANAGED_READ_TOOLS,
     "assign-issue",
+    "create-project",
+    "update-project",
+    "create-component",
+    "update-component",
+    "create-version",
+    "update-version",
+    "create-board",
+    "create-sprint",
+    "update-sprint",
+    "move-issues-to-sprint",
+    "move-issues-to-backlog",
+    "update-epic",
+    "move-issues-to-epic",
   ] as const satisfies readonly AtlassianConnectorActionType[]);
 
 /** One mapping from canonical tools to the existing connector policy vocabulary. */
 /** Full source reference: collision-safe document scope, requirement id and optional criterion. */
 export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 
+const JIRA_DIRECT_MUTATION_ACTIONS = Object.freeze([
+  ...JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS,
+  ...JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS,
+  ...JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS,
+  ...JIRA_ISSUE_ACTIONS,
+  ...JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS,
+  ...JIRA_ACCESS_CONFIGURATION_ACTIONS,
+  ...JIRA_PLANNING_VERSION_CATEGORY_ACTIONS,
+  ...JIRA_CONFIGURATION_ACTIONS,
+  ...JIRA_RELATIONSHIP_RELEASE_ACTIONS,
+  ...JIRA_SAVED_ACTIONS,
+  ...JIRA_PROPERTY_ACTIONS,
+] as const);
+
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  ...(Object.fromEntries(
+    JIRA_DIRECT_MUTATION_ACTIONS.map((action) => [`jira.${action}`, action]),
+  ) as Record<
+    `jira.${(typeof JIRA_DIRECT_MUTATION_ACTIONS)[number]}`,
+    (typeof JIRA_DIRECT_MUTATION_ACTIONS)[number]
+  >),
   ...(Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, name])) as Record<
     JiraManagedReadToolName,
     JiraManagedReadToolName
   >),
+  ...(Object.fromEntries(
+    JIRA_ENTITY_PROPERTY_MUTATIONS.map((name) => [name, jiraPropertyAction(name)]),
+  ) as Record<JiraEntityPropertyMutation, JiraEntityPropertyAction>),
   "jira.create": "create-issue",
+  "jira.set-app-monitoring": "set-app-monitoring",
+  "jira.set-ipd-monitoring": "set-ipd-monitoring",
+  "jira.start-jmx-metrics": "start-jmx-metrics",
+  "jira.stop-jmx-metrics": "stop-jmx-metrics",
+  "jira.create-screen-tab": "create-screen-tab",
+  "jira.rename-screen-tab": "rename-screen-tab",
+  "jira.delete-screen-tab": "delete-screen-tab",
+  "jira.create-project": "create-project",
+  "jira.update-project": "update-project",
+  "jira.create-component": "create-component",
+  "jira.update-component": "update-component",
+  "jira.create-version": "create-version",
+  "jira.update-version": "update-version",
+  "jira.board-create": "create-board",
+  "jira.sprint-create": "create-sprint",
+  "jira.sprint-update": "update-sprint",
+  "jira.sprint-move-issues": "move-issues-to-sprint",
+  "jira.backlog-move-issues": "move-issues-to-backlog",
+  "jira.epic-update": "update-epic",
+  "jira.epic-move-issues": "move-issues-to-epic",
   "jira.edit": "update-issue-fields",
   "jira.assign": "assign-issue",
   "jira.comment": "add-issue-comment",
+  "jira.update-comment": "update-issue-comment",
+  "jira.delete-comment": "delete-issue-comment",
+  "jira.delete-attachment": "delete-attachment",
+  "jira.delete-worklog": "delete-worklog",
+  "jira.create-worklog": "create-worklog",
+  "jira.update-worklog": "update-worklog",
+  "jira.watch": "watch-issue",
+  "jira.unwatch": "unwatch-issue",
+  "jira.vote": "vote-issue",
+  "jira.unvote": "unvote-issue",
   "jira.transition": "transition-issue",
   // A draft only creates issues: it is governed exactly like one create.
   "jira.draft": "create-issue",
   // An attachment changes the issue exactly as an edit does and is governed as one.
   "jira.attach": "update-issue-fields",
 });
-function jiraReadActionValues<Value extends string>(
-  value: Value,
-): Record<JiraManagedReadToolName, Value> {
-  return Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, value])) as Record<
-    JiraManagedReadToolName,
-    Value
-  >;
+function jiraActionValues<Action extends AtlassianConnectorActionType, Value extends string>(
+  actions: readonly Action[],
+  value: Value | ((action: Action) => Value),
+): Record<Action, Value> {
+  return Object.fromEntries(
+    actions.map((name) => [name, typeof value === "function" ? value(name) : value]),
+  ) as Record<Action, Value>;
 }
 
 // The D4 "Action class" column, verbatim. `connector-access` is the shared
 // `CodingWorkbenchActionClass` that admits connector operations into the Authority Envelope;
 // `connector-write` is the shared `CodingWorkbenchSupervisedActionKind` that marks the write
-// subset (there is deliberately no second Workbench action class for connector writes —
-// ADR-0128 D4 scope-extension note).
-export type AtlassianConnectorActionClass = "connector-access" | "connector-write";
+// subset. Instance administration has its own connector class and explicit admin scope; all
+// writes still share the existing Workbench class and supervised kind (ADR-0128 D4).
+export type AtlassianConnectorActionClass =
+  "connector-access" | "connector-write" | "connector-admin";
 
 export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActionClass[] =
   Object.freeze([
     "connector-access",
     "connector-write",
+    "connector-admin",
   ] as const satisfies readonly AtlassianConnectorActionClass[]);
 
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
-  ...jiraReadActionValues("connector-access"),
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_CONFIGURATION_ADMIN_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
+  "jira.validate-license": "connector-admin",
+  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "connector-admin"),
+  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.emailTemplatePacks, "connector-admin"),
+  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
+  "set-issue-type-property": "connector-admin",
+  "delete-issue-type-property": "connector-admin",
+  "set-user-property": "connector-admin",
+  "delete-user-property": "connector-admin",
+  "set-app-monitoring": "connector-admin",
+  "set-ipd-monitoring": "connector-admin",
+  "start-jmx-metrics": "connector-admin",
+  "stop-jmx-metrics": "connector-admin",
+  "create-screen-tab": "connector-admin",
+  "rename-screen-tab": "connector-admin",
+  "delete-screen-tab": "connector-admin",
+  "create-project": "connector-write",
+  "update-project": "connector-write",
+  "create-component": "connector-write",
+  "update-component": "connector-write",
+  "create-version": "connector-write",
+  "update-version": "connector-write",
+  "create-board": "connector-write",
+  "create-sprint": "connector-write",
+  "update-sprint": "connector-write",
+  "move-issues-to-sprint": "connector-write",
+  "move-issues-to-backlog": "connector-write",
+  "update-epic": "connector-write",
+  "move-issues-to-epic": "connector-write",
   "assign-issue": "connector-write",
   "sync-space": "connector-access",
   "sync-project": "connector-access",
@@ -621,6 +1048,16 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   "update-issue-fields": "connector-write",
   "transition-issue": "connector-write",
   "add-issue-comment": "connector-write",
+  "update-issue-comment": "connector-write",
+  "delete-issue-comment": "connector-write",
+  "delete-attachment": "connector-write",
+  "delete-worklog": "connector-write",
+  "create-worklog": "connector-write",
+  "update-worklog": "connector-write",
+  "watch-issue": "connector-write",
+  "unwatch-issue": "connector-write",
+  "vote-issue": "connector-write",
+  "unvote-issue": "connector-write",
   "create-page": "connector-write",
   "update-page": "connector-write",
   "add-page-comment": "connector-write",
@@ -629,36 +1066,38 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
-  ...jiraReadActionValues("jira"),
-  "assign-issue": "jira",
+  ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, "jira"),
   "sync-space": "confluence",
-  "sync-project": "jira",
-  "search-issues-live": "jira",
-  "create-issue": "jira",
-  "update-issue-fields": "jira",
-  "transition-issue": "jira",
-  "add-issue-comment": "jira",
   "create-page": "confluence",
   "update-page": "confluence",
   "add-page-comment": "confluence",
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, AtlassianConnectorProvider>>);
 
+function issueTrackerAccess(
+  actionClass: (typeof ATLASSIAN_CONNECTOR_ACTION_CLASS)[AtlassianConnectorActionType],
+): "admin" | "write" | "read" {
+  if (actionClass === "connector-admin") return "admin";
+  return actionClass === "connector-write" ? "write" : "read";
+}
+
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
-  ...jiraReadActionValues("issue-tracker.read"),
-  "assign-issue": "issue-tracker.write",
-  "sync-space": "knowledge-base.read",
-  "sync-project": "issue-tracker.read",
-  "search-issues-live": "issue-tracker.read",
-  "create-issue": "issue-tracker.write",
-  "update-issue-fields": "issue-tracker.write",
-  "transition-issue": "issue-tracker.write",
-  "add-issue-comment": "issue-tracker.write",
-  "create-page": "knowledge-base.write",
-  "update-page": "knowledge-base.write",
-  "add-page-comment": "knowledge-base.write",
+  ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, (action): CodingWorkbenchConnectorScope => {
+    const actionClass = ATLASSIAN_CONNECTOR_ACTION_CLASS[action];
+    if (ATLASSIAN_CONNECTOR_ACTION_PROVIDER[action] !== "jira") {
+      return actionClass === "connector-access" ? "knowledge-base.read" : "knowledge-base.write";
+    }
+    return `issue-tracker.${issueTrackerAccess(actionClass)}`;
+  }),
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>>);
+
+/** Required capability only; the current envelope, mode and effect owner still admit execution. */
+export function jiraRequiredConnectorScope(
+  toolName: JiraManagedReadToolName | JiraMutationOperation,
+): CodingWorkbenchConnectorScope {
+  return ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE[JIRA_MANAGED_ACTION_TYPES[toolName]];
+}
 
 // Risk tiers fixed by ADR-0128 D4: reads are `low`; additive comments are `low`; bounded field
 // edits are `medium`; creating a durable external artifact or triggering workflow side effects
@@ -666,21 +1105,41 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
-  ...jiraReadActionValues("low"),
+  ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, (action) =>
+    ATLASSIAN_CONNECTOR_ACTION_CLASS[action] === "connector-access" ? "low" : "high",
+  ),
+  "pin-comment": "medium",
+  "upsert-version-remote-link": "medium",
+  "upsert-version-remote-link-by-global-id": "medium",
+  "create-issue-link": "medium",
+  "upsert-remote-link": "medium",
+  "update-remote-link": "medium",
+  "update-filter": "medium",
+  "set-filter-columns": "medium",
+  "reset-filter-columns": "medium",
+  "set-my-preference": "medium",
+  "delete-my-preference": "medium",
+  "jira.email-template-pack": "low",
+  "jira.anonymization-validation": "low",
+  "jira.anonymization-rerun-validation": "low",
+  "jira.anonymization-progress": "low",
+  "update-project": "medium",
+  "update-component": "medium",
   "assign-issue": "medium",
-  "sync-space": "low",
-  "sync-project": "low",
-  "search-issues-live": "low",
-  "create-issue": "high",
   "update-issue-fields": "medium",
-  "transition-issue": "high",
   "add-issue-comment": "low",
-  "create-page": "high",
+  "update-issue-comment": "medium",
+  "create-worklog": "medium",
+  "update-worklog": "medium",
+  "watch-issue": "medium",
+  "unwatch-issue": "medium",
+  "vote-issue": "medium",
+  "unvote-issue": "medium",
   "update-page": "medium",
   "add-page-comment": "low",
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>>);
 
-// Both connector action classes admit through the shared `connector-access` Workbench class; the
+// All connector action classes admit through the shared `connector-access` Workbench class; the
 // write subset is additionally identified by the `connector-write` supervised action kind
 // (mirroring `permissionKindForSupervisedCodingAction`). No new Workbench policy vocabulary.
 export const ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS: Readonly<
@@ -688,6 +1147,7 @@ export const ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS: Readonly<
 > = Object.freeze({
   "connector-access": "connector-access",
   "connector-write": "connector-access",
+  "connector-admin": "connector-access",
 } as const satisfies Readonly<Record<AtlassianConnectorActionClass, CodingWorkbenchActionClass>>);
 
 // KEIKO-0701 follow-up note: this table is intentionally NOT an input to
@@ -720,11 +1180,12 @@ export const ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND: Readonly<
 > = Object.freeze({
   "connector-access": null,
   "connector-write": "connector-write",
+  "connector-admin": "connector-write",
 } as const satisfies Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchSupervisedActionKind | null>
 >);
 
-// Every connector action reaches an external system over HTTPS, so both classes compose through
+// Every connector action reaches an external system over HTTPS, so all classes compose through
 // the shared `internet` resource-scope row (ADR-0128 D4); `delivery` stays reserved for
 // source-control/release actions.
 export const ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE: Readonly<
@@ -732,6 +1193,7 @@ export const ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE: Readonly<
 > = Object.freeze({
   "connector-access": "internet",
   "connector-write": "internet",
+  "connector-admin": "internet",
 } as const satisfies Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchPolicyResourceScope>
 >);
@@ -743,6 +1205,7 @@ export const ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON: Readonly<
 > = Object.freeze({
   "connector-access": "connector-access-denied",
   "connector-write": "connector-write-denied",
+  "connector-admin": "connector-write-denied",
 } as const satisfies Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchPolicyDenialReason>
 >);
@@ -878,10 +1341,13 @@ export function decideAtlassianConnectorAction(
 // cover the provider outcomes the UI must render distinctly: an optimistic-version conflict
 // (Confluence 409), a transition id absent from the issue's available transitions, a missing
 // target, and a provider field-validation rejection. A raw provider error message never enters
-// the contract.
+// the contract. Local admission loss and caller cancellation keep their own codes; neither
+// asserts a Jira permission failure, network outage, or absence of an earlier native effect.
 export type AtlassianConnectorWriteFailureReason =
   | "auth-failed"
   | "permission-denied"
+  | "effect-denied"
+  | "cancelled"
   | "not-found"
   | "rate-limited"
   | "timeout"
@@ -896,6 +1362,8 @@ export const ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS: readonly AtlassianConnec
   Object.freeze([
     "auth-failed",
     "permission-denied",
+    "effect-denied",
+    "cancelled",
     "not-found",
     "rate-limited",
     "timeout",
@@ -1397,17 +1865,9 @@ export function isSafeJiraLiveIssueSummary(value: unknown): value is string {
 // re-encodable forms are rejected, never normalized through), and structurally safe
 // (https only; no userinfo, query, or fragment components).
 function canonicalHttpsBrowseTarget(value: string): URL | undefined {
-  if (/\s/u.test(value) || value.includes("@") || value.includes("?") || value.includes("#")) {
-    return undefined;
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return undefined;
-  }
-  if (url.toString() !== value || !isSafeParsedBaseUrl(url)) return undefined;
-  return url;
+  if (!isSafeAtlassianConnectorBaseUrl(value)) return undefined;
+  const url = new URL(value);
+  return url.toString() === value ? url : undefined;
 }
 
 // Absolute https click-through URL for one live issue (`{base}/browse/{KEY}`), mirroring the
@@ -1535,6 +1995,11 @@ export {
   JIRA_MANAGED_READ_TOOLS,
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
+export { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
+export {
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
+  type JiraEntityPropertyMutation,
+} from "./jira-tool-execution.js";
 export {
   JIRA_ATTACHMENT_MAX_BYTES,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,
@@ -1554,6 +2019,49 @@ export {
   isJiraDraftRef,
   type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_CORE_MUTATIONS,
+  JIRA_EXTENDED_ISSUE_CREATION_MUTATIONS,
+  JIRA_ANONYMIZATION_UNLOCK_MUTATIONS,
+  JIRA_GROUP_MUTATIONS,
+  type JiraGroupMutation,
+  JIRA_ISSUE_ACTION_MUTATIONS,
+  type JiraIssueActionMutation,
+  JIRA_MAINTENANCE_MUTATIONS,
+  type JiraMaintenanceMutation,
+  JIRA_SCHEMA_MUTATIONS,
+  type JiraSchemaMutation,
+  JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  type JiraDirectoryAccessMutation,
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  type JiraOptionSchemeMutation,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  type JiraWorkflowSchemeMutation,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  type JiraInstanceSettingMutation,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  type JiraEmailTemplateMutation,
+  JIRA_PERMISSION_SCHEME_MUTATIONS,
+  JIRA_ROLE_MUTATIONS,
+  type JiraPermissionSchemeMutation,
+  type JiraRoleMutation,
+  JIRA_AGILE_PLANNING_MUTATIONS,
+  JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  JIRA_PROJECT_CATEGORY_MUTATIONS,
+  type JiraAgilePlanningMutation,
+  type JiraVersionRemoteLinkMutation,
+  type JiraProjectCategoryMutation,
+  JIRA_LINK_MUTATIONS,
+  JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  type JiraLinkMutation,
+  type JiraReleaseLifecycleMutation,
+  JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  type JiraScreenConfigurationMutation,
+  type JiraBoardConfigurationMutation,
+  type JiraSprintLifecycleMutation,
+  JIRA_SAVED_CONFIGURATION_MUTATIONS,
+  type JiraSavedConfigurationMutation,
   JIRA_MUTATION_OUTCOMES,
   JIRA_MUTATION_RESULT_STATES,
   type JiraMutationOperation,
@@ -1580,6 +2088,7 @@ export {
   JIRA_TEMPLATE_PARSE_ERROR_CODES,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
+  countJiraTemplateViolations,
   compileJiraTemplatePattern,
   describeJiraTemplateParseErrors,
   isJiraIssueTemplateDocument,
@@ -1600,6 +2109,7 @@ export {
   JIRA_HEADING_LINE_CHARS_MAX,
   readJiraDescriptionSections,
   readJiraDescriptionBlocks,
+  withoutJiraSourceLabels,
   serializeJiraDescriptionHeadings,
   serializeJiraMarkdownDescription,
   JIRA_DESCRIPTION_INPUT_SCHEMA,
@@ -1623,10 +2133,14 @@ export {
   JIRA_REPORT_READ_SLICE_MS,
   JIRA_REPORT_FAILURE_REASONS,
   JIRA_REPORT_ESTIMATE_UNITS,
+  JIRA_REPORT_ESTIMATE_SOURCES,
+  JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS,
   JIRA_REPORT_RESULT_LIST_MAX,
   JIRA_REPORT_RESULT_BYTES_MAX,
   type JiraReportFailureReason,
   type JiraReportEstimateUnit,
+  type JiraReportEstimateSource,
+  type JiraReportEstimateUnavailableReason,
   type JiraReportExportFormat,
   type JiraReportExportResponse,
   type JiraReportStatus,
@@ -1634,3 +2148,38 @@ export {
   type JiraReportSection,
   type JiraReportStatusCategory,
 } from "./jira-report.js";
+
+export {
+  JIRA_HUMAN_INPUT_PURPOSES,
+  JIRA_HUMAN_INPUT_FIELDS,
+  JIRA_HUMAN_INPUT_FIELD_SETS,
+  JIRA_HUMAN_INPUT_MAX_BYTES,
+  JIRA_HUMAN_INPUT_MAX_LIFETIME_MS,
+  isJiraHumanInputView,
+  type JiraHumanInputPurpose,
+  type JiraHumanInputField,
+  type JiraHumanInputState,
+  type JiraHumanInputView,
+  type JiraHumanInputSubmission,
+} from "./jira-human-input.js";
+export { copyJiraHumanInputReview, type JiraHumanInputReview } from "./jira-human-input-review.js";
+export {
+  JIRA_AVATAR_MUTATIONS,
+  type JiraAvatarMutation,
+  JIRA_AVATAR_UPLOAD_MUTATIONS,
+  type JiraAvatarUploadMutation,
+  isJiraAvatarUploadOperation,
+  JIRA_IDENTITY_MUTATIONS,
+  type JiraIdentityMutation,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  type JiraPrivateAccountMutation,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  type JiraIssueLifecycleMutation,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  type JiraProjectLifecycleMutation,
+} from "./jira-tool-execution.js";
+
+export {
+  isJiraBoardConfigurationMutation,
+  isJiraProjectCategoryMutation,
+} from "./jira-tool-execution.js";

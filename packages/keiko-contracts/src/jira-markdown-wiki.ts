@@ -20,6 +20,16 @@ const TABLE_ROW = /^\s*\|.*\|\s*$/u;
 const TABLE_RULE_CELL = /^:?-{3,}:?$/u;
 const WIKI_HEADING = /^h[1-6]\.\s/u;
 const QUOTED = /^ {0,3}>/u;
+const BLOCK_START_PREFIXED = /^ {0,3}(?:>|[-*+_]+[ \t]|`{3}|~{3})/u;
+const BLOCK_START_ORDERED = /^[ \t]*\d{1,9}[.)][ \t]/u;
+const BLOCK_START_TABLE = /^\s*\|/u;
+function startsBlock(line: string): boolean {
+  return (
+    BLOCK_START_PREFIXED.test(line) ||
+    BLOCK_START_ORDERED.test(line) ||
+    BLOCK_START_TABLE.test(line)
+  );
+}
 const STRONG_OPEN = "";
 const STRONG_CLOSE = "";
 
@@ -48,12 +58,25 @@ const IMAGE = new RegExp(String.raw`!\[([^[\]\n]*)\]\(` + LINK_TARGET + String.r
 const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]\(` + LINK_TARGET + String.raw`\)`, "gu");
 const PROTECTED = /\uE002(\d+)\uE003/gu;
 
-/** Links and images first, kept out of the emphasis pass so a URL's `__` or `*` stays intact. */
+/** A destination Jira may render: a known scheme, a site-relative path or an anchor. */
+function safeDestination(url: string): boolean {
+  return LINK_SCHEMES.some((scheme) => url.toLowerCase().startsWith(scheme));
+}
+
+/**
+ * Links and images first, kept out of the emphasis pass so a URL's `__` or `*` stays intact. A
+ * destination with another scheme (`javascript:`, `data:`) stays prose; its brackets are escaped
+ * afterwards, so it never becomes a live link.
+ */
 function protectLinks(text: string, kept: string[]): string {
   const keep = (wiki: string): string => `\uE002${String(kept.push(wiki) - 1)}\uE003`;
   return text
-    .replaceAll(IMAGE, (_match, _alt: string, url: string) => keep(`!${url}!`))
-    .replaceAll(LINK, (_match, label: string, url: string) => keep(`[${label}|${url}]`));
+    .replaceAll(IMAGE, (match, _alt: string, url: string) =>
+      safeDestination(url) ? keep(`!${url}!`) : match,
+    )
+    .replaceAll(LINK, (match, label: string, url: string) =>
+      safeDestination(url) ? keep(`[${label}|${url}]`) : match,
+    );
 }
 
 function proseInline(text: string): string {
@@ -69,25 +92,33 @@ function proseInline(text: string): string {
       .replaceAll(/~~(?=\S)([^~\n]*?\S)~~/gu, "-$1-")
       .replaceAll(STRONG_OPEN, "*")
       .replaceAll(STRONG_CLOSE, "*")
+      .replaceAll(/[{}[\]]/gu, (character) => "\\" + character)
+      // Wiki underscores inside identifiers are literal. Markdown `_word_` already uses the
+      // same delimiters, and escaped literal `\_word\_` keeps its backslashes.
       .replaceAll(PROTECTED, (_match, index: string) => kept[Number(index)] ?? "")
   );
 }
 
-/** Inline code as a wiki monospace span; its braces are escaped so they cannot close the span. */
-function monospace(code: string): string {
-  const escaped = code.replaceAll(/[{}]/gu, (brace) => "\\" + brace);
+/**
+ * Inline code as a wiki monospace span. Braces cannot close the span; brackets, mentions, images
+ * and pipes inside it cannot open a link, mention, image or cell either.
+ */
+function monospace(code: string, tableCell: boolean): string {
+  // In a table cell Markdown writes a pipe inside code as `\|`; the span escapes it once itself.
+  const literal = tableCell ? code.replaceAll(String.raw`\|`, "|") : code;
+  const escaped = literal.replaceAll(/[{}[\]~!|]/gu, (character) => "\\" + character);
   return `{{${escaped}}}`;
 }
 
 /** Emphasis, strike, links and images in prose; inline code becomes a `{{monospace}}` span. */
-export function markdownInlineToJiraWiki(line: string): string {
+export function markdownInlineToJiraWiki(line: string, tableCell = false): string {
   return inlineParts(line)
-    .map((part) => (part.code ? monospace(part.text) : proseInline(part.text)))
+    .map((part) => (part.code ? monospace(part.text, tableCell) : proseInline(part.text)))
     .join("");
 }
 
-/** Jira wiki lists nest six levels deep. */
-const LIST_DEPTH_MAX = 6;
+/** Finite hard bound on marker length so hostile indentation cannot grow a line without limit. */
+const LIST_DEPTH_MAX = 16;
 
 /** One open list item: where its marker starts and the wiki character of its list. */
 interface ListLevel {
@@ -101,7 +132,25 @@ function indentWidth(indent: string): number {
 
 function tableCells(line: string): readonly string[] {
   const inner = line.trim().replace(/^\|/u, "").replace(/\|$/u, "");
-  return inner.split("|").map((cell) => markdownInlineToJiraWiki(cell.trim()));
+  // An empty cell keeps a space so its pipes are not read as one `||` header delimiter; a row that
+  // already starts with `||` is native wiki and keeps its delimiters as written.
+  const blank = line.trimStart().startsWith("||") ? "" : " ";
+  return splitCells(inner).map((cell) => markdownInlineToJiraWiki(cell.trim(), true) || blank);
+}
+
+/** Cells split at every pipe that is not escaped with a backslash. */
+function splitCells(inner: string): readonly string[] {
+  const cells: string[] = [];
+  let start = 0;
+  for (let index = 0; index < inner.length; index += 1) {
+    if (inner[index] === "\\") index += 1;
+    else if (inner[index] === "|") {
+      cells.push(inner.slice(start, index));
+      start = index + 1;
+    }
+  }
+  cells.push(inner.slice(start));
+  return cells;
 }
 
 /**
@@ -132,7 +181,7 @@ function continuesItem(list: readonly ListLevel[], line: string): boolean {
 }
 
 /** One line outside code. Wiki headings keep their marker; everything else is block + inline. */
-function blockLine(list: ListLevel[], line: string): string {
+function blockLine(list: ListLevel[], line: string, next: string | undefined): string {
   const quoted = QUOTED.test(line);
   const rule = RULE.test(line);
   const boundary = quoted || rule || WIKI_HEADING.test(line);
@@ -141,7 +190,23 @@ function blockLine(list: ListLevel[], line: string): string {
   // A blank line or an indented continuation keeps the list open; any other line ends it.
   if (boundary || !continuesItem(list, line)) list.length = 0;
   if (rule) return "----";
-  return quoted ? line : markdownInlineToJiraWiki(line);
+  return quoted ? line : proseLine(line, next);
+}
+
+/** The line without a trailing Markdown hard-break marker (two spaces or a backslash). */
+function hardBreakBody(line: string): string | undefined {
+  if (line.endsWith("\\")) return line.slice(0, -1);
+  let end = line.length;
+  while (end > 0 && line[end - 1] === " ") end -= 1;
+  return line.length - end >= 2 ? line.slice(0, end) : undefined;
+}
+
+/** A hard break joins two lines of one paragraph; a wiki `\\\\` keeps the break. */
+function proseLine(line: string, next: string | undefined): string {
+  const body = hardBreakBody(line);
+  const continues = next !== undefined && next.trim() !== "" && !startsBlock(next);
+  if (body === undefined || !continues || body.trim() === "") return markdownInlineToJiraWiki(line);
+  return `${markdownInlineToJiraWiki(body)}\\\\`;
 }
 
 interface Converter {
@@ -150,6 +215,8 @@ interface Converter {
   fence: Fence | undefined;
   macro: string | undefined;
   header: boolean;
+  /** Whether the previous line was a blank line outside code. */
+  blank: boolean;
 }
 
 /** An opening fence: up to three spaces, three or more backticks or tildes, an info string. */
@@ -236,6 +303,32 @@ function codeOrTableLine(state: Converter, line: string, next: string | undefine
   return fenceLine(state, line) || macroLine(state, line) || tableLine(state, line, next);
 }
 
+/** For each line, the nearest following non-blank line: one backward pass, linear. */
+function nextContentLines(lines: readonly string[]): readonly (string | undefined)[] {
+  const next: (string | undefined)[] = new Array<string | undefined>(lines.length);
+  let following: string | undefined;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    next[index] = following;
+    if ((lines[index] ?? "").trim() !== "") following = lines[index];
+  }
+  return next;
+}
+
+/** Whether the open list continues with a list item (same level, shallower or deeper). */
+function continuesList(list: readonly ListLevel[], next: string | undefined): boolean {
+  return list.length > 0 && next !== undefined && (BULLET.test(next) || ORDERED.test(next));
+}
+
+/**
+ * A blank line outside code is dropped when it repeats the blank above it, and when it sits
+ * between two items of one list, nested or not: wiki ends a list at a blank line, so keeping it
+ * would split a loose Markdown list into several.
+ */
+function dropsBlank(state: Converter, line: string, next: string | undefined): boolean {
+  if (state.fence !== undefined || state.macro !== undefined || line.trim() !== "") return false;
+  return state.blank || continuesList(state.list, next);
+}
+
 /**
  * Converts Markdown to Data Center wiki markup, line ending by line ending. The input is expected
  * to have its headings serialized already (`hN. Title`). Returns undefined when a fence is left
@@ -250,12 +343,16 @@ export function markdownBlocksToJiraWiki(text: string): string | undefined {
     fence: undefined,
     macro: undefined,
     header: false,
+    blank: false,
   };
+  const nextContent = nextContentLines(lines);
   for (const [index, line] of lines.entries()) {
     const before = state.out.length;
+    if (dropsBlank(state, line, nextContent[index])) continue;
+    state.blank = state.fence === undefined && state.macro === undefined && line.trim() === "";
     if (!codeOrTableLine(state, line, lines[index + 1])) {
       state.header = false;
-      state.out.push(blockLine(state.list, line));
+      state.out.push(blockLine(state.list, line, lines[index + 1]));
     } else state.list.length = 0;
     // A dropped table rule takes its own line ending with it; every kept line keeps its ending.
     if (state.out.length > before)

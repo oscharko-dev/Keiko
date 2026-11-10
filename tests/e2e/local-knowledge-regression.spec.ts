@@ -1411,6 +1411,52 @@ async function runRegressionPass(
   });
 }
 
+function mountedPodRow(
+  element: Awaited<ReturnType<Locator["elementHandle"]>> | null,
+): NonNullable<Awaited<ReturnType<Locator["elementHandle"]>>> {
+  if (element === null) throw new TypeError("Expected the mounted indexing Pod row.");
+  return element;
+}
+
+async function uiObserveIndexingOverview(
+  page: Page,
+  request: APIRequestContext,
+  capsule: KnowledgeCapsule,
+): Promise<void> {
+  await page.getByRole("button", { name: "Back to Knowledge Pods", exact: true }).click();
+  const row = page.getByRole("article", { name: `Knowledge Pod: ${capsule.displayName}` });
+  const cancel = row.getByRole("button", {
+    name: `Cancel indexing for Knowledge Pod ${capsule.displayName}`,
+    exact: true,
+  });
+  await expect(cancel).toBeVisible();
+  expect((await detail(request, capsule.id)).capsule.lifecycleState).toBe("indexing");
+  const mountedRow = mountedPodRow(await row.elementHandle());
+  await page.screenshot({ path: "/tmp/codex5-g4-indexing.png", fullPage: true });
+  await expect
+    .poll(async () => (await detail(request, capsule.id)).capsule.lifecycleState)
+    .toBe("ready");
+  await expect(cancel).toHaveCount(0);
+  expect(await mountedRow.evaluate((element) => element.isConnected)).toBe(true);
+  const listed = await apiJson<{
+    readonly capsules: readonly { readonly id: string; readonly lifecycleState: string }[];
+  }>(request, "get", "/api/local-knowledge/capsules?includeKnowledgePods=1");
+  expect(listed.capsules.find((entry) => entry.id === capsule.id)?.lifecycleState).toBe("ready");
+  await page.screenshot({ path: "/tmp/codex5-g4-ready.png", fullPage: true });
+  writeFileSync(
+    "/tmp/codex5-g4-browser-proof.json",
+    JSON.stringify({
+      indexingObserved: true,
+      nativeReady: true,
+      nativeListedReady: true,
+      cancelRemoved: true,
+      sameMountedRow: true,
+    }),
+  );
+  // Resume the original journey's unchanged detail/readback and final overview assertions.
+  await uiOpenCapsuleDetails(page, capsule.displayName);
+}
+
 test("keeps document selection and indexing bound to the newly created Knowledge Pod", async ({
   page,
   request,
@@ -1447,6 +1493,11 @@ test("keeps document selection and indexing bound to the newly created Knowledge
     );
     expect(connected.status()).toBe(201);
     await page.getByRole("button", { name: "Index this Knowledge Pod now", exact: true }).click();
+    if (Number(process.env.KEIKO_LK_E2E_EMBEDDING_DELAY_MS ?? "0") > 0) {
+      await test.step("G4: overview settles native indexing without remount or reload", async () => {
+        await uiObserveIndexingOverview(page, request, current);
+      });
+    }
     await expect
       .poll(async () => (await detail(request, current.id)).capsule.lifecycleState)
       .toBe("ready");

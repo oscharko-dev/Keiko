@@ -152,7 +152,8 @@ const REQUIRED_CI_COMMANDS = [
   // exactly-once assertion below is what replaced it.
   "npm run test:coverage:packages:shard",
   "npm run test:coverage:packages:merge",
-  "npm run test:coverage:scripts",
+  "npm run test:coverage:scripts:shard",
+  "npm run test:coverage:scripts:merge",
   "npm run check:coverage:quality",
   "npm run test:coverage:ui",
   // Browser release proof.
@@ -229,7 +230,12 @@ describe("CI test/gate wiring guard", () => {
     expect(ci).toContain("path: .vitest-reports/");
     expect(ci).toContain("path: .vitest-reports\n");
     expect(ci).toContain("find .vitest-reports -maxdepth 1 -name 'blob-*.json'");
-    expect(ci).toContain("run: rm -rf .vitest-reports");
+    expect(ci).toContain("run: rm -rf .vitest-reports .vitest-reports-scripts");
+    expect(rootManifest.scripts["test:coverage:scripts:shard"]).toContain("--reporter=blob");
+    expect(rootManifest.scripts["test:coverage:scripts:merge"]).toContain(
+      "--mergeReports=.vitest-reports-scripts",
+    );
+    expect(ci).toContain("find .vitest-reports-scripts -maxdepth 1 -name 'blob-*.json'");
   });
 
   it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
@@ -554,7 +560,13 @@ describe("CI test/gate wiring guard", () => {
 
   it("measures each coverage suite exactly once per run", () => {
     expect(runLineCount("npm run test:coverage:ui")).toBe(1);
-    expect(runLineCount("npm run test:coverage:scripts")).toBe(1);
+    // #4288: the script suite is sharded; its one measuring line is the shard command and its one
+    // reassembly line is the merge. The unsharded entry point stays a local-only command.
+    const runLinesStartingWith = (prefix) =>
+      ci.split("\n").filter((line) => line.trim().startsWith(`run: ${prefix}`)).length;
+    expect(runLinesStartingWith("npm run test:coverage:scripts:shard")).toBe(1);
+    expect(runLineCount("npm run test:coverage:scripts:merge")).toBe(1);
+    expect(runLineCount("npm run test:coverage:scripts")).toBe(0);
     expect(runLineCount("npm run check:coverage:quality")).toBe(1);
   });
 

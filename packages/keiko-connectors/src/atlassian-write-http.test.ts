@@ -68,6 +68,34 @@ function request(over: Partial<AtlassianWriteHttpRequest> = {}): AtlassianWriteH
 }
 
 describe("executeAtlassianWriteRequest — classification", () => {
+  it("never treats an upstream JSON claim as server-owned authentication evidence", async () => {
+    const { port } = scriptedPort([response(401, '{"authentication":"confirmed"}')]);
+    expect(await executeAtlassianWriteRequest({ http: port }, request())).toMatchObject({
+      ok: false,
+      reason: "auth-failed",
+      httpStatus: 401,
+    });
+  });
+  it.each([
+    [401, "confirmed", "permission-denied"],
+    [401, undefined, "auth-failed"],
+    [403, "confirmed", "permission-denied"],
+    [404, "confirmed", "not-found"],
+  ] as const)(
+    "classifies status %s with server identity proof %s without rewriting its status",
+    async (status, authentication, reason) => {
+      const { port, requests } = scriptedPort([
+        response(status, "{}", authentication === undefined ? {} : { authentication }),
+      ]);
+      expect(
+        await executeAtlassianWriteRequest(
+          { http: port },
+          request({ method: "GET", bodyJson: undefined }),
+        ),
+      ).toMatchObject({ ok: false, reason, httpStatus: status });
+      expect(requests).toHaveLength(1);
+    },
+  );
   it("classifies 2xx with a parsed JSON body", async () => {
     const { port } = scriptedPort([response(201, '{"id":"10001","key":"PROJ-9"}')]);
     const outcome = await executeAtlassianWriteRequest({ http: port }, request({ expect: "json" }));
@@ -171,6 +199,18 @@ describe("executeAtlassianWriteRequest — classification", () => {
     expect(outcome).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(requests).toHaveLength(0);
   });
+
+  it.each(["GET", "DELETE"] as const)(
+    "refuses a JSON body on %s before dispatch",
+    async (method) => {
+      const { port, requests } = scriptedPort([]);
+      expect(await executeAtlassianWriteRequest({ http: port }, request({ method }))).toEqual({
+        ok: false,
+        reason: "malformed-payload",
+      });
+      expect(requests).toHaveLength(0);
+    },
+  );
 });
 
 describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
@@ -260,7 +300,7 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
   // in-flight request — the caller stayed blocked for up to the full per-request timeout. Every
   // port call (initial attempt and every retry) must carry the EXACT AbortSignal instance passed
   // in, so the adapter can compose it with its own timeout and tear the request down immediately.
-  it.each(["GET", "PUT", "POST"] as const)(
+  it.each(["GET", "PUT", "POST", "DELETE"] as const)(
     "forwards cancellation into every $method call and GET retry (KEIKO-0318)",
     async (method) => {
       const controller = new AbortController();
@@ -268,7 +308,10 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
       const { port, requests } = scriptedPort([response(503), response(204, "")]);
       const outcome = await executeAtlassianWriteRequest(
         { http: port, sleep: recordedSleep(delays), signal: controller.signal },
-        request({ method, ...(method === "GET" ? { bodyJson: undefined } : {}) }),
+        request({
+          method,
+          ...(method === "GET" || method === "DELETE" ? { bodyJson: undefined } : {}),
+        }),
       );
       expect(outcome).toEqual(
         method === "GET"
@@ -279,6 +322,34 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
       for (const issued of requests) {
         expect(issued.signal).toBe(controller.signal);
       }
+    },
+  );
+
+  it.each([
+    {
+      kind: "response",
+      status: 429,
+      bodyText: "{}",
+      bodyBytes: 2,
+      truncated: false,
+      retryAfterMs: 500,
+    },
+    response(503),
+    { kind: "network-error" },
+    { kind: "timeout" },
+  ] satisfies readonly AtlassianHttpBodyResult[])(
+    "never repeats DELETE after an uncertain $kind response",
+    async (result) => {
+      const { port, requests } = scriptedPort([result, response(204, "")]);
+      const delays: number[] = [];
+      expect(
+        await executeAtlassianWriteRequest(
+          { http: port, sleep: recordedSleep(delays) },
+          request({ method: "DELETE", bodyJson: undefined }),
+        ),
+      ).toMatchObject({ ok: false });
+      expect(requests).toHaveLength(1);
+      expect(delays).toEqual([]);
     },
   );
 
@@ -394,6 +465,157 @@ it.each([{ items: [] }, { items: [{ id: "10000", key: "KEIKO" }] }])(
     expect(fixture.requests).toHaveLength(1);
   },
 );
+
+it.each([true, false, 0, -1, 10000, "", "Observed text", null])(
+  "preserves the explicit JSON scalar %j without changing record/array modes",
+  async (scalar) => {
+    const fixture = scriptedPort([response(200, JSON.stringify(scalar))]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-scalar" },
+      ),
+    ).toEqual({ ok: true, status: 200, body: undefined, scalar });
+    expect(fixture.requests).toHaveLength(1);
+  },
+);
+it.each(["{}", "[]", "", "undefined", "NaN", "1e309", "<html>Unavailable</html>"])(
+  "refuses a non-scalar or invalid native JSON response: %s",
+  async (bodyText) => {
+    const fixture = scriptedPort([response(200, bodyText)]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-scalar" },
+      ),
+    ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+    expect(fixture.requests).toHaveLength(1);
+  },
+);
+it.each([
+  ["50", "50"],
+  ['"50"', "50"],
+  ["metric.a\nmetric.b", "metric.a\nmetric.b"],
+  ["", ""],
+  ["true", "true"],
+])("reads the text/plain scalar %j literally in text-scalar mode", async (bodyText, scalar) => {
+  const fixture = scriptedPort([response(200, bodyText)]);
+  expect(
+    await executeAtlassianWriteRequest(
+      { http: fixture.port },
+      { method: "GET", url: URL, expect: "text-scalar" },
+    ),
+  ).toEqual({ ok: true, status: 200, body: undefined, scalar });
+});
+it.each(["a\u0000b", "a\u001bb"])(
+  "refuses control characters and truncation in text-scalar mode: %j",
+  async (bodyText) => {
+    const fixture = scriptedPort([response(200, bodyText)]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "text-scalar" },
+      ),
+    ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+    const cut = scriptedPort([response(200, "ok", { truncated: true })]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: cut.port },
+        { method: "GET", url: URL, expect: "text-scalar" },
+      ),
+    ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+  },
+);
+it("refuses truncated scalar JSON even when its retained prefix is valid", async () => {
+  const fixture = scriptedPort([response(200, "true", { truncated: true })]);
+  expect(
+    await executeAtlassianWriteRequest(
+      { http: fixture.port },
+      { method: "GET", url: URL, expect: "json-scalar" },
+    ),
+  ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+});
+it.each(["json", "json-array"] as const)(
+  "does not admit a scalar into the existing %s response mode",
+  async (expectShape) => {
+    const fixture = scriptedPort([response(200, "false")]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: expectShape },
+      ),
+    ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+  },
+);
+it("retains bounded read retry discipline for scalar responses", async () => {
+  const delays: number[] = [];
+  const fixture = scriptedPort([
+    response(429, "{}", { retryAfterMs: 750 }),
+    response(200, "false"),
+  ]);
+  expect(
+    await executeAtlassianWriteRequest(
+      { http: fixture.port, sleep: recordedSleep(delays) },
+      { method: "GET", url: URL, expect: "json-scalar" },
+    ),
+  ).toEqual({ ok: true, status: 200, body: undefined, scalar: false });
+  expect(fixture.requests).toHaveLength(2);
+  expect(delays).toEqual([750]);
+});
+it("keeps scalar protocol decoding from replaying a mutation", async () => {
+  const fixture = scriptedPort([response(503), response(200, "true")]);
+  expect(
+    await executeAtlassianWriteRequest(
+      { http: fixture.port },
+      { method: "POST", url: URL, expect: "json-scalar" },
+    ),
+  ).toMatchObject({ ok: false, reason: "unavailable", httpStatus: 503 });
+  expect(fixture.requests).toHaveLength(1);
+});
+
+it.each([
+  {
+    bodyText: '{"columnConfig":"SYSTEM","columnLayoutItems":[]}',
+    parsed: { body: { columnConfig: "SYSTEM", columnLayoutItems: [] } },
+  },
+  {
+    bodyText: '[{"value":"summary","label":"Summary"}]',
+    parsed: { body: undefined, items: [{ value: "summary", label: "Summary" }] },
+  },
+])(
+  "admits only the explicitly selected versioned object/array format: $bodyText",
+  async ({ bodyText, parsed }) => {
+    const fixture = scriptedPort([response(200, bodyText)]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-object-or-array" },
+      ),
+    ).toEqual({ ok: true, status: 200, ...parsed });
+    expect(fixture.requests).toHaveLength(1);
+  },
+);
+it.each(["false", "0", "null", '"text"', "", "["])(
+  "rejects scalar or malformed JSON in object/array mode: %s",
+  async (bodyText) => {
+    const fixture = scriptedPort([response(200, bodyText)]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-object-or-array" },
+      ),
+    ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+  },
+);
+it("rejects a truncated but otherwise valid object/array response", async () => {
+  const fixture = scriptedPort([response(200, "[]", { truncated: true })]);
+  expect(
+    await executeAtlassianWriteRequest(
+      { http: fixture.port },
+      { method: "GET", url: URL, expect: "json-object-or-array" },
+    ),
+  ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+});
 
 describe("governed uploads (#4176)", () => {
   const upload = {

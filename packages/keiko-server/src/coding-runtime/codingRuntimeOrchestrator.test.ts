@@ -2630,6 +2630,45 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
   });
 
+  it("refreshes durable input history through status revision without changing run authority or state", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    const before = structuredClone(f.rows.get("run-1"));
+    if (before === undefined) throw new TypeError("Missing running snapshot");
+    f.eventHub.publish.mockClear();
+    const issued = f.manager.issueApproval.mock.calls.length;
+    await f.orchestrator.refreshHistory("run-1");
+    expect(f.rows.get("run-1")).toEqual({
+      ...before,
+      revision: before.revision + 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(f.eventHub.publish).toHaveBeenCalledExactlyOnceWith({
+      schemaVersion: "1",
+      kind: "status",
+      runId: "run-1",
+      state: "running",
+      revision: before.revision + 1,
+    });
+    expect(f.manager.issueApproval).toHaveBeenCalledTimes(issued);
+    f.eventHub.publish.mockClear();
+    await f.orchestrator.refreshHistory("unrelated-run");
+    expect(f.rows.get("run-1")?.revision).toBe(before.revision + 1);
+    expect(f.eventHub.publish).not.toHaveBeenCalled();
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      kind: "runtime-stopped",
+      runId: "run-1",
+      eventId: "history-refresh-stopped",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    });
+    const stopped = structuredClone(f.rows.get("run-1"));
+    f.eventHub.publish.mockClear();
+    await f.orchestrator.refreshHistory("run-1");
+    expect(f.rows.get("run-1")).toEqual(stopped);
+    expect(f.eventHub.publish).not.toHaveBeenCalled();
+  });
+
   // #3390: the initial turn used to dispatch while the run's own public projection still read
   // "ready", flipping to "running" only after the sidecar accepted it -- untruthful for the whole
   // window the model could already be getting its first prompt, and the same window in which
@@ -2882,9 +2921,11 @@ describe("CodingRuntimeOrchestrator", () => {
       const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
       const f = fixture();
 
-      await f.orchestrator.start({ ...start, jiraPodId });
+      await f.orchestrator.start({ ...start, jiraPodId, connectorScopes: ["issue-tracker.admin"] });
 
-      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId }));
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ jiraPodId, connectorScopes: ["issue-tracker.admin"] }),
+      );
       const bare = fixture();
       await bare.orchestrator.start(start);
       expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");

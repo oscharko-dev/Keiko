@@ -742,7 +742,7 @@ jobs:
           retention-days: 1
 
   coverage-scripts:
-    name: Coverage suite (scripts)
+    name: Coverage shard (scripts ${{ matrix.shard }}/3)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
@@ -750,6 +750,11 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      # One shard's result must never mask another's; `coverage-sonar` fails closed on all of them.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -790,25 +795,37 @@ jobs:
       # packages by bare specifier, which resolve to `dist`.
       - name: Build internal packages so workspace dist resolves
         run: npm run build:packages
-      - name: Measure script coverage
+      - name: Measure script coverage shard
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        run: npm run test:coverage:scripts
-      - name: Upload script coverage evidence
+        # #4288: the whole suite in one 30-minute job was cancelled at the limit. 2475 s is the
+        # SUMMED per-file test time; the unsharded wall time was 1596 s at `maxWorkers: 2`, plus
+        # about 4 min of setup. Vitest assigns WHOLE files to shards by a sha1 hash of the path, so
+        # the shards are not equal thirds: shard 2 holds release-publish-pipeline (11-12 min) and
+        # op-catalog-drift (about 4 min), shard 1 holds portable-runtime (6-7 min), and the longest
+        # shard is bounded below by the single longest file, about 12 min. The expected wall time of
+        # the longest shard is about 13-14 min plus setup, against the 30-minute limit above, which
+        # is deliberately NOT raised. The npm script carries `default` and `blob`; the annotation
+        # reporter is added here for the same reason as in `coverage-packages`.
+        run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
+      - name: Upload script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage-report-scripts
-          path: |
-            coverage/scripts/lcov.info
-            coverage/scripts/coverage-summary.json
+          name: coverage-blob-scripts-${{ matrix.shard }}
+          # Same blob naming rule as `coverage-packages`: no explicit `--outputFile.blob`, so the
+          # three uploads merge into one directory without collision.
+          path: .vitest-reports/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
-  # KEIKO-1021: the SonarCloud-scope `if:` condition is duplicated at ci.yml:755, 770, 782,
-  # and 796 (four coupled sites in this job). GitHub Actions has no `if:`-level variable
-  # interpolation, so the four expressions must be edited together. Any change to one — adding a
-  # trigger, restricting a branch, or narrowing a base_ref — must be applied to all four to keep
-  # the coverage-sonar scope coherent across the job's four gated steps.
+  # KEIKO-1021: the coverage-scope `if:` condition (`github.event_name != 'pull_request' ||
+  # github.base_ref != 'feat/keiko-editor'`) is repeated on every coverage step of this job: the
+  # evidence downloads, the shard-count guards, the merges, the blob discard and the quality gates.
+  # GitHub Actions has no `if:`-level variable interpolation, so those expressions must be edited
+  # together. Any change to one — adding a trigger, restricting a branch, or narrowing a base_ref —
+  # must be applied to every one of them to keep the coverage-sonar scope coherent. Find them by
+  # searching for `feat/keiko-editor` in this job rather than by a count or a line number.
   coverage-sonar:
     name: Coverage and SonarCloud
     # `!cancelled()` is load-bearing. Without it a failing shard would leave this job SKIPPED, and a
@@ -920,12 +937,16 @@ jobs:
         with:
           name: coverage-report-ui
           path: packages/keiko-ui/coverage
-      - name: Download script coverage evidence
+      - name: Download script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: coverage-report-scripts
-          path: coverage/scripts
+          # A SEPARATE directory from the package blobs: `test:coverage:packages:merge` reads
+          # `.vitest-reports` wholesale, so script blobs landing there would be merged under the
+          # packages configuration. `test:coverage:scripts:merge` reads exactly this directory.
+          path: .vitest-reports-scripts
+          pattern: coverage-blob-scripts-*
+          merge-multiple: true
       - name: Verify every package coverage shard delivered its evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # download-artifact's `pattern:` form succeeds silently when nothing matches, so it is the
@@ -942,6 +963,20 @@ jobs:
             exit 1
           fi
           echo "All $expected package coverage shard blobs are present."
+      - name: Verify every script coverage shard delivered its evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # Same fail-open `pattern:` primitive as the package shards: the count binds the hardcoded
+        # `/3` in the shard command to the matrix, so a partial set is never judged as complete.
+        run: |
+          set -euo pipefail
+          expected=3
+          actual=$(find .vitest-reports-scripts -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
+          if [ "$actual" -ne "$expected" ]; then
+            echo "Expected $expected script coverage shard blobs, found $actual."
+            echo "A merge over a partial shard set would under-report every per-file floor."
+            exit 1
+          fi
+          echo "All $expected script coverage shard blobs are present."
       - name: Reassemble merged package coverage
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # Vitest's own blob merge, not a bespoke reassembler: it merges the shards' coverage maps
@@ -955,16 +990,22 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:merge
+      - name: Reassemble merged script coverage
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # Vitest's own blob merge with the scripts configuration, so `coverage/scripts/lcov.info`
+        # and `coverage-summary.json` are regenerated from the merged coverage map, not
+        # concatenated.
+        run: npm run test:coverage:scripts:merge
       - name: Discard the shard blobs now that the merged coverage exists
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
-        # `coverage/packages/lcov.info` is what every later step reads. Leaving them in the
+        # `coverage/packages` and `coverage/scripts` are what every later step reads. Leaving them in the
         # workspace puts ~12MB JSON files inside `sonar.sources=.`, and the scanner's
         # "is bigger than 20MB" WARN fails `check-sonar-analysis-log.mjs --require-full-analysis`
         # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
         # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
         # business being there once the merge has run.
-        run: rm -rf .vitest-reports
+        run: rm -rf .vitest-reports .vitest-reports-scripts
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality

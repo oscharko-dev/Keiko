@@ -4,6 +4,7 @@
 // query text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
 
 import { describe, expect, it } from "vitest";
+import { isDesktopChatStreamEvent } from "./desktop-chat-stream-wire.js";
 import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
@@ -23,7 +24,6 @@ import {
   isExpandableDirectory,
   isGroundedRerankerFailureKind,
   isChatToolBatchProgress,
-  isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MIME_BYTES,
   MAX_CONNECTED_SOURCES,

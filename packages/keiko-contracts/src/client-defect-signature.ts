@@ -29,6 +29,7 @@ const CLIENT_CONTEXT_VALUES: ReadonlySet<string> = new Set([
   "stage:command-palette",
   "stage:window-palette",
   "stage:chat-history-deletion",
+  "stage:jira-human-input",
 ]);
 
 function isClientContextValue(token: string): boolean {

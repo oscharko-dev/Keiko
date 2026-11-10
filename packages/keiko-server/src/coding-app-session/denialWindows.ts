@@ -26,14 +26,19 @@ function freshWindow(): DenialWindow {
   return { windowStartMs: 0, count: 0, emitted: false };
 }
 
-function recordDenial(window: DenialWindow, now: number, emit: (count: number) => void): void {
+function recordDenial(
+  window: DenialWindow,
+  now: number,
+  emit: (count: number) => void,
+  threshold = DENIAL_ALERT_THRESHOLD,
+): void {
   if (now - window.windowStartMs >= DENIAL_WINDOW_MS) {
     window.windowStartMs = now;
     window.count = 0;
     window.emitted = false;
   }
   window.count += 1;
-  if (!window.emitted && window.count >= DENIAL_ALERT_THRESHOLD) {
+  if (!window.emitted && window.count >= threshold) {
     window.emitted = true;
     emit(window.count);
   }
@@ -47,6 +52,7 @@ function recordDenial(window: DenialWindow, now: number, emit: (count: number) =
 export class CodingAppSessionDenialWindows {
   private readonly pairing: DenialWindow = freshWindow();
   private readonly rotate: DenialWindow = freshWindow();
+  private readonly localSession: DenialWindow = freshWindow();
 
   recordPairingDenial(now: number, onThresholdReached: (count: number) => void): void {
     recordDenial(this.pairing, now, onThresholdReached);
@@ -56,10 +62,15 @@ export class CodingAppSessionDenialWindows {
     recordDenial(this.rotate, now, onThresholdReached);
   }
 
+  recordLocalSessionDenial(now: number, onThresholdReached: (count: number) => void): void {
+    recordDenial(this.localSession, now, onThresholdReached);
+  }
+
   /** Disposal hook (deps.ts `createUiHandlerDispose`): drop counters so nothing outlives the graph. */
   reset(): void {
     Object.assign(this.pairing, freshWindow());
     Object.assign(this.rotate, freshWindow());
+    Object.assign(this.localSession, freshWindow());
   }
 }
 

@@ -1,3 +1,5 @@
+import { jiraToolLogFields } from "../atlassian/jiraOperationLogFields.js";
+import { recordJiraOperationActivity } from "../atlassian/jiraOperationActivity.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   JIRA_MANAGED_READ_TOOLS,
@@ -59,6 +61,8 @@ const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */
 export const CODING_JIRA_TOOL_RISKS: Readonly<Record<string, McpToolRisk>> = Object.freeze(
   Object.fromEntries([
+    ["jira.discover", "read"] as const,
+    ["jira.describe", "read"] as const,
     ...CODING_JIRA_READS.map((tool): [string, McpToolRisk] => [tool, "read"]),
     ...CODING_JIRA_MUTATIONS.map((tool): [string, McpToolRisk] => [tool, "write"]),
   ]),
@@ -201,6 +205,7 @@ const JIRA_POD_REASONS = [
   "pod-changed",
   "unsupported-runtime",
   "tool-failed",
+  "scope-missing",
   "internal",
 ] as const;
 
@@ -230,30 +235,14 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
       required: false,
       values: [...JIRA_POD_REASONS],
     },
-    // The Jira tool a call reached and its declared risk: closed names, never arguments or results.
-    tool: {
+    // A closed class and exact name digest identify the tool without logging its arguments.
+    toolClass: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [
-        "jira.projects",
-        "jira.issue-types",
-        "jira.create-fields",
-        "jira.edit-fields",
-        "jira.search",
-        "jira.issue",
-        "jira.comments",
-        "jira.transitions",
-        "jira.assignable-users",
-        "jira.report",
-        "jira.draft-stage",
-        "jira.create",
-        "jira.edit",
-        "jira.assign",
-        "jira.comment",
-        "jira.transition",
-      ],
+      values: ["jira-read", "jira-write"],
     },
+    toolDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     risk: { type: "string", dataClass: "closed-enum", required: false, values: ["read", "write"] },
     toolCount: { type: "integer", dataClass: "count", required: false },
     // Issue links a Jira write asked for (#4176): counts of requested, present and missing links.
@@ -261,6 +250,12 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
     linkFailedCount: { type: "integer", dataClass: "count", required: false },
     descriptionConvertedHeadingCount: { type: "integer", dataClass: "count", required: false },
+    descriptionProjection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["supported-markdown"],
+    },
     durationMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
@@ -306,17 +301,18 @@ export interface CodingJiraPodLine
   readonly tool?:
     (typeof CODING_JIRA_READS)[number] | (typeof CODING_JIRA_MUTATIONS)[number] | undefined;
   readonly risk?: McpToolRisk | undefined;
+  readonly descriptionProjection?: "supported-markdown" | undefined;
 }
 
 const CODING_JIRA_POD_LINE_FIELDS = [
   "reason",
-  "tool",
   "risk",
   "toolCount",
   "linkRequestedCount",
   "linkCreatedCount",
   "linkFailedCount",
   "descriptionConvertedHeadingCount",
+  "descriptionProjection",
   "durationMs",
 ] as const;
 
@@ -333,7 +329,27 @@ export function recordCodingJiraPod(
         correlationId,
         ...activityStateLevel(line.outcome),
       },
-      activityActionFields(line, CODING_JIRA_POD_LINE_FIELDS),
+      {
+        ...activityActionFields(line, CODING_JIRA_POD_LINE_FIELDS),
+        ...(line.tool === undefined ? {} : jiraToolLogFields(line.tool)),
+      },
     ),
   );
+  if (line.tool !== undefined) {
+    const stage = {
+      bind: "coding-binding",
+      call: "coding-call",
+      "serialize-description": "description-projection",
+    } as const;
+    recordJiraOperationActivity(
+      activityLog,
+      { correlationId, ...activityStateLevel(line.outcome) },
+      line.tool,
+      {
+        stage: stage[line.action],
+        outcome: line.outcome,
+        reason: line.reason ?? "none",
+      },
+    );
+  }
 }

@@ -57,7 +57,9 @@ export type JiraChatAuthorityDeps = JiraPodAccessDeps &
 
 export type JiraChatAuthorityEnvelope = ChatToolAuthorityEnvelope & {
   readonly subject: JiraChatToolAuthoritySubject;
-  readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write")[];
+  readonly connectorScopes: readonly (
+    "issue-tracker.read" | "issue-tracker.write" | "issue-tracker.admin"
+  )[];
 };
 export function isJiraEnvelope(
   envelope: ChatToolAuthorityEnvelope,
@@ -65,7 +67,10 @@ export function isJiraEnvelope(
   return (
     envelope.subject.kind === undefined &&
     envelope.connectorScopes.every(
-      (scope) => scope === "issue-tracker.read" || scope === "issue-tracker.write",
+      (scope) =>
+        scope === "issue-tracker.read" ||
+        scope === "issue-tracker.write" ||
+        scope === "issue-tracker.admin",
     )
   );
 }
@@ -124,7 +129,9 @@ export function prepareAcceptedJiraChatAuthority(
       facts.chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
       ceiling,
       chatToolTurnBudget(deps),
-      ["issue-tracker.read", "issue-tracker.write"],
+      facts.chat.jiraAdministrationEnabled === true
+        ? ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"]
+        : ["issue-tracker.read", "issue-tracker.write"],
     ),
   };
 }
@@ -179,6 +186,13 @@ function currentFacts(
   };
 }
 
+function currentChatMode(envelope: JiraChatAuthorityEnvelope, chat: Chat): boolean {
+  return (
+    isRequestedChatToolModeCurrent(envelope, chat) &&
+    envelope.connectorScopes.includes("issue-tracker.admin") ===
+      (chat.jiraAdministrationEnabled === true)
+  );
+}
 /** Private current-state resolution only. Consent, action approval and reservation are separate gates. */
 export function resolveCurrentJiraChatAuthority(
   deps: JiraChatAuthorityDeps,
@@ -211,7 +225,7 @@ export function resolveCurrentJiraChatAuthority(
       correlationId,
     );
   if (!isJiraEnvelope(resolution.envelope)) return { ok: false, reason: "invalid" };
-  if (!isRequestedChatToolModeCurrent(resolution.envelope, facts.chat)) {
+  if (!currentChatMode(resolution.envelope, facts.chat)) {
     return recordChatAuthorityResult(
       "current-state",
       { ok: false, reason: "invalid" },

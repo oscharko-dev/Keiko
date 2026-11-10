@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { JIRA_AVATAR_UPLOAD_MUTATIONS } from "./jira-tool-execution.js";
 import {
   CHAT_TOOL_WRITE_APPROVAL_STATES,
   validateChatToolWriteApprovalDecision,
@@ -120,11 +121,42 @@ describe("backlog draft deselection (#4178)", () => {
 describe("the reviewed file of an attachment approval (#4176)", () => {
   const attach = { ...approval(), operation: "jira.attach" as const };
   const preview = { name: "report.txt", sizeBytes: 1024, sha256: "a".repeat(64) };
-  it("carries the file's name, size and digest on an attachment approval only", () => {
+  it("carries the file's name, size and digest only for governed file upload operations", () => {
     const value = { ...attach, attachment: preview };
     expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
     expect(validateChatToolWriteApprovalView({ ...value, operation: "jira.edit" }).ok).toBe(false);
+    const email = {
+      ...value,
+      operation: "jira.upload-email-template-pack",
+      attachment: { ...preview, name: "templates.zip" },
+    };
+    expect(validateChatToolWriteApprovalView(email)).toEqual({ ok: true, value: email });
+    for (const operation of [
+      "jira.apply-email-template-pack",
+      "jira.revert-email-template-pack",
+      "jira.set-application-property",
+    ])
+      expect(validateChatToolWriteApprovalView({ ...email, operation }).ok).toBe(false);
   });
+  it.each(JIRA_AVATAR_UPLOAD_MUTATIONS)(
+    "preserves exact metadata-only reviewed avatar bytes for %s",
+    (operation) => {
+      const value = { ...attach, operation, attachment: { ...preview, name: "avatar.png" } };
+      expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
+      expect(
+        validateChatToolWriteApprovalView({
+          ...value,
+          attachment: { ...value.attachment, bytes: "model-content" },
+        }).ok,
+      ).toBe(false);
+      expect(
+        validateChatToolWriteApprovalView({ ...value, operation: "jira.create-project-avatar" }).ok,
+      ).toBe(false);
+      expect(
+        validateChatToolWriteApprovalView({ ...value, operation: "jira.crop-temporary-avatar" }).ok,
+      ).toBe(false);
+    },
+  );
   it.each([
     ["a path as the name", { ...preview, name: "docs/report.txt" }],
     ["an empty file", { ...preview, sizeBytes: 0 }],
@@ -135,5 +167,37 @@ describe("the reviewed file of an attachment approval (#4176)", () => {
     ["not an object", "report.txt"],
   ])("refuses a preview with %s", (_label, attachment) => {
     expect(validateChatToolWriteApprovalView({ ...attach, attachment }).ok).toBe(false);
+    expect(
+      validateChatToolWriteApprovalView({
+        ...attach,
+        operation: "jira.upload-email-template-pack",
+        attachment,
+      }).ok,
+    ).toBe(false);
   });
 });
+
+it("requires file metadata independently for a Jira email-template upload approval", () => {
+  const upload = { ...approval(), operation: "jira.upload-email-template-pack" as const };
+  expect(validateChatToolWriteApprovalView(upload).ok).toBe(false);
+  expect(
+    validateChatToolWriteApprovalView({
+      ...upload,
+      attachment: { name: "templates.zip", sizeBytes: 20, sha256: "d".repeat(64) },
+    }).ok,
+  ).toBe(true);
+});
+
+it.each(JIRA_AVATAR_UPLOAD_MUTATIONS)(
+  "requires actual file preview metadata on %s approvals",
+  (operation) => {
+    const upload = { ...approval(), operation };
+    expect(validateChatToolWriteApprovalView(upload).ok).toBe(false);
+    expect(
+      validateChatToolWriteApprovalView({
+        ...upload,
+        attachment: { name: "avatar.png", sizeBytes: 64, sha256: "a".repeat(64) },
+      }).ok,
+    ).toBe(true);
+  },
+);

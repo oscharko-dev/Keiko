@@ -28,6 +28,7 @@ import {
   isSqliteCorruptionError,
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
 import { runMigrations } from "./schema.js";
+import { memoryVaultOpenError } from "./migration-failure.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import {
   emitMemoryVaultLogEvent,
@@ -64,9 +65,14 @@ const MEMORY_VAULT_BUSY_TIMEOUT_MS = 5_000;
 export function preparedDatabase(target: string, sink?: MemoryVaultLogSink): DatabaseSync {
   if (target !== ":memory:") assertSqliteStatePath(target, { store: "memory-vault", sink });
   const db = new DatabaseSync(target);
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec(`PRAGMA busy_timeout = ${String(MEMORY_VAULT_BUSY_TIMEOUT_MS)}`);
-  return db;
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(`PRAGMA busy_timeout = ${String(MEMORY_VAULT_BUSY_TIMEOUT_MS)}`);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 function configureWalDatabase(db: DatabaseSync): void {
@@ -165,6 +171,18 @@ export function openMemoryDatabase(
   cipher: MemoryContentCipher,
   sink?: MemoryVaultLogSink,
 ): DatabaseSync {
+  try {
+    return openMemoryDatabaseOrThrow(dbPath, cipher, sink);
+  } catch (error) {
+    throw memoryVaultOpenError(error, "open", sink);
+  }
+}
+
+function openMemoryDatabaseOrThrow(
+  dbPath: string,
+  cipher: MemoryContentCipher,
+  sink?: MemoryVaultLogSink,
+): DatabaseSync {
   assertSqliteStatePath(dbPath, { store: "memory-vault", sink });
   ensureDirHardened(dirname(dbPath));
   assertSqliteStatePath(dbPath, { store: "memory-vault", sink });
@@ -186,18 +204,28 @@ export function openMemoryDatabase(
     }
     quarantineCorruptDb(dbPath, { hadWal, hadShm }, error);
     let reopened = false;
+    let replacement: DatabaseSync | undefined;
     try {
-      db = preparedDatabase(dbPath, sink);
+      replacement = preparedDatabase(dbPath, sink);
+      db = replacement;
       configureWalDatabase(db);
       assertQuickCheckOk(db);
       runMigrations(db, cipher, sink);
       reopened = true;
+    } catch (reopenError) {
+      replacement?.close();
+      throw reopenError;
     } finally {
       logStoreQuarantined(sink, error, reopened);
     }
   }
-  chmodIfPresent(dbPath, FILE_MODE);
-  chmodIfPresent(`${dbPath}-wal`, FILE_MODE);
-  chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
-  return db;
+  try {
+    chmodIfPresent(dbPath, FILE_MODE);
+    chmodIfPresent(`${dbPath}-wal`, FILE_MODE);
+    chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }

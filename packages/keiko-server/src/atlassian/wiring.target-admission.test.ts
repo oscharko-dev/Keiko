@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyRequest,
+  JiraHumanInputBinding,
 } from "@oscharko-dev/keiko-connectors";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -20,6 +21,7 @@ import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStor
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import { verifyStoredCredential } from "./credentialVerification.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const SYNTHETIC_TOKEN = ["synthetic", "wiring", "admission", "fixture"].join("-");
 const PRIVATE_BASE = "https://10.23.45.67:8443/context";
@@ -75,8 +77,8 @@ function fixture(egress?: OutboundHttpEgressConfig): WiringFixture {
 function createDataCenter(
   deps: AtlassianConnectorCredentialDeps,
   baseUrl: string,
-): AtlassianCredentialMetadata {
-  return deps.custody.create(
+): Extract<AtlassianCredentialMetadata, { deployment: "data-center" }> {
+  const created = deps.custody.create(
     {
       provider: "jira",
       deployment: "data-center",
@@ -88,6 +90,9 @@ function createDataCenter(
     },
     "a".repeat(64),
   );
+  if (created.deployment !== "data-center")
+    throw new TypeError("Missing Data Center fixture metadata");
+  return created;
 }
 
 function selected(
@@ -116,6 +121,129 @@ afterEach(() => {
 });
 
 describe("stored Data Center admission through real custody, wiring and verification", () => {
+  it.each([
+    { versionNumbers: [10, 3, 26], expected: "10.3" },
+    { versionNumbers: [10, 4, 0], expected: "10.4" },
+    { versionNumbers: [11, 2, 1], expected: undefined },
+    { versionNumbers: [11, 3, 13], expected: undefined },
+  ] as const)(
+    "binds legacy avatar ports only to the current persisted release $versionNumbers",
+    ({ versionNumbers, expected }) => {
+      const f = fixture();
+      const deps = f.build();
+      const created = createDataCenter(deps, PRIVATE_BASE);
+      const verification = deps.custody.beginVerification(created.authRef);
+      if (verification === undefined || created.livePod === undefined)
+        throw new TypeError("Missing verified Pod");
+      deps.custody.finishVerification(
+        created.authRef,
+        created.generation,
+        verification.revision,
+        "ok",
+        undefined,
+        {
+          schemaVersion: 1,
+          deploymentType: "Data Center",
+          versionNumbers,
+          restApi: "v2",
+          agileApi: "unverified",
+        },
+      );
+      const current = selected(deps, created.authRef);
+      const factory = deps.jiraPrivatePortFactory;
+      if (factory === undefined) throw new TypeError("Missing private port factory");
+      const context = {
+        invocationId: "legacy-avatar",
+        correlationId: "legacy-avatar",
+        signal: new AbortController().signal,
+        beforeEffect: (): boolean => true,
+      };
+      const options = {
+        legacyTemporaryRelease: "10.3" as const,
+        sessionScope: {
+          context: {
+            kind: "chat" as const,
+            chatId: "synthetic-chat",
+            podId: created.livePod.podId,
+            bindingGeneration: 1,
+          },
+          authority: { runId: "synthetic-run", envelopeDigest: "a".repeat(64) },
+          principalDigest: "a".repeat(64),
+          authRef: created.authRef,
+          authenticationGeneration: created.generation,
+          verificationRevision: verification.revision,
+          expiresAt: Date.now() + 60_000,
+        },
+      };
+      expect(factory(current, context, options).legacyTemporaryRelease).toBe(expected);
+      // A supplied hint never substitutes for the current native verification.
+      deps.custody.beginVerification(created.authRef, created.generation);
+      expect(factory(current, context, options).legacyTemporaryRelease).toBeUndefined();
+      expect(f.fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+  it("sweeps expired ready input once on the first legitimate vault use after restart, never during construction", () => {
+    const f = fixture();
+    const deps = f.build();
+    const created = createDataCenter(deps, PRIVATE_BASE);
+    const verification = deps.custody.beginVerification(created.authRef);
+    if (verification === undefined || created.livePod === undefined)
+      throw new TypeError("Missing verified Pod");
+    deps.custody.finishVerification(
+      created.authRef,
+      created.generation,
+      verification.revision,
+      "ok",
+    );
+    const binding: JiraHumanInputBinding = {
+      context: {
+        kind: "chat",
+        chatId: "synthetic-chat",
+        messageId: "synthetic-message",
+        callId: "synthetic-call",
+        podId: created.livePod.podId,
+        bindingGeneration: 1,
+      },
+      authority: { runId: "synthetic-input-run", envelopeDigest: "a".repeat(64) },
+      principalDigest: "a".repeat(64),
+      authRef: created.authRef,
+      authenticationGeneration: created.generation,
+      verificationRevision: verification.revision,
+      operation: "jira.login",
+      argumentsDigest: "b".repeat(64),
+      actorUserKey: "synthetic-key",
+      actorUsername: "synthetic-user",
+      expiresAt: Date.now() + 1000,
+    };
+    const inputs = deps.custody.humanInputs;
+    if (inputs === undefined) throw new TypeError("Missing input custody");
+    const pending = inputs.prepare(binding);
+    inputs.submit(pending.requestId, binding, pending.revision, {
+      password: "synthetic-expired-private-input",
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(binding.expiresAt);
+    try {
+      const restarted = f.build();
+      const restoredInputs = restarted.custody.humanInputs;
+      if (restoredInputs === undefined) throw new TypeError("Missing restored input custody");
+      const sweep = vi.spyOn(restoredInputs, "sweepExpired");
+      expect(restarted.custody.list()).toHaveLength(1);
+      expect(sweep).not.toHaveBeenCalled();
+      expect(restoredInputs.inspect(pending.requestId, binding)).toBeUndefined();
+      expect(restoredInputs.inspect(pending.requestId, binding)).toBeUndefined();
+      expect(sweep).toHaveBeenCalledTimes(1);
+      const phases = persistedActivityLogLines(
+        readPersistedActivityLog(f.directory),
+        "atlassian.jira.human-input",
+      ).map((line) => expectActivityLogProof("atlassian.jira.human-input.line", line));
+      const expired = phases.filter((line) => line.phase === "expired");
+      expect(expired).toHaveLength(1);
+      expect(expired[0]).toMatchObject({ correlationId: UNKNOWN_CORRELATION_ID });
+      expect(expired[0]).not.toHaveProperty("parentCorrelationId");
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it.each([
     [PRIVATE_BASE, "private"],
     ["https://127.0.0.1:18443/context", "loopback"],

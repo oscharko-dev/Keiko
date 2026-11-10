@@ -40,6 +40,8 @@
     transition: none;
   }
 }
+/* A settled count must already look complete when its label announces completion. */
+.cmpTrack[data-complete="true"]::-webkit-progress-value,
 .cmpProgress[data-stopped="true"] .cmpTrack::-webkit-progress-value {
   transition: none;
 }

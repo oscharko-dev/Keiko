@@ -4,14 +4,13 @@ import {
   type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { isMcpServerName, MCP_SERVER_MAX } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
-import type { UiHandlerDeps } from "../deps.js";
 import {
   invalidRequest,
   type UpdateChatOptions,
   type UpdateChatPatch,
   type Chat,
 } from "../store/index.js";
-import { findOwnedJiraPod, isReadyJiraPod } from "./jiraPodAccess.js";
+import { findOwnedJiraPod, isReadyJiraPod, type JiraPodAccessDeps } from "./jiraPodAccess.js";
 import { logChatScopeUpdate } from "../chat-scope-update-log.js";
 
 function requestedPod(value: unknown): string | null | undefined {
@@ -26,6 +25,13 @@ function requestedMode(value: unknown): CodingWorkbenchMode | undefined {
   return value;
 }
 
+function requestedAdministration(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean")
+    throw invalidRequest("The Jira administration selection is invalid.");
+  return value;
+}
+
 function requestedMcpServers(value: unknown): readonly string[] | null | undefined {
   if (value === undefined || value === null) return value;
   if (
@@ -37,6 +43,19 @@ function requestedMcpServers(value: unknown): readonly string[] | null | undefin
     throw invalidRequest("The MCP server selection is invalid.");
   return value;
 }
+function hasChatPatchSelection(
+  podId: string | null | undefined,
+  mode: CodingWorkbenchMode | undefined,
+  mcpServers: readonly string[] | null | undefined,
+  administration: boolean | undefined,
+): boolean {
+  return (
+    podId !== undefined ||
+    mode !== undefined ||
+    mcpServers !== undefined ||
+    administration !== undefined
+  );
+}
 
 function parseJiraChatPatchFields(
   body: Record<string, unknown>,
@@ -47,13 +66,15 @@ function parseJiraChatPatchFields(
   const podId = requestedPod(body.jiraPodId);
   const mode = requestedMode(body.toolMode);
   const mcpServers = requestedMcpServers(body.mcpServers);
-  if (podId === undefined && mode === undefined && mcpServers === undefined) return {};
+  const jiraAdministrationEnabled = requestedAdministration(body.jiraAdministrationEnabled);
+  if (!hasChatPatchSelection(podId, mode, mcpServers, jiraAdministrationEnabled)) return {};
   if (expectedIdentity === undefined)
     throw invalidRequest("A current chat scope identity is required.");
   return {
     ...(podId === undefined ? {} : { jiraPodId: podId }),
     ...(mode === undefined ? {} : { toolMode: mode }),
     ...(mcpServers === undefined ? {} : { mcpServers }),
+    ...(jiraAdministrationEnabled === undefined ? {} : { jiraAdministrationEnabled }),
   };
 }
 
@@ -71,18 +92,27 @@ export function jiraChatPatchFields(
 }
 
 export function jiraChatUpdateOptions(
-  deps: UiHandlerDeps,
+  deps: JiraPodAccessDeps,
   patch: UpdateChatPatch,
   chat: Chat,
   correlationId: string | undefined,
 ): Pick<UpdateChatOptions, "verifiedJiraPod"> {
-  if (patch.jiraPodId === undefined || patch.jiraPodId === null) return {};
-  const credential = findOwnedJiraPod(deps, patch.jiraPodId);
+  const podId =
+    patch.jiraPodId ??
+    (patch.jiraAdministrationEnabled === true ? chat.jiraPodBinding?.podId : undefined);
+  if (podId === undefined) {
+    if (patch.jiraAdministrationEnabled === true) {
+      logChatScopeUpdate("denied", chat, chat, patch, correlationId);
+      throw invalidRequest("Select a ready Jira Pod before enabling administration.");
+    }
+    return {};
+  }
+  const credential = findOwnedJiraPod(deps, podId);
   if (credential === undefined || !isReadyJiraPod(credential)) {
     logChatScopeUpdate("denied", chat, chat, patch, correlationId);
     throw invalidRequest("The Jira Pod is unavailable or requires verification.");
   }
   return {
-    verifiedJiraPod: { podId: patch.jiraPodId, authenticationGeneration: credential.generation },
+    verifiedJiraPod: { podId, authenticationGeneration: credential.generation },
   };
 }

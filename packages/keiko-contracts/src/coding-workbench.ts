@@ -68,6 +68,7 @@ export type CodingWorkbenchConnectorScope =
   | "source-control.write"
   | "issue-tracker.read"
   | "issue-tracker.write"
+  | "issue-tracker.admin"
   | "knowledge-base.read"
   | "knowledge-base.write";
 
@@ -77,9 +78,21 @@ export const CODING_WORKBENCH_CONNECTOR_SCOPES: readonly CodingWorkbenchConnecto
     "source-control.write",
     "issue-tracker.read",
     "issue-tracker.write",
+    "issue-tracker.admin",
     "knowledge-base.read",
     "knowledge-base.write",
   ] as const satisfies readonly CodingWorkbenchConnectorScope[]);
+
+/** Closed capability classification; administration never follows from ordinary write authority. */
+export function isWriteCapableCodingConnectorScope(
+  value: unknown,
+): value is CodingWorkbenchConnectorScope {
+  return (
+    typeof value === "string" &&
+    (CODING_WORKBENCH_CONNECTOR_SCOPES as readonly string[]).includes(value) &&
+    (value.endsWith(".write") || value === "issue-tracker.admin")
+  );
+}
 
 export type CodingWorkbenchNetworkMode = "deny-all" | "governed-egress" | "connector-scoped-egress";
 

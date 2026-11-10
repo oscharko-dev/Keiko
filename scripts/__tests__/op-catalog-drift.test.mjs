@@ -772,7 +772,8 @@ describe("op catalog drift", () => {
       "zzz-fixture-typed-registry-dynamic-spread",
       [
         'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
-        "const runtimeFields = Object.freeze({});",
+        "function fieldsAtRuntime() { return {}; }",
+        "const runtimeFields = Object.freeze(fieldsAtRuntime());",
         "defineActivityLogOperation({",
         '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
         '  op: "fixture.registry.dynamic-spread", category: "diagnostic",',

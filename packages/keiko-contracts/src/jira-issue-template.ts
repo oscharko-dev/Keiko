@@ -61,7 +61,12 @@ export interface JiraIssueTemplate {
     readonly pattern?: string;
     readonly minCount?: number;
   };
-  readonly parent: { readonly field?: string; readonly link?: string };
+  readonly parent: {
+    readonly field?: string;
+    readonly link?: string;
+    /** Allowed native parent issue-type names or IDs; requires an explicit parent field. */
+    readonly issueTypes?: readonly string[];
+  };
 }
 
 export const JIRA_TEMPLATE_PARSE_ERROR_CODES = [
@@ -101,9 +106,22 @@ export const JIRA_TEMPLATE_RULE_IDS = [
   "label-pattern",
   "label-count",
   "parent-missing",
+  "parent-type-mismatch",
   "template-unreadable",
 ] as const;
 export type JiraTemplateRuleId = (typeof JIRA_TEMPLATE_RULE_IDS)[number];
+
+/** Body-free counts use only the checker's closed rule vocabulary, never its subjects or text. */
+export function countJiraTemplateViolations(
+  violations: readonly { readonly ruleId: JiraTemplateRuleId }[],
+): Partial<Record<JiraTemplateRuleId, number>> {
+  const counts: Partial<Record<JiraTemplateRuleId, number>> = {};
+  for (const ruleId of JIRA_TEMPLATE_RULE_IDS) {
+    const count = violations.filter((violation) => violation.ruleId === ruleId).length;
+    if (count > 0) counts[ruleId] = count;
+  }
+  return counts;
+}
 
 export interface JiraTemplateViolation {
   readonly ruleId: JiraTemplateRuleId;
@@ -131,6 +149,7 @@ const KEYS = [
   "minLabels",
   "parentField",
   "parentLink",
+  "parentIssueTypes",
   "optionalSections",
 ] as const;
 type TemplateKey = (typeof KEYS)[number];
@@ -216,7 +235,7 @@ function inlineItems(raw: string): readonly string[] | undefined {
   const items = inner.match(INLINE_ITEM) ?? [];
   // Rejoining must reproduce the text: an empty item or an unbalanced quote does not.
   if (items.join(",") !== inner) return undefined;
-  const values = items.map(unquote);
+  const values = items.map((item) => unquote(item));
   return values.every((value): value is string => value !== undefined && value.length > 0)
     ? values
     : undefined;
@@ -388,7 +407,7 @@ function parseActivation(value: string): JiraTemplateActivation | undefined {
 
 function readActivations(reader: Reader): readonly JiraTemplateActivation[] {
   const values = reader.list("activateOn", JIRA_ISSUE_TEMPLATE_LIMITS.activations, 140);
-  const parsed = values.map(parseActivation);
+  const parsed = values.map((value) => parseActivation(value));
   if (values.length === 0 || parsed.includes(undefined)) {
     reader.errors.push({ code: "invalid-value", key: "activateOn" });
     return [];
@@ -405,7 +424,8 @@ function withoutTrailingColons(text: string): string {
 
 /** Normalised key shared by the template body and the description the checker reads. */
 export function normalizeJiraSectionHeading(heading: string): string {
-  return withoutTrailingColons(heading.replace(/[*_`]/gu, ""))
+  const text = heading.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1");
+  return withoutTrailingColons(text.replace(/[*_`]/gu, ""))
     .replace(/\s+/gu, " ")
     .trim()
     .toLowerCase();
@@ -496,6 +516,30 @@ function hasRules(template: JiraIssueTemplate): boolean {
   );
 }
 
+function readParent(reader: Reader, entries: readonly RawEntry[]): JiraIssueTemplate["parent"] {
+  const field = reader.scalar("parentField", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+  const link = reader.scalar("parentLink", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+  const entry = entryOf(entries, "parentIssueTypes");
+  const issueTypes = reader.list(
+    "parentIssueTypes",
+    JIRA_ISSUE_TEMPLATE_LIMITS.listItems,
+    JIRA_ISSUE_TEMPLATE_LIMITS.textChars,
+  );
+  if (
+    entry !== undefined &&
+    (field === undefined ||
+      issueTypes.length === 0 ||
+      issueTypes.some((type) => type.trim().length === 0))
+  ) {
+    reader.errors.push({ code: "invalid-value", key: "parentIssueTypes", line: entry.line });
+  }
+  return {
+    ...(field === undefined ? {} : { field }),
+    ...(link === undefined ? {} : { link }),
+    ...(entry === undefined ? {} : { issueTypes }),
+  };
+}
+
 /**
  * Strict, total parser. A document that is not a template yields `not-a-template`; a template
  * document that is malformed yields every error found (bounded), never a partial template.
@@ -513,8 +557,7 @@ export function parseJiraIssueTemplate(markdown: string): JiraIssueTemplateParse
   const activations = readActivations(reader);
   const summary = readSummary(reader);
   const labels = readLabels(reader);
-  const parentField = reader.scalar("parentField", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
-  const parentLink = reader.scalar("parentLink", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+  const parent = readParent(reader, scan.entries);
   const requiredFields = reader.list(
     "requiredFields",
     JIRA_ISSUE_TEMPLATE_LIMITS.listItems,
@@ -527,7 +570,7 @@ export function parseJiraIssueTemplate(markdown: string): JiraIssueTemplateParse
   );
   const requiredSections = bodySections(
     lines.slice(front.bodyStart),
-    new Set(optional.map(normalizeJiraSectionHeading)),
+    new Set(optional.map((heading) => normalizeJiraSectionHeading(heading))),
   );
   const errors = distinctErrors([...scan.errors, ...reader.errors]);
   if (requiredSections.length > JIRA_ISSUE_TEMPLATE_LIMITS.sections)
@@ -540,10 +583,7 @@ export function parseJiraIssueTemplate(markdown: string): JiraIssueTemplateParse
       requiredFields,
       requiredSections,
       labels,
-      parent: {
-        ...(parentField === undefined ? {} : { field: parentField }),
-        ...(parentLink === undefined ? {} : { link: parentLink }),
-      },
+      parent,
     };
     if (hasRules(template)) return { ok: true, template };
     errors.push({ code: "no-rules" });

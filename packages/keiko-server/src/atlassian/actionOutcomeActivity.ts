@@ -1,3 +1,9 @@
+import {
+  jiraActionOutcomeLogFields,
+  jiraToolForAction,
+  LEGACY_JIRA_ACTION_LOG_TYPES,
+} from "./jiraOperationLogFields.js";
+import { recordJiraOperationActivity } from "./jiraOperationActivity.js";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   activityLogEvent,
@@ -33,31 +39,18 @@ const ACTION_OUTCOME = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [
+        "jira-read",
+        "jira-write",
+        ...LEGACY_JIRA_ACTION_LOG_TYPES,
         "sync-space",
         "sync-project",
         "search-issues-live",
-        "create-issue",
-        "update-issue-fields",
-        "transition-issue",
-        "add-issue-comment",
         "create-page",
         "update-page",
         "add-page-comment",
-        "jira.projects",
-        "jira.issue-types",
-        "jira.create-fields",
-        "jira.edit-fields",
-        "jira.search",
-        "jira.issue",
-        "jira.comments",
-        "jira.transitions",
-        "jira.assignable-users",
-        "jira.report",
-        "jira.draft-stage",
-        "jira.draft-batch",
-        "assign-issue",
       ],
     },
+    actionTypeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     disposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -77,6 +70,8 @@ const ACTION_OUTCOME = defineActivityLogOperation({
       values: [
         "auth-failed",
         "permission-denied",
+        "effect-denied",
+        "cancelled",
         "not-found",
         "rate-limited",
         "timeout",
@@ -134,6 +129,24 @@ function failureReason(
   return "none";
 }
 
+function recordOutcomeLogFailure(
+  deps: Pick<AtlassianConnectorCredentialDeps, "diagnostics">,
+  correlationId: string,
+  error: unknown,
+): void {
+  recordActivityLogLoss("port-sink-failed");
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "atlassian.action.log-failed",
+      source: "atlassian-action-activity",
+      error,
+      redact: () => "server-operation-failed",
+    }),
+  );
+}
+
 /** Project the existing action owner's result, excluding targets, credential refs and content. */
 export function recordAtlassianActionOutcome(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
@@ -142,7 +155,8 @@ export function recordAtlassianActionOutcome(
 ): void {
   try {
     const outcome = record.syncSummary?.outcome ?? record.outcome;
-    (deps.activityLog ?? processServerLogSink()).write(
+    const sink = deps.activityLog ?? processServerLogSink();
+    sink.write(
       activityLogEvent(
         ACTION_OUTCOME,
         {
@@ -151,7 +165,7 @@ export function recordAtlassianActionOutcome(
         },
         {
           provider: record.provider,
-          actionType: record.actionType,
+          ...jiraActionOutcomeLogFields(record.actionType),
           disposition: record.disposition,
           outcome,
           durationMs: record.durationMs,
@@ -162,17 +176,20 @@ export function recordAtlassianActionOutcome(
         },
       ),
     );
+    const tool = jiraToolForAction(record.actionType);
+    if (record.provider === "jira" && tool !== undefined) {
+      recordJiraOperationActivity(
+        sink,
+        { correlationId: record.correlationId, level: OUTCOME_LEVEL[outcome] },
+        tool,
+        {
+          stage: "action-outcome",
+          outcome,
+          reason: failureReason(record, outcome),
+        },
+      );
+    }
   } catch (error) {
-    recordActivityLogLoss("port-sink-failed");
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        correlationId: record.correlationId,
-        operation: "atlassian.action.log-failed",
-        source: "atlassian-action-activity",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
+    recordOutcomeLogFailure(deps, record.correlationId, error);
   }
 }

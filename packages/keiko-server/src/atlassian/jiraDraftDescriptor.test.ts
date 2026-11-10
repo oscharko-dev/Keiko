@@ -4,7 +4,9 @@ import {
   JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { JIRA_REQUIREMENT_IDS_MAX } from "@oscharko-dev/keiko-connectors";
-import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
+import { jiraDraftStageDeclaration } from "./jiraDraftDescriptor.js";
+
+const JIRA_DRAFT_STAGE_DECLARATION = jiraDraftStageDeclaration();
 
 // Lab S14 of epic #4173: a model staged four epics without requirementIds, so none traced its
 // requirement. The staged catalog must expose the real trace and required issue-field contracts.

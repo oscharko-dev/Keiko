@@ -1362,6 +1362,29 @@ describe("fanOutClientDiagnostic budgets", () => {
 
 // PR #3678 review: the catalog counts reach the wire as structured evidence and spend the routine
 // budget, like every other closed, non-failure report.
+it("posts Jira result counts on the existing wire without spending the failure budget", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const jiraResultPresentation = {
+    messageDigest: "a".repeat(64),
+    exchangeCount: 2,
+    itemCount: 7,
+    shownCount: 5,
+    returnedCount: 8,
+    unreadableCount: 1,
+    problemCount: 0,
+    ruleCount: 0,
+    failure: "none" as const,
+    restored: true,
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Jira results presented.", { jiraResultPresentation });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ jiraResultPresentation });
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+});
+
 it("posts the knowledge catalog counts on the wire and spends the routine budget", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -1741,4 +1764,20 @@ it("retains closed scope and inspection reports without spending failure capacit
   });
   expect(bodies.every(isClientDiagnosticIngestRequest)).toBe(true);
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("posts localized Jira field counts with the routine budget and no failure evidence", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const jiraFieldPresentation = { fieldCount: 5, localizedCount: 3 };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Jira built-in field labels presented.", { jiraFieldPresentation });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ jiraFieldPresentation });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(debug).toHaveBeenCalledTimes(25);
+  expect(warn).not.toHaveBeenCalled();
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
 });

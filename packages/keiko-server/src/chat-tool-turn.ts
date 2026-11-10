@@ -1,13 +1,17 @@
+import { KNOWLEDGE_DOCUMENTS_TOOL_ID } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
+import { chatToolSelectionFits, offeredDefinitions } from "./chat-tool-schema-selection.js";
+import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import { gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
-import {
-  deriveContextProfileFromCapability,
-  estimateTokens,
-} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { randomUUID } from "node:crypto";
 import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
 import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
+import type { CodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { processServerLogSink } from "./process-log-sink.js";
+import { recordJiraCatalogSelection } from "./atlassian/jiraCatalogSelectionActivity.js";
 import {
   defaultServerDiagnosticSink,
   emitServerDiagnostic,
@@ -59,17 +63,17 @@ import {
   recordChatToolTurnEnded,
   type ChatToolTurnEndReason,
 } from "./chat-tool-turn-ending.js";
-import { onChatScopeInterruption } from "./chat-turn-serializer.js";
+import {
+  CHAT_TURN_JIRA_AUTHENTICATION_FAILED,
+  onChatScopeInterruption,
+  type ChatGenerationInterruption,
+} from "./chat-turn-serializer.js";
 import {
   groundedToolAttemptConfirmation,
   groundedNestedToolCallRelease,
 } from "./grounded-answer.js";
 import { withNestedCallerAdmission } from "./chat-tool-nested-admission.js";
-import {
-  estimateGatewayMessageTokens,
-  fitToolContinuation,
-  fitToolRoundOutput,
-} from "./chat-tool-continuation-fit.js";
+import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuation-fit.js";
 import {
   omittedReportFindingKeys,
   reportCoverageCorrection,
@@ -85,11 +89,15 @@ import {
   GatewayError,
   GatewayToolCatalogError,
   toolCallingConfigurationFingerprint,
+  type ModelProviderConfig,
   type GatewayCallRequest,
   type NormalizedResponse,
   type GatewayStreamChunk,
 } from "@oscharko-dev/keiko-model-gateway";
-import { isToolCallingVerificationFresh } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isToolCallingVerificationFresh,
+  type ToolCallingVerification,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   isChatToolBatchProgress,
   type ChatToolBatchProgress,
@@ -115,9 +123,13 @@ import {
   knowledgeCoverageCorrection,
   logKnowledgeCoverage,
 } from "./chat-tool-knowledge-coverage.js";
-import { ConversationModelNotReadyError } from "./conversation-readiness-error.js";
+import {
+  ConversationModelNotReadyError,
+  type ToolCallingReadinessReason,
+} from "./conversation-readiness-error.js";
 import { logConversationAdmission } from "./conversation-readiness-log.js";
 import type { AcceptedJiraChatTurn } from "./atlassian/jiraChatAuthority.js";
+import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
 import {
   isJiraTextWrite,
   latestCitationLabels,
@@ -185,10 +197,17 @@ export function mintAndBoundChatTurn<
   mint: (turn: AcceptedJiraChatTurn) => Authority | { readonly ok: false },
   signals: readonly AbortSignal[],
 ): { readonly authority: Authority; readonly signal: AbortSignal } {
-  if (!chatModelSupportsTools(deps, modelId)) {
+  const readinessFailure = chatModelToolReadiness(deps, modelId);
+  if (readinessFailure !== undefined) {
     const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlationId, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
+    logConversationAdmission(
+      "observation-unavailable",
+      correlationId,
+      generation,
+      generation,
+      readinessFailure,
+    );
+    throw new ConversationModelNotReadyError("tool-calling", readinessFailure);
   }
   requireDispatch(
     signals.every((signal) => !signal.aborted),
@@ -216,6 +235,23 @@ export function transcriptReportsToolAction(exchanges: readonly ChatToolExchange
   return exchanges.some((exchange) => exchange.mutationOutcome !== undefined);
 }
 type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
+type ChatRoundCatalog = Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
+type ChatCatalogBind<Context extends ToolConsumerContext> = (
+  context: Context,
+  budget: ReturnType<typeof createHarnessCatalogBudget>["port"],
+  invocationRegistry: CodingToolInvocationRegistry,
+) => CatalogToolBinder;
+export interface ChatToolCatalogSelection<Context extends ToolConsumerContext> {
+  readonly managed: ChatRoundCatalog;
+  readonly bind: ChatCatalogBind<Context>;
+  readonly close: () => Promise<void>;
+}
+export interface ChatToolInvocationPreparationPorts {
+  readonly publishHumanInput: (
+    view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView,
+  ) => Promise<void>;
+  readonly requestReadConsent: (grant: ChatToolReadGrantView) => Promise<void>;
+}
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly deps: Pick<
     UiHandlerDeps,
@@ -224,35 +260,63 @@ export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
     Partial<Pick<UiHandlerDeps, "redactor">>;
   readonly message: ChatMessage;
   readonly context: Context;
-  readonly managed: Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
+  readonly managed: ChatRoundCatalog;
   readonly correlationId: string;
   /** The accepted Authority Envelope budget; it is the turn's only duration and call bound. */
   readonly budget: ChatToolAuthorityEnvelope["budget"];
   /** Rules shared by every offered tool of a source, said once instead of in each description. */
   readonly guidance?: string;
-  readonly bind: (
-    context: Context,
-    budget: ReturnType<typeof createHarnessCatalogBudget>["port"],
-  ) => CatalogToolBinder;
+  readonly bind: ChatCatalogBind<Context>;
+  /** Source adapters commit derived write data before approval or dispatch, inside this turn. */
+  readonly prepareInvocation?: (
+    call: ChatToolExchange["call"],
+    actionId: string,
+    ports: ChatToolInvocationPreparationPorts,
+  ) => Promise<{ readonly sourceDigest?: string } | undefined>;
+  /** Release private per-call material after outcome retention, including pre-dispatch refusal. */
+  readonly finalizeInvocation?: (actionId: string) => void;
+  /** Await private lifetime cleanup when this turn ends, retaining it across adopted retries. */
+  readonly finalizeTurn?: () => Promise<void>;
+  readonly selectTools?: (
+    identities: readonly string[],
+  ) => Promise<ChatToolCatalogSelection<Context>>;
 }
 export function chatModelSupportsTools(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   modelId: string,
 ): boolean {
+  return chatModelToolReadiness(deps, modelId) === undefined;
+}
+
+/** One reason owner for both source-turn admission and the legacy boolean capability view. */
+export function chatModelToolReadiness(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): ToolCallingReadinessReason | undefined {
   const config = deps.gatewayConfig?.current();
-  if (config === undefined) return false;
+  if (config === undefined) return "unverified";
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   const capability = findConfiguredCapability(config, modelId);
-  return (
-    provider !== undefined &&
-    capability?.kind === "chat" &&
-    capability.toolCalling &&
-    capability.toolCallingVerification?.configurationFingerprint ===
-      toolCallingConfigurationFingerprint(provider) &&
-    isToolCallingVerificationFresh(capability.toolCallingVerification, {
-      nowMs: Date.now(),
-    })
-  );
+  if (provider === undefined || capability === undefined) return "unverified";
+  if (capability.kind !== "chat") return "unsupported";
+  const proofFailure = toolCallingProofFailure(capability.toolCallingVerification, provider);
+  if (proofFailure !== undefined) return proofFailure;
+  // Parsing withdraws the effective flag when proof expires; it must not hide that proof's cause.
+  return capability.toolCalling ? undefined : "unsupported";
+}
+
+function toolCallingProofFailure(
+  verification: ToolCallingVerification | undefined,
+  provider: ModelProviderConfig,
+): ToolCallingReadinessReason | undefined {
+  if (verification?.status === "unsupported") return "unsupported";
+  if (verification?.status !== "verified") return "unverified";
+  if (verification.configurationFingerprint !== toolCallingConfigurationFingerprint(provider))
+    return "configuration-changed";
+  const checkedAt = Date.parse(verification.checkedAt);
+  const nowMs = Date.now();
+  if (!Number.isFinite(checkedAt) || checkedAt > nowMs) return "unverified";
+  return isToolCallingVerificationFresh(verification, { nowMs }) ? undefined : "stale";
 }
 
 function boundArguments(value: unknown): Record<string, unknown> | undefined {
@@ -300,6 +364,21 @@ function interruptedDraftProgress(
     ? progress.snapshot()
     : undefined;
 }
+function startedOperationBinding(
+  invocation: NonNullable<NormalizedResponse["toolCalls"][number]["invocation"]>,
+): NonNullable<ReturnType<typeof jiraOperationForTool>>["binding"] | undefined {
+  const operation = JIRA_MUTATION_OPERATIONS.find(
+    (name) => invocation.toolRef.canonicalId === jiraMutationToolId(name),
+  );
+  if (operation === undefined) return undefined;
+  const contract = jiraOperationForTool(operation);
+  requireDispatch(
+    contract?.declaration.descriptor.toolRef.contractVersion === invocation.toolRef.contractVersion,
+    "invalid",
+    "invalid-arguments",
+  );
+  return contract.binding;
+}
 /** Model calls a nested batch leaves to the turn's final answer and citation repair rounds. */
 const ANSWER_ROUND_MODEL_CALL_RESERVE = 3;
 /** The one running draft batch call; its throttle key is the last progress it published. */
@@ -307,17 +386,21 @@ interface ActiveBatchProgress {
   readonly callId: string;
   publishedKey?: string;
 }
-/** A batch progress page that could not be persisted or published: a redacted server diagnostic. */
-function reportBatchProgressFailure(
+/** Turn-owned progress or cleanup failure: the existing body-free server diagnostic boundary. */
+function reportTurnFailure(
   options: Pick<ChatToolTurnOptions<ToolConsumerContext>, "deps" | "correlationId">,
   error: unknown,
+  operation:
+    | "chat.tool-turn.batch-progress"
+    | "chat.tool-turn.selection-release"
+    | "chat.tool-turn.finalize" = "chat.tool-turn.batch-progress",
 ): void {
   const { deps, correlationId } = options;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       correlationId,
-      operation: "chat.tool-turn.batch-progress",
+      operation,
       source: "chat-tool-turn",
       error,
       redact: (text): string => {
@@ -340,11 +423,30 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   protected readonly context: Context;
   private readonly budget: ReturnType<typeof createHarnessCatalogBudget>;
   private bound: CatalogToolBinder | undefined;
+  private managed: ChatRoundCatalog;
+  private readonly invocationRegistry = createCodingToolInvocationRegistry({ now: Date.now });
+  private selectedCatalog: ChatToolCatalogSelection<Context> | undefined;
+  /** Identities of the latest settled additional selection, which the next describe replaces. */
+  private jiraSelection: readonly string[] = [];
+  private pendingCatalog:
+    (ChatToolCatalogSelection<Context> & { readonly binder: CatalogToolBinder }) | undefined;
+  private preparedCatalog:
+    | (ChatToolCatalogSelection<Context> & {
+        readonly binder: CatalogToolBinder;
+        readonly requestId: string;
+        readonly identities: readonly string[];
+      })
+    | undefined;
+  private activeSelectionRequestId: string | undefined;
+  private activeRequest: GatewayCallRequest | undefined;
+  private roundDefinitions: readonly ToolDefinition[] = [];
   private inventoryPreparation: Promise<void> | undefined;
   private readonly continuation: GatewayMessage[] = [];
   private readonly runtimeContext: GatewayMessage[] = [];
   private currentToolResponse: NormalizedResponse | undefined;
   private readonly settledExchanges: ChatToolExchange[] = [];
+  /** Only server-dispatched inventory reads qualify as incidental; aliases and ids prove nothing. */
+  private readonly incidentalKnowledgeReadCallIds = new Set<string>();
   private usableObservation = false;
   /** One active serial dispatch, retired before any later turn can reuse its private snapshot. */
   private activeDraftProgress: ActiveDraftProgress | undefined;
@@ -366,6 +468,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private endedAnswer: NormalizedResponse | undefined;
   /** A change of the Chat's scope ended the turn, and its answer names the writes it made. */
   private scopeChangeEnded = false;
+  private scopeInterruption: ChatGenerationInterruption | undefined;
   private readonly abortController = new AbortController();
   private promptTokens = 0;
   private completionTokens = 0;
@@ -377,7 +480,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private elidedResults = 0;
   private reservedTranscriptBytes = CHAT_TOOL_TRANSCRIPT_BASE_BYTES;
   private readonly instruction: GatewayMessage;
-  private readonly toolDefinitions: readonly ToolDefinition[];
+  private toolDefinitions: readonly ToolDefinition[];
   /** The correction the next round carries after the gateway's own correction was rejected too. */
   private correction: GatewayMessage | undefined;
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
@@ -389,6 +492,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /** Transcript exchanges when that answer was given; any later exchange makes it stale. */
   private uncorrectedExchangeCount = 0;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
+    this.managed = options.managed;
     this.toolDefinitions = gatewayToolDefinitions(
       options.managed.catalog,
       options.managed.projection.profile,
@@ -400,20 +504,16 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.context = {
       ...options.context,
       signal: AbortSignal.any([options.context.signal, this.abortController.signal]),
+      selectJiraOperations: this.selectJiraOperations,
+      selectedJiraOperations: (): readonly string[] => this.jiraSelection,
+      jiraDiscoveryResultFits: this.jiraDiscoveryResultFits,
       ...this.turnReadouts(),
       retainDraftProgress: (
         actionId: string,
         invocationId: string,
         snapshot: () => CatalogJsonObject,
       ): void => {
-        const active = this.activeDraftProgress;
-        requireDispatch(
-          active?.actionId === actionId && active.snapshot === undefined,
-          "invalid",
-          "recovery-required",
-        );
-        active.invocationId = invocationId;
-        active.snapshot = snapshot;
+        this.retainDraftProgress(actionId, invocationId, snapshot);
       },
       reportBatchProgress: (progress: ChatToolBatchProgress): void => {
         this.reportBatchProgress(progress);
@@ -437,6 +537,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       now: Date.now,
       deadlineAt: Date.parse(this.context.deadlineAt),
     });
+  }
+  private retainDraftProgress(
+    actionId: string,
+    invocationId: string,
+    snapshot: () => CatalogJsonObject,
+  ): void {
+    const active = this.activeDraftProgress;
+    requireDispatch(
+      active?.actionId === actionId && active.snapshot === undefined,
+      "invalid",
+      "recovery-required",
+    );
+    active.invocationId = invocationId;
+    active.snapshot = snapshot;
   }
   private async callNestedModel(
     request: GatewayCallRequest,
@@ -464,8 +578,136 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     }
   }
   private get binder(): CatalogToolBinder {
-    this.bound ??= this.options.bind(this.context, this.budget.port);
+    this.bound ??= this.options.bind(this.context, this.budget.port, this.invocationRegistry);
     return this.bound;
+  }
+  private readonly selectJiraOperations = (
+    identities: readonly string[],
+    result: CatalogJsonObject,
+  ): Promise<void> => this.prepareToolSelection(identities, result);
+  private readonly jiraDiscoveryResultFits = (result: CatalogJsonObject): boolean =>
+    this.activeRequest !== undefined &&
+    this.selectionFits(this.activeRequest, this.roundDefinitions, result);
+  /** Compile and admit a candidate without replacing the current round's immutable offer. */
+  private async prepareToolSelection(
+    identities: readonly string[],
+    result: CatalogJsonObject,
+  ): Promise<void> {
+    const request = this.activeRequest;
+    const requestId = this.activeSelectionRequestId;
+    requireDispatch(
+      this.options.selectTools !== undefined && request !== undefined && requestId !== undefined,
+      "failed",
+      "handler-unavailable",
+    );
+    const selection = await this.options.selectTools(identities);
+    try {
+      this.context.signal.throwIfAborted();
+      const binder = selection.bind(this.context, this.budget.port, this.invocationRegistry);
+      const offered = binder.offer();
+      const definitions = gatewayToolDefinitions(
+        selection.managed.catalog,
+        selection.managed.projection.profile,
+      );
+      const tools = offeredDefinitions(selection.managed, definitions, offered);
+      requireDispatch(this.selectionFits(request, tools, result), "denied", "budget-exhausted");
+      requireDispatch(this.activeSelectionRequestId === requestId, "cancelled", "parent-cancelled");
+      this.preparedCatalog = { ...selection, binder, requestId, identities: [...identities] };
+    } catch (error) {
+      await selection.close();
+      throw error;
+    }
+  }
+  private selectionFits(
+    request: GatewayCallRequest,
+    tools: readonly ToolDefinition[],
+    result: CatalogJsonObject,
+  ): boolean {
+    const config = this.options.deps.gatewayConfig?.current();
+    const capability =
+      config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
+    if (capability?.kind !== "chat") return false;
+    return chatToolSelectionFits(
+      {
+        ...request,
+        messages: [
+          this.instruction,
+          ...this.runtimeContext,
+          ...request.messages,
+          ...this.continuation,
+          { role: "tool", content: JSON.stringify(result) },
+        ],
+      },
+      tools,
+      deriveContextProfileFromCapability(capability),
+      this.options.budget.maxPromptTokens - this.promptTokens,
+      config?.providers.find((provider) => provider.modelId === request.modelId)
+        ?.reasoningHistoryField,
+    );
+  }
+  private async activateToolSelection(): Promise<void> {
+    const pending = this.pendingCatalog;
+    if (pending === undefined) return;
+    this.pendingCatalog = undefined;
+    const previous = this.selectedCatalog;
+    this.selectedCatalog = pending;
+    this.managed = pending.managed;
+    this.bound = pending.binder;
+    this.toolDefinitions = gatewayToolDefinitions(
+      this.managed.catalog,
+      this.managed.projection.profile,
+    );
+    await previous?.close();
+  }
+  private async releaseToolSelection(): Promise<void> {
+    const pending = this.pendingCatalog;
+    const selected = this.selectedCatalog;
+    const prepared = this.preparedCatalog;
+    this.pendingCatalog = undefined;
+    this.selectedCatalog = undefined;
+    this.preparedCatalog = undefined;
+    this.jiraSelection = [];
+    if (selected !== undefined) {
+      this.managed = this.options.managed;
+      this.bound = undefined;
+      this.toolDefinitions = gatewayToolDefinitions(
+        this.managed.catalog,
+        this.managed.projection.profile,
+      );
+    }
+    await Promise.all([pending?.close(), selected?.close(), prepared?.close()]);
+  }
+  private async finalizeTurn(): Promise<void> {
+    try {
+      await this.releaseToolSelection();
+    } catch (error) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.selection-release");
+    }
+    // Selection cleanup must not prevent private cleanup; neither may replace the retained outcome.
+    try {
+      await this.options.finalizeTurn?.();
+    } catch (error) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.finalize");
+    }
+  }
+  private async settleToolSelection(requestId: string, succeeded: boolean): Promise<void> {
+    const prepared = this.preparedCatalog;
+    if (prepared?.requestId !== requestId) return;
+    this.preparedCatalog = undefined;
+    if (!succeeded) {
+      await prepared.close();
+      return;
+    }
+    const previous = this.pendingCatalog;
+    this.pendingCatalog = prepared;
+    recordJiraCatalogSelection(processServerLogSink(), {
+      correlationId: this.options.correlationId,
+      surface: "chat",
+      previous: this.jiraSelection,
+      selected: prepared.identities,
+    });
+    this.jiraSelection = prepared.identities;
+    await previous?.close();
   }
   protected abstract reserveAuthorityPrompt(promptTokens: number): boolean;
   protected abstract observedMutation(
@@ -686,14 +928,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       );
     } catch (error: unknown) {
       // A page that cannot be persisted is dropped; the batch and its next page carry on.
-      reportBatchProgressFailure(this.options, error);
+      reportTurnFailure(this.options, error);
       return;
     }
     active.publishedKey = key;
     this.batchPublication = this.batchPublication
       .then(() => this.publish())
       .catch((error: unknown) => {
-        reportBatchProgressFailure(this.options, error);
+        reportTurnFailure(this.options, error);
       });
   }
   /** Model calls left for nested work once the turn's own answer rounds are kept. */
@@ -716,6 +958,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const progress: ActiveDraftProgress = { actionId: identity };
     this.activeDraftProgress =
       invocation.toolRef.canonicalId === JIRA_DRAFT_TOOL_ID ? progress : undefined;
+    this.activeSelectionRequestId = identity;
     this.activeBatchProgress =
       invocation.toolRef.canonicalId === JIRA_DRAFT_BATCH_TOOL_ID ? { callId: call.id } : undefined;
     try {
@@ -726,61 +969,105 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       return { outcome, progress };
     } finally {
       this.activeDraftProgress = undefined;
+      this.activeSelectionRequestId = undefined;
       this.activeBatchProgress = undefined;
       await this.batchPublication;
     }
+  }
+  private async prepareInvocation(
+    call: NormalizedResponse["toolCalls"][number],
+    identity: string,
+  ): Promise<void> {
+    const prepared = await this.options.prepareInvocation?.(publicToolCall(call), identity, {
+      requestReadConsent: (grant) => this.waitForReadConsent(grant),
+      publishHumanInput: async (view) => {
+        this.options.deps.store.updateChatToolTranscript(
+          this.options.message.id,
+          { kind: "human-input", callId: call.id, view },
+          this.options.correlationId,
+        );
+        await this.publish();
+      },
+    });
+    if (prepared?.sourceDigest === undefined) return;
+    const { deps, message, correlationId } = this.options;
+    deps.store.updateChatToolTranscript(
+      message.id,
+      { kind: "write-prepared", callId: call.id, sourceDigest: prepared.sourceDigest },
+      correlationId,
+    );
+    await this.publish();
   }
   private async dispatch(
     call: NormalizedResponse["toolCalls"][number],
     origin?: "runtime",
   ): Promise<void> {
-    const { deps, message, correlationId, managed } = this.options;
+    const { deps, message, correlationId } = this.options;
+    const managed = this.managed;
     requireDispatch(
       call.invocation !== undefined && !this.callIds.has(call.id),
       "invalid",
       "replay-conflict",
     );
     this.callIds.add(call.id);
-    const publicCall = publicToolCall(call);
-    this.reserveTranscript(publicCall, call.invocation.toolRef.canonicalId);
-    deps.store.updateChatToolTranscript(
-      message.id,
-      { kind: "started", call: publicCall },
-      correlationId,
-    );
-    await this.publish();
+    await this.startExchange(call, call.invocation);
     const identity = sha256Hex(canonicalise({ messageId: message.id, callId: call.id }));
-    const { outcome, progress } = await this.dispatchWithProgress(call, identity);
-    requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
-    this.refreshWriteApproval(call.id);
-    const descriptor = managed.catalog.descriptors.find(
-      (entry) => entry.toolRef.canonicalId === call.invocation?.toolRef.canonicalId,
-    );
-    requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
-    this.budget.acceptReceipt(outcome.receipt, descriptor);
-    const mutationOutcome = this.observedMutation(call, identity, outcome.result);
-    const draftProgress = interruptedDraftProgress(progress, outcome.result, mutationOutcome);
+    try {
+      await this.prepareInvocation(call, identity);
+      const { outcome, progress } = await this.dispatchWithProgress(call, identity);
+      requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
+      await this.settleToolSelection(identity, outcome.result.status === "completed");
+      this.refreshWriteApproval(call.id);
+      const descriptor = managed.catalog.descriptors.find(
+        (entry) => entry.toolRef.canonicalId === call.invocation?.toolRef.canonicalId,
+      );
+      requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
+      this.budget.acceptReceipt(outcome.receipt, descriptor);
+      const mutationOutcome = this.observedMutation(call, identity, outcome.result);
+      const draftProgress = interruptedDraftProgress(progress, outcome.result, mutationOutcome);
+      deps.store.updateChatToolTranscript(
+        message.id,
+        {
+          kind: "settled",
+          callId: call.id,
+          result: outcome.result,
+          ...(draftProgress === undefined ? {} : { draftProgress }),
+          binding: {
+            descriptor,
+            projectionDigest: managed.projection.projectionDigest,
+          },
+          ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
+        },
+        correlationId,
+      );
+      this.appendObservedExchange(call.id, origin);
+      await this.publish();
+    } finally {
+      this.options.finalizeInvocation?.(identity);
+    }
+  }
+  private async startExchange(
+    call: NormalizedResponse["toolCalls"][number],
+    invocation: NonNullable<NormalizedResponse["toolCalls"][number]["invocation"]>,
+  ): Promise<void> {
+    const { deps, message, correlationId } = this.options;
+    const publicCall = publicToolCall(call);
+    const operationBinding = startedOperationBinding(invocation);
+    this.reserveTranscript(publicCall, invocation.toolRef.canonicalId);
     deps.store.updateChatToolTranscript(
       message.id,
       {
-        kind: "settled",
-        callId: call.id,
-        result: outcome.result,
-        ...(draftProgress === undefined ? {} : { draftProgress }),
-        binding: {
-          descriptor,
-          projectionDigest: managed.projection.projectionDigest,
-        },
-        ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
+        kind: "started",
+        call: publicCall,
+        ...(operationBinding === undefined ? {} : { operationBinding }),
       },
       correlationId,
     );
-    this.appendObservedExchange(call.id, origin);
     await this.publish();
   }
   /** A call whose worst-case exchange no longer fits the stored transcript ends the turn. */
   private reserveTranscript(call: ChatToolExchange["call"], canonicalId: string): void {
-    const descriptor = this.options.managed.catalog.descriptors.find(
+    const descriptor = this.managed.catalog.descriptors.find(
       (entry) => entry.toolRef.canonicalId === canonicalId,
     );
     requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
@@ -896,24 +1183,32 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.activeModelId = request.modelId;
     this.activeModel = model;
     this.activeAttemptAdmission = request.attemptAdmission;
+    this.activeRequest = request;
+    let keepSelection = false;
     const cancel = (): void => {
       this.abortController.abort();
     };
     signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) cancel();
     const { deps, message } = this.options;
-    const release = onChatScopeInterruption(deps, message.chatId, () => this.endForScopeChange());
+    const release = onChatScopeInterruption(deps, message.chatId, (reason) =>
+      this.endForScopeChange(reason),
+    );
     try {
       return await this.runRounds(model, request, signal, observeRound, retryFollows);
     } catch (error) {
       // The owning window retry keeps this same turn and its settled effects open.
-      if (this.retryKeepsTurnOpen(signal) && retryFollows?.(error) === true) throw error;
+      if (this.retryKeepsTurnOpen(signal) && retryFollows?.(error) === true) {
+        keepSelection = true;
+        throw error;
+      }
       const partial = this.failedAnswer(error, request.modelId, signal);
       if (partial === undefined) throw error;
       return partial;
     } finally {
       release();
       signal.removeEventListener("abort", cancel);
+      if (!keepSelection) await this.finalizeTurn();
     }
   }
 
@@ -943,6 +1238,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     signal: AbortSignal,
   ): NormalizedResponse | undefined {
     this.clearCorrection();
+    if (this.scopeInterruption === CHAT_TURN_JIRA_AUTHENTICATION_FAILED)
+      return this.partialAnswer(error, modelId, signal);
     return this.answerBeforeCorrection(signal) ?? this.partialAnswer(error, modelId, signal);
   }
 
@@ -951,12 +1248,13 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * change: the turn stops at once and answers from its transcript (#4175). A turn with nothing
    * to report stays a cancellation.
    */
-  private endForScopeChange(): boolean {
+  private endForScopeChange(reason?: ChatGenerationInterruption): boolean {
     const { deps, message } = this.options;
     const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
     if (this.context.signal.aborted || !chatToolTurnHoldsWrite(exchanges)) return false;
     this.scopeChangeEnded = true;
-    this.abortController.abort();
+    this.scopeInterruption = reason;
+    this.abortController.abort(reason);
     return true;
   }
 
@@ -978,7 +1276,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 
   private knowledgeAnswer(answer: NormalizedResponse): NormalizedResponse {
-    const coverage = knowledgeTurnCoverage(this.settledExchanges);
+    const coverage = knowledgeTurnCoverage(this.settledExchanges, {
+      incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
+    });
     logKnowledgeCoverage(this.options.correlationId, coverage);
     return answer;
   }
@@ -1023,7 +1323,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       exchanges,
       budget,
     });
-    logKnowledgeCoverage(correlationId, knowledgeTurnCoverage(exchanges));
+    logKnowledgeCoverage(
+      correlationId,
+      knowledgeTurnCoverage(exchanges, {
+        incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
+      }),
+    );
     this.endedAnswer = {
       modelId,
       content: chatToolTurnPartialAnswer(exchanges, reason),
@@ -1042,6 +1347,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 
   private endReason(error: unknown, expired: boolean): ChatToolTurnEndReason | undefined {
+    if (this.scopeInterruption === CHAT_TURN_JIRA_AUTHENTICATION_FAILED)
+      return "authentication-failed";
     if (expired) return "deadline";
     if (this.scopeChangeEnded) return "authority-invalid";
     return chatToolTurnEndReason(error, {
@@ -1084,20 +1391,44 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return this.endedAnswer !== undefined;
   }
 
+  /** Settled observations survive catalog cleanup; repair never reopens a tool or effect. */
+  public readOnlySynthesisRequest(request: GatewayCallRequest): GatewayCallRequest {
+    const callIds = new Set(
+      this.continuation
+        .filter((message) => message.role === "tool")
+        .map((message) => message.toolCallId),
+    );
+    const observations = this.settledExchanges
+      .filter(
+        (exchange) => callIds.has(exchange.call.id) && usableModelObservation(exchange, undefined),
+      )
+      .flatMap(gatewayMessagesForToolExchange);
+    const readOnly = {
+      ...request,
+      toolCatalog: undefined,
+      reasoningScope: `chat:${this.options.message.chatId}`,
+    };
+    return {
+      ...readOnly,
+      messages: [...request.messages, ...this.fittedContinuation(readOnly, [], observations)],
+    };
+  }
+
   private roundRequest(
     request: GatewayCallRequest,
     offered: ReturnType<CatalogToolBinder["offer"]>,
   ): GatewayCallRequest {
-    const { managed } = this.options;
+    const managed = this.managed;
+    const definitions = offeredDefinitions(managed, this.toolDefinitions, offered);
+    this.roundDefinitions = definitions;
+    const messages = [this.instruction, ...this.runtimeContext, ...request.messages];
     const round: GatewayCallRequest = {
       ...request,
       stream: false,
       reasoningScope: `chat:${this.options.message.chatId}`,
       messages: [
-        this.instruction,
-        ...this.runtimeContext,
-        ...request.messages,
-        ...this.fittedContinuation(request),
+        ...messages,
+        ...this.fittedContinuation({ ...request, messages }, definitions),
         ...(this.correction === undefined ? [] : [this.correction]),
       ],
       toolCatalog: {
@@ -1118,21 +1449,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const capability =
       config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
     if (capability?.kind !== "chat") return request;
-    const aliases = new Set(
-      this.options.managed.projection.tools
-        .filter((tool) =>
-          offered.toolRefs.some(
-            (ref) =>
-              ref.canonicalId === tool.toolRef.canonicalId &&
-              ref.contractVersion === tool.toolRef.contractVersion,
-          ),
-        )
-        .map((tool) => tool.alias),
-    );
     return fitToolRoundOutput(
       request,
       deriveContextProfileFromCapability(capability),
-      this.toolDefinitions.filter((tool) => aliases.has(tool.name)),
+      offeredDefinitions(this.managed, this.toolDefinitions, offered),
       {
         maxOutputTokens: capability.maxOutputTokens,
         reasoningHistoryField: config?.providers.find(
@@ -1142,27 +1462,40 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
   }
   /** The copy of the continuation sent this round, fitted to the model window (#4175). */
-  private fittedContinuation(request: GatewayCallRequest): readonly GatewayMessage[] {
+  private fittedContinuation(
+    request: GatewayCallRequest,
+    tools: readonly ToolDefinition[],
+    continuation: readonly GatewayMessage[] = this.continuation,
+  ): readonly GatewayMessage[] {
     const config = this.options.deps.gatewayConfig?.current();
     const capability =
       config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
-    if (capability?.kind !== "chat") return this.continuation;
+    if (capability?.kind !== "chat") return continuation;
     const output = request.maxOutputTokens ?? capability.maxOutputTokens;
-    const fixed =
-      estimateGatewayMessageTokens([
-        this.instruction,
-        ...this.runtimeContext,
-        ...request.messages,
-      ]) + estimateTokens(JSON.stringify(this.options.managed.projection));
+    const profile = deriveContextProfileFromCapability(capability);
+    const fixed = countGatewayPromptTokens(
+      {
+        ...request,
+        tools,
+        messages: request.messages,
+      },
+      profile.tokenAccounting,
+      {
+        contextWindow: profile.maxInputTokens,
+        reasoningHistoryField: config?.providers.find(
+          (provider) => provider.modelId === request.modelId,
+        )?.reasoningHistoryField,
+      },
+    );
     const budget = Math.floor((capability.contextWindow - output) * CONTINUATION_WINDOW_SHARE);
-    const fitted = fitToolContinuation(this.continuation, this.settledExchanges, budget - fixed);
+    const fitted = fitToolContinuation(continuation, this.settledExchanges, budget - fixed);
     if (fitted.elidedCount > this.elidedResults) {
       this.elidedResults = fitted.elidedCount;
       recordChatToolTurnContextFitted(processServerLogSink(), {
         correlationId: this.options.correlationId,
         messageId: this.options.message.id,
         elidedResultCount: fitted.elidedCount,
-        continuationMessageCount: this.continuation.length,
+        continuationMessageCount: continuation.length,
       });
     }
     return fitted.messages;
@@ -1170,17 +1503,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 
   /** A bounded source-membership receipt, through the same offered catalog and authority as reads. */
   private async prepareKnowledgeInventory(): Promise<void> {
-    const { deps, message, managed } = this.options;
+    const { deps, message } = this.options;
+    const managed = this.managed;
     if (chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length === 0) return;
     const tool = managed.projection.tools.find(
-      (entry) => entry.toolRef.canonicalId === "keiko.knowledge.documents",
+      (entry) => entry.toolRef.canonicalId === KNOWLEDGE_DOCUMENTS_TOOL_ID,
     );
     requireDispatch(tool !== undefined, "failed", "handler-unavailable");
     const offered = this.binder.offerTool(tool.toolRef);
     const args = { view: "inventory" };
+    const callId = `runtime-inventory-${randomUUID()}`;
+    this.incidentalKnowledgeReadCallIds.add(callId);
     await this.dispatch(
       {
-        id: `runtime-inventory-${randomUUID()}`,
+        id: callId,
         name: tool.alias,
         arguments: args,
         invocation: {
@@ -1201,29 +1537,49 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * dispatched like any other: mode, approval, authority, budget and idempotency all still apply,
    * and its result reaches the model's next round like a model-issued one.
    */
-  private async offerBatchDrafts(calls: NormalizedResponse["toolCalls"]): Promise<void> {
-    for (const call of calls) {
-      if (
-        call.invocation?.toolRef.canonicalId !== JIRA_DRAFT_BATCH_TOOL_ID ||
-        this.offeredBatchCalls.has(call.id)
-      )
-        continue;
-      this.offeredBatchCalls.add(call.id);
-      if (this.batchOfferEnded()) {
-        this.recordBatchDraftOffer("turn-ended");
-        continue;
-      }
-      const stored = this.options.deps.store
-        .findMessageById(this.options.message.id)
-        ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === call.id);
-      if (stored === undefined) {
-        this.recordBatchDraftOffer("no-stored-result");
-        continue;
-      }
-      const decision = batchDraftDecision(stored);
-      if (decision.kind === "skip") this.recordBatchDraftOffer(decision.reason);
-      else await this.dispatchBatchDraft(decision); // NOSONAR typescript:S9382 -- the approval of one batch settles before the next batch is offered
+  private offerBatchDrafts(calls: NormalizedResponse["toolCalls"]): Promise<void> {
+    return this.settleToolCalls(calls, (call) => this.offerBatchDraft(call));
+  }
+  private async offerBatchDraft(call: NormalizedResponse["toolCalls"][number]): Promise<void> {
+    if (
+      call.invocation?.toolRef.canonicalId !== JIRA_DRAFT_BATCH_TOOL_ID ||
+      this.offeredBatchCalls.has(call.id)
+    )
+      return;
+    this.offeredBatchCalls.add(call.id);
+    if (this.batchOfferEnded()) {
+      this.recordBatchDraftOffer("turn-ended");
+      return;
     }
+    const stored = this.options.deps.store
+      .findMessageById(this.options.message.id)
+      ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === call.id);
+    if (stored === undefined) {
+      this.recordBatchDraftOffer("no-stored-result");
+      return;
+    }
+    const decision = batchDraftDecision(stored);
+    if (decision.kind === "skip") this.recordBatchDraftOffer(decision.reason);
+    else await this.dispatchBatchDraft(decision);
+  }
+  /** One receipt settles before the next call; callback continuation retains no growing chain. */
+  private settleToolCalls(
+    calls: NormalizedResponse["toolCalls"],
+    settle: (call: NormalizedResponse["toolCalls"][number]) => Promise<void>,
+  ): Promise<void> {
+    const remaining = calls.values();
+    return new Promise<void>((resolve, reject) => {
+      const next = (): void => {
+        const call = remaining.next();
+        if (call.done) {
+          resolve();
+          return;
+        }
+        // A flat chain: a synchronous throw in settle becomes a rejection that reaches the caller.
+        void Promise.resolve(call.value).then(settle).then(next, reject);
+      };
+      next();
+    });
   }
   /** A cancelled, early-ended or scope-changed turn never gets a draft offered on its behalf. */
   private batchOfferEnded(): boolean {
@@ -1280,39 +1636,63 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       throw error;
     });
     await this.inventoryPreparation;
-    while (this.counters.iterations < this.limits.maxIterations) {
-      this.admitRound(request.modelId, signal);
-      const offered = this.binder.offer();
-      const round = this.roundRequest(request, offered);
-      const response = await this.callRound(model, round, signal, retryFollows); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
-      if (response === undefined) continue;
-      observeRound?.(response);
-      this.chargeUsage(response);
-      if (response.toolCalls.length === 0) {
-        const answer: NormalizedResponse = {
-          ...response,
-          usage: {
-            ...response.usage,
-            promptTokens: this.promptTokens,
-            completionTokens: this.completionTokens,
-          },
-        };
-        if (!this.correctAnswer(answer, request)) return this.knowledgeAnswer(answer);
-        continue;
-      }
-      requireDispatch(
-        response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
-        "denied",
-        "budget-exhausted",
-      );
-      const prepared = this.withCitationSources(response);
-      this.retainToolResponse(request.modelId, prepared);
-      for (const call of prepared.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
-      this.currentToolResponse = undefined;
-      await this.offerBatchDrafts(prepared.toolCalls); // NOSONAR typescript:S9382 -- the next model round reads the batch offer this round settled
-      this.correctedSinceProgress = false;
+    return new Promise<NormalizedResponse>((resolve, reject) => {
+      // Only this completion promise spans rounds; next never returns the next round's promise.
+      const next = (): void => {
+        void Promise.resolve()
+          .then(() => this.runRound(model, request, signal, observeRound, retryFollows))
+          .then((answer) => {
+            if (answer === undefined) next();
+            else resolve(answer);
+          }, reject);
+      };
+      next();
+    });
+  }
+  /** Admission, model usage and every tool receipt of this round precede the next round. */
+  private async runRound(
+    model: ModelPort,
+    request: GatewayCallRequest,
+    signal: AbortSignal,
+    observeRound?: (response: NormalizedResponse) => void,
+    retryFollows?: (error: unknown) => boolean,
+  ): Promise<NormalizedResponse | undefined> {
+    requireDispatch(
+      this.counters.iterations < this.limits.maxIterations,
+      "denied",
+      "budget-exhausted",
+    );
+    this.admitRound(request.modelId, signal);
+    const offered = this.binder.offer();
+    const round = this.roundRequest(request, offered);
+    const response = await this.callRound(model, round, signal, retryFollows);
+    if (response === undefined) return undefined;
+    observeRound?.(response);
+    this.chargeUsage(response);
+    if (response.toolCalls.length === 0) {
+      const answer: NormalizedResponse = {
+        ...response,
+        usage: {
+          ...response.usage,
+          promptTokens: this.promptTokens,
+          completionTokens: this.completionTokens,
+        },
+      };
+      return this.correctAnswer(answer, request) ? undefined : this.knowledgeAnswer(answer);
     }
-    requireDispatch(false, "denied", "budget-exhausted");
+    requireDispatch(
+      response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
+      "denied",
+      "budget-exhausted",
+    );
+    const prepared = this.withCitationSources(response);
+    this.retainToolResponse(request.modelId, prepared);
+    await this.settleToolCalls(prepared.toolCalls, (call) => this.dispatch(call));
+    await this.activateToolSelection();
+    this.currentToolResponse = undefined;
+    await this.offerBatchDrafts(prepared.toolCalls);
+    this.correctedSinceProgress = false;
+    return undefined;
   }
 
   /** What the turn's tools may read of it: the model it runs on and the sources `[n]` designates. */
@@ -1473,7 +1853,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
-    const coverage = knowledgeTurnCoverage(this.settledExchanges);
+    const coverage = knowledgeTurnCoverage(this.settledExchanges, {
+      incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
+    });
     const knowledge = coverage === undefined ? undefined : knowledgeCoverageCorrection(coverage);
     if (knowledge !== undefined && coverage !== undefined)
       corrections.push({
@@ -1578,6 +1960,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAfterScopeChange"
   | "endedEarly"
   | "reportsToolAction"
+  | "readOnlySynthesisRequest"
   | "settleRetryFailure"
   | "bindEvidenceSources"
 >;
@@ -1590,6 +1973,7 @@ export function bindChatToolCatalog<Consumer extends CatalogConsumer>(options: {
   readonly consumerPort: CatalogConsumerPort<Consumer>;
   readonly admission: Pick<CatalogToolBinderInput<Consumer>, "authorityPort" | "approvalPort">;
   readonly budgetPort: CatalogToolBudgetPort<Consumer>;
+  readonly invocationRegistry?: CodingToolInvocationRegistry;
 }): CatalogToolBinder {
   const { deps, managed, context, consumerPort, admission, budgetPort } = options;
   return createCatalogToolBinder<Consumer>(
@@ -1609,7 +1993,8 @@ export function bindChatToolCatalog<Consumer extends CatalogConsumer>(options: {
       context: () => context,
       now: Date.now,
       mintId: randomUUID,
-      invocationRegistry: createCodingToolInvocationRegistry({ now: Date.now }),
+      invocationRegistry:
+        options.invocationRegistry ?? createCodingToolInvocationRegistry({ now: Date.now }),
     },
   );
 }

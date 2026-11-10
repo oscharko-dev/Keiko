@@ -25,7 +25,7 @@ export async function withLabAdmin(session, run) {
         .getByRole("heading", { name: "Administrator Access", exact: true })
         .waitFor({ state: "hidden" });
     }
-    await run(page);
+    return await run(page);
   } catch {
     // Playwright error details may contain filled values or CSRF-bearing URLs.
     throw new TypeError("Synthetic Jira administration failed");

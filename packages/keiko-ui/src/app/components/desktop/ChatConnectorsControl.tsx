@@ -71,6 +71,10 @@ function useChatConnectorPatch(
   return { busy, failed: failedChat === chat.id, submit };
 }
 
+function selectedChatToolMode(chat: Chat): NonNullable<Chat["toolMode"]> {
+  return chat.effectiveToolMode ?? chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
+}
+
 /** A pod deleted or re-verified elsewhere changes the binding; read the Chat again. */
 function useCanonicalChatRefresh(chat: Chat, onChatChanged: (chat: Chat) => void): void {
   const latest = useRef(chat);
@@ -107,16 +111,20 @@ export function ChatConnectorsControl({
       selectedServers={chat.mcpServers}
       pods={pods.pods}
       boundPodId={chat.jiraPodBinding?.podId}
+      jiraAdministrationEnabled={!pods.failed && chat.jiraAdministrationEnabled === true}
+      onJiraAdministrationChange={(jiraAdministrationEnabled) =>
+        patch.submit({ jiraAdministrationEnabled })
+      }
       loading={servers.loading || pods.loading}
       busy={patch.busy}
       failed={patch.failed || servers.failed || pods.failed}
       mode={{
-        value: chat.effectiveToolMode ?? chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
+        value: selectedChatToolMode(chat),
         ceiling: chat.toolModeCeiling ?? CHAT_TOOL_DEFAULT_MODE,
         onChange: (toolMode) => patch.submit({ toolMode }),
       }}
       onServersChange={(mcpServers) => patch.submit({ mcpServers })}
-      onPodChange={(jiraPodId) => patch.submit({ jiraPodId })}
+      onPodChange={(jiraPodId) => patch.submit({ jiraPodId, jiraAdministrationEnabled: false })}
       onOpen={() => {
         servers.reload();
         pods.reload();

@@ -1,10 +1,11 @@
 // The lab's mid-turn action starts exactly when the stored transcript reaches its anchor (S17).
 import { describe, expect, it } from "vitest";
 import { startDuring } from "../testing/jira-chat-lab/requirements/mid-turn.mjs";
+import { canonicalToolId } from "../testing/jira-chat-lab/requirements/tool-exchanges.mjs";
 
 const exchange = (operation, status) => ({
   call: { id: "call", name: operation.replace(".", "_"), arguments: {} },
-  result: { toolRef: { canonicalId: `keiko.${operation}` }, status, data: {} },
+  result: { toolRef: { canonicalId: canonicalToolId(operation) }, status, data: {} },
 });
 const idle = () => false;
 

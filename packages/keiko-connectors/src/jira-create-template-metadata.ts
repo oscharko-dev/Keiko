@@ -1,4 +1,7 @@
-import type { JiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraFieldMetadata,
+  JiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -11,6 +14,7 @@ import {
 } from "./jira-managed-template-gate.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { requestFor } from "./jira-managed-mutations.js";
+import { jiraCreateMutationMetadata } from "./jira-managed-mutation-metadata.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
 
 const TEMPLATES_MAX = 8;
@@ -172,6 +176,8 @@ export interface JiraCreateTemplateRules {
   readonly facts: readonly CatalogJsonObject[];
   readonly requiredSections: readonly string[];
   readonly requiredFields: readonly string[];
+  /** Display names of required fields Jira's create metadata named, keyed by field id. */
+  readonly requiredFieldNames: Readonly<Record<string, string>>;
   readonly requiredLabels: readonly string[];
 }
 
@@ -184,6 +190,7 @@ const NO_RULES: JiraCreateTemplateRulesResult = {
   facts: [],
   requiredSections: [],
   requiredFields: [],
+  requiredFieldNames: {},
   requiredLabels: [],
 };
 /** Fields Keiko writes itself in every drafted issue, so a template naming them asks nothing more. */
@@ -203,6 +210,7 @@ function rulesOf(matching: readonly JiraIssueTemplate[]): JiraCreateTemplateRule
         .flatMap((template) => template.requiredFields)
         .filter((field) => !WRITTEN_BY_KEIKO.has(field.trim().toLowerCase())),
     ),
+    requiredFieldNames: {},
     requiredLabels: unique(matching.flatMap((template) => template.labels.required)),
   };
 }
@@ -212,7 +220,7 @@ function rulesOf(matching: readonly JiraIssueTemplate[]): JiraCreateTemplateRule
  * them: the same identity reads, the same matching. A connection without a template source has no
  * rules; an unreadable library or identity fails closed.
  */
-export async function readJiraCreateTemplateRules(
+async function storedTemplateRules(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
   projectId: string,
@@ -239,4 +247,76 @@ export async function readJiraCreateTemplateRules(
   return rulesOf(
     matchingJiraIssueTemplates(set.templates, { ...identity, operation: "create", fields: {} }),
   );
+}
+
+/** Fields every drafted issue carries from Keiko or Jira, never from the model's text. */
+const SET_WITHOUT_THE_MODEL: ReadonlySet<string> = new Set([
+  "project",
+  "issuetype",
+  "summary",
+  "description",
+  "labels",
+  "parent",
+  "issuelinks",
+  "reporter",
+]);
+
+/** A value the model can write as one string: a text field, or a plugin field declared `string`. */
+function writableAsText(field: JiraFieldMetadata): boolean {
+  return field.kind === "text" || (field.kind === "opaque" && field.schemaType === "string");
+}
+
+/**
+ * The string fields Jira requires on this create without supplying a value (a Data Center Epic's
+ * Epic Name, a plugin field). Nothing else sets them, so the model must write them (#4288).
+ */
+function modelWrittenRequiredFields(
+  fields: readonly JiraFieldMetadata[],
+): readonly JiraFieldMetadata[] {
+  return fields.filter(
+    (field) =>
+      field.required &&
+      !field.hasDefaultValue &&
+      writableAsText(field) &&
+      !SET_WITHOUT_THE_MODEL.has(field.id),
+  );
+}
+
+function withMetadataFields(
+  rules: JiraCreateTemplateRules,
+  fields: readonly JiraFieldMetadata[],
+): JiraCreateTemplateRulesResult {
+  // A template may name the same field by its display name; it is asked for once, as the template names it.
+  const named = new Set(rules.requiredFields.map((field) => field.trim().toLowerCase()));
+  const required = modelWrittenRequiredFields(fields).filter(
+    (field) => !named.has(field.id.toLowerCase()) && !named.has(field.name.trim().toLowerCase()),
+  );
+  return {
+    ok: true,
+    ...rules,
+    requiredFields: unique([...rules.requiredFields, ...required.map((field) => field.id)]),
+    requiredFieldNames: Object.fromEntries(required.map((field) => [field.id, field.name])),
+  };
+}
+
+/**
+ * The create rules a draft batch writes against: the stored templates' rules plus the plain-text
+ * fields Jira's create metadata requires. Without them every staged page is refused for a field the
+ * model was never asked for. A metadata read that fails adds nothing; staging still validates
+ * every issue against the current metadata and refuses what is missing.
+ */
+export async function readJiraCreateTemplateRules(
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  projectId: string,
+  issueTypeId: string,
+): Promise<JiraCreateTemplateRulesResult> {
+  const rules = await storedTemplateRules(context, connection, projectId, issueTypeId);
+  if (!rules.ok || !admitted(context)) return rules;
+  const metadata = await jiraCreateMutationMetadata(
+    requestFor(connection, context),
+    projectId,
+    issueTypeId,
+  );
+  return metadata.ok ? withMetadataFields(rules, metadata.fields) : rules;
 }

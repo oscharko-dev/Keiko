@@ -36,6 +36,7 @@ const MCP_FAILURES: Readonly<
   Record<ManagedMcpFailure, readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason]>
 > = {
   "not-admitted": ["failed", "handler-unavailable"],
+  "connector-scope-missing": ["failed", "handler-unavailable"],
   closed: ["failed", "handler-unavailable"],
   "invalid-arguments": ["invalid", "invalid-arguments"],
   "descriptor-drift": ["failed", "handler-mismatch"],
@@ -47,6 +48,10 @@ const MCP_FAILURES: Readonly<
   "result-too-large": ["failed", "handler-failed"],
   backoff: ["failed", "handler-unavailable"],
 };
+/** Reuses the closed adapter vocabulary when a private callback receives a runtime value. */
+export function isManagedMcpFailure(value: unknown): value is ManagedMcpFailure {
+  return typeof value === "string" && Object.hasOwn(MCP_FAILURES, value);
+}
 function catalogFailure(error: unknown): unknown {
   if (!(error instanceof ManagedMcpError)) return error;
   if (error.reason === "tool-error" && error.structuredResult !== undefined)
@@ -195,6 +200,16 @@ export function managedCatalogToolDefinitions(
 ): readonly ToolDefinition[] {
   const entries = managedCatalogEntries(routes, declarations);
   return gatewayToolDefinitions(managedToolCatalog(entries, profile, referenceTimeMs), profile);
+}
+/** The same compiler-owned projection for a private captured result; it grants no authority. */
+export function managedCatalogProjection(
+  routes: readonly RouteIdentity[],
+  declarations: readonly DeclarationIdentity[],
+  profile: CatalogVersionRef,
+  referenceTimeMs: number,
+): CompiledToolProjection {
+  const entries = managedCatalogEntries(routes, declarations);
+  return compileToolProjection(managedToolCatalog(entries, profile, referenceTimeMs), profile);
 }
 function compileEntries<Consumer extends CatalogConsumer>(
   host: ManagedMcpHost<CatalogHandlerContext<Consumer>>,

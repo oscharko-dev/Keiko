@@ -2,7 +2,15 @@
 // Uses vitest + React Testing Library (jsdom) matching the existing test pattern.
 // jest-axe WCAG check at the end per GroundedAnswer.a11y.test.tsx pattern.
 
-import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { readFileSync } from "node:fs";
@@ -1287,6 +1295,62 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await waitFor(() => {
       expect(cancelIndexingImpl).toHaveBeenCalledWith(id);
     });
+  });
+
+  it("removes Cancel when indexing finishes without remounting the Knowledge Pod row", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let finishReload: ((response: CapsulesResponse) => void) | undefined;
+    const response = new Promise<CapsulesResponse>((resolve) => {
+      finishReload = resolve;
+    });
+    const fetchCapsulesImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        capsules: [makeCapsule({ displayName: "Running Pod", lifecycleState: "indexing" })],
+      })
+      .mockReturnValue(response);
+    const view = render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} />);
+    try {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const row = screen.getByRole("article", { name: "Knowledge Pod: Running Pod" });
+      expect(
+        within(row).getByRole("button", {
+          name: "Cancel indexing for Knowledge Pod Running Pod",
+        }),
+      ).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      // A real HTTP response yields between loading and settlement; the existing row must
+      // stay mounted through that pending interval as well as after the new data arrives.
+      expect(screen.getByRole("article", { name: "Knowledge Pod: Running Pod" })).toBe(row);
+      if (finishReload === undefined) throw new TypeError("Missing held Pod reload resolver");
+      const finish = finishReload;
+      await act(async () => {
+        finish({
+          capsules: [makeCapsule({ displayName: "Running Pod", lifecycleState: "ready" })],
+        });
+        await response;
+      });
+      expect(
+        within(row).queryByRole("button", {
+          name: "Cancel indexing for Knowledge Pod Running Pod",
+        }),
+      ).toBeNull();
+      expect(screen.getByRole("article", { name: "Knowledge Pod: Running Pod" })).toBe(row);
+      expect(fetchCapsulesImpl).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(fetchCapsulesImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      view.unmount();
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("asks for confirmation before calling disconnectCapsule (destructive, no undo)", async () => {

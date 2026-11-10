@@ -7,6 +7,8 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import type { JiraIssueTemplateSet } from "./jira-managed-template-gate.js";
+import { gateJiraSchemaRuleImpact } from "./jira-managed-template-gate.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
   checkJiraManagedMutationTemplates,
   executeJiraManagedMutation,
@@ -22,6 +24,7 @@ function named(id: string, type: string, name: string, required = false): Record
 const CREATE_FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
+  named("parent", "issuelink", "Parent"),
   named("summary", "string", "Summary", true),
   {
     ...named("description", "string", "Description"),
@@ -43,14 +46,18 @@ const EDIT_FIELDS = {
   issuelinks: LINKS_FIELD,
 };
 
-function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTemplate {
+function template(
+  frontMatter: readonly string[],
+  body = SECTIONS,
+  issueType = "Story",
+): JiraIssueTemplate {
   const result = parseJiraIssueTemplate(
     [
       "---",
       "keiko: jira-issue-template",
       "version: 1",
       "project: SYN",
-      "issueType: Story",
+      `issueType: ${issueType}`,
       ...frontMatter,
       "---",
       body,
@@ -61,6 +68,204 @@ function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTem
 }
 const ALL_POINTS = ["activateOn: [create, edit, transition:Ready]"];
 
+describe("schema impacts on saved formal rules", () => {
+  const request = (): ReturnType<typeof vi.fn<JiraMutationRequest>> =>
+    vi.fn<JiraMutationRequest>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: undefined,
+      items: [
+        { id: "summary", name: "Summary" },
+        { id: "customfield_10016", name: "Story Points" },
+        { id: "customfield_10017", name: "Other" },
+      ],
+    });
+  it.each(["create", "edit", "transition:Ready"])(
+    "does not limit type-selection migration checks to edit: %s",
+    async (activation) => {
+      const rule = template([`activateOn: [${activation}]`, "summaryMinLength: 8"]);
+      expect(
+        await gateJiraSchemaRuleImpact({
+          request: request(),
+          source: (): JiraIssueTemplateSet => ({ templates: [rule], unreadable: 0 }),
+          impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] },
+        }),
+      ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+    },
+  );
+  it("includes a migration target's rule selection and leaves unrelated types alone", async () => {
+    const source = (): JiraIssueTemplateSet => ({
+      templates: [template(["activateOn: [transition:Ready]"])],
+      unreadable: 0,
+    });
+    const types = [
+      { id: "1", name: "Task" },
+      { id: "7", name: "Story" },
+    ];
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        source,
+        impact: { kind: "issue-type", types },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        source,
+        impact: { kind: "issue-type", types: [{ id: "1", name: "Task" }] },
+      }),
+    ).toEqual({ ok: true });
+  });
+  it.each(["requiredFields: [Story Points]", "parentField: Story Points"])(
+    "recognizes deleted custom-field references in %s",
+    async (line) => {
+      const source = (): JiraIssueTemplateSet => ({
+        templates: [template(["activateOn: [create]", line])],
+        unreadable: 0,
+      });
+      expect(
+        await gateJiraSchemaRuleImpact({
+          request: request(),
+          source,
+          impact: {
+            kind: "custom-fields",
+            fields: [{ id: "customfield_10016", name: "Story Points" }],
+          },
+        }),
+      ).toMatchObject({ ok: false });
+      expect(
+        await gateJiraSchemaRuleImpact({
+          request: request(),
+          source,
+          impact: { kind: "custom-fields", fields: [{ id: "customfield_10017", name: "Other" }] },
+        }),
+      ).toEqual({ ok: true });
+    },
+  );
+  it("refuses required parent-link removal without broadening a prose skill into enforcement", async () => {
+    const impact = { kind: "link-type" as const, names: ["Blocks", "blocks", "is blocked by"] };
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        impact,
+        source: () => ({
+          templates: [template(["activateOn: [create]", "parentLink: Blocks"])],
+          unreadable: 0,
+        }),
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        impact,
+        source: () => ({ templates: [], unreadable: 0 }),
+      }),
+    ).toEqual({ ok: true });
+  });
+  it("does not downgrade unreadable saved rules to an empty rule set", async () => {
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] },
+        source: () => ({
+          templates: [],
+          unreadable: 1,
+          unreadableNames: ["Synthetic formal record"],
+        }),
+      }),
+    ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  });
+});
+
+describe("issue deletion impacts on surviving formal references", () => {
+  function admission(
+    rule: JiraIssueTemplate,
+    items: readonly unknown[] = [],
+  ): {
+    request: ReturnType<typeof vi.fn<JiraMutationRequest>>;
+    source: () => JiraIssueTemplateSet;
+    impact: { kind: "issue-deletion" };
+  } {
+    const request = vi
+      .fn<JiraMutationRequest>()
+      .mockResolvedValue({ ok: true, status: 200, body: undefined, items });
+    return {
+      request,
+      source: (): JiraIssueTemplateSet => ({ templates: [rule], unreadable: 0 }),
+      impact: { kind: "issue-deletion" as const },
+    };
+  }
+  it.each([
+    "parentLink: Blocks",
+    "parentField: parent",
+    "requiredFields: [issuelinks]",
+    "requiredFields: [subtasks]",
+  ])("refuses an unproved surviving reference: %s", async (line) => {
+    expect(
+      await gateJiraSchemaRuleImpact(admission(template(["activateOn: [create]", line]))),
+    ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  });
+  it("does not apply the deleted object's content requirements as a surviving field state", async () => {
+    const input = admission(
+      template([
+        "activateOn: [create, transition:Ready]",
+        "summaryMinLength: 8",
+        "requiredLabels: [reviewed]",
+        "requiredFields: [Summary]",
+      ]),
+    );
+    expect(await gateJiraSchemaRuleImpact(input)).toEqual({ ok: true });
+    expect(input.request).not.toHaveBeenCalled();
+  });
+  it("uses observed scalar metadata to establish disjoint impact", async () => {
+    const input = admission(template(["activateOn: [edit]", "requiredFields: [Story Points]"]), [
+      {
+        id: "customfield_10016",
+        name: "Story Points",
+        schema: {
+          type: "number",
+          custom: "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        },
+      },
+    ]);
+    expect(await gateJiraSchemaRuleImpact(input)).toEqual({ ok: true });
+    expect(input.request).toHaveBeenCalledWith("field", "GET", undefined, "json-array");
+  });
+  it.each([undefined, { type: "string", custom: "plugin:issue-picker" }, { type: "issue" }])(
+    "does not invent disjointness from opaque/missing issue-reference metadata",
+    async (schema) => {
+      const input = admission(template(["activateOn: [create]", "parentField: Related Issue"]), [
+        {
+          id: "customfield_10100",
+          name: "Related Issue",
+          ...(schema === undefined ? {} : { schema }),
+        },
+      ]);
+      expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({ ok: false });
+    },
+  );
+  it("keeps an unreadable catalog fail-closed while unrelated content rules remain usable", async () => {
+    const input = admission(template(["activateOn: [edit]", "requiredFields: [Related Issue]"]));
+    input.request.mockResolvedValue({ ok: false, reason: "permission-denied" });
+    expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-unreadable" }],
+    });
+  });
+  it("does not convert prose-only/no-formal-rule sources into a deletion gate", async () => {
+    const request = vi.fn<JiraMutationRequest>();
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request,
+        source: () => ({ templates: [], unreadable: 0 }),
+        impact: { kind: "issue-deletion" },
+      }),
+    ).toEqual({ ok: true });
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
 interface ReadRoute {
   readonly suffix?: string;
   readonly includes?: string;
@@ -69,11 +274,17 @@ interface ReadRoute {
 }
 function readRoutes(remote: Remote): readonly ReadRoute[] {
   return [
-    { suffix: "/project/10000", body: { key: "SYN" } },
-    { suffix: "/issuetype/10001", body: { id: "10001", name: "Story" } },
+    { suffix: "/project/10000", body: { id: "10000", key: "SYN" } },
+    { suffix: "/issuetype/10001", body: { id: "10001", name: remote.issueTypeName ?? "Story" } },
     {
       includes: "createmeta",
-      body: { values: CREATE_FIELDS, start: 0, size: 100, last: true, total: CREATE_FIELDS.length },
+      body: {
+        values: remote.createFields ?? CREATE_FIELDS,
+        start: 0,
+        size: 100,
+        last: true,
+        total: (remote.createFields ?? CREATE_FIELDS).length,
+      },
     },
     { suffix: "editmeta", body: { fields: EDIT_FIELDS } },
     { suffix: "assignable/search", body: [{ name: "alice", active: true }] },
@@ -95,6 +306,14 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
       ? { suffix: "/field", body: [{ id: "customfield_10016", name: "Story Points" }] }
       : { suffix: "/field", body: {}, status: 404 },
     { suffix: "/issue/SYN-1", body: { id: "10001", key: "SYN-1", fields: remote.issue } },
+    {
+      suffix: "/issue/SYN-2",
+      body: {
+        id: "10002",
+        key: "SYN-2",
+        fields: { issuetype: remote.parentType ?? { id: "7", name: "Task" } },
+      },
+    },
   ];
 }
 interface Remote {
@@ -102,6 +321,10 @@ interface Remote {
   fieldCatalog: boolean;
   /** Jira answered transitions without transition or status names. */
   unnamedTransitions?: boolean;
+  parentType?: { id: string; name: string };
+  /** Replaces the create screen, for example with a Data Center Epic's Epic Name. */
+  createFields?: readonly Record<string, unknown>[];
+  issueTypeName?: string;
 }
 function fixture(
   templates: JiraIssueTemplateSet | (() => JiraIssueTemplateSet) | undefined,
@@ -188,6 +411,27 @@ const SET = (...templates: JiraIssueTemplate[]): JiraIssueTemplateSet => ({
 });
 
 describe("create", () => {
+  it("blocks a disallowed independently read parent type before the real create dispatch", async () => {
+    const saved = SET(
+      template(["activateOn: [create]", "parentField: parent", "parentIssueTypes: [Task]"]),
+    );
+    const invalid = fixture(saved, {
+      issue: {},
+      fieldCatalog: true,
+      parentType: { id: "8", name: "Epic" },
+    });
+    const args = { ...CREATE, fields: { ...CREATE.fields, parent: { key: "SYN-2" } } };
+    expect(await invalid.run("jira.create", args)).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "parent-type-mismatch", template: "SYN/Story" }],
+    });
+    expect(invalid.writes()).toEqual([]);
+    const valid = fixture(saved);
+    await valid.run("jira.create", args);
+    expect(valid.paths()).toContain("GET /context/rest/api/2/issue/SYN-2");
+    expect(valid.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
   it("refuses a violating create with structured violations and never writes", async () => {
     const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])));
     const result = await f.run("jira.create", {
@@ -455,6 +699,81 @@ describe("transition", () => {
 });
 
 describe("dry run before approval", () => {
+  it("refuses a mismatched native type both before approval and before create", async () => {
+    const f = fixture(SET(template(ALL_POINTS)));
+    const native = f.http.getMockImplementation();
+    if (native === undefined) throw new TypeError("Missing native fixture");
+    f.http.mockImplementation((request) =>
+      new URL(request.url).pathname.endsWith("/issuetype/10001")
+        ? Promise.resolve(response({ id: "10002", name: "Bug" }))
+        : native(request),
+    );
+    for (const operation of [f.check, f.run]) {
+      expect(await operation("jira.create", CREATE)).toMatchObject({
+        ok: false,
+        reason: "malformed-payload",
+        violations: [{ ruleId: "template-unreadable" }],
+      });
+    }
+    expect(f.writes()).toEqual([]);
+    f.http.mockImplementation(native);
+    expect(await f.check("jira.create", CREATE)).toEqual({ ok: true });
+    await f.run("jira.create", CREATE);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
+
+  it.each(["jira.edit", "jira.transition"] as const)(
+    "keeps %s unsent when the complete field read changes type",
+    async (operation) => {
+      const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])), {
+        fieldCatalog: true,
+        issue: {
+          project: { key: "SYN" },
+          issuetype: { id: "10001", name: "Story" },
+          summary: "Native task",
+          description: FULL_DESCRIPTION,
+          labels: [],
+          customfield_10016: 5,
+          status: { id: "1", name: "To Do" },
+        },
+      });
+      const native = f.http.getMockImplementation();
+      if (native === undefined) throw new TypeError("Missing native fixture");
+      f.http.mockImplementation((request) => {
+        const url = new URL(request.url);
+        return url.pathname.endsWith("/issue/SYN-1") &&
+          url.searchParams.get("fields")?.includes("customfield_10016")
+          ? Promise.resolve(
+              response({
+                id: "10001",
+                key: "SYN-1",
+                fields: {
+                  project: { key: "SYN" },
+                  issuetype: { id: "10002", name: "Bug" },
+                  customfield_10016: 5,
+                },
+              }),
+            )
+          : native(request);
+      });
+      const args: CatalogJsonObject =
+        operation === "jira.edit"
+          ? { issueKey: "SYN-1", fields: { summary: "Corrected native work" } }
+          : { issueKey: "SYN-1", transitionId: "31" };
+      expect(await f.check(operation, args)).toMatchObject({
+        ok: false,
+        reason: "conflict",
+        violations: [{ ruleId: "template-unreadable" }],
+      });
+      expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "conflict" });
+      expect(f.writes()).toEqual([]);
+      f.http.mockImplementation(native);
+      expect(await f.check(operation, args)).toEqual({ ok: true });
+      await f.run(operation, args);
+      expect(f.writes()).toHaveLength(1);
+    },
+  );
+
   it("reports violations and performs no write", async () => {
     const f = fixture(SET(template(ALL_POINTS)));
     expect(
@@ -634,6 +953,103 @@ describe("a required link rides on the primary write (#4177, review)", () => {
     );
     const refused = await f.run("jira.create", { ...CREATE, links: links("Blocks", "Relates") });
     expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.writes()).toEqual([]);
+  });
+});
+
+describe("a Data Center Epic create against a stored formal rule", () => {
+  const EPIC_NAME = "customfield_10011";
+  const EPIC_FIELDS = [
+    field("project", "project", true),
+    field("issuetype", "issuetype", true),
+    named("summary", "string", "Summary", true),
+    {
+      ...named("description", "string", "Description"),
+      schema: { type: "string", system: "description" },
+    },
+    {
+      ...named(EPIC_NAME, "string", "Epic Name", true),
+      schema: { type: "string", custom: "com.pyxis.greenhopper.jira:gh-epic-label" },
+    },
+  ];
+  const remote: Remote = {
+    issue: {},
+    fieldCatalog: true,
+    createFields: EPIC_FIELDS,
+    issueTypeName: "Epic",
+  };
+  const epicRule = (): JiraIssueTemplateSet =>
+    SET(template([...ALL_POINTS, "summaryMinLength: 20"], SECTIONS, "Epic"));
+  const epic = (fields: Record<string, unknown>): CatalogJsonObject => ({
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Too short", description: FULL_DESCRIPTION, ...fields },
+  });
+  it("reports the formal rule, not a field error, when the Epic Name is sent by id", async () => {
+    const f = fixture(epicRule(), remote);
+    expect(await f.run("jira.create", epic({ [EPIC_NAME]: "REQ-1" }))).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: expect.any(String) as string, template: "SYN/Epic" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+  it("creates the Epic once the rule holds, sending the Epic Name by id", async () => {
+    const f = fixture(epicRule(), remote);
+    const args = epic({ [EPIC_NAME]: "REQ-1" });
+    await f.run("jira.create", {
+      ...args,
+      fields: { ...(args.fields as object), summary: "A sufficiently long Epic summary" },
+    });
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
+  it("names the missing Epic Name field and the formal rule the rest breaks in one refusal", async () => {
+    const f = fixture(epicRule(), remote);
+    const result = await f.run("jira.create", epic({}));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: EPIC_NAME, validation: "required-field" },
+      violations: [{ ruleId: expect.any(String) as string, template: "SYN/Epic" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+  it("names only the missing Epic Name when the supplied fields satisfy every rule", async () => {
+    const f = fixture(epicRule(), remote);
+    const result = await f.run(
+      "jira.create",
+      epic({ summary: "A sufficiently long Epic summary" }),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: EPIC_NAME, validation: "required-field" },
+    });
+    expect(result).not.toHaveProperty("violations");
+    expect(f.writes()).toEqual([]);
+  });
+  it("still refuses a missing Epic Name without templates, naming only the field", async () => {
+    const f = fixture(undefined, remote);
+    const result = await f.run("jira.create", epic({}));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: EPIC_NAME, validation: "required-field" },
+    });
+    expect(result).not.toHaveProperty("violations");
+    expect(f.writes()).toEqual([]);
+  });
+  it("tells the model which field id carries a display name it sent instead", async () => {
+    const f = fixture(epicRule(), remote);
+    const result = await f.run("jira.create", epic({ "Epic Name": "REQ-1" }));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        validation: "invalid-field",
+        messages: [expect.stringContaining(EPIC_NAME) as string],
+      },
+    });
     expect(f.writes()).toEqual([]);
   });
 });

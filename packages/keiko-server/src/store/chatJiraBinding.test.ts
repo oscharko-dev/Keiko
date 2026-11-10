@@ -18,13 +18,19 @@ import { previewChatScopeUpdate } from "./chats.js";
 import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identity.js";
 import { decodeJiraChatState } from "./chatJiraBinding.js";
 import { buildRedactor } from "../deps.js";
-import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import {
+  createJiraProviderForCatalog,
+  jiraOperationBindingForTool,
+} from "../atlassian/jiraManagedProvider.js";
 import {
   createKeikoToolCatalog,
   compileToolProjection,
   type ToolResultValidationBinding,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  NATIVE_TOOL_CATALOG_RUNTIME,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 const FIRST = "aa6262ad-003d-4440-8519-5b84c3f87f01";
@@ -74,11 +80,19 @@ function historicalIssueBinding(): ToolResultValidationBinding {
   };
 }
 
-function historicalIssue(chatId: string, podId: string, browseUrl: string): void {
+function historicalIssue(
+  chatId: string,
+  podId: string,
+  browseUrl: string,
+): ToolResultValidationBinding {
   const binding = historicalIssueBinding();
+  const operationBinding = jiraOperationBindingForTool("jira.issue");
+  if (operationBinding === undefined)
+    throw new TypeError("Missing real Jira issue operation binding");
   const data = {
     outcome: "succeeded",
     items: [{ id: "10001", key: "SYN-1", summary: "Synthetic", browseUrl }],
+    operationBinding,
   };
   store.updateChat(chatId, { jiraPodId: podId }, target(podId));
   const message = store.createMessage({
@@ -120,6 +134,7 @@ function historicalIssue(chatId: string, podId: string, browseUrl: string): void
     },
     "historical-source",
   );
+  return binding;
 }
 
 it("keeps identical ticket keys attributable to their original Jira instance after replacement and reopen", () => {
@@ -134,13 +149,16 @@ it("keeps identical ticket keys attributable to their original Jira instance aft
     "https://10.1.2.3:8443/context/browse/SYN-1",
     "https://10.4.5.6:8443/context/browse/SYN-1",
   ] as const;
-  historicalIssue(chat.id, FIRST, urls[0]);
-  historicalIssue(chat.id, SECOND, urls[1]);
+  const bindings = [
+    historicalIssue(chat.id, FIRST, urls[0]),
+    historicalIssue(chat.id, SECOND, urls[1]),
+  ];
   const messages = store.listMessages(chat.id);
   expect(messages.map((message) => message.toolTranscript?.exchanges[0]?.result?.data)).toEqual(
     urls.map((browseUrl) => ({
       outcome: "succeeded",
       items: [{ id: "10001", key: "SYN-1", summary: "Synthetic", browseUrl }],
+      operationBinding: jiraOperationBindingForTool("jira.issue"),
     })),
   );
   expect(store.findChatById(chat.id)?.jiraPodBinding).toMatchObject({
@@ -151,9 +169,169 @@ it("keeps identical ticket keys attributable to their original Jira instance aft
   store = createNodeUiStore(dbPath, options);
   expect(store.listMessages(chat.id)).toEqual(messages);
   expect(store.findChatById(chat.id)?.jiraPodBinding?.podId).toBe(SECOND);
+  const raw = new DatabaseSync(dbPath);
+  try {
+    for (const [index, message] of messages.entries()) {
+      const row = raw
+        .prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?")
+        .get(message.id);
+      if (typeof row?.tool_transcript_json !== "string")
+        throw new TypeError("Missing persisted issue result");
+      const persisted = JSON.parse(row.tool_transcript_json) as {
+        readonly exchanges: readonly {
+          readonly call: { readonly id: string };
+          readonly resultBinding?: ToolResultValidationBinding;
+        }[];
+      };
+      expect(persisted.exchanges).toHaveLength(1);
+      expect(persisted.exchanges[0]?.call.id).toBe(`call-${index === 0 ? FIRST : SECOND}`);
+      expect(persisted.exchanges[0]?.resultBinding).toEqual(bindings[index]);
+    }
+  } finally {
+    raw.close();
+  }
+});
+
+it("refuses an unbound result against the current issue descriptor without altering stored history", () => {
+  const chat = store.createChat(project, "Current issue result contract", "model");
+  const binding = historicalIssue(chat.id, FIRST, "https://jira.example.invalid/browse/SYN-1");
+  const before = store.listMessages(chat.id);
+  const message = before[0];
+  if (message === undefined) throw new TypeError("Missing current issue message fixture");
+  const exchange = message.toolTranscript?.exchanges[0];
+  if (exchange === undefined) throw new TypeError("Missing current issue exchange fixture");
+  const result = exchange.result;
+  if (result === undefined) throw new TypeError("Missing current issue result fixture");
+  if (result.status !== "completed") throw new TypeError("Expected a completed issue result");
+  if (result.data === null || typeof result.data !== "object" || Array.isArray(result.data))
+    throw new TypeError("Missing current issue result fixture");
+  const { operationBinding, ...data } = result.data as CatalogJsonObject;
+  expect(operationBinding).toEqual(jiraOperationBindingForTool("jira.issue"));
+  const bound = store.findChatById(chat.id);
+  expect(() => {
+    store.updateChatToolTranscript(
+      message.id,
+      {
+        kind: "settled",
+        callId: exchange.call.id,
+        binding,
+        result: {
+          ...result,
+          data,
+          metrics: { ...result.metrics, outputBytes: Buffer.byteLength(JSON.stringify(data)) },
+        },
+      },
+      "unbound-current-source",
+    );
+  }).toThrow(expect.objectContaining({ reason: "result-contract-failed" }));
+  expect(store.listMessages(chat.id)).toEqual(before);
+  expect(store.findChatById(chat.id)).toEqual(bound);
 });
 
 describe("Chat Jira binding persistence", () => {
+  it("defaults administration off, binds explicit opt-in to CAS and advances its generation", () => {
+    const created = store.createChat(project, "Administration", "model");
+    expect(created.jiraAdministrationEnabled).toBe(false);
+    const bound = store.updateChat(created.id, { jiraPodId: FIRST }, target());
+    expect(bound.jiraAdministrationEnabled).toBe(false);
+    expect(() => store.updateChat(bound.id, { jiraAdministrationEnabled: true })).toThrow(
+      "current verified Jira Pod",
+    );
+    const enabled = store.updateChat(
+      bound.id,
+      {
+        jiraAdministrationEnabled: true,
+        expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(bound),
+      },
+      target(),
+    );
+    expect(enabled.jiraAdministrationEnabled).toBe(true);
+    expect(enabled.jiraBindingGeneration).toBe((bound.jiraBindingGeneration ?? 0) + 1);
+    expect(enabled.groundingScopeIdentity).not.toBe(bound.groundingScopeIdentity);
+    expect(() =>
+      store.updateChat(bound.id, {
+        jiraAdministrationEnabled: false,
+        expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(bound),
+      }),
+    ).toThrow();
+    expect(store.findChatById(bound.id)?.jiraAdministrationEnabled).toBe(true);
+    const changedMode = store.updateChat(bound.id, { toolMode: "governed-assist" });
+    expect(changedMode.jiraAdministrationEnabled).toBe(true);
+    const disabled = store.updateChat(bound.id, { jiraAdministrationEnabled: false });
+    expect(disabled.jiraAdministrationEnabled).toBe(false);
+    expect(disabled.jiraBindingGeneration).toBe((changedMode.jiraBindingGeneration ?? 0) + 1);
+  });
+
+  it.each(["disconnect", "replace-pod", "replace-credential", "remove-credential"] as const)(
+    "clears explicit administration on %s",
+    (change) => {
+      const created = store.createChat(project, "Administration", "model");
+      store.updateChat(created.id, { jiraPodId: FIRST }, target());
+      const enabled = store.updateChat(created.id, { jiraAdministrationEnabled: true }, target());
+      if (change === "disconnect") store.updateChat(created.id, { jiraPodId: null });
+      if (change === "replace-pod")
+        store.updateChat(created.id, { jiraPodId: SECOND }, target(SECOND));
+      if (change === "replace-credential") store.invalidateJiraPod(FIRST, 2);
+      if (change === "remove-credential") store.invalidateJiraPod(FIRST, null);
+      const current = store.findChatById(created.id);
+      expect(current?.jiraAdministrationEnabled).toBe(false);
+      expect(current?.jiraBindingGeneration).toBe((enabled.jiraBindingGeneration ?? 0) + 1);
+    },
+  );
+
+  it("refuses an administration field in legacy schema 1 instead of migrating a grant", () => {
+    const legacy = {
+      schemaVersion: 1,
+      generation: 1,
+      mode: "autonomous-delivery",
+      binding: {
+        podId: FIRST,
+        bindingGeneration: 1,
+        authenticationGeneration: 1,
+        connectedAtMs: 5,
+      },
+    };
+    expect(decodeJiraChatState(JSON.stringify(legacy))).toMatchObject({
+      schemaVersion: 2,
+      mode: "autonomous-delivery",
+      binding: legacy.binding,
+    });
+    expect(decodeJiraChatState(JSON.stringify(legacy)).jiraAdministrationEnabled).toBeUndefined();
+    expect(() =>
+      decodeJiraChatState(JSON.stringify({ ...legacy, jiraAdministrationEnabled: true })),
+    ).toThrow("Stored Jira Chat state is invalid");
+  });
+
+  it("does not grant administration with an absent, changed or stale credential binding", () => {
+    const created = store.createChat(project, "Administration", "model");
+    expect(() =>
+      store.updateChat(created.id, { jiraAdministrationEnabled: true }, target()),
+    ).toThrow();
+    expect(() =>
+      store.updateChat(created.id, { jiraPodId: FIRST, jiraAdministrationEnabled: true }, target()),
+    ).toThrow();
+    store.updateChat(created.id, { jiraPodId: FIRST }, target());
+    expect(() =>
+      store.updateChat(created.id, { jiraAdministrationEnabled: true }, target(FIRST, 2)),
+    ).toThrow("generation has changed");
+    expect(store.findChatById(created.id)?.jiraAdministrationEnabled).toBe(false);
+    expect(
+      decodeJiraChatState(
+        JSON.stringify({ schemaVersion: 2, generation: 0, mode: "autonomous-delivery" }),
+      ).jiraAdministrationEnabled,
+    ).toBeUndefined();
+    expect(() =>
+      decodeJiraChatState(
+        JSON.stringify({
+          schemaVersion: 2,
+          generation: 0,
+          mode: "autonomous-delivery",
+          jiraAdministrationEnabled: true,
+        }),
+      ),
+    ).toThrow();
+  });
+
   it("revokes all matching bindings atomically, retaining association across credential changes", () => {
     const first = store.createChat(project, "First", "model");
     const second = store.createChat(project, "Second", "model");
@@ -450,6 +628,7 @@ describe("Chat Jira binding persistence", () => {
         { ...target(), correlationId: "jira-binding-proof" },
       );
       store.updateChat(chat.id, { toolMode: "supervised-coding" });
+      store.updateChat(chat.id, { jiraAdministrationEnabled: true }, target());
       store.updateChat(chat.id, { jiraPodId: null });
       sink.close?.();
       const text = readPersistedActivityLog(project);
@@ -458,16 +637,18 @@ describe("Chat Jira binding persistence", () => {
         .filter(Boolean)
         .filter((line) => (JSON.parse(line) as { op?: string }).op === "chat.scope.update")
         .map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
-      expect(lines).toHaveLength(3);
+      expect(lines).toHaveLength(4);
       expect(lines[0]).toMatchObject({
         correlationId: "jira-binding-proof",
         jiraSourceCount: 1,
         jiraBindingGeneration: 1,
         toolMode: "autonomous-delivery",
       });
-      expect(lines[2]).toMatchObject({
+      expect(lines[2]).toMatchObject({ jiraAdministrationEnabled: true });
+      expect(lines[3]).toMatchObject({
+        jiraAdministrationEnabled: false,
         jiraSourceCount: 0,
-        jiraBindingGeneration: 3,
+        jiraBindingGeneration: 4,
         toolMode: "supervised-coding",
       });
       expect(text).not.toContain(FIRST);

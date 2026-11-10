@@ -18,6 +18,7 @@ import {
 import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
+import { jiraOperationDefinitions } from "./atlassian/jiraOperationRegistry.js";
 import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -31,7 +32,12 @@ import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/test
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
-import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRoutes.js";
+import {
+  handleDecideChatWriteApproval,
+  handleGetChatWriteApproval,
+} from "./atlassian/chatWriteApprovalRoutes.js";
+import * as appSessionAuthority from "./coding-app-session/appSessionReadAuthority.js";
+import { continuations } from "./chat-approval-continuation-state.js";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -47,10 +53,12 @@ import type {
   AtlassianCredentialMetadata,
 } from "@oscharko-dev/keiko-connectors";
 import type { ChatToolExchange, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps, currentContextProfileForModel, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import type { RouteContext, RouteResult } from "./routes.js";
+import type { ChatMessage } from "./store/index.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
@@ -293,7 +301,45 @@ function restartConsentGraph(deps: UiHandlerDeps): UiHandlerDeps {
     diagnostics: defaultServerDiagnosticSink,
   });
   cleanup.push(() => catalog.close());
+  preselectKnownFixtureTools(catalog);
   return { ...next, jiraChatCatalog: catalog };
+}
+
+/** These existing regressions isolate scope, approval and budget behavior with known tools. */
+function preselectKnownFixtureTools(
+  catalog: UiHandlerDeps["jiraChatCatalog"],
+  tool?: string,
+  additionalTools: readonly string[] = [],
+): void {
+  if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+  if (tool === undefined && additionalTools.length === 0) return;
+  vi.spyOn(catalog, "get").mockImplementation(async (scope) => {
+    const base = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
+    const operations = jiraOperationDefinitions();
+    const selected = await catalog.select(
+      operations
+        .filter((entry) =>
+          tool === undefined
+            ? base.has(entry.tool.replace(/[.-]/gu, "_")) || additionalTools.includes(entry.tool)
+            : entry.tool === tool,
+        )
+        .map((entry) => entry.identity),
+      scope,
+    );
+    if (tool === undefined) return selected;
+    if (selected.omitting === undefined) throw new TypeError("Missing fixture catalog projection");
+    const retained = new Set([tool]);
+    if (scope?.knowledgeScoped ?? true) {
+      retained.add("jira.draft-batch");
+      retained.add("jira.draft");
+    }
+    return {
+      ...selected.omitting(
+        operations.filter((entry) => !retained.has(entry.tool)).map((entry) => entry.tool),
+      ),
+      close: selected.close,
+    };
+  });
 }
 
 function context(body: Record<string, unknown>, approvalId?: string): RouteContext {
@@ -331,6 +377,8 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
 function runtime(
   mutation = false,
   deployment: Readonly<Record<string, string>> = {},
+  demandDiscovery = false,
+  selectedTool?: string,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -365,6 +413,7 @@ function runtime(
     rmSync(state, { recursive: true, force: true });
   });
   configure(deps);
+  if (!demandDiscovery) preselectKnownFixtureTools(deps.jiraChatCatalog, selectedTool);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Mixed Chat", MODEL);
   // Ask for approval is pinned so the concrete write approvals under test stay required; an
@@ -850,10 +899,13 @@ function providerBody(init: RequestInit | undefined): string {
 function isToolStep(body: string, step: ProviderStep): boolean {
   return (
     step === "repair-write" ||
-    (body.includes('"tools":') && (step === "tool" || step === "write" || step === "malformed"))
+    (body.includes('"tools":') &&
+      (step === "describe" || step === "tool" || step === "write" || step === "malformed"))
   );
 }
 function toolArguments(step: ProviderStep, commentBody: string): string {
+  if (step === "describe")
+    return JSON.stringify({ identities: ["GET /rest/agile/1.0/board/{boardId}/configuration"] });
   if (step === "repair-write")
     return JSON.stringify({ issueKey: "KEIKO-1", body: "Changed citation repair comment" });
   if (step === "write") return JSON.stringify({ issueKey: "KEIKO-1", body: commentBody });
@@ -876,6 +928,7 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
 type ProviderStep =
+  | "describe"
   | "tool"
   | "write"
   | "repair-write"
@@ -981,10 +1034,7 @@ function provider(
                       id: `mixed-call-${String(requests.length)}${index === 0 ? "" : `-${String(index)}`}`,
                       type: "function",
                       function: {
-                        name:
-                          step === "write" || step === "repair-write"
-                            ? "jira_comment"
-                            : "jira_projects",
+                        name: providerToolName(step),
                         arguments: toolArguments(step, commentBody),
                       },
                     })),
@@ -1003,6 +1053,43 @@ function provider(
   );
   return requests;
 }
+
+function providerToolName(step: ProviderStep): string {
+  if (step === "describe") return "jira_describe";
+  return step === "write" || step === "repair-write" ? "jira_comment" : "jira_projects";
+}
+
+it("offers curated Jira projects and discovers an additional schema while retaining mixed grounding and its read grant", async () => {
+  const f = runtime(false, {}, true);
+  const requests = provider(["describe", "tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const offered = requests.map(
+    (body) =>
+      (
+        JSON.parse(body) as {
+          tools?: { function: { name: string } }[];
+        }
+      ).tools?.map((tool) => tool.function.name) ?? [],
+  );
+  expect(requests).toHaveLength(3);
+  expect(offered[0]).toContain("jira_describe");
+  expect(offered[0]).toContain("jira_projects");
+  expect(offered[1]).toContain("jira_projects");
+  expect(offered[0]).not.toContain("jira_board_configuration");
+  expect(offered[1]).toContain("jira_board_configuration");
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect(f.acceptedReadGrants).toHaveLength(1);
+  expect(requests.every((request) => request.includes("File: src/Feature.ts"))).toBe(true);
+  expect((result.body as GroundedAnswer).content).toContain(
+    "Jira tool result: project SYN is visible.",
+  );
+  expect(
+    (result.body as GroundedAnswer).citations.some(
+      (citation) => "scopePath" in citation && citation.scopePath === "src/Feature.ts",
+    ),
+  ).toBe(true);
+});
 
 // #4175: a confirmed Jira tool round is charged to and bounded by the turn's Authority Envelope,
 // so it no longer spends the grounded answer's own token grant; the envelope still ends the turn.
@@ -1787,27 +1874,32 @@ function assertOriginalMutationRetryGrant(
   const synthesisCost = costs.slice(1).reduce((total, cost) => total + cost, 0);
   expect(synthesisCost).toBeLessThanOrEqual(grant);
   if (calls === 2) {
-    const tools = deps.jiraChatCatalog?.toolDefinitions();
-    if (tools === undefined) throw new Error("Expected the current Jira catalog");
+    const actual = JSON.parse(requests.at(-1) ?? "{}") as {
+      tools?: {
+        function: { name: string; description: string; parameters: ToolDefinition["parameters"] };
+      }[];
+    };
+    const tools = actual.tools?.map(({ function: tool }) => tool);
+    if (tools === undefined) throw new TypeError("Expected the physically offered Jira tools");
     const catalogFloor = countGatewayPromptTokens({ messages: [], tools });
     expect(grant - synthesisCost).toBeLessThan(catalogFloor);
   }
 }
 
 // Size the original cumulative grant around the complete provider prompts, including tool schemas.
-// Keep the owner's original 8192 caller allowance: shared Jira instructions must fit this
-// complete prompt. Physical-cost assertions derive from the owning gateway counter; only the
+// Keep the owner's original 8192 caller allowance with the operation this workflow needs.
+// Physical-cost assertions derive from the owning gateway counter; only the
 // confirmed write leaves this grant.
 it.each([
-  { grant: 8192, calls: 2 },
-  { grant: 10000, calls: 2 },
-  { grant: 12000, calls: 2 },
-  { grant: 17000, calls: 3 },
-  { grant: 18000, calls: 3 },
+  { grant: 4096, calls: 2 },
+  { grant: 4500, calls: 2 },
+  { grant: 4600, calls: 2 },
+  { grant: 8192, calls: 3 },
+  { grant: 10000, calls: 3 },
 ])(
   "settles an adopted retry inside the original positive input grant $grant",
   async ({ grant, calls }) => {
-    const f = runtime(true);
+    const f = runtime(true, {}, false, "jira.comment");
     boundCallerSynthesisInput(grant);
     const requests = provider(["write", "overflow", "answer", "answer"], undefined, undefined, {
       overflowContextWindow: RETRY_CONTEXT_WINDOW,
@@ -1838,7 +1930,7 @@ it.each([
 it.each(["cancel", "scope"] as const)(
   "keeps a %s interruption before the adopted retry's preflight terminal",
   async (kind) => {
-    const f = runtime(true);
+    const f = runtime(true, {}, false, "jira.comment");
     boundCallerSynthesisInput(8192);
     beforeAdoptedGroundedRetry(async () => {
       if (kind === "scope") await changeOwnedMode(f, f.chatId);
@@ -1903,6 +1995,20 @@ it.each(["answer", "uncited"] as const)(
 
 it("settles a committed mutation when the adopted window cannot fit the current tool catalog", async () => {
   const f = runtime(true);
+  // A bounded native selection still fits the catalog's compound byte ceiling while its full
+  // physical prompt exceeds the adopted window. The curated base alone now fits that window.
+  preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, [
+    "jira.project",
+    "jira.project-permissions",
+    "jira.project-statuses",
+    "jira.project-types",
+    "jira.project-type",
+    "jira.project-categories",
+    "jira.project-category",
+    "jira.project-version-page",
+    "jira.priority",
+    "jira.priority-page",
+  ]);
   const requests = provider(["write", "overflow", "answer"]);
   const body = {
     chatId: f.chatId,
@@ -1915,6 +2021,8 @@ it("settles a committed mutation when the adopted window cannot fit the current 
   expect(response.status).toBe(200);
   expect(requests).toHaveLength(2);
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  for (const cost of physicallyDispatchedPromptCosts(f.deps, requests))
+    expect(cost).toBeGreaterThan(8192);
   expect(JSON.stringify(response.body)).toContain("context window");
   const refused = gatewayPromptAdmissions(f.deps).at(-1);
   expect(refused).toMatchObject({ contextWindow: 8192, errorKind: "invalid-request" });
@@ -1962,7 +2070,7 @@ it("keeps a committed mutation's deadline answer when an overflow arrives after 
 });
 
 it("keeps the already sent empty-answer correction on its existing adopted-window retry", async () => {
-  const f = runtime();
+  const f = runtime(false, {}, false, "jira.projects");
   f.deps.store.updateChat(f.chatId, { connectedScope: null });
   const requests = provider(["tool", "empty", "overflow", "answer"]);
   const response = await startOwnedTurn(f, f.chatId);
@@ -2572,9 +2680,9 @@ it("rejects a bound mixed model without verified tool capability before any prov
   );
   expect(result).toMatchObject({
     status: 400,
-    body: { error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } },
+    body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
   });
-  expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling"));
+  expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling", "unverified"));
   expect(requests).toEqual([]);
   expect(f.jiraRequests).toEqual([]);
   expect(fetch).not.toHaveBeenCalled();
@@ -2896,4 +3004,129 @@ describe("Jira text cites the evidence pack of its own turn (F8)", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
   });
+});
+
+async function pendingGroundedWrite(f: ReturnType<typeof runtime>): Promise<{
+  readonly user: ChatMessage;
+  readonly approval: NonNullable<ChatToolExchange["approval"]>;
+  readonly canonicalTurnRef: string;
+}> {
+  await vi.waitFor(
+    () => {
+      expect(
+        f.deps.store
+          .listMessages(f.chatId)[0]
+          ?.toolTranscript?.exchanges.find((exchange) => exchange.approval !== undefined)?.approval
+          ?.state,
+      ).toBe("pending");
+    },
+    { timeout: 10_000 },
+  );
+  const user = f.deps.store.listMessages(f.chatId)[0];
+  const approval = user?.toolTranscript?.exchanges.find(
+    (exchange) => exchange.approval !== undefined,
+  )?.approval;
+  if (approval === undefined || user?.canonicalTurnRef === undefined)
+    throw new Error("Missing admitted grounded approval");
+  return { user, approval, canonicalTurnRef: user.canonicalTurnRef };
+}
+
+function expectGroundedCancellation(f: ReturnType<typeof runtime>, userId: string): void {
+  const user = f.deps.store.findMessageById(userId);
+  expect(user?.turnState).toBe("cancelled");
+  expect(
+    user?.toolTranscript?.exchanges.find((exchange) => exchange.approval !== undefined)?.approval
+      ?.state,
+  ).toBe("revoked");
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+}
+
+describe("grounded Jira approval continuation", () => {
+  it.each([
+    ["grounded", true],
+    ["grounded", false],
+    ["buffered", true],
+    ["buffered", false],
+  ] as const)(
+    "preserves only an observed bounded grounded approval on close: transport=%s leased=%s",
+    async (transport, leased) => {
+      const f = runtime(true);
+      await connectNamedDataPod(f, "Grounded continuation specification", "Feature returns true.");
+      const registry = approvalOwner(f.deps);
+      vi.spyOn(registry, "waitForChatWriteApproval").mockRestore();
+      vi.spyOn(appSessionAuthority, "resolveAppSessionReadAuthority").mockReturnValue({
+        sessionId: "sess_012345678901234567890123",
+        principalLabel: "local",
+        issuedAtMs: 1,
+        lastSeenAtMs: 1,
+        rotationCount: 0,
+      });
+      Object.assign(f.deps, {
+        codingAppSessionChannel: {
+          ...f.deps.codingAppSessionChannel,
+          isSessionLive: (): boolean => true,
+          beginOperation: (): undefined => undefined,
+        },
+      });
+      provider(["write", "answer"], "The comment was added.");
+      const ctx = context({
+        ...(transport === "buffered" ? { projectPath: f.root } : {}),
+        chatId: f.chatId,
+        content: "Add the Jira comment from the connected specification.",
+        modelId: MODEL,
+        clientTurnId: `grounded-continuation-${String(leased)}`,
+      });
+      if (leased) ctx.req.headers["x-keiko-chat-pending-lease"] = "bounded";
+      const outcome =
+        transport === "grounded"
+          ? handleGroundedAsk(ctx, f.deps)
+          : handleSendDesktopChat(ctx, f.deps);
+      try {
+        const { user, approval, canonicalTurnRef } = await pendingGroundedWrite(f);
+        expect(handleGetChatWriteApproval(context({}, approval.approvalId), f.deps)).toMatchObject({
+          status: 200,
+        });
+        ctx.res.destroy();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (!leased) {
+          await outcome;
+          expectGroundedCancellation(f, user.id);
+          return;
+        }
+        expect(
+          continuations.get(f.deps.store)?.get(canonicalTurnRef)?.controller.signal.aborted,
+        ).toBe(false);
+        expect(f.deps.store.findMessageById(user.id)).toMatchObject({
+          turnState: "pending",
+          toolTranscript: user.toolTranscript,
+        });
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+        const decision = context(
+          { decision: "approve", actionDigest: approval.actionDigest },
+          approval.approvalId,
+        );
+        expect((await handleDecideChatWriteApproval(decision, f.deps)).status).toBe(200);
+        expect((await outcome).status).toBe(200);
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+        expect(f.deps.store.findMessageById(user.id)).toMatchObject({ turnState: "completed" });
+        expect(
+          (
+            await handleDecideChatWriteApproval(
+              context(
+                { decision: "approve", actionDigest: approval.actionDigest },
+                approval.approvalId,
+              ),
+              f.deps,
+            )
+          ).status,
+        ).toBe(409);
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+      } finally {
+        ctx.res.destroy();
+        for (const entry of continuations.get(f.deps.store)?.values() ?? [])
+          entry.controller.abort();
+        await outcome;
+      }
+    },
+  );
 });

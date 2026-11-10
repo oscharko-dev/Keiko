@@ -12,6 +12,11 @@ import {
 } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import {
+  countJiraTemplateViolations,
+  JIRA_TEMPLATE_RULE_IDS,
+  type JiraTemplateRuleId,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { requirementReference } from "@oscharko-dev/keiko-quality-intelligence";
 import type { UiHandlerDeps } from "../deps.js";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
@@ -44,7 +49,7 @@ import {
 } from "./jiraDraftBatchArguments.js";
 import { JIRA_DRAFT_BATCH_FAILED_REFS_MAX } from "./jiraDraftBatchDescriptor.js";
 import { createBatchModel, type BatchModel } from "./jiraDraftBatchModel.js";
-import type { DraftBatchRequirement } from "./jiraDraftBatchPrompt.js";
+import type { DraftBatchRequirement, PageParseFaults } from "./jiraDraftBatchPrompt.js";
 
 export type JiraDraftBatchContext = CatalogHandlerContext<JiraChatCatalogConsumer>;
 
@@ -110,6 +115,8 @@ type Collected =
       readonly omittedCount: number;
       /** The filter provably saw every requirement it could select. */
       readonly selectionComplete: boolean;
+      /** Documents left out because they repeat another document's requirements. */
+      readonly copyDocumentCount: number;
     }
   | {
       readonly ok: false;
@@ -147,11 +154,22 @@ function selectedRequirements(
   readonly alreadyDrafted: number;
   /** Every requirement the filter selected, duplicates and already drafted ones included. */
   readonly selectedCount: number;
+  /** Documents that share a selected requirement ID, when no documents filter chose one. */
+  readonly ambiguousDocuments: readonly string[];
+  /** Documents left out because they repeat another document's requirements. */
+  readonly copyDocumentCount: number;
+  /** Requirements of the Pods once copies are left out: the whole collection to draft. */
+  readonly availableCount: number;
 } {
   let alreadyDrafted = 0;
   const byRef = new Map<string, DraftBatchRequirement>();
   const duplicateRefs = new Set<string>();
-  const selectedUnits = selectUnits(units, args.filter, redact);
+  const copies = args.filter.documents === undefined ? copyDocuments(units) : new Set<string>();
+  const selectedUnits = selectUnits(units, args.filter, redact).filter(
+    ({ entry }) => !copies.has(entry.documentScope),
+  );
+  const ambiguousDocuments =
+    args.filter.documents === undefined ? sharedIdDocuments(selectedUnits) : [];
   for (const { entry } of selectedUnits) {
     const ref = requirementReference(entry);
     if (drafted.has(ref)) {
@@ -162,19 +180,99 @@ function selectedRequirements(
       duplicateRefs.add(ref);
       continue;
     }
-    byRef.set(ref, {
-      ref,
-      title: clip(redact(entry.title), TITLE_CHARS_MAX),
-      section: clip(entry.sectionPath.map(redact).join(" > "), SECTION_CHARS_MAX),
-      text: clip(redact(entry.statement), REQUIREMENT_TEXT_CHARS_MAX),
-      criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
-    });
+    byRef.set(ref, batchRequirement(ref, entry, redact));
   }
   return {
     requirements: [...byRef.values()],
     duplicateRefs: [...duplicateRefs],
     alreadyDrafted,
     selectedCount: selectedUnits.length,
+    ambiguousDocuments,
+    copyDocumentCount: copies.size,
+    availableCount: units.filter(({ entry }) => !copies.has(entry.documentScope)).length,
+  };
+}
+
+function batchRequirement(
+  ref: string,
+  entry: Parameters<typeof selectUnits>[0][number]["entry"],
+  redact: (value: string) => string,
+): DraftBatchRequirement {
+  return {
+    ref,
+    title: clip(redact(entry.title), TITLE_CHARS_MAX),
+    section: clip(entry.sectionPath.map((part) => redact(part)).join(" > "), SECTION_CHARS_MAX),
+    text: clip(redact(entry.statement), REQUIREMENT_TEXT_CHARS_MAX),
+    criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
+  };
+}
+
+/** Requirement text compared across formats: extraction differs only in spacing and punctuation. */
+function comparableText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * Documents that are copies of another one, such as one requirements document uploaded as
+ * Markdown, DOCX and PDF: they hold the same requirement IDs with the same titles and statements.
+ * The first copy in stable scope order is drafted; the others would create every issue again.
+ * Documents that share IDs but differ in content are not copies and stay ambiguous (#4288).
+ */
+function copyDocuments(units: Parameters<typeof selectUnits>[0]): ReadonlySet<string> {
+  const contents = new Map<string, string[]>();
+  for (const { entry } of units) {
+    const content = contents.get(entry.documentScope) ?? [];
+    content.push(`${entry.id}\0${comparableText(entry.title)}\0${comparableText(entry.statement)}`);
+    contents.set(entry.documentScope, content);
+  }
+  const firstBySignature = new Map<string, string>();
+  const copies = new Set<string>();
+  for (const scope of [...contents.keys()].sort(compareText)) {
+    const signature = (contents.get(scope) ?? []).sort(compareText).join("\n");
+    if (firstBySignature.has(signature)) copies.add(scope);
+    else firstBySignature.set(signature, scope);
+  }
+  return copies;
+}
+
+/**
+ * The documents that hold one requirement ID more than once among the selection, such as the same
+ * requirements document as Markdown, DOCX and PDF. Drafting all of them would create every issue
+ * once per document, so the documents filter has to choose (#4288).
+ */
+function sharedIdDocuments(selected: Parameters<typeof selectUnits>[0]): readonly string[] {
+  const scopesById = new Map<string, Set<string>>();
+  for (const { entry } of selected) {
+    const scopes = scopesById.get(entry.id) ?? new Set<string>();
+    scopes.add(entry.documentScope);
+    scopesById.set(entry.id, scopes);
+  }
+  const shared = new Set<string>();
+  for (const scopes of scopesById.values()) {
+    if (scopes.size < 2) continue;
+    for (const scope of scopes) shared.add(scope);
+  }
+  return [...shared].sort(compareText);
+}
+
+function compareText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function ambiguousRequirements(documents: readonly string[], count: number): Collected {
+  return {
+    ok: false,
+    refusal: "requirements-ambiguous",
+    facts: {
+      availableRequirementCount: count,
+      availableDocuments: documents.slice(0, SCOPES_NAMED_MAX),
+      guidance:
+        "The same requirement IDs appear in several of availableDocuments, for example one requirements document in several formats. Call again with requirements.documents naming the one document to draft from, keeping the other filters; name several documents only when they hold different requirements.",
+    },
   };
 }
 
@@ -231,6 +329,8 @@ function collectRequirements(
     const cut = collection.cutReasons.length > 0 || collection.unitsOmitted > 0;
     if (cut && !args.filtered) return { ok: false, refusal: "requirements-cut" };
     const selected = selectedRequirements(collection.units, args, contentRedact(deps), drafted);
+    if (selected.ambiguousDocuments.length > 0)
+      return ambiguousRequirements(selected.ambiguousDocuments, selected.selectedCount);
     if (selected.requirements.length > 0)
       return {
         ok: true,
@@ -238,7 +338,8 @@ function collectRequirements(
         requirements: selected.requirements,
         duplicateRefs: selected.duplicateRefs,
         // A filter naming every document of the Pod still drafts the whole collection (#4292).
-        wholeCollection: !cut && selected.selectedCount === collection.units.length,
+        wholeCollection: !cut && selected.selectedCount === selected.availableCount,
+        copyDocumentCount: selected.copyDocumentCount,
         omittedCount: collection.unitsOmitted,
         selectionComplete: selectionProven(collection, args),
       };
@@ -324,9 +425,33 @@ function stageOutcome(result: ManagedMcpToolResult): DraftBatchStageOutcome {
   )
     return { kind: "staged", draftId, draftDigest, itemCount, pageCount };
   if (data.outcome === "rejected" || data.reason === "invalid-input")
-    return { kind: "rejected", guidance: rejectionGuidance(data), owner: rejectionOwner(data) };
+    return {
+      kind: "rejected",
+      guidance: rejectionGuidance(data),
+      owner: rejectionOwner(data),
+      violationRuleCounts: rejectionRuleCounts(data),
+    };
   const reason = typeof data.reason === "string" ? data.reason : "stage-failed";
   return { kind: "fatal", reason, transient: !PERMANENT_STAGE_REASONS.has(reason) };
+}
+
+function rejectionRuleCounts(
+  data: CatalogJsonObject,
+): Partial<Readonly<Record<JiraTemplateRuleId, number>>> {
+  const violations: { readonly ruleId: JiraTemplateRuleId }[] = [];
+  const candidates: readonly unknown[] = Array.isArray(data.violations) ? data.violations : [];
+  for (const violation of candidates) {
+    if (
+      violation === null ||
+      typeof violation !== "object" ||
+      Array.isArray(violation) ||
+      !("ruleId" in violation)
+    )
+      continue;
+    const ruleId = JIRA_TEMPLATE_RULE_IDS.find((candidate) => candidate === violation.ruleId);
+    if (ruleId !== undefined) violations.push({ ruleId });
+  }
+  return countJiraTemplateViolations(violations);
 }
 
 const REJECTION_KEYS = [
@@ -361,6 +486,8 @@ interface BatchRun {
   selectionComplete: boolean;
   /** Requirements a cut collection did not list. */
   omittedCount: number;
+  /** Documents left out because they repeat another document's requirements. */
+  copyDocumentCount: number;
 }
 
 function record(run: BatchRun, activity: JiraDraftBatchActivity): void {
@@ -384,7 +511,34 @@ function observation(run: BatchRun, observed: DraftBatchObservation): void {
       ...(observed.completionTokens === undefined
         ? {}
         : { completionTokens: observed.completionTokens }),
+      ...(observed.parseAttemptCount === undefined
+        ? {}
+        : { parseAttemptCount: observed.parseAttemptCount }),
+      ...(observed.stageAttemptCount === undefined
+        ? {}
+        : { stageAttemptCount: observed.stageAttemptCount }),
+      ...(observed.guidanceDigest === undefined ? {} : { guidanceDigest: observed.guidanceDigest }),
+      ...(observed.violationRuleCounts === undefined
+        ? {}
+        : { violationRuleCounts: observed.violationRuleCounts }),
+      ...parseFaultFields(observed.parseFaults),
     });
+}
+
+/** Why a page answer was sent back, so a slow batch is explained by its log alone (#4288). */
+function parseFaultFields(
+  faults: PageParseFaults | undefined,
+): Pick<
+  JiraDraftBatchActivity,
+  "unreadableAnswer" | "missingItemCount" | "missingSectionItemCount" | "missingFieldItemCount"
+> {
+  if (faults === undefined) return {};
+  return {
+    unreadableAnswer: faults.unreadable,
+    missingItemCount: faults.missingItemCount,
+    missingSectionItemCount: faults.missingSectionItemCount,
+    missingFieldItemCount: faults.missingFieldItemCount,
+  };
 }
 
 async function stagePage(
@@ -431,6 +585,8 @@ function deadlineGuidance(result: DraftBatchResult, drafted: number): string {
 }
 
 function partialGuidance(run: BatchRun, result: DraftBatchResult, drafted: number): string {
+  if (result.stopReason === "stage-rejection-unchanged")
+    return `${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved. The corrected page received the same stage refusal again, so Keiko stopped without splitting it further. Report failedRequirementRefs and review the refused content and applicable rules before another attempt.`;
   const notes = [
     result.stopReason === "deadline"
       ? deadlineGuidance(result, drafted)
@@ -464,6 +620,7 @@ function readWholeCollection(run: BatchRun): boolean {
 /** Facts that keep an incomplete selection from reading as a clean batch. */
 function selectionFacts(run: BatchRun): CatalogJsonObject {
   return {
+    ...(run.copyDocumentCount === 0 ? {} : { copyDocumentsSkipped: run.copyDocumentCount }),
     ...(run.selectionComplete
       ? {}
       : { selectionIncomplete: true, omittedRequirementCount: run.omittedCount }),
@@ -484,6 +641,15 @@ function originalRequirements(args: JiraDraftBatchArguments): CatalogJsonObject 
   };
 }
 
+function resultReason(
+  succeeded: boolean,
+  result: DraftBatchResult,
+  fatal: string | undefined,
+): CatalogJsonObject {
+  if (succeeded && result.stopReason !== "stage-rejection-unchanged") return {};
+  return { reason: fatal ?? result.stopReason ?? "nothing-drafted" };
+}
+
 function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject {
   const { progress } = result;
   const failedCount =
@@ -492,7 +658,7 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
   const fatal = run.fatalReason;
   return {
     outcome: succeeded ? "succeeded" : "failed",
-    ...(succeeded ? {} : { reason: fatal ?? result.stopReason ?? "nothing-drafted" }),
+    ...resultReason(succeeded, result, fatal),
     ...(result.draftId === undefined ? {} : { draftId: result.draftId }),
     ...(result.draftDigest === undefined ? {} : { draftDigest: result.draftDigest }),
     newDraft: run.args.draftId === undefined,
@@ -521,6 +687,8 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
 }
 
 function failureGuidance(result: DraftBatchResult, fatal: string | undefined): string {
+  if (result.stopReason === "stage-rejection-unchanged")
+    return "The corrected page received the same stage refusal again. Nothing was drafted; Keiko stopped without splitting it further. Report the refusal and review the content and applicable rules before another attempt.";
   if (fatal === "too-large")
     return "The backlog is larger than one draft can hold. Tell the user the items already written are saved and offer to draft the rest as a second batch with fewer requirements.";
   if (result.stopReason === "deadline")
@@ -650,6 +818,7 @@ function batchInput(
       rules: rulesText(rules),
       requiredSections: rules.requiredSections,
       requiredFields: rules.requiredFields,
+      requiredFieldNames: rules.requiredFieldNames,
     },
     placement: {
       projectId: placement.projectId,
@@ -705,6 +874,7 @@ async function runBatch(
   run.wholeCollection = collected.wholeCollection;
   run.selectionComplete = collected.selectionComplete;
   run.omittedCount = collected.omittedCount;
+  run.copyDocumentCount = collected.copyDocumentCount;
   const model = createBatchModel(deps, context);
   if (typeof model === "string") return refusalResult(run, model);
   const rules = await readJiraCreateTemplateRules(
@@ -755,6 +925,7 @@ export function createJiraDraftBatchExecutor(
       wholeCollection: false,
       selectionComplete: true,
       omittedCount: 0,
+      copyDocumentCount: 0,
     };
     if (connection.deployment !== "data-center")
       return refusalResult(run, "unsupported-deployment");

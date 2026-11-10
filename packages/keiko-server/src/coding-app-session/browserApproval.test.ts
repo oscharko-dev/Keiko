@@ -435,6 +435,38 @@ describe("explicit browser approval", () => {
     expect(f.store.list()).toEqual([]);
   });
 
+  it("does not replace the browser secret on a repeated completion while its turn is active", () => {
+    const f = fixture();
+    const key = keyPair();
+    const descriptor = request(f.service, key.publicKey);
+    expect(approve(f.service, f.ownerCookie, descriptor)).toBe(true);
+    const first = f.service.prove(
+      proof(challenge(f.service, descriptor.requestId), key.privateKey),
+      ORIGIN,
+    );
+    if (first.state !== "active") throw new Error("Missing first session");
+    const release = f.registry.beginOperation(first.mint.cookieToken);
+    const rotation = vi.spyOn(f.registry, "rotate");
+    const repeated = f.service.prove(
+      proof(challenge(f.service, descriptor.requestId), key.privateKey),
+      ORIGIN,
+      "browser-proof-audit",
+    );
+    expect(rotation).toHaveBeenCalledWith(first.mint.session.sessionId, {
+      onlyIfIdle: true,
+      correlationId: "browser-proof-audit",
+    });
+    expect(repeated.state).toBe("unavailable");
+    expect(f.registry.inspectOperationCount(first.mint.cookieToken)).toBe(1);
+    release?.();
+    const retried = f.service.prove(
+      proof(challenge(f.service, descriptor.requestId), key.privateKey),
+      ORIGIN,
+    );
+    expect(retried.state).toBe("active");
+    expect(f.registry.inspect(first.mint.cookieToken)).toBeUndefined();
+  });
+
   it("recovers a lost completion response by rotating the same session without extending its lifetime", () => {
     const f = fixture();
     const key = keyPair();

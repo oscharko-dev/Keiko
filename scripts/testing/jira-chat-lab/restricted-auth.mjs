@@ -36,7 +36,7 @@ export function restrictedAuthenticationObserver() {
         if (!state || request.method !== "POST") return;
         const path = new URL(request.url, "http://127.0.0.1").pathname;
         if (CHAT_PATHS.has(path)) observeChatResponse(response, state);
-        else if (path.endsWith("/chat-write-approval"))
+        else if (path.startsWith("/api/atlassian-connectors/chat-write-approval/"))
           response.once("finish", () => {
             if (response.statusCode === 200) state.approvals += 1;
           });

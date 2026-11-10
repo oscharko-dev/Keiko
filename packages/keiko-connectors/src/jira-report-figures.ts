@@ -1,6 +1,22 @@
 import { Buffer } from "node:buffer";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraReport, JiraReportContainer } from "./jira-report-types.js";
+import type { JiraReportEstimateUnavailableReason } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+
+const ESTIMATE_REASONS: Readonly<Record<JiraReportEstimateUnavailableReason, string>> = {
+  "project-not-specified": "no project was specified",
+  "field-not-found": "no estimate field is configured on the project's boards or screens",
+  "ambiguous-field": "the project has conflicting estimate fields",
+  "metadata-unavailable": "the project's estimate configuration could not be read",
+};
+export function jiraReportEstimateSummary(report: JiraReport): string {
+  const estimate = report.progress.project.estimate;
+  if (estimate === null)
+    return `Estimate: unavailable (${ESTIMATE_REASONS[report.scope.estimateUnavailableReason ?? "metadata-unavailable"]})`;
+  const unit = report.scope.estimateUnit === "seconds" ? "seconds" : "field units";
+  const field = report.scope.estimateFieldId ?? "timeoriginalestimate";
+  return `Estimate (${unit}, field ${field}): ${String(estimate.total)} total, ${String(estimate.done)} done, ${String(estimate.remaining)} remaining; ${String(estimate.unestimated)} issues without an estimate`;
+}
 
 /** Lines per list; the sections page the rest, and the block says how many it left out. */
 export const JIRA_REPORT_FIGURES_LINES_MAX = 300;
@@ -50,9 +66,11 @@ function containerLines(containers: readonly JiraReportContainer[]): readonly st
 }
 function estimateLines(report: JiraReport): readonly string[] {
   const { estimate } = report.progress.project;
+  if (estimate === null) return [jiraReportEstimateSummary(report)];
   const { total, done, remaining, unestimated } = estimate;
   const unit = report.scope.estimateUnit;
   return [
+    `Estimate field: ${report.scope.estimateFieldName ?? report.scope.estimateFieldId ?? "timeoriginalestimate"}`,
     unit === "seconds"
       ? "Estimate in seconds of original estimate (total;done;remaining):"
       : `Estimate in the unit of field ${report.scope.estimateFieldId ?? ""} (total;done;remaining):`,

@@ -460,6 +460,47 @@ describe("isClientDiagnosticIngestRequest", () => {
 
   // PR #3678 review: the Knowledge Pod catalog's availability picture is six bounded counts, never
   // a name, path or id, and never a field beyond them.
+  it("accepts only closed Jira result presentation counts and the parent digest", () => {
+    const presentation = {
+      messageDigest: "a".repeat(64),
+      exchangeCount: 1,
+      itemCount: 7,
+      shownCount: 5,
+      returnedCount: 8,
+      unreadableCount: 1,
+      problemCount: 2,
+      ruleCount: 1,
+      failure: "fields",
+      restored: true,
+    };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), jiraResultPresentation: presentation }),
+    ).toBe(true);
+    const { ruleCount: _omitted, ...missing } = presentation;
+    for (const invalid of [
+      missing,
+      { ...presentation, issueKey: "PRIVATE-1" },
+      { ...presentation, itemCount: -1 },
+      { ...presentation, shownCount: 8 },
+      { ...presentation, itemCount: 1.5 },
+      { ...presentation, itemCount: 1_000_000_001 },
+      { ...presentation, failure: "Private error" },
+      { ...presentation, restored: "true" },
+      { ...presentation, messageDigest: "private-message-id" },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), jiraResultPresentation: invalid }),
+      ).toBe(false);
+    }
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        jiraResultPresentation: presentation,
+        errorKind: "unknown",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only the six bounded knowledge catalog counts", () => {
     const counts = {
       podCount: 2,
@@ -658,6 +699,20 @@ describe("isClientStageIngestRequest", () => {
         }),
       ).toBe(true);
     }
+  });
+
+  it("admits the human-input stage without accepting private entry or request metadata", () => {
+    const report = { ...startedRequest(), stage: "jira human input" };
+    expect(isClientStageIngestRequest(report)).toBe(true);
+    for (const extra of [
+      { password: "synthetic-private-entry" },
+      { values: { license: "synthetic-license" } },
+      { requestId: `jhi_${"a".repeat(64)}` },
+      { username: "Private User" },
+      { host: "private.example.invalid" },
+      { error: "reflected private response body" },
+    ])
+      expect(isClientStageIngestRequest({ ...report, ...extra })).toBe(false);
   });
 
   it("accepts body-free deletion counts and rejects content, missing counts and impossible settlements", () => {
@@ -2326,6 +2381,24 @@ it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
         preview: { previewKind: "text", sourceTextBytesRead, canEdit: false },
       }),
     ).toBe(sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES);
+  },
+);
+
+it.each(["workspace-sync-idle", "workspace-sync-active", "workspace-sync-pull-pending"])(
+  "accepts only the closed workspace polling activity %s (#4321)",
+  (composerActivity) => {
+    const report = {
+      message: "Workspace polling state changed.",
+      clientTs: "2026-11-08T00:00:00.000Z",
+      composerActivity,
+    };
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerActivity: `${composerActivity}-private`,
+      }),
+    ).toBe(false);
   },
 );
 
