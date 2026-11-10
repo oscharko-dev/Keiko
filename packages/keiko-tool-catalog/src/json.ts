@@ -174,12 +174,23 @@ function copyWithinBounds(
   }
 }
 
+/** `Array.isArray` alone leaves a readonly array type in the union; this predicate removes it. */
+export function isCatalogJsonArray(
+  value: CatalogJsonValue | undefined,
+): value is readonly CatalogJsonValue[] {
+  return Array.isArray(value);
+}
+
+function jsonObject(value: CatalogJsonValue | undefined): CatalogJsonObject | undefined {
+  return typeof value === "object" && value !== null && !isCatalogJsonArray(value)
+    ? value
+    : undefined;
+}
+
 export function catalogObject(value: CatalogJsonValue | undefined): CatalogJsonObject {
-  requireCatalog(
-    typeof value === "object" && value !== null && !Array.isArray(value),
-    "invalid-shape",
-  );
-  return value as CatalogJsonObject;
+  const object = jsonObject(value);
+  requireCatalog(object !== undefined, "invalid-shape");
+  return object;
 }
 
 export function exactCatalogKeys(value: CatalogJsonObject, keys: readonly string[]): void {
@@ -189,9 +200,14 @@ export function exactCatalogKeys(value: CatalogJsonObject, keys: readonly string
   );
 }
 
+function jsonString(value: CatalogJsonValue | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 export function catalogString(value: CatalogJsonValue | undefined): string {
-  requireCatalog(typeof value === "string" && value.length > 0, "invalid-shape");
-  return value;
+  const text = jsonString(value);
+  requireCatalog(text !== undefined && text.length > 0, "invalid-shape");
+  return text;
 }
 
 export function catalogPositive(
@@ -206,6 +222,65 @@ export function catalogPositive(
 }
 
 export function catalogArray(value: CatalogJsonValue | undefined): readonly CatalogJsonValue[] {
-  requireCatalog(Array.isArray(value), "invalid-shape");
-  return value as readonly CatalogJsonValue[];
+  requireCatalog(isCatalogJsonArray(value), "invalid-shape");
+  return value;
+}
+
+/** A provider tool call after `copyCatalogJson`: its identity strings and its argument object. */
+export interface CatalogToolCall {
+  readonly arguments: CatalogJsonObject;
+  readonly id: string;
+  readonly name: string;
+}
+
+/** The same call with the bound invocation it claims; the normalizer still verifies that claim. */
+export interface BoundCatalogToolCall extends CatalogToolCall {
+  readonly invocation: CatalogJsonValue;
+}
+
+const CALL_KEYS: readonly string[] = ["arguments", "id", "name"];
+const BOUND_CALL_KEYS: readonly string[] = ["arguments", "id", "invocation", "name"];
+
+function callObject(
+  value: CatalogJsonValue,
+  keys: readonly string[],
+): CatalogJsonObject | undefined {
+  const object = jsonObject(value);
+  return object !== undefined &&
+    Object.keys(object).length === keys.length &&
+    keys.every((key) => Object.hasOwn(object, key))
+    ? object
+    : undefined;
+}
+
+// Keys are built in sorted order, the order `copyCatalogJson` gives its copy, so a call read here
+// serializes exactly as the copy it was read from.
+function callFields(object: CatalogJsonObject): CatalogToolCall | undefined {
+  const args = jsonObject(object.arguments);
+  const id = jsonString(object.id);
+  const name = jsonString(object.name);
+  return args !== undefined && id !== undefined && name !== undefined
+    ? { arguments: args, id, name }
+    : undefined;
+}
+
+/**
+ * Reads a copied call with exactly `id`, `name` and `arguments`, or returns undefined for any other
+ * shape. The caller applies its own id rule and its own rejection.
+ */
+export function readCatalogToolCall(value: CatalogJsonValue): CatalogToolCall | undefined {
+  const object = callObject(value, CALL_KEYS);
+  return object === undefined ? undefined : callFields(object);
+}
+
+/** As `readCatalogToolCall`, for a call that also carries exactly one `invocation`. */
+export function readBoundCatalogToolCall(
+  value: CatalogJsonValue,
+): BoundCatalogToolCall | undefined {
+  const object = callObject(value, BOUND_CALL_KEYS);
+  const call = object === undefined ? undefined : callFields(object);
+  const invocation = object?.invocation;
+  return call === undefined || invocation === undefined
+    ? undefined
+    : { arguments: call.arguments, id: call.id, invocation, name: call.name };
 }

@@ -19,6 +19,7 @@ import type { NormalizedToolCall, NormalizedResponse } from "@oscharko-dev/keiko
 import {
   createToolInvocationNormalizer,
   captureCatalogJson,
+  isCatalogJsonArray,
   lookupCatalogTool,
   validateToolResultEnvelope,
   type ToolInvocationNormalizer,
@@ -204,7 +205,9 @@ export function captureModelToolCalls(
   const normalizer = ctx.catalog?.normalizer;
   if (normalizer === undefined)
     throw new HarnessCatalogError(HARNESS_CODES.TOOL_ERROR, "Catalog handler unavailable");
-  const calls = captureCatalogJson(response.toolCalls) as unknown as readonly NormalizedToolCall[];
+  const calls = captureCatalogJson(response.toolCalls);
+  if (!isCatalogJsonArray(calls))
+    throw new HarnessCatalogError(HARNESS_CODES.INTERNAL, "Invalid bound provider call");
   const captured = calls.map((call) => captureHarnessToolCall(normalizer, call, ctx.clock.now()));
   if (new Set(captured.map((call) => call.id)).size !== captured.length)
     throw new HarnessCatalogError(HARNESS_CODES.INTERNAL, "Duplicate provider tool call identity");
