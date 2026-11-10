@@ -41607,6 +41607,12 @@
               "required": false
             },
             {
+              "name": "counterCheckRunPromptAllowance",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "elapsedMs",
               "type": "integer",
               "dataClass": "duration",

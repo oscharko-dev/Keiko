@@ -61,7 +61,7 @@ export function reviewDiffBudgetTokens(baseSha: string, headSha: string): number
  * The dry-run estimate from the gateway estimator: the changed lines as typical diff lines (bounded
  * by `maxParts` part budgets) plus the Reviewer's system prompt once per part, and the
  * Counter-checker's instruction, a candidate and its reads over a typical number of turns for the
- * most candidates one Reviewer session may file.
+ * most candidates each part's Reviewer session may file.
  */
 export function estimateReviewRun(
   changedLines: number,
@@ -80,7 +80,7 @@ export function estimateReviewRun(
     estimatedInputTokens: {
       reviewer: countContextTokens(REVIEW_SYSTEM_PROMPT) * parts + diffTokens,
       counterChecker:
-        REVIEW_RUN_MAX_CANDIDATE_REPORTS * ESTIMATE_COUNTER_CHECK_TURNS * counterCheckTask,
+        parts * REVIEW_RUN_MAX_CANDIDATE_REPORTS * ESTIMATE_COUNTER_CHECK_TURNS * counterCheckTask,
     },
     estimatedDurationMs: medianDurationMs,
   };

@@ -102,6 +102,8 @@ export interface ReviewRunState {
   runtimeCleanup: ReviewRuntimeCleanup | undefined;
   readonly counterCheckEffects: CounterCheckEffect[];
   uncheckedCandidates: number;
+  /** The diff package's part count; the counter-check run allowance holds once per part (#4130). */
+  partCount: number;
   /** `diffBaseSha` is the merge base the diff starts at; `baseSha` is the base the rules come from. */
   target: ReviewRunTarget | undefined;
   worktreeRoot: string | undefined;
@@ -130,6 +132,7 @@ export function newReviewRunState(): ReviewRunState {
     runtimeCleanup: undefined,
     counterCheckEffects: [],
     uncheckedCandidates: 0,
+    partCount: 0,
     target: undefined,
     worktreeRoot: undefined,
     candidates: [],
@@ -147,6 +150,7 @@ function enterPhase(
   extra: {
     readonly packageCounts?: ReviewRunPackageCounts;
     readonly candidateCount?: number;
+    readonly counterCheckRunPromptAllowance?: number;
   } = {},
 ): void {
   deps.store.setPhase(ctx.runId, phase, deps.now());
@@ -473,6 +477,7 @@ export async function runReviewer(
   if (diffPackage.parts.length === 0) {
     return stopWith(state, { kind: "skipped", reason: "no-reviewable-changes" });
   }
+  state.partCount = diffPackage.parts.length;
   const facts = await reviewParts(deps, runtime, ctx, state, {
     parts: diffPackage.parts,
     target,
@@ -540,6 +545,15 @@ function runBudget(limit: number): RunCounterCheckBudget {
 }
 
 /**
+ * The prompt tokens all counter-checks of one run may spend: the configured allowance once per diff
+ * package part. Each part's Reviewer session may file up to `REVIEW_RUN_MAX_CANDIDATE_REPORTS`
+ * candidates, so a fixed run allowance left the candidates of a many-part review unchecked (#4130).
+ */
+function counterCheckRunAllowance(perPartTokens: number, partCount: number): number {
+  return perPartTokens * Math.max(1, partCount);
+}
+
+/**
  * The `counter-checking` phase: each candidate in severity order, then Reviewer order, in its own
  * fresh session. Once the run's allowance is exhausted the remaining candidates stay unchecked.
  */
@@ -552,13 +566,17 @@ export async function counterCheckCandidates(
   const worktreeRoot = state.worktreeRoot;
   if (ctx.counterCheck === "off" || state.candidates.length === 0) return;
   if (target === undefined || worktreeRoot === undefined) return;
-  enterPhase(deps, ctx, "counter-checking", { candidateCount: state.candidates.length });
+  const allowance = counterCheckRunAllowance(deps.counterCheckRunPromptTokens, state.partCount);
+  enterPhase(deps, ctx, "counter-checking", {
+    candidateCount: state.candidates.length,
+    counterCheckRunPromptAllowance: allowance,
+  });
   const reader = new ReviewHeadFileReader({
     worktreeRoot,
     headSha: target.headSha,
     runner: deps.reviewServices.reviewRunner(ctx.correlationId),
   });
-  const budget = runBudget(deps.counterCheckRunPromptTokens);
+  const budget = runBudget(allowance);
   const ranked = counterCheckOrder(
     state.candidates.map((candidate, index) => ({ ...candidate, reviewerRank: index + 1 })),
   );

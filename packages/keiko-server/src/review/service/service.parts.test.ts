@@ -4,7 +4,10 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import type { ReviewRunView } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
+  type ReviewRunView,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import type { ReviewRuntimeRunRequest, ReviewRuntimeRunResult } from "../runtime/instance.js";
 import { handleReviewRunStart } from "../routes.js";
@@ -75,6 +78,21 @@ const refused: RuntimeScript = () =>
 
 function parts(h: ReviewRunHarness): readonly ReviewRuntimeRunRequest[] {
   return h.runtimeRequests;
+}
+
+/** A counter-check that reserves `promptTokens` of the run's allowance before it confirms. */
+function reserving(promptTokens: number): NonNullable<HarnessOptions["counterCheck"]> {
+  const confirm = counterCheckBy({ 3: "confirmed", 10: "confirmed" });
+  const refuse = counterCheckBy({}, "budget-exhausted");
+  return (input) => (input.budget.reserve(promptTokens) ? confirm(input) : refuse(input));
+}
+
+/** More than half of one part's counter-check allowance: two such checks exceed it. */
+const OVER_HALF_ALLOWANCE = Math.floor(REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS / 2) + 1;
+
+function counterCheckingLine(h: ReviewRunHarness): Readonly<Record<string, unknown>> | undefined {
+  return h.log.withOp("review.run.phase").find((event) => event.extra?.phase === "counter-checking")
+    ?.extra;
 }
 
 describe("a review in several parts (Issue #4130)", () => {
@@ -158,6 +176,37 @@ describe("a review in several parts (Issue #4130)", () => {
     const { h, view } = await review({ runtime: refused });
     expect(parts(h)).toHaveLength(1);
     expect(view.settlement).toEqual({ kind: "skipped", reason: "model-unavailable" });
+  });
+
+  it("gives the counter-checks the run allowance once for each part", async () => {
+    const { h, view } = await review({
+      runtime: perPart(
+        reviewerFiling([reportAt(3, "high")]),
+        reviewerFiling([reportAt(10, "medium")]),
+      ),
+      counterCheck: reserving(OVER_HALF_ALLOWANCE),
+    });
+    // Both checks together exceed one part's allowance and fit in two.
+    expect(h.counterInputs).toHaveLength(2);
+    expect(view.settlement).toEqual({ kind: "complete" });
+    expect(view.presentedFindings).toHaveLength(2);
+    expect(counterCheckingLine(h)).toMatchObject({
+      candidateCount: 2,
+      counterCheckRunPromptAllowance: 2 * REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
+    });
+  });
+
+  it("keeps a single-part review at one run allowance for its counter-checks", async () => {
+    const { h, view } = await review({
+      topicFiles: [],
+      runtime: reviewerFiling([reportAt(3, "high"), reportAt(10, "medium")]),
+      counterCheck: reserving(OVER_HALF_ALLOWANCE),
+    });
+    expect(view.settlement).toEqual({ kind: "incomplete", reason: "budget-exhausted" });
+    expect(view.presentedFindings).toHaveLength(1);
+    expect(counterCheckingLine(h)).toMatchObject({
+      counterCheckRunPromptAllowance: REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
+    });
   });
 
   it("gives a single-part review no part line in its task", async () => {
