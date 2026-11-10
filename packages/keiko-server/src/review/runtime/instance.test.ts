@@ -8,6 +8,7 @@ import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 import type { GovernedCodingToolPort } from "../../coding-runtime/codingToolGovernedDelegate.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../../diagnostics-log.js";
 import { DiffFixtureRepository } from "../diff-package/diffFixtures.test-support.js";
 import type { ReviewRuntimeComposeRefusal, ReviewRuntimeComposition } from "./composition.js";
 import {
@@ -94,6 +95,7 @@ function service(
   options: {
     readonly layers?: ReviewRuntimeLayers | (() => ReviewRuntimeLayers);
     readonly compose?: boolean;
+    readonly diagnostics?: ServerDiagnosticSink;
   } = {},
 ): ServiceFixture {
   const log = createBufferedServerLogSink();
@@ -118,6 +120,7 @@ function service(
       typeof options.layers === "function" ? options.layers() : (options.layers ?? reviewLayers()),
     runner: () => createGitReviewProcessRunner(),
     activityLog: log,
+    diagnostics: options.diagnostics,
     setTimer: (callback) => {
       timers.push(callback);
       return timers.length;
@@ -435,45 +438,91 @@ describe("createReviewRuntimeService", () => {
       expect(observed.starts).toHaveLength(1);
     });
 
-    it("leaves the decision to the self-check when the check fails", async () => {
+    it("reports a failed check and leaves the decision to the self-check", async () => {
       const { repo, base, head } = headRepository();
-      const lapsed = service({ reports: [] }, { layers: LAPSED });
+      const records: ServerDiagnosticRecord[] = [];
+      const diagnostics: ServerDiagnosticSink = {
+        record: (record): void => {
+          records.push(record);
+        },
+      };
+      const lapsed = service({ reports: [] }, { layers: LAPSED, diagnostics });
       const ensureModelReady = (): Promise<void> => Promise.reject(new TypeError("probe failed"));
+      const failing = { ensureModelReady, correlationId: "corr-readiness" };
 
-      await expect(
-        lapsed.subject.run(request(repo, base, head, { ensureModelReady })),
-      ).resolves.toEqual({ ok: false, reason: "runtime-unavailable", rules: "absent" });
+      await expect(lapsed.subject.run(request(repo, base, head, failing))).resolves.toEqual({
+        ok: false,
+        reason: "runtime-unavailable",
+        rules: "absent",
+      });
       expect(lapsed.observed.starts).toEqual([]);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        operation: "review.run.model-readiness",
+        correlationId: "corr-readiness",
+      });
+      expect(JSON.stringify(records[0])).toContain("TypeError");
 
-      const fresh = service({ reports: [] });
-      await expect(
-        fresh.subject.run(request(repo, base, head, { ensureModelReady })),
-      ).resolves.toMatchObject({ ok: true, outcome: "completed" });
-    });
-
-    it("neither waits for the check nor starts a session once the run is cancelled", async () => {
-      const { repo, base, head } = headRepository();
-      const { subject, observed, log } = service({ reports: [] });
-      const controller = new AbortController();
-      // The check never settles; it cancels the run while the launch waits for it.
-      const ensureModelReady = (): Promise<void> =>
-        new Promise<void>(() => {
-          controller.abort();
-        });
-
-      const result = await subject.run(
-        request(repo, base, head, { ensureModelReady, signal: controller.signal }),
-      );
-
-      expect(result).toMatchObject({ ok: true, outcome: "cancelled", candidates: [] });
-      expect(observed.starts).toEqual([]);
-      expect(log.events.some((event) => event.op === "review.run.profile-refused")).toBe(false);
-      // The instance is free for the next review.
-      await expect(subject.run(request(repo, base, head))).resolves.toMatchObject({
+      const fresh = service({ reports: [] }, { diagnostics });
+      await expect(fresh.subject.run(request(repo, base, head, failing))).resolves.toMatchObject({
         ok: true,
         outcome: "completed",
       });
+      expect(records).toHaveLength(2);
     });
+
+    it("reports a check that throws before it returns a promise", async () => {
+      const { repo, base, head } = headRepository();
+      const records: ServerDiagnosticRecord[] = [];
+      const { subject } = service(
+        { reports: [] },
+        {
+          diagnostics: {
+            record: (record): void => {
+              records.push(record);
+            },
+          },
+        },
+      );
+      const ensureModelReady = (): Promise<void> => {
+        throw new RangeError("no probe");
+      };
+
+      await expect(
+        subject.run(request(repo, base, head, { ensureModelReady })),
+      ).resolves.toMatchObject({ ok: true, outcome: "completed" });
+      expect(records).toHaveLength(1);
+    });
+
+    // R4130-049: a run cancelled during the check went on to the self-check and could start a
+    // session. With a lapsed observation it wrote a model-unavailable refusal the model never caused.
+    it.each([
+      ["a fresh", reviewLayers()],
+      ["a lapsed", LAPSED],
+    ])(
+      "starts no session and no self-check when cancelled during the check (%s observation)",
+      async (_name, layers) => {
+        const { repo, base, head } = headRepository();
+        const { subject, observed, log } = service({ reports: [] }, { layers });
+        const controller = new AbortController();
+        // The check never settles; it cancels the run while the launch waits for it.
+        const ensureModelReady = (): Promise<void> =>
+          new Promise<void>(() => {
+            controller.abort();
+          });
+
+        const result = await subject.run(
+          request(repo, base, head, { ensureModelReady, signal: controller.signal }),
+        );
+
+        expect(result).toMatchObject({ ok: true, outcome: "cancelled", candidates: [] });
+        expect(observed.starts).toEqual([]);
+        expect(log.events.some((event) => event.op === "review.run.profile-refused")).toBe(false);
+        // The instance is free again: the next review reaches its own self-check.
+        const next = await subject.run(request(repo, base, head));
+        expect(next).not.toMatchObject({ reason: "busy" });
+      },
+    );
   });
 
   // R4130-019: a composition that failed returned `undefined` without a line, so every review

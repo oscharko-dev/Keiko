@@ -35,6 +35,7 @@ import type {
   GovernedCodingToolPort,
   GovernedCodingToolResult,
 } from "../../coding-runtime/codingToolGovernedDelegate.js";
+import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { reportReviewFailure } from "../diagnostics.js";
 import {
@@ -135,6 +136,8 @@ export interface ReviewRuntimeServiceDeps {
   readonly runner: () => GitProcessRunner;
   readonly rulesSettings?: ReviewRulesSettingsPort | undefined;
   readonly activityLog: ServerLogSink;
+  /** Where a failed readiness check is reported (#4130); the server's diagnostic sink by default. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly idleMs?: number | undefined;
   readonly now?: (() => number) | undefined;
   readonly setTimer?: ((callback: () => void, ms: number) => unknown) | undefined;
@@ -525,15 +528,26 @@ function whenAborted(signal: AbortSignal | undefined): {
  * that found the model not ready; a cancelled run does not wait for a probe it no longer needs,
  * and the caller then starts no session.
  */
-async function modelReadyOrCancelled(request: ReviewRuntimeRunRequest): Promise<void> {
+async function modelReadyOrCancelled(
+  context: ServiceContext,
+  request: ReviewRuntimeRunRequest,
+): Promise<void> {
   const ensure = request.ensureModelReady;
   if (ensure === undefined || request.signal?.aborted === true) return;
   // The listener is attached before the check starts, so a cancellation during it is never missed.
   const cancellation = whenAborted(request.signal);
   try {
-    const settled = ensure().catch((error: unknown) => {
-      reportReviewFailure("review.run.model-readiness", request.correlationId, error);
-    });
+    // `then(ensure)` turns a check that throws before it returns a promise into a rejection too.
+    const settled = Promise.resolve()
+      .then(ensure)
+      .catch((error: unknown) => {
+        reportReviewFailure(
+          "review.run.model-readiness",
+          request.correlationId,
+          error,
+          context.deps.diagnostics,
+        );
+      });
     await Promise.race([settled, cancellation.promise]);
   } finally {
     cancellation.release();
@@ -551,7 +565,7 @@ async function runOnInstance(
   const workspace = live.composition.workspace;
   try {
     if (!workspace.bind(request)) return { ok: false, reason: "busy", rules: prepared.rules };
-    await modelReadyOrCancelled(request);
+    await modelReadyOrCancelled(context, request);
     if (request.signal?.aborted === true) return cancelledBeforeLaunch(prepared.rules);
     const refusal = selfCheckRefusal(context, live, request);
     if (refusal !== undefined) return { ok: false, reason: refusal, rules: prepared.rules };
