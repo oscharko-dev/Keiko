@@ -100,6 +100,14 @@ changed. No record binds capture bytes, so the existing macOS captures from 2026
 keeps one renderer across the set; the new `generatedAt` describes the three records, not the captures. No updater behavior, baseline or numerical ceiling changed. This remains
 updater fixture evidence.
 
+On 2026-11-10 (UTC) the production build moved its type check to `tsconfig.build.json`
+(`packages/keiko-ui/next.config.mjs`), and the optional EN/DE catalogs gained the Jira
+`invalidInput` refusal text. The complete original nine-case producer ran in the Linux gates
+container (`--init`, Node 24.18.0) and passed in 1.5 minutes, including the real BFF stop and
+restart. The three records rebind only those source digests. No record binds capture bytes, so the
+existing captures are kept to preserve one renderer across the set. No updater behavior, baseline
+or numerical ceiling changed.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

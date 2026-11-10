@@ -77,7 +77,7 @@
     },
     {
       "path": "packages/keiko-ui/next.config.mjs",
-      "sha256": "5d2f34ac59dbccc52eb1b485b399caac66dd11b70906d3bea9337e097283191e"
+      "sha256": "54efa67c8dc62dfb4ec406d229d8b50c4528218c10aac1df06291f928c88f679"
     },
     {
       "path": "packages/keiko-ui/package.json",
@@ -122,8 +122,8 @@
   ],
   "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
   "run": {
-    "generatedAt": "2026-11-09T20:28:34.821Z",
-    "repoHeadSha": "cc5c88b6ce2e09be60b03b74728a49e31fca6c4b"
+    "generatedAt": "2026-11-10T02:48:04.808Z",
+    "repoHeadSha": "unknown"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

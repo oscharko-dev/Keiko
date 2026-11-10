@@ -314,3 +314,16 @@ recorded. Accessibility retains zero serious/critical violations and zero unreso
 findings across the seven modes. All 108 browser captures retain zero page errors, unexpected API
 requests, missing selectors, crashed windows, visible error notices and unavailable workspace-trust
 states. No producer assertion, tolerance, fixture or budget changed.
+
+## PR #4288 production build type-check input — 2026-11-10
+
+`packages/keiko-ui/next.config.mjs`, a declared producer input, now points the production build's
+type check at `tsconfig.build.json`, so the build fits a 2 GB V8 heap. The four original producers
+were rerun in the isolated Linux arm64 container with Node 24.18.0 and the Playwright Chromium
+revision the lockfile pins. Component fidelity retains 427 probes with zero gated or recorded
+differences and no missing selectors. Editor fidelity retains all 14 reference captures and zero gated
+differences. Accessibility retains zero serious/critical violations and zero unresolved incomplete
+findings across the seven modes. All 108 browser captures retain zero page errors, unexpected API
+requests, missing selectors, crashed windows, visible error notices and unavailable workspace-trust
+states. The records rebind only the `next.config.mjs` digest; the committed captures are kept. No
+producer assertion, tolerance, fixture or budget changed.
