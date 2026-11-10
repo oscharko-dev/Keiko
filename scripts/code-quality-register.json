@@ -5741,17 +5741,14 @@
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-sandbox/src/local-docker-endpoint.ts": {
-      "anti-slop/no-runtime-typeof": 5,
-      "anti-slop/no-unsafe-dictionary-type": 4,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-runtime-typeof": 5
     },
     "packages/keiko-sandbox/src/native-linked-files.test.ts": {
       "anti-slop/no-known-value-widening": 1
     },
     "packages/keiko-sandbox/src/native-linked-files.ts": {
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unknown-parameters": 1
     },
     "packages/keiko-sandbox/src/plan.ts": {
       "anti-slop/no-unknown-parameters": 1
@@ -5774,13 +5771,10 @@
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-sandbox/src/runtime-gateway.ts": {
-      "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-conditional-empty-object-spread": 2,
-      "anti-slop/no-known-value-widening": 1,
-      "anti-slop/no-runtime-typeof": 4,
+      "anti-slop/no-runtime-typeof": 3,
       "anti-slop/no-unknown-parameters": 4,
-      "anti-slop/no-unsafe-dictionary-type": 5,
-      "anti-slop/require-safety-comment-for-type-assertion": 6
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-sandbox/src/runtime-service.test.ts": {
       "anti-slop/no-runtime-typeof": 1,
@@ -5789,35 +5783,27 @@
     "packages/keiko-sandbox/src/runtime-service.ts": {
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 3,
-      "anti-slop/no-unknown-parameters": 3,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unknown-parameters": 3
     },
     "packages/keiko-sandbox/src/runtime.test.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-unsafe-dictionary-type": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-sandbox/src/runtime.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 7,
       "anti-slop/no-unknown-parameters": 8,
-      "anti-slop/no-unsafe-dictionary-type": 7,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unsafe-dictionary-type": 6
     },
     "packages/keiko-sandbox/src/seatbelt-credential-paths.test.ts": {
       "anti-slop/no-known-value-widening": 1
     },
-    "packages/keiko-sandbox/src/seatbelt-credential-paths.ts": {
-      "anti-slop/no-array-filter-map": 1
-    },
     "packages/keiko-sandbox/src/seatbelt-execution-root.ts": {
       "anti-slop/no-runtime-typeof": 8,
       "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/no-unsafe-dictionary-type": 8,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-unsafe-dictionary-type": 8
     },
     "packages/keiko-sdk/src/index.test.ts": {
       "anti-slop/no-runtime-typeof": 2,

@@ -46,7 +46,7 @@ function outsideWorkspace(path: string, root: string): string {
   return canonical;
 }
 
-function readBoundedObject(path: string, root: string): Record<string, unknown> {
+function readBoundedObject(path: string, root: string): object {
   const canonical = outsideWorkspace(path, root);
   const fd = openSync(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -60,7 +60,7 @@ function readBoundedObject(path: string, root: string): Record<string, unknown> 
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new TypeError("docker-context-invalid");
     }
-    return value as Record<string, unknown>;
+    return value;
   } finally {
     closeSync(fd);
   }
@@ -85,15 +85,20 @@ function configuredDirectory(
 function currentContext(directory: string | undefined, root: string): string {
   if (directory === undefined) return "default";
   try {
-    const value = readBoundedObject(join(directory, "config.json"), root).currentContext;
-    if (value === undefined || value === "") return "default";
-    if (typeof value !== "string" || value.length > 1024)
-      throw new TypeError("docker-context-invalid");
-    return value;
+    return configuredContext(join(directory, "config.json"), root) ?? "default";
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return "default";
     throw error;
   }
+}
+
+function configuredContext(path: string, root: string): string | undefined {
+  const config = readBoundedObject(path, root);
+  const value = "currentContext" in config ? config.currentContext : undefined;
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string" || value.length > 1024)
+    throw new TypeError("docker-context-invalid");
+  return value;
 }
 
 function contextHost(
@@ -106,13 +111,18 @@ function contextHost(
   if (directory === undefined || context.length > 1024)
     throw new TypeError("docker-context-invalid");
   const key = createHash("sha256").update(context).digest("hex");
-  const value = readBoundedObject(join(directory, "contexts", "meta", key, "meta.json"), root);
-  const endpoints = value.Endpoints;
-  if (typeof endpoints !== "object" || endpoints === null)
+  return contextMetaHost(join(directory, "contexts", "meta", key, "meta.json"), root);
+}
+
+function contextMetaHost(path: string, root: string): string {
+  const value = readBoundedObject(path, root);
+  const endpoints = "Endpoints" in value ? value.Endpoints : undefined;
+  if (typeof endpoints !== "object" || endpoints === null || !("docker" in endpoints))
     throw new TypeError("docker-context-invalid");
-  const docker = (endpoints as Record<string, unknown>).docker;
-  if (typeof docker !== "object" || docker === null) throw new TypeError("docker-context-invalid");
-  const host = (docker as Record<string, unknown>).Host;
+  const docker = endpoints.docker;
+  if (typeof docker !== "object" || docker === null || !("Host" in docker))
+    throw new TypeError("docker-context-invalid");
+  const host = docker.Host;
   if (typeof host !== "string") throw new TypeError("docker-context-invalid");
   return host;
 }

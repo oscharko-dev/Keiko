@@ -99,12 +99,12 @@ describe("long-lived runtime qualification", () => {
   it("rejects malformed receipts and platform/backend mismatches even if listed", () => {
     const malformed = { ...qualified, releaseReceipt: "release-2258" };
     const mismatched = { ...qualified, backend: "macos-app-sandbox" } as const;
-    const invalidPlatform = {
-      ...qualified,
-      platform: "linux",
-      arch: "ia32",
-      backend: "macos-app-sandbox",
-    } as unknown as LongLivedRuntimeQualification;
+    // Hostile input: the overriding source widens these fields to `string`, as a caller outside
+    // TypeScript could, while the target keeps the declared qualification type.
+    const invalidPlatform = Object.assign(
+      { ...qualified },
+      { platform: "linux", arch: "ia32", backend: "macos-app-sandbox" },
+    );
     const extraKey = { ...qualified, unreviewed: true } as LongLivedRuntimeQualification;
 
     expect(qualifyLongLivedRuntime(malformed, [malformed])).toEqual({

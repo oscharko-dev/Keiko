@@ -58,6 +58,7 @@ const ZERO_FINDING_SCOPES = {
     "memory-governance",
     "memory-retrieval",
     "quality-intelligence",
+    "sandbox",
     "sdk",
     "security",
     "tool-catalog",

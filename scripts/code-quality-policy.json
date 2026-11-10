@@ -19,7 +19,8 @@
         "package:@oscharko-dev/keiko-memory-vault",
         "package:@oscharko-dev/keiko-sdk",
         "fixtures",
-        "root-product"
+        "root-product",
+        "package:@oscharko-dev/keiko-sandbox"
       ]
     },
     {
@@ -58,7 +59,8 @@
         "package:@oscharko-dev/keiko-security",
         "package:@oscharko-dev/keiko-tool-catalog",
         "package:@oscharko-dev/keiko-tools",
-        "package:@oscharko-dev/keiko-ui"
+        "package:@oscharko-dev/keiko-ui",
+        "package:@oscharko-dev/keiko-sandbox"
       ]
     },
     {

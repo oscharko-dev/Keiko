@@ -253,19 +253,26 @@ function positiveInteger(value: unknown, maximum: number): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
 }
 
+/** A service message is a plain object with exactly the three message keys. */
+function exactServiceMessageKeys(keys: readonly string[], isArray: boolean): boolean {
+  return (
+    !isArray &&
+    keys.length === SERVICE_MESSAGE_KEYS.size &&
+    keys.every((key) => SERVICE_MESSAGE_KEYS.has(key))
+  );
+}
+
 function serviceMessage(value: unknown): ServiceSocketMessage | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
+  if (typeof value !== "object" || value === null) return undefined;
+  if (!("kind" in value && "connectionId" in value && "port" in value)) return undefined;
   if (
-    keys.length !== SERVICE_MESSAGE_KEYS.size ||
-    !keys.every((key) => SERVICE_MESSAGE_KEYS.has(key)) ||
-    record.kind !== "service-socket" ||
-    !positiveInteger(record.connectionId, Number.MAX_SAFE_INTEGER) ||
-    !positiveInteger(record.port, 65_535)
+    !exactServiceMessageKeys(Object.keys(value), Array.isArray(value)) ||
+    value.kind !== "service-socket" ||
+    !positiveInteger(value.connectionId, Number.MAX_SAFE_INTEGER) ||
+    !positiveInteger(value.port, 65_535)
   )
     return undefined;
-  return { kind: "service-socket", connectionId: record.connectionId, port: record.port };
+  return { kind: "service-socket", connectionId: value.connectionId, port: value.port };
 }
 
 export function createNamespaceRuntimeService(
