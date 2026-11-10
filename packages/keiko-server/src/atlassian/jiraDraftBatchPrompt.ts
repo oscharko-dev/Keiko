@@ -97,7 +97,8 @@ const OUTLINE_SYSTEM =
 
 const FILL_SYSTEM =
   'You write Jira issue drafts from requirements. Answer with one JSON object only: {"items":[{"key":"<key>","summary":"...","sections":{"<section>":"..."},"fields":{"<field>":"..."}}]}. ' +
-  "Write exactly one item for every listed key and copy each key exactly. In sections, give every required section a substantive text in Markdown without headings. " +
+  "Write exactly one item for every listed key and copy each key exactly. " +
+  "Each key is Keiko's internal draft key: never write it into a summary or a section; a summary rule that asks for an identifier means the requirement's own reference. In sections, give every required section a substantive text in Markdown without headings. " +
   "In fields, give only the listed required fields as plain text. State only what the listed requirements support. Keiko appends each requirement's acceptance criteria verbatim, so do not list acceptance criteria unless a section asks for them. " +
   "Write in the language of the requirements unless the instructions name another.";
 

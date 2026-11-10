@@ -101,6 +101,13 @@ describe("fillMessages", () => {
     expect(user).toContain("Required fields: []");
   });
 
+  it("keeps Keiko's draft key out of summaries and sections", () => {
+    // A summary rule asking for a bracketed identifier made a model write the draft key "[OKE01]"
+    // instead of the requirement reference (#4287).
+    const system = fillMessages([entry(1)], instructions)[0]?.content ?? "";
+    expect(system).toContain("Each key is Keiko's internal draft key");
+    expect(system).toContain("never write it into a summary or a section");
+  });
   it("indents multi-line requirement text under its bullet", () => {
     const user = fillMessages([entry(1)], instructions)[1]?.content ?? "";
     expect(user).toContain("  Statement 1\n  second line");
