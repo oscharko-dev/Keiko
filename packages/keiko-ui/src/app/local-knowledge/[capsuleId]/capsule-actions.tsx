@@ -356,7 +356,7 @@ function nativeDocumentFilters(t: I18nTranslate): readonly NativeFileDialogFilte
 
 interface ConnectSourceFormProps {
   readonly capsuleId: KnowledgeCapsuleId;
-  readonly onConnected: () => void;
+  readonly onConnected: (connectedSource: string) => void;
   readonly connectImpl?: typeof connectCapsuleSource;
 }
 
@@ -568,7 +568,7 @@ interface ConnectSourceSubmissionController {
 
 function useConnectSourceSubmission(
   capsuleId: KnowledgeCapsuleId,
-  onConnected: () => void,
+  onConnected: (connectedSource: string) => void,
   connectImpl: typeof connectCapsuleSource,
   state: ConnectSourceState,
   t: I18nTranslate,
@@ -589,7 +589,7 @@ function useConnectSourceSubmission(
       if (explicitDisplayName === "") await connectImpl(capsuleId, scope);
       else await connectImpl(capsuleId, scope, explicitDisplayName);
       state.reset();
-      onConnected();
+      onConnected(selectedSource ?? "");
     } catch (error) {
       state.setConnectError(formatError(error, t));
     } finally {
@@ -1078,6 +1078,7 @@ function ProgressBar({
 // ---------------------------------------------------------------------------
 
 interface IndexActionRowProps {
+  readonly indexButtonRef: React.RefObject<HTMLButtonElement | null>;
   readonly indexBusy: boolean;
   readonly indexError: string | null;
   readonly progress: ProgressState | null;
@@ -1086,6 +1087,7 @@ interface IndexActionRowProps {
 }
 
 function IndexActionRow({
+  indexButtonRef,
   indexBusy,
   indexError,
   progress,
@@ -1095,6 +1097,7 @@ function IndexActionRow({
   return (
     <div className={`lkd-index-row ${detailStyles.indexPrompt}`}>
       <button
+        ref={indexButtonRef}
         type="button"
         className="lk-btn lk-btn-primary"
         aria-label={t("localKnowledge.detail.actions.index.aria")}
@@ -1483,6 +1486,8 @@ export function CapsuleActions({
   const [pendingDeleteResponse, setPendingDeleteResponse] = useState<CapsuleActionResponse | null>(
     null,
   );
+  const [connectedSource, setConnectedSource] = useState<string | null>(null);
+  const indexButtonRef = useRef<HTMLButtonElement>(null);
   const [indexBusy, setIndexBusy] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressState | null>(null);
@@ -1538,8 +1543,21 @@ export function CapsuleActions({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- attach exactly when the capsule reports an in-flight run; indexBusy is read for idempotence, not as a trigger.
   }, [lifecycleState]);
 
+  // The connect POST succeeded: say so, ask the page to re-read the pod and hand the person the
+  // next step. Connecting and indexing stay separate actions (knowledge-pods.md); the notice lives
+  // here because the page re-read must not unmount this component and drop it.
+  function handleConnected(source: string): void {
+    setConnectedSource(source);
+    onActionComplete();
+  }
+
+  useEffect(() => {
+    if (connectedSource !== null && sourceCount > 0) indexButtonRef.current?.focus();
+  }, [connectedSource, sourceCount]);
+
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
+    setConnectedSource(null);
     setProgress(initialProgressState(Date.now(), false, latestJobId ?? null));
     setIndexBusy(true);
     setIndexError(null);
@@ -1648,12 +1666,19 @@ export function CapsuleActions({
       <ConnectSourceForm
         key={capsuleId}
         capsuleId={capsuleId}
-        onConnected={onActionComplete}
+        onConnected={handleConnected}
         connectImpl={connectCapsuleSourceImpl}
       />
 
+      {connectedSource !== null ? (
+        <p role="status" aria-live="polite" className={detailStyles.sourceSetupDescription}>
+          {t("localKnowledge.detail.connect.connected", { source: connectedSource })}
+        </p>
+      ) : null}
+
       {showIndexButton ? (
         <IndexActionRow
+          indexButtonRef={indexButtonRef}
           indexBusy={indexBusy}
           indexError={indexError}
           progress={progress}

@@ -1605,7 +1605,7 @@ export function CapsuleDetail({
   const capsuleId =
     providedCapsuleId ?? ((searchParams.get("capsuleId") ?? "") as KnowledgeCapsuleId);
 
-  const { data, loadStatus, loadError, reload, replaceData } = useCapsuleDetail(
+  const { data, loadStatus, loadError, reload, refresh, replaceData } = useCapsuleDetail(
     capsuleId,
     fetchDetailImpl,
   );
@@ -1694,7 +1694,7 @@ export function CapsuleDetail({
         lifecycleState={data.capsule.lifecycleState}
         vectorCompatible={data.health.vectorCompatible}
         contextualRebuildRequired={data.health.contextualRetrieval?.rebuildRequired ?? false}
-        onActionComplete={reload}
+        onActionComplete={refresh}
         onDeleted={handleDeleted}
         {...(data.indexingJobs[0]?.id !== undefined
           ? { latestJobId: data.indexingJobs[0].id }

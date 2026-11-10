@@ -15,7 +15,17 @@ export interface CapsuleDetailState {
   readonly loadStatus: DetailLoadStatus;
   readonly loadError: string | null;
   readonly reload: () => void;
+  /** Re-reads the pod without swapping the page for its loading state; a failure stays visible. */
+  readonly refresh: () => void;
   readonly replaceData: (nextData: CapsuleDetail) => void;
+}
+
+// A foreground load swaps the page for its loading state; polling and a keep-view re-read do not.
+function isForegroundLoad(opts: {
+  readonly quiet?: boolean;
+  readonly keepView?: boolean;
+}): boolean {
+  return opts.quiet !== true && opts.keepView !== true;
 }
 
 export function useCapsuleDetail(
@@ -31,7 +41,7 @@ export function useCapsuleDetail(
   } | null>(null);
 
   const load = useCallback(
-    async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
+    async (opts: { readonly quiet?: boolean; readonly keepView?: boolean } = {}): Promise<void> => {
       const scope = activeScope.current;
       if (scope?.capsuleId !== capsuleId) return;
       if (capsuleId === "") {
@@ -41,7 +51,7 @@ export function useCapsuleDetail(
         scope.settled("unavailable");
         return;
       }
-      if (opts.quiet !== true) {
+      if (isForegroundLoad(opts)) {
         setLoadStatus("loading");
         setLoadError(null);
       }
@@ -123,6 +133,10 @@ export function useCapsuleDetail(
     void load();
   }
 
+  function refresh(): void {
+    void load({ keepView: true });
+  }
+
   const replacementScope = activeScope.current;
   function replaceData(nextData: CapsuleDetail): void {
     const settled = beginPodSelectionEvidence();
@@ -141,5 +155,5 @@ export function useCapsuleDetail(
     settled("applied");
   }
 
-  return { data, loadStatus, loadError, reload, replaceData };
+  return { data, loadStatus, loadError, reload, refresh, replaceData };
 }
