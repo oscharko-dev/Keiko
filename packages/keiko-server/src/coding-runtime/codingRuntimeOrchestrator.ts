@@ -1278,7 +1278,6 @@ function promptInputFields(
   };
 }
 
-
 function recordRuntimeStartFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,

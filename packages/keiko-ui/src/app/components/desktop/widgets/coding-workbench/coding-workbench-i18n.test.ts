@@ -184,11 +184,16 @@ describe("Coding Workbench translations", () => {
     expect(de).not.toMatch(/\{\w+\}/u);
   });
 
-  // Starting the same task again can never help here, so the sentence must not say so.
-  it("tells the operator to select another repository when it holds the runtime", () => {
+  // Starting the same task again in the same folder can never help here, so the sentence must
+  // name a folder outside the Keiko installation before it mentions starting again.
+  it("tells the operator to choose a folder outside the installation when it holds the runtime", () => {
     const key = "codingWorkbench.event.failure.workspace-unqualified";
-    expect(translateCodingWorkbench("en", key)).toContain("Select another repository");
-    expect(translateCodingWorkbench("de", key)).toContain("Wähle ein anderes Repository");
+    expect(translateCodingWorkbench("en", key)).toContain(
+      "Choose a project folder outside the Keiko installation",
+    );
+    expect(translateCodingWorkbench("de", key)).toContain(
+      "Wähle einen Projektordner außerhalb der Keiko-Installation",
+    );
   });
 
   // #4068: a start the Windows broker cannot confine must name what to change, never "try again".
