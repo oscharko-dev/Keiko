@@ -241,7 +241,10 @@ other candidate. The verdict tool records the first valid `CounterCheckVerdict` 
 the fingerprint) and ends the session; free text is ignored and a missing or invalid verdict is
 `undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 600 seconds (raised from
 120 and then 300 seconds on the offline gate's development set, Issue #4138), 200,000 prompt
-tokens, and 1,200,000 prompt tokens for all counter-checks of a run; the harness bound, the tool
+tokens, and 1,200,000 prompt tokens for all counter-checks of a run for each part of its diff
+package (Issue #4130: each part's Reviewer session may file up to eight candidates, so a fixed run
+allowance left the candidates of a many-part review unchecked; the `counter-checking` phase line
+records the run's `counterCheckRunPromptAllowance`); the harness bound, the tool
 ceiling or a refused reservation ends a session `undecided/out-of-budget` and the run
 `incomplete/budget-exhausted`, the deadline `incomplete/deadline-exceeded`, a failed or unavailable
 model `incomplete/model-failed`. Candidates are checked by severity, then in the Reviewer's order;

@@ -134,6 +134,9 @@ const REVIEW_RUN_PHASE = defineActivityLogOperation({
     // #4130: the diff package parts, one Reviewer session each; `budgetTokens` is one part's.
     partCount: OPTIONAL_COUNT,
     candidateCount: OPTIONAL_COUNT,
+    // #4130: the prompt tokens all counter-checks of the run may spend, the configured allowance
+    // once per diff package part; only on the `counter-checking` line.
+    counterCheckRunPromptAllowance: OPTIONAL_COUNT,
   },
   lifecycle: "state",
   analyzerProjection: "timeline",
@@ -304,6 +307,7 @@ export function logReviewRunPhase(
     readonly elapsedMs: number;
     readonly packageCounts?: ReviewRunPackageCounts | undefined;
     readonly candidateCount?: number | undefined;
+    readonly counterCheckRunPromptAllowance?: number | undefined;
   },
 ): void {
   log.write(
@@ -316,6 +320,9 @@ export function logReviewRunPhase(
         elapsedMs: Math.max(0, Math.round(line.elapsedMs)),
         ...line.packageCounts,
         ...(line.candidateCount === undefined ? {} : { candidateCount: line.candidateCount }),
+        ...(line.counterCheckRunPromptAllowance === undefined
+          ? {}
+          : { counterCheckRunPromptAllowance: line.counterCheckRunPromptAllowance }),
       },
     ),
   );

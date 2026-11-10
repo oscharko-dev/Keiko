@@ -65,6 +65,10 @@ describe("reviewDiffBudgetTokens", () => {
     const prompt = parted.estimatedInputTokens.reviewer - budget * REVIEW_RUN_MAX_DIFF_PARTS;
     // The diff fills every part, and each part's session gets the system prompt once.
     expect(prompt).toBe(REVIEW_RUN_MAX_DIFF_PARTS * (one.estimatedInputTokens.reviewer - budget));
+    // Each part's session may file its own candidates, so the counter-checks scale with the parts.
+    expect(parted.estimatedInputTokens.counterChecker).toBe(
+      REVIEW_RUN_MAX_DIFF_PARTS * one.estimatedInputTokens.counterChecker,
+    );
     const small = estimateReviewRun(10, budget, null, REVIEW_RUN_MAX_DIFF_PARTS);
     expect(small).toEqual(estimateReviewRun(10, budget, null));
   });

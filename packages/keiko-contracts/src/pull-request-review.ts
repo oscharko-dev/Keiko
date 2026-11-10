@@ -866,7 +866,10 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
 // about 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5 tool calls, and at
 // 300 s 20 of 48 checks still ended undecided while the decided ones took up to 285 s.
 export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 600_000;
-/** Prompt tokens one counter-check may spend, and all counter-checks of one run together. */
+/**
+ * Prompt tokens one counter-check may spend, and all counter-checks of one run together for each
+ * part of its diff package (#4130: each part's Reviewer session may file its own candidates).
+ */
 export const REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS = 200_000;
 export const REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS = 1_200_000;
 
