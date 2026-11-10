@@ -57,7 +57,7 @@ const INVALID: Failure = {
   detail: {
     validation: "invalid-field",
     messages: [
-      "Use only the typed project arguments. Create requires key, name, lead and projectTypeKey; update requires at least one supported metadata change. Names must contain 1–255 characters without surrounding whitespace.",
+      "Use only the typed project arguments. Create requires key, name and projectTypeKey; update requires at least one supported metadata change. Names must contain 1–255 characters without surrounding whitespace.",
     ],
   },
 };
@@ -319,6 +319,7 @@ export function executeJiraProjectRead(
 }
 interface ProjectCreateArguments extends CatalogJsonObject {
   readonly key: string;
+  readonly lead?: string;
   readonly projectTypeKey: string;
 }
 function createInput(args: CatalogJsonObject): args is ProjectCreateArguments {
@@ -326,7 +327,7 @@ function createInput(args: CatalogJsonObject): args is ProjectCreateArguments {
   return (
     isSafeAtlassianIdentifier(key) &&
     jiraNativeName(name, 255) &&
-    boundedText(lead, 128) &&
+    (lead === undefined || boundedText(lead, JIRA_PROJECT_LEAD_MAX_CHARS)) &&
     isSafeAtlassianIdentifier(projectTypeKey) &&
     Object.entries(args).every(
       ([field, value]) =>
@@ -421,12 +422,58 @@ function createdIdentity(
     ? { projectId: String(id), projectKey: key }
     : undefined;
 }
+const UNKNOWN_LEAD: Failure = {
+  ok: false,
+  reason: "field-validation",
+  detail: {
+    validation: "invalid-field",
+    fieldErrors: [
+      {
+        fieldId: "lead",
+        message:
+          "No Jira user has this user name. Omit lead to make the connected Jira user the lead.",
+      },
+    ],
+  },
+};
+/**
+ * The lead the create names: an omitted lead becomes the connected Jira user, and a named lead must
+ * be an existing Jira user. Both are settled before review, so an approval never shows a lead Jira
+ * would refuse and a model never has to guess a user name. Jira matches user names without regard
+ * to case, so a named lead keeps Jira's spelling only when it names that same user.
+ */
+async function resolvedLead(
+  request: JiraMutationRequest,
+  lead: string | undefined,
+): Promise<Failure | { readonly ok: true; readonly lead: string }> {
+  const result = await request(
+    lead === undefined ? "myself" : `user?${new URLSearchParams({ username: lead }).toString()}`,
+  );
+  if (!result.ok) {
+    const unknownUser =
+      lead !== undefined && (result.httpStatus === 404 || result.reason === "not-found");
+    return unknownUser ? UNKNOWN_LEAD : dispatchFailure(result);
+  }
+  const name = result.body?.name;
+  return result.status === 200 && answeredLead(name, lead) ? { ok: true, lead: name } : MALFORMED;
+}
+/** A usable user name that, for a named lead, names that same user (Jira ignores case). */
+function answeredLead(name: unknown, requested: string | undefined): name is string {
+  return (
+    boundedText(name, JIRA_PROJECT_LEAD_MAX_CHARS) &&
+    !/[\r\n\t]/u.test(name) &&
+    (requested === undefined || name.toLowerCase() === requested.toLowerCase())
+  );
+}
 async function createProject(
   request: JiraMutationRequest,
-  args: CatalogJsonObject,
+  supplied: CatalogJsonObject,
   check: boolean,
 ): Promise<JiraMutationAttempt> {
-  if (!createInput(args)) return INVALID;
+  if (!createInput(supplied)) return INVALID;
+  const lead = await resolvedLead(request, supplied.lead);
+  if (!lead.ok) return lead;
+  const args: ProjectCreateArguments = { ...supplied, lead: lead.lead };
   const key = args.key;
   const validation = await validateKey(request, key);
   if (!validation.ok) return validation;

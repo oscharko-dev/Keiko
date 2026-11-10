@@ -3297,6 +3297,46 @@ describe("POST /api/diagnostics/client", () => {
     expectCompleteGitTimeline(events);
   });
 
+  it("records the move action on the deletion lifecycle as a closed value", async () => {
+    const sink = captureServerLog();
+    for (const report of [
+      {
+        phase: "started",
+        deletion: { action: "move", requestedCount: 2, deletedCount: 0, failedCount: 0 },
+      },
+      {
+        phase: "settled",
+        durationMs: 7,
+        deletion: { action: "move", requestedCount: 2, deletedCount: 2, failedCount: 0 },
+      },
+    ]) {
+      const body = {
+        kind: "stage",
+        stage: "chat history deletion",
+        ordinal: 2,
+        correlationId: "ui_history-move-0001",
+        ...report,
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    }
+    const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+    expect(events.map((event) => [event.op, event.correlationId])).toEqual([
+      ["client.stage.started", "ui_history-move-0001"],
+      ["client.stage.settled", "ui_history-move-0001"],
+    ]);
+    expect(events.at(-1)?.extra).toEqual({
+      stage: "chat-history-deletion",
+      ordinal: 2,
+      deletionAction: "move",
+      requestedCount: 2,
+      deletedCount: 2,
+      failedCount: 0,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  });
+
   // #3557 review: the stale-session repair outcome joins the denied request's timeline.
   describe("session repair evidence", () => {
     it.each([

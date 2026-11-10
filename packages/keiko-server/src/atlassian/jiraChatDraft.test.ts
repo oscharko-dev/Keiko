@@ -517,6 +517,9 @@ describe("executeJiraChatDraft (#4178)", () => {
       existingCount: 4,
       guidance: JIRA_DRAFT_EXISTING_GUIDANCE,
     });
+    // Customer test 2026-11-10: a later request for other issues resumed this finished draft.
+    expect(JIRA_DRAFT_EXISTING_GUIDANCE).toContain("without draftId");
+    expect(JIRA_DRAFT_EXISTING_GUIDANCE).toContain("Do not create these issues again");
     const none = await executeJiraChatDraft(execution(syntheticJira(), BACKLOG, ["epic", "loose"]));
     expect(none.isError).toBeUndefined();
     expect(none.data).toMatchObject({ outcome: "not-dispatched", excludedCount: 4 });
@@ -914,20 +917,17 @@ describe("source traceability of a draft (#4179)", () => {
             correlationId: "draft-source-proof",
           }),
       });
-      if (complete) {
-        expect(result.data).toMatchObject({ outcome: "succeeded", createdCount: 1 });
-        expect(jira.posts()).toHaveLength(1);
-        expect(jira.issues[0]?.fields.description).toContain(description);
-        expect(jira.issues[0]?.fields.description).toContain("Keiko traceability");
-      } else {
-        expect(result.data).toMatchObject({
-          outcome: "rejected",
-          requirementProblems: [{ ref: "traced", reason: "acceptance-criteria-missing" }],
-        });
-        expect(result.data.guidance).toContain(
-          "Copy each missing acceptance criterion verbatim into fields.description.",
-        );
-        expect(jira.fetch).not.toHaveBeenCalled();
+      // Keiko completes what the model left out: the missing source criterion goes into Keiko's own
+      // trace block, so the item is created either way (customer test 2026-11-10).
+      expect(result.data).toMatchObject({ outcome: "succeeded", createdCount: 1 });
+      expect(jira.posts()).toHaveLength(1);
+      const written = String(jira.issues[0]?.fields.description);
+      expect(written).toContain(description);
+      expect(written).toContain("Keiko traceability");
+      if (complete) expect(written).not.toContain("verbatim from the source");
+      else {
+        expect(written).toContain("Acceptance criteria (verbatim from the source):");
+        expect(written).toContain("Fehler zu Thema 1 werden gemeldet.");
       }
       const declaration = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
       expect(
@@ -1129,7 +1129,25 @@ describe("source traceability of a draft (#4179)", () => {
   });
 
   it("does not evade a criteria refusal by removing references and repeating the draft (S16)", async () => {
-    const source = await podFixture([{ capsuleId: "trace-retry", text: specification(1).text }]);
+    // A criterion Keiko cannot copy verbatim (a macro) stays refused; completion never guesses.
+    const source = await podFixture([
+      {
+        capsuleId: "trace-retry",
+        text: [
+          "# Lastenheft",
+          "",
+          "### LH-001 Thema",
+          "",
+          "Das Portal unterstützt das Thema; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+          "",
+          "Abnahmekriterien:",
+          "- {code} Return an error if authentication fails.",
+          "",
+          "Priorität: Muss.",
+          "",
+        ].join("\n"),
+      },
+    ]);
     cleanup.push(source.cleanup);
     const jira = syntheticJira();
     const untracedItem = {

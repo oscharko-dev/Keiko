@@ -1172,7 +1172,12 @@ export function NewWindowDialog({
       // uiux-fix F008 C053 — config-less types (connector, figma) have no first field, so focus
       // used to stay on the trigger OUTSIDE this aria-modal dialog: Escape and the Tab trap
       // (both bound to the dialog div) never fired. Fall back to the dialog container itself.
-      (firstFieldRef.current ?? dlgRef.current)?.focus();
+      const target = firstFieldRef.current ?? dlgRef.current;
+      target?.focus();
+      // #4335 — a prefilled default (the chat title) must be replaced by typing, not appended to.
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        target.select();
+      }
     });
     return () => cancelAnimationFrame(r);
   }, []);

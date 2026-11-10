@@ -440,3 +440,24 @@ stop and restart, and `npm run check:update-ui-evidence` passes. Only the five s
 fallback fonts and were discarded; the 14 committed captures remain the complete Liberation set of
 the AC9 run. No record binds capture bytes. No updater behavior, fixture, assertion or numerical
 ceiling changed. This remains updater fixture evidence.
+
+## Chat History deletion wording — 2026-11-10 (#4335)
+
+The recoverable Chat History delete and its purge confirmation added messages to both optional
+catalogs, so the freshness gate rejected their two digests. The complete original nine-case
+producer ran in the Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.5m)**,
+including the real BFF stop and restart, and `npm run check:update-ui-evidence` passes. Only the
+two catalog digests and `generatedAt` in the three records were taken from this run. Its captures
+used the container's fallback fonts and were discarded; the 14 committed captures remain the
+complete Liberation set of the AC9 run. No record binds capture bytes. No updater behavior,
+fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Chat History move-failure wording — 2026-11-10 (#4335)
+
+The move-failure message in both optional catalogs changed to "Moving to Deleted failed:
+{detail}", so the two catalog digests moved again. The complete original nine-case producer ran
+in the Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.7m)**, and
+`npm run check:update-ui-evidence` passes. Only the two catalog digests and `generatedAt` in the
+three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.

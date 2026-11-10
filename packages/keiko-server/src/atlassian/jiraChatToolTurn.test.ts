@@ -2079,7 +2079,8 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
   }, 180_000);
 
   it("carries a deselection of more than 32 items and leaves them out", async () => {
-    const { f } = stagedFixture();
+    const { f, reference } = stagedFixture();
+    expect(f.deps.jiraDraftStore?.latest(f.chatId)?.id).toBe(reference.draftId);
     const left = Array.from({ length: 40 }, (_, index) => `s${String(index)}`);
     const pending = handleSendDesktopChat(sendContext(f, "staged-deselection"), f.deps);
     void pending.catch(() => undefined);
@@ -2091,6 +2092,8 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
       excludedItemRefs: left,
     });
     expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain('"excludedCount":40');
+    // Every item settled: a later request for other issues starts a new draft, not this one.
+    expect(f.deps.jiraDraftStore?.latest(f.chatId)).toBeUndefined();
   });
 
   it("refuses a draft extended after its digest was read before anyone is asked", async () => {
@@ -2112,6 +2115,8 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     expect(f.jira.posts()).toHaveLength(0);
     expect(firstToolExchange(f).approval).toBeUndefined();
     expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain("draft-changed");
+    // A refused draft settled nothing, so it stays the open one.
+    expect(store?.latest(f.chatId)?.id).toBe(draftId);
   });
 });
 

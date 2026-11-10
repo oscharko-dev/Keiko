@@ -1605,10 +1605,8 @@ export function CapsuleDetail({
   const capsuleId =
     providedCapsuleId ?? ((searchParams.get("capsuleId") ?? "") as KnowledgeCapsuleId);
 
-  const { data, loadStatus, loadError, reload, replaceData } = useCapsuleDetail(
-    capsuleId,
-    fetchDetailImpl,
-  );
+  const { data, loadStatus, loadError, refreshError, reload, refresh, replaceData } =
+    useCapsuleDetail(capsuleId, fetchDetailImpl);
   const resumeImplementation = optionalResumeImplementation(resumeImpl);
 
   function handleDeleted(response: CapsuleActionResponse): void {
@@ -1686,6 +1684,19 @@ export function CapsuleDetail({
       {/* Own block below the header: the multi-line connect form, Index-now row
           and action buttons no longer compete with the H1 inside the
           .lk-header flex row (uiux-fix F033, C104). */}
+      {refreshError === null ? null : (
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          {refreshError}
+          <button
+            type="button"
+            onClick={refresh}
+            aria-label={t("localKnowledge.detail.retryLoad")}
+            className="lk-alert-retry"
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
       <CapsuleActions
         key={capsuleId}
         capsuleId={capsuleId}
@@ -1694,7 +1705,7 @@ export function CapsuleDetail({
         lifecycleState={data.capsule.lifecycleState}
         vectorCompatible={data.health.vectorCompatible}
         contextualRebuildRequired={data.health.contextualRetrieval?.rebuildRequired ?? false}
-        onActionComplete={reload}
+        onActionComplete={refresh}
         onDeleted={handleDeleted}
         {...(data.indexingJobs[0]?.id !== undefined
           ? { latestJobId: data.indexingJobs[0].id }

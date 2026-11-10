@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   activityLogErrorKindOr,
@@ -65,6 +65,10 @@ async function canonicalGeneratedJsonBytes(bytes) {
 // immutable result and keep that unavoidable scan bounded without letting the global 15-second
 // test limit abort it.
 const REPOSITORY_SCAN_TEST_TIMEOUT_MS = 4 * 60_000;
+// The one shared scan of the current repository (about 230 s on a hosted runner) gets its own
+// budget. Billed to whichever test first read the catalog, it left that test seconds below its
+// timeout and failed it on a slower runner (#4335).
+const REPOSITORY_SCAN_HOOK_TIMEOUT_MS = 10 * 60_000;
 let currentCatalog;
 
 const ACTIVITY_FIELD_TYPES_BY_DATA_CLASS = {
@@ -553,6 +557,10 @@ describe("new failure-path observability", () => {
 });
 
 describe("op catalog drift", () => {
+  beforeAll(() => {
+    generateCurrentOpCatalog();
+  }, REPOSITORY_SCAN_HOOK_TIMEOUT_MS);
+
   it("binds the schema digest to the complete persisted envelope and closed vocabularies", () => {
     const material = activityLogSchemaDigestMaterial();
 

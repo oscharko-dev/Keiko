@@ -7254,6 +7254,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      deletionAction: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["move", "purge"],
+      },
       requestedCount: {
         type: "integer",
         dataClass: "count",
@@ -7439,6 +7445,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      deletionAction: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["move", "purge"],
       },
       requestedCount: {
         type: "integer",
@@ -34438,6 +34450,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       acceptanceCriteriaMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      acceptanceCriteriaCompletedCount: {
         type: "integer",
         dataClass: "count",
         required: false,

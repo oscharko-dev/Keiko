@@ -56,8 +56,17 @@ export interface JiraDraftStore {
   readonly get: (id: string, owner: string) => StagedJiraDraft | undefined;
   /** The same lookup without renewing the expiry: reading a draft is not use of it. */
   readonly peek: (id: string, owner: string) => StagedJiraDraft | undefined;
-  /** The owner's most recently used draft, without renewing it; none once every one expired. */
+  /**
+   * The owner's most recently used draft that is still open, without renewing it; none once every
+   * one expired or was completed.
+   */
   readonly latest: (owner: string) => StagedJiraDraft | undefined;
+  /**
+   * Records that every item of this exact draft revision is settled in Jira. The draft stays
+   * readable, so a retry still reconciles it, but it is no longer the owner's open draft; a page
+   * appended later makes a new revision that is open again.
+   */
+  readonly complete: (id: string, owner: string, digest: string) => void;
   readonly size: () => number;
 }
 
@@ -198,6 +207,50 @@ function retainDraft(
   trimBytes(drafts, bounds.maxTotalBytes);
 }
 
+/**
+ * The newest draft of an oldest-first list, while it is still open. A settled newest draft names
+ * none: an older draft the person moved on from must not be offered for "create them again".
+ */
+function newestOpen(
+  held: readonly StagedJiraDraft[],
+  isOpen: (draft: StagedJiraDraft) => boolean,
+): StagedJiraDraft | undefined {
+  const newest = held.at(-1);
+  return newest !== undefined && isOpen(newest) ? newest : undefined;
+}
+
+/** The drafts still held: idle ones expired and the shared byte bound kept. */
+function sweeper(
+  drafts: Drafts,
+  bounds: {
+    readonly now: () => number;
+    readonly idleTtlMs: number;
+    readonly maxTotalBytes: number;
+  },
+): () => Drafts {
+  return (): Drafts => {
+    const cutoff = bounds.now() - bounds.idleTtlMs;
+    for (const [id, draft] of drafts) if (draft.lastUsedAt < cutoff) drafts.delete(id);
+    trimBytes(drafts, bounds.maxTotalBytes);
+    return drafts;
+  };
+}
+
+/** Revisions by draft id whose items are all settled; a draft whose digest moved on is open again. */
+function settledRevisions(drafts: Drafts): {
+  readonly isOpen: (draft: StagedJiraDraft) => boolean;
+  readonly settle: (id: string, digest: string) => void;
+} {
+  const completed = new Map<string, string>();
+  return {
+    isOpen: (draft): boolean => completed.get(draft.id) !== draft.digest,
+    settle: (id, digest): void => {
+      completed.set(id, digest);
+      for (const known of completed.keys()) if (!drafts.has(known)) completed.delete(known);
+    },
+  };
+}
+
 export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraDraftStore {
   const now = options.now ?? Date.now;
   const newId = options.newId ?? randomUUID;
@@ -206,17 +259,12 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
   const maxDraftBytes = options.maxDraftBytes ?? JIRA_DRAFT_STAGE_BYTES_MAX;
   const perOwner = options.maxDraftsPerOwner ?? JIRA_DRAFT_OWNER_DRAFTS_MAX;
   const drafts: Drafts = new Map();
-  /** The drafts still held: idle ones expired and the shared byte bound kept. */
-  const swept = (): Drafts => {
-    const cutoff = now() - idleTtlMs;
-    for (const [id, draft] of drafts) if (draft.lastUsedAt < cutoff) drafts.delete(id);
-    trimBytes(drafts, maxTotalBytes);
-    return drafts;
-  };
+  const swept = sweeper(drafts, { now, idleTtlMs, maxTotalBytes });
   const peek = (id: string, owner: string): StagedJiraDraft | undefined => {
     const draft = swept().get(id);
     return draft?.owner === owner ? draft : undefined;
   };
+  const settled = settledRevisions(drafts);
   return {
     append: (owner, draftId, fingerprint, page, sourceBindings = []): JiraDraftAppend => {
       const current = draftId === undefined ? undefined : peek(draftId, owner);
@@ -244,7 +292,11 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
       return renewed;
     },
     peek,
-    latest: (owner): StagedJiraDraft | undefined => oldestFirst(swept(), owner).at(-1),
+    latest: (owner): StagedJiraDraft | undefined =>
+      newestOpen(oldestFirst(swept(), owner), settled.isOpen),
+    complete: (id, owner, digest): void => {
+      if (peek(id, owner)?.digest === digest) settled.settle(id, digest);
+    },
     size: () => drafts.size,
   };
 }

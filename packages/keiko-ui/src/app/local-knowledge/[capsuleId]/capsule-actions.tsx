@@ -356,7 +356,9 @@ function nativeDocumentFilters(t: I18nTranslate): readonly NativeFileDialogFilte
 
 interface ConnectSourceFormProps {
   readonly capsuleId: KnowledgeCapsuleId;
-  readonly onConnected: () => void;
+  readonly onConnected: (connectedSource: string) => void;
+  /** Called when a connect attempt begins, so an earlier confirmation cannot outlive it. */
+  readonly onConnectStart?: () => void;
   readonly connectImpl?: typeof connectCapsuleSource;
 }
 
@@ -568,7 +570,8 @@ interface ConnectSourceSubmissionController {
 
 function useConnectSourceSubmission(
   capsuleId: KnowledgeCapsuleId,
-  onConnected: () => void,
+  onConnected: (connectedSource: string) => void,
+  onConnectStart: (() => void) | undefined,
   connectImpl: typeof connectCapsuleSource,
   state: ConnectSourceState,
   t: I18nTranslate,
@@ -580,16 +583,19 @@ function useConnectSourceSubmission(
     state.repositoryMode,
     t,
   );
+  const connectedRoot = state.rootPath.trim();
   async function connect(): Promise<void> {
     if (scope === null || state.busy) return;
     state.setBusy(true);
     state.setConnectError(null);
+    onConnectStart?.();
     try {
       const explicitDisplayName = state.displayName.trim();
       if (explicitDisplayName === "") await connectImpl(capsuleId, scope);
       else await connectImpl(capsuleId, scope, explicitDisplayName);
       state.reset();
-      onConnected();
+      // The notice names the bare root: the selection summary is a sentence of its own.
+      onConnected(connectedRoot);
     } catch (error) {
       state.setConnectError(formatError(error, t));
     } finally {
@@ -869,6 +875,7 @@ function ConnectSourceFields(props: ConnectSourceViewProps): ReactNode {
 function ConnectSourceForm({
   capsuleId,
   onConnected,
+  onConnectStart,
   connectImpl = connectCapsuleSource,
 }: ConnectSourceFormProps): ReactNode {
   const t = useTranslate();
@@ -876,7 +883,14 @@ function ConnectSourceForm({
   const state = useConnectSourceState();
   const documentFilters = nativeDocumentFilters(t);
   const picker = useNativeSourcePicker(state, documentFilters, t);
-  const submission = useConnectSourceSubmission(capsuleId, onConnected, connectImpl, state, t);
+  const submission = useConnectSourceSubmission(
+    capsuleId,
+    onConnected,
+    onConnectStart,
+    connectImpl,
+    state,
+    t,
+  );
   return (
     <ConnectSourceFields
       state={state}
@@ -1078,6 +1092,7 @@ function ProgressBar({
 // ---------------------------------------------------------------------------
 
 interface IndexActionRowProps {
+  readonly indexButtonRef: React.RefObject<HTMLButtonElement | null>;
   readonly indexBusy: boolean;
   readonly indexError: string | null;
   readonly progress: ProgressState | null;
@@ -1086,6 +1101,7 @@ interface IndexActionRowProps {
 }
 
 function IndexActionRow({
+  indexButtonRef,
   indexBusy,
   indexError,
   progress,
@@ -1095,6 +1111,7 @@ function IndexActionRow({
   return (
     <div className={`lkd-index-row ${detailStyles.indexPrompt}`}>
       <button
+        ref={indexButtonRef}
         type="button"
         className="lk-btn lk-btn-primary"
         aria-label={t("localKnowledge.detail.actions.index.aria")}
@@ -1483,6 +1500,10 @@ export function CapsuleActions({
   const [pendingDeleteResponse, setPendingDeleteResponse] = useState<CapsuleActionResponse | null>(
     null,
   );
+  const [connectedSource, setConnectedSource] = useState<string | null>(null);
+  const indexButtonRef = useRef<HTMLButtonElement>(null);
+  const focusIndexOnceRef = useRef(false);
+  const [connectGeneration, setConnectGeneration] = useState(0);
   const [indexBusy, setIndexBusy] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressState | null>(null);
@@ -1538,8 +1559,43 @@ export function CapsuleActions({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- attach exactly when the capsule reports an in-flight run; indexBusy is read for idempotence, not as a trigger.
   }, [lifecycleState]);
 
+  // The connect POST succeeded: say so, ask the page to re-read the pod and hand the person the
+  // next step. Connecting and indexing stay separate actions (knowledge-pods.md); the notice lives
+  // here because the page re-read must not unmount this component and drop it.
+  function handleConnected(source: string): void {
+    // A blank source name renders no sentence; the focus hand-off still happens once.
+    setConnectedSource(source.trim() === "" ? null : source);
+    focusIndexOnceRef.current = true;
+    setConnectGeneration((generation) => generation + 1);
+    onActionComplete();
+  }
+
+  function handleConnectStart(): void {
+    setConnectedSource(null);
+    focusIndexOnceRef.current = false;
+  }
+
+  // Index now takes focus exactly once per successful connect, as soon as the re-read shows a
+  // source; later source-count changes (a removal, say) never pull focus back.
+  useEffect(() => {
+    if (!focusIndexOnceRef.current || sourceCount === 0) return;
+    focusIndexOnceRef.current = false;
+    indexButtonRef.current?.focus();
+  }, [connectGeneration, sourceCount]);
+
+  // A removal makes the confirmation stale.
+  const previousSourceCountRef = useRef(sourceCount);
+  useEffect(() => {
+    if (sourceCount < previousSourceCountRef.current) {
+      setConnectedSource(null);
+      focusIndexOnceRef.current = false;
+    }
+    previousSourceCountRef.current = sourceCount;
+  }, [sourceCount]);
+
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
+    setConnectedSource(null);
     setProgress(initialProgressState(Date.now(), false, latestJobId ?? null));
     setIndexBusy(true);
     setIndexError(null);
@@ -1648,12 +1704,20 @@ export function CapsuleActions({
       <ConnectSourceForm
         key={capsuleId}
         capsuleId={capsuleId}
-        onConnected={onActionComplete}
+        onConnected={handleConnected}
+        onConnectStart={handleConnectStart}
         connectImpl={connectCapsuleSourceImpl}
       />
 
+      {connectedSource !== null ? (
+        <p role="status" aria-live="polite" className={detailStyles.sourceSetupDescription}>
+          {t("localKnowledge.detail.connect.connected", { source: connectedSource })}
+        </p>
+      ) : null}
+
       {showIndexButton ? (
         <IndexActionRow
+          indexButtonRef={indexButtonRef}
           indexBusy={indexBusy}
           indexError={indexError}
           progress={progress}

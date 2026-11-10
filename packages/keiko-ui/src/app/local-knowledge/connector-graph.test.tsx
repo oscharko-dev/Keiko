@@ -1130,9 +1130,9 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await user.click(await screen.findByRole("button", { name: createLabel }));
     const dialog = screen.getByRole("dialog", { name: createLabel });
     expect(within(dialog).getAllByRole("textbox")).toHaveLength(1);
-    await waitFor(() =>
-      expect(within(dialog).getByLabelText(nameLabel, { exact: true })).toHaveFocus(),
-    );
+    // #4335: focus must already be there when the dialog mounts, not a frame later -- text typed
+    // right away would otherwise be lost.
+    expect(within(dialog).getByLabelText(nameLabel, { exact: true })).toHaveFocus();
     expect(within(dialog).queryByRole("radiogroup")).toBeNull();
     expect(within(dialog).queryByRole("radio")).toBeNull();
     expect(within(dialog).getAllByRole("button")).toHaveLength(2);

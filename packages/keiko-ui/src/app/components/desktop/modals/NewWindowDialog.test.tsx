@@ -1242,6 +1242,19 @@ describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled m
     expect(subText("chat", cfg)).toBe("Freigabeprüfung");
   });
 
+  it("selects the prefilled default so typing replaces it instead of appending (#4335)", async () => {
+    const onConfirm = vi.fn();
+    render(
+      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+    );
+    const input = screen.getByDisplayValue(EN_MESSAGES["window.default.chatTitle"]);
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(input).toHaveProperty("selectionStart", 0);
+    expect(input).toHaveProperty("selectionEnd", input.getAttribute("value")?.length);
+    await userEvent.setup().keyboard("Online-Banking-App");
+    expect(input).toHaveValue("Online-Banking-App");
+  });
+
   it("treats an accepted English default exactly the same way", () => {
     const onConfirm = vi.fn();
     render(

@@ -67,6 +67,8 @@ import type {
   ClientStageId,
   ClientStageIngestRequest,
   ClientStageSettledIngestRequest,
+  ClientChatHistoryDeletionAction,
+  ClientChatHistoryDeletionCounts,
   ClientStageStartedIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
@@ -82,6 +84,7 @@ import {
   CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
   CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
   CLIENT_BROWSER_APPROVAL_OPERATIONS,
+  CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
   CLIENT_BROWSER_APPROVAL_OUTCOMES,
   CLIENT_MODULE_LOAD_FAILURES,
   CLIENT_COMPOSER_ACTIVITIES,
@@ -657,6 +660,12 @@ const CLIENT_STAGE_FIELDS = {
     values: CLIENT_STAGE_ACTIVITY_LOG_IDS,
   },
   ordinal: { type: "integer", dataClass: "count", required: true },
+  deletionAction: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
+  },
   requestedCount: { type: "integer", dataClass: "count", required: false },
   deletedCount: { type: "integer", dataClass: "count", required: false },
   failedCount: { type: "integer", dataClass: "count", required: false },
@@ -2734,6 +2743,15 @@ function composerSubmissionFields(
   };
 }
 
+function chatHistoryDeletionActivityFields(
+  deletion: ClientChatHistoryDeletionCounts | undefined,
+): Partial<Record<"deletionAction", ClientChatHistoryDeletionAction>> &
+  Partial<Record<"requestedCount" | "deletedCount" | "failedCount", number>> {
+  if (deletion === undefined) return {};
+  const { action, ...counts } = deletion;
+  return action === undefined ? counts : { ...counts, deletionAction: action };
+}
+
 function logClientStageStarted(
   request: ClientStageStartedIngestRequest,
   correlationId: string,
@@ -2745,7 +2763,7 @@ function logClientStageStarted(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
-        ...request.deletion,
+        ...chatHistoryDeletionActivityFields(request.deletion),
         ...(request.browserApproval === undefined
           ? {}
           : { browserOperation: request.browserApproval.operation }),
@@ -2808,7 +2826,7 @@ function logClientStageSettled(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
-        ...request.deletion,
+        ...chatHistoryDeletionActivityFields(request.deletion),
         ...sourcePreviewActivityFields(request.preview),
         ...modelCatalogActivityFields(request.modelCatalog),
         ...(request.browserApproval === undefined

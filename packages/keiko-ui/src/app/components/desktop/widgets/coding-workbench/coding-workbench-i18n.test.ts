@@ -150,6 +150,7 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.composer.commands.review.description",
     "codingWorkbench.composer.blocked.commandsLoading",
     "codingWorkbench.event.failure.invalid-intent",
+    "codingWorkbench.event.failure.workspace-unqualified",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
     const de = translateCodingWorkbench("de", key, { name: "n", count: 1, position: 1, total: 1 });

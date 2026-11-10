@@ -124,7 +124,11 @@ import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
-import { launchRejectionDiagnosticReason, refusedLaunch } from "./launchFailure.js";
+import {
+  classifyManagerStartFailure,
+  launchRejectionDiagnosticReason,
+  refusedLaunch,
+} from "./launchFailure.js";
 import type {
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskOutcome,
@@ -4680,7 +4684,7 @@ export class CodingRuntimeOrchestrator {
     }
     if (!result.ok) {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, result.failureCode);
-      return this.transitionActive("failed", "runtime-failed");
+      return this.transitionActive("failed", classifyManagerStartFailure(result.failureCode));
     }
     return undefined;
   }

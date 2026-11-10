@@ -94,18 +94,25 @@ export interface JiraChatTurnOptions {
   readonly openTrace?: ((context: JiraChatCatalogContext) => TraceSession) | undefined;
 }
 
-function draftUntracedAdvice(
+/** Exported for its focused regression test: the first advice is new, an identical one repeats. */
+export function draftUntracedAdvice(
   deps: JiraChatTurnOptions["deps"],
   openTrace: JiraChatTurnOptions["openTrace"],
 ): JiraChatTemplatePreflightPorts["untracedAdvice"] {
   if (openTrace === undefined) return undefined;
   const advised = new Set<string>();
-  return (draftArguments, context) =>
-    jiraDraftUntracedAdvice(
+  return (draftArguments, context) => {
+    const advise = untracedAdvisory(deps, advised, context);
+    let repeated = true;
+    const data = jiraDraftUntracedAdvice(
       draftArguments,
       () => openTrace(context),
-      untracedAdvisory(deps, advised, context),
+      (refs) => {
+        repeated = !advise(refs);
+      },
     );
+    return data === undefined ? undefined : { data, repeated };
+  };
 }
 
 function draftRequirementsCheck(
