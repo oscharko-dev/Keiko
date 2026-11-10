@@ -41607,6 +41607,12 @@
               "required": false
             },
             {
+              "name": "counterCheckPhaseWallTimeMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "counterCheckRunPromptAllowance",
               "type": "integer",
               "dataClass": "count",

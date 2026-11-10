@@ -244,11 +244,23 @@ the fingerprint) and ends the session; free text is ignored and a missing or inv
 tokens, and 1,200,000 prompt tokens for all counter-checks of a run for each part of its diff
 package (Issue #4130: each part's Reviewer session may file up to eight candidates, so a fixed run
 allowance left the candidates of a many-part review unchecked; the `counter-checking` phase line
-records the run's `counterCheckRunPromptAllowance`); the harness bound, the tool
+records the run's `counterCheckRunPromptAllowance`, while `counterCheckRunPromptBudget` on
+`review.run.started` is the configured amount for one part); the harness bound, the tool
 ceiling or a refused reservation ends a session `undecided/out-of-budget` and the run
 `incomplete/budget-exhausted`, the deadline `incomplete/deadline-exceeded`, a failed or unavailable
 model `incomplete/model-failed`. Candidates are checked by severity, then in the Reviewer's order;
 candidates left when the run's allowance ran out stay unchecked and make the run incomplete.
+
+The `counter-checking` phase has its own wall-time limit (Issue #4130): 60 minutes for each part of
+the diff package, recorded on the phase line as `counterCheckPhaseWallTimeMs`. The per-candidate
+limit alone bounded one check, so a twelve-part review with 96 candidates could spend 16 hours in
+this phase. Once the limit has passed the phase starts no further counter-check; the candidates left
+stay unchecked and the run settles `incomplete/deadline-exceeded`, or `incomplete/budget-exhausted`
+when the prompt allowance ran out as well. A check in flight is not cut and ends at its own limit,
+so the phase overruns by at most one check (600 seconds by default). 60 minutes is six checks at the
+per-candidate limit, the number the run prompt allowance covers. On the offline gate's sets the
+longest single-part phase of the local 4-bit pair took 54 minutes for eight candidates, and a
+30-minute limit would have left candidates unchecked in many measured reviews.
 
 The presentation rule is one pure function (`review/service/presentation.ts`): a candidate is
 presented only when its verdict is `confirmed`, bound to its own fingerprint, every verdict evidence

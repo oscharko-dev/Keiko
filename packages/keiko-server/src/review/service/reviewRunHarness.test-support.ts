@@ -225,6 +225,8 @@ export interface HarnessOptions {
   readonly ensureReady?: ReviewRunServiceDeps["models"]["ensureReady"];
   /** Issue #4130: further files the topic branch adds before its head commit (a larger change). */
   readonly topicFiles?: readonly { readonly path: string; readonly content: string }[] | undefined;
+  /** Issue #4130: the counter-check phase's wall-time limit for each part (default: the product's). */
+  readonly counterCheckPhaseWallTimeMs?: number | undefined;
 }
 
 export interface ReviewRunHarness {
@@ -312,6 +314,9 @@ function serviceDeps(
       ...(options.ensureReady === undefined ? {} : { ensureReady: options.ensureReady }),
     },
     activityLog: harness.log.sink,
+    ...(options.counterCheckPhaseWallTimeMs === undefined
+      ? {}
+      : { counterCheckPhaseWallTimeMs: options.counterCheckPhaseWallTimeMs }),
   };
 }
 

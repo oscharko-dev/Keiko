@@ -53,6 +53,14 @@ describe("settleReviewRun", () => {
       kind: "incomplete",
       reason: "deadline-exceeded",
     });
+    // #4130: candidates the counter-check phase's wall-time limit left unchecked.
+    expect(settle({ uncheckedCandidates: 2, uncheckedReason: "deadline-exceeded" })).toEqual({
+      kind: "incomplete",
+      reason: "deadline-exceeded",
+    });
+    expect(settle({ uncheckedCandidates: 0, uncheckedReason: "deadline-exceeded" })).toEqual({
+      kind: "complete",
+    });
     expect(settle({ counterChecks: ["model-failed"] })).toEqual({
       kind: "incomplete",
       reason: "model-failed",
@@ -72,6 +80,14 @@ describe("settleReviewRun", () => {
         counterChecks: ["deadline-exceeded"],
       }),
     ).toEqual({ kind: "incomplete", reason: "deadline-exceeded" });
+    // An exhausted counter-check outranks candidates the phase deadline left unchecked.
+    expect(
+      settle({
+        counterChecks: ["budget-exhausted"],
+        uncheckedCandidates: 1,
+        uncheckedReason: "deadline-exceeded",
+      }),
+    ).toEqual({ kind: "incomplete", reason: "budget-exhausted" });
   });
 
   it("abandons a cancelled or interrupted run in any phase, ahead of everything else", () => {
@@ -113,6 +129,7 @@ describe("settleReviewRun", () => {
       { reviewer: { outcome: "failed", reason: "deadline-exceeded" } },
       { counterChecks: ["budget-exhausted"] },
       { uncheckedCandidates: 1 },
+      { uncheckedCandidates: 1, uncheckedReason: "deadline-exceeded" },
       { cancelled: true },
       { interrupted: true },
     ];

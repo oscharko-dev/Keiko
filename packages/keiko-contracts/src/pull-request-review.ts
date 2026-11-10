@@ -872,6 +872,15 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 600_000;
  */
 export const REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS = 200_000;
 export const REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS = 1_200_000;
+/**
+ * Wall time the `counter-checking` phase of one run may take for each part of its diff package
+ * (#4130). No counter-check starts after it; a check in flight ends at its own limit, so the phase
+ * overruns by at most one check. 60 minutes is six checks at the per-check limit, the number the run
+ * prompt allowance covers. On the offline gate's sets the longest single-part phase of the local
+ * 4-bit pair took 54 minutes for eight candidates; without the limit a twelve-part review could
+ * spend 96 checks of 600 s, 16 hours, in this phase.
+ */
+export const REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS = 3_600_000;
 
 /**
  * `POST /api/git-review/runs`. The repository is the Git window's selected root (`?root=`).
