@@ -2722,6 +2722,22 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-contracts/src/connected-context.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 24,
+      "to": 35,
+      "reason": "pending-boundary-migration",
+      "issue": 4278
+    },
+    {
+      "path": "packages/keiko-contracts/src/connected-context.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 9,
+      "to": 15,
+      "reason": "pending-boundary-migration",
+      "issue": 4278
+    },
+    {
       "path": "packages/keiko-contracts/src/container-runtime.test.ts",
       "rule": "anti-slop/no-unknown-parameters",
       "from": 0,
