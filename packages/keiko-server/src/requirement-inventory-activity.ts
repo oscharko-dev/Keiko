@@ -141,6 +141,8 @@ export interface RequirementTraceActivity {
   /** Unknown, ambiguous or malformed references, excluding missing source criteria. */
   readonly referenceProblemCount: number;
   readonly acceptanceCriteriaMissingCount: number;
+  /** Source criteria Keiko wrote into its own trace block of a written description. */
+  readonly acceptanceCriteriaCompletedCount?: number;
   readonly labelsAppliedCount: number;
   readonly footerAppliedCount: number;
   readonly droppedLabelCount: number;
@@ -168,6 +170,7 @@ const REQUIREMENT_TRACE_APPLIED_OPERATION = defineActivityLogOperation({
     refusedItemCount: COUNT,
     referenceProblemCount: COUNT,
     acceptanceCriteriaMissingCount: { ...COUNT, required: false },
+    acceptanceCriteriaCompletedCount: { ...COUNT, required: false },
     labelsAppliedCount: COUNT,
     footerAppliedCount: COUNT,
     droppedLabelCount: COUNT,

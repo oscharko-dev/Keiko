@@ -830,7 +830,7 @@ test("scrolls and searches twelve models while hiding unsupported attachments @s
   await expect(menu.getByRole("option")).toHaveText("e2e-model-11");
 });
 
-test("deletes selected chats with one mouse action and no confirmation @smoke", async ({
+test("moves selected chats to Deleted, then purges them only after confirmation @smoke", async ({
   page,
   request,
 }) => {
@@ -879,13 +879,30 @@ test("deletes selected chats with one mouse action and no confirmation @smoke", 
   await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(2);
   await history.getByRole("checkbox", { name: "Select all displayed chats" }).check();
   await history.getByRole("button", { name: "Delete selected (2)", exact: true }).click();
+  // Delete in Active is reversible: the rows leave Active without a dialog, stay stored, and
+  // reappear in the Deleted tab.
   await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(0);
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const messagesUrl = (id: string): string =>
+    `/api/chats/messages?${new URLSearchParams({ chatId: id, projectPath }).toString()}`;
   for (const id of [chat.id, second.chat.id]) {
-    const response = await request.get(
-      `/api/chats/messages?${new URLSearchParams({ chatId: id, projectPath }).toString()}`,
-    );
-    expect(response.status()).toBe(404);
+    expect((await request.get(messagesUrl(id))).status()).toBe(200);
+  }
+  await history.getByRole("tab", { name: /^Deleted/u }).click();
+  await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(2);
+  // Only the Deleted tab purges, and only after the person confirms.
+  await history.getByRole("checkbox", { name: "Select all displayed chats" }).check();
+  await history.getByRole("button", { name: "Delete selected (2)", exact: true }).click();
+  const purge = page.getByRole("button", { name: "Delete permanently", exact: true });
+  await expect(purge).toBeVisible();
+  // An open confirmation has purged nothing yet.
+  for (const id of [chat.id, second.chat.id]) {
+    expect((await request.get(messagesUrl(id))).status()).toBe(200);
+  }
+  await purge.click();
+  await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(0);
+  for (const id of [chat.id, second.chat.id]) {
+    expect((await request.get(messagesUrl(id))).status()).toBe(404);
   }
 });
 

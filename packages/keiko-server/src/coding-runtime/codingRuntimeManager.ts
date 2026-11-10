@@ -147,8 +147,6 @@ export type CodingRuntimeFailureCode =
   | "spawn-failed"
   | "start-aborted"
   | "start-timeout"
-  // The selected workspace holds the runtime's managed root, so a run could write to its own runtime.
-  | "workspace-contains-runtime"
   // The admitted managed workspace root no longer re-proves at the spawn boundary (#3347 owner P1).
   | "workspace-root-denied";
 
@@ -2721,7 +2719,11 @@ function preflightExecutable(
   if (managedRoot === undefined || workspaceRoot === undefined || executablePath === undefined) {
     return failure("sidecar-missing", false);
   }
-  if (pathInside(workspaceRoot, managedRoot)) return failure("workspace-contains-runtime", false);
+  // A workspace that contains Keiko's own managed runtime (a home folder holding a portable
+  // install, or a Keiko checkout in the dev lane) is refused: the agent could change the runtime it
+  // runs on. The person can fix this by choosing another folder, so it is named as an unqualified
+  // workspace rather than an internal failure (#4335).
+  if (pathInside(workspaceRoot, managedRoot)) return failure("workspace-unqualified", false);
   if (!pathInside(managedRoot, executablePath)) return failure("sidecar-unmanaged", false);
   return { ok: true, executablePath, managedRoot, workspaceRoot };
 }

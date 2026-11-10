@@ -1290,7 +1290,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko hat die Aufgabe abgelehnt, bevor sie lief, zum Beispiel weil eine mit @ referenzierte Datei fehlt, außerhalb des Arbeitsbereichs liegt oder geschützt ist, oder weil der Slash-Befehl nicht verfügbar ist. Prüfe die referenzierten Dateien und den Befehl und starte die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.workspace-unqualified":
-    "Keiko hat dieses Repository abgelehnt, weil seine eigene Coding-Runtime darin liegt, wie in einem Keiko-Checkout. Ein Lauf darf die Runtime, auf der er läuft, nicht ändern. Wähle ein anderes Repository und starte die Aufgabe dort.",
+    "Keiko lässt in diesem Ordner keinen Agenten arbeiten, weil er Keikos eigene Installation enthält, die der Agent sonst verändern könnte. Wähle einen Projektordner außerhalb der Keiko-Installation und starte die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":

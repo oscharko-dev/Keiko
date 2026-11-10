@@ -488,6 +488,19 @@ it("points create fields at jira.draft for several issues, and only create field
   expect(refused.data).toMatchObject({ outcome: "failed" });
   expect(refused.data).not.toHaveProperty("draft");
 });
+it("shows the reporter Jira assigns on create as defaulted, so the model does not invent one", async () => {
+  // Customer test 2026-11-10: Jira's create metadata marked the reporter required without a
+  // default; the model set reporter "admin" on five epics and Jira refused each as unknown user.
+  const values = [field("summary", "string", true), field("reporter", "user", true)];
+  const created = await fixture({ ...REMOTE_PAGE, total: values.length, values }).run(
+    "jira.create-fields",
+    { projectKey: "SYN", issueTypeId: "1" },
+  );
+  expect(created.data.items).toEqual([
+    expect.objectContaining({ id: "summary", required: true, hasDefaultValue: false }),
+    expect.objectContaining({ id: "reporter", required: true, hasDefaultValue: true }),
+  ]);
+});
 it("advertises explicit Markdown provenance only for Data Center description input", async () => {
   const values = [field("description", "string"), field("environment", "string")];
   const created = await fixture({ ...REMOTE_PAGE, total: values.length, values }).run(

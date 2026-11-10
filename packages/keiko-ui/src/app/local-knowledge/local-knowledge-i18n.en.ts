@@ -332,6 +332,8 @@ export const EN_LOCAL_KNOWLEDGE_MESSAGES = {
   "localKnowledge.detail.connect.repositoryFilesDisabledNote":
     "Specific-file selection is unavailable in repository mode. The whole repository is connected as one code source.",
   "localKnowledge.detail.connect.connect": "Connect",
+  "localKnowledge.detail.connect.connected":
+    "Connected {source}. Next step: index it so Keiko can search it.",
   "localKnowledge.detail.connect.connecting": "Connecting…",
   "localKnowledge.detail.connect.limitSummary":
     "Maximum single file size: {size}. Parser budget: {objects} objects, {duration} per document.",

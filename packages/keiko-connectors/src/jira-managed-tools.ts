@@ -160,6 +160,7 @@ import {
   metadataItems,
   remoteJiraPage,
 } from "./jira-managed-metadata.js";
+import { JIRA_CREATE_ASSIGNED_FIELDS } from "./jira-field-metadata.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -381,7 +382,19 @@ function objectReadResult(
 /** Machine-readable provenance for new Markdown; native wiki strings remain verbatim (ADR-0128). */
 function createMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
   const items = metadataItems(value);
-  return items === undefined ? undefined : descriptionMetadataItems(items);
+  return items === undefined
+    ? undefined
+    : descriptionMetadataItems(items).map((item) => assignedOnCreate(item));
+}
+/**
+ * Jira's create metadata marks the reporter required without a default, yet Jira sets it to the
+ * calling user when a create omits it, and create admission already treats it so. Shown raw, the
+ * field told the model to invent a reporter, which Jira then refused as unknown user.
+ */
+function assignedOnCreate(item: CatalogJsonObject): CatalogJsonObject {
+  return typeof item.id === "string" && JIRA_CREATE_ASSIGNED_FIELDS.has(item.id)
+    ? { ...item, hasDefaultValue: true }
+    : item;
 }
 function descriptionMetadataItems(
   items: readonly CatalogJsonObject[],

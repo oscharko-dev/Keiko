@@ -181,6 +181,8 @@ const REQUIREMENT_IDS = {
   type: "array",
   maxItems: JIRA_REQUIREMENT_IDS_MAX,
   items: text(JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
+  description:
+    "IDs of the Knowledge requirements this issue implements, as knowledge.requirements returns them. Required while the Chat holds requirements; Keiko adds their source trace and acceptance criteria.",
 };
 const TRACE_RESULT = object({
   labelsApplied: { type: "boolean" },
@@ -571,14 +573,18 @@ const DEFINITIONS: Readonly<
       {
         key: identifier(64),
         name: identifier(255),
-        lead: identifier(JIRA_PROJECT_LEAD_MAX_CHARS),
+        lead: {
+          ...identifier(JIRA_PROJECT_LEAD_MAX_CHARS),
+          description:
+            "Jira user name of the project lead. Omit it to make the connected Jira user the lead.",
+        },
         projectTypeKey: identifier(64),
         projectTemplateKey: moduleKey(255),
         description: text(32768),
         url: text(JIRA_PROJECT_URL_MAX_CHARS),
         assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
       },
-      ["key", "name", "lead", "projectTypeKey"],
+      ["key", "name", "projectTypeKey"],
     ),
   },
   "jira.update-project": {

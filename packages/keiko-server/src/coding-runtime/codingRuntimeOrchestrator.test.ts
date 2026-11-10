@@ -2782,7 +2782,7 @@ describe("CodingRuntimeOrchestrator", () => {
   // A workspace that holds the runtime is the one managed start failure the operator can repair, so
   // it alone leaves the internal-error code. Its precise reason stays in the diagnostic either way.
   it.each([
-    ["workspace-contains-runtime", "workspace-unqualified"],
+    ["workspace-unqualified", "workspace-unqualified"],
     ["sidecar-unmanaged", "runtime-failed"],
     ["spawn-failed", "runtime-failed"],
   ] as const)(
@@ -4963,6 +4963,37 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     expect(JSON.stringify(projection.currentContent())).not.toContain("RESTART_CANARY_2479");
   });
+
+  it.each([
+    ["workspace-unqualified", "workspace-unqualified"],
+    ["runtime-state-unavailable", "runtime-failed"],
+  ] as const)(
+    "settles a manager start refusal %s as %s on the run and its settled line (#4335)",
+    async (managerCode, runCode) => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      const snapshot = successfulSnapshot(await f.orchestrator.start(start));
+
+      expect(snapshot).toMatchObject({ state: "failed", failureCode: runCode });
+      const settled = requireLoggedEvent(
+        captured.records.find((candidate) => candidate.op === "coding-runtime.run.settled"),
+        "expected coding runtime settlement log",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.settled.emitted-line",
+          formatActivityLogProofLine(settled),
+        ),
+      ).toMatchObject({ runId: "run-1", state: "failed", failureCode: runCode });
+      expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
+    },
+  );
 
   it("contains rejected host lifecycle promises as recovery-required", async () => {
     const captured = captureDiagnostics();

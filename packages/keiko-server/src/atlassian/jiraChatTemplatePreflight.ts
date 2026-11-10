@@ -154,13 +154,21 @@ export interface JiraChatTemplatePreflightPorts {
         context: JiraChatCatalogContext,
       ) => { readonly data: CatalogJsonObject; readonly violationCount: number } | undefined)
     | undefined;
-  /** Asks a draft that names no requirement to name them before a human reviews it. */
+  /**
+   * Asks a draft that names no requirement to name them before a human reviews it. `repeated`
+   * says the same untraced items were already advised in this turn.
+   */
   readonly untracedAdvice?:
     | ((
         draftArguments: CatalogJsonObject,
         context: JiraChatCatalogContext,
-      ) => CatalogJsonObject | undefined)
+      ) => UntracedAdvice | undefined)
     | undefined;
+}
+
+interface UntracedAdvice {
+  readonly data: CatalogJsonObject;
+  readonly repeated: boolean;
 }
 
 type Credential = Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>;
@@ -422,15 +430,20 @@ async function draftPreflight(
   return draft.ok ? undefined : draftRefusalData(draft);
 }
 
-/** Only an existing required review can confirm the missing trace; this never grants the write. */
+/**
+ * Only an existing required review can confirm the missing trace; this never grants the write.
+ * The model first receives the advice so it can name the requirements; only the same untraced
+ * items submitted again in this turn reach the human review, with the missing-trace warning.
+ */
 function untracedReviewRefusal(
   ports: JiraChatTemplatePreflightPorts,
   action: JiraChatCatalogAction,
   context: JiraChatCatalogContext,
-  advice: CatalogJsonObject,
+  { data: advice, repeated }: UntracedAdvice,
 ): CatalogJsonObject | undefined {
   if (
     advice.requirementRefusal !== "untraced" ||
+    !repeated ||
     context.signal.aborted ||
     !ports.readAllowed(action)
   )
@@ -455,7 +468,7 @@ function untracedAdviceOf(
   draft: ReturnType<typeof readableChatDraft>,
   refused: boolean,
   context: JiraChatCatalogContext,
-): CatalogJsonObject | undefined {
+): UntracedAdvice | undefined {
   if (!draft.ok || refused) return undefined;
   try {
     return ports.untracedAdvice?.(draft.arguments, context);

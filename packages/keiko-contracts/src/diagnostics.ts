@@ -1141,7 +1141,16 @@ export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
 // anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
 export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
 
+/** `purge` is the permanent delete from the Deleted tab; `move` is the reversible Delete (#4335). */
+export const CLIENT_CHAT_HISTORY_DELETION_ACTIONS = ["move", "purge"] as const;
+export type ClientChatHistoryDeletionAction = (typeof CLIENT_CHAT_HISTORY_DELETION_ACTIONS)[number];
+const CHAT_HISTORY_DELETION_ACTIONS: ReadonlySet<string> = new Set(
+  CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
+);
+
 export interface ClientChatHistoryDeletionCounts {
+  /** Absent means `purge`, the shape every earlier client sent. */
+  readonly action?: ClientChatHistoryDeletionAction | undefined;
   readonly requestedCount: number;
   readonly deletedCount: number;
   readonly failedCount: number;
@@ -1254,16 +1263,24 @@ function hasValidNavigationOutcome(value: Record<string, unknown>): boolean {
 }
 
 const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "action",
   "requestedCount",
   "deletedCount",
   "failedCount",
 ]);
 
+function hasValidDeletionShape(counts: Record<string, unknown>): boolean {
+  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  return (
+    counts.action === undefined ||
+    (typeof counts.action === "string" && CHAT_HISTORY_DELETION_ACTIONS.has(counts.action))
+  );
+}
+
 function hasValidStageDeletion(value: Record<string, unknown>): boolean {
   if (value.stage !== "chat history deletion") return value.deletion === undefined;
   const counts = value.deletion;
-  if (!isRecord(counts)) return false;
-  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  if (!isRecord(counts) || !hasValidDeletionShape(counts)) return false;
   if (!isBoundedPositiveInteger(counts.requestedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.deletedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;

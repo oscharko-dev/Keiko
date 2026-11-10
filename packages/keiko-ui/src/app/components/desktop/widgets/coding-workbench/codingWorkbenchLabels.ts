@@ -416,8 +416,8 @@ export function eventDetail(
 // cause instead. F5 (#3873): a run whose edits were refused again and again names its refusal
 // class and the next step, never the generic sentence. A start the server refused before its first
 // turn (`invalid-intent`: a file the first prompt referenced, or a slash command, was not accepted)
-// names what to check. A run settles `workspace-unqualified` only when its repository holds Keiko's
-// own runtime; every other refusal under that code comes before a run exists, as a refused start.
+// names what to check. A run whose folder contains Keiko's own installation (`workspace-unqualified`,
+// #4335) names the folder as the thing to change.
 const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map<
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchMessageKey

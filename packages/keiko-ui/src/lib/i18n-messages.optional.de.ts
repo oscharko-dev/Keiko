@@ -4485,6 +4485,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.history.selection.deleting": "Wird gelöscht…",
   "chat.history.selection.permanent":
     "Löscht den Chat und seine gespeicherten Nachrichten endgültig.",
+  "chat.history.selection.recoverable":
+    "Verschiebt den Chat nach Gelöscht. Dort kannst du ihn wiederherstellen, bis du ihn endgültig löschst.",
+  "chat.history.moveFailed": "Verschieben nach Gelöscht fehlgeschlagen: {detail}",
+  "chat.history.confirm.title": "Endgültig löschen?",
+  "chat.history.confirm.bodyOne":
+    "Der Chat \u201E{title}\u201C und seine gespeicherten Nachrichten werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.",
+  "chat.history.confirm.bodyMany":
+    "{count} Chats und ihre gespeicherten Nachrichten werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.",
+  "chat.history.confirm.confirm": "Endgültig löschen",
   "chat.history.tab.active": "Aktiv",
   "chat.history.tab.deleted": "Gelöscht",
   "chat.role.user": "Du",

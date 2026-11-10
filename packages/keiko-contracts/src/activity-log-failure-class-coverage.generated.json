@@ -8976,6 +8976,12 @@
               "required": false
             },
             {
+              "name": "deletionAction",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "failedCount",
               "type": "integer",
               "dataClass": "count",
@@ -9075,6 +9081,12 @@
               "name": "deletedCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "deletionAction",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -43759,6 +43771,12 @@
           "causal": "correlation",
           "analyzerProjection": "timeline",
           "safeContextFields": [
+            {
+              "name": "acceptanceCriteriaCompletedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
             {
               "name": "acceptanceCriteriaMissingCount",
               "type": "integer",

@@ -121,4 +121,32 @@ describe("the owner's latest draft", () => {
     clock = usedAt + 101;
     expect(store.latest("chat-1")).toBeUndefined();
   });
+
+  it("names no draft once the newest one settled, until it changes again", () => {
+    let clock = 1_000;
+    let next = 0;
+    const store = createJiraDraftStore({
+      now: () => clock,
+      newId: () => `draft-${String((next += 1))}`,
+    });
+    store.append("chat-1", undefined, "fp", [item("a")]);
+    clock += 10;
+    const second = store.append("chat-1", undefined, "fp", [item("b")]);
+    if (!second.ok) throw new TypeError("Expected the second draft");
+
+    store.complete("draft-2", "chat-1", "0".repeat(64));
+    store.complete("draft-2", "chat-2", second.draft.digest);
+    expect(store.latest("chat-1")?.id).toBe("draft-2");
+
+    store.complete("draft-2", "chat-1", second.draft.digest);
+    // The older draft-1 was superseded by draft-2; it is not offered again (#4335).
+    expect(store.latest("chat-1")).toBeUndefined();
+    // The finished draft itself stays readable for a rerun that only reconciles it.
+    expect(store.get("draft-2", "chat-1")?.digest).toBe(second.draft.digest);
+
+    clock += 10;
+    const grown = store.append("chat-1", "draft-2", "fp", [item("c")]);
+    if (!grown.ok) throw new TypeError("Expected the grown draft");
+    expect(store.latest("chat-1")?.id).toBe("draft-2");
+  });
 });

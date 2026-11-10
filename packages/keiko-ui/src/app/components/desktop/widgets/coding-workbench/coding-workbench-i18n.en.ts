@@ -1246,7 +1246,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
   "codingWorkbench.event.failure.workspace-unqualified":
-    "Keiko refused this repository because its own coding runtime is stored inside it, as in a Keiko checkout. A run must not be able to change the runtime it runs on. Select another repository and start the task there.",
+    "Keiko does not let an agent work in this folder because it contains Keiko's own installation, which the agent could otherwise change. Choose a project folder outside the Keiko installation, then start the task again.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":

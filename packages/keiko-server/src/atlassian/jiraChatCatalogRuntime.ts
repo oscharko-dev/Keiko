@@ -252,11 +252,11 @@ export function untracedAdvisory(
     readonly userMessageId?: string | undefined;
     readonly correlationId: string;
   },
-): (refs: readonly string[]) => void {
-  return (refs): void => {
+): (refs: readonly string[]) => boolean {
+  return (refs): boolean => {
     const turn = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
     const key = `${turn}\u0000${JSON.stringify([...refs].sort((a, b) => a.localeCompare(b)))}`;
-    if (advised.has(key)) return;
+    if (advised.has(key)) return false;
     advised.add(key);
     if (advised.size > ADVISED_DRAFTS_MAX) advised.delete(advised.values().next().value ?? key);
     recordJiraDraftActivity(deps.activityLog, context.correlationId, {
@@ -271,6 +271,7 @@ export function untracedAdvisory(
       violationCount: 0,
       durationMs: 0,
     });
+    return true;
   };
 }
 
@@ -293,7 +294,7 @@ function executePreparedDraft(
   if (source === undefined && hasRequirementReferences(draft.arguments))
     return Promise.resolve(missingPreparedSource());
   const approval = draftApproval(deps, current.envelope.subject, context, intent);
-  return executeJiraChatDraft({
+  const completed = executeJiraChatDraft({
     ...shared,
     arguments: draft.arguments,
     deselected: approval?.excludedItemRefs ?? [],
@@ -321,6 +322,26 @@ function executePreparedDraft(
       recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
     },
   });
+  return completed.then((result) => settleDraft(deps, context.chatId, args, result));
+}
+
+/**
+ * Every item settled: the draft is done, so later turns no longer name it as the open draft and a
+ * request for other issues starts a new one instead of reconciling this one again.
+ */
+function settleDraft(
+  deps: UiHandlerDeps,
+  chatId: string,
+  args: CatalogJsonObject,
+  result: ManagedMcpToolResult,
+): ManagedMcpToolResult {
+  if (
+    result.isError !== true &&
+    typeof args.draftId === "string" &&
+    typeof args.draftDigest === "string"
+  )
+    deps.jiraDraftStore?.complete(args.draftId, chatId, args.draftDigest);
+  return result;
 }
 
 function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
@@ -422,7 +443,7 @@ export async function executeTracedMutation(
         traced = outcome;
       },
     });
-    tallyOutcome(tally, traced);
+    tallyOutcome(tally, traced, resolution.trace);
     logTrace(turn.correlationId, logged, tally);
     const data = traceOutcomeData(traced);
     return data === undefined ? result : { ...result, data: { ...result.data, trace: data } };
