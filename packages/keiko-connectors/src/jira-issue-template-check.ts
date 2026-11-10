@@ -465,7 +465,9 @@ export function jiraTemplateViolationGuidance(
     );
   }
   const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
-    ? " A section is a line of its own, h2. Title, with its text below; subject is its title."
+    ? " A section is a line of its own, h2. Title, with its text below; subject is its title." +
+      " Write the section text yourself from the request, the issue and the Chat's sources;" +
+      " ask the user only for a fact neither provides."
     : "";
   return (
     "Nothing was changed: this breaks the issue template of the project. " +

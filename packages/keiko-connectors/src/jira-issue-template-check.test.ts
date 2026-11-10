@@ -33,6 +33,18 @@ describe("formal admission guidance", () => {
       ]),
     ).toContain("Correct what violations name");
   });
+  it("tells the model to write a missing section itself instead of asking the user for its text", () => {
+    const section = jiraTemplateViolationGuidance([
+      { ruleId: "section-missing", subject: "Testhinweise", template: "SYN/Sub-task" },
+    ]);
+    expect(section).toContain("Write the section text yourself");
+    expect(section).toContain("ask the user only for a fact neither provides");
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "field-missing", subject: "Story Points", template: "SYN/Task" },
+      ]),
+    ).not.toContain("Write the section text yourself");
+  });
 });
 
 describe("sections sampled from native Jira descriptions", () => {

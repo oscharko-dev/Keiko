@@ -879,6 +879,7 @@ const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   "malformed-payload": "chat.jira.outcome.failure.response",
   "field-validation": "chat.jira.outcome.failure.fields",
   "read:field-validation": "chat.jira.outcome.failure.readParameters",
+  "invalid-input": "chat.jira.outcome.failure.invalidInput",
   "requirement:untraced": "chat.jira.outcome.failure.requirementUntraced",
   "requirement:criteria-missing": "chat.jira.outcome.failure.requirementCriteria",
   "requirement:references": "chat.jira.outcome.failure.requirementReferences",

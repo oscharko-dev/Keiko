@@ -2229,6 +2229,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Review the required Jira fields and template rules before requesting the change again.",
   "chat.jira.outcome.failure.readParameters":
     "Jira refused the values of this read. Check the project key, issue type or filter it used; nothing was changed.",
+  "chat.jira.outcome.failure.invalidInput":
+    "Keiko refused the values of this request; nothing was changed.",
   "chat.jira.outcome.failure.unavailable":
     "The Jira result is unavailable. Check the connection and the remote state before making another request.",
   "chat.requirements.tool": "Requirements",

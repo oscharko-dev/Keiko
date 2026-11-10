@@ -24,6 +24,7 @@ const FAILURE_KEYS: Readonly<Record<string, ClientJiraResultFailure>> = {
   "chat.jira.outcome.failure.response": "response",
   "chat.jira.outcome.failure.fields": "fields",
   "chat.jira.outcome.failure.readParameters": "fields",
+  "chat.jira.outcome.failure.invalidInput": "fields",
   "chat.jira.outcome.failure.requirementUntraced": "fields",
   "chat.jira.outcome.failure.requirementCriteria": "fields",
   "chat.jira.outcome.failure.requirementReferences": "fields",

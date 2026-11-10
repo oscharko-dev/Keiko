@@ -315,6 +315,16 @@ it.each([
   expect(view.failure).toBe(label);
   expect(view.items).toEqual([]);
 });
+it("names refused arguments instead of advising a connection check", () => {
+  const view = jiraToolOutcomeView(
+    exchange("jira_report", {
+      outcome: "failed",
+      reason: "invalid-input",
+      invalidArguments: ["section"],
+    }),
+  );
+  expect(view.failure).toBe("chat.jira.outcome.failure.invalidInput");
+});
 it("does not repurpose a mutation's technical failure as a harmless read outcome", () => {
   const call: ChatToolExchange = {
     call: { id: "mutation-failed", name: "jira_create_issue_link", arguments: {} },

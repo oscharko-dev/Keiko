@@ -2362,6 +2362,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Prüfe die erforderlichen Jira-Felder und Vorlagenregeln, bevor du die Änderung erneut anforderst.",
   "chat.jira.outcome.failure.readParameters":
     "Jira hat die Werte dieser Abfrage abgelehnt. Prüfe den verwendeten Projektschlüssel, Vorgangstyp oder Filter; es wurde nichts geändert.",
+  "chat.jira.outcome.failure.invalidInput":
+    "Keiko hat die Werte dieser Anfrage abgelehnt; es wurde nichts geändert.",
   "chat.jira.outcome.failure.unavailable":
     "Das Jira-Ergebnis ist nicht verfügbar. Prüfe die Verbindung und den Stand in Jira vor einer weiteren Anfrage.",
   "chat.requirements.tool": "Anforderungen",
