@@ -42,14 +42,15 @@ export interface RuntimeGatewayConfinement {
   readonly egress?: RuntimeGatewayEgress | undefined;
 }
 
-const OPTIONAL_POLICY_KEYS: ReadonlySet<string> = new Set(["filesystem", "egress"]);
+const OPTIONAL_POLICY_KEY_LIST = ["filesystem", "egress"] as const;
+const OPTIONAL_POLICY_KEYS: ReadonlySet<string> = new Set(OPTIONAL_POLICY_KEY_LIST);
 const EGRESS_DISPOSITIONS: ReadonlySet<unknown> = new Set<RuntimeGatewayEgress>([
   "inherited",
   "loopback-only",
 ]);
 const DIGEST = /^[a-f0-9]{64}$/u;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-const POLICY_KEYS = new Set([
+const POLICY_KEY_LIST = [
   "schemaVersion",
   "profile",
   "addressFamily",
@@ -60,7 +61,8 @@ const POLICY_KEYS = new Set([
   "runtimeArtifactDigest",
   "modelProfileDigest",
   "policyDigest",
-]);
+] as const;
+const POLICY_KEYS = new Set<string>(POLICY_KEY_LIST);
 
 function invalidPolicy(): never {
   throw new TypeError("runtime-gateway-policy-invalid");
@@ -205,8 +207,13 @@ export function copyRuntimeGatewayConfinement(
   return Object.freeze(record);
 }
 
-/** Own data properties copied from an untrusted policy object, before any field is validated. */
-type PolicyData = Record<string, unknown>;
+/**
+ * Own data properties copied from an untrusted policy object, before any field is validated.
+ * `ownPolicyData` refuses every key outside the two key lists, so the copy holds only these keys.
+ */
+type PolicyData = Partial<
+  Record<(typeof POLICY_KEY_LIST)[number] | (typeof OPTIONAL_POLICY_KEY_LIST)[number], unknown>
+>;
 
 function policyData(value: unknown): PolicyData | undefined {
   try {
