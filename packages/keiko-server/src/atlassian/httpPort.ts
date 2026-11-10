@@ -17,7 +17,7 @@
 // validation); `gatewayFetch` itself always issues `redirect: "manual"`, so a 3xx is surfaced,
 // never followed.
 
-import { setImmediate as yieldCredentialScan } from "node:timers/promises";
+import { setImmediate as yieldCredentialScan } from "node:timers";
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
@@ -745,17 +745,18 @@ function credentialScanPlan(
   if (longest > CREDENTIAL_SCAN_MAX_SECRET_CHARS) return undefined;
   return { longest, width: Math.min(4096, Math.floor(CREDENTIAL_SCAN_MAX_STEP_WORK / longest)) };
 }
-async function credentialReflectionCount(
+function credentialReflectionCount(
   content: string,
   values: readonly string[],
   signal: AbortSignal,
 ): Promise<number | "scan-budget-exhausted"> {
   const plan = credentialScanPlan(values);
-  if (plan === undefined) return "scan-budget-exhausted";
+  if (plan === undefined) return Promise.resolve("scan-budget-exhausted");
   const floor = createSecretSpellingStreamRedactor(values);
   let held = 0;
   let offset = 0;
-  while (offset < content.length) {
+  /** One bounded chunk; undefined means the scan continues after a yield. */
+  const step = (): number | "scan-budget-exhausted" | undefined => {
     const capacity = Math.floor(CREDENTIAL_SCAN_MAX_STEP_WORK / plan.longest) - held;
     if (signal.aborted || capacity < 1) return "scan-budget-exhausted";
     const chunk = content.slice(offset, offset + Math.min(plan.width, capacity));
@@ -764,12 +765,23 @@ async function credentialReflectionCount(
     const count = floor.redactedCount();
     if (count > 0) return count;
     held += chunk.length - published.length;
-    // Retained spellings depend on the preceding chunk; yielding lets the existing request budget revoke this scan.
-    if (offset < content.length) await yieldCredentialScan();
-  }
-  if (signal.aborted) return "scan-budget-exhausted";
-  floor.finish();
-  return floor.redactedCount();
+    if (offset < content.length) return undefined;
+    floor.finish();
+    return floor.redactedCount();
+  };
+  return new Promise((resolve, reject) => {
+    // Retained spellings depend on the preceding chunk; yielding between chunks lets the existing
+    // request budget revoke this scan, and a callback continuation retains no growing chain.
+    const next = (): void => {
+      void Promise.resolve()
+        .then(step)
+        .then((settled) => {
+          if (settled === undefined) yieldCredentialScan(next);
+          else resolve(settled);
+        }, reject);
+    };
+    next();
+  });
 }
 /** Withhold complete text or archive bytes, never rewrite potentially structured native receipts. */
 async function credentialSafeBody(

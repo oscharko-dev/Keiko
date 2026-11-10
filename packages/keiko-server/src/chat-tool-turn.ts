@@ -1570,16 +1570,13 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const remaining = calls.values();
     return new Promise<void>((resolve, reject) => {
       const next = (): void => {
-        void Promise.resolve()
-          .then(() => {
-            const call = remaining.next();
-            if (call.done) {
-              resolve();
-              return undefined;
-            }
-            return settle(call.value).then(next);
-          })
-          .catch(reject);
+        const call = remaining.next();
+        if (call.done) {
+          resolve();
+          return;
+        }
+        // A flat chain: a synchronous throw in settle becomes a rejection that reaches the caller.
+        void Promise.resolve(call.value).then(settle).then(next, reject);
       };
       next();
     });

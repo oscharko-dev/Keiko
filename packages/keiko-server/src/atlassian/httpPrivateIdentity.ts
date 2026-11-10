@@ -88,17 +88,19 @@ export function createJiraPrivateLifetime(
     if (settled !== undefined) return settled;
     signal.removeEventListener("abort", aborted);
     // Publish the promise before any finalizer can re-enter finish/register synchronously.
-    settled = Promise.resolve().then(async () => {
-      while (finalizers.size > 0) {
-        const pending = [...finalizers];
-        finalizers.clear();
-        await Promise.all(
-          pending.map((finalize) => completePrivateFinalizer(finalize, correlationId)),
-        );
-      }
-      drained = true;
-    });
+    settled = Promise.resolve().then(drainFinalizers);
     return settled;
+  }
+  /** Runs every registered finalizer, then any a finalizer registered while it ran. */
+  async function drainFinalizers(): Promise<void> {
+    if (finalizers.size === 0) {
+      drained = true;
+      return;
+    }
+    const pending = [...finalizers];
+    finalizers.clear();
+    await Promise.all(pending.map((finalize) => completePrivateFinalizer(finalize, correlationId)));
+    await drainFinalizers();
   }
   function aborted(): void {
     void finish();
