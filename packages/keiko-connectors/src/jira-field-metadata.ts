@@ -702,13 +702,13 @@ function validateSets(
     ...(descriptionProjection === undefined ? {} : { descriptionProjection }),
   };
 }
+/** Fields Jira itself fills when a create omits them: the reporter becomes the calling user. */
+export const JIRA_CREATE_ASSIGNED_FIELDS: ReadonlySet<string> = new Set(["reporter"]);
 /**
  * Jira sets the reporter of a new issue to the authenticated caller when the field is absent, even
  * though create metadata lists it as required without a default. This is the one field Keiko does
  * not insist on; a supplied reporter is still validated like any other user.
  */
-/** Fields Jira itself fills when a create omits them: the reporter becomes the calling user. */
-export const JIRA_CREATE_ASSIGNED_FIELDS: ReadonlySet<string> = new Set(["reporter"]);
 function jiraAssignsOnCreate(field: JiraFieldMetadata): boolean {
   return JIRA_CREATE_ASSIGNED_FIELDS.has(field.id);
 }

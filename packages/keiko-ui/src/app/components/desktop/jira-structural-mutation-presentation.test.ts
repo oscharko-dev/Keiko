@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { OptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { jiraActionFacts } from "./jiraActionFacts";
@@ -345,3 +346,78 @@ it("does not repurpose a mutation's technical failure as a harmless read outcome
   expect(jiraLocalReadFailureNotice(call)).toBeUndefined();
   expect(jiraToolState(call, "completed")).toBe("chat.jira.write.unknown");
 });
+
+const draftItem = (state: string, reason?: string): CatalogJsonObject => ({
+  ref: "a",
+  state,
+  ...(reason === undefined ? {} : { reason }),
+});
+it("names the one reason every failed draft row shares", () => {
+  const view = jiraToolOutcomeView(
+    exchange("jira_draft", {
+      outcome: "failed",
+      items: [
+        draftItem("failed", "field-validation"),
+        draftItem("created"),
+        draftItem("failed", "field-validation"),
+      ],
+    }),
+  );
+  expect(view.failure).toBe("chat.jira.outcome.failure.fields");
+});
+it.each([
+  [
+    "rows with different reasons",
+    [draftItem("failed", "conflict"), draftItem("failed", "not-found")],
+  ],
+  ["failed rows without a reason", [draftItem("failed")]],
+  ["a reason on a row that did not fail", [draftItem("created", "conflict")]],
+  ["no rows", []],
+])("falls back to the generic failure for %s", (_name, items) => {
+  const view = jiraToolOutcomeView(exchange("jira_draft", { outcome: "failed", items }));
+  expect(view.failure).toBe("chat.jira.outcome.failure.unavailable");
+});
+it("prefers the top-level reason over the shared row reason", () => {
+  const view = jiraToolOutcomeView(
+    exchange("jira_draft", {
+      outcome: "failed",
+      reason: "permission-denied",
+      items: [draftItem("failed", "conflict")],
+    }),
+  );
+  expect(view.failure).toBe("chat.jira.outcome.failure.permission");
+});
+const APPROVAL: ChatToolWriteApprovalView = {
+  kind: "jira-chat-write",
+  approvalId: "approval-1",
+  chatId: "chat-1",
+  podId: "11111111-1111-4111-8111-111111111111",
+  bindingGeneration: 1,
+  authenticationGeneration: 1,
+  invocationId: "action-1",
+  operation: "jira.create",
+  actionDigest: "a".repeat(64),
+  requestedAt: 1,
+  expiresAt: 2,
+  state: "pending",
+};
+it.each(["rejected", "expired", "revoked"] as const)(
+  "adds no failure line when the human decision %s ended the write",
+  (state) => {
+    const ended = {
+      ...exchange("jira_create", { outcome: "failed", reason: "unavailable" }),
+      approval: { ...APPROVAL, state },
+    };
+    expect(jiraToolOutcomeView(ended).failure).toBeUndefined();
+  },
+);
+it.each(["pending", "approved", "claimed"] as const)(
+  "still reports a technical failure while the approval is %s",
+  (state) => {
+    const failed = {
+      ...exchange("jira_create", { outcome: "failed", reason: "unavailable" }),
+      approval: { ...APPROVAL, state },
+    };
+    expect(jiraToolOutcomeView(failed).failure).toBe("chat.jira.outcome.failure.unavailable");
+  },
+);

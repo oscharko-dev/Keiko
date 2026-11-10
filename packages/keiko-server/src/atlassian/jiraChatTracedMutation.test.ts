@@ -61,9 +61,9 @@ describe("traced create and edit", () => {
     ["jira.edit", "native"],
     ["jira.edit", "markdown"],
   ] as const)(
-    "refuses %s with a %s description missing a source criterion before any effect",
+    "completes a source criterion missing from a %s description (%s) in the trace footer before the effect",
     async (operation, format) => {
-      const call = run();
+      const call = run({ labelsApplied: true, footerApplied: true, droppedLabels: [] });
       const text = "Thema 1 ist verfügbar.";
       const description = format === "native" ? text : { format: "markdown", text };
 
@@ -75,17 +75,14 @@ describe("traced create and edit", () => {
         call.fn,
       );
 
-      expect(call.seen).toHaveLength(0);
-      expect(result).toMatchObject({
-        isError: true,
-        data: {
-          outcome: "rejected",
-          requirementProblems: [{ reason: "acceptance-criteria-missing" }],
-        },
-      });
+      expect(result.isError).not.toBe(true);
+      expect(call.seen).toHaveLength(1);
+      expect(call.seen[0]?.footer).toContain("Acceptance criteria (verbatim from the source):");
+      expect(call.seen[0]?.footer).toContain("Fehler zu Thema 1 werden gemeldet.");
+      expect(call.seen[0]?.footer).not.toContain("- Thema 1 ist verfügbar.");
       expect(
-        sink.events.find((event) => event.op === "knowledge.requirement-trace.applied"),
-      ).toMatchObject({ extra: { acceptanceCriteriaMissingCount: 1 } });
+        sink.events.find((event) => event.op === "knowledge.requirement-trace.applied")?.extra,
+      ).not.toMatchObject({ acceptanceCriteriaMissingCount: 1 });
     },
   );
 

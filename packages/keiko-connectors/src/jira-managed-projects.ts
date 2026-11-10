@@ -319,6 +319,7 @@ export function executeJiraProjectRead(
 }
 interface ProjectCreateArguments extends CatalogJsonObject {
   readonly key: string;
+  readonly lead?: string;
   readonly projectTypeKey: string;
 }
 function createInput(args: CatalogJsonObject): args is ProjectCreateArguments {
@@ -421,6 +422,20 @@ function createdIdentity(
     ? { projectId: String(id), projectKey: key }
     : undefined;
 }
+const UNKNOWN_LEAD: Failure = {
+  ok: false,
+  reason: "field-validation",
+  detail: {
+    validation: "invalid-field",
+    fieldErrors: [
+      {
+        fieldId: "lead",
+        message:
+          "No Jira user has this user name. Omit lead to make the connected Jira user the lead.",
+      },
+    ],
+  },
+};
 /**
  * The lead the create names: an omitted lead becomes the connected Jira user, and a named lead must
  * be an existing Jira user. Both are settled before review, so an approval never shows a lead Jira
@@ -428,28 +443,16 @@ function createdIdentity(
  */
 async function resolvedLead(
   request: JiraMutationRequest,
-  lead: unknown,
+  lead: string | undefined,
 ): Promise<Failure | { readonly ok: true; readonly lead: string }> {
-  const result =
-    lead === undefined
-      ? await request("myself")
-      : await request(`user?${new URLSearchParams({ username: String(lead) }).toString()}`);
-  if (!result.ok && lead !== undefined && (result.httpStatus === 404 || result.reason === "not-found"))
-    return {
-      ok: false,
-      reason: "field-validation",
-      detail: {
-        validation: "invalid-field",
-        fieldErrors: [
-          {
-            fieldId: "lead",
-            message:
-              "No Jira user has this user name. Omit lead to make the connected Jira user the lead.",
-          },
-        ],
-      },
-    };
-  if (!result.ok) return dispatchFailure(result);
+  const result = await request(
+    lead === undefined ? "myself" : `user?${new URLSearchParams({ username: lead }).toString()}`,
+  );
+  if (!result.ok) {
+    const unknownUser =
+      lead !== undefined && (result.httpStatus === 404 || result.reason === "not-found");
+    return unknownUser ? UNKNOWN_LEAD : dispatchFailure(result);
+  }
   const name = result.body?.name;
   return result.status === 200 && boundedText(name, 128) && !/[\r\n\t]/u.test(name)
     ? { ok: true, lead: name }

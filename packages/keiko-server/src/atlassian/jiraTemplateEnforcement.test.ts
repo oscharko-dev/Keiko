@@ -1206,7 +1206,7 @@ describe("the dry run before approval", () => {
     it("returns the untraced advice instead of an approval, logged once as refused (S05)", async () => {
       const sink = logs();
       const advice = { outcome: "rejected", requirementRefusal: "untraced" };
-      const untracedAdvice = vi.fn(() => advice);
+      const untracedAdvice = vi.fn(() => ({ data: advice, repeated: false }));
       const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
         untracedAdvice,
       });
@@ -1217,11 +1217,11 @@ describe("the dry run before approval", () => {
     });
 
     it.each<CodingWorkbenchMode>(["governed-assist", "supervised-coding"])(
-      "allows only the existing human review path to present the untraced draft in %s (S16)",
+      "allows only the existing human review path to present the repeated untraced draft in %s (S16)",
       async (mode) => {
         preflightAuthority.mode = mode;
         const advice = { outcome: "rejected", requirementRefusal: "untraced" };
-        const untracedAdvice = vi.fn(() => advice);
+        const untracedAdvice = vi.fn(() => ({ data: advice, repeated: true }));
         const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
           untracedAdvice,
         });
@@ -1231,15 +1231,30 @@ describe("the dry run before approval", () => {
       },
     );
 
-    it("keeps an untraced draft refused in allowed mode without inventing human confirmation (S16)", async () => {
-      const advice = { outcome: "rejected", requirementRefusal: "untraced" };
-      const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
-        untracedAdvice: () => advice,
-      });
-      expect(await f.run()).toBe(advice);
-      expect(await f.run()).toBe(advice);
-      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
-    });
+    it.each<CodingWorkbenchMode>(["governed-assist", "supervised-coding"])(
+      "gives the model the advice first and never the review on a first untraced submission in %s",
+      async (mode) => {
+        preflightAuthority.mode = mode;
+        const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          untracedAdvice: () => ({ data: advice, repeated: false }),
+        });
+        expect(await f.run()).toBe(advice);
+      },
+    );
+
+    it.each([false, true])(
+      "keeps an untraced draft refused in allowed mode without inventing human confirmation, repeated=%s (S16)",
+      async (repeated) => {
+        const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          untracedAdvice: () => ({ data: advice, repeated }),
+        });
+        expect(await f.run()).toBe(advice);
+        expect(await f.run()).toBe(advice);
+        expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+      },
+    );
 
     it("asks for approval when there is no advice, and gives none on an invalid draft (S05)", async () => {
       const untracedAdvice = vi.fn(() => undefined);
@@ -1249,7 +1264,7 @@ describe("the dry run before approval", () => {
       await expect(valid.run()).resolves.toBeUndefined();
       expect(untracedAdvice).toHaveBeenCalledTimes(1);
 
-      const refused = vi.fn(() => ({ outcome: "rejected" }));
+      const refused = vi.fn(() => ({ data: { outcome: "rejected" }, repeated: false }));
       const invalid = preflight(TEMPLATE, { items: [item("story", "nothing")] }, "jira.draft", {
         untracedAdvice: refused,
       });

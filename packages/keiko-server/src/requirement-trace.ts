@@ -207,10 +207,7 @@ function withSourceCriteria(trace: ItemTrace, missing: readonly MissingCriterion
   const block = `${SOURCE_CRITERIA_HEADING}\n${list}`;
   return {
     ...trace,
-    footer: trace.footer.replace(
-      `${trace.footerStart}\n`,
-      `${trace.footerStart}\n${block}\n\n`,
-    ),
+    footer: trace.footer.replace(`${trace.footerStart}\n`, `${trace.footerStart}\n${block}\n\n`),
   };
 }
 
@@ -243,6 +240,38 @@ function authoredDescription(description: TraceDescriptionCheck): TraceDescripti
   return { description: withoutFooter.trim() };
 }
 
+type LocatedReference = Parameters<typeof requirementTrace>[0][number];
+
+function sourceDigestOf(located: readonly LocatedReference[]): string {
+  return sha256Hex(
+    canonicalise(
+      located.map(({ unit, criterion }) => ({
+        reference: requirementReference(unit.entry),
+        requirementDigest: unit.entry.digest,
+        source: unit.source,
+        sectionPath: unit.entry.sectionPath,
+        characterStart: unit.entry.characterStart,
+        characterEnd: unit.entry.characterEnd,
+        criterion: criterion?.id ?? null,
+      })),
+    ),
+  );
+}
+
+function baseTrace(
+  located: readonly LocatedReference[],
+  redact: (value: string) => string,
+): ItemTrace {
+  const { labels, footer } = requirementTrace(located, redact);
+  return {
+    labels,
+    footer,
+    footerStart: REQUIREMENT_TRACE_FOOTER_START,
+    footerEnd: REQUIREMENT_TRACE_FOOTER_END,
+    replaceLabelPrefixes: [REQUIREMENT_REVISION_LABEL_PREFIX],
+  };
+}
+
 function resolveAgainst(
   opened: Opened,
   references: readonly string[],
@@ -263,14 +292,7 @@ function resolveAgainst(
     ...item,
     unit: withPage(opened.store, item.unit),
   }));
-  const { labels, footer } = requirementTrace(located, redact);
-  const base: ItemTrace = {
-    labels,
-    footer,
-    footerStart: REQUIREMENT_TRACE_FOOTER_START,
-    footerEnd: REQUIREMENT_TRACE_FOOTER_END,
-    replaceLabelPrefixes: [REQUIREMENT_REVISION_LABEL_PREFIX],
-  };
+  const base = baseTrace(located, redact);
   const trace = missing.length === 0 ? base : withSourceCriteria(base, missing);
   if (authored !== undefined && missing.length > 0) {
     const remaining = completedCriteriaRemain(
@@ -283,23 +305,7 @@ function resolveAgainst(
     if (remaining.length > 0)
       return { ok: false, reason: "references", problems: missingProblems(remaining) };
   }
-  return {
-    ok: true,
-    sourceDigest: sha256Hex(
-      canonicalise(
-        located.map(({ unit, criterion }) => ({
-          reference: requirementReference(unit.entry),
-          requirementDigest: unit.entry.digest,
-          source: unit.source,
-          sectionPath: unit.entry.sectionPath,
-          characterStart: unit.entry.characterStart,
-          characterEnd: unit.entry.characterEnd,
-          criterion: criterion?.id ?? null,
-        })),
-      ),
-    ),
-    trace,
-  };
+  return { ok: true, sourceDigest: sourceDigestOf(located), trace };
 }
 
 /** One session per write call: the Pods are read at most once, and closed when the call is done. */

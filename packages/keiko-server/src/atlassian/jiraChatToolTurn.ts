@@ -94,7 +94,8 @@ export interface JiraChatTurnOptions {
   readonly openTrace?: ((context: JiraChatCatalogContext) => TraceSession) | undefined;
 }
 
-function draftUntracedAdvice(
+/** Exported for its focused regression test: the first advice is new, an identical one repeats. */
+export function draftUntracedAdvice(
   deps: JiraChatTurnOptions["deps"],
   openTrace: JiraChatTurnOptions["openTrace"],
 ): JiraChatTemplatePreflightPorts["untracedAdvice"] {

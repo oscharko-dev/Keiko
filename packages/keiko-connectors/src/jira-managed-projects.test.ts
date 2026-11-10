@@ -76,6 +76,8 @@ interface ProjectFixture {
   readonly read: (name: string, args: CatalogJsonObject) => Promise<ManagedMcpToolResult>;
 }
 function fixtureRead(path: string, project: typeof PROJECT): AtlassianHttpBodyResult {
+  if (path === "myself") return response({ name: "connected.user" });
+  if (path === `user?username=${CREATE.lead}`) return response({ name: CREATE.lead });
   if (path.startsWith("projectvalidate/key?")) return response({ errors: {}, errorMessages: [] });
   if (path === "project/type/software/accessible")
     return response({ key: "software", formattedKey: "Software", icon: "omit-me" });
@@ -281,6 +283,58 @@ describe("native Jira project reads", () => {
 });
 
 describe("native Jira project writes", () => {
+  const { lead: _lead, ...WITHOUT_LEAD } = CREATE;
+  const posted = (h: ProjectFixture): Record<string, unknown> => {
+    const post = h.http.mock.calls.map(([request]) => request).find((r) => r.method === "POST");
+    return JSON.parse(post?.bodyJson ?? "{}") as Record<string, unknown>;
+  };
+  it("makes the connected Jira user the lead when the create omits it", async () => {
+    const h = fixture();
+    expect(await h.mutate("jira.create-project", WITHOUT_LEAD)).toMatchObject({
+      ok: true,
+      receipt: { projectId: PROJECT.id },
+    });
+    expect(posted(h).lead).toBe("connected.user");
+  });
+  it("settles the lead before review, so a check names no unknown user", async () => {
+    const h = fixture((path) => (path === "myself" ? response({ name: "someone" }) : undefined));
+    const checked = await checkJiraManagedMutation(
+      "jira.create-project",
+      WITHOUT_LEAD,
+      CONTEXT,
+      h.connection,
+    );
+    expect(checked).toMatchObject({ ok: true });
+    expect(h.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+  });
+  it("refuses a named lead that is not a Jira user with a field error and writes nothing", async () => {
+    const h = fixture((path) =>
+      path.startsWith("user?") ? response({ errorMessages: ["gone"] }, 404) : undefined,
+    );
+    expect(await h.mutate("jira.create-project", { ...CREATE, lead: "ghost" })).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldErrors: [{ fieldId: "lead" }] },
+    });
+    expect(h.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+  });
+  it.each([
+    ["a non-string lead", { ...CREATE, lead: 7 }],
+    ["an over-long lead", { ...CREATE, lead: "x".repeat(129) }],
+  ])("refuses %s before any HTTP", async (_name, args) => {
+    const h = fixture();
+    expect(
+      await h.mutate("jira.create-project", args as unknown as CatalogJsonObject),
+    ).toMatchObject({
+      ok: false,
+    });
+    expect(h.http).not.toHaveBeenCalled();
+  });
+  it("refuses a connected-user answer without a usable name instead of guessing a lead", async () => {
+    const h = fixture((path) => (path === "myself" ? response({ name: "bad\nname" }) : undefined));
+    expect(await h.mutate("jira.create-project", WITHOUT_LEAD)).toMatchObject({ ok: false });
+    expect(h.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+  });
   it("confirms the native case-insensitive lead identity after creation", async () => {
     const h = fixture((path, method, written) =>
       method === "GET" && written && path.startsWith("project/")
@@ -357,16 +411,19 @@ describe("native Jira project writes", () => {
       ok: true,
       receipt: { projectId: "10010", projectKey: CREATE.key, projectName: CREATE.name },
     });
+    // The named lead is looked up first, so an approval never shows a lead Jira would refuse.
     expect(h.http.mock.calls.map(([request]) => request.method)).toEqual([
+      "GET",
       "GET",
       "GET",
       "POST",
       "GET",
     ]);
+    expect(h.http.mock.calls[0]?.[0].url).toContain(`user?username=${CREATE.lead}`);
     expect(h.http.mock.calls.at(-1)?.[0].url).toBe(
       "https://jira.example.invalid/context/rest/api/2/project/10010",
     );
-    expect(JSON.parse(h.http.mock.calls[2]?.[0].bodyJson ?? "{}")).toEqual(CREATE);
+    expect(JSON.parse(h.http.mock.calls[3]?.[0].bodyJson ?? "{}")).toEqual(CREATE);
   });
   it("relays an explicit native creation template selector and independently confirms readable project fields", async () => {
     const h = fixture();
@@ -420,7 +477,7 @@ describe("native Jira project writes", () => {
     expect(
       await checkJiraManagedMutation("jira.create-project", CREATE, CONTEXT, h.connection),
     ).toEqual({ ok: true });
-    expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET"]);
+    expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "GET"]);
   });
   it("refuses an already-held update without issuing PUT", async () => {
     const h = fixture();

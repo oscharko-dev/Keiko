@@ -487,6 +487,19 @@ describe("the advice about a draft that names no requirement (S16 of #4173)", ()
     }
   });
 
+  it("reports whether the advice is new, so only a repeated submission is told apart", () => {
+    const advised = new Set<string>();
+    const advise = untracedAdvisory(
+      { activityLog: createBufferedServerLogSink() },
+      advised,
+      turn("m-1"),
+    );
+    expect(advise(["task-1"])).toBe(true);
+    expect(advise(["task-1"])).toBe(false);
+    expect(advise(["task-2"])).toBe(true);
+    expect(untracedAdvisory({}, advised, turn("m-2"))(["task-1"])).toBe(true);
+  });
+
   it("stays bounded however many drafts a long session advises about", () => {
     const advised = new Set<string>();
     const advise = untracedAdvisory({}, advised, turn("m-1"));

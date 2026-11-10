@@ -322,13 +322,26 @@ function executePreparedDraft(
       recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
     },
   });
-  // Every item settled: the draft is done, so later turns no longer name it as the open draft and
-  // a request for other issues starts a new one instead of reconciling this one again.
-  return completed.then((result) => {
-    if (result.isError !== true && typeof args.draftId === "string")
-      deps.jiraDraftStore?.complete(args.draftId, context.chatId, String(args.draftDigest));
-    return result;
-  });
+  return completed.then((result) => settleDraft(deps, context.chatId, args, result));
+}
+
+/**
+ * Every item settled: the draft is done, so later turns no longer name it as the open draft and a
+ * request for other issues starts a new one instead of reconciling this one again.
+ */
+function settleDraft(
+  deps: UiHandlerDeps,
+  chatId: string,
+  args: CatalogJsonObject,
+  result: ManagedMcpToolResult,
+): ManagedMcpToolResult {
+  if (
+    result.isError !== true &&
+    typeof args.draftId === "string" &&
+    typeof args.draftDigest === "string"
+  )
+    deps.jiraDraftStore?.complete(args.draftId, chatId, args.draftDigest);
+  return result;
 }
 
 function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
