@@ -51,7 +51,10 @@ import {
 } from "./requirement-inventory-activity.js";
 
 /** The labels and footer of a validated item; the connector applies them and reports back. */
-export type ItemTrace = Omit<JiraTraceRequest, "report">;
+export type ItemTrace = Omit<JiraTraceRequest, "report"> & {
+  /** Source criteria Keiko wrote into its own trace block because the description lacked them. */
+  readonly completedCriteriaCount?: number;
+};
 
 type TraceProblem =
   | RequirementReferenceProblem
@@ -205,9 +208,14 @@ function withSourceCriteria(trace: ItemTrace, missing: readonly MissingCriterion
   const markdown = missing.map(({ text }) => `- ${text}`).join("\n");
   const list = projectJiraDescriptionInput({ format: "markdown", text: markdown })?.text ?? "";
   const block = `${SOURCE_CRITERIA_HEADING}\n${list}`;
+  // A replacer function: a criterion such as "price in $$" must not be read as a replacement pattern.
   return {
     ...trace,
-    footer: trace.footer.replace(`${trace.footerStart}\n`, `${trace.footerStart}\n${block}\n\n`),
+    footer: trace.footer.replace(
+      `${trace.footerStart}\n`,
+      () => `${trace.footerStart}\n${block}\n\n`,
+    ),
+    completedCriteriaCount: missing.length,
   };
 }
 
@@ -405,6 +413,7 @@ export interface TraceTally {
   refusedItems: number;
   problems: number;
   acceptanceCriteriaMissing: number;
+  acceptanceCriteriaCompleted: number;
   labelsApplied: number;
   footersApplied: number;
   droppedLabels: number;
@@ -417,6 +426,7 @@ export function newTally(): TraceTally {
     refusedItems: 0,
     problems: 0,
     acceptanceCriteriaMissing: 0,
+    acceptanceCriteriaCompleted: 0,
     labelsApplied: 0,
     footersApplied: 0,
     droppedLabels: 0,
@@ -424,11 +434,19 @@ export function newTally(): TraceTally {
   };
 }
 
-export function tallyOutcome(tally: TraceTally, outcome: JiraTraceOutcome | undefined): void {
+export function tallyOutcome(
+  tally: TraceTally,
+  outcome: JiraTraceOutcome | undefined,
+  trace?: ItemTrace,
+): void {
   tally.tracedItems += 1;
   if (outcome === undefined) return;
   if (outcome.labelsApplied) tally.labelsApplied += 1;
-  if (outcome.footerApplied) tally.footersApplied += 1;
+  if (outcome.footerApplied) {
+    tally.footersApplied += 1;
+    // Criteria count as completed only when the block that carries them reached the description.
+    tally.acceptanceCriteriaCompleted += trace?.completedCriteriaCount ?? 0;
+  }
   tally.droppedLabels += outcome.droppedLabels.length;
 }
 
@@ -457,6 +475,7 @@ export function logTrace(
     refusedItemCount: tally.refusedItems,
     referenceProblemCount: tally.problems - tally.acceptanceCriteriaMissing,
     acceptanceCriteriaMissingCount: tally.acceptanceCriteriaMissing,
+    acceptanceCriteriaCompletedCount: tally.acceptanceCriteriaCompleted,
     labelsAppliedCount: tally.labelsApplied,
     footerAppliedCount: tally.footersApplied,
     droppedLabelCount: tally.droppedLabels,

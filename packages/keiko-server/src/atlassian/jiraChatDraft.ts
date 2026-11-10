@@ -240,7 +240,7 @@ async function runItem(
         },
   );
   if (trace === undefined) return settled;
-  tallyOutcome(tally, traced);
+  tallyOutcome(tally, traced, trace);
   const data = traceOutcomeData(traced);
   return data === undefined ? settled : { ...settled, trace: data };
 }

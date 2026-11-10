@@ -443,7 +443,7 @@ export async function executeTracedMutation(
         traced = outcome;
       },
     });
-    tallyOutcome(tally, traced);
+    tallyOutcome(tally, traced, resolution.trace);
     logTrace(turn.correlationId, logged, tally);
     const data = traceOutcomeData(traced);
     return data === undefined ? result : { ...result, data: { ...result.data, trace: data } };

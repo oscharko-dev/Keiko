@@ -82,7 +82,13 @@ describe("traced create and edit", () => {
       expect(call.seen[0]?.footer).not.toContain("- Thema 1 ist verfügbar.");
       expect(
         sink.events.find((event) => event.op === "knowledge.requirement-trace.applied")?.extra,
-      ).not.toMatchObject({ acceptanceCriteriaMissingCount: 1 });
+      ).toMatchObject({
+        refusedItemCount: 0,
+        acceptanceCriteriaMissingCount: 0,
+        // The written description was changed by Keiko; the log says by how many criteria (#4335).
+        acceptanceCriteriaCompletedCount: 1,
+        footerAppliedCount: 1,
+      });
     },
   );
 

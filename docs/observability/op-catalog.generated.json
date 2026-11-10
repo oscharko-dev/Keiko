@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "959f90dc1ea9f03ad0ed30daff6250c949d52843b96b5237b83b6209724b9b13",
+    "catalogDigest": "c9303722ca4c36f946404c84026340cbe447b5329267b304e3e607e34c5b4042",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -35874,6 +35874,11 @@
             "dataClass": "count",
             "required": false
           },
+          "acceptanceCriteriaCompletedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "labelsAppliedCount": {
             "type": "integer",
             "dataClass": "count",
@@ -35926,8 +35931,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.requirement-trace.applied.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:153",
-        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:202"]
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:155",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:205"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -104860,6 +104865,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "acceptanceCriteriaCompletedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "acceptanceCriteriaMissingCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -119740,14 +119751,14 @@
     {
       "op": "knowledge.requirement-trace",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirement-trace.ts:327",
+      "site": "packages/keiko-server/src/requirement-trace.ts:335",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "knowledge.requirement-trace.applied",
       "category": "search",
-      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:156",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:158",
       "package": "keiko-server"
     },
     {

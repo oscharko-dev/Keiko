@@ -2010,8 +2010,9 @@ without answer or tool-result bodies.
   `report-required`, `report-reading` or `report-not-found` and the closed `baselineSource`
   `explicit`/`turn`, never an identifier or key);
   `knowledge.requirement-trace.applied` records, per create, edit or draft, the traced,
-  refused and problem counts and the labels, footers and dropped labels applied. Counts and closed
-  words only.
+  refused and problem counts, the labels, footers and dropped labels applied, and how many source
+  acceptance criteria Keiko wrote verbatim into its own trace block of a written description
+  (`acceptanceCriteriaCompletedCount`). Counts and closed words only.
 - _Limits stated openly._ The tool is available only in a Chat with a Jira binding. The `removed`
   query is omitted when it would exceed the JQL bound. HTML flattening is a heuristic. PDF
   inventories depend on the extracted line structure. The detector is evaluated on the lab corpus

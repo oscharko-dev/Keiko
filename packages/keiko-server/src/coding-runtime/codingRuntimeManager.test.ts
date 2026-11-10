@@ -953,6 +953,32 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
+  it("keeps refusing an executable outside the managed runtime root as sidecar-unmanaged (#4335)", async () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    executable(join(portable.resourceRoot, "runtime/outside"), "opencode-sidecar");
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({
+        verification: {
+          ...portable.verification,
+          executablePath: "runtime/outside/opencode-sidecar",
+        },
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    const result = await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toEqual({ ok: false, failureCode: "sidecar-unmanaged", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
   it("launches a Full-access run whose mode value the host also carries under a non-secret name (#3897)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

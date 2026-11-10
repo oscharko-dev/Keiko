@@ -150,6 +150,31 @@ describe("source acceptance criteria before a Jira draft can be staged or approv
     }
   });
 
+  it("writes a criterion that holds replacement patterns such as $$ and $& exactly as the source has it (#4335)", async () => {
+    const criterion = "Der Preis in $$ wird mit $& und $' je Monat ausgewiesen.";
+    const text = [
+      "# Lastenheft",
+      "",
+      "### LH-001 Preise",
+      "",
+      "Das Portal zeigt Preise.",
+      "",
+      "Abnahmekriterien:",
+      `- ${criterion}`,
+      "",
+    ].join("\n");
+    const { open } = await session([{ capsuleId: "cap-dollar", text }]);
+    const trace = open();
+    try {
+      const completed = trace.resolve(["LH-001"], { description: "Das Portal zeigt Preise." });
+      if (!completed.ok) throw new TypeError("Expected Keiko to complete the criterion");
+      expect(completed.trace.footer).toContain(criterion);
+      expect(completed.trace.completedCriteriaCount).toBe(1);
+    } finally {
+      trace.close();
+    }
+  });
+
   it("writes no criteria block when the description already carries every criterion", async () => {
     const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
     const trace = open();
