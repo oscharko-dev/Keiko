@@ -146,7 +146,9 @@ export function copyRuntimeGatewayFilesystem(value: unknown): RuntimeGatewayFile
     )
       return undefined;
     const record = Object.fromEntries(
-      Object.entries(descriptors).map(([key, entry]) => [key, entry.value as unknown]),
+      Object.entries(descriptors).map(
+        ([key, entry]: readonly [string, TypedPropertyDescriptor<unknown>]) => [key, entry.value],
+      ),
     );
     return validGatewayFilesystem(record) ? Object.freeze(record) : undefined;
   } catch {
@@ -196,7 +198,7 @@ function validOptionalRoots(value: Record<string, unknown>): boolean {
 function validLinkedFiles(value: Record<string, unknown>): boolean {
   if (value.linkedFiles === undefined) return true;
   const external: readonly unknown[] = Array.isArray(value.externalReadRoots)
-    ? (value.externalReadRoots as readonly unknown[])
+    ? value.externalReadRoots
     : [];
   const containers = [value.workspaceRoot, ...external];
   return (
@@ -267,7 +269,7 @@ function validRootList(value: unknown, max: number, accept: (root: string) => bo
   return (
     Array.isArray(value) &&
     value.length <= max &&
-    Array.from(value as readonly unknown[]).every(
+    Array.from<unknown>(value).every(
       (root) => typeof root === "string" && validRoot(root) && accept(root),
     )
   );

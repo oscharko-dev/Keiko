@@ -374,11 +374,13 @@ function isQualificationRecord(
   value: unknown,
 ): value is Record<"platform" | "arch" | "backend" | "releaseReceipt", string> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  const keys = ["platform", "arch", "backend", "releaseReceipt"];
+  if (!("platform" in value && "arch" in value && "backend" in value && "releaseReceipt" in value))
+    return false;
   return (
-    Object.keys(record).length === keys.length &&
-    keys.every((key) => typeof record[key] === "string")
+    Object.keys(value).length === 4 &&
+    [value.platform, value.arch, value.backend, value.releaseReceipt].every(
+      (field) => typeof field === "string",
+    )
   );
 }
 

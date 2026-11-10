@@ -202,10 +202,13 @@ export function copyRuntimeGatewayConfinement(
 ): RuntimeGatewayConfinement | undefined {
   const record = policyData(value);
   if (record === undefined || !validPolicy(record)) return undefined;
-  return Object.freeze(record as unknown as RuntimeGatewayConfinement);
+  return Object.freeze(record);
 }
 
-function policyData(value: unknown): Record<string, unknown> | undefined {
+/** Own data properties copied from an untrusted policy object, before any field is validated. */
+type PolicyData = Record<string, unknown>;
+
+function policyData(value: unknown): PolicyData | undefined {
   try {
     return ownPolicyData(value);
   } catch {
@@ -213,7 +216,7 @@ function policyData(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-function ownPolicyData(value: unknown): Record<string, unknown> | undefined {
+function ownPolicyData(value: unknown): PolicyData | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return undefined;
@@ -231,35 +234,23 @@ function ownPolicyData(value: unknown): Record<string, unknown> | undefined {
   )
     return undefined;
   const record = Object.fromEntries(
-    entries.map(([key, descriptor]) => [key, descriptor.value as unknown]),
+    entries.map(([key, descriptor]: readonly [string, TypedPropertyDescriptor<unknown>]) => [
+      key,
+      descriptor.value,
+    ]),
   );
   if (Object.hasOwn(record, "filesystem")) record.filesystem = closedFilesystem(record.filesystem);
   return record;
 }
 
-const PROFILES: ReadonlySet<unknown> = new Set<RuntimeGatewayProfile>([
-  "keiko-gateway",
-  "keiko-native",
-]);
-const ADDRESS_FAMILIES: ReadonlySet<unknown> = new Set(["ipv4", "ipv6"]);
-
-function validPolicy(value: unknown): value is RuntimeGatewayConfinement {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+/** The record holds exactly the policy keys, every value is valid, and the digest binds them. */
+function validPolicy(record: PolicyData): record is PolicyData & RuntimeGatewayConfinement {
   if (!hasPolicyKeys(record)) return false;
-  if (
-    record.schemaVersion !== 1 ||
-    !PROFILES.has(record.profile) ||
-    !ADDRESS_FAMILIES.has(record.addressFamily)
-  )
-    return false;
-  return (
-    validPolicyIdentity(record) &&
-    policyDigest(record as unknown as RuntimeGatewayConfinement) === record.policyDigest
-  );
+  const identity = policyIdentity(record);
+  return identity !== undefined && policyDigest(identity) === record.policyDigest;
 }
 
-function hasPolicyKeys(record: Record<string, unknown>): boolean {
+function hasPolicyKeys(record: PolicyData): boolean {
   return (
     [...POLICY_KEYS].every((key) => Object.hasOwn(record, key)) &&
     Object.keys(record).every((key) => POLICY_KEYS.has(key) || OPTIONAL_POLICY_KEYS.has(key)) &&
@@ -271,21 +262,63 @@ function hasPolicyKeys(record: Record<string, unknown>): boolean {
   );
 }
 
-function validPolicyIdentity(record: Record<string, unknown>): boolean {
-  return (
-    typeof record.runId === "string" &&
-    RUN_ID.test(record.runId) &&
-    Number.isSafeInteger(record.port) &&
-    Number(record.port) > 0 &&
-    Number(record.port) <= 65_535 &&
-    [
-      record.treeBindingId,
-      record.envelopeDigest,
-      record.runtimeArtifactDigest,
-      record.modelProfileDigest,
-      record.policyDigest,
-    ].every((digest) => typeof digest === "string" && DIGEST.test(digest))
-  );
+/** The typed fields the policy digest binds, or `undefined` when any of them is invalid. */
+function policyIdentity(
+  record: PolicyData,
+): Omit<RuntimeGatewayConfinement, "policyDigest"> | undefined {
+  const { profile, addressFamily, egress } = record;
+  if (
+    record.schemaVersion !== 1 ||
+    (profile !== "keiko-gateway" && profile !== "keiko-native") ||
+    (addressFamily !== "ipv4" && addressFamily !== "ipv6") ||
+    (egress !== undefined && egress !== "inherited" && egress !== "loopback-only")
+  )
+    return undefined;
+  const fields = identityFields(record);
+  if (fields === undefined) return undefined;
+  const filesystem = copyRuntimeGatewayFilesystem(record.filesystem);
+  return { schemaVersion: 1, profile, addressFamily, ...fields, filesystem, egress };
+}
+
+type IdentityDigestKey =
+  "treeBindingId" | "envelopeDigest" | "runtimeArtifactDigest" | "modelProfileDigest";
+
+function identityFields(
+  record: PolicyData,
+): Pick<RuntimeGatewayConfinement, "port" | "runId" | IdentityDigestKey> | undefined {
+  const port = portField(record);
+  const runId = runIdField(record);
+  const treeBindingId = digestField(record, "treeBindingId");
+  const envelopeDigest = digestField(record, "envelopeDigest");
+  const runtimeArtifactDigest = digestField(record, "runtimeArtifactDigest");
+  const modelProfileDigest = digestField(record, "modelProfileDigest");
+  if (
+    port === undefined ||
+    runId === undefined ||
+    treeBindingId === undefined ||
+    envelopeDigest === undefined ||
+    runtimeArtifactDigest === undefined ||
+    modelProfileDigest === undefined
+  )
+    return undefined;
+  return { port, runId, treeBindingId, envelopeDigest, runtimeArtifactDigest, modelProfileDigest };
+}
+
+function portField(record: PolicyData): number | undefined {
+  const port = record.port;
+  return Number.isSafeInteger(port) && Number(port) > 0 && Number(port) <= 65_535
+    ? Number(port)
+    : undefined;
+}
+
+function runIdField(record: PolicyData): string | undefined {
+  const runId = record.runId;
+  return typeof runId === "string" && RUN_ID.test(runId) ? runId : undefined;
+}
+
+function digestField(record: PolicyData, key: IdentityDigestKey): string | undefined {
+  const digest = record[key];
+  return typeof digest === "string" && DIGEST.test(digest) ? digest : undefined;
 }
 
 /**

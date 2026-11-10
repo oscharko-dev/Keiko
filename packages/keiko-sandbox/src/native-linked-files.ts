@@ -63,9 +63,7 @@ const ABSENT_CODES: ReadonlySet<unknown> = new Set(["ENOENT", "ENOTDIR", "EACCES
 
 function absent(error: unknown): boolean {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    ABSENT_CODES.has((error as { code?: unknown }).code)
+    typeof error === "object" && error !== null && "code" in error && ABSENT_CODES.has(error.code)
   );
 }
 
