@@ -733,6 +733,16 @@ describe("isClientStageIngestRequest", () => {
       isClientStageIngestRequest({ ...startedRequest(), stage: "chat history deletion", deletion }),
     ).toBe(false);
     expect(isClientStageIngestRequest({ ...settledRequest(), deletion })).toBe(false);
+    for (const action of ["move", "purge"]) {
+      expect(isClientStageIngestRequest({ ...request, deletion: { ...deletion, action } })).toBe(
+        true,
+      );
+    }
+    for (const action of ["delete", "", 1, null]) {
+      expect(isClientStageIngestRequest({ ...request, deletion: { ...deletion, action } })).toBe(
+        false,
+      );
+    }
   });
 
   it("accepts a well-formed settled report, including a genuinely instant 0ms settle", () => {

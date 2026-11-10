@@ -505,8 +505,8 @@ describe("ChatHistoryPanel", () => {
     expect(result.failedIds).toEqual([]);
     expect(notifyChatDeleted).toHaveBeenCalledTimes(5);
     expect(reports.map((meta) => meta.stageReport?.deletion)).toEqual([
-      { requestedCount: 5, deletedCount: 0, failedCount: 0 },
-      { requestedCount: 5, deletedCount: 5, failedCount: 0 },
+      { action: "purge", requestedCount: 5, deletedCount: 0, failedCount: 0 },
+      { action: "purge", requestedCount: 5, deletedCount: 5, failedCount: 0 },
     ]);
     expect(reports[0]?.correlationId).toBe(reports[1]?.correlationId);
     expect(JSON.stringify(reports)).not.toMatch(/Sprint triage|\/repo|bulk-0/);

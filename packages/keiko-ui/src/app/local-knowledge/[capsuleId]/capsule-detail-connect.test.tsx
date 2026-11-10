@@ -165,4 +165,25 @@ describe("CapsuleDetail — connect a source (#4335)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/outside the workspace/i);
     expect(screen.queryByText(/next step: index it/i)).toBeNull();
   });
+
+  it("keeps the pod view and shows a failed re-read inline instead of an error page", async () => {
+    const user = userEvent.setup();
+    connectCapsuleSourceMock.mockResolvedValue({ capsule: CAPSULE });
+    const fetchDetailImpl = vi
+      .fn<() => Promise<CapsuleDetailData>>()
+      .mockResolvedValueOnce(EMPTY_POD)
+      .mockRejectedValueOnce(new Error("Re-read unavailable"))
+      .mockResolvedValue(CONNECTED_POD);
+    render(<CapsuleDetail fetchDetailImpl={fetchDetailImpl} />);
+
+    await user.type(await screen.findByLabelText(/source path/i), "/tmp/docs");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/re-read unavailable/i);
+    expect(screen.getByRole("heading", { level: 1, name: "Fresh Pod" })).toBeInTheDocument();
+    expect(screen.getByText(/next step: index it/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
 });

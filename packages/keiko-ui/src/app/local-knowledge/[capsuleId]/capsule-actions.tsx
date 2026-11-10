@@ -357,6 +357,8 @@ function nativeDocumentFilters(t: I18nTranslate): readonly NativeFileDialogFilte
 interface ConnectSourceFormProps {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly onConnected: (connectedSource: string) => void;
+  /** Called when a connect attempt begins, so an earlier confirmation cannot outlive it. */
+  readonly onConnectStart?: () => void;
   readonly connectImpl?: typeof connectCapsuleSource;
 }
 
@@ -569,6 +571,7 @@ interface ConnectSourceSubmissionController {
 function useConnectSourceSubmission(
   capsuleId: KnowledgeCapsuleId,
   onConnected: (connectedSource: string) => void,
+  onConnectStart: (() => void) | undefined,
   connectImpl: typeof connectCapsuleSource,
   state: ConnectSourceState,
   t: I18nTranslate,
@@ -584,6 +587,7 @@ function useConnectSourceSubmission(
     if (scope === null || state.busy) return;
     state.setBusy(true);
     state.setConnectError(null);
+    onConnectStart?.();
     try {
       const explicitDisplayName = state.displayName.trim();
       if (explicitDisplayName === "") await connectImpl(capsuleId, scope);
@@ -869,6 +873,7 @@ function ConnectSourceFields(props: ConnectSourceViewProps): ReactNode {
 function ConnectSourceForm({
   capsuleId,
   onConnected,
+  onConnectStart,
   connectImpl = connectCapsuleSource,
 }: ConnectSourceFormProps): ReactNode {
   const t = useTranslate();
@@ -876,7 +881,14 @@ function ConnectSourceForm({
   const state = useConnectSourceState();
   const documentFilters = nativeDocumentFilters(t);
   const picker = useNativeSourcePicker(state, documentFilters, t);
-  const submission = useConnectSourceSubmission(capsuleId, onConnected, connectImpl, state, t);
+  const submission = useConnectSourceSubmission(
+    capsuleId,
+    onConnected,
+    onConnectStart,
+    connectImpl,
+    state,
+    t,
+  );
   return (
     <ConnectSourceFields
       state={state}
@@ -1488,6 +1500,8 @@ export function CapsuleActions({
   );
   const [connectedSource, setConnectedSource] = useState<string | null>(null);
   const indexButtonRef = useRef<HTMLButtonElement>(null);
+  const focusIndexOnceRef = useRef(false);
+  const [connectGeneration, setConnectGeneration] = useState(0);
   const [indexBusy, setIndexBusy] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressState | null>(null);
@@ -1547,13 +1561,35 @@ export function CapsuleActions({
   // next step. Connecting and indexing stay separate actions (knowledge-pods.md); the notice lives
   // here because the page re-read must not unmount this component and drop it.
   function handleConnected(source: string): void {
-    setConnectedSource(source);
+    // A blank source name renders no sentence; the focus hand-off still happens once.
+    setConnectedSource(source.trim() === "" ? null : source);
+    focusIndexOnceRef.current = true;
+    setConnectGeneration((generation) => generation + 1);
     onActionComplete();
   }
 
+  function handleConnectStart(): void {
+    setConnectedSource(null);
+    focusIndexOnceRef.current = false;
+  }
+
+  // Index now takes focus exactly once per successful connect, as soon as the re-read shows a
+  // source; later source-count changes (a removal, say) never pull focus back.
   useEffect(() => {
-    if (connectedSource !== null && sourceCount > 0) indexButtonRef.current?.focus();
-  }, [connectedSource, sourceCount]);
+    if (!focusIndexOnceRef.current || sourceCount === 0) return;
+    focusIndexOnceRef.current = false;
+    indexButtonRef.current?.focus();
+  }, [connectGeneration, sourceCount]);
+
+  // A removal makes the confirmation stale.
+  const previousSourceCountRef = useRef(sourceCount);
+  useEffect(() => {
+    if (sourceCount < previousSourceCountRef.current) {
+      setConnectedSource(null);
+      focusIndexOnceRef.current = false;
+    }
+    previousSourceCountRef.current = sourceCount;
+  }, [sourceCount]);
 
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
@@ -1667,6 +1703,7 @@ export function CapsuleActions({
         key={capsuleId}
         capsuleId={capsuleId}
         onConnected={handleConnected}
+        onConnectStart={handleConnectStart}
         connectImpl={connectCapsuleSourceImpl}
       />
 

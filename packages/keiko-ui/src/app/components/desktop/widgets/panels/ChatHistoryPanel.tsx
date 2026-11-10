@@ -19,6 +19,7 @@ import {
 } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
+import { notifyChatUpsert } from "../../hooks/useChatSession";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";
 import { ChatHistoryDeleteConfirm } from "./ChatHistoryDeleteConfirm";
 import { moveHistoryChatsToDeleted } from "./chatHistoryDeletion";
@@ -284,6 +285,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     try {
       const response = await updateChat(chat.id, { status: "open" });
       actions.replaceChat(response.chat);
+      notifyChatUpsert(response.chat);
       selection.clear();
     } catch (caughtError) {
       const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";

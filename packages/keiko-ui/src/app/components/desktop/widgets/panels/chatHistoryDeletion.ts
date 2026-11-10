@@ -9,7 +9,7 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffRequestErrorKind } from "@/lib/http";
 import { clientErrorSummary } from "@/lib/client-error-summary";
 import type { Chat } from "@/lib/types";
-import { notifyChatDeleted } from "../../hooks/useChatSession";
+import { notifyChatDeleted, notifyChatUpsert } from "../../hooks/useChatSession";
 
 const DELETE_CONCURRENCY = 4;
 let nextDeletionOrdinal = 0;
@@ -55,18 +55,39 @@ function recordFailedDeletion(error: unknown, correlationId: string): string {
   return error instanceof Error ? error.message : "Request failed.";
 }
 
-async function deleteBatch(
+/** At most `DELETE_CONCURRENCY` requests in flight; results keep the order of `chats`. */
+async function settleBounded<T>(
+  chats: readonly Chat[],
+  run: (chat: Chat) => Promise<T>,
+  offset = 0,
+  settled: readonly PromiseSettledResult<T>[] = [],
+): Promise<readonly PromiseSettledResult<T>[]> {
+  const batch = await Promise.allSettled(chats.slice(offset, offset + DELETE_CONCURRENCY).map(run));
+  const all = [...settled, ...batch];
+  const nextOffset = offset + DELETE_CONCURRENCY;
+  return nextOffset < chats.length ? settleBounded(chats, run, nextOffset, all) : all;
+}
+
+function chatsAndResults<T>(
+  chats: readonly Chat[],
+  results: readonly PromiseSettledResult<T>[],
+): readonly (readonly [Chat, PromiseSettledResult<T>])[] {
+  return results.flatMap((result, index) => {
+    const chat = chats[index];
+    return chat === undefined ? [] : [[chat, result] as const];
+  });
+}
+
+async function deleteBatches(
   chats: readonly Chat[],
   correlationId: string,
-): Promise<ChatHistoryDeletionResult> {
-  const failedIds: string[] = [];
-  let detail: string | undefined;
-  const results = await Promise.allSettled(
-    chats.map((chat): Promise<void> => deleteChat(chat.id, chat.projectPath, correlationId)),
+  failedIds: string[],
+): Promise<string | undefined> {
+  const results = await settleBounded(chats, (chat) =>
+    deleteChat(chat.id, chat.projectPath, correlationId),
   );
-  for (const [index, result] of results.entries()) {
-    const chat = chats[index];
-    if (chat === undefined) continue;
+  let detail: string | undefined;
+  for (const [chat, result] of chatsAndResults(chats, results)) {
     if (result.status === "fulfilled") {
       notifyChatDeleted(chat.id);
     } else {
@@ -74,23 +95,7 @@ async function deleteBatch(
       detail = recordFailedDeletion(result.reason, correlationId);
     }
   }
-  return { requestedCount: chats.length, failedIds, detail };
-}
-
-async function deleteBatches(
-  chats: readonly Chat[],
-  correlationId: string,
-  failedIds: string[],
-  offset: number,
-  detail: string | undefined,
-): Promise<string | undefined> {
-  const result = await deleteBatch(chats.slice(offset, offset + DELETE_CONCURRENCY), correlationId);
-  failedIds.push(...result.failedIds);
-  const settledDetail = result.detail ?? detail;
-  const nextOffset = offset + DELETE_CONCURRENCY;
-  return nextOffset < chats.length
-    ? deleteBatches(chats, correlationId, failedIds, nextOffset, settledDetail)
-    : settledDetail;
+  return detail;
 }
 
 /** Reuses the scoped, confirmed purge API with bounded concurrency and per-chat settlement. */
@@ -103,15 +108,17 @@ export async function deleteHistoryChats(
   const startedAt = performance.now();
   const failedIds: string[] = [];
   reportDeletion(correlationId, ordinal, {
+    action: "purge",
     requestedCount: chats.length,
     deletedCount: 0,
     failedCount: 0,
   });
-  const detail = await deleteBatches(chats, correlationId, failedIds, 0, undefined);
+  const detail = await deleteBatches(chats, correlationId, failedIds);
   reportDeletion(
     correlationId,
     ordinal,
     {
+      action: "purge",
       requestedCount: chats.length,
       deletedCount: chats.length - failedIds.length,
       failedCount: failedIds.length,
@@ -134,22 +141,41 @@ export interface ChatHistoryMoveResult {
 export async function moveHistoryChatsToDeleted(
   chats: readonly Chat[],
 ): Promise<ChatHistoryMoveResult> {
+  if (chats.length === 0) return { moved: [], failedIds: [], detail: undefined };
   const correlationId = newClientCorrelationId();
-  const results = await Promise.allSettled(
-    chats.map((chat) => updateChat(chat.id, { status: "closed" })),
-  );
+  const ordinal = ++nextDeletionOrdinal;
+  const startedAt = performance.now();
+  reportDeletion(correlationId, ordinal, {
+    action: "move",
+    requestedCount: chats.length,
+    deletedCount: 0,
+    failedCount: 0,
+  });
+  const results = await settleBounded(chats, (chat) => updateChat(chat.id, { status: "closed" }));
   const moved: Chat[] = [];
   const failedIds: string[] = [];
   let detail: string | undefined;
-  for (const [index, result] of results.entries()) {
-    const chat = chats[index];
-    if (chat === undefined) continue;
+  for (const [chat, result] of chatsAndResults(chats, results)) {
     if (result.status === "fulfilled") {
       moved.push(result.value.chat);
+      // Open windows learn the chat is closed through the existing upsert mutation, the same one
+      // that carries every other chat change; the host already treats a closed chat as gone.
+      notifyChatUpsert(result.value.chat);
     } else {
       failedIds.push(chat.id);
       detail = recordFailedDeletion(result.reason, correlationId);
     }
   }
+  reportDeletion(
+    correlationId,
+    ordinal,
+    {
+      action: "move",
+      requestedCount: chats.length,
+      deletedCount: moved.length,
+      failedCount: failedIds.length,
+    },
+    startedAt,
+  );
   return { moved, failedIds, detail };
 }
