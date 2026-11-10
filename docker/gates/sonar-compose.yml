@@ -13,8 +13,9 @@
 # It is deliberately SELF-HOSTED and never talks to sonarcloud.io: a local scan must not publish an
 # analysis over the real project's pull-request result, and it must work without a token or a
 # network account. The analyzer inside is the same SonarJS that SonarCloud runs, so the rule keys
-# and messages match; the quality PROFILE is SonarQube's built-in "Sonar way" rather than the
-# organisation's, so treat a clean local run as "no known rule violation", not as a gate verdict.
+# and messages match. run-sonar.sh selects the built-in "Sonar way comprehensive" profile SonarCloud
+# applies to this project; the analyzer can still trail SonarCloud's, so treat a clean local run as
+# "no known rule violation", not as a gate verdict.
 # The verdict stays CI's (docs/qa/local-gates.md).
 #
 # KEIKO-0578: explicit Compose project name for direct/manual invocations. run-sonar.sh exports its
@@ -27,7 +28,7 @@ services:
   sonarqube:
     # Digest-pinned like every GitHub Action in this repository: a floating tag would silently
     # change the analyzer, and with it which findings a pre-push scan can see.
-    image: sonarqube@sha256:160bd2f6a3485bd09b655ef22dd63c02bd1fa7ba82aa5d9973fd010b8bcca0b3 # 26.7.0.124771-community
+    image: sonarqube@sha256:1ce197471f5f2bac347694a336862fd2c23e9f57c6edb46acebbfbe70f2c7d9c # 26.11.0.134175-community
     cpus: 2
     environment:
       # This server is reachable only from the loopback interface of the developer machine and holds
