@@ -42,8 +42,9 @@ function pathRegexArguments(segments: readonly string[]): string {
     size += segment.length + 1;
   }
   return chunks
-    .filter((chunk) => chunk.length > 0)
-    .map((chunk) => JSON.stringify(`(^|/)(${chunk.join("|")})(/|$)`))
+    .flatMap((chunk) =>
+      chunk.length > 0 ? [JSON.stringify(`(^|/)(${chunk.join("|")})(/|$)`)] : [],
+    )
     .join(" ");
 }
 
