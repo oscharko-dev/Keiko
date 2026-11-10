@@ -228,4 +228,22 @@ describe("Jira source payload captured before review", () => {
       requirementRefusal: "unavailable",
     });
   });
+
+  it("binds the same digest when an item whose criteria Keiko completed is prepared again", async () => {
+    const f = await fixture();
+    const bare = {
+      ...item,
+      fields: { summary: "Synthetic", description: { format: "markdown", text: "## Ziel\nKurz." } },
+    };
+    const first = prepareJiraDraftRequirements([bare], f.openTrace);
+    if (!first.ok) throw new TypeError("Expected the first preparation to complete the criteria");
+    const completed = first.items[0];
+    expect((completed?.fields as { description: string }).description).toContain(
+      "Thema 1 ist verfügbar.",
+    );
+    const again = prepareJiraDraftRequirements([completed ?? bare], f.openTrace);
+    if (!again.ok) throw new TypeError("Expected the prepared item to prepare again");
+    expect(again.sourceBindings).toEqual(first.sourceBindings);
+    expect(again.items).toEqual(first.items);
+  });
 });

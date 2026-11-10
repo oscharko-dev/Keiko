@@ -57,7 +57,7 @@ const INVALID: Failure = {
   detail: {
     validation: "invalid-field",
     messages: [
-      "Use only the typed project arguments. Create requires key, name, lead and projectTypeKey; update requires at least one supported metadata change. Names must contain 1–255 characters without surrounding whitespace.",
+      "Use only the typed project arguments. Create requires key, name and projectTypeKey; update requires at least one supported metadata change. Names must contain 1–255 characters without surrounding whitespace.",
     ],
   },
 };
@@ -326,7 +326,7 @@ function createInput(args: CatalogJsonObject): args is ProjectCreateArguments {
   return (
     isSafeAtlassianIdentifier(key) &&
     jiraNativeName(name, 255) &&
-    boundedText(lead, 128) &&
+    (lead === undefined || boundedText(lead, 128)) &&
     isSafeAtlassianIdentifier(projectTypeKey) &&
     Object.entries(args).every(
       ([field, value]) =>
@@ -421,12 +421,49 @@ function createdIdentity(
     ? { projectId: String(id), projectKey: key }
     : undefined;
 }
+/**
+ * The lead the create names: an omitted lead becomes the connected Jira user, and a named lead must
+ * be an existing Jira user. Both are settled before review, so an approval never shows a lead Jira
+ * would refuse and a model never has to guess a user name.
+ */
+async function resolvedLead(
+  request: JiraMutationRequest,
+  lead: unknown,
+): Promise<Failure | { readonly ok: true; readonly lead: string }> {
+  const result =
+    lead === undefined
+      ? await request("myself")
+      : await request(`user?${new URLSearchParams({ username: String(lead) }).toString()}`);
+  if (!result.ok && lead !== undefined && (result.httpStatus === 404 || result.reason === "not-found"))
+    return {
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        validation: "invalid-field",
+        fieldErrors: [
+          {
+            fieldId: "lead",
+            message:
+              "No Jira user has this user name. Omit lead to make the connected Jira user the lead.",
+          },
+        ],
+      },
+    };
+  if (!result.ok) return dispatchFailure(result);
+  const name = result.body?.name;
+  return result.status === 200 && boundedText(name, 128) && !/[\r\n\t]/u.test(name)
+    ? { ok: true, lead: name }
+    : MALFORMED;
+}
 async function createProject(
   request: JiraMutationRequest,
-  args: CatalogJsonObject,
+  supplied: CatalogJsonObject,
   check: boolean,
 ): Promise<JiraMutationAttempt> {
-  if (!createInput(args)) return INVALID;
+  if (!createInput(supplied)) return INVALID;
+  const lead = await resolvedLead(request, supplied.lead);
+  if (!lead.ok) return lead;
+  const args: ProjectCreateArguments = { ...supplied, lead: lead.lead };
   const key = args.key;
   const validation = await validateKey(request, key);
   if (!validation.ok) return validation;

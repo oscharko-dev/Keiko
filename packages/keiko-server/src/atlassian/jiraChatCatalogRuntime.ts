@@ -252,11 +252,11 @@ export function untracedAdvisory(
     readonly userMessageId?: string | undefined;
     readonly correlationId: string;
   },
-): (refs: readonly string[]) => void {
-  return (refs): void => {
+): (refs: readonly string[]) => boolean {
+  return (refs): boolean => {
     const turn = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
     const key = `${turn}\u0000${JSON.stringify([...refs].sort((a, b) => a.localeCompare(b)))}`;
-    if (advised.has(key)) return;
+    if (advised.has(key)) return false;
     advised.add(key);
     if (advised.size > ADVISED_DRAFTS_MAX) advised.delete(advised.values().next().value ?? key);
     recordJiraDraftActivity(deps.activityLog, context.correlationId, {
@@ -271,6 +271,7 @@ export function untracedAdvisory(
       violationCount: 0,
       durationMs: 0,
     });
+    return true;
   };
 }
 
@@ -293,7 +294,7 @@ function executePreparedDraft(
   if (source === undefined && hasRequirementReferences(draft.arguments))
     return Promise.resolve(missingPreparedSource());
   const approval = draftApproval(deps, current.envelope.subject, context, intent);
-  return executeJiraChatDraft({
+  const completed = executeJiraChatDraft({
     ...shared,
     arguments: draft.arguments,
     deselected: approval?.excludedItemRefs ?? [],
@@ -320,6 +321,13 @@ function executePreparedDraft(
     activity: (activity): void => {
       recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
     },
+  });
+  // Every item settled: the draft is done, so later turns no longer name it as the open draft and
+  // a request for other issues starts a new one instead of reconciling this one again.
+  return completed.then((result) => {
+    if (result.isError !== true && typeof args.draftId === "string")
+      deps.jiraDraftStore?.complete(args.draftId, context.chatId, String(args.draftDigest));
+    return result;
   });
 }
 

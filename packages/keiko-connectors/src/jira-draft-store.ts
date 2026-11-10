@@ -56,8 +56,17 @@ export interface JiraDraftStore {
   readonly get: (id: string, owner: string) => StagedJiraDraft | undefined;
   /** The same lookup without renewing the expiry: reading a draft is not use of it. */
   readonly peek: (id: string, owner: string) => StagedJiraDraft | undefined;
-  /** The owner's most recently used draft, without renewing it; none once every one expired. */
+  /**
+   * The owner's most recently used draft that is still open, without renewing it; none once every
+   * one expired or was completed.
+   */
   readonly latest: (owner: string) => StagedJiraDraft | undefined;
+  /**
+   * Records that every item of this exact draft revision is settled in Jira. The draft stays
+   * readable, so a retry still reconciles it, but it is no longer the owner's open draft; a page
+   * appended later makes a new revision that is open again.
+   */
+  readonly complete: (id: string, owner: string, digest: string) => void;
   readonly size: () => number;
 }
 
@@ -217,6 +226,9 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
     const draft = swept().get(id);
     return draft?.owner === owner ? draft : undefined;
   };
+  /** Completed revisions by draft id; a draft whose digest moved on is open again. */
+  const completed = new Map<string, string>();
+  const isOpen = (draft: StagedJiraDraft): boolean => completed.get(draft.id) !== draft.digest;
   return {
     append: (owner, draftId, fingerprint, page, sourceBindings = []): JiraDraftAppend => {
       const current = draftId === undefined ? undefined : peek(draftId, owner);
@@ -244,7 +256,13 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
       return renewed;
     },
     peek,
-    latest: (owner): StagedJiraDraft | undefined => oldestFirst(swept(), owner).at(-1),
+    latest: (owner): StagedJiraDraft | undefined =>
+      oldestFirst(swept(), owner).filter(isOpen).at(-1),
+    complete: (id, owner, digest): void => {
+      if (peek(id, owner)?.digest !== digest) return;
+      completed.set(id, digest);
+      for (const known of completed.keys()) if (!drafts.has(known)) completed.delete(known);
+    },
     size: () => drafts.size,
   };
 }

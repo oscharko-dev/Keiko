@@ -8,6 +8,7 @@ import {
   type GatewayToolCatalogAdvertisement,
   type ToolInvocationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import { providerToolSchema } from "./provider-tool-schema.js";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -413,13 +414,14 @@ function definitions(normalizer: ToolInvocationNormalizer, now: number): readonl
     "unsupported-capability",
   );
   return Object.freeze([
-    ...(isCodeModeProjection(normalizer) ? [] : tools).map((tool) =>
-      Object.freeze({
+    ...(isCodeModeProjection(normalizer) ? [] : tools).map((tool) => {
+      const advertised = providerToolSchema(tool.inputSchema, tool.description);
+      return Object.freeze({
         name: tool.alias,
-        description: tool.description,
-        parameters: tool.inputSchema,
-      }),
-    ),
+        description: advertised.description,
+        parameters: advertised.parameters,
+      });
+    }),
     ...nativeExtensionTools(normalizer),
   ]);
 }

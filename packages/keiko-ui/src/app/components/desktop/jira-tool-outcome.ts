@@ -906,24 +906,44 @@ function requirementRefusalReason(data: UnknownRecord | undefined): string | und
   );
   return criteriaMissing ? "requirement:criteria-missing" : "requirement:references";
 }
+const APPROVAL_ENDED_STATES: ReadonlySet<string> = new Set(["rejected", "expired", "revoked"]);
+/** The one reason every failed draft row shares; a draft reports reasons per item, not on top. */
+function failedItemsReason(data: UnknownRecord | undefined): string | undefined {
+  const items: readonly unknown[] = Array.isArray(data?.items) ? data.items : [];
+  const reasons = new Set(
+    items.flatMap((item) => {
+      const row = record(item);
+      const reason = row?.state === "failed" ? text(row.reason) : undefined;
+      return reason === undefined ? [] : [reason];
+    }),
+  );
+  return reasons.size === 1 ? [...reasons][0] : undefined;
+}
 function failureReason(
   data: UnknownRecord | undefined,
   exchange: ChatToolExchange,
 ): string | undefined {
-  const reason = requirementRefusalReason(data) ?? text(data?.reason);
+  const reason = requirementRefusalReason(data) ?? text(data?.reason) ?? failedItemsReason(data);
   if (JIRA_CATALOG_TOOLS.has(exchange.call.name) && reason === "invalid-arguments")
     return "catalog:invalid-arguments";
   // A read changes nothing, so Jira refused the requested values, not fields of a change.
   if (reason === "field-validation" && jiraToolOnlyReads(exchange)) return "read:field-validation";
   return reason;
 }
+/** The card already states why nothing changed, so no failure line is added. */
+function outcomeStatedElsewhere(exchange: ChatToolExchange): boolean {
+  if (jiraMutationUnchanged(exchange)) return true;
+  // A human decision that ended the write is stated on the approval card ("Action declined",
+  // expired, revoked); nothing went to Jira, so no connection failure is suggested.
+  if (APPROVAL_ENDED_STATES.has(exchange.approval?.state ?? "")) return true;
+  // A refused or stopped draft batch names its own reason in the state line.
+  return jiraBatchRefusalKey(exchange) !== undefined;
+}
 function failureMessage(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
 ): WidgetMessageKey | undefined {
-  if (jiraMutationUnchanged(exchange)) return undefined;
-  // A refused or stopped draft batch names its own reason in the state line.
-  if (jiraBatchRefusalKey(exchange) !== undefined) return undefined;
+  if (outcomeStatedElsewhere(exchange)) return undefined;
   const localRead = jiraLocalReadFailureNotice(exchange);
   if (localRead !== undefined) return localRead;
   const reason = failureReason(data, exchange);

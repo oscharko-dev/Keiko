@@ -621,11 +621,15 @@ export const JIRA_DRAFT_PENDING_GUIDANCE =
   "issues that already exist are recognised, so nothing is created twice. Do not show this message.";
 /**
  * A rerun that finds every issue already in Jira writes nothing (`not-dispatched`); without this the
- * model read that outcome as a failure and created the issues again one by one (S19, #4178).
+ * model read that outcome as a failure and created the issues again one by one (S19, #4178). A
+ * later request for other issues must not resume this finished draft: committing it again only
+ * reconciles its own items, so the words name the way to a new draft.
  */
 export const JIRA_DRAFT_EXISTING_GUIDANCE =
   "Every item already exists in Jira and was recognised, so nothing was created and nothing is missing. " +
-  "Report the existing keys as the result. Do not create these issues again with jira.create. Do not show this message.";
+  "Report the existing keys as the result. Do not create these issues again with jira.create. " +
+  "This draft is complete: issues it does not contain need a new draft, so call jira.draft with items and without draftId. " +
+  "Do not show this message.";
 /**
  * Jira refused some items while others are in Jira: "nothing was changed" would be false, so the
  * words name both and scope the correction to the refused items (#4178).

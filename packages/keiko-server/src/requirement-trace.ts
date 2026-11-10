@@ -19,7 +19,11 @@ import {
   type ResolvedRequirementReference,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import type { JiraTraceOutcome, JiraTraceRequest } from "@oscharko-dev/keiko-connectors";
+import {
+  descriptionWithFooter,
+  type JiraTraceOutcome,
+  type JiraTraceRequest,
+} from "@oscharko-dev/keiko-connectors";
 import {
   projectJiraDescriptionInput,
   JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
@@ -114,6 +118,9 @@ function withPage(store: KnowledgeStore, unit: LocatedRequirementUnit): Requirem
   return pageLabel === undefined ? unit : { ...unit, source: { ...unit.source, pageLabel } };
 }
 
+/** The heading of the source criteria Keiko writes into its own trace block. */
+const SOURCE_CRITERIA_HEADING = "Acceptance criteria (verbatim from the source):";
+
 function criterionText(value: string): string {
   return normaliseText(value).replace(/\s+/gu, " ");
 }
@@ -147,12 +154,18 @@ function descriptionBlocks(description: unknown, documents: readonly string[]): 
   );
 }
 
-function acceptanceCriteriaProblems(
+interface MissingCriterion {
+  readonly reference: string;
+  /** The redacted source criterion as one line; empty when it has no checkable representation. */
+  readonly text: string;
+}
+
+function missingAcceptanceCriteria(
   resolved: readonly ResolvedRequirementReference[],
   description: TraceDescriptionCheck,
   redact: (value: string) => string,
   documents: readonly string[],
-): readonly TraceProblem[] {
+): readonly MissingCriterion[] {
   const blocks = descriptionBlocks(description.description, documents);
   const criteria = new Map<string, string>();
   for (const item of resolved) {
@@ -173,11 +186,61 @@ function acceptanceCriteriaProblems(
     [0, 1].some((index) =>
       blocks.has(traceable.map((options) => options[index] ?? options[0] ?? "").join(" ")),
     );
-  return [...forms].flatMap(([reference, options]): TraceProblem[] =>
+  return [...forms].flatMap(([reference, options]): MissingCriterion[] =>
     options.length > 0 && (completeBlock || options.some((form) => blocks.has(form)))
       ? []
-      : [{ reference, reason: "acceptance-criteria-missing" }],
+      : [{ reference, text: options.length > 0 ? (criteria.get(reference) ?? "") : "" }],
   );
+}
+
+function missingProblems(missing: readonly MissingCriterion[]): readonly TraceProblem[] {
+  return missing.map(({ reference }) => ({ reference, reason: "acceptance-criteria-missing" }));
+}
+
+/**
+ * The source criteria a description lacks, written by Keiko itself as a bullet list inside its own
+ * trace block: the model is not asked to copy them, and a later source edit replaces the block.
+ */
+function withSourceCriteria(trace: ItemTrace, missing: readonly MissingCriterion[]): ItemTrace {
+  const markdown = missing.map(({ text }) => `- ${text}`).join("\n");
+  const list = projectJiraDescriptionInput({ format: "markdown", text: markdown })?.text ?? "";
+  const block = `${SOURCE_CRITERIA_HEADING}\n${list}`;
+  return {
+    ...trace,
+    footer: trace.footer.replace(
+      `${trace.footerStart}\n`,
+      `${trace.footerStart}\n${block}\n\n`,
+    ),
+  };
+}
+
+/** Keiko's own completion must satisfy the same check; otherwise the write is refused as before. */
+function completedCriteriaRemain(
+  resolved: readonly ResolvedRequirementReference[],
+  description: TraceDescriptionCheck,
+  trace: ItemTrace,
+  redact: (value: string) => string,
+  documents: readonly string[],
+): readonly MissingCriterion[] {
+  const base = projectJiraDescriptionInput(description.description)?.text;
+  const completed = descriptionWithFooter(base, trace);
+  return missingAcceptanceCriteria(resolved, { description: completed }, redact, documents);
+}
+
+/**
+ * The description as its author wrote it. A staged item is prepared again before its write; its
+ * description then already carries Keiko's own trace footer, criteria block included. Checked
+ * without that footer, both preparations complete the same criteria and bind the same digest.
+ */
+function authoredDescription(description: TraceDescriptionCheck): TraceDescriptionCheck {
+  const text = projectJiraDescriptionInput(description.description)?.text;
+  if (text?.includes(REQUIREMENT_TRACE_FOOTER_START) !== true) return description;
+  const withoutFooter = descriptionWithFooter(text, {
+    footer: "",
+    footerStart: REQUIREMENT_TRACE_FOOTER_START,
+    footerEnd: REQUIREMENT_TRACE_FOOTER_END,
+  });
+  return { description: withoutFooter.trim() };
 }
 
 function resolveAgainst(
@@ -188,21 +251,38 @@ function resolveAgainst(
 ): TraceResolution {
   const resolution = resolveRequirementReferences(references, opened.collection.units);
   if (!resolution.ok) return { ok: false, reason: "references", problems: resolution.problems };
-  if (description !== undefined) {
-    const documents = opened.collection.documents.flatMap(({ name }) => [name, redact(name)]);
-    const problems = acceptanceCriteriaProblems(
-      resolution.resolved,
-      description,
-      redact,
-      documents,
-    );
-    if (problems.length > 0) return { ok: false, reason: "references", problems };
-  }
+  const documents = opened.collection.documents.flatMap(({ name }) => [name, redact(name)]);
+  const authored = description === undefined ? undefined : authoredDescription(description);
+  const missing =
+    authored === undefined
+      ? []
+      : missingAcceptanceCriteria(resolution.resolved, authored, redact, documents);
+  if (missing.some(({ text }) => text.length === 0))
+    return { ok: false, reason: "references", problems: missingProblems(missing) };
   const located = resolution.resolved.map((item) => ({
     ...item,
     unit: withPage(opened.store, item.unit),
   }));
   const { labels, footer } = requirementTrace(located, redact);
+  const base: ItemTrace = {
+    labels,
+    footer,
+    footerStart: REQUIREMENT_TRACE_FOOTER_START,
+    footerEnd: REQUIREMENT_TRACE_FOOTER_END,
+    replaceLabelPrefixes: [REQUIREMENT_REVISION_LABEL_PREFIX],
+  };
+  const trace = missing.length === 0 ? base : withSourceCriteria(base, missing);
+  if (authored !== undefined && missing.length > 0) {
+    const remaining = completedCriteriaRemain(
+      resolution.resolved,
+      authored,
+      trace,
+      redact,
+      documents,
+    );
+    if (remaining.length > 0)
+      return { ok: false, reason: "references", problems: missingProblems(remaining) };
+  }
   return {
     ok: true,
     sourceDigest: sha256Hex(
@@ -218,13 +298,7 @@ function resolveAgainst(
         })),
       ),
     ),
-    trace: {
-      labels,
-      footer,
-      footerStart: REQUIREMENT_TRACE_FOOTER_START,
-      footerEnd: REQUIREMENT_TRACE_FOOTER_END,
-      replaceLabelPrefixes: [REQUIREMENT_REVISION_LABEL_PREFIX],
-    },
+    trace,
   };
 }
 
