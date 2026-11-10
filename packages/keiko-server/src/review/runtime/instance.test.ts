@@ -451,9 +451,9 @@ describe("createReviewRuntimeService", () => {
       ).resolves.toMatchObject({ ok: true, outcome: "completed" });
     });
 
-    it("does not wait for the check once the run is cancelled", async () => {
+    it("neither waits for the check nor starts a session once the run is cancelled", async () => {
       const { repo, base, head } = headRepository();
-      const { subject } = service({ reports: [] });
+      const { subject, observed, log } = service({ reports: [] });
       const controller = new AbortController();
       // The check never settles; it cancels the run while the launch waits for it.
       const ensureModelReady = (): Promise<void> =>
@@ -461,9 +461,18 @@ describe("createReviewRuntimeService", () => {
           controller.abort();
         });
 
-      await expect(
-        subject.run(request(repo, base, head, { ensureModelReady, signal: controller.signal })),
-      ).resolves.toBeDefined();
+      const result = await subject.run(
+        request(repo, base, head, { ensureModelReady, signal: controller.signal }),
+      );
+
+      expect(result).toMatchObject({ ok: true, outcome: "cancelled", candidates: [] });
+      expect(observed.starts).toEqual([]);
+      expect(log.events.some((event) => event.op === "review.run.profile-refused")).toBe(false);
+      // The instance is free for the next review.
+      await expect(subject.run(request(repo, base, head))).resolves.toMatchObject({
+        ok: true,
+        outcome: "completed",
+      });
     });
   });
 

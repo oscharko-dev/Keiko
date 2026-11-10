@@ -522,7 +522,8 @@ function whenAborted(signal: AbortSignal | undefined): {
 /**
  * Waits for the request's readiness check, or for the run's cancellation, whichever comes first
  * (#4130). A check that fails is reported and leaves the decision to the self-check, like a check
- * that found the model not ready; a cancelled run does not wait for a probe it no longer needs.
+ * that found the model not ready; a cancelled run does not wait for a probe it no longer needs,
+ * and the caller then starts no session.
  */
 async function modelReadyOrCancelled(request: ReviewRuntimeRunRequest): Promise<void> {
   const ensure = request.ensureModelReady;
@@ -551,6 +552,7 @@ async function runOnInstance(
   try {
     if (!workspace.bind(request)) return { ok: false, reason: "busy", rules: prepared.rules };
     await modelReadyOrCancelled(request);
+    if (request.signal?.aborted === true) return cancelledBeforeLaunch(prepared.rules);
     const refusal = selfCheckRefusal(context, live, request);
     if (refusal !== undefined) return { ok: false, reason: refusal, rules: prepared.rules };
     live.slot.pending = {
@@ -580,6 +582,22 @@ async function runOnInstance(
   }
 }
 
+const NO_REJECTIONS: Readonly<Record<ReviewReportRejectionReason, number>> = Object.freeze({
+  "schema-invalid": 0,
+  "path-outside-worktree": 0,
+  "range-invalid": 0,
+  "evidence-mismatch": 0,
+  "limit-reached": 0,
+});
+
+/**
+ * A run cancelled before its session started (#4130): no runtime run, no self-check and no
+ * candidates. A cancellation during the readiness check must not start a Reviewer session.
+ */
+function cancelledBeforeLaunch(rules: ReviewRulesFileOutcome): ReviewRuntimeRunResult {
+  return { ok: true, outcome: "cancelled", rules, candidates: [], rejections: NO_REJECTIONS };
+}
+
 function collected(
   live: LiveInstance,
   outcome: ReviewRunDriveOutcome,
@@ -594,13 +612,7 @@ function collected(
     ...(runId === undefined ? {} : { runtimeRunId: runId }),
     rules,
     candidates: intake?.candidates() ?? [],
-    rejections: intake?.rejections() ?? {
-      "schema-invalid": 0,
-      "path-outside-worktree": 0,
-      "range-invalid": 0,
-      "evidence-mismatch": 0,
-      "limit-reached": 0,
-    },
+    rejections: intake?.rejections() ?? NO_REJECTIONS,
   };
 }
 

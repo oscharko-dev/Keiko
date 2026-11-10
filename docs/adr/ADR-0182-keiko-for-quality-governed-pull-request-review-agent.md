@@ -439,7 +439,8 @@ verifies the Reviewer model's again right before its self-check reads the model'
 and the preparation, the rules read, the instance start or an earlier part's session can outlast
 it. A fresh observation makes the check a no-op; a lapsed one is probed under the run's correlation
 (`gateway.readiness.automatic.*`). A check that fails is reported as a `review.run.model-readiness`
-diagnostic, a cancelled run does not wait for it, and in both cases the self-check decides.
+diagnostic and leaves the decision to the self-check. A run cancelled during the check does not
+wait for it and starts no Reviewer session.
 Operators may set defaults and restrict the choice; invalid explicit configuration fails closed.
 Each pair has a status (`unmeasured`, `seed-qualified`, `seed-failed`, `collecting`,
 `measured-passed`, `measured-failed`); a pair that was never measured is shown as unmeasured, never
