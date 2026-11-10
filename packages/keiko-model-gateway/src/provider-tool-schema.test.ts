@@ -81,6 +81,53 @@ describe("providerToolSchema", () => {
     },
   );
 
+  it("flattens a root oneOf and a root anyOf together, keeping what each requires (#4335)", () => {
+    const schema = {
+      type: "object",
+      oneOf: [
+        { properties: { key: { type: "string" } }, required: ["key"], additionalProperties: false },
+        { properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false },
+      ],
+      anyOf: [
+        {
+          properties: { fields: { type: "array" } },
+          required: ["fields", "mode"],
+          additionalProperties: false,
+        },
+        {
+          properties: { expand: { type: "string" } },
+          required: ["mode"],
+          additionalProperties: false,
+        },
+      ],
+    };
+    const before = JSON.stringify(schema);
+    const result = providerToolSchema(schema, "Reads one issue.");
+    expect(JSON.stringify(schema)).toBe(before);
+    expect(result.parameters).not.toHaveProperty("oneOf");
+    expect(result.parameters).not.toHaveProperty("anyOf");
+    expect(result.parameters).toEqual({
+      type: "object",
+      properties: {
+        key: { type: "string" },
+        id: { type: "string" },
+        fields: { type: "array" },
+        expand: { type: "string" },
+      },
+      required: ["mode"],
+      additionalProperties: false,
+    });
+    expect(result.description).toBe(
+      "Reads one issue. Provide exactly one of these argument sets: key; or id. " +
+        "Also provide one of these argument sets: fields + mode; or mode.",
+    );
+  });
+
+  it("leaves the schema as it is when either root list cannot be flattened", () => {
+    const schema = { oneOf: [{ required: ["a"] }], anyOf: [{ type: "string" }] };
+    expect(providerToolSchema(schema, "d")).toEqual({ parameters: schema, description: "d" });
+  });
+
   it("never widens a base property with an alternative's fixed value", () => {
     const result = providerToolSchema(
       {

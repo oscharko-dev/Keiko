@@ -8,6 +8,7 @@
 type JsonObject = Record<string, unknown>;
 
 const ROOT_ALTERNATIVE_KEYS = ["oneOf", "anyOf"] as const;
+const ROOT_ALTERNATIVE_KEY_SET: ReadonlySet<string> = new Set(ROOT_ALTERNATIVE_KEYS);
 
 export interface ProviderToolSchema {
   readonly parameters: JsonObject;
@@ -88,27 +89,53 @@ function sharedRequired(base: JsonObject, alternatives: readonly JsonObject[]): 
   return [...new Set([...requiredOf(base), ...common])];
 }
 
-function alternativesSentence(alternatives: readonly JsonObject[]): string {
+function alternativesSentence(alternatives: readonly JsonObject[], lead: string): string {
   const sets = alternatives.map((alternative) => {
     const names = requiredOf(alternative);
     return names.length > 0 ? names.join(" + ") : "no arguments";
   });
-  return `Provide exactly one of these argument sets: ${sets.join("; or ")}.`;
+  return `${lead} ${sets.join("; or ")}.`;
 }
 
-/** The provider-facing schema and description of one tool; unchanged when nothing needs flattening. */
-export function providerToolSchema(schema: JsonObject, description: string): ProviderToolSchema {
-  const key = ROOT_ALTERNATIVE_KEYS.find((candidate) => Array.isArray(schema[candidate]));
-  if (key === undefined) return { parameters: schema, description };
-  const alternatives = schema[key] as readonly unknown[];
-  if (
-    alternatives.length === 0 ||
-    !alternatives.every((alternative) => isObjectAlternative(alternative))
-  ) {
-    return { parameters: schema, description };
+/**
+ * Every root alternative list (oneOf, anyOf or both), or undefined when one of them is not a
+ * non-empty list of object alternatives, in which case the schema is advertised as it is.
+ */
+function rootAlternativeGroups(schema: JsonObject): readonly (readonly JsonObject[])[] | undefined {
+  const groups: (readonly JsonObject[])[] = [];
+  for (const key of ROOT_ALTERNATIVE_KEYS) {
+    const alternatives = schema[key];
+    if (alternatives === undefined) continue;
+    if (
+      !Array.isArray(alternatives) ||
+      alternatives.length === 0 ||
+      !alternatives.every((alternative) => isObjectAlternative(alternative))
+    ) {
+      return undefined;
+    }
+    groups.push(alternatives);
   }
-  const rest = Object.fromEntries(Object.entries(schema).filter(([name]) => name !== key));
-  const required = sharedRequired(schema, alternatives);
+  return groups.length > 0 ? groups : undefined;
+}
+
+const GROUP_LEADS = [
+  "Provide exactly one of these argument sets:",
+  "Also provide one of these argument sets:",
+] as const;
+
+/**
+ * The provider-facing schema and description of one tool; unchanged when nothing needs flattening.
+ * A root oneOf and a root anyOf both hold, so each list adds the names all its alternatives require
+ * and its own sentence.
+ */
+export function providerToolSchema(schema: JsonObject, description: string): ProviderToolSchema {
+  const groups = rootAlternativeGroups(schema);
+  if (groups === undefined) return { parameters: schema, description };
+  const alternatives = groups.flat();
+  const rest = Object.fromEntries(
+    Object.entries(schema).filter(([name]) => !ROOT_ALTERNATIVE_KEY_SET.has(name)),
+  );
+  const required = [...new Set(groups.flatMap((group) => sharedRequired(schema, group)))];
   const closed = alternatives.every((alternative) => alternative.additionalProperties === false);
   const parameters: JsonObject = {
     ...rest,
@@ -117,7 +144,9 @@ export function providerToolSchema(schema: JsonObject, description: string): Pro
     ...(required.length > 0 ? { required } : {}),
     ...(closed ? { additionalProperties: false } : {}),
   };
-  const sentence = alternativesSentence(alternatives);
+  const sentence = groups
+    .map((group, index) => alternativesSentence(group, GROUP_LEADS[Math.min(index, 1)] ?? ""))
+    .join(" ");
   return {
     parameters,
     description: description.length > 0 ? `${description} ${sentence}` : sentence,

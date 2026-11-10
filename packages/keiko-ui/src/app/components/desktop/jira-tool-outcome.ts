@@ -907,14 +907,16 @@ function requirementRefusalReason(data: UnknownRecord | undefined): string | und
   return criteriaMissing ? "requirement:criteria-missing" : "requirement:references";
 }
 const APPROVAL_ENDED_STATES: ReadonlySet<string> = new Set(["rejected", "expired", "revoked"]);
-/** The one reason every failed draft row shares; a draft reports reasons per item, not on top. */
+/**
+ * The one reason every failed draft row shares; a draft reports reasons per item, not on top. A
+ * failed row without a reason may have another cause, so it leaves the generic message.
+ */
 function failedItemsReason(data: UnknownRecord | undefined): string | undefined {
   const items: readonly unknown[] = Array.isArray(data?.items) ? data.items : [];
   const reasons = new Set(
     items.flatMap((item) => {
       const row = record(item);
-      const reason = row?.state === "failed" ? text(row.reason) : undefined;
-      return reason === undefined ? [] : [reason];
+      return row?.state === "failed" ? [text(row.reason)] : [];
     }),
   );
   return reasons.size === 1 ? [...reasons][0] : undefined;

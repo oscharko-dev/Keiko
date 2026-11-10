@@ -371,6 +371,10 @@ it.each([
     [draftItem("failed", "conflict"), draftItem("failed", "not-found")],
   ],
   ["failed rows without a reason", [draftItem("failed")]],
+  [
+    "a failed row without a reason beside one with a reason",
+    [draftItem("failed", "field-validation"), draftItem("failed")],
+  ],
   ["a reason on a row that did not fail", [draftItem("created", "conflict")]],
   ["no rows", []],
 ])("falls back to the generic failure for %s", (_name, items) => {
