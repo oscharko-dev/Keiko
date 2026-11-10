@@ -893,7 +893,13 @@ test("moves selected chats to Deleted, then purges them only after confirmation 
   // Only the Deleted tab purges, and only after the person confirms.
   await history.getByRole("checkbox", { name: "Select all displayed chats" }).check();
   await history.getByRole("button", { name: "Delete selected (2)", exact: true }).click();
-  await page.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  const purge = page.getByRole("button", { name: "Delete permanently", exact: true });
+  await expect(purge).toBeVisible();
+  // An open confirmation has purged nothing yet.
+  for (const id of [chat.id, second.chat.id]) {
+    expect((await request.get(messagesUrl(id))).status()).toBe(200);
+  }
+  await purge.click();
   await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(0);
   for (const id of [chat.id, second.chat.id]) {
     expect((await request.get(messagesUrl(id))).status()).toBe(404);

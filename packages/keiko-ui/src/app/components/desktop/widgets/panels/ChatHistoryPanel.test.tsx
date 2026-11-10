@@ -435,7 +435,7 @@ describe("ChatHistoryPanel", () => {
     await user.click(screen.getByRole("checkbox", { name: "Select all displayed chats" }));
     await user.click(screen.getByRole("button", { name: "Delete selected (2)" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not move 1 chats to Deleted: disk busy",
+      "Moving to Deleted failed: disk busy",
     );
     expect(screen.getByRole("checkbox", { name: "Select Sprint triage" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Select Bug hunt" })).toBeChecked();
@@ -830,10 +830,8 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     await user.click(await screen.findByRole("button", { name: "Sprint triage löschen" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(
-      "1 Chats konnten nicht nach Gelöscht verschoben werden: disk busy",
-    );
-    expect(alert).not.toHaveTextContent("Could not move");
+    expect(alert).toHaveTextContent("Verschieben nach Gelöscht fehlgeschlagen: disk busy");
+    expect(alert).not.toHaveTextContent("Moving to Deleted failed");
   });
 
   it("shows the German restore-failed error with the caught detail, not the English literal", async () => {

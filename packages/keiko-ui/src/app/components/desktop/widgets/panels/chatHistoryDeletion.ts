@@ -62,7 +62,9 @@ async function settleBounded<T>(
   offset = 0,
   settled: readonly PromiseSettledResult<T>[] = [],
 ): Promise<readonly PromiseSettledResult<T>[]> {
-  const batch = await Promise.allSettled(chats.slice(offset, offset + DELETE_CONCURRENCY).map(run));
+  const batch = await Promise.allSettled(
+    chats.slice(offset, offset + DELETE_CONCURRENCY).map((chat) => run(chat)),
+  );
   const all = [...settled, ...batch];
   const nextOffset = offset + DELETE_CONCURRENCY;
   return nextOffset < chats.length ? settleBounded(chats, run, nextOffset, all) : all;

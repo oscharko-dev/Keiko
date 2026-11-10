@@ -207,16 +207,16 @@ function retainDraft(
   trimBytes(drafts, bounds.maxTotalBytes);
 }
 
-/** The last draft of an oldest-first list that is still open. */
+/**
+ * The newest draft of an oldest-first list, while it is still open. A settled newest draft names
+ * none: an older draft the person moved on from must not be offered for "create them again".
+ */
 function newestOpen(
   held: readonly StagedJiraDraft[],
   isOpen: (draft: StagedJiraDraft) => boolean,
 ): StagedJiraDraft | undefined {
-  for (let index = held.length - 1; index >= 0; index -= 1) {
-    const draft = held[index];
-    if (draft !== undefined && isOpen(draft)) return draft;
-  }
-  return undefined;
+  const newest = held.at(-1);
+  return newest !== undefined && isOpen(newest) ? newest : undefined;
 }
 
 /** The drafts still held: idle ones expired and the shared byte bound kept. */

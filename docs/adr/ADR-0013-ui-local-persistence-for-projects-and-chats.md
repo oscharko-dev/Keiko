@@ -602,7 +602,7 @@ open" pattern expected by the issue without trusting the browser clock.
 parameters — no `:param` path segments on mutable resources. The route matcher in
 `src/ui/routes.ts` can match them exactly, just as it matches the existing twelve routes.
 
-### Chat History deletion refinement (owner decision, 2026-09-29; amended #4335)
+### Chat History deletion refinement (owner decision, 2026-09-29; amended by owner decision, 2026-11-10, #4335)
 
 Chat History keeps deletion in two steps, because one click on a shifting list destroyed a chat the
 person still needed. **Delete** on an active chat, and **Delete selected** in the Active tab, move

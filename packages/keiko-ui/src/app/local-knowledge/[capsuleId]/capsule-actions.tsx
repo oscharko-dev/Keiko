@@ -583,6 +583,7 @@ function useConnectSourceSubmission(
     state.repositoryMode,
     t,
   );
+  const connectedRoot = state.rootPath.trim();
   async function connect(): Promise<void> {
     if (scope === null || state.busy) return;
     state.setBusy(true);
@@ -593,7 +594,8 @@ function useConnectSourceSubmission(
       if (explicitDisplayName === "") await connectImpl(capsuleId, scope);
       else await connectImpl(capsuleId, scope, explicitDisplayName);
       state.reset();
-      onConnected(selectedSource ?? "");
+      // The notice names the bare root: the selection summary is a sentence of its own.
+      onConnected(connectedRoot);
     } catch (error) {
       state.setConnectError(formatError(error, t));
     } finally {

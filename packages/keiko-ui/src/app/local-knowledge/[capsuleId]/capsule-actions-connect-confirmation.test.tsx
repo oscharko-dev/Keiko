@@ -44,7 +44,10 @@ describe("CapsuleActions connect confirmation (#4335)", () => {
     render(<CapsuleActions {...props({ connectCapsuleSourceImpl: connect })} />);
 
     await connectTo(user, "/tmp/a");
-    expect(await screen.findByText(CONFIRMATION)).toHaveTextContent("/tmp/a");
+    // The notice names the bare path, never the "Selected source: …" summary sentence.
+    expect(await screen.findByText(CONFIRMATION)).toHaveTextContent(
+      /^Connected \/tmp\/a\. Next step: index it/u,
+    );
 
     await connectTo(user, "/tmp/b");
     expect(await screen.findByRole("alert")).toHaveTextContent(/outside the workspace/i);

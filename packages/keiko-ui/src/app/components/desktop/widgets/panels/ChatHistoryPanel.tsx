@@ -190,10 +190,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       selection.retain(result.failedIds, scope);
       if (result.failedIds.length > 0) {
         setError(
-          optionalT("chat.history.moveFailed", {
-            count: result.failedIds.length,
-            detail: result.detail ?? "Request failed.",
-          }),
+          optionalT("chat.history.moveFailed", { detail: result.detail ?? "Request failed." }),
         );
       }
     } finally {

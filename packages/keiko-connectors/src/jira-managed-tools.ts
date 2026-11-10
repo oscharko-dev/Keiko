@@ -382,7 +382,9 @@ function objectReadResult(
 /** Machine-readable provenance for new Markdown; native wiki strings remain verbatim (ADR-0128). */
 function createMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
   const items = metadataItems(value);
-  return items === undefined ? undefined : descriptionMetadataItems(items).map(assignedOnCreate);
+  return items === undefined
+    ? undefined
+    : descriptionMetadataItems(items).map((item) => assignedOnCreate(item));
 }
 /**
  * Jira's create metadata marks the reporter required without a default, yet Jira sets it to the

@@ -27,6 +27,71 @@ describe("providerToolSchema", () => {
     expect(result.description).toBe("Reads a.");
   });
 
+  it("keeps every value of a discriminator the alternatives fix differently (#4335)", () => {
+    const schema = {
+      type: "object",
+      oneOf: [
+        {
+          type: "object",
+          properties: { kind: { type: "string", const: "issue" }, key: { type: "string" } },
+          required: ["kind", "key"],
+        },
+        {
+          type: "object",
+          properties: { kind: { type: "string", const: "project" }, name: { type: "string" } },
+          required: ["kind", "name"],
+        },
+        {
+          type: "object",
+          properties: { kind: { type: "string", enum: ["issue", "board"] } },
+          required: ["kind"],
+        },
+      ],
+    };
+    const properties = providerToolSchema(schema, "d").parameters.properties;
+    expect(properties).toMatchObject({
+      kind: { type: "string", enum: ["issue", "project", "board"] },
+      key: { type: "string" },
+      name: { type: "string" },
+    });
+    expect(properties).not.toHaveProperty("kind.const");
+  });
+
+  it.each(["oneOf", "anyOf"])(
+    "offers every differing definition of one property under a root %s as a nested anyOf",
+    (key) => {
+      const schema = {
+        type: "object",
+        [key]: [
+          { properties: { target: { type: "string", description: "issue key" } } },
+          { properties: { target: { type: "integer", minimum: 1 } } },
+          { properties: { target: { type: "string", description: "issue key" } } },
+        ],
+      };
+      const parameters = providerToolSchema(schema, "d").parameters;
+      expect(parameters).not.toHaveProperty(key);
+      expect(parameters.properties).toEqual({
+        target: {
+          anyOf: [
+            { type: "string", description: "issue key" },
+            { type: "integer", minimum: 1 },
+          ],
+        },
+      });
+    },
+  );
+
+  it("never widens a base property with an alternative's fixed value", () => {
+    const result = providerToolSchema(
+      {
+        properties: { kind: { type: "string", const: "issue" } },
+        oneOf: [{ properties: { kind: { type: "string", const: "project" } } }],
+      },
+      "d",
+    );
+    expect(result.parameters.properties).toEqual({ kind: { type: "string", const: "issue" } });
+  });
+
   it("does not touch alternatives nested below the top level", () => {
     const schema = {
       type: "object",

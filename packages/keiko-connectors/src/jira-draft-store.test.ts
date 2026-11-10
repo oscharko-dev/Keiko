@@ -122,7 +122,7 @@ describe("the owner's latest draft", () => {
     expect(store.latest("chat-1")).toBeUndefined();
   });
 
-  it("stops naming a draft whose committed revision settled, until it changes again", () => {
+  it("names no draft once the newest one settled, until it changes again", () => {
     let clock = 1_000;
     let next = 0;
     const store = createJiraDraftStore({
@@ -139,7 +139,8 @@ describe("the owner's latest draft", () => {
     expect(store.latest("chat-1")?.id).toBe("draft-2");
 
     store.complete("draft-2", "chat-1", second.draft.digest);
-    expect(store.latest("chat-1")?.id).toBe("draft-1");
+    // The older draft-1 was superseded by draft-2; it is not offered again (#4335).
+    expect(store.latest("chat-1")).toBeUndefined();
     // The finished draft itself stays readable for a rerun that only reconciles it.
     expect(store.get("draft-2", "chat-1")?.digest).toBe(second.draft.digest);
 

@@ -330,6 +330,54 @@ describe("native Jira project writes", () => {
     });
     expect(h.http).not.toHaveBeenCalled();
   });
+  it.each([
+    ["the connected user", WITHOUT_LEAD, "myself"],
+    ["a named lead", CREATE, "user?"],
+  ] as const)(
+    "reports a failed lookup of %s as a Jira failure, never as an unknown user (#4335)",
+    async (_name, args, path) => {
+      const h = fixture((requested) =>
+        requested.startsWith(path) ? response({ errorMessages: ["down"] }, 500) : undefined,
+      );
+      const result = await h.mutate("jira.create-project", args);
+      expect(result).toMatchObject({ ok: false });
+      expect(JSON.stringify(result)).not.toContain("No Jira user has this user name");
+      expect(h.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+    },
+  );
+  it.each([
+    ["the connected user is not found", WITHOUT_LEAD, "myself", response({}, 404)],
+    ["the connected user lookup is forbidden", WITHOUT_LEAD, "myself", response({}, 403)],
+    ["the connected user lookup times out", WITHOUT_LEAD, "myself", { kind: "timeout" }],
+    ["the named lead lookup times out", CREATE, "user?", { kind: "timeout" }],
+    ["the named lead lookup fails on the network", CREATE, "user?", { kind: "network-error" }],
+  ] as const)(
+    "never reports an unknown user when %s (#4335)",
+    async (_name, args, path, answer: AtlassianHttpBodyResult) => {
+      const h = fixture((requested) => (requested.startsWith(path) ? answer : undefined));
+      const result = await h.mutate("jira.create-project", args);
+      expect(result).toMatchObject({ ok: false });
+      expect(result).not.toMatchObject({ reason: "field-validation" });
+      expect(h.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+    },
+  );
+  it.each([
+    ["without a name", response({ displayName: "Someone" })],
+    ["with a different user's name", response({ name: "someone.else" })],
+  ])("refuses a named-lead answer %s instead of accepting it (#4335)", async (_name, answer) => {
+    const h = fixture((path) => (path.startsWith("user?") ? answer : undefined));
+    const result = await h.mutate("jira.create-project", CREATE);
+    expect(result).toMatchObject({ ok: false });
+    expect(result).not.toMatchObject({ reason: "field-validation" });
+    expect(h.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+  });
+  it("keeps Jira's spelling of a named lead that differs only by case", async () => {
+    const h = fixture((path) =>
+      path.startsWith("user?") ? response({ name: CREATE.lead.toUpperCase() }) : undefined,
+    );
+    expect(await h.mutate("jira.create-project", CREATE)).toMatchObject({ ok: true });
+    expect(posted(h).lead).toBe(CREATE.lead.toUpperCase());
+  });
   it("refuses a connected-user answer without a usable name instead of guessing a lead", async () => {
     const h = fixture((path) => (path === "myself" ? response({ name: "bad\nname" }) : undefined));
     expect(await h.mutate("jira.create-project", WITHOUT_LEAD)).toMatchObject({ ok: false });

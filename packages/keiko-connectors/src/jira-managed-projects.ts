@@ -327,7 +327,7 @@ function createInput(args: CatalogJsonObject): args is ProjectCreateArguments {
   return (
     isSafeAtlassianIdentifier(key) &&
     jiraNativeName(name, 255) &&
-    (lead === undefined || boundedText(lead, 128)) &&
+    (lead === undefined || boundedText(lead, JIRA_PROJECT_LEAD_MAX_CHARS)) &&
     isSafeAtlassianIdentifier(projectTypeKey) &&
     Object.entries(args).every(
       ([field, value]) =>
@@ -439,7 +439,8 @@ const UNKNOWN_LEAD: Failure = {
 /**
  * The lead the create names: an omitted lead becomes the connected Jira user, and a named lead must
  * be an existing Jira user. Both are settled before review, so an approval never shows a lead Jira
- * would refuse and a model never has to guess a user name.
+ * would refuse and a model never has to guess a user name. Jira matches user names without regard
+ * to case, so a named lead keeps Jira's spelling only when it names that same user.
  */
 async function resolvedLead(
   request: JiraMutationRequest,
@@ -454,9 +455,15 @@ async function resolvedLead(
     return unknownUser ? UNKNOWN_LEAD : dispatchFailure(result);
   }
   const name = result.body?.name;
-  return result.status === 200 && boundedText(name, 128) && !/[\r\n\t]/u.test(name)
-    ? { ok: true, lead: name }
-    : MALFORMED;
+  return result.status === 200 && answeredLead(name, lead) ? { ok: true, lead: name } : MALFORMED;
+}
+/** A usable user name that, for a named lead, names that same user (Jira ignores case). */
+function answeredLead(name: unknown, requested: string | undefined): name is string {
+  return (
+    boundedText(name, JIRA_PROJECT_LEAD_MAX_CHARS) &&
+    !/[\r\n\t]/u.test(name) &&
+    (requested === undefined || name.toLowerCase() === requested.toLowerCase())
+  );
 }
 async function createProject(
   request: JiraMutationRequest,

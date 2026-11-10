@@ -4487,8 +4487,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Löscht den Chat und seine gespeicherten Nachrichten endgültig.",
   "chat.history.selection.recoverable":
     "Verschiebt den Chat nach Gelöscht. Dort kannst du ihn wiederherstellen, bis du ihn endgültig löschst.",
-  "chat.history.moveFailed":
-    "{count} Chats konnten nicht nach Gelöscht verschoben werden: {detail}",
+  "chat.history.moveFailed": "Verschieben nach Gelöscht fehlgeschlagen: {detail}",
   "chat.history.confirm.title": "Endgültig löschen?",
   "chat.history.confirm.bodyOne":
     "Der Chat \u201E{title}\u201C und seine gespeicherten Nachrichten werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.",

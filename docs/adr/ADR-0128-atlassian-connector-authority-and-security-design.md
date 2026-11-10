@@ -1947,10 +1947,15 @@ without answer or tool-result bodies.
   criteria; an explicit criterion reference requires that exact criterion. The canonical description
   projection must contain each criterion as a whole active paragraph or list item, or the complete
   ordered criterion set as one paragraph. Unicode normalization and whitespace wrapping may differ;
-  prefixes, substrings, headings, quotes and code do not establish preservation. A missing criterion
-  refuses the draft with `acceptance-criteria-missing` before a digest, approval or Jira mutation;
-  no approved description is silently rewritten. This proves content preservation, not semantic
-  implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
+  prefixes, substrings, headings, quotes and code do not establish preservation. A criterion the
+  author's description lacks is written by Keiko itself, verbatim from the source, into its own
+  replaceable trace block (owner decision, 2026-11-10, #4335). This happens during preparation, before the digest, the preview
+  and the human approval, so the payload the person approves already carries it and no approved
+  description is rewritten afterwards. The completed description is checked again; a criterion that
+  is still missing, or one without checkable text (for example a macro), refuses the draft with
+  `acceptance-criteria-missing` before a digest, approval or Jira mutation.
+  `knowledge.requirement-trace.applied` counts the completed criteria. This proves content
+  preservation, not semantic implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
   preview digest, template checks, journal and idempotent reconciliation continue to apply.
   Direct create and edit calls apply the same criterion check whenever they supply a description.
 - _Change check._ A new document version is compared with the backlog through the labels alone;

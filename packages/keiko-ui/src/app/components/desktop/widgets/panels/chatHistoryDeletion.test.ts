@@ -68,7 +68,7 @@ describe("moveHistoryChatsToDeleted (#4335)", () => {
     ports.update.mockImplementation(async (id: string) => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      await Promise.resolve();
       inFlight -= 1;
       return { chat: { id, status: "closed" } };
     });
@@ -131,7 +131,7 @@ describe("moveHistoryChatsToDeleted (#4335)", () => {
     ports.remove.mockImplementation(async () => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      await Promise.resolve();
       inFlight -= 1;
     });
     await deleteHistoryChats(chats(9));

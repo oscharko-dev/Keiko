@@ -4265,7 +4265,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.history.selection.permanent": "Permanently deletes the chat and its stored messages.",
   "chat.history.selection.recoverable":
     "Moves the chat to Deleted. You can restore it there until you delete it permanently.",
-  "chat.history.moveFailed": "Could not move {count} chats to Deleted: {detail}",
+  "chat.history.moveFailed": "Moving to Deleted failed: {detail}",
   "chat.history.confirm.title": "Delete permanently?",
   "chat.history.confirm.bodyOne":
     "This permanently deletes the chat \u201C{title}\u201D and its stored messages. This cannot be undone.",

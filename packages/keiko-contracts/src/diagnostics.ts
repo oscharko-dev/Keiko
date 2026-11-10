@@ -1257,16 +1257,18 @@ const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
   "failedCount",
 ]);
 
+function hasValidDeletionShape(counts: Record<string, unknown>): boolean {
+  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  return (
+    counts.action === undefined ||
+    (typeof counts.action === "string" && CHAT_HISTORY_DELETION_ACTIONS.has(counts.action))
+  );
+}
+
 function hasValidStageDeletion(value: Record<string, unknown>): boolean {
   if (value.stage !== "chat history deletion") return value.deletion === undefined;
   const counts = value.deletion;
-  if (!isRecord(counts)) return false;
-  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
-  if (
-    counts.action !== undefined &&
-    !(typeof counts.action === "string" && CHAT_HISTORY_DELETION_ACTIONS.has(counts.action))
-  )
-    return false;
+  if (!isRecord(counts) || !hasValidDeletionShape(counts)) return false;
   if (!isBoundedPositiveInteger(counts.requestedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.deletedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;

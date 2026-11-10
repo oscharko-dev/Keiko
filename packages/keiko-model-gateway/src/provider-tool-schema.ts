@@ -30,19 +30,60 @@ function requiredOf(schema: JsonObject): readonly string[] {
     : [];
 }
 
+function fixedValues(schema: unknown): readonly unknown[] | undefined {
+  if (!isRecord(schema)) return undefined;
+  if (schema.const !== undefined) return [schema.const];
+  return Array.isArray(schema.enum) ? schema.enum : undefined;
+}
+
+/** One schema per distinct definition, in first-seen order. */
+function distinctDefinitions(definitions: readonly unknown[]): readonly unknown[] {
+  const seen = new Map<string, unknown>();
+  for (const definition of definitions) {
+    const identity = JSON.stringify(definition);
+    if (!seen.has(identity)) seen.set(identity, definition);
+  }
+  return [...seen.values()];
+}
+
+/**
+ * The advertised schema of a property several alternatives define. A property every definition
+ * fixes to a value (a discriminator such as `kind`) keeps every value as one enum; other differing
+ * definitions are offered as a nested anyOf, which providers accept below the top level, so the
+ * model can still produce a valid call for every alternative.
+ */
+function mergedProperty(definitions: readonly unknown[]): unknown {
+  const distinct = distinctDefinitions(definitions);
+  const [first] = distinct;
+  if (distinct.length === 1) return first;
+  const values = distinct.map((definition) => fixedValues(definition));
+  if (isRecord(first) && values.every((entry) => entry !== undefined)) {
+    const merged: JsonObject = { ...first, enum: [...new Set(values.flat())] };
+    delete merged.const;
+    return merged;
+  }
+  return { anyOf: distinct };
+}
+
+/** Base properties win: every alternative must satisfy the base schema as well. */
 function mergedProperties(base: JsonObject, alternatives: readonly JsonObject[]): JsonObject {
   const properties: JsonObject = isRecord(base.properties) ? { ...base.properties } : {};
+  const definitions = new Map<string, unknown[]>();
   for (const alternative of alternatives) {
     if (!isRecord(alternative.properties)) continue;
     for (const [name, schema] of Object.entries(alternative.properties)) {
-      if (!(name in properties)) properties[name] = schema;
+      if (name in properties) continue;
+      const known = definitions.get(name);
+      if (known === undefined) definitions.set(name, [schema]);
+      else known.push(schema);
     }
   }
+  for (const [name, schemas] of definitions) properties[name] = mergedProperty(schemas);
   return properties;
 }
 
 function sharedRequired(base: JsonObject, alternatives: readonly JsonObject[]): readonly string[] {
-  const [first, ...rest] = alternatives.map(requiredOf);
+  const [first, ...rest] = alternatives.map((alternative) => requiredOf(alternative));
   const common = (first ?? []).filter((name) => rest.every((names) => names.includes(name)));
   return [...new Set([...requiredOf(base), ...common])];
 }
@@ -60,7 +101,10 @@ export function providerToolSchema(schema: JsonObject, description: string): Pro
   const key = ROOT_ALTERNATIVE_KEYS.find((candidate) => Array.isArray(schema[candidate]));
   if (key === undefined) return { parameters: schema, description };
   const alternatives = schema[key] as readonly unknown[];
-  if (alternatives.length === 0 || !alternatives.every(isObjectAlternative)) {
+  if (
+    alternatives.length === 0 ||
+    !alternatives.every((alternative) => isObjectAlternative(alternative))
+  ) {
     return { parameters: schema, description };
   }
   const rest = Object.fromEntries(Object.entries(schema).filter(([name]) => name !== key));
