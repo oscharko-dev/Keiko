@@ -935,6 +935,24 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(result)).not.toContain(unmanaged);
   });
 
+  it("refuses a workspace that contains the managed runtime as unqualified, before spawn (#4335)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+    });
+
+    // The temporary directory holds the resolver-owned runtime payload, like a home folder that
+    // holds a portable Keiko install.
+    const result = await manager.start(
+      launchRequest(realpathSync(tmpdir()), fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toEqual({ ok: false, failureCode: "workspace-unqualified", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
   it("launches a Full-access run whose mode value the host also carries under a non-secret name (#3897)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

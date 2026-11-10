@@ -177,6 +177,17 @@ export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeF
   return LAUNCH_FAILURE_CODES.get(error.failureCode) ?? "authority-resolution-failed";
 }
 
+/**
+ * The settled failure code of a run whose managed runtime refused to start. A workspace the person
+ * can replace (it contains Keiko's own runtime) keeps its name so the Workbench can say what to
+ * change (#4335); every other refusal stays the internal `runtime-failed`.
+ */
+export function classifyManagerStartFailure(
+  failureCode: CodingRuntimeFailureCode,
+): CodingWorkbenchRuntimeFailureCode {
+  return failureCode === "workspace-unqualified" ? "workspace-unqualified" : "runtime-failed";
+}
+
 /** The refused start a thrown launch rejection becomes: its wire code and any named model reason. */
 export function refusedLaunch(error: unknown): {
   readonly ok: false;
