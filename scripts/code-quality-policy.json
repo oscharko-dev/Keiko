@@ -156,7 +156,8 @@
         "package:@oscharko-dev/keiko-workflows",
         "package:@oscharko-dev/keiko-workspace",
         "fixtures",
-        "root-product"
+        "root-product",
+        "package:@oscharko-dev/keiko-verification"
       ]
     },
     {
@@ -268,7 +269,12 @@
         "package:@oscharko-dev/keiko-memory-governance",
         "package:@oscharko-dev/keiko-sdk",
         "fixtures",
-        "root-product"
+        "root-product",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-verification",
+        "package:@oscharko-dev/keiko-workflows"
       ]
     },
     {

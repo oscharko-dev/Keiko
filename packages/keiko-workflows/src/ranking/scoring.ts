@@ -124,10 +124,13 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-export function positiveWeightTotal(weights: ScoringWeights): number {
+// Keyed by the weight names, so Object.entries reads each weight as the number it is.
+export function positiveWeightTotal(
+  weights: Readonly<Partial<Record<keyof ScoringWeights, number>>>,
+): number {
   let total = 0;
-  for (const key of Object.keys(weights) as (keyof ScoringWeights)[]) {
-    if (key !== "generatedPenalty") total += Math.max(0, weights[key] ?? 0);
+  for (const [key, weight] of Object.entries(weights)) {
+    if (key !== "generatedPenalty") total += Math.max(0, weight);
   }
   return total;
 }

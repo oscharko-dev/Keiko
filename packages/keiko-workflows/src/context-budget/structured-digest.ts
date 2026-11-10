@@ -441,7 +441,7 @@ export function mergeHistoryDigests(
         sameQuestionKey(questionKey(question), questionKey(resolution)),
       ),
   );
-  if (Object.keys(merged).some((field) => mergedFieldLostItems(field, older, newer))) {
+  if (digestLostItems(older, newer)) {
     merged.droppedCategories = mergeStrings(merged.droppedCategories, [
       "bounded-structured-signals-require-rehydration",
     ]);
@@ -449,16 +449,29 @@ export function mergeHistoryDigests(
   return merged;
 }
 
-function mergedFieldLostItems(
-  field: string,
-  older: CompactionDigest,
-  newer: CompactionDigest,
-): boolean {
-  const key = field as keyof CompactionDigest;
-  return (
-    new Set([...(older[key] ?? []), ...(newer[key] ?? [])].map((item) => JSON.stringify(item)))
-      .size > 16
-  );
+// True when a merged digest field had more distinct items than the merge keeps, so bounded merging
+// dropped some of them. `satisfies` requires one entry per CompactionDigest field, so a new field is
+// a type error here until its loss is checked too.
+function digestLostItems(older: CompactionDigest, newer: CompactionDigest): boolean {
+  const lostIn = (field: keyof CompactionDigest): boolean =>
+    fieldLostItems(older[field], newer[field]);
+  const lost = {
+    preservedFacts: lostIn("preservedFacts"),
+    assumptions: lostIn("assumptions"),
+    userConstraints: lostIn("userConstraints"),
+    decisions: lostIn("decisions"),
+    openQuestions: lostIn("openQuestions"),
+    filesInspected: lostIn("filesInspected"),
+    filesChanged: lostIn("filesChanged"),
+    commandOutcomes: lostIn("commandOutcomes"),
+    failingTests: lostIn("failingTests"),
+    droppedCategories: lostIn("droppedCategories"),
+  } satisfies { readonly [Field in keyof CompactionDigest]-?: boolean };
+  return Object.values(lost).some(Boolean);
+}
+
+function fieldLostItems(older: readonly unknown[] = [], newer: readonly unknown[] = []): boolean {
+  return new Set([...older, ...newer].map((item) => JSON.stringify(item))).size > 16;
 }
 
 function mergeStrings(older: readonly string[] = [], newer: readonly string[] = []): string[] {

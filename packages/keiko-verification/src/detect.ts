@@ -21,15 +21,16 @@ function parseScripts(text: string): Readonly<Record<string, string>> {
     // and the plan will mark every kind skipped, which is a visible, testable outcome (D4).
     return {};
   }
-  if (typeof parsed !== "object" || parsed === null) {
+  if (typeof parsed !== "object" || parsed === null || !("scripts" in parsed)) {
     return {};
   }
-  const scripts = (parsed as Record<string, unknown>).scripts;
+  const scripts = parsed.scripts;
   if (typeof scripts !== "object" || scripts === null) {
     return {};
   }
   const out: Record<string, string> = {};
-  for (const [name, value] of Object.entries(scripts as Record<string, unknown>)) {
+  const entries: readonly (readonly [string, unknown])[] = Object.entries(scripts);
+  for (const [name, value] of entries) {
     if (typeof value === "string") {
       out[name] = value;
     }

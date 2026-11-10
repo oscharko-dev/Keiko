@@ -379,7 +379,7 @@ function selectReviewCandidates(
   delta: readonly Candidate[],
 ): readonly Candidate[] {
   if (delta.length === 0) {
-    return Object.freeze([] as readonly Candidate[]);
+    return Object.freeze([]);
   }
   const persistedIds = new Set(persisted.map((candidate) => String(candidate.id)));
   const persistedDelta = delta.filter((candidate) => persistedIds.has(String(candidate.id)));
@@ -499,8 +499,7 @@ function modelRoutingForPersist(
 
 function hasQiCode(error: unknown, code: string): boolean {
   if (!(error instanceof Error)) return false;
-  const coded = error as Error & { readonly code?: unknown };
-  return typeof coded.code === "string" && coded.code === code;
+  return "code" in error && error.code === code;
 }
 
 function shouldCountRejectedGenerationDispatch(error: unknown): boolean {
@@ -1097,7 +1096,7 @@ function analyzeRequirementQualityFailSoft(
       atoms: ingestedAtoms,
     });
   } catch {
-    return Object.freeze([] as readonly QI.QualityIntelligenceRequirementQualityFinding[]);
+    return Object.freeze([]);
   }
 }
 

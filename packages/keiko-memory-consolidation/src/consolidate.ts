@@ -106,6 +106,7 @@ const CONSOLIDATION_SUMMARY_FALLBACK_OPERATION = defineActivityLogOperation({
 });
 
 const DEFAULT_ELIGIBLE_STATUSES: readonly MemoryStatus[] = ["accepted", "proposed", "conflicted"];
+// SAFETY: MemoryReviewerId is an erased brand on string, and this fixed literal is a valid id.
 const DEFAULT_REVIEWER_ID = "memory-consolidation" as MemoryReviewerId;
 
 function isFiniteInRange(n: number, lo: number, hi: number): boolean {

@@ -147,16 +147,6 @@ export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
   ...DEFAULT_COMMAND_RULES,
 ]);
 
-const ALL_STATUSES: readonly VerificationStatus[] = [
-  "passed",
-  "failed",
-  "skipped",
-  "denied",
-  "timed-out",
-  "cancelled",
-  "resource-exceeded",
-];
-
 // Maps a step's resource limits and the run's resolved network policy onto a #6 SandboxPolicy:
 // wall-time and output-size are enforced by runCommand. Memory is NOT a SandboxPolicy field — it is
 // handled by the SpawnFn-wrapper monitor, so it does not appear here. The network policy is resolved by
@@ -653,10 +643,15 @@ function overallStatus(
 }
 
 function countByStatus(results: readonly VerificationResult[]): Record<VerificationStatus, number> {
-  const counts = Object.fromEntries(ALL_STATUSES.map((s) => [s, 0])) as Record<
-    VerificationStatus,
-    number
-  >;
+  const counts: Record<VerificationStatus, number> = {
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    denied: 0,
+    "timed-out": 0,
+    cancelled: 0,
+    "resource-exceeded": 0,
+  };
   for (const r of results) {
     counts[r.status] += 1;
   }

@@ -2906,6 +2906,7 @@
     "keiko-workflows/ranking/rank",
     "keiko-workflows/ranking/scoring",
     "keiko-workflows/ranking/signals",
+    "keiko-workflows/run-event-envelope",
     "keiko-workflows/unit-tests/_support",
     "keiko-workflows/unit-tests/context",
     "keiko-workflows/unit-tests/conventions",

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ae23140e8bf0e393aa33871c0f9cbad686c0d7e7018dd91518a404d9bded1a57",
+    "catalogDigest": "e69d79a7bbc23a4b8eecdaba0784a3ba2900124b28bf86a1958a8f627d59bee7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -17459,7 +17459,7 @@
         "proofIds": ["consolidation.summary.fallback.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-consolidation/src/consolidate.ts:82",
-        "emitterSites": ["packages/keiko-memory-consolidation/src/consolidate.ts:495"]
+        "emitterSites": ["packages/keiko-memory-consolidation/src/consolidate.ts:496"]
       },
       {
         "contractKind": "activity-log-operation",

@@ -490,9 +490,9 @@ function hostLibcIdentity(): string {
   if (process.platform !== "linux") return "none";
   const report: unknown = process.report.getReport();
   if (typeof report !== "object" || report === null) return "unknown";
-  const header: unknown = Reflect.get(report, "header");
+  const header: unknown = "header" in report ? report.header : undefined;
   if (typeof header !== "object" || header === null) return "unknown";
-  const version: unknown = Reflect.get(header, "glibcVersionRuntime");
+  const version: unknown = "glibcVersionRuntime" in header ? header.glibcVersionRuntime : undefined;
   return typeof version === "string" && /^\d{1,3}\.\d{1,3}$/u.test(version)
     ? `glibc:${version}`
     : "unknown";

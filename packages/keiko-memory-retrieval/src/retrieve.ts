@@ -87,8 +87,9 @@ function resolveWeights(request: MemoryRetrievalRequest): RankingWeights {
   };
 }
 
-function assertNonNegativeWeights(weights: RankingWeights): void {
-  for (const [name, value] of Object.entries(weights) as readonly [string, number][]) {
+// Keyed by the weight names, so Object.entries reads each weight as the number it is.
+function assertNonNegativeWeights(weights: Readonly<Record<keyof RankingWeights, number>>): void {
+  for (const [name, value] of Object.entries(weights)) {
     if (!Number.isFinite(value) || value < 0) {
       throw new RetrievalError(
         "invalid-weight",
