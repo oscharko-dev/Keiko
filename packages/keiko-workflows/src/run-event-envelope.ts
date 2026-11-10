@@ -21,7 +21,18 @@ export function runFingerprint(canonicalIdentity: string): string {
 // union member minus the envelope.
 type EnvelopeFields = "schemaVersion" | "runId" | "fingerprint" | "seq" | "ts";
 
-export type RunEventBody<Event extends { readonly type: string }> = {
+// Every event member declares exactly these envelope fields, as BaseWorkflowEvent and BaseBugEvent
+// do. The emitter fills them in, so a member must not narrow them (for example `runId: "fixed"`).
+interface RunEventEnvelope {
+  readonly schemaVersion: "1";
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly seq: number;
+  readonly ts: number;
+  readonly type: string;
+}
+
+export type RunEventBody<Event extends RunEventEnvelope> = {
   [Member in Event as Member["type"]]: Omit<Member, EnvelopeFields>;
 }[Event["type"]];
 
@@ -29,11 +40,11 @@ interface RunEventSink<Event> {
   emit(event: Event): void;
 }
 
-export interface RunEventEmitter<Event extends { readonly type: string }> {
+export interface RunEventEmitter<Event extends RunEventEnvelope> {
   readonly emit: (body: RunEventBody<Event>) => void;
 }
 
-export function createRunEventEmitter<Event extends { readonly type: string }>(
+export function createRunEventEmitter<Event extends RunEventEnvelope>(
   sink: RunEventSink<Event>,
   runId: string,
   fingerprint: string,
@@ -43,8 +54,9 @@ export function createRunEventEmitter<Event extends { readonly type: string }>(
   return {
     emit: (body: RunEventBody<Event>): void => {
       seq += 1;
-      // SAFETY: The body is a complete discriminated-union member minus the envelope; re-attaching
-      // the envelope yields a valid Event. The cast is over the union, not a widening to any.
+      // SAFETY: Event extends RunEventEnvelope, so every member declares these five envelope fields
+      // with the types written here and none narrows them. The body is a complete member minus the
+      // envelope, so re-attaching it yields a valid Event. The cast is over the union, not to any.
       const event = {
         schemaVersion: "1" as const,
         runId,
