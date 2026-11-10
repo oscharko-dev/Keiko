@@ -207,6 +207,18 @@ function retainDraft(
   trimBytes(drafts, bounds.maxTotalBytes);
 }
 
+/** The last draft of an oldest-first list that is still open. */
+function newestOpen(
+  held: readonly StagedJiraDraft[],
+  isOpen: (draft: StagedJiraDraft) => boolean,
+): StagedJiraDraft | undefined {
+  for (let index = held.length - 1; index >= 0; index -= 1) {
+    const draft = held[index];
+    if (draft !== undefined && isOpen(draft)) return draft;
+  }
+  return undefined;
+}
+
 /** The drafts still held: idle ones expired and the shared byte bound kept. */
 function sweeper(
   drafts: Drafts,
@@ -281,7 +293,7 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
     },
     peek,
     latest: (owner): StagedJiraDraft | undefined =>
-      oldestFirst(swept(), owner).filter(settled.isOpen).at(-1),
+      newestOpen(oldestFirst(swept(), owner), settled.isOpen),
     complete: (id, owner, digest): void => {
       if (peek(id, owner)?.digest === digest) settled.settle(id, digest);
     },
