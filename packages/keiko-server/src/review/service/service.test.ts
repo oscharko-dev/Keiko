@@ -218,9 +218,7 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
       },
     });
 
-    // Both role models before eligibility, then the Reviewer model again right before its session
-    // (#4130): the preparation in between can outlast a readiness observation.
-    expect(checked).toEqual(["reviewer-model", "checker-model", "reviewer-model"]);
+    expect(checked).toEqual(["reviewer-model", "checker-model"]);
     expect(settlement).toEqual({ kind: "complete" });
   });
 

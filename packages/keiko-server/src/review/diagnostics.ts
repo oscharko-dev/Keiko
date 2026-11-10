@@ -21,6 +21,7 @@ export type ReviewDiagnosticOperation =
   | "review.worktree.registry-read"
   | "review.worktree.remove"
   | "review.run.execute"
+  | "review.run.model-readiness"
   | "review.run.persist"
   | "review.run.diff"
   | "review.settings.read"

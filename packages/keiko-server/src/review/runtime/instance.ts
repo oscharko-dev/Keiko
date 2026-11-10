@@ -12,8 +12,9 @@
 //      the run with its closed outcome before any runtime work;
 //   2. renders the review task (`reviewPrompt.ts`): rules and diff package as fenced, nonce-bound,
 //      untrusted data;
-//   3. binds the instance's workspace view to the review worktree and runs the startup self-check
-//      over all four read-only layers; any missing layer refuses with its closed reason;
+//   3. binds the instance's workspace view to the review worktree, verifies the Reviewer model's
+//      readiness again (#4130) and runs the startup self-check over all four read-only layers;
+//      any missing layer refuses with its closed reason;
 //   4. starts the run on the instance's own orchestrator with a run-bound finding intake behind
 //      `keiko_review_report`, waits for it to settle, and returns the accepted candidates.
 // Orchestration, counter-check, settlement and presentation belong to Issue #4136.
@@ -35,6 +36,7 @@ import type {
   GovernedCodingToolResult,
 } from "../../coding-runtime/codingToolGovernedDelegate.js";
 import type { ServerLogSink } from "../../observability/index.js";
+import { reportReviewFailure } from "../diagnostics.js";
 import {
   logReviewProfileRefused,
   logReviewRulesFile,
@@ -76,6 +78,13 @@ export interface ReviewRuntimeRunRequest {
   readonly diffPart?: ReviewTaskPart | undefined;
   readonly correlationId?: string | undefined;
   readonly signal?: AbortSignal | undefined;
+  /**
+   * Verifies the Reviewer model's readiness again (#4130). The service calls it once the instance
+   * is acquired, right before the self-check reads the authority a run would be minted with: that
+   * authority exists only for a fresh readiness observation, and the steps before it can outlast
+   * one. Resolves when the check settled, whatever its result; the self-check then decides.
+   */
+  readonly ensureModelReady?: (() => Promise<void>) | undefined;
 }
 
 type ReviewRuntimeRefusalReason =
@@ -487,6 +496,49 @@ function selfCheckRefusal(
   return check.authorityRefusal === "model-unavailable" ? "runtime-unavailable" : check.reason;
 }
 
+/** A promise that resolves when `signal` aborts; `release` removes its listener. */
+function whenAborted(signal: AbortSignal | undefined): {
+  readonly promise: Promise<void>;
+  readonly release: () => void;
+} {
+  if (signal === undefined) {
+    return { promise: new Promise<void>(() => undefined), release: (): void => undefined };
+  }
+  let onAbort = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    onAbort = (): void => {
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return {
+    promise,
+    release: (): void => {
+      signal.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+/**
+ * Waits for the request's readiness check, or for the run's cancellation, whichever comes first
+ * (#4130). A check that fails is reported and leaves the decision to the self-check, like a check
+ * that found the model not ready; a cancelled run does not wait for a probe it no longer needs.
+ */
+async function modelReadyOrCancelled(request: ReviewRuntimeRunRequest): Promise<void> {
+  const ensure = request.ensureModelReady;
+  if (ensure === undefined || request.signal?.aborted === true) return;
+  // The listener is attached before the check starts, so a cancellation during it is never missed.
+  const cancellation = whenAborted(request.signal);
+  try {
+    const settled = ensure().catch((error: unknown) => {
+      reportReviewFailure("review.run.model-readiness", request.correlationId, error);
+    });
+    await Promise.race([settled, cancellation.promise]);
+  } finally {
+    cancellation.release();
+  }
+}
+
 async function runOnInstance(
   context: ServiceContext,
   live: LiveInstance,
@@ -498,6 +550,7 @@ async function runOnInstance(
   const workspace = live.composition.workspace;
   try {
     if (!workspace.bind(request)) return { ok: false, reason: "busy", rules: prepared.rules };
+    await modelReadyOrCancelled(request);
     const refusal = selfCheckRefusal(context, live, request);
     if (refusal !== undefined) return { ok: false, reason: refusal, rules: prepared.rules };
     live.slot.pending = {

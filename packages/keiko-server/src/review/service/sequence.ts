@@ -414,11 +414,12 @@ function partLine(
 /**
  * One part's Reviewer session: totals, rules digest, cleanup and candidates go into the state.
  *
- * The Reviewer model's readiness is verified again right before the session (#4130). The run's
- * start verified it, but the launch mints its authority only for a model with a fresh readiness
- * observation, and the preparation or an earlier part's session can outlast that observation's
- * lifetime. The launch then refused a model that was serving, and the run settled
- * `skipped/model-unavailable`. A fresh observation makes the check a no-op.
+ * The launch gets the Reviewer model's readiness check (#4130). The run's start verified the model,
+ * but the launch mints its authority only for a readiness observation younger than five minutes,
+ * and the preparation, the rules read, the instance start or an earlier part's session can outlast
+ * that. The launch then refused a model that was serving, and the run settled
+ * `skipped/model-unavailable`. The review runtime calls the check right before it reads that
+ * authority; a fresh observation makes it a no-op.
  */
 async function runReviewerPart(
   deps: ReviewSequenceDeps,
@@ -427,7 +428,6 @@ async function runReviewerPart(
   state: ReviewRunState,
   input: ReviewerPart,
 ): Promise<ReviewerPartStep> {
-  await deps.models.ensureReady?.(ctx.reviewerModelId, ctx.correlationId);
   const startedAt = deps.now();
   const result = await runtime.run({
     reviewRunId: ctx.runId,
@@ -440,6 +440,9 @@ async function runReviewerPart(
     ...(input.count > 1 ? { diffPart: { index: input.index, count: input.count } } : {}),
     correlationId: ctx.correlationId,
     signal: ctx.signal,
+    ensureModelReady: async (): Promise<void> => {
+      await deps.models.ensureReady?.(ctx.reviewerModelId, ctx.correlationId);
+    },
   });
   const totals = reviewerTotals(result, deps.now() - startedAt);
   state.reviewerTotals = addRoleTotals(state.reviewerTotals, totals);

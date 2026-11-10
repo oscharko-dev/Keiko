@@ -91,7 +91,10 @@ interface ServiceFixture {
 /** One script for every composed instance, or one per instance in composition order. */
 function service(
   script: ScriptedReviewRun | readonly ScriptedReviewRun[],
-  options: { readonly layers?: ReviewRuntimeLayers; readonly compose?: boolean } = {},
+  options: {
+    readonly layers?: ReviewRuntimeLayers | (() => ReviewRuntimeLayers);
+    readonly compose?: boolean;
+  } = {},
 ): ServiceFixture {
   const log = createBufferedServerLogSink();
   const observed = newReviewRuntimeObservations();
@@ -111,7 +114,8 @@ function service(
   );
   const subject = createReviewRuntimeService({
     compose,
-    layersFor: () => options.layers ?? reviewLayers(),
+    layersFor: () =>
+      typeof options.layers === "function" ? options.layers() : (options.layers ?? reviewLayers()),
     runner: () => createGitReviewProcessRunner(),
     activityLog: log,
     setTimer: (callback) => {
@@ -388,6 +392,78 @@ describe("createReviewRuntimeService", () => {
     expect(refused?.extra).toMatchObject({
       reason: "authority-missing",
       authorityRefusal: "model-unavailable",
+    });
+  });
+
+  // #4130, R4130-048: the authority exists only for a readiness observation younger than five
+  // minutes. A review whose preparation, rules read and instance start outlasted the observation of
+  // the run's start was refused although the model was serving. The launch now verifies the model
+  // again once the instance is composed, right before the self-check reads the authority.
+  describe("the Reviewer model's readiness at the launch", () => {
+    const LAPSED: ReviewRuntimeLayers = {
+      ...reviewLayers(),
+      authority: undefined,
+      authorityRefusal: "model-unavailable",
+    };
+
+    it("verifies the model after the instance is composed and before the self-check", async () => {
+      const { repo, base, head } = headRepository();
+      const order: string[] = [];
+      let ready = false;
+      const { subject, observed, compose } = service(
+        { reports: [] },
+        {
+          layers: () => {
+            order.push("self-check");
+            return ready ? reviewLayers() : LAPSED;
+          },
+        },
+      );
+      let composedBeforeCheck = -1;
+      const ensureModelReady = (): Promise<void> => {
+        order.push("readiness");
+        composedBeforeCheck = compose.mock.calls.length;
+        ready = true;
+        return Promise.resolve();
+      };
+
+      const result = await subject.run(request(repo, base, head, { ensureModelReady }));
+
+      expect(result).toMatchObject({ ok: true, outcome: "completed" });
+      expect(order).toEqual(["readiness", "self-check"]);
+      expect(composedBeforeCheck).toBe(1);
+      expect(observed.starts).toHaveLength(1);
+    });
+
+    it("leaves the decision to the self-check when the check fails", async () => {
+      const { repo, base, head } = headRepository();
+      const lapsed = service({ reports: [] }, { layers: LAPSED });
+      const ensureModelReady = (): Promise<void> => Promise.reject(new TypeError("probe failed"));
+
+      await expect(
+        lapsed.subject.run(request(repo, base, head, { ensureModelReady })),
+      ).resolves.toEqual({ ok: false, reason: "runtime-unavailable", rules: "absent" });
+      expect(lapsed.observed.starts).toEqual([]);
+
+      const fresh = service({ reports: [] });
+      await expect(
+        fresh.subject.run(request(repo, base, head, { ensureModelReady })),
+      ).resolves.toMatchObject({ ok: true, outcome: "completed" });
+    });
+
+    it("does not wait for the check once the run is cancelled", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject } = service({ reports: [] });
+      const controller = new AbortController();
+      // The check never settles; it cancels the run while the launch waits for it.
+      const ensureModelReady = (): Promise<void> =>
+        new Promise<void>(() => {
+          controller.abort();
+        });
+
+      await expect(
+        subject.run(request(repo, base, head, { ensureModelReady, signal: controller.signal })),
+      ).resolves.toBeDefined();
     });
   });
 

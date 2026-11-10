@@ -433,11 +433,13 @@ offers (`ReviewModelPolicy`). One pure rule, `evaluateReviewRoleEligibility`, de
 for both roles from the existing gateway capability data: a model must be configured, have verified
 and current tool calling, a known context window that fits the review budget, and be coding-safe.
 Conversation readiness `false` makes it temporarily unavailable; a busy model stays eligible.
-A run verifies both role models' readiness again at its start (Issue #4138) and the Reviewer
-model's again right before each part's session (Issue #4130): the launch mints its authority only
-for a model with a fresh readiness observation, and the preparation or an earlier part's session
-can outlast that observation's lifetime of five minutes. A fresh observation makes the check a
-no-op; a lapsed one is probed under the run's correlation (`gateway.readiness.automatic.*`).
+A run verifies both role models' readiness again at its start (Issue #4138). Each Reviewer launch
+verifies the Reviewer model's again right before its self-check reads the model's authority
+(Issue #4130): that authority is minted only for a readiness observation younger than five minutes,
+and the preparation, the rules read, the instance start or an earlier part's session can outlast
+it. A fresh observation makes the check a no-op; a lapsed one is probed under the run's correlation
+(`gateway.readiness.automatic.*`). A check that fails is reported as a `review.run.model-readiness`
+diagnostic, a cancelled run does not wait for it, and in both cases the self-check decides.
 Operators may set defaults and restrict the choice; invalid explicit configuration fails closed.
 Each pair has a status (`unmeasured`, `seed-qualified`, `seed-failed`, `collecting`,
 `measured-passed`, `measured-failed`); a pair that was never measured is shown as unmeasured, never
