@@ -164,6 +164,41 @@ describe("isDenied (always-on security)", () => {
     });
   }
 
+  // W7 of #4068: Windows names one file by spellings the lexical deny list never saw. An alternate
+  // data stream suffix and trailing dots or spaces are stripped by the Win32 layer, so each of
+  // these opens the denied file (observed on NTFS: `.env::$DATA` reads `.env`).
+  for (const aliased of [
+    ".env::$DATA",
+    ".env:stream",
+    ".env ",
+    ".env. ",
+    "id_rsa::$DATA",
+    "id_rsa.",
+    "config/secrets/key.pem::$DATA",
+    "node_modules::$INDEX_ALLOCATION/x",
+    ".git::$INDEX_ALLOCATION/config",
+    ".git./config",
+    "app/.ENV::$data",
+  ]) {
+    it(`denies the Windows alias ${JSON.stringify(aliased)}`, () => {
+      expect(isDenied(aliased)).toBe(true);
+    });
+  }
+
+  // The `.env.example` exception is an exact, literal match: an aliased spelling of it is denied
+  // with the rest of `.env*`, which only ever denies more.
+  for (const aliasedExample of [".env.example::$DATA", ".env.example."]) {
+    it(`keeps the .env.example exception literal for ${JSON.stringify(aliasedExample)}`, () => {
+      expect(isDenied(aliasedExample)).toBe(true);
+    });
+  }
+
+  for (const allowedAlias of ["src/index.ts::$DATA", "a:b.txt"]) {
+    it(`does not over-deny the alias ${JSON.stringify(allowedAlias)}`, () => {
+      expect(isDenied(allowedAlias)).toBe(false);
+    });
+  }
+
   it("denies regardless of leading ./ and backslashes", () => {
     expect(isDenied("./node_modules/x")).toBe(true);
     expect(isDenied("node_modules\\x\\y")).toBe(true);

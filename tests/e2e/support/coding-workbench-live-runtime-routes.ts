@@ -48,7 +48,8 @@ type RuntimeOptions = Required<
     LiveRuntimeFixtureOptions,
     "deploymentCeiling" | "disconnectStreamOnce" | "eventCount" | "runtimeAvailable"
   >
->;
+> &
+  Pick<LiveRuntimeFixtureOptions, "executionLocations" | "startRefusalCode">;
 
 const FIXTURE_BRIDGE_DECISION_CAPABILITY = "A".repeat(
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
@@ -322,6 +323,9 @@ async function handleReadinessRoute(
     ...(options.runtimeAvailable
       ? { runtimeEvidenceClass: "platform-qualified" }
       : { runtimeUnavailableReason: "runtime-unqualified" }),
+    ...(options.executionLocations === undefined
+      ? {}
+      : { executionLocations: options.executionLocations }),
   };
   expect(validateCodingWorkbenchRuntimeReadiness(readiness).ok).toBe(true);
   await fulfillJson(route, readiness);
@@ -437,14 +441,30 @@ async function handleRecoveryCommand(
   return true;
 }
 
+// The server's refused start: the wire error envelope with the code and its correlation, and no
+// run. The fixture speaks the real contract so the Workbench's own code handling is what is tested.
+async function refuseStart(route: Route, code: string): Promise<void> {
+  await route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    body: JSON.stringify({
+      error: { code, message: "Runtime request was rejected.", correlationId: "e2e-refused-start" },
+    }),
+  });
+}
+
 async function handleRuntimePost(
   route: Route,
   pathname: string,
   fixture: RuntimeFixtureState,
+  options: RuntimeOptions,
 ): Promise<boolean> {
   if (pathname === "/api/coding-workbench/runtime/runs") {
-    if ((await parsedRequest(route, parseCodingWorkbenchRuntimeStartRequest, fixture)) !== null)
+    if ((await parsedRequest(route, parseCodingWorkbenchRuntimeStartRequest, fixture)) === null)
+      return true;
+    if (options.startRefusalCode === undefined)
       await transition(route, fixture, "awaiting-approval");
+    else await refuseStart(route, options.startRefusalCode);
     return true;
   }
   if (pathname.endsWith(`/${FIXTURE_RUN_ID}/approvals`))
@@ -463,6 +483,8 @@ export async function installRuntimeRoutes(
     disconnectStreamOnce: options.disconnectStreamOnce ?? false,
     eventCount: options.eventCount ?? 0,
     runtimeAvailable: options.runtimeAvailable ?? true,
+    executionLocations: options.executionLocations,
+    startRefusalCode: options.startRefusalCode,
   };
   const authStatus = options.authStatus ?? "connected";
   // #2386 fixed the product default at the supervised middle mode; the policy channel starts there
@@ -481,7 +503,7 @@ export async function installRuntimeRoutes(
       if (await handleRepositoryFixtureRead(route, pathname)) return;
       if (await handleRuntimeGet(route, pathname, searchParams, runtimeOptions, fixture)) return;
     } else if (route.request().method() === "POST") {
-      if (await handleRuntimePost(route, pathname, fixture)) return;
+      if (await handleRuntimePost(route, pathname, fixture, runtimeOptions)) return;
     }
     await route.continue();
   });

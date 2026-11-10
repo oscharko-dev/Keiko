@@ -3,7 +3,8 @@
 
 import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { containsPath } from "@oscharko-dev/keiko-git";
 import { assertSqliteStatePath } from "@oscharko-dev/keiko-security/fs-hardening";
 import type { ServerLogSink } from "../observability/index.js";
 import { invalidRequest } from "./errors.js";
@@ -11,16 +12,15 @@ import { invalidRequest } from "./errors.js";
 export const UI_DB_FILENAME = "keiko-ui.db";
 export const UI_DB_DIRNAME = ".keiko";
 
+// Containment follows the platform's filesystem identity (case-insensitive on win32 and darwin):
+// process.cwd() keeps the drive letter as the shell spelled it, so a byte comparison let a
+// differently cased path inside the workspace pass as outside it (#4068 W7).
 function isInsideCurrentWorkingDirectory(path: string): boolean {
-  const cwd = resolve(process.cwd());
-  const resolved = resolve(path);
-  return resolved === cwd || resolved.startsWith(`${cwd}${sep}`);
+  return containsPath(resolve(process.cwd()), resolve(path));
 }
 
 function isInsideRuntimeStateRoot(path: string, workspaceRoot: string): boolean {
-  const runtimeRoot = resolve(workspaceRoot, UI_DB_DIRNAME);
-  const resolved = resolve(path);
-  return resolved === runtimeRoot || resolved.startsWith(`${runtimeRoot}${sep}`);
+  return containsPath(resolve(workspaceRoot, UI_DB_DIRNAME), resolve(path));
 }
 
 function resolveConfiguredPath(path: string, label: string): string {
@@ -43,12 +43,6 @@ function resolveConfiguredPath(path: string, label: string): string {
     throw invalidRequest(`${label} must not be inside the current workspace.`);
   }
   return resolved;
-}
-
-function containsPath(parent: string, child: string): boolean {
-  const resolvedParent = resolve(parent);
-  const resolvedChild = resolve(child);
-  return resolvedChild === resolvedParent || resolvedChild.startsWith(`${resolvedParent}${sep}`);
 }
 
 export function resolveUiDbPath(

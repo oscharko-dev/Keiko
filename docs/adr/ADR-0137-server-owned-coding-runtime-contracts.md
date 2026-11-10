@@ -1224,6 +1224,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `direct` until a native boundary is qualified there); no request field can select a profile. The mapped `direct` and `code-mode` profiles remain available to tests and to an
   explicit server selection, and the governed `keiko_*` catalog, the tool facade and Chat
   repository search stay in place for the surfaces that use them.
+- **Windows qualification (#4068, 2026-10-26).** The task owner explicitly retained the mapped
+  `direct` profile for this qualification. Profile selection alone does not establish availability:
+  production Windows gateway confinement still refuses before spawn. The
+  [Windows record](../qa/opencode-windows-qualification.md) distinguishes executed helper proofs,
+  unavailable native capabilities and remaining install/service blockers. No mapped result may be
+  labeled native or close unexecuted Windows acceptance criteria.
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
@@ -1386,7 +1392,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   starts through `/usr/bin/env -i` with a fixed `PATH`, the run's private `HOME` and its own
   variables only. It runs inside the run's sandbox; its executable's install prefix is opened for
   reading under the same toolchain rule as the launcher's `PATH`, and the supervisor's resource
-  coalition reaps it with the tree. A remote server is written only for Full access; without an
+  coalition reaps it with the tree. Only a darwin or linux host has that env-scrubbing launcher; on any
+  other platform (Windows today, #4068 W10) `openCodeNativeMcpAdmission` omits every local server not
+  reached through the relay, with its tools and grants, rather than start it with the inherited
+  environment, and `coding-runtime.native-mcp-local.refused` records the refused count only. This is a
+  static refusal, not a Windows launcher and not a Windows qualification pass. A remote server is
+  written only for Full access; without an
   operator-named issuer its OAuth stays off.
   The runtime exposes MCP tools through Code Mode, and every nested call reaches the policy as
   `<server>_<tool>`: a named local `read` tool is a vetted command (Ask for approval asks,
@@ -1768,7 +1779,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   composer shows a Build | Plan switch only where that list offers `plan`, keeps it operable
   between turns (idle, paused) and fixed while a turn runs, sends the selection with every start,
   retry and follow-up (`build` included, so a follow-up can switch back), and names the plan agent
-  in the run status line and information panel.
+  in the run status line and information panel. The snapshot of a run its server process started
+  states that run's `modelId` and latest accepted `agent`; readiness states the closed `toolProfile`
+  (`native`, or `mapped` for anything else). A reloaded window adopts the run's identity once, and a
+  live run's facts never fall back to the browser's selection: an absent value reads as not reported
+  (#4068 W12).
 - **The prompt takes a message while a turn runs and the files its text references.** A follow-up
   may carry `delivery` (`steer` or `queue`, the closed `CODING_WORKBENCH_PROMPT_DELIVERIES`
   vocabulary) and `references` (at most 16 `{ path }` entries relative to the run's workspace root;
@@ -1895,7 +1910,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   stopped or undone turn cannot hand them to the next prompt; a failed withdrawal is logged and does
   not fail the stop. The Workbench lists the messages above the composer with Cancel and, for a queued
   one, Send now, and refreshes on the run's revision and on the conversation gaining a message (no
-  polling); a failed read is a retryable error, never an empty list.
+  polling); a failed read is a retryable error, never an empty list. It reads the list only while
+  readiness offers delivery (`promptInputs.delivery`): under a profile that takes no delivery, such as
+  the mapped Windows profile, the server refuses every read as `unsupported`, and the Workbench left
+  one warn line per refresh until it stopped asking (#4068, 2026-11-07).
 - **A turn may run as one of the runtime's slash commands (C02).** The pinned producer lists its
   commands (`GET /api/command`, `command.list`: `init`, guided AGENTS.md setup, and `review`, review
   of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST
@@ -2658,6 +2676,19 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     entries in all, 14 days, 3,000 messages; the store prunes on startup and on every retain, and an
     entry whose task Coding History no longer holds is removed. `KEIKO_CODING_SESSION_RETENTION=off`
     retains, resumes and forks nothing; any other unknown value fails closed to off.
+    Every retain, checkout, prune and remove validates the configured retention root as an actual
+    directory, rejecting a symbolic link or Windows junction before traversing its entries. A root
+    replaced between operations is not trusted because a prior retention succeeded. Invalid roots
+    propagate through the existing `coding-runtime.session-continuity` failed/copy-failed event;
+    startup pruning leaves their targets untouched. Each retained entry must also be an actual
+    directory before its manifest is read. Stored manifests and databases must be regular files
+    with a single hard link; final symbolic links and multiply linked files are refused before
+    reading or copying them. A redirected entry or linked stored file is an integrity refusal,
+    and removal unlinks the store entry without changing external file contents. Startup pruning
+    reports removed invalid entries through the existing count-only continuity event. The
+    runtime-owned source database keeps its existing read-only input semantics. These pathname
+    checks do not attest Windows ACL privacy, ancestor containment or atomic protection against
+    replacement during an operation.
   - **Resume.** The orchestrator declares the intent before it launches; the composition's prepare
     step checks the entry out into the new run's own state root (exclusive copy, then the digest and
     the audit again, workspace, runtime version and window checked against the new run), so the

@@ -28,6 +28,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rewriteGitPointerInPlace } from "../test-support/git-pointer-fixture.js";
 import {
   retrieveConnectedContextPack,
   runGroundedExploration,
@@ -265,7 +266,7 @@ describe("resolveManagedWorkspaceRootAccess", () => {
   });
 
   it("rejects a malformed linked-worktree pointer", () => {
-    writeFileSync(join(workspaceRoot, ".git"), "gitdir: relative/admin-dir\n");
+    rewriteGitPointerInPlace(join(workspaceRoot, ".git"), "gitdir: relative/admin-dir\n");
 
     expect(resolveAccess()).toBeUndefined();
   });
@@ -274,7 +275,7 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     const pointerPath = join(workspaceRoot, ".git");
     const target = parseGitdirPointerTarget(readFileSync(pointerPath, "utf8"));
     if (target === undefined) throw new Error("real Git pointer was not parsed");
-    writeFileSync(pointerPath, `gitdir:${" ".repeat(70_000)}${target}\n`);
+    rewriteGitPointerInPlace(pointerPath, `gitdir:${" ".repeat(70_000)}${target}\n`);
 
     expect(resolveAccess()).toBeUndefined();
   });

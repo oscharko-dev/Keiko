@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import {
   ACTIVITY_LOG_ERROR_KINDS,
   ACTIVITY_LOG_OPERATION_REGISTRY,
@@ -67,6 +68,9 @@ const START_DIAGNOSTIC_CODES = [
   "initial-turn-dispatch",
   "initial-turn-recovery",
   "launch-resolution",
+  // #4068: a Windows start the broker cannot confine, refused before anything spawns.
+  "launch-resolution:workspace-location-unsupported:local-checkout",
+  "launch-resolution:workspace-volume-unsupported:non-system-volume",
   "manager-exception",
   "model-unavailable",
   "payload-missing",
@@ -90,6 +94,7 @@ const START_DIAGNOSTIC_CODES = [
   "runtime-unqualified",
   "runtime-version-mismatch",
   "signature-unverified",
+  "workspace-contains-runtime",
   "workspace-root-denied",
   "workspace-unqualified",
 ].map((reason) => `stage=start:reason=${reason}`);
@@ -201,6 +206,52 @@ export function customerShapeFailureSummary(lines, requests, firstRequest) {
         deliveredToolCall: fields.deliveredToolCall === true,
       };
     }),
+  };
+}
+
+/**
+ * The folder the qualification's Workbench window holds, as a closed class: the run's preflight
+ * refuses the Yarn project itself (`workspace-contains-runtime`), because the installed runtime
+ * lives in its `node_modules`, so a window on the project instead of the provisioned repository
+ * fails the turn. Paths never cross into the public CI log, only these classes.
+ */
+export function customerShapeFolderClass(value, repository, project) {
+  if (typeof value !== "string" || value.trim() === "") return "absent";
+  if (value === repository) return "provisioned";
+  if (value === project) return "project-root";
+  return "other";
+}
+
+/** The same class for the repository chooser, which shows the folder's name, not its path. */
+export function customerShapeChooserClass(label, repository, project) {
+  const text = typeof label === "string" ? label.trim() : "";
+  if (text === "") return "absent";
+  if (text.includes(basename(repository))) return "provisioned";
+  if (text.includes(basename(project))) return "project-root";
+  return "other";
+}
+
+const FOLDER_CLASSES = new Set(["absent", "provisioned", "project-root", "other"]);
+
+function folderClassOf(value) {
+  return FOLDER_CLASSES.has(value) ? value : "other";
+}
+
+/**
+ * Where the Workbench window's folder came from, for a failure report: the stored layout the
+ * qualification seeded (scope key present, window found, its `repositoryPath`), how many layout
+ * scopes the browser holds, and what the repository chooser shows. Counts and closed classes only.
+ */
+export function customerShapeWorkbenchFolderFacts(observed) {
+  const facts = observed !== null && typeof observed === "object" ? observed : {};
+  const count = (value) => (Number.isInteger(value) && value >= 0 ? value : 0);
+  return {
+    layoutStored: facts.layoutStored === true,
+    layoutScopeCount: count(facts.layoutScopeCount),
+    windowCount: count(facts.windowCount),
+    windowFound: facts.windowFound === true,
+    cfgFolder: folderClassOf(facts.cfgFolder),
+    chooserFolder: folderClassOf(facts.chooserFolder),
   };
 }
 

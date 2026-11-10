@@ -33,7 +33,13 @@ export const GIT_BASE_ARGS: readonly string[] = ["--no-pager", "--no-optional-lo
 // see `withDiffFamilyNeutralized` below. `core.editor=true` has no reachable local-read path (no
 // subcommand this runner uses launches an editor) but costs nothing and closes the config value
 // for good if one is ever added.
+// #4068 (W7): Git for Windows opens no path of MAX_PATH (260 characters) or more unless
+// core.longpaths is set. `status` and `ls-files` then exit 0 with a warning and simply leave such a
+// file out, so a dirty worktree reads as clean. The setting only lets Git use the long-path APIs.
+const PLATFORM_GIT_CONFIG_ARGS: readonly string[] =
+  process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
 const LOCAL_READ_CONFIG_ARGS: readonly string[] = [
+  ...PLATFORM_GIT_CONFIG_ARGS,
   "-c",
   "core.fsmonitor=false",
   "-c",
@@ -45,6 +51,7 @@ const LOCAL_READ_CONFIG_ARGS: readonly string[] = [
   "status.submoduleSummary=false",
 ];
 const NETWORK_CONFIG_ARGS: readonly string[] = [
+  ...PLATFORM_GIT_CONFIG_ARGS,
   "-c",
   "core.fsmonitor=false",
   "-c",
@@ -533,14 +540,24 @@ function wireGitProcessEvents(
   child.stderr?.on("data", (chunk: Buffer) => {
     captureChunk(state, child, state.stderr, chunk, maxBytes);
   });
-  child.on("error", () => {
+  const settleSpawnError = (): void => {
     settle({
       ...SPAWN_ERROR_RESULT,
       truncated: state.truncated,
       timedOut: state.timedOut,
       aborted: state.aborted,
     });
-  });
+  };
+  child.on("error", settleSpawnError);
+  // #4068: on Windows a refused spawn (a cwd at or above MAX_PATH) destroys both pipes with
+  // `read ENOTCONN` before the child's own `error`. Unheard, a pipe error is an uncaught exception
+  // that terminates the server, so a pipe failure ends the run as a spawn failure instead.
+  const onStreamError = (): void => {
+    terminateWithEscalation(state, child);
+    settleSpawnError();
+  };
+  child.stdout?.on("error", onStreamError);
+  child.stderr?.on("error", onStreamError);
   child.on("close", (exitCode, signal) => {
     settle(runResult(state, exitCode, signal));
   });

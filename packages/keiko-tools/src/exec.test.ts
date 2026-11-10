@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 import {
   createWindowsTerminationCapacity,
   createWindowsTaskkillBudget,
@@ -1077,10 +1078,10 @@ describe("runCommand — allowlist guard (before spawn)", () => {
     expect(spawn.calls()).toHaveLength(0);
   });
 
-  it("rejects a workspace PATH symlink to an outside executable without spawning", async () => {
+  it("rejects a workspace PATH symlink to an outside executable without spawning", async (context) => {
     const bin = join(root, "bin");
     mkdirSync(bin, { recursive: true });
-    symlinkSync(process.execPath, join(bin, "node"));
+    plantSymlinkOrSkip(context, process.execPath, join(bin, "node"), "file");
     const spawn = recordingSpawn();
     await expect(
       runCommand(
@@ -1159,6 +1160,7 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     const held = capacity.reserve(windowsEnv);
     expect(held).toBeDefined();
 
+    // The command waits for a slot, unspawned and without HOME, and is refused once the bound ends.
     await expect(
       runCommand(
         {
@@ -1173,6 +1175,27 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
           home: home.provider,
           platform: "win32",
           windowsTerminationCapacity: capacity,
+          windowsSlotWaitMs: 5,
+        },
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toEqual([]);
+    expect(home.made()).toEqual([]);
+    // A capacity that cannot queue keeps the immediate pre-spawn decision.
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn, windowsEnv),
+          home: home.provider,
+          platform: "win32",
+          windowsTerminationCapacity: { reserve: capacity.reserve },
         },
       ),
     ).rejects.toBeInstanceOf(CommandDeniedError);
@@ -1197,6 +1220,128 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     );
     spawn.child.emit("close", 0, null);
     await expect(admitted).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it("starts a waiting Windows command only after a slot is released", async () => {
+    const spawn = recordingSpawn();
+    const home = recordingHome();
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const windowsEnv: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH ?? "",
+      SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows`,
+    };
+    const held = capacity.reserve(windowsEnv);
+    const waiting = runCommand(
+      {
+        command: "node",
+        args: ["-e", "ok"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      {
+        ...fakeDeps(spawn.fn, windowsEnv),
+        home: home.provider,
+        platform: "win32",
+        windowsTerminationCapacity: capacity,
+        windowsSlotWaitMs: 60_000,
+      },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn.calls()).toEqual([]);
+    expect(home.made()).toEqual([]);
+
+    held?.release();
+    await vi.waitFor(() => {
+      expect(spawn.calls()).toHaveLength(1);
+    });
+    spawn.child.emit("close", 0, null);
+    await expect(waiting).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it("admits waiters in arrival order and never lets reserve overtake them", async () => {
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };
+    const held = capacity.reserve(env);
+    const order: string[] = [];
+    const first = capacity.acquire?.(env, controller().signal, 60_000).then((r) => {
+      order.push("first");
+      return r;
+    });
+    const second = capacity.acquire?.(env, controller().signal, 60_000).then((r) => {
+      order.push("second");
+      return r;
+    });
+
+    held?.release();
+    expect(capacity.reserve(env)).toBeUndefined();
+    const admitted = await first;
+    expect(admitted).toBeDefined();
+    expect(order).toEqual(["first"]);
+
+    admitted?.release();
+    expect(await second).toBeDefined();
+    expect(order).toEqual(["first", "second"]);
+  });
+
+  it("drops an aborted waiter without admitting it and serves the next one", async () => {
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };
+    const held = capacity.reserve(env);
+    const abort = new AbortController();
+    const cancelled = capacity.acquire?.(env, abort.signal, 60_000);
+    const next = capacity.acquire?.(env, controller().signal, 60_000);
+
+    abort.abort();
+    expect(await cancelled).toBeUndefined();
+    held?.release();
+    expect(await next).toBeDefined();
+  });
+
+  it("denies a waiter whose freed slot the stall budget cannot fund", async () => {
+    const real = createWindowsTaskkillBudget();
+    let funded = true;
+    const budget: typeof real = {
+      ...real,
+      reserve: (slots) => (funded ? real.reserve(slots) : undefined),
+    };
+    const capacity = createWindowsTerminationCapacity(
+      1,
+      () => "succeeded",
+      undefined,
+      undefined,
+      budget,
+    );
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };
+    const held = capacity.reserve(env);
+    const waiting = capacity.acquire?.(env, controller().signal, 60_000);
+
+    funded = false;
+    held?.release();
+    expect(await waiting).toBeUndefined();
+    funded = true;
+    expect(capacity.reserve(env)).toBeDefined();
+  });
+
+  it("rejects the waiter, not the releasing command, when a queued admission throws", async () => {
+    let authoritative = true;
+    const capacity = createWindowsTerminationCapacity(
+      1,
+      () => "succeeded",
+      () => {
+        if (!authoritative) throw new WindowsSystemBinaryMissingError();
+        return { command: String.raw`C:WindowsSystem32	askkill.exe`, args: [] };
+      },
+    );
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:Windows` };
+    const held = capacity.reserve(env);
+    const waiting = capacity.acquire?.(env, controller().signal, 60_000);
+
+    authoritative = false;
+    expect(() => held?.release()).not.toThrow();
+    await expect(waiting).rejects.toBeInstanceOf(WindowsSystemBinaryMissingError);
+    authoritative = true;
+    expect(capacity.reserve(env)).toBeDefined();
   });
 
   it("refuses a Windows spawn when authoritative taskkill is unavailable", async () => {
@@ -1698,6 +1843,56 @@ describe("runCommand — real node integration", () => {
     expect(home.cleaned()).toEqual(home.made());
   });
 
+  // #4068 (W7): on Windows a refused CreateProcess (a cwd at or above MAX_PATH) destroys both pipes
+  // with `read ENOTCONN` before the child's own ENOENT. An unheard pipe error is an uncaught
+  // exception that terminates the server; the child's error must name the failure instead.
+  it("settles a refused spawn on the child's error when its pipes fail first", async () => {
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      { ...fakeDeps(spawn.fn), home: home.provider },
+    );
+    const pipeError = Object.assign(new Error("read ENOTCONN"), { code: "ENOTCONN" });
+    expect(() => spawn.child.stdout.emit("error", pipeError)).not.toThrow();
+    expect(() => spawn.child.stderr.emit("error", pipeError)).not.toThrow();
+    const spawnError = Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" });
+    spawn.child.emit("error", spawnError);
+    await expect(promise).rejects.toBe(spawnError);
+    expect(home.cleaned()).toEqual(home.made());
+  });
+
+  it("terminates a running child whose output pipe fails and settles on close", async () => {
+    const kills = captureKills();
+    const spawn = recordingSpawn();
+    try {
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        fakeDeps(spawn.fn),
+      );
+      spawn.child.emit("spawn");
+      const pipeError = new Error("read ECONNRESET");
+      expect(() => spawn.child.stdout.emit("error", pipeError)).not.toThrow();
+      expectTerminated(kills, spawn.child);
+      spawn.child.emit("close", null, "SIGTERM");
+      await expect(promise).rejects.toBe(pipeError);
+    } finally {
+      kills.restore();
+    }
+  });
+
   it("retains the child and HOME after a post-spawn error until close confirms exit", async () => {
     vi.useFakeTimers();
     const home = recordingHome();
@@ -2190,6 +2385,107 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     await pending;
     expect(spawn.calls()[0]?.args.slice(-3)).toEqual(["npm", "run", "typecheck"]);
     expect(spawn.calls()[0]?.args).not.toContain("npm-cli.js");
+  });
+
+  // #4068 W8: a Windows host without Yarn refused `yarn run test` for a container backend whose
+  // image ships Yarn, because the host PATH was asked first. The image's PATH supplies the tool.
+  describe("a container step and the host's PATH (#4068 W8)", () => {
+    const hostWithoutYarn: RunCommandDeps["resolveExecutable"] = (command) => {
+      if (command === "yarn")
+        throw new CommandDeniedError("executable not found on PATH: yarn", command);
+      return `/abs/${command}`;
+    };
+
+    // Podman needs no local engine endpoint, so the case stays hermetic on every host; Docker's
+    // endpoint pinning is proven by its own socket test above.
+    it.each(["linux", "win32"] as const)(
+      "runs a tool the host lacks from the container image (%s)",
+      async (platform) => {
+        const backend = "podman";
+        const spawn = recordingSpawn();
+        const deps: RunCommandDeps = {
+          ...fakeDeps(spawn.fn),
+          commandRules: [{ executable: "yarn", allowedSubcommands: ["run"] }],
+          policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+          resolveExecutable: hostWithoutYarn,
+          sandboxAvailability: { ...NO_BACKENDS, podman: true },
+          platform,
+        };
+        const pending = runCommand(
+          {
+            command: "yarn",
+            args: ["run", "test"],
+            cwd: undefined,
+            timeoutMs: undefined,
+            signal: controller().signal,
+          },
+          deps,
+        );
+        spawn.child.emit("close", 0, null);
+        const result = await pending;
+        expect(result.attestation?.backend).toBe(`container-${backend}`);
+        expect(spawn.calls()[0]?.command).toBe(`/abs/${backend}`);
+        expect(spawn.calls()[0]?.args.slice(-3)).toEqual(["yarn", "run", "test"]);
+      },
+    );
+
+    it.each([
+      ["a native isolation backend", { ...NO_BACKENDS, bubblewrap: true }, "none"],
+      ["an inherited-network run", NO_BACKENDS, "inherit"],
+    ] as const)(
+      "still refuses a tool the host lacks for %s, before spawning",
+      async (_, sandboxAvailability, network) => {
+        const spawn = recordingSpawn();
+        const deps: RunCommandDeps = {
+          ...fakeDeps(spawn.fn),
+          commandRules: [{ executable: "yarn", allowedSubcommands: ["run"] }],
+          policy: { ...DEFAULT_SANDBOX_POLICY, network },
+          resolveExecutable: hostWithoutYarn,
+          sandboxAvailability,
+          platform: "linux",
+        };
+        await expect(
+          runCommand(
+            {
+              command: "yarn",
+              args: ["run", "test"],
+              cwd: undefined,
+              timeoutMs: undefined,
+              signal: controller().signal,
+            },
+            deps,
+          ),
+        ).rejects.toThrow("executable not found on PATH: yarn");
+        expect(spawn.calls()).toHaveLength(0);
+      },
+    );
+
+    it("still resolves the container runtime itself on the host", async () => {
+      const spawn = recordingSpawn();
+      const deps: RunCommandDeps = {
+        ...fakeDeps(spawn.fn),
+        commandRules: [{ executable: "yarn", allowedSubcommands: ["run"] }],
+        policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+        resolveExecutable: (command) => {
+          throw new CommandDeniedError(`executable not found on PATH: ${command}`, command);
+        },
+        sandboxAvailability: { ...NO_BACKENDS, podman: true },
+        platform: "linux",
+      };
+      await expect(
+        runCommand(
+          {
+            command: "yarn",
+            args: ["run", "test"],
+            cwd: undefined,
+            timeoutMs: undefined,
+            signal: controller().signal,
+          },
+          deps,
+        ),
+      ).rejects.toThrow("executable not found on PATH: podman");
+      expect(spawn.calls()).toHaveLength(0);
+    });
   });
 
   it("leaves an inherited-network run unwrapped and unattested", async () => {

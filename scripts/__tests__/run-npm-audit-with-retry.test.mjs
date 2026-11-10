@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,6 +13,31 @@ import {
 const result = (status, output) => ({ output, status, stderr: output, stdout: "" });
 
 describe("npm audit retry", () => {
+  it("starts Windows npm without a shell and preserves arguments and advisory exits", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko audit & %PATH% ü "));
+    try {
+      const bin = join(root, "node_modules", "npm", "bin");
+      mkdirSync(bin, { recursive: true });
+      const wrapper = join(root, "npm.cmd");
+      writeFileSync(wrapper, "@exit /b 99\r\n", { mode: 0o755 });
+      writeFileSync(
+        join(bin, "npm-cli.js"),
+        'process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exit(process.argv.includes("--fixture-advisory") ? 1 : 0);\n',
+        { mode: 0o755 },
+      );
+      const dependencies = { resolveNpm: () => wrapper, platform: "win32" };
+      const args = ["--json", "--omit=dev", "literal & %PATH% ü"];
+      const passed = runNpmAudit(args, dependencies);
+      expect(passed.status).toBe(0);
+      expect(JSON.parse(passed.stdout)).toEqual(["audit", ...args]);
+      const refused = runNpmAudit(["--fixture-advisory"], dependencies);
+      expect(refused.status).toBe(1);
+      expect(JSON.parse(refused.stdout)).toEqual(["audit", "--fixture-advisory"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     "npm warn audit 503 Service Unavailable",
     "npm warn audit 503 Service Temporarily Unavailable",
@@ -113,6 +141,7 @@ describe("npm audit retry", () => {
       cwd: "/workspace",
       environment,
       resolveNpm: () => "/trusted/npm",
+      platform: "linux",
       spawn,
     });
 
@@ -136,7 +165,7 @@ describe("npm audit retry", () => {
       .fn()
       .mockReturnValue({ status: null, signal: "SIGKILL", stderr: "", stdout: "" });
 
-    const audit = runNpmAudit([], { resolveNpm: () => "/trusted/npm", spawn });
+    const audit = runNpmAudit([], { resolveNpm: () => "/trusted/npm", platform: "linux", spawn });
 
     expect(audit.status).toBe(1);
     expect(audit.signal).toBe("SIGKILL");

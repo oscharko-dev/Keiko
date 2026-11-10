@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   closeSync,
@@ -178,6 +178,51 @@ interface CandidateRuntimeBindings {
  * (unreadable or malformed manifests, partial tree, attestation errors) emits the redacted
  * discovery diagnostic (audit finding F-12c).
  */
+export function releasedWindowsGatewayHelperPin(runtime: {
+  readonly target: UpdatePortableTarget;
+  readonly platformAssurance: PortableRuntimeLane;
+  readonly nativeHelperSha256?: string;
+}): string | undefined {
+  return runtime.target === "windows-x64" && runtime.platformAssurance === "release-qualified"
+    ? runtime.nativeHelperSha256
+    : undefined;
+}
+
+/**
+ * Asks the attested helper for the broker state without blocking the event loop; resolves to null
+ * when it did not run to an exit, including a spawn failure or the 2 s timeout (#4068).
+ */
+export function readWindowsGatewayServiceStatus(
+  helperPath: string,
+  helperSha256: string,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    const child = spawn(helperPath, ["--gateway-service-status", helperSha256], {
+      stdio: "ignore",
+      windowsHide: true,
+      shell: false,
+      timeout: 2_000,
+    });
+    child.once("error", () => {
+      resolve(null);
+    });
+    child.once("close", (code: number | null) => {
+      resolve(code);
+    });
+  });
+}
+
+/** The helper `keiko gateway-service` may install: only the bytes a launch would accept (#4068). */
+export function discoverReleasedWindowsGatewayHelper(
+  input: PortableOpenCodeDiscoveryInput,
+): { readonly helperPath: string; readonly helperSha256: string } | undefined {
+  const runtime = discoverQualifiedPortableOpenCode(input);
+  const helperSha256 = runtime === undefined ? undefined : releasedWindowsGatewayHelperPin(runtime);
+  return runtime === undefined || helperSha256 === undefined
+    ? undefined
+    : { helperPath: runtime.nativeHelperPath, helperSha256 };
+}
+
 export function discoverQualifiedPortableOpenCode(
   input: PortableOpenCodeDiscoveryInput,
 ): QualifiedPortableOpenCodeRuntime | undefined {
@@ -773,8 +818,20 @@ function realPortableRoots(
 // ONLY a genuinely missing path is an expected absence. ENOTDIR deliberately does NOT belong here:
 // it means a path component exists but is the wrong kind (e.g. `.portable` is a regular file), which
 // is a malformed installation and must keep reaching the corruption diagnostic (#2843 review).
+// Windows reports that same case as ENOENT, so an ENOENT whose nearest existing ancestor is not a
+// directory is classified as malformed too (#4068).
 function isAbsentPathError(error: unknown): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (!(error instanceof Error)) return false;
+  const { code, path } = error as NodeJS.ErrnoException;
+  return code === "ENOENT" && (path === undefined || !blockedByNonDirectoryAncestor(path));
+}
+
+function blockedByNonDirectoryAncestor(path: string): boolean {
+  for (let current = dirname(path); ; current = dirname(current)) {
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (entry !== undefined) return !entry.isDirectory() && !entry.isSymbolicLink();
+    if (dirname(current) === current) return false;
+  }
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {

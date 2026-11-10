@@ -1695,6 +1695,19 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held", notice: "activity" },
     { interaction: "notice-held", notice: "questions" },
     { interaction: "notice-held", notice: "editor-bridge" },
+    // #4068 W12: a window first showed a live run's identity.
+    {
+      interaction: "run-identity-observed",
+      modelReported: true,
+      agentReported: true,
+      toolProfile: "mapped",
+    },
+    {
+      interaction: "run-identity-observed",
+      modelReported: false,
+      agentReported: false,
+      toolProfile: "unreported",
+    },
     // #4271: what a delivery card showed was a warn/unknown sentence; it is a closed step and state.
     { interaction: "delivery-step-shown", deliveryStep: "delivery-review", deliveryState: "ready" },
     { interaction: "delivery-step-shown", deliveryStep: "stage-review", deliveryState: "loading" },
@@ -1712,6 +1725,10 @@ describe("POST /api/diagnostics/client", () => {
       deliveryState: "unobserved",
     },
     { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "stale" },
+    // #4068: where a mounted Workbench window took its repository from, never the path.
+    { interaction: "repository-resolved", repositorySource: "window" },
+    { interaction: "repository-resolved", repositorySource: "shell" },
+    { interaction: "repository-resolved", repositorySource: "none" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1756,6 +1773,22 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held" },
     { interaction: "notice-held", notice: "Activity not connected." },
     { interaction: "notice-held", notice: "skills", fileCount: 1 },
+    { interaction: "run-identity-observed", modelReported: true, agentReported: true },
+    {
+      interaction: "run-identity-observed",
+      modelReported: "private-model-name",
+      agentReported: true,
+      toolProfile: "mapped",
+    },
+    {
+      interaction: "run-identity-observed",
+      modelReported: true,
+      agentReported: true,
+      toolProfile: "direct",
+    },
+    { interaction: "repository-resolved" },
+    { interaction: "repository-resolved", repositorySource: "/repos/synthetic-repository" },
+    { interaction: "repository-resolved", repositorySource: "window", repositoryPath: "/repos/a" },
     { interaction: "delivery-step-shown" },
     { interaction: "delivery-step-shown", deliveryStep: "journey" },
     { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "ready" },
@@ -3367,6 +3400,90 @@ describe("POST /api/diagnostics/client", () => {
       expect(
         sink.events.some((event) => event.op.startsWith("client.session-repair.recovered")),
       ).toBe(false);
+    });
+
+    // #4068: tabs of one origin share the session cookie, so a refused stream's reports from two
+    // documents could not be told apart. Each line keeps its page load's own reference.
+    it("keeps each document's reference on its stream failure, repair and interaction lines", async () => {
+      const sink = captureServerLog();
+      const documents = ["ui_document-first-0001", "ui_document-second-0002"];
+      for (const [index, documentRef] of documents.entries()) {
+        const streak = `ui_stream-streak-01${String(index)}0`;
+        const reports = [
+          {
+            message: "[keiko] shared-event-source sse stream error",
+            clientTs: CLIENT_TS,
+            correlationId: streak,
+            kind: "sse-error",
+            readyState: 2,
+            documentRef,
+          },
+          {
+            kind: "session-repair",
+            outcome: "repair-acknowledged",
+            stream: "shared-event-source",
+            correlationId: streak,
+            repairCorrelationId: `ui_session-repair-01${String(index)}0`,
+            documentRef,
+          },
+          {
+            message: "[keiko] coding workbench interaction",
+            clientTs: CLIENT_TS,
+            correlationId: streak,
+            codingWorkbenchInteraction: { interaction: "event-stream-reconnecting" },
+            documentRef,
+          },
+        ];
+        for (const report of reports) {
+          expect((await handleClientDiagnosticIngest(context(JSON.stringify(report)))).status).toBe(
+            204,
+          );
+        }
+      }
+
+      const lines = (op: string): string[] =>
+        sink.events.filter((event) => event.op === op).map(formatActivityLogProofLine);
+      expect(
+        lines("client.diagnostic").map(
+          (line) => expectActivityLogProof("client.diagnostic.line", line).documentRef,
+        ),
+      ).toEqual(documents);
+      expect(
+        lines("client.session-repair.acknowledged").map(
+          (line) =>
+            expectActivityLogProof("client.session-repair.acknowledged.line", line).documentRef,
+        ),
+      ).toEqual(documents);
+      expect(
+        lines("client.coding-workbench.interaction").map(
+          (line) =>
+            expectActivityLogProof("client.coding-workbench.interaction.line", line).documentRef,
+        ),
+      ).toEqual(documents);
+    });
+
+    it.each([
+      ["a diagnostic", { message: "x", clientTs: CLIENT_TS, kind: "sse-error" }],
+      [
+        "a repair report",
+        {
+          kind: "session-repair",
+          outcome: "repair-acknowledged",
+          stream: "shared-event-source",
+          correlationId: "ui_stream-streak-0200",
+          repairCorrelationId: "ui_session-repair-0200",
+        },
+      ],
+    ])("refuses %s whose document reference is not an opaque id", async (_label, report) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({ ...report, documentRef: "tab one" });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+      expect(sink.events.filter((event) => event.op === "client.diagnostic.rejected")).toEqual([
+        expect.objectContaining({
+          extra: expect.objectContaining({ rejection: "invalid-shape" }) as unknown,
+        }),
+      ]);
     });
 
     // #3557 review: a repair report the Activity Log cannot link to its repair request is refused

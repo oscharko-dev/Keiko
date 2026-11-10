@@ -3,7 +3,7 @@
 // boundary (resolveWithinWorkspace + WorkspaceFs.exists); no raw node:fs. Candidate test-path
 // derivation uses plain string ops (no regex), so there is no ReDoS surface.
 
-import { basename, dirname, extname, join, posix, relative } from "node:path";
+import { posix, sep } from "node:path";
 import {
   assertContainedRealPath,
   resolveWithinWorkspace,
@@ -94,28 +94,37 @@ function wants(only: PlanOptions["only"], kind: VerificationKind): boolean {
   return only === undefined || only.includes(kind);
 }
 
+// A planned test path is an argument of the verification command, which runs in a Linux container
+// (ADR-0043 D20). Vitest turns a backslash into a separator only when it runs on Windows itself, and
+// Jest reads the argument as a regular expression, so a path built with Windows separators selects no
+// test there. Planned paths therefore always use POSIX separators, whatever the host.
+function toPosix(path: string): string {
+  return sep === "/" ? path : path.split(sep).join("/");
+}
+
 // Derives candidate test paths for a changed source file: a sibling `X.test.ts`/`X.spec.ts`
 // (and .tsx/.js/.jsx variants), and the same basename mirrored under each configured testDir.
-function candidateTestPaths(workspace: WorkspaceInfo, file: string): readonly string[] {
-  const ext = extname(file);
+function candidateTestPaths(workspace: WorkspaceInfo, changedFile: string): readonly string[] {
+  const file = toPosix(changedFile);
+  const ext = posix.extname(file);
   if (ext === "") {
     return [];
   }
-  const dir = dirname(file);
-  const stem = basename(file, ext);
+  const dir = posix.dirname(file);
+  const stem = posix.basename(file, ext);
   const suffixes = [".test", ".spec"];
-  const siblings = suffixes.map((s) => join(dir, `${stem}${s}${ext}`));
+  const siblings = suffixes.map((s) => posix.join(dir, `${stem}${s}${ext}`));
   const sourceSubdir = sourceRelativeDir(workspace, file);
   const mirrored = workspace.testDirs.flatMap((testDir) =>
-    suffixes.map((s) => join(testDir, sourceSubdir, `${stem}${s}${ext}`)),
+    suffixes.map((s) => posix.join(toPosix(testDir), sourceSubdir, `${stem}${s}${ext}`)),
   );
   return [...siblings, ...mirrored];
 }
 
 function sourceRelativeDir(workspace: WorkspaceInfo, file: string): string {
-  const dir = dirname(file);
+  const dir = posix.dirname(file);
   for (const sourceDir of workspace.sourceDirs) {
-    const rel = relative(sourceDir, dir);
+    const rel = posix.relative(toPosix(sourceDir), dir);
     if (rel === "") {
       return "";
     }
@@ -230,7 +239,7 @@ export function planDirectTargetedTests(
   limits: VerificationResourceLimits = DEFAULT_VERIFICATION_LIMITS,
 ): readonly VerificationStep[] {
   const resolved: string[] = [];
-  for (const file of testFiles) {
+  for (const file of testFiles.map(toPosix)) {
     if (existsInWorkspace(workspace, fs, file) && !resolved.includes(file)) {
       resolved.push(file);
     }

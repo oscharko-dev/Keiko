@@ -2651,3 +2651,66 @@ describe("CodingWorkbenchTimeline render cost", () => {
     expect(collate).not.toHaveBeenCalled();
   });
 });
+
+// #4068 W12: a feed message's segments are the transport bound of 4,096 characters, not
+// paragraphs. A long operator prompt pasted from a Windows console (CRLF line endings) used to
+// render as one paragraph per segment, so a gap opened at an arbitrary character — here between
+// the CR and the LF of one line ending.
+describe("CodingWorkbenchTimeline long operator messages", () => {
+  function feedWithLongPrompt(truncated: boolean): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-long",
+          messages: [
+            {
+              messageId: "message-long",
+              role: "user",
+              occurredAt: AT,
+              segments: [
+                { kind: "text", text: `${"a".repeat(4_095)}\r`, truncated: false },
+                { kind: "text", text: "\nnpm ERR! code 1\r\n", truncated },
+              ],
+              truncated,
+            },
+          ],
+          tools: [],
+          truncated,
+        },
+      ],
+    };
+  }
+
+  it("renders every segment of one message as one text block", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithLongPrompt(false))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const message = container.querySelector(`[data-message-role="user"] .${styles.messageText}`);
+    const paragraphs = message?.querySelectorAll("p") ?? [];
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]?.textContent).toBe(`${"a".repeat(4_095)}\r\nnpm ERR! code 1\r\n`);
+    expect(message?.querySelector(`.${styles.truncationMark}`)).toBeNull();
+  });
+
+  it("discloses a cut message once, at the end of its text", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithLongPrompt(true))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const message = container.querySelector(`[data-message-role="user"] .${styles.messageText}`);
+    const marks = message?.querySelectorAll(`.${styles.truncationMark}`) ?? [];
+    expect(marks).toHaveLength(1);
+    expect(message?.querySelector("p")?.lastElementChild).toBe(marks[0]);
+    expect(container).toHaveTextContent("Activity truncated.");
+  });
+});

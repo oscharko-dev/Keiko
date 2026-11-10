@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -183,6 +184,11 @@ describe("secure workspace read compiler environment", () => {
       expect.arrayContaining(["/MT", "/link", "/DEPENDENTLOADFLAG:0x800"]),
     );
     expect(invocation.args).toContain("ntdll.lib");
+    // The npm runtime lane compiles this helper's digest into the server (#4068): identical sources
+    // must yield identical bytes, so both the compiler and the linker drop their timestamps.
+    const linkIndex = invocation.args.indexOf("/link");
+    expect(invocation.args.slice(0, linkIndex)).toContain("/Brepro");
+    expect(invocation.args.slice(linkIndex)).toContain("/Brepro");
     expect(invocation.options).toEqual({
       env: {
         PATH: "C:\\MSVC\\bin",
@@ -192,6 +198,29 @@ describe("secure workspace read compiler environment", () => {
       },
       stdio: "inherit",
     });
+  });
+
+  it("writes Windows object files to a private directory it removes afterwards (#4068)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "keiko-secure-read-build-"));
+    temporaryDirectories.push(root);
+    let objectDirectory;
+
+    const status = await runSecureWorkspaceReadBuild({
+      argv: ["node", "build-secure-workspace-read.mjs", "windows-x64", join(root, "read.exe")],
+      environment: { PATH: "C:\\MSVC\\bin", INCLUDE: "C:\\MSVC\\include", LIB: "C:\\MSVC\\lib" },
+      spawnSyncImpl: (_command, args) => {
+        const objectFlag = args.find((arg) => arg.startsWith("/Fo:"));
+        objectDirectory = objectFlag?.slice("/Fo:".length, -1);
+        expect(objectFlag?.endsWith("\\")).toBe(true);
+        expect(existsSync(objectDirectory)).toBe(true);
+        return { status: 0 };
+      },
+      resolveCompilerImpl: (_envPath, tool) => `C:\\MSVC\\bin\\${tool}`,
+    });
+
+    expect(status).toBe(0);
+    expect(dirname(objectDirectory)).not.toBe(root);
+    expect(existsSync(objectDirectory)).toBe(false);
   });
 
   it("builds the Linux helper with a hardened C11 compiler invocation", async () => {

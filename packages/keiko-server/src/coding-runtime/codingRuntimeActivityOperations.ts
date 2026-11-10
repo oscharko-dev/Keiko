@@ -246,7 +246,7 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["bubblewrap", "unshare", "seatbelt"],
+      values: ["bubblewrap", "unshare", "seatbelt", "windows-wfp"],
     },
     policyDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     authorityDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -268,7 +268,12 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["namespace-inherited", "runtime-and-attested-git-only", "toolchain-inherited"],
+      values: [
+        "namespace-inherited",
+        "runtime-and-attested-git-only",
+        "toolchain-inherited",
+        "appcontainer-inherited",
+      ],
     },
     egressDisposition: {
       type: "string",
@@ -312,12 +317,50 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       required: false,
       values: ["read-write"],
     },
+    // #4068: the directories granted to a confined Windows tree's own SID (runtime, private
+    // state), and whether a managed worktree was readable through its capability. Counts only.
+    windowsTreeGrantCount: { type: "integer", dataClass: "count", required: false },
+    windowsWorktreeAccess: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["capability-read", "none"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["runtime-confinement"],
   proofIds: ["runtime.confinement.spawned.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// #4068 B1 crash rule: a confined Windows launch that found no other live run removed the tree
+// entries crashed supervisors left on its granted directories. Counts only; recorded when the
+// sweep removed or failed to remove something (ADR-0043 D18).
+export const RUNTIME_CONFINEMENT_STALE_GRANTS_SWEPT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "runtime.confinement.stale-grants-swept",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.shared.runtimeConfinementStaleGrantsSwept",
+  fields: {
+    backend: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["windows-wfp"],
+    },
+    removedEntryCount: { type: "integer", dataClass: "count", required: true },
+    failedCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  diagnosticWhen: [{ field: "failedCount", positive: true }],
+  failureClasses: ["runtime-confinement"],
+  proofIds: ["runtime.confinement.stale-grants-swept.emitted-line"],
   releaseImpact: "patch",
 });
 

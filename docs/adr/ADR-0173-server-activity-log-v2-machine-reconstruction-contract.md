@@ -515,7 +515,11 @@ rule of `check:error-observability`: it scans every production file on every run
 paths that predate the full-tree rule sit in a committed register that may only shrink
 (`docs/observability/legacy-failure-path-register.json`); nothing adds to it. The exemption validator also
 requires the record's owner to be the operation's owning package and its expiry to lie at most 180
-days ahead, so no record is unowned or permanent.
+days ahead, so no record is unowned or permanent. The gate starts npm without a shell. On Windows,
+the host-executable owner resolves the installed `npm-cli.js` beside the selected npm launcher and
+runs it with the current Node executable; workspace-local or redirected CLI targets outside that
+npm installation are refused. All constituent scripts and their exit-status requirements remain
+identical across hosts.
 
 **Every production process has a writer, and a missing one is visible (#3532).** The registry is
 authoritative only when every production emitter reaches the sink that enforces it. The
@@ -1583,6 +1587,12 @@ client failure incident; their owning lifecycle evidence remains.
     repair request itself (the local-session ensure) mints its id before it is sent, so
     a failure that never reached the server is still recorded under that id with its closed
     class, which a message report may now carry as `errorKind`.
+    Tabs and windows of one origin share the session cookie, so their streaks are otherwise
+    indistinguishable (#4068). Every report therefore carries `documentRef`, a random id the page
+    mints once per load, under the correlation rule. `client.diagnostic`,
+    `client.coding-workbench.interaction` and the three `client.session-repair.*` lines keep it.
+    It names no person, tab, title or URL, and a support export reduces it to an artifact-local
+    reference like every other opaque id. A malformed one refuses the report as malformed.
     Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
     budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
     sliding window), so it can never starve a failure report. Every drop is still counted as loss.

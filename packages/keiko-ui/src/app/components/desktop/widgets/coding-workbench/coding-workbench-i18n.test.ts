@@ -11,6 +11,27 @@ import {
 
 describe("Coding Workbench translations", () => {
   it.each([
+    ["codingWorkbench.gatewayService.absent", "keiko gateway-service install"],
+    ["codingWorkbench.gatewayService.stopped", "keiko gateway-service repair"],
+    ["codingWorkbench.gatewayService.stale", "keiko gateway-service repair"],
+    ["codingWorkbench.gatewayService.unknown", "keiko gateway-service status"],
+  ] as const)("%s names the command in both languages", (key, command) => {
+    expect(translateCodingWorkbench("en", key)).toContain(command);
+    expect(translateCodingWorkbench("de", key)).toContain(command);
+  });
+
+  // No command repairs this, so none may be suggested: `keiko gateway-service install` refuses a
+  // runtime that is not release-qualified.
+  it("says an unqualified Windows runtime cannot start coding runs, offering no command", () => {
+    const key = "codingWorkbench.gatewayService.unqualified";
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).toContain("cannot start coding runs");
+    expect(de).toContain("keine Coding-Läufe starten");
+    for (const text of [en, de]) expect(text).not.toContain("keiko gateway-service");
+  });
+
+  it.each([
     "codingWorkbench.setup.runtimeUnavailable",
     "codingWorkbench.alert.runtimeUnqualified",
   ] as const)("explains the Windows npm runtime limitation in %s", (key) => {
@@ -150,6 +171,8 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.composer.commands.review.description",
     "codingWorkbench.composer.blocked.commandsLoading",
     "codingWorkbench.event.failure.invalid-intent",
+    "codingWorkbench.event.failure.workspace-unqualified",
+    "codingWorkbench.repository.folderModeUnsupported",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
     const de = translateCodingWorkbench("de", key, { name: "n", count: 1, position: 1, total: 1 });
@@ -159,6 +182,35 @@ describe("Coding Workbench translations", () => {
     if (key !== "codingWorkbench.composer.commands.active") expect(de).not.toBe(en);
     expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
     expect(de).not.toMatch(/\{\w+\}/u);
+  });
+
+  // Starting the same task again can never help here, so the sentence must not say so.
+  it("tells the operator to select another repository when it holds the runtime", () => {
+    const key = "codingWorkbench.event.failure.workspace-unqualified";
+    expect(translateCodingWorkbench("en", key)).toContain("Select another repository");
+    expect(translateCodingWorkbench("de", key)).toContain("Wähle ein anderes Repository");
+  });
+
+  // #4068: a start the Windows broker cannot confine must name what to change, never "try again".
+  it("names the work location or the state drive when Windows refuses a start", () => {
+    for (const locale of ["en", "de"] as const) {
+      const location = translateCodingWorkbench(
+        locale,
+        "codingWorkbench.alert.startRefusedWorkspaceLocation",
+        { code: "C" },
+      );
+      expect(location).toContain(
+        translateCodingWorkbench(locale, "codingWorkbench.repository.locationWorktree"),
+      );
+      expect(location).toContain("(C)");
+      const volume = translateCodingWorkbench(
+        locale,
+        "codingWorkbench.alert.startRefusedWorkspaceVolume",
+        { code: "C" },
+      );
+      expect(volume).toContain("KEIKO_STATE_DIR");
+      expect(volume).toContain("(C)");
+    }
   });
 
   it("keeps the placeholders the command menu fills in both languages", () => {

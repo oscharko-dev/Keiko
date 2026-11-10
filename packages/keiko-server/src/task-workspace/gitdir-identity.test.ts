@@ -9,10 +9,17 @@
 // These pins take the filesystem out of the verdict. They drive the real production entry point,
 // `inspectManagedGitdirIdentity`, through an injected port whose stat values are written by hand,
 // so "the inode was reused" is an input rather than something the test hopes for.
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
@@ -23,7 +30,11 @@ import type {
   WorkspaceHardLinkPolicy,
   WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  forwardWorkspaceFs,
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   classifyWorkspaceReconciliation,
@@ -32,12 +43,39 @@ import {
 import {
   inspectManagedGitdirIdentity,
   inspectManagedGitdirIdentityOutcome,
+  liveManagedIdentityDrift,
   managedIdentityDriftFor,
   managedIdentityDriftMarker,
   managedIdentityDriftMessage,
+  parseGitdirPointerTarget,
   type ManagedGitdirIdentityInspection,
   type ManagedIdentityDrift,
 } from "./gitdir-identity.js";
+
+// #4068 W7: a planted pointer must not make Keiko reach an SMB host or a device. On Windows a
+// pointer that names anything but a local drive path is no pointer at all.
+describe.runIf(process.platform === "win32")("Windows gitdir pointers", () => {
+  it("refuses UNC, device and stream pointers and keeps local and relative ones", () => {
+    for (const target of [
+      String.raw`\\server\share\repo\.git\worktrees\task`,
+      String.raw`\\?\C:\repo\.git\worktrees\task`,
+      String.raw`\\.\pipe\keiko`,
+      String.raw`C:\repo\.git\worktrees\task:stream`,
+      String.raw`C:\repo\.git\worktrees\CON`,
+    ]) {
+      expect(parseGitdirPointerTarget(`gitdir: ${target}\n`), target).toBeUndefined();
+    }
+    expect(parseGitdirPointerTarget(String.raw`gitdir: C:\repo\.git\worktrees\task` + "\n")).toBe(
+      String.raw`C:\repo\.git\worktrees\task`,
+    );
+    expect(
+      parseGitdirPointerTarget("gitdir: ../repo/.git/worktrees/task\n", String.raw`C:\work\task`),
+    ).toBe(String.raw`C:\work\repo\.git\worktrees\task`);
+    expect(
+      parseGitdirPointerTarget(String.raw`gitdir: ..\..\..\server\share` + "\n", String.raw`\\h`),
+    ).toBeUndefined();
+  });
+});
 
 // Keys are built with the same `node:path` API the production code uses. Spelling them as POSIX
 // literals would make the fixture Unix-only: on Windows `join(WORKTREE_ROOT, ".git")` yields a
@@ -1083,6 +1121,157 @@ describe("real Git linked worktrees, absolute and relative pointers", () => {
       expect(inspectManagedGitdirIdentityOutcome(relativePaths, repository).kind).toBe(
         "identified",
       );
+    },
+  );
+});
+
+// #4068 W7: a managed linked worktree that leaves its registered path, by `git worktree move` or by
+// a folder rename that `git worktree repair` later reconciles. The registration is bound to the
+// path it was proven at, so the stale path must refuse, and the proof at the new path must never
+// open anything through the old one, even while Git's own backpointer still names it.
+describe("real Git linked worktree moves", () => {
+  let scratch: string | undefined;
+
+  afterEach(() => {
+    if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
+    scratch = undefined;
+  });
+
+  function git(cwd: string, args: readonly string[]): void {
+    execFileSync("git", ["-c", "worktree.useRelativePaths=false", ...args], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+
+  function linkedWorktree(): { readonly repository: string; readonly worktree: string } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gitdir-move-")));
+    scratch = root;
+    const repository = join(root, "repo");
+    execFileSync("git", ["init", "-q", "-b", "main", repository], { encoding: "utf8" });
+    git(repository, ["config", "user.email", "test@keiko.example"]);
+    git(repository, ["config", "user.name", "Keiko Test"]);
+    git(repository, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(repository, "README.md"), "# demo\n");
+    git(repository, ["add", "README.md"]);
+    git(repository, ["commit", "-q", "-m", "initial"]);
+    // Spaces and non-ASCII letters in every worktree spelling: Git for Windows writes both pointers
+    // as forward-slash drive paths, and the proof must still recognise them as the same directory.
+    const worktree = join(root, "linked wt ä");
+    git(repository, ["worktree", "add", "-q", "-b", "keiko/moved", worktree]);
+    return { repository, worktree: realpathSync(worktree) };
+  }
+
+  // Every path the proof touches, so a test can show the old location was never consulted.
+  function recordingFs(touched: string[]): WorkspaceFs {
+    const base = forwardWorkspaceFs(nodeWorkspaceFs);
+    const contained = base.readFileUtf8WithinRootSameDescriptor;
+    return {
+      ...base,
+      stat: (path): WorkspaceStat => {
+        touched.push(path);
+        return base.stat(path);
+      },
+      realPath: (path): string => {
+        touched.push(path);
+        return base.realPath(path);
+      },
+      exists: (path): boolean => {
+        touched.push(path);
+        return base.exists(path);
+      },
+      ...(contained === undefined
+        ? {}
+        : {
+            readFileUtf8WithinRootSameDescriptor: (
+              root,
+              path,
+              maxBytes,
+              hardLinks,
+              completeness,
+            ): WorkspaceDescriptorUtf8Read => {
+              touched.push(root, path);
+              return contained(root, path, maxBytes, hardLinks, completeness);
+            },
+          }),
+    };
+  }
+
+  function touchedBelow(touched: readonly string[], directory: string): boolean {
+    const prefix = `${normalize(directory).toLowerCase()}${sep}`;
+    return touched.some((path) => `${normalize(path).toLowerCase()}${sep}`.startsWith(prefix));
+  }
+
+  function identified(worktree: string, repository: string): ManagedGitdirIdentityInspection {
+    const outcome = inspectManagedGitdirIdentityOutcome(worktree, repository);
+    if (outcome.kind !== "identified") throw new Error(`expected an identity, got ${outcome.kind}`);
+    return outcome.inspection;
+  }
+
+  it("refuses the registered path after `git worktree move` and proves the new one", () => {
+    const { repository, worktree } = linkedWorktree();
+    const registered = identified(worktree, repository).identity;
+    const moved = join(dirname(worktree), "moved wt ö");
+
+    git(repository, ["worktree", "move", worktree, moved]);
+
+    expect(liveManagedIdentityDrift(worktree, repository, registered)).toBe("unproven");
+    const touched: string[] = [];
+    const outcome = inspectManagedGitdirIdentityOutcome(moved, repository, recordingFs(touched));
+    expect(outcome.kind).toBe("identified");
+    expect(touched.length).toBeGreaterThan(0);
+    expect(touchedBelow(touched, worktree)).toBe(false);
+  });
+
+  it("refuses a renamed worktree until `git worktree repair` makes the pointers reciprocal", () => {
+    const { repository, worktree } = linkedWorktree();
+    const registered = identified(worktree, repository).identity;
+    const renamed = join(dirname(worktree), "renamed wt ü");
+
+    renameSync(worktree, renamed);
+
+    // Git's backpointer still names the old path. Reciprocity fails at the new path, and the stale
+    // path no longer exists, so neither location proves the registration.
+    expect(liveManagedIdentityDrift(worktree, repository, registered)).toBe("unproven");
+    const touched: string[] = [];
+    expect(
+      inspectManagedGitdirIdentityOutcome(renamed, repository, recordingFs(touched)).kind,
+    ).toBe("unproven");
+    expect(touchedBelow(touched, worktree)).toBe(false);
+
+    git(renamed, ["worktree", "repair"]);
+
+    expect(liveManagedIdentityDrift(worktree, repository, registered)).toBe("unproven");
+    expect(inspectManagedGitdirIdentityOutcome(renamed, repository).kind).toBe("identified");
+  });
+
+  it("refuses a new worktree Git adds at the vacated path", () => {
+    const { repository, worktree } = linkedWorktree();
+    const registered = identified(worktree, repository).identity;
+
+    git(repository, ["worktree", "move", worktree, join(dirname(worktree), "moved wt ö")]);
+    git(repository, ["worktree", "add", "-q", "-b", "keiko/replacement", worktree]);
+
+    // A real, reciprocal worktree now answers at the registered path, but it is a different admin
+    // directory and different objects: the registration must read as changed, never as matching.
+    expect(liveManagedIdentityDrift(worktree, repository, registered)).toBe("changed");
+  });
+
+  // NTFS keeps a renamed directory's file ID and creation time, and Git for Windows rewrites the
+  // admin backpointer in place. The moved worktree therefore proves the same identity it was
+  // registered with; it is the registered PATH that refuses (#4068 W7, 2026-11-09).
+  it.runIf(process.platform === "win32")(
+    "keeps a moved worktree's identity on NTFS while the registered path refuses",
+    () => {
+      const { repository, worktree } = linkedWorktree();
+      const registered = identified(worktree, repository).identity;
+      const moved = join(dirname(worktree), "moved wt ö");
+
+      git(repository, ["worktree", "move", worktree, moved]);
+
+      expect(identified(moved, repository).identity).toBe(registered);
+      expect(liveManagedIdentityDrift(worktree, repository, registered)).toBe("unproven");
     },
   );
 });

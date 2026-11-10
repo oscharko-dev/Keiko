@@ -131,25 +131,58 @@ function selectedHost(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Pla
   return contextHost(directory, currentContext(directory, root), root, platform);
 }
 
-/** Canonical local Unix sockets or local Windows named pipes; never a remote engine. */
+const WINDOWS_LOCAL_PIPE = /^npipe:\/\/\/\/\.\/pipe\/([a-zA-Z0-9][a-zA-Z0-9_.-]{0,255})$/u;
+
+/**
+ * Whether a local named pipe is being served. A stopped Docker Desktop leaves its context naming a
+ * pipe nobody serves; an existing pipe stats or reports EBUSY, a missing one ENOENT (#4068).
+ */
+function localNamedPipePresent(name: string): boolean {
+  try {
+    statSync(`\\\\.\\pipe\\${name}`);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EBUSY") return true;
+    if (code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function windowsPipeEndpoint(
+  host: string,
+  pipePresent: (name: string) => boolean,
+): LocalDockerEndpoint {
+  const pipe = WINDOWS_LOCAL_PIPE.exec(host)?.[1];
+  if (pipe === undefined) return { kind: "unavailable", reason: "docker-context-unsupported" };
+  if (!pipePresent(pipe)) throw new TypeError("docker-context-invalid");
+  return { kind: "available", host };
+}
+
+function unixSocketEndpoint(host: string, workspaceRoot: string): LocalDockerEndpoint {
+  if (!host.startsWith("unix:///") || host.length > 4096 || host.includes("\0")) {
+    return { kind: "unavailable", reason: "docker-context-unsupported" };
+  }
+  const socket = outsideWorkspace(host.slice("unix://".length), workspaceRoot);
+  if (!statSync(socket).isSocket()) throw new TypeError("docker-context-invalid");
+  return { kind: "available", host: `unix://${socket}` };
+}
+
+/**
+ * Canonical local Unix sockets or local Windows named pipes; never a remote engine. Like a missing
+ * Unix socket, a named pipe that no engine serves is unavailable, never an enforced backend.
+ */
 export function resolveLocalDockerEndpoint(
   env: NodeJS.ProcessEnv,
   workspaceRoot: string,
   platform: NodeJS.Platform = process.platform,
+  pipePresent: (name: string) => boolean = localNamedPipePresent,
 ): LocalDockerEndpoint {
   try {
     const host = selectedHost(env, workspaceRoot, platform);
-    if (platform === "win32") {
-      return /^npipe:\/\/\/\/\.\/pipe\/[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/u.test(host)
-        ? { kind: "available", host }
-        : { kind: "unavailable", reason: "docker-context-unsupported" };
-    }
-    if (!host.startsWith("unix:///") || host.length > 4096 || host.includes("\0")) {
-      return { kind: "unavailable", reason: "docker-context-unsupported" };
-    }
-    const socket = outsideWorkspace(host.slice("unix://".length), workspaceRoot);
-    if (!statSync(socket).isSocket()) throw new TypeError("docker-context-invalid");
-    return { kind: "available", host: `unix://${socket}` };
+    return platform === "win32"
+      ? windowsPipeEndpoint(host, pipePresent)
+      : unixSocketEndpoint(host, workspaceRoot);
   } catch {
     throw new LocalDockerEndpointUnavailableError();
   }

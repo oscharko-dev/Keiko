@@ -9,6 +9,7 @@ import {
   type ClientCodingWorkbenchAgentKind,
   type ClientCodingWorkbenchDetailSection,
   type ClientCodingWorkbenchDiffSurface,
+  type ClientCodingWorkbenchRepositorySource,
   type ClientDiagnosticCodingWorkbenchInteraction,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { reportClientDiagnostic } from "./client-diagnostics";
@@ -47,6 +48,16 @@ export function reportCodingWorkbenchSummaryActivated(
 /** A built-in agent by name; a custom primary agent only as `custom`, never by its name. */
 export function codingWorkbenchAgentKind(agent: string): ClientCodingWorkbenchAgentKind {
   return agent === "build" || agent === "plan" ? agent : "custom";
+}
+
+/**
+ * A mounted Workbench window settled where its repository came from (#4068): its own saved
+ * selection, the folder the shell held, or none. The closed source only, never the path.
+ */
+export function reportCodingWorkbenchRepositoryResolved(
+  repositorySource: ClientCodingWorkbenchRepositorySource,
+): void {
+  reportCodingWorkbenchInteraction({ interaction: "repository-resolved", repositorySource });
 }
 
 /** The size of a diff that switched to the windowed view: counts only, never a path or text. */

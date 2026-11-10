@@ -2,7 +2,9 @@ import { resetServerLogger } from "../../../../../tests/support/activity-log-tes
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
+import { PassThrough } from "node:stream";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -873,5 +875,32 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
       formatActivityLogProofLine(terminated ?? {}),
     );
     expect(proven).toMatchObject({ signal: "SIGTERM" });
+  });
+});
+
+// #4068 (W7): on Windows a refused CreateProcess (a workspace cwd at or above MAX_PATH) destroys
+// the child's stdio pipes with `read ENOTCONN` before the child's own ENOENT. An unheard pipe error
+// is an uncaught exception that terminates the server; the child's error already records the
+// spawn failure, so the pipes must not throw.
+describe("defaultLspSpawnFn — stdio pipe failures (#4068)", () => {
+  it.each(["stdout", "stderr"] as const)("hears a %s pipe error", (stream) => {
+    const fake = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      pid: undefined,
+      exitCode: null,
+      signalCode: null,
+      kill: (): boolean => true,
+    });
+    const spawnLsp = createDefaultLspSpawnFn(
+      () => fake as unknown as ChildProcessWithoutNullStreams,
+      createEphemeralHome,
+    );
+    const handle = spawnLsp(process.execPath, [], { PATH: "" }, tmpdir());
+    handle.onError(() => undefined);
+    const pipeError = Object.assign(new Error("read ENOTCONN"), { code: "ENOTCONN" });
+    expect(() => fake[stream].emit("error", pipeError)).not.toThrow();
+    fake.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
   });
 });

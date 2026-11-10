@@ -1491,6 +1491,20 @@ jobs:
         # Git prints forward slashes on Windows. Exercise the production binding and restore
         # paths against real Git so a Linux-only test run cannot hide a broken Windows checkout.
         run: node node_modules/vitest/vitest.mjs run packages/keiko-server/src/task-workspace/local-checkout.test.ts
+      - name: Verify Windows path and watch pins
+        if: runner.os == 'Windows'
+        # Each of these pins proves a Windows-only form (letter case, host separators, a watched
+        # root that moves). On Linux and macOS the same code takes a branch where the pin is
+        # trivially true, so only this lane can see the regression (#4068). Cases that create a
+        # link are left out: they have not yet been qualified on Windows with link privilege.
+        run: >-
+          node node_modules/vitest/vitest.mjs run
+          packages/keiko-verification/src/plan.test.ts
+          packages/keiko-server/src/store/paths.test.ts
+          packages/keiko-git/src/resolve.test.ts
+          packages/keiko-memory-vault/src/paths.test.ts
+          packages/keiko-server/src/editor/watch/workspaceWatchService.test.ts
+          --testNamePattern '^(?!.*link)'
       - name: Smoke the Windows command spawn wrapper
         if: runner.os == 'Windows'
         # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so

@@ -627,10 +627,18 @@ it.each([false, true])(
     const f = fixture(false, undefined, true, true);
     if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
     vi.mocked(f.deps.jiraChatCatalog.get).mockRestore();
+    // A wall-clock deadline raced the read-grant probe on a loaded runner: the turn could end and
+    // release its grant before the probe looked. The controlled deadline expires only once the
+    // second round is waiting, as in the draft deadline tests below.
+    const deadline = controlledTurnDeadline(1_500);
     Object.assign(f.deps, {
       chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 },
     });
-    stallAfterFirstRound(f);
+    let enteredStall!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      enteredStall = resolve;
+    });
+    stallAfterFirstRound(f, enteredStall);
     const response = mockResponse({ captureBody: true });
     const ctx = {
       ...sendContext(f, `deadline-${String(stream)}`),
@@ -641,6 +649,8 @@ it.each([false, true])(
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
     await awaitReadGrantedForWrite(f);
+    await stalled;
+    deadline.expire();
     const result = await pending;
     expect(f.requests()).toBe(1);
     const [user, assistant] = f.deps.store.listMessages(f.chatId);

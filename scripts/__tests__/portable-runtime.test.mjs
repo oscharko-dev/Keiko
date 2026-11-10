@@ -4734,6 +4734,28 @@ describe("reviewed staging entry", () => {
 });
 
 describe("fixed runtime npm archive extraction", () => {
+  // #4068: Git for Windows puts GNU tar first on PATH, and GNU tar reads `C:\…\package.tgz` as the
+  // remote host `C`. The Windows runtime candidate is verified on a Windows host, so its own tarball
+  // path must reach tar as a local file on every host.
+  it("reads an archive named by an absolute host path", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-fixed-pack-test-"));
+    try {
+      const source = join(root, "source");
+      mkdirSync(join(source, "package/runtime"), { recursive: true });
+      writeFileSync(join(source, "package/runtime/program"), "fixed program");
+      const packed = spawnSync("tar", ["-czf", "package.tgz", "-C", "source", "package"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(packed.status).toBe(0);
+      const output = join(root, "extracted");
+      extractPackedRuntimePackage(join(root, "package.tgz"), output);
+      expect(readFileSync(join(output, "runtime/program"), "utf8")).toBe("fixed program");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform === "win32")(
     "retains ordinary nested bytes and executable permissions",
     () => {

@@ -347,6 +347,13 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
     private readonly log: ServerLogSink,
   ) {}
 
+  /** Releases the ledger file; the next reservation reopens the same ledger with its charges. */
+  close(): void {
+    const store = this.store;
+    this.store = undefined;
+    store?.close();
+  }
+
   private ledger(correlationId: string): ModelSpendStore {
     if (!Number.isSafeInteger(this.ceiling) || this.ceiling < 0)
       reject(this.log, correlationId, "spend-budget-invalid");
@@ -423,6 +430,15 @@ export function createGatewaySpendBudget(
   if (raw === undefined) return undefined;
   const ceiling = raw.trim() === "" ? Number.NaN : Number(raw) * NANO_USD;
   return new PersistentGatewaySpendBudget(ceiling, env[QUALIFICATION_SPEND_LEDGER_PATH_ENV], log);
+}
+
+/**
+ * Closes a ledger this server opened (#4068). A disposed dependency graph calls it, so the SQLite
+ * file no longer keeps its state directory from being removed on Windows. A reservation still in
+ * flight then fails its settlement closed as `spend-ledger-unavailable` and keeps its charge.
+ */
+export function closeGatewaySpendBudget(budget: GatewaySpendBudget | undefined): void {
+  if (budget instanceof PersistentGatewaySpendBudget) budget.close();
 }
 
 const budgetsByEnvironment = new WeakMap<object, GatewaySpendBudget | undefined>();

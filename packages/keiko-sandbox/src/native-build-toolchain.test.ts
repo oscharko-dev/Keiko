@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  nativeBuildCacheReadRoots,
   nativeBuildCertificateFiles,
   nativeBuildInheritedEnvNames,
   nativeBuildToolReadRoots,
@@ -62,8 +63,25 @@ describe("native build-tool environment and roots (#4271)", () => {
     rmSync(dists, { recursive: true });
     const outside = join(home, "Documents");
     mkdirSync(outside, { recursive: true });
-    symlinkSync(outside, dists);
+    // A junction needs no privilege on Windows; other platforms ignore the type.
+    symlinkSync(outside, dists, "junction");
     expect(nativeBuildWrapperReadRoots(home)).toEqual([]);
+  });
+
+  // #4068: on Windows `relative` answers `..\x`, which the containment test read as inside, and the
+  // depth test counted `/` segments, so a real `~/.m2/repository` was never admitted there.
+  it("admits the Maven repository cache below ~/.m2, and no link that leaves it", () => {
+    const root = tree();
+    const home = join(root, "home");
+    expect(nativeBuildCacheReadRoots(home)).toEqual([]);
+    const repository = join(home, ".m2", "repository");
+    mkdirSync(join(repository, "org", "example"), { recursive: true });
+    expect(nativeBuildCacheReadRoots(home)).toEqual([repository]);
+    rmSync(repository, { recursive: true });
+    const outside = join(root, "elsewhere", "shared", "cache");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, repository, "junction");
+    expect(nativeBuildCacheReadRoots(home)).toEqual([]);
   });
 
   it("admits the directory of an explicit certificate bundle", () => {

@@ -11,7 +11,17 @@ import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadP
 // pins that source digest to native/secure-workspace-read, so a helper source change forces a rebuild
 // and a new pin instead of silently shipping a stale helper.
 
-export type NpmLaneOpenCodeTarget = "macos-arm64" | "macos-x64";
+export type NpmLaneOpenCodeTarget = "macos-arm64" | "macos-x64" | "windows-x64";
+
+/**
+ * The Job Object supervisor a Windows package carries (#4068). Windows runs are launched through it
+ * and confined by the installed D18 broker, which is pinned to this digest (ADR-0043 D19).
+ */
+export interface NpmLaneRuntimeSupervisorApproval {
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  readonly sourceTreeSha256: string;
+}
 
 export interface NpmLaneRuntimeApproval {
   readonly packageName: string;
@@ -27,6 +37,8 @@ export interface NpmLaneRuntimeApproval {
   readonly helperSourceCommit: string;
   readonly helperSourceTreeSha256: string;
   readonly helperMaxBytes?: number;
+  /** Required on Windows, absent elsewhere; a Windows approval without it is refused. */
+  readonly runtimeSupervisor?: NpmLaneRuntimeSupervisorApproval;
 }
 
 /** The helper both tables carry: an OpenCode upgrade leaves its source and binaries unchanged. */
@@ -45,6 +57,18 @@ const HELPER_MACOS_X64 = {
   helperSha256: "2b722685dc1059a9eec75164e8f5157602a7802cf6a5b27da6f2a9fd78e07ac6",
   helperSizeBytes: 18_160,
 } as const;
+
+// Built on Windows with MSVC and `/Brepro` (#4068), so identical sources yield these exact bytes.
+const HELPER_WINDOWS_X64 = {
+  helperSha256: "1318171b0544702ef5f0f9f201084767b3182279c99012278812a5dfe27ede4d",
+  helperSizeBytes: 129_024,
+} as const;
+
+const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.freeze({
+  sha256: "76920ce87eb8b3cdc2189fab1df62839153dd38c9861bd4eb1d62a1f0a0577f8",
+  sizeBytes: 232_960,
+  sourceTreeSha256: "5f39f9fcc98cbb6e412039ab4687c0d2cb8f95b3b76a371f328981cc1f1087bd",
+});
 
 const SHARED = {
   ...HELPER,
@@ -72,6 +96,14 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
     executableTreeSha256: "d4792443ecee7527ba15c6a09a0799e68f9d6904bfe5022bdd1b15ac5eee7a87",
     sbomSha256: "1213a19896a2ce21f96a3510dee01bfce87ac93964430e5a2188654294794e1b",
   }),
+  "windows-x64": Object.freeze({
+    ...SHARED,
+    ...HELPER_WINDOWS_X64,
+    packageName: "@oscharko-dev/keiko-coding-runtime-win32-x64",
+    executableTreeSha256: "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
+    sbomSha256: "320b03dca2e27a8d9afc6a6bf2d1b4b903f6c5340f25202f20aa7dd104573493",
+    runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
+  }),
 });
 
 /**
@@ -91,8 +123,9 @@ const PREVIOUS_SHARED = {
   protocolSchemaSha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
 } as const;
 
+/** No Windows package was ever published, so Windows has no previous approval (#4068). */
 export const NPM_LANE_PREVIOUS_RUNTIME_APPROVALS: Readonly<
-  Record<NpmLaneOpenCodeTarget, NpmLaneRuntimeApproval>
+  Partial<Record<NpmLaneOpenCodeTarget, NpmLaneRuntimeApproval>>
 > = Object.freeze({
   "macos-arm64": Object.freeze({
     ...PREVIOUS_SHARED,

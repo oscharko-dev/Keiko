@@ -770,6 +770,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "runtime-history-failed",
   "runtime-lifecycle-failed",
   "runtime-start-failed",
+  "runtime-turn-expired",
   "runtime-turn-failed",
   "safe-activity-dropped-validation-rejected",
   "safe-activity-dropped-redactor-collapsed",

@@ -54,6 +54,7 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
     ]);
     expect(rec.calls()[1]?.command).toBe("git");
     expect(rec.calls()[1]?.args).toEqual([
+      ...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []),
       "-c",
       "core.fsmonitor=false",
       "-c",

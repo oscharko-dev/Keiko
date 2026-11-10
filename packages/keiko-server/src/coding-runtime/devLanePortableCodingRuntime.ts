@@ -186,7 +186,7 @@ export function discoverNpmLaneOpenCode(
   input: DevLaneOpenCodeDiscoveryInput,
 ): DevLaneOpenCodeDiscovery {
   const target = targetFromDiscoveryInput(input);
-  if (target === undefined || target === "windows-x64") return { outcome: "inactive" };
+  if (target === undefined) return { outcome: "inactive" };
   const approval = (input.npmLaneApprovals ?? NPM_LANE_RUNTIME_APPROVALS)[target];
   if (approval === undefined) return { outcome: "inactive" };
   try {
@@ -239,13 +239,16 @@ function npmLaneRuntimePackageRoot(
 
 function discoverNpmLanePackage(
   runtimeRoot: string,
-  target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
+  target: DevLaneOpenCodeTarget,
   approval: NpmLaneRuntimeApproval,
   previous: NpmLaneRuntimeApproval | undefined,
 ): DevLaneOpenCodeDiscovery {
   const selected = selectNpmLanePackage(runtimeRoot, target, approval, previous);
   if (!selected.ok) return refused(selected.refusal);
   const { helper, helperPath, payload } = selected;
+  // The supervisor belongs to the same coherent approval as the payload and helper it launches.
+  const supervisor = npmLaneRuntimeSupervisor(runtimeRoot, target, helper);
+  if (!supervisor.ok) return refused(supervisor.refusal);
   // The pinned ripgrep (#3897) ships beside the helper. Its name is admitted here; its bytes are
   // judged at launch against the pinned digest, which degrades search instead of refusing the lane.
   if (!trustedNativeHelperDirectory(runtimeRoot, target, [npmLaneRipgrepName(target)])) {
@@ -273,8 +276,33 @@ function discoverNpmLanePackage(
     runtimeRoot,
     payload.sidecar,
     secureRead,
-    undefined,
+    supervisor.supervisor,
   );
+}
+
+type NpmLaneSupervisorVerification =
+  | { readonly ok: true; readonly supervisor: VerifiedRuntimeSupervisor | undefined }
+  | { readonly ok: false; readonly refusal: DevLaneOpenCodeRefusalReason };
+
+/**
+ * The Windows package's Job Object supervisor, admitted only at the digest and size this server
+ * compiled in (#4068). A package cannot vouch for it: an approval without a pin is unapproved, a
+ * missing file is a missing payload, and any other bytes are tampering.
+ */
+function npmLaneRuntimeSupervisor(
+  runtimeRoot: string,
+  target: DevLaneOpenCodeTarget,
+  approval: NpmLaneRuntimeApproval,
+): NpmLaneSupervisorVerification {
+  if (target !== "windows-x64") return { ok: true, supervisor: undefined };
+  const pin = approval.runtimeSupervisor;
+  if (pin === undefined) return { ok: false, refusal: "payload-unapproved" };
+  const path = join(runtimeRoot, runtimeSupervisorRelativePath(target));
+  if (!isRegularFile(path)) return { ok: false, refusal: "payload-missing" };
+  if (statSync(path).size !== pin.sizeBytes || sha256File(path) !== pin.sha256) {
+    return { ok: false, refusal: "payload-tampered" };
+  }
+  return { ok: true, supervisor: { path, sha256: pin.sha256 } };
 }
 
 type SelectedNpmLanePackage =
@@ -293,7 +321,7 @@ type SelectedNpmLanePackage =
  */
 function selectNpmLanePackage(
   runtimeRoot: string,
-  target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
+  target: DevLaneOpenCodeTarget,
   approval: NpmLaneRuntimeApproval,
   previous: NpmLaneRuntimeApproval | undefined,
 ): SelectedNpmLanePackage {
@@ -382,6 +410,63 @@ export function devLaneCheckoutRoot(
 }
 
 /**
+ * The broker pin of a Windows local lane (ADR-0043 D19, #4068): the digest of the runtime
+ * supervisor discovery verified. For a dev checkout that is the supervisor it built, re-verified
+ * against the source tree; for the npm runtime package it is the digest compiled into this server
+ * (owner decision 2026-11-09). Either may install the D18 broker with it, so its runs are confined
+ * like a release's. Their evidence stays `functional-not-platform-qualified`.
+ */
+export function localLaneWindowsGatewayHelperPin(
+  runtime: Pick<DevLanePortableOpenCodeRuntime, "lane" | "target" | "nativeHelperSha256">,
+): string | undefined {
+  // Both local lanes (`dev-checkout`, `npm-runtime-package`) carry a pin; only Windows has a broker.
+  return runtime.target === "windows-x64" ? runtime.nativeHelperSha256 : undefined;
+}
+
+interface WindowsGatewayHelper {
+  readonly helperPath: string;
+  readonly helperSha256: string;
+}
+
+function windowsGatewayHelperOf(
+  discovery: DevLaneOpenCodeDiscovery,
+): WindowsGatewayHelper | undefined {
+  if (discovery.outcome !== "activated") return undefined;
+  const helperSha256 = localLaneWindowsGatewayHelperPin(discovery.runtime);
+  const helperPath = discovery.runtime.nativeHelperPath;
+  return helperSha256 === undefined || helperPath === undefined
+    ? undefined
+    : { helperPath, helperSha256 };
+}
+
+/**
+ * The helper `keiko gateway-service --dev-lane` hands to Windows: this checkout's verified runtime
+ * supervisor. The flag is the human's opt-in, so the dev lane is enabled for this one discovery; a
+ * checkout that does not verify yields nothing.
+ */
+export function discoverDevCheckoutWindowsGatewayHelper(
+  input: Pick<DevLaneOpenCodeDiscoveryInput, "env" | "platform" | "arch">,
+): WindowsGatewayHelper | undefined {
+  return windowsGatewayHelperOf(
+    discoverDevLaneOpenCode({
+      ...input,
+      env: { ...input.env, [KEIKO_CODING_RUNTIME_DEV_LANE_ENV]: "1" },
+    }),
+  );
+}
+
+/**
+ * The helper `keiko gateway-service` hands to Windows when no release helper exists (#4068): the supervisor of the
+ * runtime package installed next to this Keiko, admitted only at its compiled digest. A package
+ * that is absent or does not verify yields nothing.
+ */
+export function discoverNpmRuntimeWindowsGatewayHelper(
+  input: Pick<DevLaneOpenCodeDiscoveryInput, "env" | "platform" | "arch" | "diagnostics">,
+): WindowsGatewayHelper | undefined {
+  return windowsGatewayHelperOf(discoverNpmLaneOpenCode(input));
+}
+
+/**
  * The installed npm runtime package a runtime was activated from, or `undefined` for any other lane.
  * Derived from the one place that composes `installRoot` (`discoverNpmLaneOpenCode`:
  * `<package>/runtime/opencode-compatible`), so the layout stays with its owner. The pinned ripgrep
@@ -395,7 +480,7 @@ export function npmLanePackageRoot(
   return basename(runtimeRoot) === NPM_LANE_RUNTIME_DIR ? dirname(runtimeRoot) : undefined;
 }
 
-function npmLaneRipgrepName(target: Exclude<DevLaneOpenCodeTarget, "windows-x64">): string {
+function npmLaneRipgrepName(target: DevLaneOpenCodeTarget): string {
   return ripgrepBinaryName(ripgrepTargetKeyForPortableTarget(target));
 }
 

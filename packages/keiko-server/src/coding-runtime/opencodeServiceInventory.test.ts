@@ -541,8 +541,9 @@ function declaredSettings(value: unknown, declared: ReadonlySet<string>, prefix 
 
 /** Every setting the native profile composes, at its widest: images, Full access and both MCP kinds. */
 function composedNativeSettings(): readonly string[] {
-  // #3903 AC3: a remote server with a validated issuer, with the operator's client and scope.
-  const oauthServer: McpServerDefinition = {
+  // #3903 AC3: a remote server with a validated issuer, with the operator's client and scope. Not
+  // named after OAuth: CodeQL reads such identifiers as passwords (see opencodeNativeMcp.test.ts).
+  const authorizedServer: McpServerDefinition = {
     ...REMOTE_SERVER,
     name: "issues",
     transport: {
@@ -562,9 +563,10 @@ function composedNativeSettings(): readonly string[] {
     },
   };
   const mcp = openCodeNativeMcpAdmission({
-    servers: [LOCAL_SERVER, REMOTE_SERVER, oauthServer, credentialedServer],
+    servers: [LOCAL_SERVER, REMOTE_SERVER, authorizedServer, credentialedServer],
     mode: "autonomous-delivery",
     home: "/state/home",
+    platform: "linux",
     relays: new Map([
       [
         "wiki",

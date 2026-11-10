@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
-import { useWorkbenchExecutionLocation } from "./useWorkbenchExecutionLocation";
+import {
+  activeExecutionLocation,
+  useWorkbenchExecutionLocation,
+} from "./useWorkbenchExecutionLocation";
 
 const mocks = vi.hoisted(() => ({
   fetchGitStatus: vi.fn(),
@@ -33,6 +36,26 @@ const managed = {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+// #4068: behind the Windows broker the runtime confines only a Keiko-managed worktree, so neither a
+// saved Local choice nor the Local default may bind a checkout the server would refuse.
+describe("the location a runtime can confine", () => {
+  const local = { ...managed, executionLocation: "local" } as WorkspaceInstance;
+
+  it("keeps every preference when the runtime names no locations", () => {
+    expect(activeExecutionLocation(null, "/repo", undefined)).toBe("local");
+    expect(activeExecutionLocation(null, "/repo", "worktree")).toBe("worktree");
+    expect(activeExecutionLocation(local, "/repo", undefined)).toBe("local");
+    expect(activeExecutionLocation(null, "/repo", undefined, ["local", "worktree"])).toBe("local");
+  });
+
+  it("turns a saved or default Local into a worktree where only a worktree is confined", () => {
+    expect(activeExecutionLocation(null, "/repo", undefined, ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(null, "/repo", "local", ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(local, "/repo", undefined, ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(managed, "/repo", undefined, ["worktree"])).toBe("worktree");
+  });
 });
 
 describe("workbench execution location restoration", () => {

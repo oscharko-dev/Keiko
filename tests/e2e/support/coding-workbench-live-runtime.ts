@@ -1,6 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import type {
   CodingWorkbenchCodexAuthStatus,
+  CodingWorkbenchExecutionLocation,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
@@ -20,6 +21,10 @@ export interface LiveRuntimeFixtureOptions {
   readonly authStatus?: FixtureAuthStatus;
   readonly runtimeAvailable?: boolean;
   readonly disconnectStreamOnce?: boolean;
+  /** The work locations readiness offers (#4068); absent, readiness names none, as on macOS. */
+  readonly executionLocations?: readonly CodingWorkbenchExecutionLocation[] | undefined;
+  /** A start the server refuses with this wire code and HTTP 409, before any run exists (#4068). */
+  readonly startRefusalCode?: string | undefined;
 }
 
 export interface LiveRuntimeFixture {

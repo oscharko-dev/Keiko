@@ -38,9 +38,11 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { runRuntimeSupervisorBuild } from "./build-runtime-supervisor.mjs";
 import { runSecureWorkspaceReadBuild } from "./build-secure-workspace-read.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
 import { hashHelperSourceTree } from "./stage-dev-coding-runtime.mjs";
 import {
@@ -66,19 +68,35 @@ import {
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SIDECAR_NAME = "opencode-compatible";
-const HELPER_RELATIVE_PATH = "native/keiko-secure-workspace-read";
-const EXECUTABLE_PATH = "runtime/opencode-compatible/payload/bin/opencode";
+const SUPERVISOR_SOURCE_DIR = "native/runtime-supervisor/windows";
 const LICENSE_PATH = "runtime/opencode-compatible/payload/evidence/LICENSE";
 const SBOM_PATH = "runtime/opencode-compatible/payload/evidence/sbom.cdx.json";
 const RIPGREP_SBOM_PATH = "runtime/licenses/ripgrep/sbom.cdx.json";
 
+/**
+ * The executable paths of one target, as the npm lane reads them: Windows names its executables
+ * with `.exe` and also carries the Job Object supervisor its runs launch through (#4068).
+ */
+export function runtimePackageLayout(target) {
+  const exe = target === "windows-x64" ? ".exe" : "";
+  return {
+    executablePath: `runtime/opencode-compatible/payload/bin/opencode${exe}`,
+    executableRelativePath: `bin/opencode${exe}`,
+    helperPath: `runtime/native/keiko-secure-workspace-read${exe}`,
+    supervisorPath:
+      target === "windows-x64" ? "runtime/native/keiko-runtime-supervisor.exe" : undefined,
+  };
+}
+
 /** Every file a candidate carries; the ripgrep executable name is the target release's own. */
-function candidateFiles(ripgrep) {
+function candidateFiles(target, ripgrep) {
+  const layout = runtimePackageLayout(target);
   return [
     "LICENSE.md",
     "package.json",
-    `runtime/${HELPER_RELATIVE_PATH}`,
-    EXECUTABLE_PATH,
+    layout.helperPath,
+    ...(layout.supervisorPath === undefined ? [] : [layout.supervisorPath]),
+    layout.executablePath,
     LICENSE_PATH,
     SBOM_PATH,
     ripgrepPortableExecutablePath(ripgrep.targetKey),
@@ -117,15 +135,23 @@ function sha256File(path) {
 }
 
 function licenseNotice(target, ripgrep) {
+  const layout = runtimePackageLayout(target);
+  const keikoCode =
+    layout.supervisorPath === undefined
+      ? [`- \`${layout.helperPath}\`: part of Keiko, under Keiko's license`]
+      : [
+          `- \`${layout.helperPath}\` and \`${layout.supervisorPath}\`: part of Keiko,`,
+          "  under Keiko's license",
+        ];
   return [
     `# ${codingRuntimePackageName(target)}`,
     "",
     "This package redistributes three components:",
     "",
-    "- `runtime/opencode-compatible/payload/bin/opencode`: OpenCode, MIT License. The upstream",
+    `- \`${layout.executablePath}\`: OpenCode, MIT License. The upstream`,
     "  license text is `runtime/opencode-compatible/payload/evidence/LICENSE`, and its software",
     "  bill of materials is `runtime/opencode-compatible/payload/evidence/sbom.cdx.json`.",
-    "- `runtime/native/keiko-secure-workspace-read`: part of Keiko, under Keiko's license",
+    ...keikoCode,
     "  (https://github.com/oscharko-dev/Keiko/blob/dev/LICENSE).",
     `- \`${ripgrepPortableExecutablePath(ripgrep.targetKey)}\`: ripgrep ${ripgrep.version}, the unmodified upstream`,
     `  release executable, licensed under ${ripgrep.licenseExpression}, at the recipient's option.`,
@@ -194,30 +220,20 @@ export function stagePinnedNpmRipgrep(
  * or must be empty: a runtime directory is an execution boundary, never merged into.
  */
 export async function buildCodingRuntimeNpmPackage({ target, version, outDir, deps = {} }) {
-  if (!isAbsolute(outDir)) throw new TypeError("outDir must be an absolute path");
-  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
-    throw new Error(`outDir must not exist or must be empty: ${outDir}`);
-  }
+  assertEmptyOutDir(outDir);
   const prepare = deps.prepareSidecars ?? prepareApprovedSidecarPayloads;
   const runBuild = deps.runBuild ?? runSecureWorkspaceReadBuild;
+  const runSupervisorBuild = deps.runSupervisorBuild ?? runRuntimeSupervisorBuild;
   const stageRipgrep = deps.stageRipgrep ?? stagePinnedNpmRipgrep;
   const manifest = codingRuntimePackageManifest(target, version);
   const staging = mkdtempSync(join(tmpdir(), "keiko-coding-runtime-npm-"));
   try {
-    await prepare(["--target", target, "--output-root", staging], undefined, repoRoot);
-    const runtimeRoot = join(outDir, "runtime");
-    mkdirSync(join(runtimeRoot, "native"), { recursive: true });
-    cpSync(
-      join(staging, target, SIDECAR_NAME, "payload"),
-      join(runtimeRoot, SIDECAR_NAME, "payload"),
-      {
-        recursive: true,
-      },
-    );
-    const helperPath = join(runtimeRoot, HELPER_RELATIVE_PATH);
+    await stageApprovedPayload(prepare, target, staging, outDir);
+    const helperPath = join(outDir, ...runtimePackageLayout(target).helperPath.split("/"));
     const buildScript = join(repoRoot, "scripts", "build-secure-workspace-read.mjs");
     const status = await runBuild({ argv: [process.execPath, buildScript, target, helperPath] });
     if (status !== 0) throw new Error(`secure-workspace-read build failed with status ${status}`);
+    const supervisor = await buildPackageSupervisor(target, outDir, runSupervisorBuild);
     const ripgrep = await stageRipgrep(target, outDir);
     mkdirSync(dirname(join(outDir, RIPGREP_SBOM_PATH)), { recursive: true });
     writeFileSync(join(outDir, RIPGREP_SBOM_PATH), ripgrepSbomText(target, ripgrep, outDir));
@@ -228,11 +244,48 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
       helperSizeBytes: statSync(helperPath).size,
       name: manifest.name,
       outDir,
+      ...(supervisor === undefined ? {} : { runtimeSupervisor: supervisor }),
       target,
     };
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
+}
+
+function assertEmptyOutDir(outDir) {
+  if (!isAbsolute(outDir)) throw new TypeError("outDir must be an absolute path");
+  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+    throw new Error(`outDir must not exist or must be empty: ${outDir}`);
+  }
+}
+
+/** Prepares the approved OpenCode payload in `staging` and copies only its payload into the package. */
+async function stageApprovedPayload(prepare, target, staging, outDir) {
+  await prepare(["--target", target, "--output-root", staging], undefined, repoRoot);
+  const runtimeRoot = join(outDir, "runtime");
+  mkdirSync(join(runtimeRoot, "native"), { recursive: true });
+  cpSync(
+    join(staging, target, SIDECAR_NAME, "payload"),
+    join(runtimeRoot, SIDECAR_NAME, "payload"),
+    { recursive: true },
+  );
+}
+
+/** Builds the Windows supervisor into the package and returns the facts the server pins. */
+async function buildPackageSupervisor(target, outDir, runSupervisorBuild) {
+  const relativePath = runtimePackageLayout(target).supervisorPath;
+  if (relativePath === undefined) return undefined;
+  const supervisorPath = join(outDir, ...relativePath.split("/"));
+  const buildScript = join(repoRoot, "scripts", "build-runtime-supervisor.mjs");
+  const status = await runSupervisorBuild({
+    argv: [process.execPath, buildScript, target, supervisorPath],
+  });
+  if (status !== 0) throw new Error(`runtime supervisor build failed with status ${status}`);
+  return {
+    sha256: sha256File(supervisorPath),
+    sizeBytes: statSync(supervisorPath).size,
+    sourceTreeSha256: hashHelperSourceTree(join(repoRoot, SUPERVISOR_SOURCE_DIR)),
+  };
 }
 
 /** The approval compiled into this checkout for one target, with its pinned ripgrep. */
@@ -272,27 +325,43 @@ function candidateFilePaths(root, prefix = "") {
   });
 }
 
-function candidateFileFacts(packageDir, ripgrep) {
+function candidateFileFacts(packageDir, target, ripgrep) {
   const paths = candidateFilePaths(packageDir).sort();
-  if (!isDeepStrictEqual(paths, candidateFiles(ripgrep))) {
-    throw new Error("runtime candidate must contain exactly the nine approved package files");
+  if (!isDeepStrictEqual(paths, candidateFiles(target, ripgrep))) {
+    throw new Error("runtime candidate must contain exactly the approved package files");
   }
   return fileFactsForPaths(packageDir, paths);
 }
 
-function fileFactsForPaths(packageDir, paths) {
+function fileFactsForPaths(packageDir, paths, platform = process.platform) {
   return paths.map((path) => {
     const full = join(packageDir, path);
     const status = statSync(full);
-    return { path, sha256: sha256File(full), sizeBytes: status.size, mode: status.mode & 0o777 };
+    return {
+      path,
+      sha256: sha256File(full),
+      sizeBytes: status.size,
+      mode: packedFileMode(status.mode, platform),
+    };
   });
+}
+
+/**
+ * The mode the tarball records for a file. A Windows file has no POSIX permission bits (Node
+ * reports 0o666 or 0o444), and npm writes it as 0o644 or 0o444 (#4068); POSIX keeps its own bits.
+ */
+export function packedFileMode(mode, platform = process.platform) {
+  if (platform !== "win32") return mode & 0o777;
+  return (mode & 0o200) === 0 ? 0o444 : 0o644;
 }
 
 function assertCandidatePins(files, approval, packageDir, target) {
   const ripgrep = approval.ripgrep;
   const ripgrepPath = ripgrepPortableExecutablePath(ripgrep.targetKey);
+  const layout = runtimePackageLayout(target);
   const expected = new Map([
-    [`runtime/${HELPER_RELATIVE_PATH}`, approval.helperSha256],
+    [layout.helperPath, approval.helperSha256],
+    ...supervisorPin(layout, approval),
     [LICENSE_PATH, approval.licenseSha256],
     [SBOM_PATH, approval.sbomSha256],
     [ripgrepPath, ripgrep.binarySha256],
@@ -309,11 +378,28 @@ function assertCandidatePins(files, approval, packageDir, target) {
     if (pin !== undefined && file.sha256 !== pin)
       throw new Error("runtime candidate digest mismatch");
   }
-  for (const path of [EXECUTABLE_PATH, `runtime/${HELPER_RELATIVE_PATH}`, ripgrepPath]) {
-    if (
-      process.platform !== "win32" &&
-      ((files.find((file) => file.path === path)?.mode ?? 0) & 0o111) === 0
-    ) {
+  if (target !== "windows-x64") {
+    // A Windows package carries no POSIX executable bit, and Windows needs none (#4068); the
+    // publisher verifies it on Linux, so the target decides, not the verifying host.
+    assertExecutablePermissions(files, [layout.executablePath, layout.helperPath, ripgrepPath]);
+  }
+}
+
+/** The supervisor's pin entry: present exactly when both the layout and the approval name one. */
+function supervisorPin(layout, approval) {
+  if ((layout.supervisorPath === undefined) !== (approval.runtimeSupervisor === undefined)) {
+    throw new Error("runtime candidate supervisor approval mismatch");
+  }
+  return layout.supervisorPath === undefined
+    ? []
+    : [[layout.supervisorPath, approval.runtimeSupervisor.sha256]];
+}
+
+function assertExecutablePermissions(files, paths) {
+  // A Windows host records no POSIX executable bit, so it cannot attest a macOS package's bits.
+  if (process.platform === "win32") return;
+  for (const path of paths) {
+    if (((files.find((file) => file.path === path)?.mode ?? 0) & 0o111) === 0) {
       throw new Error("runtime candidate binary must retain executable permissions");
     }
   }
@@ -329,9 +415,11 @@ async function inspectRuntimeCandidate({ target, version, packageDir }, deps) {
   ) {
     throw new Error("runtime candidate manifest, version or architecture mismatch");
   }
-  const files = candidateFileFacts(packageDir, approval.ripgrep);
+  const files = candidateFileFacts(packageDir, target, approval.ripgrep);
   assertCandidatePins(files, approval, packageDir, target);
-  const helper = files.find((file) => file.path === `runtime/${HELPER_RELATIVE_PATH}`);
+  const layout = runtimePackageLayout(target);
+  assertSupervisorCandidate(files, approval, layout);
+  const helper = files.find((file) => file.path === layout.helperPath);
   if (helper.sizeBytes !== approval.helperSizeBytes)
     throw new Error("runtime helper size mismatch");
   const sourceTreeSha256 = hashHelperSourceTree(join(repoRoot, "native/secure-workspace-read"));
@@ -341,9 +429,9 @@ async function inspectRuntimeCandidate({ target, version, packageDir }, deps) {
   (deps.verifySourceCommit ?? verifyHelperSourceCommit)(approval.helperSourceCommit);
   const { computePortableSidecarPayloadTreeDigest } =
     await import("../packages/keiko-server/dist/coding-runtime/devLanePortableCodingRuntime.js");
-  const executable = files.find((file) => file.path === EXECUTABLE_PATH);
+  const executable = files.find((file) => file.path === layout.executablePath);
   const executableTreeSha256 = computePortableSidecarPayloadTreeDigest([
-    { relativePath: "bin/opencode", sha256: executable.sha256 },
+    { relativePath: layout.executableRelativePath, sha256: executable.sha256 },
   ]);
   if (executableTreeSha256 !== approval.executableTreeSha256) {
     throw new Error("runtime candidate OpenCode digest mismatch");
@@ -356,6 +444,19 @@ async function inspectRuntimeCandidate({ target, version, packageDir }, deps) {
     helper,
     executableTreeSha256,
   });
+}
+
+/** The Windows supervisor must be the pinned binary of the supervisor source this checkout carries. */
+function assertSupervisorCandidate(files, approval, layout) {
+  if (layout.supervisorPath === undefined) return;
+  const supervisor = files.find((file) => file.path === layout.supervisorPath);
+  if (supervisor.sizeBytes !== approval.runtimeSupervisor.sizeBytes) {
+    throw new Error("runtime supervisor size mismatch");
+  }
+  const sourceTreeSha256 = hashHelperSourceTree(join(repoRoot, SUPERVISOR_SOURCE_DIR));
+  if (sourceTreeSha256 !== approval.runtimeSupervisor.sourceTreeSha256) {
+    throw new Error("runtime candidate supervisor source is stale");
+  }
 }
 
 function runtimeCandidateReceipt({
@@ -385,6 +486,9 @@ function runtimeCandidateReceipt({
       sourceTreeSha256: approval.helperSourceTreeSha256,
       maxBytes: approval.helperMaxBytes,
     },
+    ...(approval.runtimeSupervisor === undefined
+      ? {}
+      : { runtimeSupervisor: { ...approval.runtimeSupervisor } }),
     opencode: {
       version: upstream.version,
       sourceCommit: upstream.commit,
@@ -404,10 +508,19 @@ function runtimeCandidateReceipt({
   };
 }
 
-function packRuntimeCandidate(packageDir, artifactDir) {
+export function packRuntimeCandidate(packageDir, artifactDir) {
+  const npm = hostNpmInvocation(resolveHostExecutable("npm"));
   const result = execFileSync(
-    resolveHostExecutable("npm"),
-    ["pack", packageDir, "--ignore-scripts", "--json", "--pack-destination", artifactDir],
+    npm.command,
+    [
+      ...npm.args,
+      "pack",
+      packageDir,
+      "--ignore-scripts",
+      "--json",
+      "--pack-destination",
+      artifactDir,
+    ],
     { cwd: repoRoot, encoding: "utf8", timeout: 120_000, maxBuffer: NPM_PACK_STDIO_MAX_BUFFER },
   );
   return JSON.parse(result).at(0);

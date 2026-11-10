@@ -7,7 +7,7 @@
 // containment guard below therefore normalizes before comparing, and is defense-in-depth only.
 
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { GIT_BASE_ARGS } from "./runner.js";
 import type { GitProcessResult, GitProcessRunner } from "./types.js";
 
@@ -141,5 +141,6 @@ export function comparablePath(value: string): string {
  */
 export function containsPath(root: string, target: string): boolean {
   const rel = relative(comparablePath(root), comparablePath(target));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  // A child named `..cache` is inside; only a `..` segment leaves the root.
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }

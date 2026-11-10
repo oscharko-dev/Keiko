@@ -29,11 +29,33 @@ export function activeExecutionLocation(
   instance: WorkspaceInstance | null,
   root: string | null,
   selected: WorkbenchExecutionLocation | undefined,
+  offered?: readonly WorkbenchExecutionLocation[],
+): WorkbenchExecutionLocation {
+  return offeredExecutionLocation(preferredExecutionLocation(instance, root, selected), offered);
+}
+
+function preferredExecutionLocation(
+  instance: WorkspaceInstance | null,
+  root: string | null,
+  selected: WorkbenchExecutionLocation | undefined,
 ): WorkbenchExecutionLocation {
   if (selected !== undefined) return selected;
   if (instance?.repositoryRoot === root)
     return instance.executionLocation === "local" ? "local" : "worktree";
   return "local";
+}
+
+/**
+ * #4068: the location a runtime can confine wins over any preference. Behind the Windows broker the
+ * runtime confines only a Keiko-managed worktree, so a saved or default `local` becomes `worktree`
+ * rather than binding a checkout the server would refuse. Absent, every location is offered.
+ */
+function offeredExecutionLocation(
+  location: WorkbenchExecutionLocation,
+  offered: readonly WorkbenchExecutionLocation[] | undefined,
+): WorkbenchExecutionLocation {
+  if (offered === undefined || offered.includes(location)) return location;
+  return offered[0] ?? location;
 }
 
 function bindingReady(

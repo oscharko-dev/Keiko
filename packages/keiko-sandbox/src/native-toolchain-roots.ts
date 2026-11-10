@@ -1,6 +1,6 @@
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { readdirSync, realpathSync, statSync } from "node:fs";
-import { basename, delimiter, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, sep } from "node:path";
 
 // The read-only support roots of the project's toolchains for the native profile (#3897). The
 // launcher's `PATH` names where `node`, `npm`, `python`, `cargo` and friends live; their install
@@ -52,9 +52,19 @@ export function nativeHomeDeniedReadRoots(home: string): readonly string[] {
   return HOME_DENIED_LOCATIONS.map((location) => join(home, location));
 }
 
+// Separator-aware (#4068): on Windows `relative` answers `..\x`, which a `../` test read as inside,
+// and a path on another drive comes back absolute.
 function insideOrEqual(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
-  return path === "" || (path !== ".." && !path.startsWith("../") && !isAbsolute(path));
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+/** The number of named components below the filesystem root (`/a/b` and `C:\a\b` are two). */
+function depthBelowRoot(path: string): number {
+  return path
+    .slice(parse(path).root.length)
+    .split(sep)
+    .filter((segment) => segment !== "").length;
 }
 
 function installPrefix(directory: string): string {
@@ -65,7 +75,7 @@ function installPrefix(directory: string): string {
 
 function admissible(root: string, home: string): boolean {
   return (
-    root.split("/").length > 2 &&
+    depthBelowRoot(root) >= 2 &&
     !/[\0\r\n]/u.test(root) &&
     !insideOrEqual(root, home) &&
     !SYSTEM_PREFIXES.some((system) => insideOrEqual(system, root)) &&
@@ -78,7 +88,7 @@ function admissible(root: string, home: string): boolean {
 /** A real install prefix: outside the home, or at least two levels below it. */
 function isInstallPrefix(prefix: string, home: string): boolean {
   if (!admissible(prefix, home)) return false;
-  return !insideOrEqual(home, prefix) || relative(home, prefix).split("/").length >= 2;
+  return !insideOrEqual(home, prefix) || relative(home, prefix).split(sep).length >= 2;
 }
 
 /** A `PATH` entry or link target that does not exist or cannot be read is simply not a root. */

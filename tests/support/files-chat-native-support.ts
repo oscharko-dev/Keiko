@@ -160,7 +160,8 @@ function seedFiles(nested: boolean): { directory: string; root: string; alias: s
     mkdirSync(join(root, "Alpha/nested"));
     writeFileSync(join(root, "Alpha/nested/nested.ts"), "export const nestedValidation = true;\n");
   }
-  symlinkSync(root, alias, "dir");
+  // A junction is the directory alias Windows creates without Developer Mode; POSIX ignores it.
+  symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
   return { directory, root, alias };
 }
 

@@ -5,11 +5,20 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { isCommandAllowed } from "./sandbox.js";
+import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import {
   buildAddWorktreeArgv,
   buildLocalBranchExistsArgv,
@@ -239,6 +248,68 @@ describe("real git worktree lifecycle (EV2)", () => {
     expect(await adapter.resolveRepositoryRoot()).toBe(repoRoot);
   });
 
+  // #4068 (W7): a task workspace adds its own long base path, so a file that fits below the user's
+  // checkout crossed MAX_PATH there and `git worktree add` failed "Filename too long" (exit 128).
+  it.runIf(process.platform === "win32")(
+    "adds a Windows task worktree whose files reach MAX_PATH or more",
+    async () => {
+      const segments = Array.from({ length: 9 }, (_, index) => `nested_directory_${String(index)}`);
+      mkdirSync(join(repoRoot, ...segments), { recursive: true });
+      writeFileSync(join(repoRoot, ...segments, "file.txt"), "deep\n");
+      git(["-c", "core.longpaths=true", "add", "-A"]);
+      git(["-c", "core.longpaths=true", "commit", "-q", "-m", "deep"]);
+      const worktreePath = join(
+        worktreeParent,
+        "ui",
+        "task-workspaces",
+        "r".repeat(40),
+        "w".repeat(40),
+      );
+      const deepFile = join(worktreePath, ...segments, "file.txt");
+      expect(deepFile.length).toBeGreaterThanOrEqual(260);
+      mkdirSync(join(worktreePath, ".."), { recursive: true });
+
+      const adapter = createNodeGitWorktreeAdapter(deps());
+      const added = await adapter.addWorktree({
+        worktreePath,
+        taskBranch: "keiko/task/deep-00112233",
+        baseRef: "main",
+      });
+
+      expect(added.ok).toBe(true);
+      expect(statSync(deepFile).isFile()).toBe(true);
+    },
+  );
+
+  // #4068: Git for Windows sets core.autocrlf=true at system scope, so `worktree add` checked every
+  // text file out with CRLF while Keiko's status and diff reads ignore the system scope. Each file
+  // whose index stat was stale then compared CRLF bytes against an LF blob, and a read-only coding
+  // run showed every file of the repository as changed. A system config is injected here so the
+  // proof is the same on every host.
+  it("checks the task worktree out with the blob bytes despite a system core.autocrlf", async () => {
+    const systemConfig = join(worktreeParent, "system.gitconfig");
+    writeFileSync(systemConfig, "[core]\n\tautocrlf = true\n");
+    const adapter = createNodeGitWorktreeAdapter({
+      workspace: workspaceInfo(repoRoot),
+      policy: {
+        ...DEFAULT_SANDBOX_POLICY,
+        envAllowlist: [...DEFAULT_SANDBOX_POLICY.envAllowlist, "GIT_CONFIG_SYSTEM"],
+      },
+      processEnv: { PATH: process.env.PATH ?? "", GIT_CONFIG_SYSTEM: systemConfig },
+      now: () => Date.now(),
+    });
+    const worktreePath = join(worktreeParent, "wt-eol");
+
+    const added = await adapter.addWorktree({
+      worktreePath,
+      taskBranch: "keiko/task/eol-00112233",
+      baseRef: "main",
+    });
+
+    expect(added.ok).toBe(true);
+    expect(readFileSync(join(worktreePath, "README.md"), "utf8")).toBe("# demo\n");
+  });
+
   it("adds, lists, then removes a managed worktree on a new task branch", async () => {
     const adapter = createNodeGitWorktreeAdapter(deps());
     const worktreePath = join(worktreeParent, "wt");
@@ -279,7 +350,10 @@ describe("real git worktree lifecycle (EV2)", () => {
       (candidate) => realpathSync(candidate.path) === worktreeReal,
     );
 
-    expect(entry?.path).toBe(worktreeReal);
+    // Git for Windows reports `C:/…` with forward slashes, and the adapter's consumers normalize
+    // with resolve()/realpath. resolve() is the identity on an absolute POSIX path, so the exact
+    // equality still holds there; on every host a redacted path can never resolve to the real one.
+    expect(resolve(entry?.path ?? "")).toBe(worktreeReal);
     expect(entry?.head).toMatch(/^[0-9a-f]{40}$/u);
   });
 

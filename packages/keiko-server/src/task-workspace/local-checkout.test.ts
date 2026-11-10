@@ -407,6 +407,63 @@ describe("local checkout selection", () => {
     }
   });
 
+  // #4068 W7: the active pointer names the path the human selected. Once Git moves the linked
+  // checkout, that path must refuse instead of following Git's metadata to the new location; the
+  // new location binds only when the human registers and selects it, under a new identity.
+  describe("a moved linked checkout", () => {
+    let scratch: string;
+    let linkedRoot: string;
+
+    beforeEach(() => {
+      scratch = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-move-")));
+      linkedRoot = join(scratch, "linked wt ä");
+      git("worktree", "add", "-q", "-b", "linked", linkedRoot);
+    });
+
+    afterEach(() => {
+      git("worktree", "prune");
+      rmSync(scratch, { recursive: true, force: true });
+    });
+
+    function selectAt(path: string): ReturnType<ReturnType<typeof fixture>["selectLocal"]> {
+      return fixture(undefined, path).selectLocal({
+        root: path,
+        branch: "linked",
+        requestedBy: "test",
+      });
+    }
+
+    it("refuses the selected path after `git worktree move` and binds the new path anew", () => {
+      const service = fixture(undefined, linkedRoot);
+      const selected = service.selectLocal({
+        root: linkedRoot,
+        branch: "linked",
+        requestedBy: "t",
+      });
+      const moved = join(scratch, "moved wt ö");
+
+      git("worktree", "move", linkedRoot, moved);
+
+      expect(service.getActive()).toBeUndefined();
+      const rebound = selectAt(moved);
+      expect(rebound.binding.activeRoot).toBe(moved);
+      expect(rebound.instance.workspaceId).not.toBe(selected.instance.workspaceId);
+    });
+
+    it("refuses the selected path after a folder rename, before and after `git worktree repair`", () => {
+      const service = fixture(undefined, linkedRoot);
+      service.selectLocal({ root: linkedRoot, branch: "linked", requestedBy: "t" });
+      const renamed = join(scratch, "renamed wt ü");
+
+      renameSync(linkedRoot, renamed);
+      expect(service.getActive()).toBeUndefined();
+
+      git("worktree", "repair", renamed);
+      expect(service.getActive()).toBeUndefined();
+      expect(selectAt(renamed).binding.activeRoot).toBe(renamed);
+    });
+  });
+
   it("rejects unknown branches without changing HEAD or the active pointer", () => {
     const service = fixture();
     const original = service.selectLocal({ root, branch: "main", requestedBy: "test" });

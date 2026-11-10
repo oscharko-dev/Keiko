@@ -650,6 +650,10 @@ export interface ClientDiagnosticIngestRequest {
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
+  // The reporting page load's own random reference, minted once per document (#4068). Several tabs
+  // or windows of one origin share the session cookie, so without it their streams' reports cannot
+  // be told apart. It names no person, tab title or URL.
+  readonly documentRef?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   // The closed class of the failure the page observed, when it classified one (a refused
   // connection is `unavailable`, never `unknown`); otherwise the server derives it from `kind`.
@@ -924,6 +928,7 @@ const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "clientTs",
   "correlationId",
   "parentCorrelationId",
+  "documentRef",
   "loss",
 ]);
 function allowsClosedReportFailureField(value: Record<string, unknown>, key: string): boolean {
@@ -1014,10 +1019,17 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidClientIdentityContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.errorKind, isActivityLogErrorKind) &&
+    isOptional(value.parentCorrelationId, isCorrelationIdShape) &&
+    isOptional(value.documentRef, isActivityLogCorrelationId)
+  );
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { errorKind, loss, parentCorrelationId } = value;
-  if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
-  if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
+  const { loss } = value;
+  if (!hasValidClientIdentityContext(value)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!hasValidRenderFailure(value)) return false;
@@ -1713,6 +1725,8 @@ export interface ClientSessionRepairIngestRequest {
   readonly errorKind?: ActivityLogErrorKind | undefined;
   // The stream whose failure streak asked for the repair.
   readonly stream?: ClientSessionRepairStream | undefined;
+  // The reporting page load's own random reference (#4068), as on `ClientDiagnosticIngestRequest`.
+  readonly documentRef?: string | undefined;
 }
 
 const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -1722,6 +1736,7 @@ const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "repairCorrelationId",
   "errorKind",
   "stream",
+  "documentRef",
 ]);
 
 // Only a repair's own outcome can name a stream (a stream is never replayed), and a stream-only
@@ -1751,6 +1766,7 @@ export function isClientSessionRepairIngestRequest(
   if (!isOneOf(value.outcome, CLIENT_SESSION_REPAIR_OUTCOMES)) return false;
   if (!isOptional(value.errorKind, isActivityLogErrorKind)) return false;
   if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
+  if (!isOptional(value.documentRef, isActivityLogCorrelationId)) return false;
   return (
     isCorrelationIdShape(value.correlationId) && isCorrelationIdShape(value.repairCorrelationId)
   );
@@ -2315,10 +2331,16 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // missing pairing once instead of every surface reporting its own failure. Closed notice only
   // (#3880).
   "notice-held",
+  // The window first showed a live run's identity: whether the server reported its model and agent,
+  // and the reported tool profile. Reported flags and the closed profile only (#4068 W12).
+  "run-identity-observed",
   // A delivery card showed a step's state: a review's load state, a verified commit's result, a
   // draft delivery's phase, the CI readiness or the journey outcome. These were warn/unknown
   // `client.diagnostic` sentences before (#4271). The step and its closed state only.
   "delivery-step-shown",
+  // The mounted window settled where its repository came from: its own saved selection, the
+  // folder the shell held, or none. The closed source only, never the path (#4068).
+  "repository-resolved",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2351,6 +2373,11 @@ export type ClientCodingWorkbenchProgressState =
 /** A built-in agent by name; every custom primary agent is `custom`, never its name. */
 export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
 export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
+
+/** The tool profile a window was told about; `unreported` when readiness named none. */
+export const CLIENT_CODING_WORKBENCH_TOOL_PROFILES = ["native", "mapped", "unreported"] as const;
+export type ClientCodingWorkbenchToolProfile =
+  (typeof CLIENT_CODING_WORKBENCH_TOOL_PROFILES)[number];
 
 /** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
 export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
@@ -2473,6 +2500,15 @@ const DELIVERY_STEP_STATES = {
   Record<ClientCodingWorkbenchDeliveryStep, readonly ClientCodingWorkbenchDeliveryState[]>
 >;
 
+/**
+ * Where a mounted Workbench window took its repository from: the window's own saved selection, the
+ * folder the shell held when the window first knew it, or none (an active task binding met the
+ * window first).
+ */
+export const CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES = ["window", "shell", "none"] as const;
+export type ClientCodingWorkbenchRepositorySource =
+  (typeof CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2517,9 +2553,19 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
     }
   | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice }
   | {
+      readonly interaction: "run-identity-observed";
+      readonly modelReported: boolean;
+      readonly agentReported: boolean;
+      readonly toolProfile: ClientCodingWorkbenchToolProfile;
+    }
+  | {
       readonly interaction: "delivery-step-shown";
       readonly deliveryStep: ClientCodingWorkbenchDeliveryStep;
       readonly deliveryState: ClientCodingWorkbenchDeliveryState;
+    }
+  | {
+      readonly interaction: "repository-resolved";
+      readonly repositorySource: ClientCodingWorkbenchRepositorySource;
     };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
@@ -2534,6 +2580,9 @@ const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
 const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
 );
+const CODING_WORKBENCH_TOOL_PROFILE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
+);
 const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
 );
@@ -2542,6 +2591,9 @@ const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+);
+const CODING_WORKBENCH_REPOSITORY_SOURCE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2594,10 +2646,18 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
   "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
+  "run-identity-observed": {
+    modelReported: (value) => typeof value === "boolean",
+    agentReported: (value) => typeof value === "boolean",
+    toolProfile: (value) => isSetMember(value, CODING_WORKBENCH_TOOL_PROFILE_SET),
+  },
   "delivery-step-shown": {
     deliveryStep: (value) =>
       typeof value === "string" && Object.hasOwn(DELIVERY_STEP_STATES, value),
     deliveryState: (value) => isSetMember(value, CODING_WORKBENCH_DELIVERY_STATE_SET),
+  },
+  "repository-resolved": {
+    repositorySource: (value) => isSetMember(value, CODING_WORKBENCH_REPOSITORY_SOURCE_SET),
   },
 };
 

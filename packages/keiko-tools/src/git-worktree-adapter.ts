@@ -364,8 +364,32 @@ function structuredCommandEnvironment(
   return safe;
 }
 
+// The rules deny `-c`, so checkout settings travel as pinned config. A policy that already pins Git
+// config keeps its own entries.
+//
+// #4068: Keiko's status and diff reads ignore the system and global config scopes (keiko-git
+// `gitEnv`), while `worktree add` honors them. Git for Windows sets core.autocrlf=true at system
+// scope, so the task worktree held CRLF bytes that those reads compared against LF blobs, and every
+// file with a stale index stat appeared changed. The checkout therefore writes the bytes the reads
+// expect; repository-local config and .gitattributes still apply to both sides alike.
+//
+// #4068 (W7): a task workspace adds its own long base path, so a checkout whose files fit where the
+// user keeps it crosses MAX_PATH there, and Git for Windows then fails `worktree add` with "Filename
+// too long" unless core.longpaths is set.
+function withCheckoutConfig(policy: SandboxPolicy): SandboxPolicy {
+  if (policy.pinnedEnv?.GIT_CONFIG_COUNT !== undefined) return policy;
+  const entries: [string, string][] = [["core.autocrlf", "false"]];
+  if (process.platform === "win32") entries.push(["core.longpaths", "true"]);
+  const pinned: Record<string, string> = { GIT_CONFIG_COUNT: String(entries.length) };
+  entries.forEach(([key, value], index) => {
+    pinned[`GIT_CONFIG_KEY_${String(index)}`] = key;
+    pinned[`GIT_CONFIG_VALUE_${String(index)}`] = value;
+  });
+  return { ...policy, pinnedEnv: { ...policy.pinnedEnv, ...pinned } };
+}
+
 function buildAdapterContext(deps: NodeGitWorktreeAdapterDeps): AdapterContext {
-  const policy = deps.policy ?? DEFAULT_SANDBOX_POLICY;
+  const policy = withCheckoutConfig(deps.policy ?? DEFAULT_SANDBOX_POLICY);
   return {
     runDeps: {
       workspace: deps.workspace,

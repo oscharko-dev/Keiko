@@ -641,6 +641,12 @@ function wrapChild(
   // settling an in-flight request. The manager observes the child exit separately; the write-side
   // broken pipe must not escape as an unhandled process error.
   stdin.on("error", () => undefined);
+  // #4068: on Windows a refused spawn (a workspace cwd at or above MAX_PATH) destroys the read pipes
+  // with `read ENOTCONN` before the child's own error, which `lsp.spawn.failed` records. A pipe that
+  // fails later also ends the transport's frame reader, and the manager observes the exit; unheard,
+  // either would be an uncaught exception that terminates the server.
+  stdout.on("error", () => undefined);
+  stderr.on("error", () => undefined);
   let lastKillResult: LspProcessKillResult | undefined;
   return {
     stdin: {

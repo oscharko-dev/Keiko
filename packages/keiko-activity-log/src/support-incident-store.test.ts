@@ -105,9 +105,13 @@ describe("withdrawn incident metadata", () => {
     expect(openSync).not.toHaveBeenCalled();
     expect(readSync).not.toHaveBeenCalled();
     expect(readdirSync).not.toHaveBeenCalled();
-    expect(lstatSync).toHaveBeenCalledTimes(5);
+    // One metadata read per entry, plus one of the incident directory itself once an entry is
+    // absent: Windows reports ENOENT below a replaced directory, so absence alone proves nothing
+    // (#4068). Neither reads a body.
+    expect(lstatSync).toHaveBeenCalledTimes(6);
+    expect(lstatSync).toHaveBeenLastCalledWith(supportIncidentDirectory(stateDir));
     expect(isSupportIncidentRecordAbsent(stateDir, "../foreign")).toBe(false);
-    expect(lstatSync).toHaveBeenCalledTimes(5);
+    expect(lstatSync).toHaveBeenCalledTimes(6);
   });
 
   it("preserves metadata access errors instead of authorizing a retry", () => {

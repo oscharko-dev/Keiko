@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { TaskWorkspaceError } from "./errors.js";
+import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 import type { TaskWorkspaceDriftMarker } from "@oscharko-dev/keiko-contracts";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import {
@@ -417,8 +418,15 @@ function readStableContainedFile(
 function parseSingleLinePath(raw: string, base: string | undefined): string | undefined {
   const value = raw.trim();
   if (value.length === 0 || value.includes("\0") || /[\r\n]/u.test(value)) return undefined;
-  if (isAbsolute(value)) return normalize(value);
-  return base === undefined ? undefined : normalize(join(base, value));
+  let path: string | undefined;
+  if (isAbsolute(value)) path = normalize(value);
+  else if (base !== undefined) path = normalize(join(base, value));
+  // #4068 W7: a pointer naming a UNC share, a device or a stream would be touched by the next
+  // realpath, which reaches the SMB host or the device before anything is refused.
+  if (path !== undefined && process.platform === "win32" && !isWindowsLocalDriveFilePath(path)) {
+    return undefined;
+  }
+  return path;
 }
 
 interface GitdirPointerLine {

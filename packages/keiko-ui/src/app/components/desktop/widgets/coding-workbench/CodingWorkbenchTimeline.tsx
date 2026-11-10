@@ -1003,18 +1003,14 @@ function MessageContent({
       />
     );
   }
+  // Segments are the feed's transport bound (4,096 characters each), not paragraphs: a long prompt
+  // is one text, so it renders as one block. A paragraph per segment opened a gap at an arbitrary
+  // character, mid-word or between the CR and LF of a Windows line ending (#4068 W12).
   return (
-    <>
-      {message.segments.map((segment, index) => (
-        <p key={`${message.messageId}:${String(index)}`}>
-          {segment.text}
-          {segment.truncated ? <TruncationMark t={t} /> : null}
-        </p>
-      ))}
-      {message.truncated && !message.segments.some((segment) => segment.truncated) ? (
-        <TruncationMark t={t} />
-      ) : null}
-    </>
+    <p>
+      {message.segments.map((segment) => segment.text).join("")}
+      {truncationFor(message, t) ?? null}
+    </p>
   );
 }
 

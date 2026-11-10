@@ -306,6 +306,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.runState": "Laufstatus",
   "codingWorkbench.info.model": "Modell",
   "codingWorkbench.info.agent": "Agent",
+  "codingWorkbench.info.toolProfile": "Tool-Profil",
+  "codingWorkbench.info.toolProfile.native": "Native OpenCode-Tools",
+  "codingWorkbench.info.toolProfile.mapped":
+    "Von Keiko abgebildete Tools, keine vollständige native Parität",
   "codingWorkbench.info.modelReadiness": "Modellbereitschaft",
   "codingWorkbench.info.runtime": "Runtime-Verifikation",
   "codingWorkbench.info.runtimeVersion": "OpenCode-Runtime",
@@ -536,6 +540,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
   "codingWorkbench.repository.folderModeHint":
     "Kein Git-Repository: Der Agent bearbeitet, führt aus und prüft hier, ohne Commits oder Pushes.",
+  "codingWorkbench.repository.folderModeUnsupported":
+    "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
@@ -593,6 +599,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairFailed":
     "Die Reparatur wurde nicht abgeschlossen. Aktualisiere die Task Workspaces und versuche es erneut.",
   "codingWorkbench.setup.findingUnknown": "sein Zustand konnte nicht erneut verifiziert werden",
+  "codingWorkbench.gatewayService.absent":
+    "Coding-Läufe brauchen das Windows-Runtime-Gateway, das nicht installiert ist. Führe im Terminal aus: keiko gateway-service install. Windows fragt einmal nach der Freigabe.",
+  "codingWorkbench.gatewayService.stopped":
+    "Das Windows-Runtime-Gateway ist gestoppt. Es startet kurz nach dem Windows-Start. Bleibt das so, führe im Terminal aus: keiko gateway-service repair",
+  "codingWorkbench.gatewayService.stale":
+    "Das Windows-Runtime-Gateway passt nicht zu dieser Keiko-Version. Führe im Terminal aus: keiko gateway-service repair. Windows fragt einmal nach der Freigabe.",
+  "codingWorkbench.gatewayService.unknown":
+    "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Führe im Terminal aus: keiko gateway-service status",
+  "codingWorkbench.gatewayService.unqualified":
+    "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
@@ -1273,6 +1289,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko hat die Aufgabe abgelehnt, bevor sie lief, zum Beispiel weil eine mit @ referenzierte Datei fehlt, außerhalb des Arbeitsbereichs liegt oder geschützt ist, oder weil der Slash-Befehl nicht verfügbar ist. Prüfe die referenzierten Dateien und den Befehl und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.workspace-unqualified":
+    "Keiko hat dieses Repository abgelehnt, weil seine eigene Coding-Runtime darin liegt, wie in einem Keiko-Checkout. Ein Lauf darf die Runtime, auf der er läuft, nicht ändern. Wähle ein anderes Repository und starte die Aufgabe dort.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":
@@ -1428,6 +1446,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens; {code}). Keiko konnte 32.000 Tokens dafür nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben und starte dann erneut.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko prüft das Kontextfenster des gewählten Modells gerade beim Gateway ({code}). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; starte erneut, sobald die Prüfung abgeschlossen ist.",
+  "codingWorkbench.alert.startRefusedWorkspaceLocation":
+    "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree aus, nicht in deinem eigenen Checkout oder Ordner ({code}). Wähle „Neuer lokaler Worktree“ als Arbeitsort eines Git-Repositorys und starte erneut.",
+  "codingWorkbench.alert.startRefusedWorkspaceVolume":
+    "Keiko legt seine Worktrees auf einem anderen Laufwerk als Windows ab, auf dem die Windows-Sandbox keine Coding-Aufgabe ausführen kann ({code}). Ein Betreiber muss KEIKO_STATE_DIR auf einen Ordner auf dem Windows-Laufwerk, meist C:, setzen und Keiko neu starten.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
   "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",

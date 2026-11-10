@@ -20,6 +20,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { secureRandomId } from "@/lib/secure-random";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import type { ClientDiagnosticCodingHistoryScope } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
@@ -591,6 +592,11 @@ function useFollowedRun(
   const { snapshot, active } = input;
   const statusRead = snapshot !== null;
   const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
+  // #4068 W9: after a server restart the restored run's task was read before the browser was
+  // paired again. The server answers an unpaired caller exactly like an unknown task, so that read
+  // failed, and nothing read it again once the pairing arrived without a page load. The restore
+  // re-runs on each later pairing, like every other session-bound read (F65).
+  const redemptions = useCodingAppSessionRedemptions();
   useEffect(() => {
     const id = snapshot?.conversationId;
     // A status read without a run tells the window no other task's run is pending.
@@ -610,6 +616,7 @@ function useFollowedRun(
     snapshot?.revision,
     activeWorkspaceId,
     active,
+    redemptions,
     load,
     ignoredRun,
     awaitingRun,

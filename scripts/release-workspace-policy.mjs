@@ -27,6 +27,15 @@ export const platformRuntimePackagePrefix = `${scope}keiko-coding-runtime-`;
 export const platformRuntimePackages = Object.freeze({
   "macos-arm64": Object.freeze({ cpu: "arm64", os: "darwin", suffix: "darwin-arm64" }),
   "macos-x64": Object.freeze({ cpu: "x64", os: "darwin", suffix: "darwin-x64" }),
+  // #4068: built and approved, but never published. The main package can declare it only once its
+  // first version exists on the registry (its lockfile must resolve it), so it is listed here as
+  // pending; the first publication removes the flag and adds the optionalDependency together.
+  "windows-x64": Object.freeze({
+    cpu: "x64",
+    os: "win32",
+    suffix: "win32-x64",
+    firstPublication: "pending",
+  }),
 });
 
 export function platformRuntimePackageName(target) {
@@ -36,7 +45,16 @@ export function platformRuntimePackageName(target) {
 }
 
 export const requiredPlatformRuntimePackageNames = Object.freeze(
-  Object.keys(platformRuntimePackages).map(platformRuntimePackageName),
+  Object.keys(platformRuntimePackages)
+    .filter((target) => platformRuntimePackages[target].firstPublication !== "pending")
+    .map(platformRuntimePackageName),
+);
+
+/** Approved packages whose first version is not yet on the registry; the main package omits them. */
+export const pendingPlatformRuntimePackageNames = Object.freeze(
+  Object.keys(platformRuntimePackages)
+    .filter((target) => platformRuntimePackages[target].firstPublication === "pending")
+    .map(platformRuntimePackageName),
 );
 
 export function isPlatformRuntimePackage(name) {

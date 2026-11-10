@@ -14,7 +14,12 @@ import { bffRequestErrorKind } from "@/lib/http";
 
 import { dirty, type DraftEntry, type DraftPhase } from "./chat-draft-state";
 
-function reportFailure(error: unknown, action: "read" | "save"): void {
+// A read refused as an access decision (a browser not yet paired, or a session that has not reached
+// this request yet) settles as the designed `unavailable` phase and is read again once the session
+// changes. The server's `chat.draft.operation` line already records that refusal, so it is no client
+// failure (#4068). A refused save still is: the typed text was not kept.
+function reportFailure(error: unknown, action: "read" | "save", phase: DraftPhase): void {
+  if (action === "read" && phase === "unavailable") return;
   reportClientDiagnostic(`Private chat draft ${action} failed.`, {
     correlationId: correlationIdOf(error),
     errorKind: bffRequestErrorKind(error),
@@ -99,7 +104,7 @@ export class ChatDraftActions {
       if (entry.disposed) return;
       entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error, "read");
+      reportFailure(error, "read", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }
@@ -145,7 +150,7 @@ export class ChatDraftActions {
       if (entry.disposed) return;
       entry.phase = failurePhase(error, "save");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error, "save");
+      reportFailure(error, "save", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }
@@ -167,7 +172,7 @@ export class ChatDraftActions {
       if (entry.disposed) return;
       entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error, "read");
+      reportFailure(error, "read", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }
@@ -198,7 +203,7 @@ export class ChatDraftActions {
       if (entry.disposed) return;
       entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error, "read");
+      reportFailure(error, "read", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }

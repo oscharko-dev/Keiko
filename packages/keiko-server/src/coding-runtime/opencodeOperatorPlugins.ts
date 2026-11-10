@@ -136,7 +136,7 @@ function pluginDefinition(value: unknown): OperatorPluginDefinition | undefined 
 // the operator installed; either names a module by an allowed extension.
 function pluginSource(workspacePath: unknown, path: unknown): OperatorPluginSource | undefined {
   if (typeof workspacePath === "string" && path === undefined)
-    return containedRelative(workspacePath) && moduleFile(workspacePath)
+    return registryRelative(workspacePath) && moduleFile(workspacePath)
       ? { kind: "workspace", path: workspacePath }
       : undefined;
   if (typeof path === "string" && workspacePath === undefined)
@@ -155,10 +155,15 @@ function packageSource(
   if (workspacePath !== undefined || typeof path !== "string" || typeof entry !== "string")
     return undefined;
   if (!isAbsolute(path) || resolve(path) !== path) return undefined;
-  const relative = entry.split("/").join(sep);
-  return containedRelative(relative) && moduleFile(entry) && !entry.includes("\\")
+  return registryRelative(entry) && moduleFile(entry)
     ? { kind: "package", path, entry }
     : undefined;
+}
+
+// A registry's relative path is written with "/" on every host: it is checked in host form, and a
+// backslash is refused so the same registry means the same file everywhere (#4068).
+function registryRelative(value: string): boolean {
+  return !value.includes("\\") && containedRelative(value.split("/").join(sep));
 }
 
 function containedRelative(path: string): boolean {

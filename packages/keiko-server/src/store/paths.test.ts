@@ -153,3 +153,38 @@ describe("assertUiDbOutsideProject", () => {
     }).not.toThrow();
   });
 });
+
+// #4068 W7: Windows paths name the same file whatever their letter case, and process.cwd() keeps
+// the drive letter as the shell spelled it. Every containment rule here must hold for any spelling.
+describe.runIf(process.platform === "win32")("UI DB containment on Windows letter case", () => {
+  const swapCase = (path: string): string =>
+    path === path.toUpperCase() ? path.toLowerCase() : path.toUpperCase();
+
+  it("rejects an explicit database path inside the current workspace in another case", () => {
+    expectCode(
+      () => resolveUiDbPath(swapCase(join(process.cwd(), "keiko-ui.db")), {}),
+      "INVALID_REQUEST",
+    );
+  });
+
+  it("rejects a UI DB path inside a selected project in another case", () => {
+    const project = join(makeTempDir(), "repo");
+    expectCode(() => {
+      assertUiDbOutsideProject(swapCase(join(project, "state", "keiko-ui.db")), project);
+    }, "INVALID_REQUEST");
+  });
+
+  it("rejects a selected project inside the UI DB directory in another case", () => {
+    const dbPath = join(makeTempDir(), "app-data", "keiko-ui.db");
+    expectCode(() => {
+      assertUiDbOutsideProject(dbPath, swapCase(join(dirname(dbPath), "repo")));
+    }, "INVALID_REQUEST");
+  });
+
+  it("still allows the project's own .keiko runtime UI DB in another case", () => {
+    const project = makeTempDir();
+    expect(() => {
+      assertUiDbOutsideProject(swapCase(join(project, ".keiko", "ui", "keiko-ui.db")), project);
+    }).not.toThrow();
+  });
+});

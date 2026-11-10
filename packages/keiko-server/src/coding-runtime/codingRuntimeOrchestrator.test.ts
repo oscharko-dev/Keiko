@@ -35,7 +35,7 @@ import {
   MAX_QUEUED_APPROVALS_PER_RUN,
   type CodingRuntimeDescriptionSupport,
   type CodingRuntimeIssueIntake,
-  type CodingRuntimeOrchestratorResult,
+  type CodingRuntimeStartResult,
   type CodingRuntimeLaunchResolver,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
@@ -119,7 +119,7 @@ type OptionalOrchestratorDeps = Pick<
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
 
-function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
+function successfulSnapshot(result: CodingRuntimeStartResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
   return result.snapshot;
 }
@@ -1000,7 +1000,7 @@ function issueIntake(
   };
 }
 
-function refusedStart(result: CodingRuntimeOrchestratorResult) {
+function refusedStart(result: CodingRuntimeStartResult) {
   if (result.ok) throw new Error("expected a refused start");
   return result;
 }
@@ -1030,6 +1030,21 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start({ ...start, modelId: "PRIVATE_MODEL_CANARY", agent: "plan" });
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      primaryAgent: "plan",
+      modelIdDigest: sha256Hex("PRIVATE_MODEL_CANARY"),
+    });
+    expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_MODEL_CANARY");
+  });
+
   // #4279 (lifecycle audit): a start that shutdown overtook would launch a runtime nobody stops.
   describe("a start that shutdown overtook", () => {
     it("launches nothing when it reaches the lane after shutdown began", async () => {
@@ -2764,6 +2779,37 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // A workspace that holds the runtime is the one managed start failure the operator can repair, so
+  // it alone leaves the internal-error code. Its precise reason stays in the diagnostic either way.
+  it.each([
+    ["workspace-contains-runtime", "workspace-unqualified"],
+    ["sidecar-unmanaged", "runtime-failed"],
+    ["spawn-failed", "runtime-failed"],
+  ] as const)(
+    "settles a start the manager refused with %s as %s",
+    async (managerCode, failureCode) => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+        state: "failed",
+        failureCode,
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: `stage=start:reason=${managerCode}`,
+        }),
+      );
+    },
+  );
+
   // #3565 Observation 17: a model the gateway does not admit reached the customer as
   // `authority-resolution-failed` (403) and the log named no cause. The start now answers with
   // `model-unavailable` and the diagnostic carries the sidecar's closed reason.
@@ -2816,6 +2862,29 @@ describe("CodingRuntimeOrchestrator", () => {
         operation: "coding-runtime.start",
         message: "runtime-start-failed",
         code: "stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient",
+      }),
+    );
+  });
+
+  // #4068: a Windows start the broker cannot confine is refused before any run exists, with a code
+  // the Workbench names and the diagnostic's closed reason.
+  it.each([
+    ["workspace-location-unsupported", "local-checkout"],
+    ["workspace-volume-unsupported", "non-system-volume"],
+  ] as const)("refuses a Windows start as %s and records %s", async (failureCode, reason) => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError(failureCode, false, reason);
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode, runId: "run-1" });
+    expect(f.orchestrator.getSnapshot("run-1")).toBeUndefined();
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: `stage=start:reason=launch-resolution:${failureCode}:${reason}`,
       }),
     );
   });
@@ -2949,6 +3018,62 @@ describe("CodingRuntimeOrchestrator", () => {
         }),
       );
       expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
+    });
+
+    it("states the live run's model and agent on its snapshot across follow-ups (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(
+        await f.orchestrator.start({ ...start, modelId: "gemma-4-31b-it", agent: "plan" }),
+      );
+      expect(started).toMatchObject({ modelId: "gemma-4-31b-it", agent: "plan" });
+
+      const switched = successfulSnapshot(
+        await f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-build",
+          expectedRevision: started.revision,
+          taskIntent: "now implement it",
+          agent: "build",
+        }),
+      );
+      expect(switched).toMatchObject({ modelId: "gemma-4-31b-it", agent: "build" });
+
+      const kept = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: switched.revision,
+        taskIntent: "and test it",
+      });
+      expect(successfulSnapshot(kept)).toMatchObject({ agent: "build" });
+    });
+
+    it("keeps the run's agent when its follow-up was refused (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(await f.orchestrator.start({ ...start, agent: "plan" }));
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false, reason: "agent-unsupported" });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-refused",
+        expectedRevision: started.revision,
+        taskIntent: "try another agent",
+        agent: "build",
+      });
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({ agent: "plan" });
+    });
+
+    it("states a default start's agent and no model it was not told (#4068 W12)", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const snapshot = f.orchestrator.getSnapshot("run-1");
+      expect(snapshot).toMatchObject({ agent: "build" });
+      expect(snapshot).not.toHaveProperty("modelId");
+    });
+
+    it("reports no identity for a run this process did not start (#4068 W12)", () => {
+      const f = fixture(undefined, undefined, [settledRow("run-9", "2026-07-13T12:00:00.000Z", 3)]);
+      const snapshot = f.orchestrator.getSnapshot("run-9");
+      expect(snapshot).toBeDefined();
+      expect(snapshot).not.toHaveProperty("agent");
+      expect(snapshot).not.toHaveProperty("modelId");
     });
 
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {

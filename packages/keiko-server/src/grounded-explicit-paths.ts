@@ -1,4 +1,4 @@
-import { relative, isAbsolute } from "node:path";
+import { relative, isAbsolute, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -154,7 +154,10 @@ export function normalizedExplicitReferencePath(
     if (url.hostname !== "" && url.hostname !== "localhost") return undefined;
     path = localFileUrlPath(url) ?? "";
   }
-  if (isAbsolute(path)) path = relative(root, path);
+  // `relative` answers in the platform's separator. On Windows that is a backslash, which the
+  // strict scope validator refuses, so a native absolute reference is rejoined with `/` there
+  // (#4068). Elsewhere a backslash is an ordinary filename character and stays as it is.
+  if (isAbsolute(path)) path = relative(root, path).split(sep).join("/");
   // A leading current-directory spelling does not change the target. Keep all interior and
   // parent segments for the strict canonical validator; path.normalize would erase that evidence.
   path = path.replace(/^(?:\.\/)+/u, "");

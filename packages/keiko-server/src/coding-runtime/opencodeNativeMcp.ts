@@ -19,7 +19,8 @@ import type { OpenCodeNativeMcpGrants } from "./opencodeNativePolicy.js";
  *  - A local server is a direct child of the runtime and inherits its whole environment, Keiko's
  *    gateway capability and the service password included. It therefore starts through
  *    `/usr/bin/env -i` with a fixed `PATH`, the run's private `HOME` and only the literal variables
- *    the registry names. It runs inside the run's native sandbox like every other descendant.
+ *    the registry names. It runs inside the run's native sandbox like every other descendant. A
+ *    platform without that launcher (Windows today, #4068 W10) admits no local server at all.
  *  - A remote server is internet use: it is written only for a Full access run. Without an
  *    operator-named issuer its OAuth stays off, so the runtime never starts an authorization flow
  *    of its own. With one (#3903 AC3) it is admitted only once that issuer validated
@@ -35,6 +36,14 @@ import type { OpenCodeNativeMcpGrants } from "./opencodeNativePolicy.js";
  */
 export const OPENCODE_NATIVE_MCP_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 const ENV_EXECUTABLE = "/usr/bin/env";
+
+/**
+ * The platforms with an environment-scrubbing launcher for a local server (`/usr/bin/env -i`).
+ * Any other platform has none, so a local server there would inherit Keiko's gateway capability and
+ * service password: it is refused, with its tools and grants (#4068 W10). This is a static refusal,
+ * not a Windows launcher.
+ */
+const ENV_SCRUBBING_LAUNCHER_PLATFORMS: ReadonlySet<NodeJS.Platform> = new Set(["darwin", "linux"]);
 
 /** Where a relayed server is reached: Keiko's relay address and the run's capability for it. */
 export interface OpenCodeNativeMcpRelayEndpoint {
@@ -62,6 +71,8 @@ export interface OpenCodeNativeMcpAdmission {
   readonly grants: OpenCodeNativeMcpGrants;
   /** The admitted servers that authorize through OAuth, by name. */
   readonly oauth: ReadonlyMap<string, AdmittedMcpOAuthServer>;
+  /** Enabled local servers left out because the platform has no env-scrubbing launcher. */
+  readonly refusedLocalServerCount: number;
 }
 
 /** The registry's remote servers a run launched in `mode` would reach through the relay. */
@@ -202,13 +213,22 @@ export function openCodeNativeMcpAdmission(input: {
    * choice is the grant of their read tools. Absent, no server is granted anything.
    */
   readonly grantedServers?: ReadonlySet<string> | undefined;
+  /** The platform the runtime is launched on; absent, this process's. */
+  readonly platform?: NodeJS.Platform | undefined;
 }): OpenCodeNativeMcpAdmission {
   const validations = input.validations ?? new Map<string, McpOAuthIssuerValidation>();
   const relays = input.relays ?? new Map<string, OpenCodeNativeMcpRelayEndpoint>();
-  const candidates =
+  const launcher = ENV_SCRUBBING_LAUNCHER_PLATFORMS.has(input.platform ?? process.platform);
+  const refusesLocal = (server: McpServerDefinition): boolean =>
+    !launcher && server.transport.kind === "local" && !relays.has(server.name);
+  const base =
     input.managed === true
       ? input.servers.filter((server) => relays.has(server.name))
       : input.servers;
+  const refusedLocalServerCount = base.filter(
+    (server) => server.enabled && refusesLocal(server),
+  ).length;
+  const candidates = base.filter((server) => !refusesLocal(server));
   const admitted = admittedServers(candidates, input.mode, validations, relays, input.managed);
   const oauth = new Map(
     admitted.flatMap((server) => {
@@ -226,6 +246,7 @@ export function openCodeNativeMcpAdmission(input: {
       ),
     },
     oauth,
+    refusedLocalServerCount,
     grants: nativeGrants(
       admitted,
       input.managed === true ? new Set(relays.keys()) : new Set(),

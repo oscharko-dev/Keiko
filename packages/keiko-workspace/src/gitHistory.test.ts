@@ -1,8 +1,11 @@
+import { execFileSync } from "node:child_process";
 import {
   linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -521,6 +524,263 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
     expect(utf8Reads).toBe(0);
   });
 });
+
+interface LinkedWorktreeFixture {
+  readonly fixtureRoot: string;
+  readonly workspaceRoot: string;
+  readonly adminDirectory: string;
+}
+
+// fixture/repo/.git/worktrees/demo is the admin directory of the linked worktree fixture/wt.
+function linkedWorktreeFixture(prefix: string, worktreeName = "wt"): LinkedWorktreeFixture {
+  const fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  tempDirs.push(fixtureRoot);
+  const workspaceRoot = join(fixtureRoot, worktreeName);
+  const adminDirectory = join(fixtureRoot, "repo", ".git", "worktrees", "demo");
+  mkdirSync(workspaceRoot);
+  writeGitMetadata(adminDirectory);
+  return { fixtureRoot, workspaceRoot, adminDirectory };
+}
+
+async function expectGitHistory(root: string, available: boolean): Promise<void> {
+  const scope = realScope(root, "scope-linked-worktree-pointer");
+  await expect(gitHistoryAdapter.isAvailable(scope, nodeWorkspaceFs)).resolves.toBe(available);
+  const atoms = await gitHistoryAdapter.lookup(
+    scope,
+    nlq("recent"),
+    DEFAULT_SEARCH_LIMITS,
+    nodeWorkspaceFs,
+    { nowMs: FIXED_NOW },
+  );
+  expect(atoms).toHaveLength(available ? 1 : 0);
+}
+
+describe("gitHistoryAdapter — relative linked-worktree pointers (#4068)", () => {
+  it("accepts the relative pointer pair Git writes with worktree.useRelativePaths", async () => {
+    const { workspaceRoot, adminDirectory } = linkedWorktreeFixture("keiko-git-relative-");
+    writeFileSync(join(workspaceRoot, ".git"), "gitdir: ../repo/.git/worktrees/demo\n", "utf8");
+    writeReciprocalWorktreePointer(adminDirectory, "../../../../wt/.git");
+
+    await expectGitHistory(workspaceRoot, true);
+  });
+
+  it("accepts an absolute forward pointer with a relative backpointer", async () => {
+    const { workspaceRoot, adminDirectory } = linkedWorktreeFixture("keiko-git-relative-back-");
+    writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${adminDirectory}\n`, "utf8");
+    writeReciprocalWorktreePointer(adminDirectory, "../../../../wt/.git");
+
+    await expectGitHistory(workspaceRoot, true);
+  });
+
+  it("refuses a relative backpointer that names another worktree", async () => {
+    const { fixtureRoot, workspaceRoot, adminDirectory } = linkedWorktreeFixture(
+      "keiko-git-relative-other-",
+    );
+    mkdirSync(join(fixtureRoot, "other"));
+    writeFileSync(join(fixtureRoot, "other", ".git"), "gitdir: elsewhere\n", "utf8");
+    writeFileSync(join(workspaceRoot, ".git"), "gitdir: ../repo/.git/worktrees/demo\n", "utf8");
+    writeReciprocalWorktreePointer(adminDirectory, "../../../../other/.git");
+
+    await expectGitHistory(workspaceRoot, false);
+  });
+
+  it.each([
+    ["steps back out after a named segment", "../repo/x/../.git/worktrees/demo"],
+    ["carries a dot segment after a named segment", "../repo/./.git/worktrees/demo"],
+    ["traverses out after the allowlisted segment", "../repo/.git/worktrees/demo/../../../victim"],
+  ])("refuses a relative forward pointer that %s", async (_label, pointer) => {
+    const { workspaceRoot, adminDirectory } = linkedWorktreeFixture("keiko-git-relative-escape-");
+    writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${pointer}\n`, "utf8");
+    writeReciprocalWorktreePointer(adminDirectory, join(workspaceRoot, ".git"));
+
+    await expectGitHistory(workspaceRoot, false);
+  });
+
+  it.each([
+    ["does not start with a parent segment", "wt/.git"],
+    ["steps back out after a named segment", "../../../../wt/../wt/.git"],
+    ["spans more than one line", "../../../../wt/.git\n../../../../wt/.git"],
+  ])("refuses a relative backpointer that %s", async (_label, backpointer) => {
+    const { workspaceRoot, adminDirectory } = linkedWorktreeFixture("keiko-git-relative-back-bad-");
+    writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${adminDirectory}\n`, "utf8");
+    writeReciprocalWorktreePointer(adminDirectory, backpointer);
+
+    await expectGitHistory(workspaceRoot, false);
+  });
+});
+
+// A pointer file is workspace data: a network (UNC) or device target must be refused before the
+// adapter resolves it, because resolving `\\host\share\...` on Windows opens an SMB connection.
+function remotePathRecordingFs(): { readonly fs: WorkspaceFs; readonly remoteCalls: string[] } {
+  const remoteCalls: string[] = [];
+  const record = (path: string): void => {
+    if (/^[\\/]{2}/u.test(path)) remoteCalls.push(path);
+  };
+  const fs: WorkspaceFs = {
+    ...nodeWorkspaceFs,
+    realPath: (path) => {
+      record(path);
+      return nodeWorkspaceFs.realPath(path);
+    },
+    stat: (path) => {
+      record(path);
+      return nodeWorkspaceFs.stat(path);
+    },
+    exists: (path) => {
+      record(path);
+      return nodeWorkspaceFs.exists(path);
+    },
+  };
+  return { fs, remoteCalls };
+}
+
+describe("gitHistoryAdapter — non-local linked-worktree pointers (#4068)", () => {
+  const remoteTargets = [
+    ["a UNC share", "\\\\keiko-unreachable.invalid\\share\\wt\\.git"],
+    ["a device path", "\\\\?\\C:\\keiko-unreachable\\wt\\.git"],
+    ["a forward-slash network path", "//keiko-unreachable.invalid/share/wt/.git"],
+  ] as const;
+
+  it.each(remoteTargets)(
+    "refuses a backpointer that names %s without resolving it",
+    async (_label, backpointer) => {
+      const { workspaceRoot, adminDirectory } = linkedWorktreeFixture("keiko-git-remote-back-");
+      writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${adminDirectory}\n`, "utf8");
+      writeReciprocalWorktreePointer(adminDirectory, backpointer);
+      const { fs, remoteCalls } = remotePathRecordingFs();
+
+      const scope = realScope(workspaceRoot, "scope-remote-backpointer");
+      await expect(gitHistoryAdapter.isAvailable(scope, fs)).resolves.toBe(false);
+      expect(remoteCalls).toEqual([]);
+    },
+  );
+
+  it.each(remoteTargets)(
+    "refuses a forward pointer that names %s without resolving it",
+    async (_label, target) => {
+      const { workspaceRoot } = linkedWorktreeFixture("keiko-git-remote-forward-");
+      const adminTarget = target.replace(/[\\/]wt[\\/]\.git$/u, "/repo/.git/worktrees/demo");
+      writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${adminTarget}\n`, "utf8");
+      const { fs, remoteCalls } = remotePathRecordingFs();
+
+      const scope = realScope(workspaceRoot, "scope-remote-forward-pointer");
+      await expect(gitHistoryAdapter.isAvailable(scope, fs)).resolves.toBe(false);
+      expect(remoteCalls).toEqual([]);
+    },
+  );
+});
+
+function flipDriveLetterCase(path: string): string {
+  const drive = path.charAt(0);
+  const flipped = drive === drive.toLowerCase() ? drive.toUpperCase() : drive.toLowerCase();
+  return `${flipped}${path.slice(1)}`;
+}
+
+function runGit(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", [...args], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: "NUL", GIT_CONFIG_NOSYSTEM: "1" },
+  }).trim();
+}
+
+function gitWorktree(fixtureRoot: string, worktree: string, extra: readonly string[] = []): void {
+  const repository = join(fixtureRoot, "repo");
+  mkdirSync(repository);
+  runGit(repository, ["init", "-qb", "main"]);
+  runGit(repository, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.test",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "init",
+  ]);
+  runGit(repository, [...extra, "worktree", "add", "-q", worktree, "-b", "linked"]);
+}
+
+function gitSupportsRelativeWorktrees(): boolean {
+  if (process.platform !== "win32") return false;
+  const match = /(\d+)\.(\d+)/u.exec(runGit(tmpdir(), ["--version"]));
+  return match !== null && Number(match[1]) * 1000 + Number(match[2]) >= 2048;
+}
+
+// NTFS resolves a path regardless of letter case, so Git keeps working after a case-only rename of
+// the worktree directory or with a backpointer spelled with another case; history must too.
+describe.runIf(process.platform === "win32")(
+  "gitHistoryAdapter — Windows linked-worktree spelling (#4068 W7)",
+  () => {
+    function freshFixtureRoot(prefix: string): string {
+      const fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+      tempDirs.push(fixtureRoot);
+      return fixtureRoot;
+    }
+
+    it("reads history after a case-only rename of the worktree directory", async () => {
+      const fixtureRoot = freshFixtureRoot("keiko-git-win-rename-");
+      gitWorktree(fixtureRoot, join(fixtureRoot, "linked"));
+      const renamed = join(fixtureRoot, "LINKED");
+      renameSync(join(fixtureRoot, "linked"), renamed);
+      expect(runGit(renamed, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("linked");
+
+      await expectGitHistory(renamed, true);
+    });
+
+    it("accepts a backpointer with a lower-case drive letter or another component case", async () => {
+      const { workspaceRoot, adminDirectory } = linkedWorktreeFixture("keiko-git-win-case-");
+      writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${adminDirectory}\n`, "utf8");
+      const dotGit = join(workspaceRoot, ".git");
+      writeReciprocalWorktreePointer(adminDirectory, flipDriveLetterCase(dotGit));
+      await expectGitHistory(workspaceRoot, true);
+
+      writeReciprocalWorktreePointer(adminDirectory, dotGit.replace(/wt\\\.git$/u, "WT\\.git"));
+      await expectGitHistory(workspaceRoot, true);
+    });
+
+    it("accepts a workspace root spelled with another drive-letter case", async () => {
+      const fixtureRoot = freshFixtureRoot("keiko-git-win-drive-");
+      gitWorktree(fixtureRoot, join(fixtureRoot, "linked"));
+
+      await expectGitHistory(flipDriveLetterCase(join(fixtureRoot, "linked")), true);
+    });
+
+    it.runIf(gitSupportsRelativeWorktrees())(
+      "reads history through the relative pointers Git writes",
+      async () => {
+        const fixtureRoot = freshFixtureRoot("keiko-git-win-relative-");
+        const worktree = join(fixtureRoot, "linked");
+        gitWorktree(fixtureRoot, worktree, ["-c", "worktree.useRelativePaths=true"]);
+        expect(readFileSync(join(worktree, ".git"), "utf8")).toMatch(/^gitdir: \.\.\//u);
+
+        await expectGitHistory(worktree, true);
+      },
+    );
+
+    it("reads history for a worktree path with spaces and non-ASCII characters", async () => {
+      const fixtureRoot = freshFixtureRoot("keiko-git-win-unicode-");
+      const worktree = join(fixtureRoot, "linked tree ü 日本");
+      gitWorktree(fixtureRoot, worktree);
+
+      await expectGitHistory(worktree, true);
+    });
+
+    it("refuses a backpointer naming a sibling directory with a similar spelling", async () => {
+      const { workspaceRoot, adminDirectory } = linkedWorktreeFixture("keiko-git-win-other-");
+      writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${adminDirectory}\n`, "utf8");
+      mkdirSync(`${workspaceRoot}x`);
+      writeFileSync(join(`${workspaceRoot}x`, ".git"), `gitdir: ${adminDirectory}\n`, "utf8");
+      writeReciprocalWorktreePointer(adminDirectory, join(`${workspaceRoot}X`, ".git"));
+
+      await expectGitHistory(workspaceRoot, false);
+    });
+  },
+);
 
 describe("gitHistoryAdapter — size cap before read (Finding 6)", () => {
   it("reads an oversized reflog only through the bounded contained-prefix lane", async () => {

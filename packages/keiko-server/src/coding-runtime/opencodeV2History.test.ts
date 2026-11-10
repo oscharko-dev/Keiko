@@ -2604,6 +2604,35 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     ]);
   });
 
+  // #4068 W12: Windows console output (CRLF, bare-CR progress rewrites, a megabyte-long line and
+  // replacement characters) never becomes timeline text: the call projects its state and exit
+  // status alone, whatever the runtime kept of its output.
+  it("projects no part of a large Windows-shaped shell output", () => {
+    const output = `PRIVATE_OUT\r\n[##  ] 50%\r[####] 100%\r\n${"y".repeat(1_048_576)}\uFFFD\r\n`;
+    const history = shellHistory({
+      status: "completed",
+      input: { command: "npm install" },
+      content: [{ type: "text", text: output }],
+      metadata: { status: "completed", truncated: true, exit: 0 },
+    });
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-shell",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const signals = projection
+      .project("ses_shell", history, undefined)
+      .flatMap((event) => projection.takeSignal(event) ?? []);
+
+    expect(signals.filter((signal) => signal.kind === "tool")).toEqual([
+      expect.objectContaining({ callId: "call_shell", state: "succeeded", exitCode: 0 }),
+    ]);
+    const serialized = JSON.stringify(signals);
+    expect(serialized).not.toContain("PRIVATE_OUT");
+    expect(serialized).not.toContain("100%");
+    expect(serialized.length).toBeLessThan(4_096);
+  });
+
   // #4271: a command the runtime killed reports no exit status at all, only how it ended.
   it.each([
     ["ran out of its timeout", { status: "completed", truncated: false, timeout: true }],

@@ -1,3 +1,4 @@
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { memFs } from "./_memfs.js";
 import { createStructuralExecutionControl } from "./structuralExecution.js";
@@ -11,8 +12,8 @@ import {
 } from "./workspacePathDiscovery.js";
 
 const WORKSPACE: WorkspaceInfo = {
-  root: "/repo",
-  selectedRoot: "/repo",
+  root: resolve("/repo"),
+  selectedRoot: resolve("/repo"),
   name: "fixture",
   version: "1",
   testFramework: "vitest",
@@ -92,8 +93,8 @@ describe("workspace path discovery scoped results", () => {
       "packages/app/deep/target.ts",
     ]);
     expect(iterate.mock.calls.map(([path]) => path)).toEqual([
-      "/repo/packages/app",
-      "/repo/packages/app/deep",
+      join(WORKSPACE.root, "packages", "app"),
+      join(WORKSPACE.root, "packages", "app", "deep"),
     ]);
     expect(
       stat.mock.calls.some(([path]) => path.includes("unrelated") || path.includes("other")),
@@ -125,7 +126,7 @@ describe("workspace path discovery scoped results", () => {
       { relativePath: "src/deep", kind: "directory", sizeBytes: 0 },
       { relativePath: "src/large.bin", kind: "file", sizeBytes: 7 },
     ]);
-    expect(iterate.mock.calls.map(([path]) => path)).toEqual(["/repo/src"]);
+    expect(iterate.mock.calls.map(([path]) => path)).toEqual([join(WORKSPACE.root, "src")]);
     expect(result.stats).toMatchObject({ filesDiscovered: 2, directoriesDiscovered: 1 });
     expect(result.coverageIncomplete).toBe(false);
   });
@@ -145,6 +146,40 @@ describe("workspace path discovery scoped results", () => {
       "packages/app/deep/Foo1.tsx",
     ]);
     expect(result.stats.filesDiscovered).toBe(2);
+  });
+
+  // A model that names a directory writes the pattern relative to it (`directory: "src"`,
+  // `query: "math.js"`). Matching only the root-relative path found nothing, and the coding agent
+  // then reported that existing files did not exist (#4068). Root-relative patterns keep working.
+  it("matches a glob written relative to the selected directory", async () => {
+    const result = await discoverWorkspacePaths(
+      WORKSPACE,
+      { mode: "glob", directory: "src", query: "*.js", maxResults: 10 },
+      createStructuralExecutionControl(5_000),
+      memFs(WORKSPACE.root, {
+        "src/math.js": "target",
+        "src/nested/deep.js": "other",
+        "test/math.test.js": "other",
+      }),
+    );
+    expect(result.entries.map((entry) => entry.relativePath)).toEqual(["src/math.js"]);
+    expect(result.matchedCount).toBe(1);
+  });
+
+  it("matches a directory-relative glob that names a nested directory", async () => {
+    const result = await discoverWorkspacePaths(
+      WORKSPACE,
+      { mode: "glob", directory: "packages/app", query: "deep/Foo?.tsx", maxResults: 10 },
+      createStructuralExecutionControl(5_000),
+      memFs(WORKSPACE.root, {
+        "packages/app/deep/Foo1.tsx": "target",
+        "packages/app/Foo2.tsx": "other",
+        "deep/Foo3.tsx": "outside the selected directory",
+      }),
+    );
+    expect(result.entries.map((entry) => entry.relativePath)).toEqual([
+      "packages/app/deep/Foo1.tsx",
+    ]);
   });
 
   it("retains a deterministic bounded sample and reports omitted matching paths", async () => {

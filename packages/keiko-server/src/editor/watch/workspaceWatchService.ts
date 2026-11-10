@@ -823,8 +823,24 @@ class WorkspaceWatchSession {
       this.additionalExclusions,
       fileSystem,
     );
+    const wouldDelete = current.kind === "absent" && this.known.has(change.relativePath);
+    if (wouldDelete && (await this.rootMoved(fileSystem))) return;
     if (!this.ensureLiveRootAuthority()) return;
     this.applyMetadataResult(change.relativePath, current);
+  }
+
+  // A Windows directory watch holds the directory handle, so moving the watched root raises no
+  // watcher error and its events keep arriving relative to the old path (#4068 W7). A known entry
+  // absent below the root is a deletion only while the root itself is still a directory there.
+  // An unavailable root answer is left to the caller's existing ambiguous-event handling.
+  private async rootMoved(fileSystem: WatchEffectFileSystem): Promise<boolean> {
+    const root = await metadataFor(this.root, "", this.additionalExclusions, fileSystem);
+    const moved =
+      root.kind === "absent" ||
+      root.kind === "unsafe" ||
+      (root.kind === "present" && root.metadata.entryKind !== "directory");
+    if (moved && this.ensureLiveRootAuthority()) this.rootReplaced();
+    return moved;
   }
 
   private async reconcileRename(oldRelativePath: string, relativePath: string): Promise<void> {
@@ -836,6 +852,7 @@ class WorkspaceWatchSession {
       this.additionalExclusions,
       fileSystem,
     );
+    if (current.kind === "absent" && (await this.rootMoved(fileSystem))) return;
     if (!this.ensureLiveRootAuthority()) return;
     if (current.kind !== "present") {
       const reason = current.kind === "unsafe" ? "unsafe-path" : "ambiguous-event";

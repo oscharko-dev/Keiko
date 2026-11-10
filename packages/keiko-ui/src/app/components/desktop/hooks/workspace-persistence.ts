@@ -167,14 +167,24 @@ function sanitizeCodingExecutionLocation(value: unknown): AppWindow["cfg"][strin
   return value === "local" || value === "worktree" ? value : undefined;
 }
 
-// A repository path or branch name is the Workbench's own selection: a secret-shaped one is
-// dropped, never replaced by the generic redaction marker, which the window would read as a root.
-function sanitizeCodingSelectionText(value: unknown): AppWindow["cfg"][string] {
-  return typeof value === "string" &&
-    value.length <= MAX_GENERIC_CFG_TEXT_LENGTH &&
-    !isSecretShapedString(value)
-    ? value
-    : undefined;
+const MAX_CODING_ROOT_LENGTH = 1_024;
+const MAX_CODING_BRANCH_LENGTH = 256;
+
+// A Workbench selection is restored only as the exact value it was chosen as: a padded, oversized
+// or secret-shaped value is dropped rather than redacted, because a placeholder root or branch
+// would be offered to the person as if it were real.
+function boundedSecretFreeText(value: unknown, maxLength: number): AppWindow["cfg"][string] {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) return undefined;
+  if (value.trim() !== value || isSecretShapedString(value)) return undefined;
+  return value;
+}
+
+function sanitizeCodingRoot(value: unknown): AppWindow["cfg"][string] {
+  return boundedSecretFreeText(value, MAX_CODING_ROOT_LENGTH);
+}
+
+function sanitizeCodingBranch(value: unknown): AppWindow["cfg"][string] {
+  return boundedSecretFreeText(value, MAX_CODING_BRANCH_LENGTH);
 }
 
 const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;
@@ -213,9 +223,9 @@ function sanitizeChatCreationRequestId(value: unknown): AppWindow["cfg"][string]
 
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
-  "coding:repositoryPath": sanitizeCodingSelectionText,
-  "coding:targetBranch": sanitizeCodingSelectionText,
-  "coding:targetBranchRoot": sanitizeCodingSelectionText,
+  "coding:repositoryPath": sanitizeCodingRoot,
+  "coding:targetBranch": sanitizeCodingBranch,
+  "coding:targetBranchRoot": sanitizeCodingRoot,
   "coding:executionLocation": sanitizeCodingExecutionLocation,
   "files:rootBinding": sanitizeCodingRepositoryBinding,
   "editor:rootBinding": sanitizeCodingRepositoryBinding,

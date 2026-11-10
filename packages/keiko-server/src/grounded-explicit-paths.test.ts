@@ -1,3 +1,6 @@
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -253,6 +256,28 @@ describe("query-named explicit path admission", () => {
       else expect(normalized).toBeUndefined();
     },
   );
+  // #4068 (W7): on Windows `path.relative` answers with backslashes, which the strict scope
+  // validator refuses, so a pasted absolute path or a `file:///C:/…` stack frame was never admitted
+  // as an explicit file there. A native root keeps the case portable.
+  describe("native absolute references (#4068)", () => {
+    const nativeRoot = resolve(tmpdir(), "keiko-explicit-native-root");
+    const nested = join(nativeRoot, "src", "lib", "checker.ts");
+    it.each([
+      ["an absolute path", nested],
+      ["a file URL", pathToFileURL(nested).href],
+    ])("admits %s inside the root with forward slashes", (_label, path) => {
+      expect(normalizedExplicitReferencePath({ path, origin: "query" }, nativeRoot)).toBe(
+        "src/lib/checker.ts",
+      );
+    });
+    it("still refuses an absolute path outside the root", () => {
+      const outside = join(dirname(nativeRoot), "other", "checker.ts");
+      expect(
+        normalizedExplicitReferencePath({ path: outside, origin: "query" }, nativeRoot),
+      ).toBeUndefined();
+    });
+  });
+
   it("formats correlated content-free admission and read evidence", async () => {
     const { log } = await retrieve(`Why does ${TARGET}:1 fail?`);
     const source = log.events.find(

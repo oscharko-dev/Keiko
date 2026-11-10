@@ -271,7 +271,7 @@ those runtimes change.
 ### Preparing an optional npm coding-runtime update
 
 The product publisher is root-only. It does not publish
-`@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64`, and the portable asset build
+`@oscharko-dev/keiko-coding-runtime-darwin-arm64`, `-darwin-x64` or `-win32-x64`, and the portable asset build
 does not publish them either. They have their own publisher, `coding-runtime-publish.yml`, below.
 Keep the root manifest and lockfile on the existing public runtime versions until both replacement
 packages have been published and verified.
@@ -286,8 +286,10 @@ a package without it still activates and only degrades search. After the usual w
 checks an existing candidate against the server's compiled npm-lane approvals and the canonical
 helper source-tree digest, produces a real `npm pack --ignore-scripts` tarball, and writes a
 separate `receipt.json`. It checks the package name, version, architecture, nine-file inventory (the
-original six plus the pinned ripgrep executable, its MIT text and its component SBOM), executable
-permissions, helper, OpenCode and ripgrep bytes, licenses and SBOMs before sealing the artifacts.
+original six plus the pinned ripgrep executable, its MIT text and its component SBOM; ten on
+Windows, which adds `runtime/native/keiko-runtime-supervisor.exe`), executable permissions (macOS
+only: a Windows package carries none), helper, supervisor, OpenCode and ripgrep bytes, licenses and
+SBOMs before sealing the artifacts.
 It verifies the actual archive's ordinary-file inventory, permissions and bounded file bodies
 without extracting files into the filesystem. Changing both a tarball and its receipt's integrity
 cannot authorize unapproved bytes. The artifact directory must be empty; prepared candidates are
@@ -301,6 +303,25 @@ node scripts/build-coding-runtime-npm-package.mjs --verify macos-arm64 1.1.4 /tm
 node scripts/build-coding-runtime-npm-package.mjs --pack macos-x64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-x64 /tmp/keiko-runtime-1.1.4/artifacts-x64
 node scripts/build-coding-runtime-npm-package.mjs --verify macos-x64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-x64 /tmp/keiko-runtime-1.1.4/artifacts-x64
 ```
+
+The Windows package (#4068, owner decision 2026-11-09) is built on a Windows host with MSVC. Both
+native executables are linked with `/Brepro`, so identical sources reproduce the bytes pinned in
+`npmLaneRuntimeApprovals.ts`; the supervisor is pinned to the source tree of
+`native/runtime-supervisor/windows` as the helper is to its own. A Windows npm installation then
+runs `keiko gateway-service install` once (one UAC prompt): without a release helper, the command
+installs the broker for this package's supervisor.
+
+```sh
+node scripts/build-coding-runtime-npm-package.mjs windows-x64 1.2.0 C:\keiko-runtime-1.2.0\windows-x64
+node scripts/build-coding-runtime-npm-package.mjs --pack windows-x64 1.2.0 C:\keiko-runtime-1.2.0\windows-x64 C:\keiko-runtime-1.2.0\artifacts-windows
+node scripts/build-coding-runtime-npm-package.mjs --verify windows-x64 1.2.0 C:\keiko-runtime-1.2.0\windows-x64 C:\keiko-runtime-1.2.0\artifacts-windows
+```
+
+The main package cannot declare a runtime package before its first version exists on the registry,
+because the root lockfile must resolve it. `scripts/release-workspace-policy.mjs` therefore lists
+`windows-x64` with `firstPublication: "pending"`, and the publish-manifest gate omits it until the
+first publication. That publication removes the flag and adds the exact optional dependency and its
+lockfile entry in one change (step 3 below).
 
 The receipt records SHA-256 file hashes, exact helper and upstream OpenCode source commits,
 helper source-tree identity, native byte capability, and the actual tarball's SHA-256 and SHA-512
@@ -345,6 +366,7 @@ publishes only reviewed bytes.
    ```sh
    npm trust github @oscharko-dev/keiko-coding-runtime-darwin-arm64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
    npm trust github @oscharko-dev/keiko-coding-runtime-darwin-x64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
+   npm trust github @oscharko-dev/keiko-coding-runtime-win32-x64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
    ```
 
    The `npm-runtime-publish` environment admits `dev` only and holds no secret.
@@ -370,8 +392,9 @@ at 64 KiB and has left the approvals with the OpenCode 2.2.5 bump (#4271): an in
 holds it reports `payload-unapproved` until it updates, while 1.1.4 stays approved as the previous
 entry until packages built from the current pin are selected. The final fresh npm/Yarn installation validation against the next
 product release remains pending (#3898 AC9). The existing Yarn qualification uses the `node-modules`
-linker and does not prove Plug'n'Play support. Linux and Windows npm runtime availability is
-unchanged; their coding engines remain on the packaged lanes described by ADR-0140.
+linker and does not prove Plug'n'Play support. Linux npm runtime availability is unchanged; its
+coding engine remains on the packaged lane described by ADR-0140. The Windows package is approved
+and qualified locally (#4068) but not yet published.
 
 Release notes are generated from the current version's approved catalog entries by
 `scripts/release-impact-notes.mjs` and published in GitHub Releases. Preview them with

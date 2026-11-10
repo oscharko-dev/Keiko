@@ -9,6 +9,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  closeGatewaySpendBudget,
   createGatewaySpendBudget,
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -71,8 +72,11 @@ function budget(
     },
   );
   if (result === undefined) throw new TypeError("fixture budget missing");
+  openBudgets.push(result);
   return result;
 }
+// Every fixture ledger is closed before its directory is removed, as a disposed server does.
+const openBudgets: NonNullable<ReturnType<typeof createGatewaySpendBudget>>[] = [];
 
 function expectStructuredRejection(reason: string, correlationId: string): void {
   const event = events.at(-1);
@@ -140,10 +144,32 @@ beforeEach(() => {
   events.length = 0;
 });
 afterEach(() => {
+  for (const open of openBudgets.splice(0)) closeGatewaySpendBudget(open);
   rmSync(directory, { recursive: true, force: true });
 });
 
 describe("shared persistent model spend admission", () => {
+  // #4068: the lazily opened ledger was never closed, so on Windows its SQLite file kept the state
+  // directory from being removed after the server's dependencies were disposed.
+  it("closes its ledger on demand, releases the file, and reopens it with its charges", () => {
+    const spend = budget();
+    spend.reserve(capability, request, "before-close").settle(response.usage);
+    closeGatewaySpendBudget(spend);
+    // The ledger file is released: on Windows an open SQLite handle refuses this removal.
+    const ledger = join(directory, "spend.db");
+    expect(() => {
+      rmSync(`${ledger}-wal`, { force: true });
+      rmSync(`${ledger}-shm`, { force: true });
+      rmSync(ledger);
+    }).not.toThrow();
+    // A later reservation reopens a ledger at the same path instead of using a closed handle.
+    expect(() => {
+      spend.reserve(capability, request, "after-close").settle(response.usage);
+    }).not.toThrow();
+    closeGatewaySpendBudget(spend);
+    closeGatewaySpendBudget(undefined);
+  });
+
   it("records reconstructable diagnostics for caught and locally-constructed rejections", () => {
     expect(() =>
       budget().reserve({ ...capability, pricing: undefined }, request, "pricing-rejection"),
