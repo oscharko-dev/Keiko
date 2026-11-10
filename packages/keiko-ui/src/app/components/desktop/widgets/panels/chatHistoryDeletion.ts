@@ -2,7 +2,7 @@ import {
   CLIENT_STAGE_DURATION_MS_MAX,
   type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { deleteChat } from "@/lib/api";
+import { deleteChat, updateChat } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -119,4 +119,37 @@ export async function deleteHistoryChats(
     startedAt,
   );
   return { requestedCount: chats.length, failedIds, detail };
+}
+
+export interface ChatHistoryMoveResult {
+  readonly moved: readonly Chat[];
+  readonly failedIds: readonly string[];
+  readonly detail: string | undefined;
+}
+
+/**
+ * Reversible delete (#4335): marks chats closed so they move to the Deleted tab, where they can be
+ * restored. Failures are reported on the existing client diagnostic path, body-free.
+ */
+export async function moveHistoryChatsToDeleted(
+  chats: readonly Chat[],
+): Promise<ChatHistoryMoveResult> {
+  const correlationId = newClientCorrelationId();
+  const results = await Promise.allSettled(
+    chats.map((chat) => updateChat(chat.id, { status: "closed" })),
+  );
+  const moved: Chat[] = [];
+  const failedIds: string[] = [];
+  let detail: string | undefined;
+  for (const [index, result] of results.entries()) {
+    const chat = chats[index];
+    if (chat === undefined) continue;
+    if (result.status === "fulfilled") {
+      moved.push(result.value.chat);
+    } else {
+      failedIds.push(chat.id);
+      detail = recordFailedDeletion(result.reason, correlationId);
+    }
+  }
+  return { moved, failedIds, detail };
 }

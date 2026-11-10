@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useCallback,
   useId,
   useMemo,
   useRef,
@@ -19,6 +20,8 @@ import {
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";
+import { ChatHistoryDeleteConfirm } from "./ChatHistoryDeleteConfirm";
+import { moveHistoryChatsToDeleted } from "./chatHistoryDeletion";
 import { ChatHistorySelectionToolbar } from "./ChatHistorySelectionToolbar";
 import { useChatHistoryDeletion, useChatHistorySelection } from "./useChatHistorySelection";
 import styles from "./ChatHistorySelection.module.css";
@@ -98,6 +101,9 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [movedBatches, setMovedBatches] = useState(0);
+  const [confirmTargets, setConfirmTargets] = useState<readonly Chat[] | null>(null);
+  const cancelConfirm = useCallback((): void => setConfirmTargets(null), []);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const tablistRef = useRef<HTMLDivElement | null>(null);
   const selectionRef = useRef<HTMLInputElement | null>(null);
@@ -147,19 +153,19 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           detail: deletion.failure.detail ?? "Request failed.",
         });
 
-  // GEN-UI-FOCUS-016: one-click deletion replaces the confirmation. Keep a stable keyboard
-  // destination after the row disappears, rather than leaving focus on the document body.
+  const settledBatches = deletion.completed + movedBatches;
+  // GEN-UI-FOCUS-016: keep a stable keyboard destination after the row disappears, rather than leaving focus on the document body.
   useEffect((): void => {
-    if (deletion.completed === 0) return;
+    if (settledBatches === 0) return;
     const target = selectionRef.current;
     const lastRowRemoved =
       target?.disabled &&
       (document.activeElement === target || document.activeElement === document.body);
-    if (focusedDeletionRef.current === deletion.completed && !lastRowRemoved) return;
-    focusedDeletionRef.current = deletion.completed;
+    if (focusedDeletionRef.current === settledBatches && !lastRowRemoved) return;
+    focusedDeletionRef.current = settledBatches;
     if (target !== null && !target.disabled) target.focus({ preventScroll: true });
     else searchRef.current?.focus({ preventScroll: true });
-  }, [chats.length, deletion.completed]);
+  }, [chats.length, settledBatches]);
 
   const removeChats = async (targets: readonly Chat[]): Promise<void> => {
     setEditingId(null);
@@ -167,6 +173,38 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     setError(null);
     const result = await deletion.remove(targets);
     if (result !== undefined) selection.retain(result.failedIds, scope);
+  };
+
+  // #4335: Delete on an active chat is reversible — it moves the chat to the Deleted tab. Only
+  // the Deleted tab purges, and only after an explicit confirmation naming what goes.
+  const moveToDeleted = async (targets: readonly Chat[]): Promise<void> => {
+    if (targets.length === 0) return;
+    setEditingId(null);
+    setRenameError(null);
+    setError(null);
+    setBusyId(MOVE_BUSY_ID);
+    try {
+      const result = await moveHistoryChatsToDeleted(targets);
+      for (const chat of result.moved) actions.replaceChat(chat);
+      selection.retain(result.failedIds, scope);
+      if (result.failedIds.length > 0) {
+        setError(
+          optionalT("chat.history.moveFailed", {
+            count: result.failedIds.length,
+            detail: result.detail ?? "Request failed.",
+          }),
+        );
+      }
+    } finally {
+      setBusyId(null);
+      setMovedBatches((previous) => previous + 1);
+    }
+  };
+
+  const confirmPurge = (): void => {
+    const targets = confirmTargets;
+    setConfirmTargets(null);
+    if (targets !== null) void removeChats(targets);
   };
 
   // GEN-UI-KEYBOARD-008: roving tablist keyboard nav (WAI-ARIA APG tabs pattern).
@@ -313,7 +351,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         disabled={busy}
         aria-label={t("chat.history.action.deletePermanent", { title: chat.title })}
         title={t("chat.history.selection.permanent")}
-        onClick={() => void removeChats([chat])}
+        onClick={() => setConfirmTargets([chat])}
       >
         {optionalT("chat.history.purge")}
       </button>
@@ -336,8 +374,8 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         className="lk-btn lk-btn-ghost"
         disabled={rowBusy}
         aria-label={t("chat.history.action.delete", { title: chat.title })}
-        title={t("chat.history.selection.permanent")}
-        onClick={() => void removeChats([chat])}
+        title={t("chat.history.selection.recoverable")}
+        onClick={() => void moveToDeleted([chat])}
       >
         {t("common.delete")}
       </button>
@@ -444,7 +482,12 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         busy={busy || session.loading}
         toggleAll={selection.toggleAll}
         clear={selection.clear}
-        removeSelected={() => void removeChats(selection.selectedChats)}
+        permanent={view === "deleted"}
+        removeSelected={() =>
+          view === "deleted"
+            ? setConfirmTargets(selection.selectedChats)
+            : void moveToDeleted(selection.selectedChats)
+        }
       />
       {error !== null || deletionError !== null ? (
         <div className="lk-alert" role="alert">
@@ -535,10 +578,18 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           })
         )}
       </div>
+      {confirmTargets === null ? null : (
+        <ChatHistoryDeleteConfirm
+          targets={confirmTargets}
+          onConfirm={confirmPurge}
+          onCancel={cancelConfirm}
+        />
+      )}
     </div>
   );
 }
 
+const MOVE_BUSY_ID = "moving-to-deleted";
 const HISTORY_TAB_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
 function historyNextTab(key: string, from: number, length: number): number {
   if (key === "ArrowRight") return (from + 1) % length;
