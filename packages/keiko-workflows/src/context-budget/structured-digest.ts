@@ -453,22 +453,24 @@ export function mergeHistoryDigests(
 // dropped some of them. `satisfies` requires one entry per CompactionDigest field, so a new field is
 // a type error here until its loss is checked too.
 function digestLostItems(older: CompactionDigest, newer: CompactionDigest): boolean {
+  const lostIn = (field: keyof CompactionDigest): boolean =>
+    fieldLostItems(older[field], newer[field]);
   const lost = {
-    preservedFacts: fieldLostItems(older.preservedFacts, newer.preservedFacts),
-    assumptions: fieldLostItems(older.assumptions, newer.assumptions),
-    userConstraints: fieldLostItems(older.userConstraints, newer.userConstraints),
-    decisions: fieldLostItems(older.decisions, newer.decisions),
-    openQuestions: fieldLostItems(older.openQuestions, newer.openQuestions),
-    filesInspected: fieldLostItems(older.filesInspected, newer.filesInspected),
-    filesChanged: fieldLostItems(older.filesChanged, newer.filesChanged),
-    commandOutcomes: fieldLostItems(older.commandOutcomes, newer.commandOutcomes),
-    failingTests: fieldLostItems(older.failingTests, newer.failingTests),
-    droppedCategories: fieldLostItems(older.droppedCategories, newer.droppedCategories),
+    preservedFacts: lostIn("preservedFacts"),
+    assumptions: lostIn("assumptions"),
+    userConstraints: lostIn("userConstraints"),
+    decisions: lostIn("decisions"),
+    openQuestions: lostIn("openQuestions"),
+    filesInspected: lostIn("filesInspected"),
+    filesChanged: lostIn("filesChanged"),
+    commandOutcomes: lostIn("commandOutcomes"),
+    failingTests: lostIn("failingTests"),
+    droppedCategories: lostIn("droppedCategories"),
   } satisfies { readonly [Field in keyof CompactionDigest]-?: boolean };
   return Object.values(lost).some(Boolean);
 }
 
-function fieldLostItems<T>(older: readonly T[] = [], newer: readonly T[] = []): boolean {
+function fieldLostItems(older: readonly unknown[] = [], newer: readonly unknown[] = []): boolean {
   return new Set([...older, ...newer].map((item) => JSON.stringify(item))).size > 16;
 }
 

@@ -1,35 +1,24 @@
-// Event emission helper for the bug-investigation workflow (ADR-0009 D5). Owns the monotonic seq
-// counter and stamps every event with the shared envelope ({ schemaVersion, runId, fingerprint,
-// seq, ts }). The fingerprint is SHA-256(workflowId + canonical(report) + modelId) truncated to 16
-// hex chars — the same shape as the harness fingerprinter — reusing `canonicalise` from the harness
-// barrel so two structurally equal reports fingerprint identically regardless of key order.
-// Sensitive fields are redacted by the CALLER before handing the event here.
+// Event emission for the bug-investigation workflow (ADR-0009 D5). The fingerprint identity is
+// { workflowId, report, modelId }; run-event-envelope.ts owns the envelope, the seq counter and the
+// fingerprint shape. Sensitive fields are redacted by the CALLER before handing the event here.
 
-import { createHash } from "node:crypto";
 import { canonicalise } from "@oscharko-dev/keiko-harness";
 import type { BugReportInput } from "./types.js";
 import type { BugInvestigationEvent, BugWorkflowEventSink } from "./events.js";
-
-const FINGERPRINT_HEX_CHARS = 16;
+import {
+  createRunEventEmitter,
+  runFingerprint,
+  type RunEventBody,
+  type RunEventEmitter,
+} from "../run-event-envelope.js";
 
 export function computeBugFingerprint(report: BugReportInput, modelId: string): string {
-  const canonical = canonicalise({ workflowId: "bug-investigation", report, modelId });
-  return createHash("sha256")
-    .update(canonical, "utf8")
-    .digest("hex")
-    .slice(0, FINGERPRINT_HEX_CHARS);
+  return runFingerprint(canonicalise({ workflowId: "bug-investigation", report, modelId }));
 }
 
-// The fields the emitter fills in on every event; the caller supplies the rest of the discriminated
-// union member minus the envelope.
-type EnvelopeFields = "schemaVersion" | "runId" | "fingerprint" | "seq" | "ts";
-export type BugEventBody = {
-  [E in BugInvestigationEvent as E["type"]]: Omit<E, EnvelopeFields>;
-}[BugInvestigationEvent["type"]];
+export type BugEventBody = RunEventBody<BugInvestigationEvent>;
 
-export interface BugEventEmitter {
-  readonly emit: (body: BugEventBody) => void;
-}
+export type BugEventEmitter = RunEventEmitter<BugInvestigationEvent>;
 
 export function createBugEventEmitter(
   sink: BugWorkflowEventSink,
@@ -37,21 +26,5 @@ export function createBugEventEmitter(
   fingerprint: string,
   now: () => number,
 ): BugEventEmitter {
-  let seq = 0;
-  return {
-    emit: (body: BugEventBody): void => {
-      seq += 1;
-      // The body is a complete discriminated-union member minus the envelope, so re-attaching the
-      // envelope yields a BugInvestigationEvent that the compiler checks without a cast.
-      const event: BugInvestigationEvent = {
-        schemaVersion: "1" as const,
-        runId,
-        fingerprint,
-        seq,
-        ts: now(),
-        ...body,
-      };
-      sink.emit(event);
-    },
-  };
+  return createRunEventEmitter(sink, runId, fingerprint, now);
 }

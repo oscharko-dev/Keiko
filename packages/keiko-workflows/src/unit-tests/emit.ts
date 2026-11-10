@@ -1,35 +1,24 @@
-// Event emission helper for the workflow (ADR-0008 D4). Owns the monotonic seq counter and stamps
-// every event with the shared envelope ({ schemaVersion, runId, fingerprint, seq, ts }). The
-// fingerprint is SHA-256(workflowId + canonical(target) + modelId) truncated to 16 hex chars — the
-// same shape as the harness fingerprinter — reusing `canonicalise` from the harness barrel so two
-// structurally equal targets fingerprint identically regardless of key order. Sensitive fields are
-// redacted by the CALLER before handing the event here (this helper does not inspect payloads).
+// Event emission for the unit-test workflow (ADR-0008 D4). The fingerprint identity is
+// { workflowId, target, modelId }; run-event-envelope.ts owns the envelope, the seq counter and the
+// fingerprint shape. Sensitive fields are redacted by the CALLER before handing the event here.
 
-import { createHash } from "node:crypto";
 import { canonicalise } from "@oscharko-dev/keiko-harness";
 import type { UnitTestTarget } from "./types.js";
 import type { WorkflowEvent, WorkflowEventSink } from "./events.js";
-
-const FINGERPRINT_HEX_CHARS = 16;
+import {
+  createRunEventEmitter,
+  runFingerprint,
+  type RunEventBody,
+  type RunEventEmitter,
+} from "../run-event-envelope.js";
 
 export function computeFingerprint(target: UnitTestTarget, modelId: string): string {
-  const canonical = canonicalise({ workflowId: "unit-test-generation", target, modelId });
-  return createHash("sha256")
-    .update(canonical, "utf8")
-    .digest("hex")
-    .slice(0, FINGERPRINT_HEX_CHARS);
+  return runFingerprint(canonicalise({ workflowId: "unit-test-generation", target, modelId }));
 }
 
-// The fields the emitter fills in on every event; the caller supplies the rest of the discriminated
-// union member minus the envelope.
-type EnvelopeFields = "schemaVersion" | "runId" | "fingerprint" | "seq" | "ts";
-export type WorkflowEventBody = {
-  [E in WorkflowEvent as E["type"]]: Omit<E, EnvelopeFields>;
-}[WorkflowEvent["type"]];
+export type WorkflowEventBody = RunEventBody<WorkflowEvent>;
 
-export interface EventEmitter {
-  readonly emit: (body: WorkflowEventBody) => void;
-}
+export type EventEmitter = RunEventEmitter<WorkflowEvent>;
 
 export function createEventEmitter(
   sink: WorkflowEventSink,
@@ -37,21 +26,5 @@ export function createEventEmitter(
   fingerprint: string,
   now: () => number,
 ): EventEmitter {
-  let seq = 0;
-  return {
-    emit: (body: WorkflowEventBody): void => {
-      seq += 1;
-      // The body is a complete discriminated-union member minus the envelope, so re-attaching the
-      // envelope yields a WorkflowEvent that the compiler checks without a cast.
-      const event: WorkflowEvent = {
-        schemaVersion: "1" as const,
-        runId,
-        fingerprint,
-        seq,
-        ts: now(),
-        ...body,
-      };
-      sink.emit(event);
-    },
-  };
+  return createRunEventEmitter(sink, runId, fingerprint, now);
 }
