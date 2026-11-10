@@ -125,6 +125,29 @@ describe("a review in several parts (Issue #4130)", () => {
     expect(settledLine?.extra).toMatchObject({ reviewerPromptTokens: 2 * 4_321 });
   });
 
+  it("verifies the Reviewer model's readiness again right before each part's session", async () => {
+    const order: string[] = [];
+    const filing = reviewerFiling([]);
+    await review({
+      runtime: (request, h) => {
+        order.push(`session:${String(request.diffPart?.index)}`);
+        return filing(request, h);
+      },
+      ensureReady: (modelId) => {
+        order.push(`ready:${modelId}`);
+        return Promise.resolve();
+      },
+    });
+    expect(order).toEqual([
+      "ready:reviewer-model",
+      "ready:checker-model",
+      "ready:reviewer-model",
+      "session:0",
+      "ready:reviewer-model",
+      "session:1",
+    ]);
+  });
+
   it("records each part's session and the part count on the Activity Log", async () => {
     const { h } = await review({});
     const reviewing = h.log

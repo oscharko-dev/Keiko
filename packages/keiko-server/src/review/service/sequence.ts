@@ -411,7 +411,15 @@ function partLine(
     : { ...base, outcome: fact.outcome };
 }
 
-/** One part's Reviewer session: totals, rules digest, cleanup and candidates go into the state. */
+/**
+ * One part's Reviewer session: totals, rules digest, cleanup and candidates go into the state.
+ *
+ * The Reviewer model's readiness is verified again right before the session (#4130). The run's
+ * start verified it, but the launch mints its authority only for a model with a fresh readiness
+ * observation, and the preparation or an earlier part's session can outlast that observation's
+ * lifetime. The launch then refused a model that was serving, and the run settled
+ * `skipped/model-unavailable`. A fresh observation makes the check a no-op.
+ */
 async function runReviewerPart(
   deps: ReviewSequenceDeps,
   runtime: Pick<ReviewRuntimeService, "run">,
@@ -419,6 +427,7 @@ async function runReviewerPart(
   state: ReviewRunState,
   input: ReviewerPart,
 ): Promise<ReviewerPartStep> {
+  await deps.models.ensureReady?.(ctx.reviewerModelId, ctx.correlationId);
   const startedAt = deps.now();
   const result = await runtime.run({
     reviewRunId: ctx.runId,
