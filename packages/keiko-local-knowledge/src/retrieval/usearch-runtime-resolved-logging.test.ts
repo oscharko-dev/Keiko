@@ -139,9 +139,11 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
           event.op === "search.native-runtime-resolved" && event.extra?.workerState === undefined,
       );
       // resolvedIndex() and buildSearchIndex() both call targetRuntime() for the same request;
-      // the second call is already a warm hit against the cache the first call just populated,
-      // so exactly one line — not two — is written for one logical search call.
-      expect(coldLines).toHaveLength(1);
+      // on POSIX the second call is already a warm hit against the cache the first call just
+      // populated, so exactly one line — not two — is written for one logical search call. Windows
+      // re-verifies on every call by design (no unforgeable change signal), so each call resolves
+      // and logs.
+      expect(coldLines).toHaveLength(process.platform === "win32" ? 2 : 1);
       expect(coldLines[0]).toMatchObject({
         level: "info",
         category: "search",
@@ -160,6 +162,8 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
       );
       expect(persisted).toMatchObject({ resolutionState: "resolved", version: FIXTURE_VERSION });
 
+      // A warm search on POSIX reuses the memoized verification and writes no resolution line; on
+      // Windows it verifies, and logs, again.
       events.length = 0;
       await searchUsearchAnnIndex(request);
       expect(
@@ -167,7 +171,7 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
           (event) =>
             event.op === "search.native-runtime-resolved" && event.extra?.workerState === undefined,
         ),
-      ).toHaveLength(0);
+      ).toHaveLength(process.platform === "win32" ? 2 : 0);
     } finally {
       __resetTargetRuntimeCacheForTests();
       rmSync(fixtureDir, { recursive: true, force: true });

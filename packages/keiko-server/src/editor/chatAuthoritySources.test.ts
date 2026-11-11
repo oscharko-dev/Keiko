@@ -59,11 +59,11 @@ function register(
 }
 
 describe("one accepted Chat turn with both source authorities", () => {
-  it("shares cumulative tool and prompt budgets, including duplicate registration", () => {
+  it("shares the cumulative tool budget, including duplicate registration", () => {
     const registry = new EditorAgentAuthorityRegistry();
     const values = sources();
     const refs = register(registry, values);
-    const reserve = (index: number, toolCalls: number, promptTokens: number): boolean => {
+    const reserve = (index: number, toolCalls: number): boolean => {
       const ref = refs.at(index);
       const value = values.at(index);
       if (ref === undefined || value === undefined) throw new Error("Missing source");
@@ -71,23 +71,25 @@ describe("one accepted Chat turn with both source authorities", () => {
         ref,
         value.subject,
         "autonomous-delivery",
-        { toolCalls, promptTokens, patchBytes: 0 },
+        { toolCalls, patchBytes: 0 },
         NOW,
       ).ok;
     };
-    expect(reserve(0, 19, 9_999)).toBe(true);
+    expect(reserve(0, 19)).toBe(true);
     expect(register(registry, values)).toEqual(refs);
-    expect(reserve(1, 2, 0)).toBe(false);
-    expect(reserve(1, 1, 1)).toBe(true);
-    expect(reserve(0, 1, 0)).toBe(false);
-    expect(reserve(1, 0, 1)).toBe(false);
+    expect(reserve(1, 2)).toBe(false);
+    expect(reserve(1, 1)).toBe(true);
+    expect(reserve(0, 1)).toBe(false);
+    // Keiko does not limit tokens (#4346): no prompt budget remains, so an effect that books no
+    // tool call still fits once the tool budget is spent.
+    expect(reserve(1, 0)).toBe(true);
   });
 
   it.each([
     { runId: "other-turn" },
     { requestedMode: "governed-assist", effectiveMode: "governed-assist" },
     {
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 21, maxPromptTokens: 10_000, maxPatchBytes: 0 },
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 21, maxPatchBytes: 0 },
     },
     { expiresAt: "2026-07-09T14:00:00.000Z" },
   ])("refuses mismatching turn facts atomically: %j", (patch) => {
@@ -175,22 +177,24 @@ describe("local Knowledge with external MCP source authority", () => {
         envelope: { actionClasses: value.actionClasses, connectorScopes: value.connectorScopes },
       });
     }
-    const reserve = (index: 0 | 1, toolCalls: number, promptTokens: number): boolean => {
+    const reserve = (index: 0 | 1, toolCalls: number): boolean => {
       const ref = refs[index];
       if (ref === undefined) throw new Error("Missing source reference");
       return registry.reserveForChat(
         ref,
         values[index].subject,
         "autonomous-delivery",
-        { toolCalls, promptTokens, patchBytes: 0 },
+        { toolCalls, patchBytes: 0 },
         NOW,
       ).ok;
     };
-    expect(reserve(0, 19, 9_999)).toBe(true);
-    expect(reserve(1, 2, 0)).toBe(false);
-    expect(reserve(1, 1, 1)).toBe(true);
-    expect(reserve(0, 1, 0)).toBe(false);
-    expect(reserve(1, 0, 1)).toBe(false);
+    expect(reserve(0, 19)).toBe(true);
+    expect(reserve(1, 2)).toBe(false);
+    expect(reserve(1, 1)).toBe(true);
+    expect(reserve(0, 1)).toBe(false);
+    // Keiko does not limit tokens (#4346): no prompt budget remains, so an effect that books no
+    // tool call still fits once the tool budget is spent.
+    expect(reserve(1, 0)).toBe(true);
   });
 
   it.each([
@@ -198,7 +202,7 @@ describe("local Knowledge with external MCP source authority", () => {
     { connectorScopes: ["mcp.tools"] as const },
     { requestedMode: "governed-assist", effectiveMode: "governed-assist" },
     {
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 21, maxPromptTokens: 10_000, maxPatchBytes: 0 },
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 21, maxPatchBytes: 0 },
     },
   ])("refuses a widened or mismatched Knowledge source atomically: %j", (patch) => {
     const registry = new EditorAgentAuthorityRegistry();

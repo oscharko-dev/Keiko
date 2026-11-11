@@ -983,6 +983,37 @@ describe("runPortableCli", () => {
     );
   });
 
+  it("keeps a managed root whose name only begins with two dots home-relative", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const managedRoot = join(home, "..Keiko");
+    const stateDir = join(root, "state");
+    writeWindowsFixture(source);
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      capture().io,
+      windowsPortableEnv(home),
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(0);
+    expect(readPortableInstallRegistration(stateDir)).toMatchObject({
+      managedRootLocator: { kind: "home-relative", path: "..Keiko" },
+    });
+  });
+
   it("retries an attested failed setup after rollback removed the managed root", async () => {
     const root = tempRoot();
     const home = join(root, "home");

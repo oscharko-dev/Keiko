@@ -13,6 +13,7 @@ import {
   readOwnerPrivateFile,
 } from "../ownerPrivateStateFile.js";
 import { onlyKeys, plainRecord } from "../operatorRegistryJson.js";
+import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 import { CODING_RUNTIME_FAILURE_TRACE_FIELDS } from "./codingRuntimeActivityOperations.js";
 import {
   readPluginPackage,
@@ -96,6 +97,7 @@ export function loadOperatorPluginRegistry(stateDir: string): OperatorPluginRegi
 /** The closed registry grammar: `{ "schemaVersion": 1, "plugins": [{ name, workspacePath | path, sha256 }] }`. */
 export function parseOperatorPluginRegistry(
   value: unknown,
+  platform: NodeJS.Platform = process.platform,
 ):
   | { readonly ok: true; readonly plugins: readonly OperatorPluginDefinition[] }
   | { readonly ok: false; readonly reason: RegistryReason } {
@@ -108,7 +110,7 @@ export function parseOperatorPluginRegistry(
   if (entries.length > MAX_PLUGINS) return { ok: false, reason: "too-many-plugins" };
   const plugins: OperatorPluginDefinition[] = [];
   for (const entry of entries as readonly unknown[]) {
-    const plugin = pluginDefinition(entry);
+    const plugin = pluginDefinition(entry, platform);
     if (plugin === undefined) return { ok: false, reason: "plugin-invalid" };
     if (plugins.some((known) => known.name === plugin.name))
       return { ok: false, reason: "duplicate-plugin" };
@@ -117,7 +119,10 @@ export function parseOperatorPluginRegistry(
   return { ok: true, plugins };
 }
 
-function pluginDefinition(value: unknown): OperatorPluginDefinition | undefined {
+function pluginDefinition(
+  value: unknown,
+  platform: NodeJS.Platform,
+): OperatorPluginDefinition | undefined {
   const entry = plainRecord(value);
   if (entry === undefined || !onlyKeys(entry, ["name", "workspacePath", "path", "entry", "sha256"]))
     return undefined;
@@ -128,7 +133,7 @@ function pluginDefinition(value: unknown): OperatorPluginDefinition | undefined 
   const source =
     entry.entry === undefined
       ? pluginSource(workspacePath, path)
-      : packageSource(workspacePath, path, entry.entry);
+      : packageSource(workspacePath, path, entry.entry, platform);
   return source === undefined ? undefined : { name, source, sha256 };
 }
 
@@ -136,7 +141,7 @@ function pluginDefinition(value: unknown): OperatorPluginDefinition | undefined 
 // the operator installed; either names a module by an allowed extension.
 function pluginSource(workspacePath: unknown, path: unknown): OperatorPluginSource | undefined {
   if (typeof workspacePath === "string" && path === undefined)
-    return containedRelative(workspacePath) && moduleFile(workspacePath)
+    return registryRelative(workspacePath) && moduleFile(workspacePath)
       ? { kind: "workspace", path: workspacePath }
       : undefined;
   if (typeof path === "string" && workspacePath === undefined)
@@ -151,14 +156,22 @@ function packageSource(
   workspacePath: unknown,
   path: unknown,
   entry: unknown,
+  platform: NodeJS.Platform,
 ): OperatorPluginSource | undefined {
   if (workspacePath !== undefined || typeof path !== "string" || typeof entry !== "string")
     return undefined;
+  // A UNC or device root would reach a remote host on the first listing (#4068 W7).
+  if (platform === "win32" && !isWindowsLocalDriveFilePath(path)) return undefined;
   if (!isAbsolute(path) || resolve(path) !== path) return undefined;
-  const relative = entry.split("/").join(sep);
-  return containedRelative(relative) && moduleFile(entry) && !entry.includes("\\")
+  return registryRelative(entry) && moduleFile(entry)
     ? { kind: "package", path, entry }
     : undefined;
+}
+
+// A registry's relative path is written with "/" on every host: it is checked in host form, and a
+// backslash is refused so the same registry means the same file everywhere (#4068).
+function registryRelative(value: string): boolean {
+  return !value.includes("\\") && containedRelative(value.split("/").join(sep));
 }
 
 function containedRelative(path: string): boolean {

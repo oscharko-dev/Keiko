@@ -214,7 +214,9 @@ describe("workflow Node toolchain parity", () => {
     // The four-target portable secure-read matrix adds one pinned setup-node definition.
     // The isolated Firefox smoke matrix adds one more governed setup definition. The owner-dispatched
     // coding-runtime package publisher (#3898 AC8, coding-runtime-publish.yml) adds one more.
-    expect(withSetupNode).toHaveLength(37);
+    // The owner-dispatched published-install matrix on Windows x64 and Intel macOS (#4068 W3)
+    // adds one more.
+    expect(withSetupNode).toHaveLength(38);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

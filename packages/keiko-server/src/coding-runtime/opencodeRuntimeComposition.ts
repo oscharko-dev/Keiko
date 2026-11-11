@@ -10,6 +10,10 @@ import {
 } from "./nativeWebSearch.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  inheritWindowsParentDacl,
+  protectWindowsOwnerPrivateFile,
+} from "@oscharko-dev/keiko-security/windows-owner-private";
+import {
   openCodeAgentModelBinding,
   type OpenCodeAgentModelBinding,
   type OpenCodeAgentModelCatalog,
@@ -123,6 +127,7 @@ import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
   classifyOpenCodeV2PromptFailure,
   createOpenCodeV2HttpClient,
+  OpenCodeV2HttpStatusError,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
   type OpenCodeV2MessageWindow,
@@ -303,6 +308,7 @@ import {
   openCodeCatalogSettlementBudgetMs,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -402,6 +408,31 @@ const NATIVE_FORMATTER_BOUND_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-native-policy"],
   proofIds: ["coding-runtime.native-formatter.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const NATIVE_MCP_LOCAL_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-mcp-local.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeMcpLocalRefused",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-env-scrubbing-launcher"],
+    },
+    refusedServerCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-mcp-local.refused.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -621,8 +652,21 @@ export interface OpenCodeRuntimeCompositionInput {
    * is the grant of their read tools, in every mode. Absent, the run grants nothing.
    */
   readonly mcpGrantedServers?: ReadonlySet<string> | undefined;
+  /** The platform deciding whether a local MCP server has an env-scrubbing launcher; default this process's. */
+  readonly mcpPlatform?: NodeJS.Platform | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
+  /**
+   * How a run's state directory is kept private to this account (#4068): the directory itself, and
+   * a resumed run's database copy, which then inherits from it. Absent, the Windows default applies
+   * and every other host keeps its 0700 and 0600 mode bits.
+   */
+  readonly runStateAccess?:
+    | {
+        readonly protectRoot: (runRoot: string) => void;
+        readonly adoptCopy: (path: string) => void;
+      }
+    | undefined;
   readonly contextGeometry: OpenCodeContextGeometry;
   readonly capabilities: {
     readonly modelGatewayCapability: string;
@@ -845,6 +889,8 @@ export interface OpenCodeRunPort {
    * abandoned, `"interrupted"` the runtime ended it at a human's refusal of a question.
    */
   readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<OpenCodeTurnOutcome>;
+  /** Whether the run's last failed turn wait ran out of its envelope duration (W9, #4068). */
+  readonly turnWaitExpired?: (runId: string) => boolean;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
   readonly answerQuestion: (
     runId: string,
@@ -1192,7 +1238,7 @@ async function finishNativeTurn(
     await profile.mcpRecovery(run.runId);
     return false;
   }
-  if (outcome === false && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+  if (outcome === false && !signal.aborted) recordFailedTurnEnd(diagnostics, run);
   if (profile.snapshots) recordOpenCodeTurnImage(run, activityLog);
   return outcome;
 }
@@ -1236,6 +1282,7 @@ function createRunPort(
       if (run === undefined) return false;
       return finishNativeTurn(run, signal, profile, diagnostics, activityLog);
     },
+    turnWaitExpired: (runId) => readyRun(runId)?.runtimeAdapter.turnWaitExpired?.() === true,
     replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
     ...createQuestionRunPort(readyRun, diagnostics, activityLog),
   };
@@ -1642,7 +1689,33 @@ function recordOpenCodeTurnFailure(
   });
 }
 
-function openCodeTurnFailureCode(runRoot: string, stage: OpenCodeTurnFailureStage): string {
+/**
+ * A turn wait that ran out of its own deadline is the run's envelope duration ending (the wait
+ * counts the same `maxRuntimeMs` from a later start), not a runtime failure: it stays on the
+ * timeline as a routine observation, and the run's settlement records the bound with its
+ * `timeout` error kind (W9, #4068). Any other failed turn keeps the failure channel.
+ */
+function recordFailedTurnEnd(diagnostics: ServerDiagnosticSink | undefined, run: ReadyRun): void {
+  if (run.runtimeAdapter.turnWaitExpired?.() !== true) {
+    recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+    return;
+  }
+  emitServerDiagnostic(diagnostics, {
+    correlationId: run.runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode.turn",
+    errorClass: "OpenCodeTurnWaitExpired",
+    message: "runtime-turn-expired",
+    diagnosticOutcome: "routine",
+    code: openCodeTurnFailureCode(run.runRoot, "terminal-expired"),
+  });
+}
+
+function openCodeTurnFailureCode(
+  runRoot: string,
+  stage: OpenCodeTurnFailureStage | "terminal-expired",
+): string {
   const database = projectOpenCodeRuntimeDatabase(join(runRoot, "state", "opencode.db"));
   return `stage=${stage}:${database}`;
 }
@@ -2014,7 +2087,7 @@ async function materializePrepare(
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
 ): Promise<OpenCodeLifecyclePrepareResult> {
-  createPrivateState(runRoot);
+  createPrivateState(runRoot, runStateAccessOf(input).protectRoot);
   if (input.ripgrepVerified === false) refuseRipgrepDownload(runRoot);
   const continuation = seedRun(input, request, runRoot);
   await bridge.start();
@@ -2114,6 +2187,7 @@ function runLaunchProfile(
   readonly mcp: OpenCodeNativeMcpAdmission | undefined;
 } {
   const mcp = nativeMcpAdmission(input, request, runRoot, mcpChecks);
+  recordNativeMcpLocalRefused(input.activityLog, request, mcp);
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
@@ -2153,6 +2227,7 @@ function nativeMcpAdmission(
     relays: checks.relays,
     managed: input.mcpRelay?.managed !== undefined,
     grantedServers: input.mcpGrantedServers,
+    platform: input.mcpPlatform,
   });
 }
 
@@ -2378,11 +2453,13 @@ function seedRun(
 ): RunContinuation | undefined {
   const context = continuationContext(input);
   if (context === undefined) return undefined;
-  return seedContinuation(context, {
+  const continuation = seedContinuation(context, {
     runId: request.runId,
     runRoot,
     workspaceRoot: request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
   });
+  if (continuation !== undefined) runStateAccessOf(input).adoptCopy(runtimeDatabasePath(runRoot));
+  return continuation;
 }
 
 /** A native run's built-in formatter decision, once per prepared run (parity row C07). */
@@ -2460,6 +2537,26 @@ function recordNativeFormatterBound(
         ...(entries === undefined
           ? {}
           : { configuredEntryCount: entries.admitted, refusedEntryCount: entries.refused }),
+      },
+    ),
+  );
+}
+
+/** A native run left local MCP servers out for want of an env-scrubbing launcher: a count only. */
+function recordNativeMcpLocalRefused(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  mcp: OpenCodeNativeMcpAdmission | undefined,
+): void {
+  if (mcp === undefined || mcp.refusedLocalServerCount === 0) return;
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_MCP_LOCAL_REFUSED_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        reason: "no-env-scrubbing-launcher",
+        refusedServerCount: mcp.refusedLocalServerCount,
       },
     ),
   );
@@ -3441,8 +3538,8 @@ async function runGatewayChallenge(
         accepted || signal.aborted ? "live-verification-failed" : "gateway-refused",
       );
     return verified;
-  } catch {
-    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+  } catch (error) {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed", error);
     return false;
   } finally {
     input.gatewayReadiness.clear(run.runId, verified);
@@ -3467,10 +3564,13 @@ function gatewayChallengePrecondition(
   return input.capabilities.modelGatewayCapability.length < 32 ? "capability-invalid" : undefined;
 }
 
+// #4068: a challenge that threw keeps its frames, cause classes and the runtime's HTTP status, so a
+// refused prompt reads apart from a broken route; the error's own text is never recorded.
 function recordGatewayChallengeFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   reason: GatewayChallengePreconditionFailure,
+  error?: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
@@ -3480,6 +3580,10 @@ function recordGatewayChallengeFailure(
     errorClass: "OpenCodeGatewayChallengeFailure",
     message: "runtime-handshake-failed",
     code: `stage=gateway-challenge:reason=${reason}`,
+    ...(error === undefined
+      ? {}
+      : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+    ...(error instanceof OpenCodeV2HttpStatusError ? { httpStatus: error.status } : {}),
   });
 }
 
@@ -3562,9 +3666,10 @@ function distinctCapabilities(
   );
 }
 
-function createPrivateState(runRoot: string): void {
+function createPrivateState(runRoot: string, protectRunState: (path: string) => void): void {
   mkdirSync(runRoot, { recursive: true, mode: 0o700 });
   chmodSync(runRoot, 0o700);
+  protectRunState(runRoot);
   for (const name of ["config", "state", "home", "tmp"]) {
     const path = join(runRoot, name);
     mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -3580,6 +3685,38 @@ function createPrivateState(runRoot: string): void {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
   }
+}
+
+type RunStateAccess = NonNullable<OpenCodeRuntimeCompositionInput["runStateAccess"]>;
+
+/**
+ * Windows reports synthesized mode bits, so `chmod` keeps nobody out: a run's database, history and
+ * configuration would inherit whatever the state directory's parents grant (#4068). The run root is
+ * made owner-private with inheritable entries before anything is written below it, so every file
+ * the runtime or Keiko writes there is private too. The confined tree's own grant is added to this
+ * directory at launch (ADR-0043 D18) and is inherited the same way.
+ *
+ * A resumed run's database arrives as the retained store's owner-only copy, whose protected DACL
+ * would keep that grant out, so the runtime could not open it and every resumed run on Windows ended
+ * before its first turn. The copy is handed to the run root's inherited DACL instead: exactly as
+ * private as the run root, and reachable by the tree.
+ */
+const WINDOWS_RUN_STATE_ACCESS: RunStateAccess = Object.freeze({
+  protectRoot: (runRoot: string): void => {
+    if (process.platform === "win32") {
+      protectWindowsOwnerPrivateFile(runRoot, { inheritToChildren: true });
+    }
+  },
+  // Without a copy there is nothing to hand over: the runtime creates its database below the root.
+  adoptCopy: (path: string): void => {
+    if (process.platform === "win32" && existsSync(path)) inheritWindowsParentDacl(path);
+  },
+});
+
+function runStateAccessOf(
+  input: Pick<OpenCodeRuntimeCompositionInput, "runStateAccess">,
+): RunStateAccess {
+  return input.runStateAccess ?? WINDOWS_RUN_STATE_ACCESS;
 }
 
 // OpenCode looks for `rg` on PATH, then in `<data home>/opencode/bin`, and only then downloads one

@@ -72,6 +72,7 @@ import {
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
+import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
 import { WorkspaceStorageScopeContext, workspaceStorageKey } from "./workspace-storage";
@@ -2307,8 +2308,16 @@ function canonicalFilesWindow(
   if (current === null || scope.root === undefined || !isScopeConnected([current], requested))
     return window;
   const cfg = { ...window.cfg };
+  // The request carries the normalized `/` spelling while the window keeps the native one (`C:\`
+  // on Windows), so the roots are compared by connected-scope identity, not as strings (#4068).
+  const requestedIdentity = chatConnectedScopeIdentity(requested);
   for (const key of ["root", "resolvedRoot"]) {
-    if (cfg[key] === requested.root) cfg[key] = scope.root;
+    const value = cfg[key];
+    if (
+      typeof value === "string" &&
+      chatConnectedScopeIdentity({ ...requested, root: value }) === requestedIdentity
+    )
+      cfg[key] = scope.root;
   }
   return { ...window, cfg };
 }

@@ -72,6 +72,8 @@ function trustedGitArgs(root: string, args: readonly string[]): string[] {
     ...GIT_BASE_ARGS,
     "-C",
     root,
+    // #4068 (W7): Git for Windows cannot check out a path of MAX_PATH or more without core.longpaths.
+    ...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []),
     "-c",
     "core.fsmonitor=false",
     "-c",

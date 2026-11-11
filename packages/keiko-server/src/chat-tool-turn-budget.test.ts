@@ -11,6 +11,12 @@ describe("chat tool turn budget (#4175)", () => {
     expect(CHAT_TOOL_TURN_BUDGET.maxRuntimeMs).toBeGreaterThan(DEFAULT_LIMITS.maxWallTimeMs);
     expect(CHAT_TOOL_TURN_BUDGET.maxToolCalls).toBeGreaterThan(DEFAULT_LIMITS.maxToolCalls);
     expect(CHAT_TOOL_TURN_BUDGET.maxPatchBytes).toBe(0);
+    // Keiko does not limit tokens (#4346): the turn budget carries no cumulative prompt quota.
+    expect(Object.keys(CHAT_TOOL_TURN_BUDGET).sort()).toEqual([
+      "maxPatchBytes",
+      "maxRuntimeMs",
+      "maxToolCalls",
+    ]);
     expect(Object.isFrozen(CHAT_TOOL_TURN_BUDGET)).toBe(true);
   });
 
@@ -18,7 +24,6 @@ describe("chat tool turn budget (#4175)", () => {
     const budget = {
       maxRuntimeMs: 1_000,
       maxToolCalls: 4,
-      maxPromptTokens: 10,
       maxPatchBytes: 0,
     } as const;
     expect(chatToolTurnLimits(budget)).toMatchObject({
@@ -33,7 +38,6 @@ describe("chat tool turn budget (#4175)", () => {
     const narrow = {
       maxRuntimeMs: 1,
       maxToolCalls: 1,
-      maxPromptTokens: 1,
       maxPatchBytes: 0,
     } as const;
     expect(chatToolTurnBudget({ chatToolTurnBudget: narrow })).toBe(narrow);
@@ -44,13 +48,11 @@ describe("chat tool turn budget (#4175)", () => {
     const wide = {
       maxRuntimeMs: 1,
       maxToolCalls: CHAT_TOOL_TURN_BUDGET.maxToolCalls + 1,
-      maxPromptTokens: CHAT_TOOL_TURN_BUDGET.maxPromptTokens + 1,
       maxPatchBytes: 0,
     } as const;
     expect(chatToolTurnBudget({ chatToolTurnBudget: wide })).toEqual({
       maxRuntimeMs: 1,
       maxToolCalls: CHAT_TOOL_TURN_BUDGET.maxToolCalls,
-      maxPromptTokens: CHAT_TOOL_TURN_BUDGET.maxPromptTokens,
       maxPatchBytes: 0,
     });
   });

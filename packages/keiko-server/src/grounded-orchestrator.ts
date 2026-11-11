@@ -8902,13 +8902,10 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function strongFileCacheIdentity(
-  scopePath: string,
-  canonicalRelativePath: string,
-  stat: WorkspaceStat,
-): string | undefined {
+// `scopePath` must already be admitted by `isCanonicalAllowedContainedPath`, which proves that the
+// canonical relative path equals it under the platform's separator normalization.
+function strongFileCacheIdentity(scopePath: string, stat: WorkspaceStat): string | undefined {
   if (
-    canonicalRelativePath !== scopePath ||
     !stat.isFile ||
     stat.isSymbolicLink ||
     stat.hardLinkCount !== 1 ||
@@ -8920,7 +8917,7 @@ function strongFileCacheIdentity(
   }
   return JSON.stringify({
     scopePath,
-    canonicalRelativePath,
+    canonicalRelativePath: scopePath,
     size: stat.size,
     fileIdentity: stat.fileIdentity,
     mtimeNs: stat.mtimeNs,
@@ -8947,7 +8944,10 @@ async function fileStateCacheIdentity(
     throwIfCancelled(signal);
     if (nowMs() >= deadlineAtMs) return Promise.resolve(undefined);
     const stat = guardedFs.stat(target.path);
-    const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
+    // `target.realRelative` keeps the native separator, so on Windows comparing it with `scopePath`
+    // again refused every nested file and the warm cache never hit (#4068); the admission above
+    // already proved the two equal.
+    const strongIdentity = strongFileCacheIdentity(scopePath, stat);
     if (strongIdentity === undefined) return Promise.resolve(undefined);
     return (identity.length + 1) % 64 === 0
       ? groundedSchedulingYield(signal).then(() => strongIdentity)

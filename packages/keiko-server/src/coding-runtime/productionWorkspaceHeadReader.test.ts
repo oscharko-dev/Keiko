@@ -76,6 +76,39 @@ describe("production workspace HEAD reader", () => {
   });
 });
 
+// #4068 W7: a planted `.git` pointer naming a UNC share or a device is refused before any lstat,
+// realpath or open could reach the SMB host or the device.
+describe.runIf(process.platform === "win32")("Windows Git pointers outside a local drive", () => {
+  it.each([
+    String.raw`\\keiko-unreachable.invalid\share\repo\.git\worktrees\task`,
+    String.raw`\\.\pipe\keiko-head-reader`,
+    String.raw`\\?\C:\repo\.git\worktrees\task`,
+  ])("never touches %s", (target) => {
+    const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-pointer-"));
+    roots.push(root);
+    const workspace = join(root, "task");
+    mkdirSync(workspace);
+    writeFileSync(join(workspace, ".git"), `gitdir: ${target}\n`, "utf8");
+    git(root, ["init", "-q", "-b", "main"]);
+    const touched: string[] = [];
+    const record = (path: string): string => {
+      touched.push(path);
+      return path;
+    };
+    const fileSystem: ProductionWorkspaceHeadFileSystem = {
+      close: closeSync,
+      fstat: fstatSync,
+      lstat: (path) => lstatSync(record(path)),
+      open: (path) => openSync(record(path), "r"),
+      read: readSync,
+      realpath: (path) => realpathSync(record(path)),
+    };
+    expect(readProductionWorkspaceHead(workspace, root, fileSystem)).toBeUndefined();
+    expect(readProductionWorkspaceHead(root, workspace, fileSystem)).toBeUndefined();
+    expect(touched.filter((path) => path.startsWith("\\\\"))).toEqual([]);
+  });
+});
+
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" }).trim();
 }

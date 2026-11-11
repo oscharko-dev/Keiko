@@ -9,6 +9,7 @@ import {
   isChatJiraPodId,
   isDesktopChatCreationRequestId,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/text-safety";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
@@ -167,14 +168,38 @@ function sanitizeCodingExecutionLocation(value: unknown): AppWindow["cfg"][strin
   return value === "local" || value === "worktree" ? value : undefined;
 }
 
-// A repository path or branch name is the Workbench's own selection: a secret-shaped one is
-// dropped, never replaced by the generic redaction marker, which the window would read as a root.
-function sanitizeCodingSelectionText(value: unknown): AppWindow["cfg"][string] {
-  return typeof value === "string" &&
-    value.length <= MAX_GENERIC_CFG_TEXT_LENGTH &&
-    !isSecretShapedString(value)
-    ? value
-    : undefined;
+const MAX_CODING_ROOT_LENGTH = 1_024;
+const MAX_CODING_BRANCH_LENGTH = 256;
+
+// A Workbench selection is restored only as the exact value it was chosen as: a padded, oversized
+// or secret-shaped value is dropped rather than redacted, because a placeholder root or branch
+// would be offered to the person as if it were real.
+function boundedSecretFreeText(value: unknown, maxLength: number): AppWindow["cfg"][string] {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) return undefined;
+  if (value.trim() !== value || isSecretShapedString(value)) return undefined;
+  return value;
+}
+
+// eslint-disable-next-line no-control-regex -- C0 and DEL are exactly what is refused
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
+
+// A restored root is a local absolute path (POSIX or Windows drive): never relative, home-relative,
+// a UNC share, a device path or a URL, and never carrying a control character.
+function sanitizeCodingRoot(value: unknown): AppWindow["cfg"][string] {
+  const text = boundedSecretFreeText(value, MAX_CODING_ROOT_LENGTH);
+  if (typeof text !== "string" || CONTROL_CHARACTER.test(text)) return undefined;
+  return isLocalAbsolutePath(text) ? text : undefined;
+}
+
+// A restored branch keeps a git ref-name shape: no control character, space, `..`, leading `-`,
+// or ref-forbidden character.
+const GIT_REF_FORBIDDEN = /(?:[\s~^:?*[\\]|\.\.|@\{|\/\/|\.lock(?:\/|$)|[./]$)/u;
+
+function sanitizeCodingBranch(value: unknown): AppWindow["cfg"][string] {
+  const text = boundedSecretFreeText(value, MAX_CODING_BRANCH_LENGTH);
+  if (typeof text !== "string" || CONTROL_CHARACTER.test(text)) return undefined;
+  if (text.startsWith("-") || text.startsWith("/") || text.startsWith(".")) return undefined;
+  return GIT_REF_FORBIDDEN.test(text) ? undefined : text;
 }
 
 const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;
@@ -213,9 +238,9 @@ function sanitizeChatCreationRequestId(value: unknown): AppWindow["cfg"][string]
 
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
-  "coding:repositoryPath": sanitizeCodingSelectionText,
-  "coding:targetBranch": sanitizeCodingSelectionText,
-  "coding:targetBranchRoot": sanitizeCodingSelectionText,
+  "coding:repositoryPath": sanitizeCodingRoot,
+  "coding:targetBranch": sanitizeCodingBranch,
+  "coding:targetBranchRoot": sanitizeCodingRoot,
   "coding:executionLocation": sanitizeCodingExecutionLocation,
   "files:rootBinding": sanitizeCodingRepositoryBinding,
   "editor:rootBinding": sanitizeCodingRepositoryBinding,

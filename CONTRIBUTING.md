@@ -169,7 +169,9 @@ truncated.". Counts only — never a message, path or run name.
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
 agent's name), a start the human gave up before it had a run (`start-cancelled`), a jump to a pending decision, a repository bound for trust (its two body-free ids)
-and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
+and a changeset received for review (`fileCount`). Once per mounted window, `repository-resolved`
+records where its repository came from (`repositorySource`: `window`, `shell` or `none`; never the
+path; #4068). These were warn/unknown `client.diagnostic`
 notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.

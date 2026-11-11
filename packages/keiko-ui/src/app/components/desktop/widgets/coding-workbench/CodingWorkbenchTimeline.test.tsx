@@ -847,11 +847,11 @@ describe("CodingWorkbenchTimeline", () => {
     expect(rows[2]).not.toHaveTextContent("runtime-failed");
   });
 
-  // F9 (#3873, live Gemma qualification): a run its prompt allowance ended read "The model or a
+  // F9 (#3873, live Gemma qualification): a run its time limit ended read "The model or a
   // Workbench guard rejected this turn" and then "The coding run ended with an internal error". The
-  // settled failure now names the exhausted allowance with its next step, and nothing on the
+  // settled failure now names the exhausted time limit with its next step, and nothing on the
   // timeline claims an internal error.
-  it("names the exhausted prompt allowance on the failed run instead of an internal error", async () => {
+  it("names the exhausted time limit on the failed run instead of an internal error", async () => {
     const turnRejected: CodingWorkbenchRuntimeSseEvent = {
       schemaVersion: "1",
       cursor: "cursor-4",
@@ -869,7 +869,7 @@ describe("CodingWorkbenchTimeline", () => {
       kind: "status",
       state: "failed",
       occurredAt: "2026-07-19T12:00:01.000Z",
-      failureCode: "prompt-allowance-exhausted",
+      failureCode: "envelope-duration-exhausted",
     };
     const { container } = render(
       <Timeline
@@ -882,12 +882,12 @@ describe("CodingWorkbenchTimeline", () => {
     const settled = [...container.querySelectorAll('[data-timeline-kind="event"]')].at(-1);
     expect(settled).toHaveTextContent("Coding run failed");
     expect(settled).toHaveAttribute("data-event-tone", "attention");
-    expect(settled).toHaveTextContent(/used up its prompt allowance/iu);
+    expect(settled).toHaveTextContent(/used up its time limit/iu);
     expect(settled).toHaveTextContent(/start the task again as a new run/iu);
-    expect(settled).toHaveTextContent("KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS");
-    expect(settled).toHaveTextContent(/up to 20,000,000 tokens/iu);
+    expect(settled).toHaveTextContent("KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES");
+    expect(settled).toHaveTextContent(/up to 480 minutes/iu);
     expect(settled).toHaveTextContent(/restart Keiko after changing it/iu);
-    expect(settled).not.toHaveTextContent("prompt-allowance-exhausted");
+    expect(settled).not.toHaveTextContent("envelope-duration-exhausted");
     expect(container).not.toHaveTextContent(/internal error/iu);
 
     const report = await axe(container);
@@ -2649,5 +2649,68 @@ describe("CodingWorkbenchTimeline render cost", () => {
     );
 
     expect(collate).not.toHaveBeenCalled();
+  });
+});
+
+// #4068 W12: a feed message's segments are the transport bound of 4,096 characters, not
+// paragraphs. A long operator prompt pasted from a Windows console (CRLF line endings) used to
+// render as one paragraph per segment, so a gap opened at an arbitrary character — here between
+// the CR and the LF of one line ending.
+describe("CodingWorkbenchTimeline long operator messages", () => {
+  function feedWithLongPrompt(truncated: boolean): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-long",
+          messages: [
+            {
+              messageId: "message-long",
+              role: "user",
+              occurredAt: AT,
+              segments: [
+                { kind: "text", text: `${"a".repeat(4_095)}\r`, truncated: false },
+                { kind: "text", text: "\nnpm ERR! code 1\r\n", truncated },
+              ],
+              truncated,
+            },
+          ],
+          tools: [],
+          truncated,
+        },
+      ],
+    };
+  }
+
+  it("renders every segment of one message as one text block", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithLongPrompt(false))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const message = container.querySelector(`[data-message-role="user"] .${styles.messageText}`);
+    const paragraphs = message?.querySelectorAll("p") ?? [];
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]?.textContent).toBe(`${"a".repeat(4_095)}\r\nnpm ERR! code 1\r\n`);
+    expect(message?.querySelector(`.${styles.truncationMark}`)).toBeNull();
+  });
+
+  it("discloses a cut message once, at the end of its text", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithLongPrompt(true))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const message = container.querySelector(`[data-message-role="user"] .${styles.messageText}`);
+    const marks = message?.querySelectorAll(`.${styles.truncationMark}`) ?? [];
+    expect(marks).toHaveLength(1);
+    expect(message?.querySelector("p")?.lastElementChild).toBe(marks[0]);
+    expect(container).toHaveTextContent("Activity truncated.");
   });
 });

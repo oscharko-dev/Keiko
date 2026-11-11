@@ -511,6 +511,29 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // #4068: the work locations a runtime can confine are a closed, nonempty set without repeats.
+  it("validates the offered work locations as a closed nonempty set", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build"],
+    };
+    for (const executionLocations of [["worktree"], ["local", "worktree"], undefined]) {
+      expect(
+        validateCodingWorkbenchRuntimeReadiness({ ...readiness, executionLocations }),
+      ).toMatchObject({ ok: true });
+    }
+    for (const executionLocations of [[], ["worktree", "worktree"], ["remote"], "worktree"]) {
+      expect(validateCodingWorkbenchRuntimeReadiness({ ...readiness, executionLocations })).toEqual(
+        { ok: false, errors: ["executionLocations is invalid"] },
+      );
+    }
+  });
+
   it("validates the server-computed selectable agents as a closed list that keeps the default", () => {
     const readiness = {
       schemaVersion: "1",
@@ -628,6 +651,50 @@ describe("Coding Workbench runtime API contracts", () => {
         }),
       ).toMatchObject({ ok: true });
     }
+  });
+
+  it("admits a run's own model and agent on its snapshot and refuses malformed ones (#4068 W12)", () => {
+    const snapshot = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: AT,
+      runId: "run-1",
+      modelId: "gemma-4-31b-it",
+      agent: "plan",
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toMatchObject({ ok: true });
+    for (const malformed of [
+      { modelId: "" },
+      { modelId: "line\nbreak" },
+      { modelId: 7 },
+      { agent: "../escape" },
+      { agent: "general" },
+    ]) {
+      expect(validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, ...malformed })).toMatchObject({
+        ok: false,
+      });
+    }
+  });
+
+  it("admits only the closed tool profile on readiness (#4068 W12)", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: false,
+      runtimeUnavailableReason: "runtime-unqualified",
+      selectableAgents: ["build"],
+    };
+    for (const toolProfile of ["native", "mapped"]) {
+      expect(validateCodingWorkbenchRuntimeReadiness({ ...readiness, toolProfile })).toMatchObject({
+        ok: true,
+      });
+    }
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, toolProfile: "direct" }),
+    ).toMatchObject({ ok: false });
   });
 
   it("projects a content-free runtime snapshot with no authority details", () => {

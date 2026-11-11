@@ -875,7 +875,24 @@ function runArchiveTar(args, policy, options = {}) {
   } catch (error) {
     return onFailure("trusted archive executable is unavailable", error);
   }
-  return run(executable, args, { ...options, timeout: TAR_COMMAND_TIMEOUT_MS }, onFailure);
+  const [mode, archivePath, ...rest] = args;
+  return run(
+    executable,
+    [mode, ...localArchiveArgument(archivePath), ...rest],
+    { ...options, ...localArchiveCwd(archivePath), timeout: TAR_COMMAND_TIMEOUT_MS },
+    onFailure,
+  );
+}
+
+// Git for Windows puts GNU tar first on PATH, and GNU tar reads `C:\…\package.tgz` as the remote
+// host `C` (#4068). On Windows the archive is therefore named relative to its own directory, which
+// GNU tar and the system bsdtar both read as a local file. Every caller passes it after the mode.
+function localArchiveArgument(archivePath) {
+  return [process.platform === "win32" ? `./${basename(archivePath)}` : archivePath];
+}
+
+function localArchiveCwd(archivePath) {
+  return process.platform === "win32" ? { cwd: dirname(archivePath) } : {};
 }
 
 function throwPackedExtractionFailure(message, cause) {

@@ -76,7 +76,7 @@ beforeEach(() => {
     remoteDigest: template.issueBinding?.remoteDigest ?? "",
     prNumber: 17,
     correlationId: "11111111-2222-4333-8444-555555555555",
-    limits: { maxRuntimeMs: 60_000, maxToolCalls: 10, maxPromptTokens: 1_000 },
+    limits: { maxRuntimeMs: 60_000, maxToolCalls: 10 },
     stillAuthorized: (): boolean => live,
   };
   budget = createCodingRuntimeCiRepairBudgetStore({
@@ -118,18 +118,12 @@ function stored(): CiRepairBudgetRecord {
   if (typeof row?.record_json !== "string") throw new Error("missing persisted budget");
   return JSON.parse(row.record_json) as CiRepairBudgetRecord;
 }
-function charge(
-  expectedRevision: number,
-  toolCalls = 1,
-  promptTokens = 10,
-  scope = context,
-): CiRepairBudgetResult {
+function charge(expectedRevision: number, toolCalls = 1, scope = context): CiRepairBudgetResult {
   return budget.charge(scope, {
     attemptId: "attempt-1",
     chargeId: `charge-${String(expectedRevision)}`,
     expectedRevision,
     toolCalls,
-    promptTokens,
   });
 }
 function successor(runId: string, headSha?: string): CiRepairBudgetContext {
@@ -182,7 +176,7 @@ describe("cumulative Code-task CI repair accounting", () => {
     const recovered = successor("run-2");
     const narrow = {
       ...recovered,
-      limits: { maxRuntimeMs: 10_000, maxToolCalls: 1, maxPromptTokens: 80 },
+      limits: { maxRuntimeMs: 10_000, maxToolCalls: 1 },
     };
     const controller = new CodingRuntimeCiRepairController({
       store: budget,
@@ -214,16 +208,15 @@ describe("cumulative Code-task CI repair accounting", () => {
       attemptId: "attempt-1",
       chargeId: "charge-1",
       toolCalls: 1,
-      promptTokens: 100,
       expectedRevision: 0,
     };
     expect(budget.charge(context, charge)).toMatchObject({
       status: "recorded",
-      record: { toolCalls: 1, promptTokens: 100, revision: 1 },
+      record: { toolCalls: 1, revision: 1 },
     });
     expect(budget.charge(context, charge)).toMatchObject({
       status: "replayed",
-      record: { toolCalls: 1, promptTokens: 100, revision: 1 },
+      record: { toolCalls: 1, revision: 1 },
     });
     expect(record(budget.read(context)).deadlineMs).toBe(first.deadlineMs);
   });
@@ -274,7 +267,7 @@ describe("cumulative Code-task CI repair accounting", () => {
 describe("CI repair restart and monotonic limits", () => {
   it("charges interrupted work once only at live accepted recovery and never during polling", () => {
     const first = record(begin("attempt-1", null));
-    charge(0, 2, 100);
+    charge(0, 2);
     const fresh = successor("run-2");
     const before = stored();
     budget.read(fresh);
@@ -289,7 +282,7 @@ describe("CI repair restart and monotonic limits", () => {
     expect(budget.accept(fresh, 1)).toMatchObject({
       status: "blocked",
       reason: "recovery-required",
-      record: { revision: 2, failedAttempts: 1, toolCalls: 2, promptTokens: 100 },
+      record: { revision: 2, failedAttempts: 1, toolCalls: 2 },
     });
     expect(budget.accept(fresh, 2)).toMatchObject({
       status: "replayed",
@@ -306,10 +299,10 @@ describe("CI repair restart and monotonic limits", () => {
   });
   it("persists narrower accepted recovery budgets even when no new effect can begin", () => {
     const first = record(begin("attempt-1", null));
-    charge(0, 2, 100);
+    charge(0, 2);
     const narrow = {
       ...context,
-      limits: { maxRuntimeMs: 10_000, maxToolCalls: 1, maxPromptTokens: 80 },
+      limits: { maxRuntimeMs: 10_000, maxToolCalls: 1 },
     };
     expect(budget.read(narrow)).toMatchObject({
       status: "blocked",
@@ -359,13 +352,12 @@ describe("CI repair restart and monotonic limits", () => {
     expect(budget.read(context)).toMatchObject({ reason: "invalid-input" });
     expect(stored()).toEqual(before);
   });
-  it.each([
-    [10, 10, "tool-budget-exhausted"],
-    [1, 1_000, "prompt-budget-exhausted"],
-  ] as const)("persists admitted usage %i/%i before reporting %s", (calls, tokens, reason) => {
+  it("persists admitted usage before reporting the exhausted tool budget", () => {
+    const calls = 10;
+    const reason = "tool-budget-exhausted";
     begin("attempt-1", null);
-    expect(charge(0, calls, tokens)).toMatchObject({ status: "blocked", reason });
-    expect(stored()).toMatchObject({ toolCalls: calls, promptTokens: tokens, revision: 1 });
+    expect(charge(0, calls)).toMatchObject({ status: "blocked", reason });
+    expect(stored()).toMatchObject({ toolCalls: calls, revision: 1 });
     expect(begin("attempt-2", 1)).toMatchObject({ reason: "attempt-active" });
     budget.settle(context, { attemptId: "attempt-1", outcome: "failed", expectedRevision: 1 });
     expect(begin("attempt-2", 2)).toMatchObject({ reason });
@@ -382,11 +374,10 @@ describe("CI repair accounting CAS and hostile input", () => {
         chargeId: "other",
         expectedRevision: 0,
         toolCalls: 1,
-        promptTokens: 10,
       }),
     ).toMatchObject({ reason: "stale-revision" });
     expect(charge(0, 2)).toMatchObject({ reason: "invalid-input" });
-    expect(stored()).toMatchObject({ revision: 1, toolCalls: 1, promptTokens: 10 });
+    expect(stored()).toMatchObject({ revision: 1, toolCalls: 1 });
     expect(
       budget.settle(context, { attemptId: "attempt-1", outcome: "succeeded", expectedRevision: 1 }),
     ).toMatchObject({ status: "recorded" });
@@ -476,15 +467,13 @@ describe("CI repair accounting CAS and hostile input", () => {
   });
   it("reports enough body-free evidence to identify the charged repair attempt", () => {
     begin("attempt-1", null);
-    charge(0, 2, 100);
+    charge(0, 2);
     expect(events.at(-1)?.extra).toMatchObject({
       attemptId: "attempt-1",
       failureSignatureDigest: "a".repeat(64),
       headSha: template.draftDelivery?.binding.headSha,
       toolCallCount: 2,
-      promptTokenCount: 100,
       maxToolCalls: 10,
-      maxPromptTokens: 1_000,
     });
     expect(redactLogFields(events.at(-1)?.extra ?? {})).toEqual(events.at(-1)?.extra);
   });
@@ -498,7 +487,7 @@ describe("CI repair durable bounds and migration", () => {
       ...context,
       stillAuthorized: (): boolean => {
         checks += 1;
-        if (checks === 2) expect(charge(0, 1, 10)).toMatchObject({ status: "recorded" });
+        if (checks === 2) expect(charge(0, 1)).toMatchObject({ status: "recorded" });
         return true;
       },
     };
@@ -508,10 +497,9 @@ describe("CI repair durable bounds and migration", () => {
         chargeId: "loser",
         expectedRevision: 0,
         toolCalls: 2,
-        promptTokens: 50,
       }),
     ).toMatchObject({ reason: "stale-revision" });
-    expect(stored()).toMatchObject({ revision: 1, toolCalls: 1, promptTokens: 10 });
+    expect(stored()).toMatchObject({ revision: 1, toolCalls: 1 });
     expect(stored().attempts[0]?.charges).toHaveLength(1);
   });
   it("never prunes completed attempt identities to evade the 32-receipt limit", () => {
@@ -535,8 +523,8 @@ describe("CI repair durable bounds and migration", () => {
   it("retains 256 active charge identities and refuses the next without refund", () => {
     const roomy = { ...context, limits: { ...context.limits, maxToolCalls: 1_000 } };
     begin("attempt-1", null, roomy);
-    for (let index = 0; index < 256; index += 1) charge(index, 1, 0, roomy);
-    expect(charge(256, 1, 0, roomy)).toMatchObject({ reason: "storage-capacity" });
+    for (let index = 0; index < 256; index += 1) charge(index, 1, roomy);
+    expect(charge(256, 1, roomy)).toMatchObject({ reason: "storage-capacity" });
     expect(stored()).toMatchObject({ toolCalls: 256, revision: 256 });
     expect(stored().attempts[0]?.charges).toHaveLength(256);
     expect(budget.read(roomy)).toMatchObject({ reason: "storage-capacity" });
@@ -563,7 +551,6 @@ describe("CI repair durable bounds and migration", () => {
         expectedRevision: current.revision,
         chargeId: String(index).padEnd(128, "a"),
         toolCalls: 1,
-        promptTokens: 0,
       });
       current = record(result);
       if (result.status === "blocked") {
@@ -572,7 +559,10 @@ describe("CI repair durable bounds and migration", () => {
       }
     }
     expect(stopped).toBe(true);
-    expect(stored().attempts.at(-1)?.charges.length).toBeLessThan(256);
+    // Keiko does not limit tokens (#4346), so a receipt no longer carries a prompt-token counter and
+    // a maximum-size record now reaches the 256-receipt count bound just before the JSON bound; the
+    // storage-capacity stop and the JSON bound below are unchanged.
+    expect(stored().attempts.at(-1)?.charges.length).toBeLessThanOrEqual(256);
     expect(budget.read(roomy)).toMatchObject({ reason: "storage-capacity" });
     expect(Buffer.byteLength(JSON.stringify(stored()))).toBeLessThanOrEqual(65_536);
   });
@@ -613,6 +603,46 @@ describe("CI repair durable bounds and migration", () => {
   );
 });
 
+// Keiko does not limit tokens (#4346). A record persisted before that decision still carries the
+// retired allowance (`limits.maxPromptTokens`, and `promptTokens` on the record, its attempts and
+// their charges). It is read, never failed closed on and never enforced, and the next write drops it.
+describe("CI repair record persisted before the prompt-token allowance was removed", () => {
+  it("is read and charged although its retired prompt tokens exceeded the retired limit", () => {
+    record(begin("attempt-1", null));
+    expect(charge(0)).toMatchObject({ status: "recorded" });
+    const current = stored();
+    const legacy = {
+      ...current,
+      promptTokens: 1_000_500,
+      limits: { ...current.limits, maxPromptTokens: 1_000 },
+      attempts: current.attempts.map((attempt) => ({
+        ...attempt,
+        promptTokens: 1_000_500,
+        charges: [
+          ...attempt.charges.map((item) => ({ ...item, promptTokens: 1_000_000 })),
+          { chargeId: "prompt-legacy", toolCalls: 0, promptTokens: 500 },
+        ],
+      })),
+    };
+    db.prepare("UPDATE coding_runtime_ci_repair_budgets SET record_json=?").run(
+      JSON.stringify(legacy),
+    );
+
+    const read = budget.read(context);
+    expect(read.status).toBe("available");
+    expect(record(read).limits).toEqual({ maxRuntimeMs: 60_000, maxToolCalls: 10 });
+    expect(record(read)).not.toHaveProperty("promptTokens");
+    expect(record(read).attempts[0]).not.toHaveProperty("promptTokens");
+    expect(record(read).attempts[0]?.charges).toEqual([
+      { chargeId: "charge-0", toolCalls: 1 },
+      { chargeId: "prompt-legacy", toolCalls: 0 },
+    ]);
+
+    expect(charge(1)).toMatchObject({ status: "recorded", record: { toolCalls: 2 } });
+    expect(JSON.stringify(stored())).not.toMatch(/[Pp]romptTokens/u);
+  });
+});
+
 describe("CI repair closed retry inputs", () => {
   it("validates revision fields even for otherwise identical idempotent replays", () => {
     const initial = record(begin("attempt-1", null));
@@ -633,7 +663,6 @@ describe("CI repair closed retry inputs", () => {
         attemptId: "attempt-1",
         chargeId: "charge-0",
         toolCalls: 1,
-        promptTokens: 10,
         expectedRevision: undefined,
       } as unknown as CiRepairChargeInput),
     ).toMatchObject({ reason: "invalid-input" });
@@ -645,7 +674,7 @@ describe("CI repair closed retry inputs", () => {
         expectedRevision: undefined,
       } as unknown as CiRepairSettle),
     ).toMatchObject({ reason: "invalid-input" });
-    expect(stored()).toMatchObject({ revision: 2, toolCalls: 1, promptTokens: 10 });
+    expect(stored()).toMatchObject({ revision: 2, toolCalls: 1 });
   });
 });
 
@@ -672,7 +701,6 @@ describe("CI repair accounting serialization reserve", () => {
         attemptId,
         chargeId: "c".repeat(128),
         toolCalls: Number.MAX_SAFE_INTEGER,
-        promptTokens: Number.MAX_SAFE_INTEGER,
         expectedRevision: current.revision,
       },
       Number.MAX_SAFE_INTEGER,

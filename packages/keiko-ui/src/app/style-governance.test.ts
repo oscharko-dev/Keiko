@@ -1,7 +1,7 @@
 import postcss from "postcss";
 import { readStylesheet } from "../../read-stylesheet.mjs";
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -120,7 +120,8 @@ describe("Design-system styling exception register", () => {
         register.canonicalLocalClassPrefix,
       );
       if (details.globalSelectors.length > 0 || details.unprefixedLocalClasses.length > 0) {
-        actual.set(relative(repositoryRoot, path), details);
+        // The register names repository paths with `/` on every host (#4068).
+        actual.set(relative(repositoryRoot, path).split(sep).join("/"), details);
       }
     }
 
@@ -197,7 +198,8 @@ describe("Design-system styling exception register", () => {
 
   it("does not permit new bare native-control rules in the global stylesheet", () => {
     const globalCssPath = resolve(appDirectory, "globals.css");
-    const globalCss = readStylesheet(globalCssPath);
+    // A CRLF checkout (core.autocrlf on Windows) must not change what the rule sees (#4068).
+    const globalCss = readStylesheet(globalCssPath).replaceAll("\r\n", "\n");
     const bareNativeRules = Array.from(
       globalCss.matchAll(
         /^(button|input|select|textarea|fieldset|label|summary|details|progress|dialog)\s*\{/gmu,

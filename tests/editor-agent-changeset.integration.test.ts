@@ -281,7 +281,6 @@ function registerAuthority(root: string): EditorAgentGovernedAuthorityReference 
     budget: {
       maxRuntimeMs: 300_000,
       maxToolCalls: 4,
-      maxPromptTokens: 1,
       maxPatchBytes: 65_536,
     },
     expiresAt: new Date(now.getTime() + 300_000).toISOString(),

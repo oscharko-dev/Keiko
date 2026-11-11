@@ -64,6 +64,9 @@ function isDeniedUncached(relPath: string): boolean {
     if (lower === EXAMPLE_ENV) {
       continue;
     }
+    if (process.platform === "win32" && isWindowsShortNameSegment(lower)) {
+      return true;
+    }
     const spellings = windowsAliasSpelling(lower);
     for (const matcher of PRECOMPILED_DENY_MATCHERS) {
       if (matcher.regex.test(lower) || (spellings !== lower && matcher.regex.test(spellings))) {
@@ -78,6 +81,80 @@ function isDeniedUncached(relPath: string): boolean {
 // (`name:stream`), to the plain name. The alias is checked IN ADDITION to the literal segment, so
 // the check only ever denies more; the `.env.example` exception stays an exact, literal match.
 const WINDOWS_TRAILING_ALIAS: ReadonlySet<string> = new Set([".", " "]);
+
+// NTFS may also resolve a sensitive entry through its 8.3 short name (`.git` is `GIT~1`, `.env` is
+// `ENV~1`), which no deny pattern names. Windows derives that name from the long name: leading
+// dots and spaces dropped, the last dot separating the extension, the first six base characters
+// (or two plus a four-digit hash) and the first three extension characters. A short-name component
+// is denied when it can alias a name some deny pattern matches. Ordinary short names such as a
+// profile's `RUNNER~1` stay admitted; the comparison over-approximates wildcards, so it can only
+// deny more than the exact alias set. POSIX names are unaffected.
+const WINDOWS_SHORT_NAME = /^([^.~]{1,6})~\d+(?:\.([^.]{0,3}))?$/u;
+const SHORT_NAME_HASH_SUFFIX = /^[0-9a-f]{4}$/u;
+const SHORT_NAME_INVALID_CHARS = /[+,;=[\]]/gu;
+
+interface ShortNameAliasRule {
+  readonly baseLiteral: string;
+  readonly baseWildcard: boolean;
+  readonly extLiteral: string | null;
+  readonly extWildcard: boolean;
+}
+
+function globLiteralPrefix(glob: string): { readonly literal: string; readonly wildcard: boolean } {
+  const star = glob.indexOf("*");
+  return star === -1
+    ? { literal: glob, wildcard: false }
+    : { literal: glob.slice(0, star), wildcard: true };
+}
+
+function shortNameAliasRule(pattern: string): ShortNameAliasRule {
+  let start = 0;
+  while (start < pattern.length && (pattern[start] === "." || pattern[start] === " ")) start += 1;
+  const name = pattern.slice(start).replace(SHORT_NAME_INVALID_CHARS, "_");
+  const dot = name.lastIndexOf(".");
+  const base = globLiteralPrefix((dot === -1 ? name : name.slice(0, dot)).replace(/[. ]/gu, ""));
+  const ext = dot === -1 ? null : globLiteralPrefix(name.slice(dot + 1).replaceAll(" ", ""));
+  return {
+    baseLiteral: base.literal,
+    baseWildcard: base.wildcard,
+    extLiteral: ext === null ? null : ext.literal.slice(0, 3),
+    extWildcard: ext?.wildcard ?? false,
+  };
+}
+
+const SHORT_NAME_ALIAS_RULES: readonly ShortNameAliasRule[] = DEFAULT_DENY_PATTERNS.map((pattern) =>
+  shortNameAliasRule(pattern.toLowerCase()),
+);
+
+// `prefix` is the generated base: the whole basis when shorter than six characters, otherwise its
+// first six. A hash-form name keeps only the first two characters, compared as an open prefix.
+function shortBaseMatches(rule: ShortNameAliasRule, prefix: string, open: boolean): boolean {
+  const literal = rule.baseLiteral;
+  if (rule.baseWildcard) {
+    return prefix.startsWith(literal) || (open && literal.startsWith(prefix));
+  }
+  return open ? literal.startsWith(prefix) : literal === prefix;
+}
+
+function shortExtMatches(rule: ShortNameAliasRule, ext: string): boolean {
+  if (rule.extLiteral === null) return ext.length === 0;
+  return rule.extWildcard ? ext.startsWith(rule.extLiteral) : ext === rule.extLiteral;
+}
+
+/** Whether one lower-cased component is a Windows 8.3 short name that can alias a denied name. */
+export function isWindowsShortNameSegment(segment: string): boolean {
+  const match = WINDOWS_SHORT_NAME.exec(segment);
+  if (match === null) return false;
+  const prefix = match[1] ?? "";
+  const ext = match[2] ?? "";
+  const hashed = prefix.length === 6 && SHORT_NAME_HASH_SUFFIX.test(prefix.slice(2));
+  return SHORT_NAME_ALIAS_RULES.some(
+    (rule) =>
+      shortExtMatches(rule, ext) &&
+      (shortBaseMatches(rule, prefix, prefix.length === 6) ||
+        (hashed && shortBaseMatches(rule, prefix.slice(0, 2), true))),
+  );
+}
 
 function windowsAliasSpelling(segment: string): string {
   const stream = segment.indexOf(":");

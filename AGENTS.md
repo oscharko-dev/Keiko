@@ -99,6 +99,12 @@ This shapes the product _and_ how you work on it:
   safety state; that state must never make the Editor discoverable or executable as an agent
   session. Chat repository search and the separate Coding Workbench are outside this retirement.
   Shared runtime contracts remain only where active consumers need them (ADR-0061).
+- **Keiko does not cap prompt tokens (owner decision, 2026-11-11):** no Coding run, Chat tool turn,
+  agent run or CI repair carries a cumulative prompt-token allowance; every agent step resends the
+  whole conversation, so any fixed sum ends healthy long runs. Cost control is the operator-configured
+  Model Gateway spend ceiling. Per-request context-window fitting, output limits, duration, tool-call
+  and patch budgets remain. Never reintroduce a token-count quota; a better guard against a model
+  that loops unnoticed is tracked in #4346 (ADR-0137).
 - **Knowledge Pod scope (owner decision, 2026-11-04):** Knowledge Pods use local storage and have
   no sharing roadmap or sharing placeholders. The ordinary Create Knowledge Pod dialog asks only
   for a name; the existing server-side `standard` default supplies model-use policy. Model routing
@@ -1137,11 +1143,17 @@ windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `
 never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
 run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
 `notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
-`editor-bridge`; #3880). What a delivery card showed is `delivery-step-shown` with the closed
+`editor-bridge`; #3880). `run-identity-observed` records once per live run whether the server
+reported the run's model and agent (`modelReported`, `agentReported`) and its closed `toolProfile`
+(`native`, `mapped`, `unreported`); `coding-runtime.run.started` carries the started run's closed
+`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). What a delivery card showed is `delivery-step-shown` with the closed
 `deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
 `commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
 `deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;
-never a head or tree digest; #4271). These were warn/unknown
+never a head or tree digest; #4271). Once per mounted window, `repository-resolved` records where
+its repository came from with the closed `repositorySource`: `window` (its own saved selection,
+which the layout retains with its branch and location), `shell` (the folder the shell held) or
+`none` (an active task binding met it first); never the path (#4068). These were warn/unknown
 `client.diagnostic` notes before and buried the rare real browser failures. The server side of
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or

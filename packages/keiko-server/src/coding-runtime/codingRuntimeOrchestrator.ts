@@ -16,6 +16,7 @@ import type {
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePendingResearch,
@@ -33,6 +34,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import {
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchBuiltInAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   isDeliveredDraftDeliveryPhase,
@@ -123,6 +128,7 @@ import type {
   CodingRuntimeOrchestratorDeps,
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 import {
   classifyManagerStartFailure,
@@ -325,6 +331,13 @@ const CODING_RUNTIME_RUN_STARTED_OPERATION = defineActivityLogOperation({
       required: false,
       maxLength: 128,
     },
+    primaryAgent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["build", "plan", "custom"],
+    },
+    modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -711,7 +724,6 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [
-        "prompt-allowance",
         "envelope-duration",
         "model-call-failure",
         "no-model-call-failure",
@@ -1340,12 +1352,60 @@ function recordApprovalExpiryFailure(
   );
 }
 
+/** The live run's model and primary agent, held by the process that started it (#4068 W12). */
+interface RuntimeRunIdentity {
+  readonly runId: string;
+  readonly modelId?: string;
+  readonly agent: CodingWorkbenchAgent;
+}
+
+function startedRunIdentity(
+  runId: string,
+  request: CodingWorkbenchRuntimeStartRequest,
+): RuntimeRunIdentity {
+  return {
+    runId,
+    ...(request.modelId ? { modelId: request.modelId } : {}),
+    agent: request.agent ?? DEFAULT_CODING_WORKBENCH_AGENT,
+  };
+}
+
+function withRunAgent(
+  identity: RuntimeRunIdentity | undefined,
+  runId: string,
+  agent: CodingWorkbenchAgent,
+): RuntimeRunIdentity | undefined {
+  return identity?.runId === runId ? { ...identity, agent } : identity;
+}
+
+function publicRunIdentity(
+  identity: RuntimeRunIdentity | undefined,
+  runId: string,
+): Pick<PublicSnapshot, "modelId" | "agent"> | undefined {
+  if (identity?.runId !== runId) return undefined;
+  const { modelId, agent } = identity;
+  return { ...(modelId === undefined ? {} : { modelId }), agent };
+}
+
+function runIdentityLogFields(identity: RuntimeRunIdentity | undefined): {
+  readonly primaryAgent?: "build" | "plan" | "custom";
+  readonly modelIdDigest?: string;
+} {
+  if (identity === undefined) return {};
+  const { agent, modelId } = identity;
+  return {
+    primaryAgent: isCodingWorkbenchBuiltInAgent(agent) ? agent : "custom",
+    ...(modelId === undefined ? {} : { modelIdDigest: DIGEST(modelId) }),
+  };
+}
+
 function recordRuntimeRunStarted(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   effectiveMode: CodingWorkbenchMode,
   predecessorSelectionReason: PredecessorSelectionReason,
   taskIntent: string,
+  identity?: RuntimeRunIdentity,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1365,6 +1425,7 @@ function recordRuntimeRunStarted(
         ...(snapshot.predecessorRunId === undefined
           ? {}
           : { predecessorRunId: snapshot.predecessorRunId }),
+        ...runIdentityLogFields(identity),
       },
     ),
   );
@@ -1824,6 +1885,7 @@ export type {
   CodingRuntimeOrchestratorDeps,
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 
 interface ApprovalChallenge {
@@ -1999,6 +2061,7 @@ export class CodingRuntimeOrchestrator {
    */
   private settledRunId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
+  private runIdentity: RuntimeRunIdentity | undefined;
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
@@ -2043,6 +2106,8 @@ export class CodingRuntimeOrchestrator {
         this.approvals.get(runId)?.permission,
       effectiveMode: (runId: string): CodingWorkbenchMode | undefined =>
         this.activeRunId === runId ? this.activeEffectiveMode : undefined,
+      runIdentity: (runId: string): Pick<PublicSnapshot, "modelId" | "agent"> | undefined =>
+        publicRunIdentity(this.runIdentity, runId),
       ...(deps.contextUsage ? { contextUsage: deps.contextUsage } : {}),
     });
     this.operations = new CodingRuntimeOperationCoordinator({
@@ -2051,6 +2116,9 @@ export class CodingRuntimeOrchestrator {
       advanceRevision: (current, eventKind): CodingRuntimeOrchestratorResult =>
         this.advanceRevision(current, eventKind),
       publicSnapshot: (current): PublicSnapshot => this.publicSnapshotWithDescription(current),
+      recordRunAgent: (runId, agent): void => {
+        this.runIdentity = withRunAgent(this.runIdentity, runId, agent);
+      },
       taskDispatcher: deps.taskDispatcher,
       resumePaused: (current): Promise<CodingRuntimeOrchestratorResult> =>
         this.resumePausedForFollowUp(current),
@@ -2085,7 +2153,7 @@ export class CodingRuntimeOrchestrator {
     input: unknown,
     correlationId?: string,
     abandoned?: AbortSignal,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
       if (abandoned?.aborted === true) return ABANDONED_START;
       // The next run ends the previous run's undo window: its runtime holds the slot until then.
@@ -2140,7 +2208,7 @@ export class CodingRuntimeOrchestrator {
     input: unknown,
     predecessorRunId: string | undefined,
     correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
     // A start still queued in the serial lane when the server began shutting down launches nothing.
     if (this.shutdownBegan()) return this.fail("runtime-unavailable");
     if (predecessorRunId === undefined) return this.startFresh(input, undefined, correlationId);
@@ -2153,11 +2221,7 @@ export class CodingRuntimeOrchestrator {
     }
   }
 
-  retry(
-    runId: string,
-    input: unknown,
-    correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  retry(runId: string, input: unknown, correlationId?: string): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
       const prior = this.deps.snapshots.get(runId);
@@ -3566,8 +3630,8 @@ export class CodingRuntimeOrchestrator {
   }
 
   /**
-   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted prompt
-   * allowance, an unreachable provider, a failed model call, or `runtime-failed` when none is on
+   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted time
+   * limit, an unreachable provider, a failed model call, or `runtime-failed` when none is on
    * record. A success or a cancellation is never explained by an earlier model-call failure.
    */
   private terminalFailure(
@@ -4040,7 +4104,7 @@ export class CodingRuntimeOrchestrator {
     input: unknown,
     predecessorRunId?: string,
     correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
     const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
     if (!parsed.ok || this.activeRunId)
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
@@ -4077,6 +4141,7 @@ export class CodingRuntimeOrchestrator {
     const selection = this.selectStartPredecessor(initialSnapshot, predecessorRunId);
     const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
+    this.runIdentity = startedRunIdentity(runId, request);
     this.activateStartedRun(runId, launch, selection, request.taskIntent);
     this.recordIssueAdmission(request, runId, issue.attachment);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
@@ -4141,6 +4206,7 @@ export class CodingRuntimeOrchestrator {
       launch.effectiveMode,
       selection.reason,
       taskIntent,
+      this.runIdentity,
     );
   }
 
@@ -4379,8 +4445,8 @@ export class CodingRuntimeOrchestrator {
     // #3390: this orchestrator-local snapshot is a separate object from runtimeAuthorityService's
     // runtimeState (synced independently by productionCodingRuntimePorts.ts's
     // startProductionRuntime, well before this method runs) -- moving this transition earlier
-    // does NOT itself admit the reservePromptTokens race; that race is closed in
-    // runtimeAuthorityService.ts (PROMPT_RESERVATION_ADMISSIBLE_STATES, which now also admits
+    // does NOT itself admit the model-call admission race; that race is closed in
+    // runtimeAuthorityService.ts (MODEL_CALL_ADMISSIBLE_STATES, which now also admits
     // "starting", the actual runtimeState during the managed runtime's own start()). What this
     // move does fix is the run's own public projection: settling into "running" BEFORE dispatch,
     // instead of only after the sidecar accepts, means an operator never observes "ready" while
@@ -4550,7 +4616,7 @@ export class CodingRuntimeOrchestrator {
     | { readonly ok: true; readonly launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]> }
     | {
         readonly ok: false;
-        readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+        readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
         readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
         readonly startAbandoned?: true;
       }
@@ -5453,7 +5519,7 @@ function latestSettledRunId(
 }
 
 /** A refused wake start's closed cause, as the scheduled-wake line records it. */
-function scheduledWakeRefusal(code: CodingWorkbenchRuntimeFailureCode): ScheduledWakeRefusal {
+function scheduledWakeRefusal(code: CodingWorkbenchRuntimeStartFailureCode): ScheduledWakeRefusal {
   if (code === "active-run-conflict") return "active-run-conflict";
   if (code === "authority-resolution-failed") return "authority-resolution-failed";
   return code === "invalid-intent" ? "invalid-intent" : "start-failed";

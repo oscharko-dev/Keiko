@@ -331,13 +331,18 @@ function validateBudget(value: unknown, path: string, errors: string[]): void {
     errors.push(`${path} must be an object`);
     return;
   }
+  // A durable run created before the cumulative prompt-token allowance was removed (#4346) may
+  // still carry `maxPromptTokens`: it is accepted while it keeps its old shape (a positive safe
+  // integer), never required and never enforced.
   validateAllowedKeys(
     value,
     ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"],
     path,
     errors,
   );
-  ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"].forEach((key) => {
+  const checked = ["maxRuntimeMs", "maxToolCalls", "maxPatchBytes"];
+  if (Object.hasOwn(value, "maxPromptTokens")) checked.push("maxPromptTokens");
+  checked.forEach((key) => {
     if (!isPositiveSafeInteger(value[key])) {
       errors.push(`${path}.${key} must be a positive safe integer`);
     }

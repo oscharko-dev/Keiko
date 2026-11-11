@@ -79,10 +79,12 @@ import {
   CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
   CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+  CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
   CLIENT_CODING_WORKBENCH_DELIVERY_STEPS,
   CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
   CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
+  CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
   CLIENT_BROWSER_APPROVAL_OPERATIONS,
   CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
   CLIENT_BROWSER_APPROVAL_OUTCOMES,
@@ -371,6 +373,13 @@ const CLIENT_MARKDOWN_LAYOUT_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// The reporting page load's own random reference (#4068). Tabs and windows of one origin share the
+// session cookie, so only this separates their stream reports; a support export reduces it to an
+// artifact-local reference like every other opaque id.
+const CLIENT_DOCUMENT_FIELDS = {
+  documentRef: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+} as const;
+
 const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -379,6 +388,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    ...CLIENT_DOCUMENT_FIELDS,
     composerCodeStage: {
       type: "string",
       dataClass: "closed-enum",
@@ -997,6 +1007,7 @@ const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
       required: true,
       maxLength: 128,
     },
+    ...CLIENT_DOCUMENT_FIELDS,
   },
   causal: "correlation",
   lifecycle: "end",
@@ -1030,6 +1041,7 @@ const CLIENT_SESSION_REPAIR_ACKNOWLEDGED_OPERATION = defineActivityLogOperation(
       required: true,
       maxLength: 128,
     },
+    ...CLIENT_DOCUMENT_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1067,6 +1079,7 @@ const CLIENT_SESSION_REPAIR_FAILED_OPERATION = defineActivityLogOperation({
       required: true,
       maxLength: 128,
     },
+    ...CLIENT_DOCUMENT_FIELDS,
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -1442,6 +1455,7 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logCodingClientReport",
   fields: {
+    ...CLIENT_DOCUMENT_FIELDS,
     interaction: {
       type: "string",
       dataClass: "closed-enum",
@@ -1490,6 +1504,14 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
       required: false,
       values: CLIENT_CODING_WORKBENCH_HELD_NOTICES,
     },
+    modelReported: { type: "boolean", dataClass: "closed-enum", required: false },
+    agentReported: { type: "boolean", dataClass: "closed-enum", required: false },
+    toolProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
+    },
     deliveryStep: {
       type: "string",
       dataClass: "closed-enum",
@@ -1501,6 +1523,12 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
       dataClass: "closed-enum",
       required: false,
       values: CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
+    },
+    repositorySource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -2005,6 +2033,15 @@ const CLIENT_LOSS_PROJECTION = [
   ActivityLogLossReason,
   string,
 ])[];
+
+// The page load's reference, re-checked here: the registered writer would refuse a malformed one
+// and drop the whole line, so a malformed reference is omitted instead.
+function clientDocumentFields(request: { readonly documentRef?: string | undefined }): {
+  readonly documentRef?: string;
+} {
+  const { documentRef } = request;
+  return documentRef !== undefined && isValidCorrelationId(documentRef) ? { documentRef } : {};
+}
 
 function projectClientLoss(
   loss: ClientDiagnosticLossCounts | undefined,
@@ -2613,6 +2650,7 @@ function logCodingClientReport(
     getServerLogger().info(
       activityLogEvent(CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION, envelope, {
         ...interaction,
+        ...clientDocumentFields(request),
         ...closed,
       }),
     );
@@ -2669,6 +2707,7 @@ function logClientDiagnostic(
   }
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
+    ...clientDocumentFields(request),
   };
   projectClientFailure(request, extra);
   projectClientStageContext(request, extra);
@@ -3115,10 +3154,12 @@ function logClientBinding(
 function sessionRepairCorrelation(request: ClientSessionRepairIngestRequest): {
   readonly repairCorrelationId: string;
   readonly stream?: NonNullable<ClientSessionRepairIngestRequest["stream"]>;
+  readonly documentRef?: string;
 } {
   return {
     repairCorrelationId: request.repairCorrelationId,
     ...(request.stream === undefined ? {} : { stream: request.stream }),
+    ...clientDocumentFields(request),
   };
 }
 

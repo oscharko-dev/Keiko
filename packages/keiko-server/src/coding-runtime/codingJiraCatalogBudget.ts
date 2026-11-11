@@ -10,15 +10,9 @@ export function codingJiraCatalogFits(input: {
   readonly result: CatalogJsonObject;
   readonly usage: CodingWorkbenchContextUsage | undefined;
   readonly geometry: OpenCodeContextGeometry;
-  readonly promptFits: ((promptTokens: number) => boolean) | undefined;
 }): boolean | undefined {
-  const { usage, geometry, promptFits } = input;
-  if (
-    usage?.state !== "available" ||
-    usage.source !== "provider-reported" ||
-    promptFits === undefined
-  )
-    return undefined;
+  const { usage, geometry } = input;
+  if (usage?.state !== "available" || usage.source !== "provider-reported") return undefined;
   // A sample from different model geometry cannot establish this run's remaining context.
   if (
     usage.capacityTokens !== geometry.contextWindowTokens ||
@@ -50,7 +44,6 @@ export function codingJiraCatalogFits(input: {
   return (
     Number.isSafeInteger(promptTokens) &&
     promptTokens <= geometry.maxInputTokens &&
-    promptTokens + geometry.maxOutputTokens <= geometry.contextWindowTokens &&
-    promptFits(promptTokens)
+    promptTokens + geometry.maxOutputTokens <= geometry.contextWindowTokens
   );
 }

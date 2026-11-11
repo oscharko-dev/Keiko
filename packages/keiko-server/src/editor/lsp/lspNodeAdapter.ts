@@ -633,6 +633,7 @@ function mergeKillResults(
 function wrapChild(
   child: ChildProcessWithoutNullStreams,
   releaseRuntimeResources: () => void,
+  spawnConfirmed: () => boolean,
 ): ReturnType<LspSpawnFn> {
   const stdin = child.stdin;
   const stdout = child.stdout;
@@ -641,6 +642,20 @@ function wrapChild(
   // settling an in-flight request. The manager observes the child exit separately; the write-side
   // broken pipe must not escape as an unhandled process error.
   stdin.on("error", () => undefined);
+  // #4068: on Windows a refused spawn (a workspace cwd at or above MAX_PATH) destroys the read pipes
+  // with `read ENOTCONN` before the child's own error, which `lsp.spawn.failed` records. A pipe that
+  // fails later also ends the transport's frame reader, and the manager observes the exit; unheard,
+  // either would be an uncaught exception that terminates the server. A pipe failure of a spawned
+  // child is recorded once per stream as `lsp.process.runtime-error`; before the spawn it is the
+  // refused spawn's symptom, which `lsp.spawn.failed` already records.
+  for (const pipe of [stdout, stderr]) {
+    let reported = false;
+    pipe.on("error", (pipeError) => {
+      if (reported || !spawnConfirmed()) return;
+      reported = true;
+      logLspRuntimeError(pipeError, child.pid);
+    });
+  }
   let lastKillResult: LspProcessKillResult | undefined;
   return {
     stdin: {
@@ -773,10 +788,10 @@ export function createDefaultLspSpawnFn(
       // releases this one-shot cleanup only after confirmed whole-tree termination (or an OS-owned
       // lifetime boundary supplied by another adapter); an unsolicited root exit intentionally
       // retains the directory together with its durable quarantine lease.
-      const wrapped = wrapChild(child, cleanupHomeOnce);
       // Spawn success is the child's real `spawn` event, not spawn() returning: dispatch always
       // returns, while ENOENT and friends arrive asynchronously via `error`.
       let spawnConfirmed = false;
+      const wrapped = wrapChild(child, cleanupHomeOnce, () => spawnConfirmed);
       child.once("spawn", () => {
         spawnConfirmed = true;
         logLspSpawnCompleted(plan.options.windowsVerbatimArguments === true, child.pid);

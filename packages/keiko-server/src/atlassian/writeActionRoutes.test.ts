@@ -201,7 +201,6 @@ function envelope(
     budget: {
       maxRuntimeMs: 3_600_000,
       maxToolCalls: 50,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2099-01-01T00:00:00.000Z",
@@ -922,7 +921,6 @@ describe("write-action route — envelope authority (AC3)", () => {
         budget: {
           maxRuntimeMs: 60_000,
           maxToolCalls: 50,
-          maxPromptTokens: 10_000,
           maxPatchBytes: 65_536,
         },
       },
@@ -938,7 +936,7 @@ describe("write-action route — envelope authority (AC3)", () => {
     const counter: FetchCounter = { count: 0, requests: [] };
     const guard = guardWith(counter);
     const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES, {
-      budget: { maxRuntimeMs: 3_600_000, maxToolCalls: 1, maxPromptTokens: 1, maxPatchBytes: 1 },
+      budget: { maxRuntimeMs: 3_600_000, maxToolCalls: 1, maxPatchBytes: 1 },
     });
     const first = await postAction("add-issue-comment", authority, "autonomous-delivery", guard);
     expect(first.body.disposition).toBe("allowed");

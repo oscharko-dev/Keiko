@@ -627,10 +627,18 @@ it.each([false, true])(
     const f = fixture(false, undefined, true, true);
     if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
     vi.mocked(f.deps.jiraChatCatalog.get).mockRestore();
+    // A wall-clock deadline raced the read-grant probe on a loaded runner: the turn could end and
+    // release its grant before the probe looked. The controlled deadline expires only once the
+    // second round is waiting, as in the draft deadline tests below.
+    const deadline = controlledTurnDeadline(1_500);
     Object.assign(f.deps, {
       chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 },
     });
-    stallAfterFirstRound(f);
+    let enteredStall!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      enteredStall = resolve;
+    });
+    stallAfterFirstRound(f, enteredStall);
     const response = mockResponse({ captureBody: true });
     const ctx = {
       ...sendContext(f, `deadline-${String(stream)}`),
@@ -641,6 +649,8 @@ it.each([false, true])(
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
     await awaitReadGrantedForWrite(f);
+    await stalled;
+    deadline.expire();
     const result = await pending;
     expect(f.requests()).toBe(1);
     const [user, assistant] = f.deps.store.listMessages(f.chatId);
@@ -1355,7 +1365,6 @@ it.each([false, true])(
 const TEN_CALL_BUDGET = {
   maxRuntimeMs: 300_000,
   maxToolCalls: 10,
-  maxPromptTokens: 100_000,
   maxPatchBytes: 0,
 } as const;
 it.each([false, true])(
@@ -1380,7 +1389,7 @@ it.each([false, true])(
       user?.toolTranscript?.exchanges.every((exchange) => exchange.result?.status === "completed"),
     ).toBe(true);
     expect(f.calls.at(-1)?.messages.filter((message) => message.role === "tool")).toHaveLength(9);
-    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(assistant?.content).toContain("this turn used up its tool-call budget");
     expect(assistant?.content).toContain("Reads completed: 10.");
     if (stream) expect(response.body()).toContain("event: done");
     else expect(result).toMatchObject({ status: 200 });
@@ -1431,13 +1440,12 @@ describe.each([false, true])("a turn past the former fixed tool-call cap (stream
     const { f } = await runReads({
       maxRuntimeMs: 300_000,
       maxToolCalls: FORMER_FIXED_CAP,
-      maxPromptTokens: 100_000,
       maxPatchBytes: 0,
     });
 
     expect(f.requests()).toBe(FORMER_FIXED_CAP);
     const [, assistant] = f.deps.store.listMessages(f.chatId);
-    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(assistant?.content).toContain("this turn used up its tool-call budget");
   });
 });
 

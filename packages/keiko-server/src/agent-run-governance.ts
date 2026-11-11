@@ -13,7 +13,6 @@ import {
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
-import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
@@ -50,7 +49,6 @@ const AGENT_RUN_AUTHORITY_CAPABILITIES = {
   budget: {
     maxRuntimeMs: AGENT_RUN_AUTHORITY_LIFETIME_MS,
     maxToolCalls: 4,
-    maxPromptTokens: 128_000,
     // One apply reserves one changeset: the cap of the governed editor path (owner decision
     // 2026-10-28), not a separate figure.
     maxPatchBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
@@ -328,30 +326,9 @@ export function reserveAgentRunBudget(input: {
     : { ok: false, reason: agentRunBudgetFailureReason(reserved.reason) };
 }
 
-function promptTokenEstimate(request: GatewayRequest): number {
-  const messages = request.messages.map((message) =>
-    JSON.stringify({
-      role: message.role,
-      content: message.content,
-      contentParts: message.contentParts,
-      toolCallId: message.toolCallId,
-      toolCalls: message.toolCalls,
-    }),
-  );
-  const tools =
-    request.toolCatalog === undefined
-      ? []
-      : [
-          JSON.stringify(
-            request.toolCatalog.kind === "native"
-              ? request.toolCatalog.tools
-              : request.toolCatalog.projection.tools,
-          ),
-        ];
-  const responseFormat =
-    request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
-  return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));
-}
+// A model call of a governed agent run books no usage (Keiko does not limit tokens, #4346); the
+// reservation still revalidates the run's retained authority, so a revoked or expired run refuses.
+const MODEL_CALL_USAGE: CodingWorkbenchRuntimeDelegationUsage = { toolCalls: 0, patchBytes: 0 };
 
 function reserveOrThrow(
   input: AgentRunBudgetedPortInput,
@@ -372,11 +349,7 @@ async function* budgetedAgentRunStream(
   signal: AbortSignal,
   input: AgentRunBudgetedPortInput,
 ): AsyncIterable<GatewayStreamChunk> {
-  reserveOrThrow(input, {
-    toolCalls: 0,
-    patchBytes: 0,
-    promptTokens: promptTokenEstimate(request),
-  });
+  reserveOrThrow(input, MODEL_CALL_USAGE);
   yield* stream(request, signal);
 }
 
@@ -384,11 +357,7 @@ export function createAgentRunBudgetedModelPort(input: AgentRunBudgetedModelPort
   const stream = input.model.callStream;
   return {
     call: (request, signal): ReturnType<ModelPort["call"]> => {
-      reserveOrThrow(input, {
-        toolCalls: 0,
-        patchBytes: 0,
-        promptTokens: promptTokenEstimate(request),
-      });
+      reserveOrThrow(input, MODEL_CALL_USAGE);
       return input.model.call(request, signal);
     },
     ...(stream === undefined
@@ -402,7 +371,7 @@ export function createAgentRunBudgetedModelPort(input: AgentRunBudgetedModelPort
 
 export function createAgentRunBudgetedSpawn(input: AgentRunBudgetedSpawnInput): SpawnFn {
   return (command, args, options) => {
-    reserveOrThrow(input, { toolCalls: 1, patchBytes: 0, promptTokens: 0 });
+    reserveOrThrow(input, { toolCalls: 1, patchBytes: 0 });
     return input.spawn(command, args, options);
   };
 }

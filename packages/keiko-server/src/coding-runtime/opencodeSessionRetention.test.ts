@@ -1,10 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,6 +19,16 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { plantSymlinkOrSkip, WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
+  createStateCodingSessionContinuity,
+  retainedSessionRoot,
+} from "./codingSessionContinuity.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import {
@@ -216,6 +230,10 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+// A Windows host reports synthesized permission bits (0o666 for every writable file, whatever
+// `chmod` was asked), so the owner-private modes are asserted where POSIX modes exist (#4068).
+const itWithPosixModes = it.skipIf(WINDOWS_HOST);
+
 describe("retaining a settled run's session state", () => {
   it("keeps a compacted, audited copy bound to the task and reports counts only", () => {
     const f = fixture();
@@ -240,6 +258,12 @@ describe("retaining a settled run's session state", () => {
     // Nothing of the conversation, the workspace path or an id outside the manifest is in it.
     expect(JSON.stringify(manifest)).not.toContain("SECRET-CONVERSATION");
     expect(JSON.stringify(manifest)).not.toContain(WORKSPACE);
+  });
+
+  itWithPosixModes("keeps the retained entry owner-private", () => {
+    const f = fixture();
+
+    expect(retain(f)).toMatchObject({ ok: true });
     expect(statSync(entryDirectory(f)).mode & 0o077).toBe(0);
     expect(statSync(join(entryDirectory(f), "opencode.db")).mode & 0o077).toBe(0);
   });
@@ -278,6 +302,46 @@ describe("retaining a settled run's session state", () => {
     } finally {
       writer.close();
     }
+  });
+
+  it("retains only committed WAL state while another connection holds a write transaction", () => {
+    const f = fixture();
+    const writer = new DatabaseSync(f.source);
+    try {
+      writer.exec("PRAGMA journal_mode=WAL");
+      writer.exec("BEGIN IMMEDIATE");
+      writer
+        .prepare("INSERT INTO session_message (id, session_id, data) VALUES (?, ?, ?)")
+        .run("msg_uncommitted", SESSION_ID, "UNCOMMITTED-CONTENT");
+
+      expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+      writer.exec("COMMIT");
+      expect(retain(f)).toMatchObject({ ok: true, messageCount: 4 });
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 4 });
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("preserves the previous entry on an exclusive database lock and recovers after release", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const previousDatabase = sha256(join(entryDirectory(f), "opencode.db"));
+    const previousManifest = sha256(join(entryDirectory(f), "manifest.json"));
+    const writer = new DatabaseSync(f.source);
+    try {
+      writer.exec("PRAGMA journal_mode=DELETE");
+      writer.exec("BEGIN EXCLUSIVE");
+      expect(() => retain(f)).toThrow(expect.objectContaining({ errcode: 5 }));
+      expect(sha256(join(entryDirectory(f), "opencode.db"))).toBe(previousDatabase);
+      expect(sha256(join(entryDirectory(f), "manifest.json"))).toBe(previousManifest);
+      expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+    } finally {
+      writer.close();
+    }
+    expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
   });
 
   it.each([
@@ -506,15 +570,51 @@ describe("retaining a settled run's session state", () => {
     expect(existsSync(f.storeRoot)).toBe(false);
   });
 
-  it("refuses a store root that is a symbolic link", () => {
+  it("refuses a store root that is a symbolic link", (context) => {
     const f = fixture();
     mkdirSync(join(f.root, "elsewhere"));
-    symlinkSync(join(f.root, "elsewhere"), f.storeRoot);
+    plantSymlinkOrSkip(context, join(f.root, "elsewhere"), f.storeRoot, "dir");
 
     // A store that cannot be trusted is a failure for the caller to record, not a refusal.
     expect(() => retain(f)).toThrow("retained-root-invalid");
     expect(readdirSync(join(f.root, "elsewhere"))).toEqual([]);
   });
+
+  it.runIf(process.platform === "win32")(
+    "refuses a Windows directory junction as the store root",
+    () => {
+      const f = fixture();
+      const target = join(f.root, "elsewhere");
+      mkdirSync(target);
+      symlinkSync(target, f.storeRoot, "junction");
+
+      expect(() => retain(f)).toThrow("retained-root-invalid");
+      expect(readdirSync(target)).toEqual([]);
+    },
+  );
+
+  it.each(["checkout", "prune", "remove"] as const)(
+    "refuses a redirected retention root during %s without touching its target",
+    (operation) => {
+      const f = fixture();
+      expect(retain(f)).toMatchObject({ ok: true });
+      const target = join(f.root, "redirected");
+      renameSync(f.storeRoot, target);
+      symlinkSync(target, f.storeRoot, process.platform === "win32" ? "junction" : "dir");
+      const entry = join(target, retainedSessionKey("task-1"));
+      const databaseBefore = sha256(join(entry, "opencode.db"));
+      const manifestBefore = sha256(join(entry, "manifest.json"));
+
+      expect(() => {
+        if (operation === "checkout") return checkout(f);
+        if (operation === "prune") return f.store.prune(() => false);
+        f.store.remove("task-1");
+      }).toThrow("retained-root-invalid");
+      expect(sha256(join(entry, "opencode.db"))).toBe(databaseBefore);
+      expect(sha256(join(entry, "manifest.json"))).toBe(manifestBefore);
+      expect(readdirSync(target)).toEqual([retainedSessionKey("task-1")]);
+    },
+  );
 
   it("throws, rather than reporting a missing database, when the source cannot be examined", () => {
     const f = fixture();
@@ -524,7 +624,9 @@ describe("retaining a settled run's session state", () => {
         binding: binding(),
         sessionId: SESSION_ID,
         directory: WORKSPACE,
-        sourceDatabase: join(f.root, "x".repeat(5000)),
+        // Past every host's name limit: POSIX refuses a component over 255 bytes, while Windows
+        // answers ENOENT up to its 32,767-character path limit and ENAMETOOLONG only beyond it.
+        sourceDatabase: join(f.root, "x".repeat(40_000)),
       }),
     ).toThrow(/ENAMETOOLONG/u);
     expect(existsSync(f.storeRoot) ? entryNames(f) : []).toEqual([]);
@@ -532,6 +634,90 @@ describe("retaining a settled run's session state", () => {
 });
 
 describe("checking a retained entry out for a resuming run", () => {
+  it("records startup removal of a redirected entry without exposing or changing its target", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const target = join(f.root, "outside-entry");
+    renameSync(entryDirectory(f), target);
+    const before = sha256(join(target, "opencode.db"));
+    symlinkSync(target, entryDirectory(f), process.platform === "win32" ? "junction" : "dir");
+    mkdirSync(join(f.root, "coding-runtime"));
+    renameSync(f.storeRoot, retainedSessionRoot(f.root));
+    const log = createBufferedServerLogSink();
+
+    createStateCodingSessionContinuity({
+      stateDir: f.root,
+      retention: undefined,
+      history: { get: () => ({}), forRun: () => undefined },
+      activityLog: log,
+    });
+
+    expect(readdirSync(retainedSessionRoot(f.root))).toEqual([]);
+    expect(sha256(join(target, "opencode.db"))).toBe(before);
+    expect(log.events).toHaveLength(1);
+    const [event] = log.events;
+    expect(event).toMatchObject({
+      op: "coding-runtime.session-continuity",
+      correlationId: "session-retention-startup",
+      extra: { action: "prune", outcome: "pruned", prunedCount: 1, entryCount: 0 },
+    });
+    expectActivityLogProof(
+      "coding-runtime.session-continuity.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(JSON.stringify(event)).not.toContain(f.root);
+  });
+
+  it.each(["checkout", "prune"] as const)(
+    "refuses a redirected retained entry during %s without traversing its target",
+    (operation) => {
+      const f = fixture();
+      expect(retain(f)).toMatchObject({ ok: true });
+      const entry = entryDirectory(f);
+      const target = join(f.root, "outside-entry");
+      renameSync(entry, target);
+      symlinkSync(target, entry, process.platform === "win32" ? "junction" : "dir");
+      const databaseBefore = sha256(join(target, "opencode.db"));
+      const manifestBefore = sha256(join(target, "manifest.json"));
+
+      if (operation === "checkout") {
+        const { result, destination } = checkout(f);
+        expect(result).toEqual({ ok: false, reason: "integrity-failed", removed: true });
+        expect(existsSync(destination)).toBe(false);
+      } else {
+        expect(f.store.prune()).toMatchObject({ invalid: 1, entryCount: 0 });
+      }
+      expect(existsSync(entry)).toBe(false);
+      expect(sha256(join(target, "opencode.db"))).toBe(databaseBefore);
+      expect(sha256(join(target, "manifest.json"))).toBe(manifestBefore);
+    },
+  );
+
+  it.each([
+    ["manifest.json", 0o600],
+    ["opencode.db", 0o600],
+    ["manifest.json", 0o400],
+    ["opencode.db", 0o400],
+  ] as const)(
+    "refuses a retained %s with another hard link at mode %i without changing that file",
+    (name, mode) => {
+      const f = fixture();
+      expect(retain(f)).toMatchObject({ ok: true });
+      const outside = join(f.root, `outside-${name}`);
+      linkSync(join(entryDirectory(f), name), outside);
+      chmodSync(outside, mode);
+      const before = sha256(outside);
+      const modeBefore = statSync(outside).mode;
+
+      const { result, destination } = checkout(f);
+      expect(result).toEqual({ ok: false, reason: "integrity-failed", removed: true });
+      expect(existsSync(destination)).toBe(false);
+      expect(existsSync(entryDirectory(f))).toBe(false);
+      expect(sha256(outside)).toBe(before);
+      expect(statSync(outside).mode).toBe(modeBefore);
+    },
+  );
+
   it("places a verified copy and reports the session and its age, never its content", () => {
     const f = fixture();
     retain(f);
@@ -547,9 +733,18 @@ describe("checking a retained entry out for a resuming run", () => {
       ageMs: 5_000,
     });
     expect(sha256(destination)).toBe(sha256(join(entryDirectory(f), "opencode.db")));
-    expect(statSync(destination).mode & 0o077).toBe(0);
     // The entry is untouched: another run of the task, or a fork, can take it again.
     expect(checkout(f).result).toMatchObject({ ok: true });
+  });
+
+  itWithPosixModes("places the checked-out copy owner-private", () => {
+    const f = fixture();
+    retain(f);
+
+    const { destination, result } = checkout(f);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(statSync(destination).mode & 0o077).toBe(0);
   });
 
   it("admits a window at least as large as the one the history was built under", () => {
@@ -880,7 +1075,14 @@ describe("pruning the retained entries", () => {
 
     const pruned = f.store.prune((taskId) => taskId !== "task-orphan");
 
-    expect(pruned).toEqual({ expired: 0, orphaned: 1, invalid: 2, quota: 0, entryCount: 1 });
+    expect(pruned).toEqual({
+      expired: 0,
+      orphaned: 1,
+      invalid: 2,
+      quota: 0,
+      blocked: 0,
+      entryCount: 1,
+    });
     expect(entryNames(f)).toEqual(["not-ours", retainedSessionKey("task-live")].sort());
   });
 
@@ -922,6 +1124,7 @@ describe("pruning the retained entries", () => {
       orphaned: 0,
       invalid: 0,
       quota: 0,
+      blocked: 0,
       entryCount: 0,
     });
   });
@@ -958,5 +1161,244 @@ describe("auditing a database directly", () => {
         version: VERSION,
       }),
     ).toEqual({ ok: false, reason: "schema-unknown", check: "audit-unreadable" });
+  });
+
+  // The pinned runtime's API answers `C:\work`, and its `session_v2` row holds `C:/work`: comparing
+  // the two literally refused every real retain on Windows, proven in the real-runtime suite (#4068).
+  it.each([
+    ["a drive path in the host's spelling", "C:/work/repo", String.raw`C:\work\repo`, true],
+    ["a drive path already in the row's spelling", "C:/work/repo", "C:/work/repo", true],
+    ["another drive path", "C:/work/repo", String.raw`C:\work\other`, false],
+    ["the same path on another drive", "C:/work/repo", String.raw`D:\work\repo`, false],
+    ["a row that kept the backslashes", String.raw`C:\work\repo`, String.raw`C:\work\repo`, false],
+    ["a POSIX name holding a backslash", String.raw`/work/a\b`, String.raw`/work/a\b`, true],
+    ["a POSIX backslash as a separator", "/work/a/b", String.raw`/work/a\b`, false],
+  ])("compares %s with the runtime's spelling", (_label, stored, directory, accepted) => {
+    const path = join(tempRoot(), "a.db");
+    runtimeDatabase(path, { messages: 2, session: { directory: stored } });
+
+    expect(auditDatabase(path, { sessionId: SESSION_ID, directory, version: VERSION })).toEqual(
+      accepted ? { ok: true, messageCount: 2 } : { ok: false, reason: "session-mismatch" },
+    );
+  });
+});
+
+// Node's mode bits say nothing on Windows, so the retained state is judged by its real DACL. The
+// fixture grants the built-in Users group inherited read access first: without that, a profile's
+// usual owner-only inheritance would satisfy this proof without Keiko doing anything (#4068).
+describe.runIf(WINDOWS_HOST)("retained session privacy on the Windows DACL", () => {
+  const BROAD_READERS = ["BU", "WD", "AU"];
+  // The system copy by absolute path, as the production owner resolves it: never one found on PATH.
+  const ICACLS = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+
+  function grantInheritedRead(path: string): void {
+    execFileSync(ICACLS, [path, "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], { stdio: "ignore" });
+  }
+
+  function sddl(path: string): string {
+    return execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "(Get-Acl -LiteralPath $env:KEIKO_ACL_PATH).Sddl",
+      ],
+      { encoding: "utf8", env: { ...process.env, KEIKO_ACL_PATH: path } },
+    ).trim();
+  }
+
+  function broadReaders(path: string): readonly string[] {
+    const aces = [...sddl(path).matchAll(/(A;[^;]*;[^;]*;;;([A-Z]{2}|S-[d-]+))/gu)];
+    return aces
+      .map((ace) => ace[2] ?? "")
+      .filter((sid) => BROAD_READERS.includes(sid) || sid === "S-1-5-32-545");
+  }
+
+  it("denies other accounts the retained entry below a broadly readable parent", () => {
+    const f = fixture();
+    grantInheritedRead(f.root);
+
+    expect(retain(f)).toMatchObject({ ok: true });
+
+    const entry = entryDirectory(f);
+    for (const path of [entry, join(entry, "opencode.db"), join(entry, "manifest.json")]) {
+      expect({ path: path.slice(entry.length), readers: broadReaders(path) }).toEqual({
+        path: path.slice(entry.length),
+        readers: [],
+      });
+    }
+  });
+
+  it("denies other accounts the checked-out copy below a broadly readable parent", () => {
+    const f = fixture();
+    grantInheritedRead(f.root);
+    expect(retain(f)).toMatchObject({ ok: true });
+
+    const { destination, result } = checkout(f);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(broadReaders(destination)).toEqual([]);
+  });
+});
+
+// The runtime's SQLite connection shares its file for reading and writing but not for deletion, so
+// a held connection is what a lingering runtime, a backup or a scanner looks like on Windows, where
+// neither the file nor a directory above it can then be moved or removed (#4068).
+describe.runIf(WINDOWS_HOST)("retained session entries a process holds open on Windows", () => {
+  function holding<Result>(f: Fixture, taskId: string, action: () => Result): Result {
+    const held = new DatabaseSync(join(entryDirectory(f, taskId), "opencode.db"), {
+      readOnly: true,
+    });
+    try {
+      expect(held.prepare("SELECT count(*) AS tables FROM sqlite_schema").get()).toMatchObject({
+        tables: expect.any(Number) as number,
+      });
+      return action();
+    } finally {
+      held.close();
+    }
+  }
+
+  it("keeps the previous entry and leaves no staging behind when it cannot be replaced", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const previous = sha256(join(entryDirectory(f), "opencode.db"));
+
+    expect(() => holding(f, "task-1", () => retain(f))).toThrow(
+      expect.objectContaining({ code: expect.stringMatching(/^(EPERM|EBUSY|EACCES)$/u) as string }),
+    );
+
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+    expect(sha256(join(entryDirectory(f), "opencode.db"))).toBe(previous);
+    expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+    expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
+  });
+
+  it("reports a published retain as retained when pruning another entry is blocked", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    f.clock.value += RETAINED_SESSION_LIMITS.maxAgeMs + 1;
+
+    const result = holding(f, "task-1", () => retain(f, { taskId: "task-2" }));
+
+    expect(result).toMatchObject({ ok: true, messageCount: 3 });
+    expect(entryNames(f)).toContain(retainedSessionKey("task-2"));
+    expect(checkout(f, { taskId: "task-2" }).result).toMatchObject({ ok: true });
+  });
+
+  it("still prunes every other entry and retries the held one on the next pass", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    expect(retain(f, { taskId: "task-2" })).toMatchObject({ ok: true });
+    f.clock.value += RETAINED_SESSION_LIMITS.maxAgeMs + 1;
+
+    holding(f, "task-1", () => f.store.prune());
+
+    expect(existsSync(entryDirectory(f, "task-2"))).toBe(false);
+    f.store.prune();
+    expect(entryNames(f)).toEqual([]);
+  });
+
+  it("records a startup pruning that had to leave a held entry in place", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    mkdirSync(join(f.root, "coding-runtime"));
+    renameSync(f.storeRoot, retainedSessionRoot(f.root));
+    const held = new DatabaseSync(
+      join(retainedSessionRoot(f.root), retainedSessionKey("task-1"), "opencode.db"),
+      {
+        readOnly: true,
+      },
+    );
+    const log = createBufferedServerLogSink();
+
+    try {
+      // No Coding History holds the task, so the startup pruning wants the entry gone.
+      createStateCodingSessionContinuity({
+        stateDir: f.root,
+        retention: undefined,
+        history: { get: () => undefined, forRun: () => undefined },
+        activityLog: log,
+      });
+    } finally {
+      held.close();
+    }
+
+    expect(log.events).toHaveLength(1);
+    const [event] = log.events;
+    expect(event).toMatchObject({
+      op: "coding-runtime.session-continuity",
+      correlationId: "session-retention-startup",
+      extra: { action: "prune", outcome: "pruned", prunedCount: 0, blockedCount: 1 },
+    });
+    expectActivityLogProof(
+      "coding-runtime.session-continuity.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(JSON.stringify(event)).not.toContain(f.root);
+  });
+
+  it("returns the refusal, not a filesystem error, when a refused entry cannot be removed yet", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    f.clock.value += RETAINED_SESSION_LIMITS.maxAgeMs + 1;
+
+    const { result } = holding(f, "task-1", () => checkout(f));
+
+    expect(result).toEqual({ ok: false, reason: "expired", removed: false });
+  });
+});
+
+describe("a retained path that cannot be made private", () => {
+  function refusingStore(f: Fixture, refuseFrom: number): RetainedSessionStore {
+    let calls = 0;
+    return createRetainedSessionStore({
+      root: f.storeRoot,
+      now: () => f.clock.value,
+      protectPrivatePath: () => {
+        calls += 1;
+        if (calls >= refuseFrom) throw new Error("not-private");
+      },
+    });
+  }
+
+  it.each([
+    ["the staging directory", 1],
+    ["the database copy", 2],
+    ["the manifest", 3],
+  ])("refuses the retain at %s and keeps the previous entry", (_step, refuseFrom) => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const previous = sha256(join(entryDirectory(f), "opencode.db"));
+
+    expect(() =>
+      refusingStore(f, refuseFrom).retain({
+        binding: binding(),
+        sessionId: SESSION_ID,
+        directory: WORKSPACE,
+        sourceDatabase: f.source,
+      }),
+    ).toThrow("not-private");
+
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+    expect(sha256(join(entryDirectory(f), "opencode.db"))).toBe(previous);
+  });
+
+  it("refuses the checkout and leaves no unprotected copy behind", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const destination = join(f.root, "restored.db");
+
+    expect(() =>
+      refusingStore(f, 1).checkout({
+        binding: binding(),
+        directory: WORKSPACE,
+        destinationDatabase: destination,
+      }),
+    ).toThrow("not-private");
+
+    expect(existsSync(destination)).toBe(false);
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
   });
 });

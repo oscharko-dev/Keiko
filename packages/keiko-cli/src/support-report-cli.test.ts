@@ -21,10 +21,10 @@ import {
   utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync, inflateSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { closeFileServerLogSinks, listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
 import * as reportReader from "@oscharko-dev/keiko-activity-log/reader";
 import {
@@ -88,6 +88,11 @@ vi.mock("@oscharko-dev/keiko-activity-log/reader", async (importOriginal) => {
 });
 
 const CORRELATION = "support-report-cli-0001";
+const WINDOWS = process.platform === "win32";
+const REDIRECT_KIND = WINDOWS ? "junction" : "symlink";
+const REDIRECT_CASES = WINDOWS
+  ? ["symlink", "dangling-symlink", "junction", "dangling-junction"]
+  : ["symlink", "dangling-symlink"];
 let root: string;
 let stateDir: string;
 let controlStateDir: string;
@@ -270,35 +275,77 @@ function analyzedReport(): { artifact: AnalyzedSupportReport; seed: Reproduction
   if (artifact.seed === undefined) throw new TypeError("missing reproduction seed");
   return { artifact, seed: artifact.seed };
 }
+// Junctions exercise the native Windows directory-reparse boundary without requiring symlink
+// privileges. File-symlink controls remain on both platforms and explicitly report missing rights.
+function writeRedirectVictim(name: string, contents: string): string {
+  const directory = join(root, `${name}-target`);
+  mkdirSync(directory, { mode: 0o700 });
+  const victim = join(directory, "canary");
+  writeFileSync(victim, contents, { mode: 0o600 });
+  return victim;
+}
+function isWindowsSymlinkPrivilegeError(error: unknown): boolean {
+  return WINDOWS && error instanceof Error && Reflect.get(error, "code") === "EPERM";
+}
+function plantRedirect(victim: string, target: string, kind: string, context: TestContext): void {
+  const junction = kind.includes("junction");
+  const dangling = kind.startsWith("dangling-");
+  const liveTarget = junction ? dirname(victim) : victim;
+  const destination = dangling ? join(root, "missing-victim") : liveTarget;
+  try {
+    symlinkSync(destination, target, junction ? "junction" : "file");
+  } catch (error) {
+    if (!junction && isWindowsSymlinkPrivilegeError(error))
+      context.skip("Windows file-symlink privilege unavailable; junction controls run separately");
+    throw error;
+  }
+  expect(lstatSync(target).isSymbolicLink()).toBe(true);
+  if (!dangling) {
+    // A reachable positive control rules out a malformed link that merely happens to be refused.
+    expect(readFileSync(junction ? join(target, basename(victim)) : target)).toEqual(
+      readFileSync(victim),
+    );
+  }
+}
+function expectPublishedFile(target: string): void {
+  const stat = lstatSync(target);
+  expect(stat.isFile()).toBe(true);
+  expect(stat.nlink).toBe(1);
+  // ADR-0048 D7: Windows inherits ACLs; Unix mode bits cannot certify an owner-private DACL.
+  if (!WINDOWS) expect(stat.mode & 0o777).toBe(0o600);
+}
 // An Activity Log entry that must never be read, planted at the name of a valid segment.
 const UNSAFE_SEGMENT_ENTRIES = [
   "permissions",
-  "symlink",
+  ...REDIRECT_CASES,
   "hard-link",
-  "dangling-symlink",
   "directory",
 ] as const;
 function plantUnsafeSegment(
   kind: (typeof UNSAFE_SEGMENT_ENTRIES)[number],
   segment: string,
   victim: string,
+  context: TestContext,
 ): void {
   if (kind === "permissions") {
     chmodSync(segment, 0o444);
     return;
   }
   rmSync(segment, { recursive: true, force: true });
-  if (kind === "symlink") symlinkSync(victim, segment);
-  else if (kind === "hard-link") linkSync(victim, segment);
-  else if (kind === "dangling-symlink") symlinkSync(join(root, "missing-victim"), segment);
-  else mkdirSync(segment, { mode: 0o700 });
+  if (kind === "hard-link") linkSync(victim, segment);
+  else if (kind === "directory") mkdirSync(segment, { mode: 0o700 });
+  else plantRedirect(victim, segment, kind, context);
 }
-// A replay fixture destination that exists or links elsewhere; a dangling link has no victim yet.
-function plantFixtureTarget(kind: string, target: string, victim: string): void {
-  if (kind !== "dangling-symlink") writeFileSync(victim, "existing-private-work", { mode: 0o600 });
-  if (kind === "symlink" || kind === "dangling-symlink") symlinkSync(victim, target);
-  else if (kind === "hard-link") linkSync(victim, target);
-  else writeFileSync(target, "existing-private-work", { mode: 0o600 });
+// A replay destination that exists or redirects elsewhere; a dangling redirect has no target yet.
+function plantFixtureTarget(
+  kind: string,
+  target: string,
+  victim: string,
+  context: TestContext,
+): void {
+  if (kind === "hard-link") linkSync(victim, target);
+  else if (kind === "existing") writeFileSync(target, "existing-private-work", { mode: 0o600 });
+  else plantRedirect(victim, target, kind, context);
 }
 
 function analyzeBuiltCli(): { code: number; output: string[]; errors: string[] } {
@@ -609,11 +656,11 @@ describe("support report CLI and private publication", () => {
     expect(report.incident.sufficiencyStatus).toBe("complete");
     expect(analyzeSupportReport(exported).selection.status).toBe("complete");
   });
-  it("publishes exactly one private report and a versioned validated machine view", async () => {
+  it("publishes exactly one report with platform assurances and a validated machine view", async () => {
     const result = await exportReport();
     expect(result.output.join("")).toContain("Nothing has been sent.");
     expect(readdirSync(root).sort()).toEqual([path.slice(root.length + 1), "state"].sort());
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expectPublishedFile(path);
     const exported = readSupportReportFile(path);
     const report = parseSupportReport(exported);
     const artifact = analyzeSupportReport(exported);
@@ -800,27 +847,27 @@ describe("support report CLI and private publication", () => {
   });
 
   // Review #3679: a redirected default directory is refused before anything changes its target.
-  it.skipIf(process.platform === "win32")(
-    "refuses a symlinked default report directory without changing its target",
-    async () => {
-      const target = join(root, "elsewhere");
-      mkdirSync(target);
-      chmodSync(target, 0o755);
-      symlinkSync(target, join(stateDir, "support-reports"));
-      const result = capture();
-      const code = await runSupportCli(
-        ["export", "--state-dir", stateDir, "--correlation-id", CORRELATION],
-        result.io,
-        {},
-        { cwd: root, controlActivityStateDir: controlStateDir },
-      );
-      // The target keeps its own permissions: nothing was changed through the link.
-      expect(statSync(target).mode & 0o777).toBe(0o755);
-      expect(readdirSync(target)).toEqual([]);
-      expect(code).toBe(1);
-      expect(result.errors.join("")).toContain("keiko support: unsafe-target");
-    },
-  );
+  it(`refuses a ${REDIRECT_KIND} default report directory without changing its target`, async () => {
+    const target = join(root, "elsewhere");
+    mkdirSync(target);
+    chmodSync(target, 0o755);
+    const originalMode = statSync(target).mode;
+    symlinkSync(target, join(stateDir, "support-reports"), WINDOWS ? "junction" : "dir");
+    expect(realpathSync(join(stateDir, "support-reports"))).toBe(realpathSync(target));
+    const result = capture();
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", CORRELATION],
+      result.io,
+      {},
+      { cwd: root, controlActivityStateDir: controlStateDir },
+    );
+    // The target keeps its own permissions: nothing was changed through the link.
+    expect(statSync(target).mode).toBe(originalMode);
+    if (!WINDOWS) expect(statSync(target).mode & 0o777).toBe(0o755);
+    expect(readdirSync(target)).toEqual([]);
+    expect(code).toBe(1);
+    expect(result.errors.join("")).toContain("keiko support: unsafe-target");
+  });
 
   it("persists the started and completed proofs against the committed digest and byte count", async () => {
     await exportReport();
@@ -906,7 +953,7 @@ describe("support report CLI and private publication", () => {
     expect(persistedActivityLogLines(raw, "support.report.completed")).toEqual([]);
   });
 
-  it("uses the closed default filename and owner-private output directory", async () => {
+  it("uses the closed default filename and platform-governed output directory", async () => {
     const result = capture();
     expect(
       await runSupportCli(
@@ -917,7 +964,15 @@ describe("support report CLI and private publication", () => {
       ),
     ).toBe(0);
     const directory = join(stateDir, "support-reports");
-    expect(statSync(directory).mode & 0o777).toBe(0o700);
+    expect(lstatSync(directory).isDirectory()).toBe(true);
+    if (!WINDOWS) expect(statSync(directory).mode & 0o777).toBe(0o700);
+    const completed = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.report.completed",
+    ).at(-1);
+    expect(JSON.parse(completed ?? "{}")).toMatchObject({
+      permissionAssurance: WINDOWS ? "platform-inherited" : "verified-private",
+    });
     expect(readdirSync(directory)).toEqual([
       expect.stringMatching(/^keiko-support-v1-[0-9a-f]{12}-\d{4}-\d{2}-\d{2}\.json$/u),
     ]);
@@ -932,13 +987,12 @@ describe("support report CLI and private publication", () => {
     expect(existsSync(`${path}.sha256`)).toBe(false);
   });
 
-  it.each(["live-symlink", "dangling-symlink", "hard-link"])(
+  it.for([...REDIRECT_CASES, "hard-link"])(
     "refuses an unsafe %s output without changing a victim",
-    (kind) => {
-      const victim = join(root, "victim");
-      writeFileSync(victim, "customer-private", { mode: 0o600 });
+    (kind, context) => {
+      const victim = writeRedirectVictim("victim", "customer-private");
       if (kind === "hard-link") linkSync(victim, path);
-      else symlinkSync(kind === "live-symlink" ? victim : join(root, "missing"), path);
+      else plantRedirect(victim, path, kind, context);
       expect(() => {
         publishSupportReportFile(path, "report");
       }).toThrow();
@@ -946,20 +1000,21 @@ describe("support report CLI and private publication", () => {
     },
   );
 
-  it.each(["symlink", "hard-link", "public-permissions"])(
-    "refuses a %s input before reading it",
-    (kind) => {
-      const victim = join(root, "victim");
-      writeFileSync(victim, "customer-private", { mode: 0o600 });
-      if (kind === "symlink") symlinkSync(victim, path);
-      else if (kind === "hard-link") linkSync(victim, path);
-      else {
-        writeFileSync(path, "customer-private");
-        chmodSync(path, 0o644);
-      }
-      expect(() => readSupportReportFile(path)).toThrow();
-    },
-  );
+  it.for([
+    ...REDIRECT_CASES.filter((kind) => !kind.startsWith("dangling-")),
+    "hard-link",
+    "public-permissions",
+  ])("refuses a %s input before reading it", (kind, context) => {
+    // Preserve the POSIX permission-refusal pin. NTFS ACLs are not modeled by chmod(0644).
+    if (WINDOWS && kind === "public-permissions") context.skip();
+    const victim = writeRedirectVictim("victim", "customer-private");
+    if (kind === "hard-link") linkSync(victim, path);
+    else if (kind === "public-permissions") {
+      writeFileSync(path, "customer-private");
+      chmodSync(path, 0o644);
+    } else plantRedirect(victim, path, kind, context);
+    expect(() => readSupportReportFile(path)).toThrow();
+  });
 
   it.skipIf(process.platform === "win32")(
     "explains how to analyze a public-permission browser download without changing it",
@@ -983,6 +1038,24 @@ describe("support report CLI and private publication", () => {
       expectFailureEvidence(controlStateDir, "analyze", "unsafe-target");
     },
   );
+
+  it.runIf(WINDOWS)("reports inherited permissions for a read-only Windows report", () => {
+    const publication = publishSupportReportFile(path, "inherited-permission-fixture");
+    expect(publication).toMatchObject({
+      status: "published",
+      permissionAssurance: "platform-inherited",
+      durabilityAssurance: "directory-sync-unavailable",
+    });
+    chmodSync(path, 0o444);
+    try {
+      const originalMode = statSync(path).mode;
+      expect(originalMode & 0o222).toBe(0);
+      expect(readSupportReportFile(path)).toBe("inherited-permission-fixture");
+      expect(statSync(path).mode).toBe(originalMode);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
 
   it("ignores private environment values, raw UI output and arbitrary files structurally", async () => {
     writeFileSync(join(stateDir, "ui.log"), "raw-customer-ui");
@@ -1098,7 +1171,8 @@ describe("support report CLI and private publication", () => {
 
   it("refuses aliases and missing descendants of the Activity Log directory", async () => {
     const alias = join(root, "log-alias");
-    symlinkSync(join(stateDir, "logs"), alias, "dir");
+    symlinkSync(join(stateDir, "logs"), alias, WINDOWS ? "junction" : "dir");
+    expect(realpathSync(alias)).toBe(realpathSync(join(stateDir, "logs")));
     const before = readdirSync(join(stateDir, "logs"));
     for (const target of [alias, join(alias, "nested", "report")]) {
       const result = capture();
@@ -1248,29 +1322,33 @@ describe("support report CLI and private publication", () => {
       sha256: sha256Of(readFileSync(path)),
     });
     expect(readFileSync(join(root, "replay.ts"), "utf8")).toContain('"status": 504');
-    expect(statSync(join(root, "replay.ts")).mode & 0o777).toBe(0o600);
+    expectPublishedFile(join(root, "replay.ts"));
   });
 
-  it.each(["existing", "symlink", "dangling-symlink", "hard-link"])(
+  it.for(["existing", ...REDIRECT_CASES, "hard-link"])(
     "settles replay publication failure for a %s destination without success evidence",
-    async (kind) => {
+    async (kind, context) => {
       seedGatewayFailure();
       await exportReport();
       const target = join(root, "replay.ts");
-      const victim = join(root, "victim.ts");
-      plantFixtureTarget(kind, target, victim);
+      const victim = writeRedirectVictim("victim.ts", "existing-private-work");
+      plantFixtureTarget(kind, target, victim, context);
       const result = await analyze(["--seed", "--json", "--emit-fixture", target]);
+      // Windows has no O_NOFOLLOW: the existing pre-open reparse guard rejects junctions before
+      // exclusive creation. POSIX file symlinks and existing regular/hardlinked files hit EEXIST.
+      const errorKind =
+        WINDOWS && kind !== "existing" && kind !== "hard-link" ? "unsafe-target" : "target-exists";
       expect(result.code).toBe(1);
       expect(result.output).toEqual([]);
-      expect(result.errors.join("")).toContain("keiko support: target-exists\n");
+      expect(result.errors.join("")).toContain(`keiko support: ${errorKind}\n`);
       // Nothing is written through a link: a victim keeps its bytes, a dangling target is never created.
-      if (kind === "dangling-symlink") expect(existsSync(victim)).toBe(false);
-      else expect(readFileSync(victim, "utf8")).toBe("existing-private-work");
+      expect(existsSync(join(root, "missing-victim"))).toBe(false);
+      expect(readFileSync(victim, "utf8")).toBe("existing-private-work");
       const log = readPersistedActivityLog(controlStateDir);
       expect(persistedActivityLogLines(log, "support.report.completed")).toEqual([]);
       const failed = persistedActivityLogLines(log, "support.report.failed");
       expect(failed).toHaveLength(1);
-      expect(JSON.parse(failed[0] ?? "{}")).toMatchObject({ errorKind: "target-exists" });
+      expect(JSON.parse(failed[0] ?? "{}")).toMatchObject({ errorKind });
       expect(failed[0]).not.toContain('"reason"');
     },
   );
@@ -1416,11 +1494,13 @@ describe("support report CLI and private publication", () => {
     expect(timeline).not.toHaveProperty("analysis");
   });
 
-  // A window segment that is not a private regular file is never read: it is named unreadable, the
-  // report is honestly insufficient, and the export still completes without touching the victim.
-  it.each(UNSAFE_SEGMENT_ENTRIES)(
+  // Redirects and aliases are never read; POSIX additionally refuses unsafe mode bits. The report
+  // is honestly insufficient, and the export still completes without touching the victim.
+  it.for(UNSAFE_SEGMENT_ENTRIES)(
     "publishes an honest insufficient report when a window segment is a %s entry",
-    async (kind) => {
+    async (kind, context) => {
+      // POSIX readability/ownership mode checks have no equivalent in Node's Windows stat mode.
+      if (WINDOWS && kind === "permissions") context.skip();
       const correlationId = "window-segment-0001";
       const process = fixtureProcess(6161, "c0ffee00");
       const segment = writeFixtureSegment(stateDir, segmentIdentity(process, Date.now(), 1), [
@@ -1439,9 +1519,9 @@ describe("support report CLI and private publication", () => {
       const [name] = readdirSync(out);
       const incidentId = parseSupportReport(readSupportReportFile(join(out, name ?? ""))).incident
         .incidentId;
-      const victim = join(root, "victim.jsonl");
-      writeFileSync(victim, "customer-private-segment\n", { mode: 0o600 });
-      plantUnsafeSegment(kind, segment, victim);
+      const victim = writeRedirectVictim("victim.jsonl", "customer-private-segment\n");
+      const originalMode = statSync(victim).mode;
+      plantUnsafeSegment(kind, segment, victim, context);
       const result = capture();
       const next = join(root, "unsafe");
       expect(
@@ -1461,8 +1541,52 @@ describe("support report CLI and private publication", () => {
       expect(result.output.join("")).toContain("Diagnostic sufficiency: insufficient (");
       // The victim behind the entry was never read, written or re-moded, and no link target was made.
       expect(readFileSync(victim, "utf8")).toBe("customer-private-segment\n");
-      expect(statSync(victim).mode & 0o777).toBe(0o600);
+      expect(statSync(victim).mode).toBe(originalMode);
+      if (!WINDOWS) expect(statSync(victim).mode & 0o777).toBe(0o600);
       expect(existsSync(join(root, "missing-victim"))).toBe(false);
+    },
+  );
+
+  it.runIf(WINDOWS)(
+    "reads a regular read-only Windows segment with inherited assurance",
+    async () => {
+      const correlationId = "windows-readonly-segment";
+      const writer = fixtureProcess(6162, "c0ffee01");
+      const segment = writeFixtureSegment(stateDir, segmentIdentity(writer, Date.now(), 1), [
+        fixtureLine(writer, Date.now(), { op: "client.diagnostic", correlationId }),
+      ]);
+      chmodSync(segment, 0o444);
+      try {
+        const originalMode = statSync(segment).mode;
+        expect(originalMode & 0o222).toBe(0);
+        const result = capture();
+        const out = join(root, "readonly-segment-report");
+        expect(
+          await runSupportCli(
+            ["export", "--state-dir", stateDir, "--correlation-id", correlationId, "--out", out],
+            result.io,
+            {},
+            { cwd: root, controlActivityStateDir: controlStateDir },
+          ),
+          result.errors.join(""),
+        ).toBe(0);
+        const report = parseSupportReport(
+          readSupportReportFile(join(out, readdirSync(out)[0] ?? "")),
+        );
+        expect(report.selection.status).toBe("complete");
+        expect(statSync(segment).mode).toBe(originalMode);
+        const completed = persistedActivityLogLines(
+          readPersistedActivityLog(stateDir),
+          "support.report.completed",
+        ).at(-1);
+        expectActivityLogProof("support.report.completed.report-lifecycle", completed ?? "");
+        expect(JSON.parse(completed ?? "{}")).toMatchObject({
+          permissionAssurance: "platform-inherited",
+          sufficiency: "complete",
+        });
+      } finally {
+        chmodSync(segment, 0o600);
+      }
     },
   );
 
@@ -1689,18 +1813,17 @@ describe("support report CLI and private publication", () => {
     expectFailureEvidence(stateDir, "export", "target-exists", 1);
   });
 
-  it.each(["live-symlink", "dangling-symlink", "hard-link"])(
+  it.for([...REDIRECT_CASES, "hard-link"])(
     "refuses a %s at the fixed report filename without touching what it names",
-    async (kind) => {
+    async (kind, context) => {
       // The report filename is closed over the incident, so a first export tells where to plant.
       await exportReport(join(root, "learn"));
       const out = join(root, "planted");
       mkdirSync(out, { mode: 0o700 });
       const target = join(out, basename(path));
-      const victim = join(root, "victim");
-      writeFileSync(victim, "customer-private", { mode: 0o600 });
+      const victim = writeRedirectVictim("victim", "customer-private");
       if (kind === "hard-link") linkSync(victim, target);
-      else symlinkSync(kind === "live-symlink" ? victim : join(root, "missing-victim"), target);
+      else plantRedirect(victim, target, kind, context);
       const result = await runExport(out);
       expect(result.code).toBe(1);
       expect(result.output).toEqual([]);

@@ -13,6 +13,7 @@
 // scope. This lets each test pick the exact `document_path` / origin / pathPrefix combination
 // under test without depending on crawl/parse/chunk machinery.
 
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -373,7 +374,8 @@ describe("manual-source-metadata", () => {
 
       expect(result).toStrictEqual({
         ok: true,
-        target: "file:///srv/manuals-root/guide.html",
+        // On Windows the POSIX-style root lands on the current drive (#4068).
+        target: pathToFileURL(resolve("/srv/manuals-root/guide.html")).href,
         sourceKind: "html-manual-local",
         pageTitle: "page.html",
         safePageId: String(documentId),

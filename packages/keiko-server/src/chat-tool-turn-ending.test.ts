@@ -101,7 +101,7 @@ describe("chatToolTurnPartialAnswer", () => {
 
   it("names exactly the acknowledged writes and keeps unconfirmed ones apart", () => {
     const answer = chatToolTurnPartialAnswer(TRANSCRIPT, "budget-exhausted");
-    expect(answer).toContain("this turn used up its tool-call or prompt budget");
+    expect(answer).toContain("this turn used up its tool-call budget");
     expect(answer).toContain("Completed in this turn:\n- jira_create REQ-12\n- jira_create REQ-13");
     expect(answer).toContain("check these in Jira before retrying:\n- jira_edit REQ-4");
     expect(answer).toContain("Reads completed: 1. Refused or failed tool calls: 1.");

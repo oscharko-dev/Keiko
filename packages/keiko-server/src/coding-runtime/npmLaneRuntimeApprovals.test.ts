@@ -79,12 +79,30 @@ describe("npm-lane runtime approvals", () => {
     }
   });
 
+  // #4068: Windows runs launch through the Job Object supervisor the package carries, and the
+  // installed broker is pinned to its digest, so that digest must describe the source this
+  // repository carries, and only Windows may name a supervisor at all.
+  it("pins the Windows supervisor built from the supervisor source this repository carries", () => {
+    const current = hashHelperSourceTree(join(repoRoot, "native", "runtime-supervisor", "windows"));
+    expect(NPM_LANE_RUNTIME_APPROVALS["windows-x64"].runtimeSupervisor?.sourceTreeSha256).toBe(
+      current,
+    );
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].runtimeSupervisor).toBeUndefined();
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-x64"].runtimeSupervisor).toBeUndefined();
+  });
+
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
     "%s approves the current and the published previous runtime and no other",
     (target, approval) => {
       const previous =
         NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target as keyof typeof NPM_LANE_RUNTIME_APPROVALS];
       expect(approval.upstreamVersion).toBe(OPENCODE_PINNED_VERSION);
+      // No Windows package was ever published, so nothing earlier may be approved for it (#4068).
+      if (target === "windows-x64") {
+        expect(previous).toBeUndefined();
+        return;
+      }
+      if (previous === undefined) throw new TypeError(`no previous approval for ${target}`);
       expect(previous.upstreamVersion).toBe(OPENCODE_RUNTIME_VERSION_PINS[1]?.version);
       expect(previous.executableTreeSha256).not.toBe(approval.executableTreeSha256);
       expect(previous.protocolSchemaSha256).not.toBe(approval.protocolSchemaSha256);

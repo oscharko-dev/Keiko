@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   atomicPublishRename,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
@@ -288,10 +288,13 @@ function managedRootLocator(
   const relativeToHome = relative(resolve(home), installRoot);
   if (
     relativeToHome.length > 0 &&
-    !relativeToHome.startsWith("..") &&
+    relativeToHome !== ".." &&
+    !relativeToHome.startsWith(`..${sep}`) &&
     !isAbsolute(relativeToHome)
   ) {
-    return { kind: "home-relative", path: relativeToHome };
+    // The record stores one separator on every host (#4068): a Windows host's relative() answers
+    // with backslashes, and the locator would otherwise read differently from the one Linux wrote.
+    return { kind: "home-relative", path: relativeToHome.split(sep).join("/") };
   }
   return { kind: "absolute-local", path: installRoot };
 }

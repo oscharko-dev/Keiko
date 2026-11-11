@@ -8,6 +8,7 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
@@ -157,7 +158,7 @@ export interface CodingRuntimeOrchestratorDeps {
    */
   readonly pendingResearchApprovals?: PendingResearchApprovals | undefined;
   /**
-   * F9 (#3873): the facts that name why a run's failed turn ended — an exhausted prompt allowance,
+   * F9 (#3873): the facts that name why a run's failed turn ended — an exhausted time limit,
    * an unreachable provider, a failed model call. Read at settlement so a failed task outcome
    * settles under its closed cause; absent, a failed outcome settles `runtime-failed` as before.
    */
@@ -193,6 +194,16 @@ export type CodingRuntimeOrchestratorResult =
       // the git preparation failure under the run id, and no join between them).
       readonly runId?: string | undefined;
     };
+
+/**
+ * What a start answers: a start refused before any run exists may also answer a start-only refusal
+ * (#4068), which no other operation and no run snapshot ever carries.
+ */
+export type CodingRuntimeStartResult =
+  | Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>
+  | (Omit<Extract<CodingRuntimeOrchestratorResult, { readonly ok: false }>, "failureCode"> & {
+      readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
+    });
 
 export type CodingRuntimeQuestionOperationResult =
   | {

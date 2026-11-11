@@ -62,7 +62,6 @@ import {
 
 import {
   configuredRuntimeMaxDurationMinutes,
-  configuredRuntimePromptTokenBudget,
   runtimeMaxDurationMs,
 } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
@@ -183,7 +182,10 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
-import { gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
+import {
+  acquireGatewaySpendBudgetForEnv,
+  gatewaySpendBudgetForEnv,
+} from "./gateway-spend-budget.js";
 import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,
@@ -567,6 +569,7 @@ export function productionOpenCodeToolProfile(
   return platform === "darwin" ? "native" : "direct";
 }
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
+import type { WindowsGatewayServiceProbe } from "./coding-runtime/windowsGatewayServiceProbe.js";
 import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -637,6 +640,11 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 export interface RuntimeGatewayConfig {
   readonly subscribe?: (listener: (correlationId?: string) => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  /**
+   * Set only by the graph that acquired `spendBudget` from the environment's shared cache; its
+   * disposal calls it. An injected budget has none and is never closed by a graph that did not open it.
+   */
+  readonly releaseSpendBudget?: (() => void) | undefined;
   /** Provider-stated context windows observed by this source's gateways. Never throws. */
   readonly onContextWindowReported?: ((report: ContextWindowReport) => void) | undefined;
   /** Binds the host's adoption path (gateway-context-window.ts) once the handler deps exist. */
@@ -874,12 +882,13 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
           capability: string,
           audience: "model-gateway" | "tool-facade",
         ) => unknown;
-        readonly reservePromptTokens?:
-          ((capability: string, promptTokens: number) => unknown) | undefined;
-        // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
-        // provider's real reported usage once known, mirroring `reservePromptTokens`. An admitted
-        // reservation may answer an opaque `modelCallId` (#3873 run effort roll-up); the settlement
-        // of that call names it, so the call is timed from its own reservation.
+        // Admits one model call of the run before provider dispatch; books no tokens (#4346).
+        readonly admitModelCall?:
+          ((capability: string, estimatedPromptTokens: number) => unknown) | undefined;
+        // #3384 wave-3 W3-3 "needs": records the provider's real reported usage of an admitted
+        // call once known. An admitted call may answer an opaque `modelCallId` (#3873 run effort
+        // roll-up); the settlement of that call names it, so the call is timed from its own
+        // admission.
         readonly settlePromptTokens?:
           | ((
               capability: string,
@@ -1000,6 +1009,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly codingRuntimeHostQualified?: boolean | undefined;
   /** Content-free reason naming the first failed activation prerequisite when unqualified. */
   readonly codingRuntimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  /** Live broker state of a released Windows runtime; absent everywhere else (#4068). */
+  readonly codingRuntimeGatewayService?: WindowsGatewayServiceProbe | undefined;
   /**
    * Available-branch twin of the reason above: how strong the qualified runtime's evidence is.
    * Every default along this path resolves to the WEAK value, so an unthreaded path degrades to
@@ -1865,10 +1876,12 @@ function createRuntimeGatewayConfig(
     observations: new Map(),
     listeners: gatewayConfigListeners(),
   };
+  const spend = acquireGatewaySpendBudgetForEnv(env);
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
-    spendBudget: gatewaySpendBudgetForEnv(env),
+    spendBudget: spend.budget,
+    releaseSpendBudget: spend.release,
     ...contextWindowReporterSlot(),
     current: (): GatewayConfig | undefined => state.config,
     ...runtimeCatalogFacets(state),
@@ -5347,7 +5360,7 @@ function createUiCodingRuntimeProjectMemory(
 // The task workspace's own AGENTS.md as bounded untrusted initial context (ADR-0137 D1). Default
 // on; the explicit `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` opt-out is read once here,
 // and any other explicit value fails composition closed exactly like the neighbouring
-// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`. The loader reads through the runtime host's own secure
+// `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`. The loader reads through the runtime host's own secure
 // workspace read helper, never a second filesystem path; an unqualified host leaves it no source.
 function createUiCodingRuntimeRepositoryInstructions(
   args: UiHandlerDepsAssemblyArgs,
@@ -6023,10 +6036,31 @@ async function disposeRuntimeServices(
     (): void => {
       codingAppSessionDenialWindows.reset();
     },
+    ...graphStoreTeardownSteps(args, services),
+  ]);
+}
+
+// The SQLite stores this graph opened itself, closed before the persistence bundle. Left open, a
+// file stays locked after dispose, which on Windows keeps the state directory from being removed.
+function graphStoreTeardownSteps(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+): readonly (() => void)[] {
+  return [
+    // #4068 (W9): the graph opens the memory vault's node:sqlite handle in `buildPeripherals`, so it
+    // closes it too, and the WAL is checkpointed on a graceful shutdown. A graph that started
+    // without memory has no vault to close.
+    (): void => {
+      services.peripherals.memoryVault?.close();
+    },
+    // #4068: the qualification spend ledger opens lazily on the first budgeted model call.
+    (): void => {
+      args.runtimeConfig.releaseSpendBudget?.();
+    },
     (): void => {
       args.bundle.dispose?.();
     },
-  ]);
+  ];
 }
 
 // `dispose` writes the runtime shutdown lines last. A process that owns its Activity Log seals it
@@ -6193,6 +6227,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
   codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
   codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
+  codingRuntimeGatewayService?: UiHandlerDeps["codingRuntimeGatewayService"];
   codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
   codingRuntimeVersion?: UiHandlerDeps["codingRuntimeVersion"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
@@ -6244,11 +6279,11 @@ function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   composition: Pick<
     ProductionRuntimeComposition,
-    "unavailableReason" | "evidenceClass" | "runtimeVersion"
+    "unavailableReason" | "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
   >,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
-  const { unavailableReason, evidenceClass, runtimeVersion } = composition;
+  const { unavailableReason, evidenceClass, runtimeVersion, windowsGatewayService } = composition;
   return {
     codingRuntimeOrchestrator: controlPlane.orchestrator,
     codingRuntimeEventHub: controlPlane.eventHub,
@@ -6261,6 +6296,9 @@ function buildCodingRuntimeControlPlaneDeps(
       : {
           codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified",
           ...(runtimeVersion === undefined ? {} : { codingRuntimeVersion: runtimeVersion }),
+          ...(windowsGatewayService === undefined
+            ? {}
+            : { codingRuntimeGatewayService: windowsGatewayService }),
         }),
     ...(controlPlane.cancellationRegistry !== undefined
       ? {
@@ -6335,6 +6373,7 @@ interface ProductionRuntimeComposition {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
@@ -6345,8 +6384,14 @@ interface ProductionRuntimePortResolution {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly activated: boolean;
 }
+
+type ActivatedRuntimeFacts = Pick<
+  ProductionRuntimeComposition,
+  "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
+>;
 
 function unqualifiedComposition(
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason,
@@ -6355,25 +6400,39 @@ function unqualifiedComposition(
 }
 
 /**
- * ADR-0137 D2 (#3873): the two Authority Envelope bounds are operator settings. Both are parsed
+ * ADR-0137 D2 (#3873): the Authority Envelope duration is an operator setting. It is parsed
  * ONCE here, before runtime activation, so an invalid value fails the composition closed at
  * startup, and the same numbers reach every newly minted envelope and the safe-activity
  * retention that must outlive it.
  */
 interface RuntimeEnvelopeBounds {
-  readonly promptTokenBudget: number;
   readonly maxDurationMinutes: number;
 }
 
 function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
+  recordRetiredPromptTokenSetting(env);
   return {
-    promptTokenBudget: configuredRuntimePromptTokenBudget(
-      env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
-    ),
     maxDurationMinutes: configuredRuntimeMaxDurationMinutes(
       env.KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES,
     ),
   };
+}
+
+// Keiko does not cap prompt tokens (#4346): an operator who still sets the retired
+// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` gets no cap, so composition records once, body-free,
+// that the setting is ignored instead of leaving the operator to believe it applies.
+function recordRetiredPromptTokenSetting(env: EnvSource): void {
+  if (env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS === undefined) return;
+  emitServerDiagnostic(undefined, {
+    correlationId: "coding-runtime-composition",
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.composition.retired-setting",
+    source: "coding-runtime.composition",
+    errorClass: "RetiredSettingIgnored",
+    message: "retired-setting-ignored",
+    diagnosticOutcome: "routine",
+    code: "setting=prompt-token-allowance",
+  });
 }
 
 // #3903 AC4: an approved Code Mode `worktree_create` becomes a managed task workspace through the
@@ -6483,6 +6542,7 @@ function resolveProductionRuntimePorts(
     unavailableReason: activation.unavailableReason,
     evidenceClass: activation.evidenceClass,
     runtimeVersion: activation.runtimeVersion,
+    windowsGatewayService: activation.windowsGatewayService,
     activated: activation.ports !== undefined,
   };
 }
@@ -6539,7 +6599,6 @@ function runtimeWorkspaceAuthority(
     workspaceLifecycle,
     managedTaskWorkspaceRoot,
     deploymentCeiling,
-    promptTokenBudget: envelopeBounds.promptTokenBudget,
     maxDurationMinutes: envelopeBounds.maxDurationMinutes,
     readWorkspaceHead: readProductionWorkspaceHead,
     verifiedCommitResult: (runId) =>
@@ -6622,13 +6681,12 @@ function productionRuntimeResolver(
   );
 }
 
-function activatedRuntimeFacts(
-  resolution: ProductionRuntimePortResolution,
-): Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion"> {
+function activatedRuntimeFacts(resolution: ProductionRuntimePortResolution): ActivatedRuntimeFacts {
   return {
     // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
     evidenceClass: resolution.evidenceClass ?? "functional-not-platform-qualified",
     runtimeVersion: resolution.runtimeVersion,
+    windowsGatewayService: resolution.windowsGatewayService,
   };
 }
 
@@ -6788,7 +6846,7 @@ function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
   mutationPorts: RuntimeMutationPorts,
-  evidence: Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion">,
+  evidence: ActivatedRuntimeFacts,
 ): ProductionRuntimeComposition {
   const { runtimeMutationLeaseBroker, materializedPatches } = mutationPorts;
   return {

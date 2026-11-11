@@ -9,7 +9,7 @@
 // reaches is present in `DELIVERY_SOURCE_PATHS`, so a future fixture left out fails here instead
 // of failing silently (AGENTS.md §7 — derive the expectation from the production entry point).
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -38,7 +38,11 @@ function relativeValueImportSpecifiers(repoRelativeFile: string): readonly strin
 /** Resolves a compiled-output specifier (".mjs"/".js") to the repo-relative TS source path. */
 function resolveToSourcePath(fromFile: string, specifier: string): string {
   const resolved = resolve(dirname(join(REPO_ROOT, fromFile)), specifier);
-  const relative = resolved.slice(REPO_ROOT.length + 1);
+  // Repository paths use `/` on every host, as DELIVERY_SOURCE_PATHS does (#4068).
+  const relative = resolved
+    .slice(REPO_ROOT.length + 1)
+    .split(sep)
+    .join("/");
   if (relative.endsWith(".mjs")) return `${relative.slice(0, -".mjs".length)}.mts`;
   if (relative.endsWith(".js")) return `${relative.slice(0, -".js".length)}.ts`;
   return relative;

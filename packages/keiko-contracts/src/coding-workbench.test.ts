@@ -107,7 +107,6 @@ function baseAuthorityEnvelope(): CodingWorkbenchAuthorityEnvelope {
     budget: {
       maxRuntimeMs: 120_000,
       maxToolCalls: 12,
-      maxPromptTokens: 24_000,
       maxPatchBytes: 32_768,
     },
     expiresAt: "2026-07-08T12:00:00Z",
@@ -848,6 +847,18 @@ describe("isCodingWorkbenchEvidenceSafeText", () => {
 });
 
 describe("validateCodingWorkbenchAuthorityEnvelope", () => {
+  // Keiko does not limit tokens (#4346). A durable run created before that decision still carries
+  // the retired `budget.maxPromptTokens`: it keeps validating (and is never required or enforced),
+  // while a malformed value of that retired key is still refused.
+  it("accepts a legacy envelope that still carries the retired prompt-token allowance", () => {
+    const base = baseAuthorityEnvelope();
+    const legacy = { ...base, budget: { ...base.budget, maxPromptTokens: 24_000 } };
+    expect(validateCodingWorkbenchAuthorityEnvelope(legacy).ok).toBe(true);
+    expect(validateCodingWorkbenchAuthorityEnvelope(base).ok).toBe(true);
+    const malformed = { ...base, budget: { ...base.budget, maxPromptTokens: -1 } };
+    expect(validateCodingWorkbenchAuthorityEnvelope(malformed).ok).toBe(false);
+  });
+
   it("accepts a valid content-free authority envelope", () => {
     expect(validateCodingWorkbenchAuthorityEnvelope(baseAuthorityEnvelope())).toEqual({
       ok: true,

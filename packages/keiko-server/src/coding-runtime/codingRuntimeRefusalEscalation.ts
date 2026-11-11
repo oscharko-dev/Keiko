@@ -22,7 +22,7 @@
 //
 // Both counts run over the refusals since the run's last applied edit, whatever their reason codes
 // (#3873 review): a model that alternates two refusals — an edit that does not match, a stale re-read,
-// an edit that does not match again — never repeats one code, yet spends the whole prompt allowance
+// an edit that does not match again — never repeats one code, yet spends the run's model calls
 // on a loop exactly as one that repeats it. An applied edit ends the streak; reads, searches and
 // other tool calls between two refused edits do not interrupt it — re-reading the file before
 // resending is exactly what the refusal guidance asks of the model. A human decision (a change

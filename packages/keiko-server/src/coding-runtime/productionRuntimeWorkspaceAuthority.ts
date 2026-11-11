@@ -44,37 +44,16 @@ import {
   type CodingRuntimeLaunchResolutionFailureReason,
 } from "./launchFailure.js";
 
-// The two hard bounds of a minted Authority Envelope (ADR-0137 D2). Both are operator settings with
+// The hard time bound of a minted Authority Envelope (ADR-0137 D2). It is an operator setting with
 // fail-closed parsing, read once at composition (deps.ts) and copied into every newly minted
-// envelope; neither can alter a live envelope or reset its usage. The defaults were re-sized by the
-// live Gemma qualification (#3873): an ordinary multi-file task on a slow self-hosted model
-// (about 24 tokens/s, 1,600 to 4,400 mostly-reasoning completion tokens per turn) re-sends its
-// whole conversation every turn, so 17 turns grew from 4,128 to 18,520 prompt tokens each and
-// summed to 200,000 in 27.5 minutes with every edit applied first time — the former 200,000-token /
-// 30-minute envelope ended ordinary work, not only a refused-edit loop. Exhaustion of either bound
+// envelope; it cannot alter a live envelope or reset its usage. Keiko does not limit tokens (#4346):
+// the envelope carries no cumulative prompt allowance, and the former
+// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` setting is no longer read. Exhaustion of the duration
 // still fails the run's next delegation closed; nothing here bypasses that.
 const MINUTE_MS = 60_000;
-export const DEFAULT_RUNTIME_PROMPT_TOKENS = 2_000_000;
-export const MAX_RUNTIME_PROMPT_TOKENS = 20_000_000;
 export const DEFAULT_RUNTIME_MAX_DURATION_MINUTES = 120;
 export const MAX_RUNTIME_MAX_DURATION_MINUTES = 480;
 const POSITIVE_DECIMAL_INTEGER = /^[1-9]\d*$/u;
-
-function checkedRuntimePromptTokenBudget(value: number): number {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_RUNTIME_PROMPT_TOKENS) {
-    throw new RangeError("Coding runtime prompt token budget is outside the supported range.");
-  }
-  return value;
-}
-
-/** Parses `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`; absent keeps the default, invalid throws. */
-export function configuredRuntimePromptTokenBudget(value: string | undefined): number {
-  if (value === undefined) return DEFAULT_RUNTIME_PROMPT_TOKENS;
-  if (!POSITIVE_DECIMAL_INTEGER.test(value)) {
-    throw new RangeError("Coding runtime prompt token budget must be a positive integer.");
-  }
-  return checkedRuntimePromptTokenBudget(Number(value));
-}
 
 function checkedRuntimeMaxDurationMinutes(value: number): number {
   if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_RUNTIME_MAX_DURATION_MINUTES) {
@@ -119,7 +98,6 @@ export interface ProductionWorkspaceAuthorityInput {
   readonly managedTaskWorkspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
   /** Trusted deployment ceiling for a newly minted run; never changes an existing envelope. */
-  readonly promptTokenBudget?: number | undefined;
   /**
    * Trusted envelope duration (minutes) for a newly minted run; `budget.maxRuntimeMs` and
    * `expiresAt` both derive from it. Absent keeps the default; out of range fails closed.
@@ -275,9 +253,6 @@ function contextFromActive(
     budget: {
       maxRuntimeMs,
       maxToolCalls: 256,
-      maxPromptTokens: checkedRuntimePromptTokenBudget(
-        input.promptTokenBudget ?? DEFAULT_RUNTIME_PROMPT_TOKENS,
-      ),
       // Owner decision 2026-10-28: 64 MiB per run, defined once next to the per-changeset cap.
       maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,
     },

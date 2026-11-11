@@ -177,6 +177,37 @@ describe("CodingWorkbenchRepositorySelector recovery notices", () => {
     ).toHaveNoViolations();
   });
 
+  // #4068: the Windows broker confines only a new worktree, so readiness offers that location alone.
+  // The Work in control then shows it, offers nothing else, and an ordinary folder says it cannot
+  // run here instead of promising to work in place.
+  it("offers only the worktree location the runtime can confine", async () => {
+    selectableRepositories.mockResolvedValue([project("/repos/plain-folder")]);
+    listBranches.mockResolvedValue(branchList(["main"]));
+    renderSelector({ location: "worktree", offeredLocations: ["worktree"] });
+
+    await waitFor(() => expect(listBranches).toHaveBeenCalled());
+    const location = screen.getByRole("combobox", { name: "Work in" });
+    expect(location).toHaveTextContent("New local worktree");
+    expect(location).toBeDisabled();
+    expect(screen.queryByTestId("coding-workbench-folder-unsupported")).not.toBeInTheDocument();
+  });
+
+  it("says an ordinary folder cannot run where only a worktree is confined", async () => {
+    selectableRepositories.mockResolvedValue([project("/repos/plain-folder")]);
+    listBranches.mockResolvedValue({
+      ...(branchList([]) as object),
+      available: false,
+      state: "unavailable",
+      reason: "not-a-repository",
+    });
+    renderSelector({ offeredLocations: ["worktree"] });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Keiko runs a coding task only in a new worktree of a Git repository",
+    );
+    expect(screen.queryByTestId("coding-workbench-folder-hint")).not.toBeInTheDocument();
+  });
+
   it("does not show the Git-unavailable notice once the branch read succeeds", async () => {
     selectableRepositories.mockResolvedValue([project("/repos/plain-folder")]);
     listBranches.mockResolvedValue(branchList(["main"]));

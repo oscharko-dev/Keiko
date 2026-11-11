@@ -1,4 +1,4 @@
-import { relative, isAbsolute } from "node:path";
+import { relative, isAbsolute, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -47,6 +47,7 @@ import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/in
 import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import { safeProperty } from "@oscharko-dev/keiko-activity-log";
 import { isConnectedDocumentPath } from "./grounded-document-evidence.js";
+import { isWindowsOrdinaryPathComponent } from "./windowsHostPath.js";
 
 export const EXPLICIT_PATH_REJECTION_REASONS = [
   "outside-scope",
@@ -146,19 +147,33 @@ export function explicitPathReferences(text: string): readonly ExplicitPathRefer
 export function normalizedExplicitReferencePath(
   reference: ExplicitPathReference,
   root: string,
+  platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  let path = reference.path;
-  if (path.startsWith("file://")) {
-    if (!URL.canParse(path)) return undefined;
-    const url = new URL(path);
-    if (url.hostname !== "" && url.hostname !== "localhost") return undefined;
-    path = localFileUrlPath(url) ?? "";
-  }
-  if (isAbsolute(path)) path = relative(root, path);
+  let path = referenceFilePath(reference.path);
+  if (path === undefined) return undefined;
+  // `relative` answers in the platform's separator. On Windows that is a backslash, which the
+  // strict scope validator refuses, so a native absolute reference is rejoined with `/` there
+  // (#4068). Elsewhere a backslash is an ordinary filename character and stays as it is.
+  if (isAbsolute(path)) path = relative(root, path).split(sep).join("/");
   // A leading current-directory spelling does not change the target. Keep all interior and
   // parent segments for the strict canonical validator; path.normalize would erase that evidence.
   path = path.replace(/^(?:\.\/)+/u, "");
-  return isValidScopePath(path, { mustBeRelative: true }) ? path : undefined;
+  if (!isValidScopePath(path, { mustBeRelative: true })) return undefined;
+  // On Windows an alternate data stream (`a.md:hidden`) or a DOS device name (`docs/CON`) is no
+  // ordinary file: refuse it before any filesystem call, as the other W7 sites do (#4068).
+  return isOrdinaryOnPlatform(path, platform) ? path : undefined;
+}
+
+function referenceFilePath(path: string): string | undefined {
+  if (!path.startsWith("file://")) return path;
+  if (!URL.canParse(path)) return undefined;
+  const url = new URL(path);
+  if (url.hostname !== "" && url.hostname !== "localhost") return undefined;
+  return localFileUrlPath(url) ?? "";
+}
+
+function isOrdinaryOnPlatform(path: string, platform: NodeJS.Platform): boolean {
+  return platform !== "win32" || path.split("/").every(isWindowsOrdinaryPathComponent);
 }
 
 function localFileUrlPath(url: URL): string | undefined {

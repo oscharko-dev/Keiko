@@ -36,6 +36,7 @@ import {
   nativeBuildWrapperReadRoots,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
+  planWindowsGatewayRuntimeSandbox,
   type LongLivedRuntimeSandboxAttestation,
   type RuntimeGatewayEgress,
   type RuntimeGatewayFilesystem,
@@ -51,6 +52,7 @@ import {
   resolveNativeGitMetadata,
 } from "./opencodeNativeGitMetadata.js";
 import {
+  localLaneWindowsGatewayHelperPin,
   devLaneCheckoutRoot,
   npmLanePackageRoot,
   type DevLanePortableOpenCodeRuntime,
@@ -91,6 +93,8 @@ import {
 import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
+import { pathIsContained } from "./nativeRuntimeProcessPaths.js";
+import type { WindowsFilesystemGrant } from "./nativeRuntimeProcessProtocol.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import type { McpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
@@ -108,7 +112,10 @@ import type {
   ProductionRuntimeBackendResolver,
   QualifiedProductionRuntimeRun,
 } from "./productionCodingRuntimeResolver.js";
-import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
+import {
+  releasedWindowsGatewayHelperPin,
+  type QualifiedPortableOpenCodeRuntime,
+} from "./productionPortableCodingRuntime.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessSupervisor,
@@ -323,6 +330,47 @@ export function createProductionOpenCodeBackend(
   });
 }
 
+/**
+ * #4068: a confined Windows tree reads only what it is granted, and Keiko grants a workspace only as
+ * a Keiko-managed worktree (ADR-0043 D18). A start in the operator's own checkout or folder would
+ * spawn and then fail inside the runtime with an opaque error, and an AppContainer cannot resolve a
+ * path on another volume than Windows. Both are refused before anything spawns, each with its own
+ * code, so the Workbench can name what to change. A workspace whose access cannot be resolved at all
+ * is left to the existing checks, which name that cause.
+ */
+export function assertWindowsWorkspaceLocation(
+  input: Pick<ProductionOpenCodeBackendInput, "portable" | "processEnv">,
+  run: Pick<ProductionRuntimeBackendInput, "context" | "resolveWorkspaceRootAccess">,
+): void {
+  if (windowsGatewayHelperPin(input.portable) === undefined) return;
+  if (run.resolveWorkspaceRootAccess()?.kind === "ordinary") {
+    throw new CodingRuntimeLaunchRejectedError(
+      "workspace-location-unsupported",
+      false,
+      "local-checkout",
+    );
+  }
+  if (onAnotherWindowsVolume(run.context.workspaceRoot, input.processEnv ?? process.env)) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "workspace-volume-unsupported",
+      false,
+      "non-system-volume",
+    );
+  }
+}
+
+/**
+ * Whether a Windows path lies on another volume than the one Windows runs from (`SystemDrive`,
+ * default `C:`): another drive letter or a UNC share. A path in another form is no Windows host
+ * path, so it names no volume to refuse.
+ */
+export function onAnotherWindowsVolume(path: string, env: NodeJS.ProcessEnv): boolean {
+  if (/^[\\/]{2}/u.test(path)) return true;
+  const drive = /^([a-z]):[\\/]/iu.exec(path)?.[1];
+  if (drive === undefined) return false;
+  return `${drive}:`.toLowerCase() !== (env.SystemDrive ?? "C:").toLowerCase();
+}
+
 function requiredRunGeometry(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
@@ -333,6 +381,15 @@ function requiredRunGeometry(
   return geometry;
 }
 
+/** The run's context geometry, once the run may start in its workspace at all. */
+function admittedRunGeometry(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeRuntimeCompositionInput["contextGeometry"] {
+  assertWindowsWorkspaceLocation(input, run);
+  return requiredRunGeometry(input, run);
+}
+
 function createOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
@@ -340,7 +397,7 @@ function createOpenCodeRun(
   toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
-  const contextGeometry = requiredRunGeometry(input, run);
+  const contextGeometry = admittedRunGeometry(input, run);
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,
@@ -572,7 +629,6 @@ function boundJira(
           result,
           geometry,
           usage: run.contextUsage?.read(run.request.runId),
-          promptFits: authority.promptFits,
         }),
     },
   };
@@ -702,7 +758,10 @@ function certificateReadFilesField(
   );
 }
 
-function nativePrivateStateRoot(input: LaunchInput, run: ProductionRuntimeBackendInput): string {
+function nativePrivateStateRoot(
+  input: Pick<ProductionOpenCodeBackendInput, "runtimeStateRoot">,
+  run: ProductionRuntimeBackendInput,
+): string {
   return join(
     realpathSync(input.runtimeStateRoot),
     "coding-runtime",
@@ -1355,12 +1414,21 @@ function runtimeSupervisor(
   if (input.portable.target === "linux-x64") {
     return linuxNamespaceGatewaySupervisor(input.portable, input, run, toolProfile);
   }
+  const installedPin = windowsGatewayHelperPin(input.portable);
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
     return appSandboxSupervisor(input.portable, input, run, toolProfile);
   }
   return createRuntimeProcessSupervisor({
+    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
+      ...(installedPin
+        ? {
+            useInstalledWindowsGateway: true,
+            expectedHelperSha256: installedPin,
+            windowsFilesystemGrants: windowsFilesystemGrants(input.portable, input, run),
+          }
+        : {}),
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
@@ -1368,6 +1436,19 @@ function runtimeSupervisor(
     }),
     qualifications: [input.portable.qualification],
   });
+}
+
+/**
+ * The digest the installed D18 broker must carry for this runtime, or `undefined` when no broker may
+ * enforce its gateway policy, which refuses every Windows start (ADR-0043 D14/D19). A
+ * release-qualified package, a Windows dev checkout and the Windows npm runtime package yield one;
+ * an evaluation package and the functional test runtime do not.
+ */
+export function windowsGatewayHelperPin(
+  portable: ResolvedPortableOpenCodeRuntime,
+): string | undefined {
+  if ("platformAssurance" in portable) return releasedWindowsGatewayHelperPin(portable);
+  return isDevLaneRuntime(portable) ? localLaneWindowsGatewayHelperPin(portable) : undefined;
 }
 
 function linuxNamespaceGatewaySupervisor(
@@ -1399,9 +1480,19 @@ function devLaneSupervisor(
   if (portable.target !== "windows-x64")
     return appSandboxSupervisor(portable, input, run, toolProfile);
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
+  // A checkout's runs go through the broker it installed with its own supervisor's pin, exactly as
+  // a release's do; without that pin the native backend refuses the gateway launch (ADR-0043 D19).
+  const installedPin = localLaneWindowsGatewayHelperPin(portable);
   return createRuntimeProcessSupervisor({
+    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: portable.nativeHelperPath,
+      ...(installedPin
+        ? {
+            useInstalledWindowsGateway: true,
+            windowsFilesystemGrants: windowsFilesystemGrants(portable, input, run),
+          }
+        : {}),
       expectedHelperSha256: portable.nativeHelperSha256,
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot: run.context.workspaceRoot,
@@ -1525,6 +1616,51 @@ function gatewayFilesystem(
         : {}),
     },
   };
+}
+
+/**
+ * What a confined Windows tree may reach on disk (#4068, ADR-0043 D18). Its runtime and its private
+ * state are granted to the tree alone. A Keiko-managed worktree is readable through that worktree's
+ * capability. The mapped profile's tools act through Keiko's facade, so the private state is the
+ * only writable grant. A user's own checkout gets none.
+ */
+export function windowsFilesystemGrants(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: Pick<LaunchInput, "runtimeStateRoot" | "ripgrep">,
+  run: ProductionRuntimeBackendInput,
+): readonly WindowsFilesystemGrant[] {
+  const runtimeRoot = join(portable.installRoot, portable.sidecar.payloadRootPath);
+  const grants: WindowsFilesystemGrant[] = [
+    { path: runtimeRoot, access: "read", principal: "tree" },
+    { path: nativePrivateStateRoot(input, run), access: "modify", principal: "tree" },
+  ];
+  // The verified ripgrep directory is the only entry on the runtime's PATH. A checkout keeps it
+  // in its own `.ripgrep`, outside the runtime root, where the tree could not run it (#4068).
+  // The developer override may name any directory whose `rg` verifies; granting the AppContainer a
+  // read of that whole directory (say a user's bin folder) would expose it, so only the Keiko-owned
+  // layouts are granted. The override still verifies and leads the PATH, and the existing
+  // `coding-runtime.ripgrep.resolved` line records `layout=override` (#4068).
+  if (
+    input.ripgrep.outcome === "verified" &&
+    input.ripgrep.layout !== "override" &&
+    !pathIsContained(runtimeRoot, input.ripgrep.directory)
+  )
+    grants.push({ path: input.ripgrep.directory, access: "read", principal: "tree" });
+  if (run.resolveWorkspaceRootAccess()?.kind === "managed-task") {
+    grants.push({
+      path: run.context.workspaceRoot,
+      access: "read",
+      principal: "capability",
+      capability: windowsWorkspaceCapability(run.context.workspaceRoot),
+    });
+  }
+  return grants;
+}
+
+/** One capability per managed worktree, so only that worktree's runs can read it. */
+export function windowsWorkspaceCapability(workspaceRoot: string): string {
+  const identity = createHash("sha256").update(workspaceRoot.toLowerCase()).digest("hex");
+  return `keiko.workspace.${identity.slice(0, 32)}`;
 }
 
 /** A linked worktree's proven common Git directory, recorded body-free (#3897 review). */

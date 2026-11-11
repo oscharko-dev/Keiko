@@ -1035,8 +1035,35 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
       correlationId: "ui_denied-read-0001",
       repairCorrelationId: "ui_session-repair-0001",
       errorKind: "unavailable",
+      documentRef: expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/u) as unknown,
     });
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 1 });
+  });
+
+  // #4068: tabs of one origin share the session cookie; each page load's reports carry its own
+  // reference, the same on a failure report and on a repair report.
+  it("stamps every report of this page load with one document reference", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] shared-event-source sse stream error", {
+      correlationId: "ui_stream-streak-0009",
+      kind: "sse-error",
+    });
+    const failure = lastPostedBody(fetchMock);
+    fanOutClientDiagnostic("[keiko] shared-event-source stream session repair", {
+      correlationId: "ui_stream-streak-0009",
+      sessionRepairReport: {
+        outcome: "repair-acknowledged",
+        repairCorrelationId: "ui_session-repair-0009",
+        stream: "shared-event-source",
+      },
+    });
+    const repair = lastPostedBody(fetchMock);
+
+    expect(failure.documentRef).toMatch(/^[A-Za-z0-9._-]{8,128}$/u);
+    expect(repair.documentRef).toBe(failure.documentRef);
   });
 
   // #3557 review: a stream repair travels under its failure streak, naming its stream.
@@ -1060,6 +1087,7 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
       correlationId: "ui_stream-streak-0001",
       repairCorrelationId: "ui_session-repair-0002",
       stream: "run-events",
+      documentRef: expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/u) as unknown,
     });
   });
 

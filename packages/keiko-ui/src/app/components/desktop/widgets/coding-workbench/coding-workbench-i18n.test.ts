@@ -11,18 +11,51 @@ import {
 
 describe("Coding Workbench translations", () => {
   it.each([
-    "codingWorkbench.setup.runtimeUnavailable",
-    "codingWorkbench.alert.runtimeUnqualified",
-  ] as const)("explains the Windows npm runtime limitation in %s", (key) => {
+    ["codingWorkbench.gatewayService.absent", "keiko gateway-service install"],
+    ["codingWorkbench.gatewayService.stopped", "keiko gateway-service repair"],
+    ["codingWorkbench.gatewayService.stale", "keiko gateway-service repair"],
+    ["codingWorkbench.gatewayService.unknown", "keiko gateway-service status"],
+  ] as const)("%s names the command in both languages", (key, command) => {
+    expect(translateCodingWorkbench("en", key)).toContain(command);
+    expect(translateCodingWorkbench("de", key)).toContain(command);
+  });
+
+  // No command repairs this, so none may be suggested: `keiko gateway-service install` refuses a
+  // runtime that is not release-qualified.
+  it("says an unqualified Windows runtime cannot start coding runs, offering no command", () => {
+    const key = "codingWorkbench.gatewayService.unqualified";
     const en = translateCodingWorkbench("en", key);
     const de = translateCodingWorkbench("de", key);
-    expect(en).toContain("Windows network isolation is not implemented yet");
-    expect(de).toContain("Windows-Netzwerkisolation ist noch nicht implementiert");
-    for (const text of [en, de]) {
-      expect(text).toContain("npm");
-      expect(text).toContain("Mac");
-      expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-arm64");
-      expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-x64");
+    expect(en).toContain("cannot start coding runs");
+    expect(de).toContain("keine Coding-Läufe starten");
+    for (const text of [en, de]) expect(text).not.toContain("keiko gateway-service");
+  });
+
+  it.each([
+    "codingWorkbench.setup.runtimeUnavailable",
+    "codingWorkbench.alert.runtimeUnqualified",
+  ] as const)(
+    "names the Mac runtime package and the Windows gateway, claiming no gap, in %s",
+    (key) => {
+      const en = translateCodingWorkbench("en", key);
+      const de = translateCodingWorkbench("de", key);
+      expect(en).toContain("Windows runtime gateway");
+      expect(de).toContain("Windows-Runtime-Gateway");
+      for (const text of [en, de]) {
+        expect(text).not.toMatch(/not implemented|nicht implementiert/iu);
+        expect(text).toContain("npm");
+        expect(text).toContain("Mac");
+        expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-arm64");
+        expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-x64");
+      }
+    },
+  );
+
+  // The notice shows whenever the offered locations exclude Local, on any platform.
+  it("words the folder notice without naming a platform", () => {
+    const key = "codingWorkbench.repository.folderModeUnsupported";
+    for (const text of [translateCodingWorkbench("en", key), translateCodingWorkbench("de", key)]) {
+      expect(text).not.toMatch(/windows/iu);
     }
   });
 
@@ -151,6 +184,7 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.composer.blocked.commandsLoading",
     "codingWorkbench.event.failure.invalid-intent",
     "codingWorkbench.event.failure.workspace-unqualified",
+    "codingWorkbench.repository.folderModeUnsupported",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
     const de = translateCodingWorkbench("de", key, { name: "n", count: 1, position: 1, total: 1 });
@@ -160,6 +194,40 @@ describe("Coding Workbench translations", () => {
     if (key !== "codingWorkbench.composer.commands.active") expect(de).not.toBe(en);
     expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
     expect(de).not.toMatch(/\{\w+\}/u);
+  });
+
+  // Starting the same task again in the same folder can never help here, so the sentence must
+  // name a folder outside the Keiko installation before it mentions starting again.
+  it("tells the operator to choose a folder outside the installation when it holds the runtime", () => {
+    const key = "codingWorkbench.event.failure.workspace-unqualified";
+    expect(translateCodingWorkbench("en", key)).toContain(
+      "Choose a project folder outside the Keiko installation",
+    );
+    expect(translateCodingWorkbench("de", key)).toContain(
+      "Wähle einen Projektordner außerhalb der Keiko-Installation",
+    );
+  });
+
+  // #4068: a start the Windows broker cannot confine must name what to change, never "try again".
+  it("names the work location or the state drive when Windows refuses a start", () => {
+    for (const locale of ["en", "de"] as const) {
+      const location = translateCodingWorkbench(
+        locale,
+        "codingWorkbench.alert.startRefusedWorkspaceLocation",
+        { code: "C" },
+      );
+      expect(location).toContain(
+        translateCodingWorkbench(locale, "codingWorkbench.repository.locationWorktree"),
+      );
+      expect(location).toContain("(C)");
+      const volume = translateCodingWorkbench(
+        locale,
+        "codingWorkbench.alert.startRefusedWorkspaceVolume",
+        { code: "C" },
+      );
+      expect(volume).toContain("KEIKO_STATE_DIR");
+      expect(volume).toContain("(C)");
+    }
   });
 
   it("keeps the placeholders the command menu fills in both languages", () => {
@@ -368,7 +436,6 @@ describe("Coding Workbench translations", () => {
   // internal error". Each terminal model-call cause is plain language with a next step in both
   // catalogs, German in the informal du-form, and only `runtime-failed` speaks of an internal error.
   it.each([
-    "codingWorkbench.event.failure.prompt-allowance-exhausted",
     "codingWorkbench.event.failure.envelope-duration-exhausted",
     "codingWorkbench.event.failure.output-exhausted-repeated",
     "codingWorkbench.event.failure.provider-unavailable",
@@ -386,14 +453,8 @@ describe("Coding Workbench translations", () => {
     expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
   });
 
-  it("names the exhausted allowance and the outage window an operator can raise", () => {
+  it("names the time limit and the outage window an operator can raise", () => {
     for (const locale of ["en", "de"] as const) {
-      expect(
-        translateCodingWorkbench(
-          locale,
-          "codingWorkbench.event.failure.prompt-allowance-exhausted",
-        ),
-      ).toContain("KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS");
       expect(
         translateCodingWorkbench(
           locale,
@@ -408,9 +469,6 @@ describe("Coding Workbench translations", () => {
       ).toContain("max_output_tokens");
     }
     expect(
-      translateCodingWorkbench("en", "codingWorkbench.event.failure.prompt-allowance-exhausted"),
-    ).toMatch(/prompt allowance/iu);
-    expect(
       translateCodingWorkbench("en", "codingWorkbench.event.failure.provider-unavailable"),
     ).toMatch(/could not be reached/iu);
   });
@@ -420,11 +478,6 @@ describe("Coding Workbench translations", () => {
   // Each message states the cap and that Keiko must be restarted, in both languages. The caps are
   // pinned against the server's own constants by tests/qa/coding-limit-message-parity.test.ts.
   it.each([
-    [
-      "codingWorkbench.event.failure.prompt-allowance-exhausted",
-      "20,000,000 tokens",
-      "20.000.000 Tokens",
-    ],
     ["codingWorkbench.event.failure.envelope-duration-exhausted", "480 minutes", "480 Minuten"],
   ] as const)("states the cap and the restart in %s", (key, enCap, deCap) => {
     const en = translateCodingWorkbench("en", key);

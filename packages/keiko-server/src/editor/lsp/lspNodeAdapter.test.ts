@@ -2,7 +2,9 @@ import { resetServerLogger } from "../../../../../tests/support/activity-log-tes
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
+import { PassThrough } from "node:stream";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -874,4 +876,71 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     );
     expect(proven).toMatchObject({ signal: "SIGTERM" });
   });
+});
+
+// #4068 (W7): on Windows a refused CreateProcess (a workspace cwd at or above MAX_PATH) destroys
+// the child's stdio pipes with `read ENOTCONN` before the child's own ENOENT. An unheard pipe error
+// is an uncaught exception that terminates the server; the child's error already records the
+// spawn failure, so the pipes must not throw.
+describe("defaultLspSpawnFn — stdio pipe failures (#4068)", () => {
+  function captureLog(): ServerLogEvent[] {
+    const events: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+    );
+    return events;
+  }
+
+  it.each(["stdout", "stderr"] as const)("hears a %s pipe error", (stream) => {
+    const fake = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      pid: undefined,
+      exitCode: null,
+      signalCode: null,
+      kill: (): boolean => true,
+    });
+    const spawnLsp = createDefaultLspSpawnFn(
+      () => fake as unknown as ChildProcessWithoutNullStreams,
+      createEphemeralHome,
+    );
+    const handle = spawnLsp(process.execPath, [], { PATH: "" }, tmpdir());
+    handle.onError(() => undefined);
+    const pipeError = Object.assign(new Error("read ENOTCONN"), { code: "ENOTCONN" });
+    expect(() => fake[stream].emit("error", pipeError)).not.toThrow();
+    fake.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "records a %s pipe failure of a spawned child once, and none before the spawn",
+    (stream) => {
+      const events = captureLog();
+      const fake = Object.assign(new EventEmitter(), {
+        stdin: new PassThrough(),
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        pid: 4242,
+        exitCode: null,
+        signalCode: null,
+        kill: (): boolean => true,
+      });
+      const spawnLsp = createDefaultLspSpawnFn(
+        () => fake as unknown as ChildProcessWithoutNullStreams,
+        createEphemeralHome,
+      );
+      const handle = spawnLsp(process.execPath, [], { PATH: "" }, tmpdir());
+      handle.onError(() => undefined);
+      const pipeError = Object.assign(new Error("read EPIPE"), { code: "EPIPE" });
+      fake[stream].emit("error", pipeError);
+      expect(events.some((event) => event.op === "lsp.process.runtime-error")).toBe(false);
+      fake.emit("spawn");
+      fake[stream].emit("error", pipeError);
+      fake[stream].emit("error", pipeError);
+      const runtime = events.filter((event) => event.op === "lsp.process.runtime-error");
+      expect(runtime).toHaveLength(1);
+      expect(runtime[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+      expect(runtime[0]?.extra?.childPid).toBe(4242);
+    },
+  );
 });

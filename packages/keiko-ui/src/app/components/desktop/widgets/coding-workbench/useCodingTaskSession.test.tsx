@@ -6,6 +6,7 @@ import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contrac
 import { useCodingTaskSession } from "./useCodingTaskSession";
 import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 
 const scopeEffects = vi.hoisted(() => ({ deferred: false }));
 vi.mock("react", async (importOriginal) => {
@@ -114,6 +115,50 @@ function activeWorkspace(): ActiveWorkspaceApi {
 beforeEach(() => {
   vi.clearAllMocks();
   read.mockResolvedValue(detail);
+});
+
+describe("restoring the run's task after a server restart (#4068 W9)", () => {
+  it("reads the task again when the browser is paired after the first read failed", async () => {
+    // The restarted server answers an unpaired caller exactly like an unknown task.
+    read.mockRejectedValueOnce(new Error("Coding task not found."));
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      notifyCodingAppSessionChanged();
+    });
+
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[1]?.[0]).toBe("chat-one");
+  });
+
+  it("does not read again without a pairing", async () => {
+    read.mockRejectedValueOnce(new Error("Coding task not found."));
+    const { result, rerender } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    rerender();
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(read).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("coding task selection", () => {

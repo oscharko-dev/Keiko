@@ -2,6 +2,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   validateCodingSafeActivityFeed,
@@ -1715,6 +1716,103 @@ describe("streamed answers in the live feed", () => {
     expect(answer.truncated).toBe(true);
     expect(answer.segments.at(-1)?.truncated).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(600);
+  });
+});
+
+// #4068 W12: Windows-shaped text through the live feed. Shell and tool output never reaches it (a
+// tool carries a label, a state and a shell's exit code only), so CRLF endings, bare-CR progress
+// rewrites and long lines arrive here only as text the model wrote or reasoned. The feed keeps that
+// text as written within its bounds and discloses every cut; it never rewrites a line ending.
+describe("Windows-shaped text in the live feed", () => {
+  const progress = "added 1 package\r\n[##   ] 40%\r[#### ] 80%\r[#####] 100%\r\n";
+
+  it("keeps CRLF and bare-CR rewrites byte for byte across streamed pieces", () => {
+    const projection = assistantTurn();
+    // One streamed piece per character, so every CR and LF arrives on its own.
+    for (let index = 0; index < progress.length; index += 1) {
+      projection.ingest(RUN_ID, text("msg_answer", progress.charAt(index)));
+    }
+
+    const answer = projected(projection);
+    expect(joinedText(answer)).toBe(progress);
+    expect(answer.segments).toHaveLength(1);
+    expect(answer.truncated).toBe(false);
+  });
+
+  it("keeps a CRLF pair whole when the segment bound falls between CR and LF", () => {
+    const projection = assistantTurn();
+    const head = `${"a".repeat(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS - 1)}\r`;
+    projection.ingest(RUN_ID, text("msg_answer", head));
+    projection.ingest(RUN_ID, text("msg_answer", "\nnext line\r\n"));
+
+    const answer = projected(projection);
+    expect(answer.segments.map((segment) => segment.text)).toEqual([head, "\nnext line\r\n"]);
+    // Consumers join segments; the joined text has the original line ending.
+    expect(joinedText(answer)).toBe(`${head}\nnext line\r\n`);
+    expect(answer.truncated).toBe(false);
+  });
+
+  it("removes backspace and escape controls but keeps tab, LF and CR", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, text("msg_answer", "\u001b[32mok\u001b[0m\t|\b/\b-\r\n"));
+
+    expect(joinedText(projected(projection))).toBe("[32mok[0m\t|/-\r\n");
+  });
+
+  it("bounds a single line far above the message budget and discloses the cut", () => {
+    const projection = assistantTurn();
+    const line = "x".repeat(200_000);
+    for (let index = 0; index < 20; index += 1) {
+      projection.ingest(
+        RUN_ID,
+        text("msg_answer", line.slice(index * 10_000, (index + 1) * 10_000)),
+      );
+    }
+
+    const answer = projected(projection);
+    expect(answer.truncated).toBe(true);
+    expect(answer.segments.at(-1)?.truncated).toBe(true);
+    expect(line.startsWith(joinedText(answer))).toBe(true);
+    expect(joinedText(answer).length).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
+    expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(
+      CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+    );
+  });
+
+  it("bounds replacement characters and a lone surrogate on their UTF-8 cost", () => {
+    const projection = assistantTurn({ limits: { maxMessageBytes: 600 } });
+    // What a UTF-8 decoder makes of invalid bytes (U+FFFD), plus a lone surrogate that a JSON
+    // escape can still deliver; each costs three bytes once serialized.
+    const mixed = `café \uFFFD\uFFFD \ud800 ${"ü".repeat(400)}`;
+    projection.ingest(RUN_ID, text("msg_answer", mixed));
+
+    const answer = projected(projection);
+    expect(answer.truncated).toBe(true);
+    expect(mixed.startsWith(joinedText(answer))).toBe(true);
+    expect(joinedText(answer)).toContain("\uFFFD\uFFFD \ud800");
+    expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(600);
+  });
+
+  it("settles a shell call cut by Stop as cancelled and keeps the streamed text it had", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, text("msg_answer", "Running npm test\r\n"));
+    const shell = (state: "running" | "succeeded"): CodingSafeActivitySignal => ({
+      kind: "tool",
+      messageId: "msg_answer",
+      callId: "call_shell",
+      tool: "shell",
+      state,
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    });
+    projection.ingest(RUN_ID, shell("running"));
+
+    projection.interrupt(RUN_ID, "stop");
+    projection.ingest(RUN_ID, text("msg_answer", "[##  ] 50%\r"));
+
+    const answer = projected(projection);
+    expect(joinedText(answer)).toBe("Running npm test\r\n[##  ] 50%\r");
+    expect(answer.truncated).toBe(false);
+    expect(firstTurnToolStates(projection)).toEqual([["call_shell", "cancelled"]]);
   });
 });
 

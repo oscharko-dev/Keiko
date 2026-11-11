@@ -7,7 +7,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimeMcpChannelPayload,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
@@ -64,7 +64,7 @@ import { writeSseFrame } from "../sse-write.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type {
   CodingRuntimeOrchestrator,
-  CodingRuntimeOrchestratorResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestrator.js";
 import type { ScheduleControlReason } from "./codingScheduledWakes.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
@@ -73,7 +73,7 @@ import { openCodePromptInputs } from "./opencodePromptInputs.js";
 const MAX_BODY_BYTES = 64 * 1024;
 
 type RuntimeMutationRefusalReason =
-  CodingWorkbenchRuntimeFailureCode | "payload-too-large" | "start-abandoned";
+  CodingWorkbenchRuntimeStartFailureCode | "payload-too-large" | "start-abandoned";
 
 // Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
 // route it backs so a log line names exactly which mutation was refused.
@@ -123,6 +123,8 @@ const RUNTIME_REFUSAL_REASONS = [
   "verification-not-evidenced",
   "model-unavailable",
   "workspace-unqualified",
+  "workspace-location-unsupported",
+  "workspace-volume-unsupported",
   "start-abandoned",
   "prompt-allowance-exhausted",
   "envelope-duration-exhausted",
@@ -180,6 +182,8 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   "issue-context-unavailable": "unavailable",
   "model-unavailable": "unavailable",
   "workspace-unqualified": "conflict",
+  "workspace-location-unsupported": "conflict",
+  "workspace-volume-unsupported": "conflict",
   "active-run-conflict": "conflict",
   "recovery-required": "conflict",
   "task-drift": "conflict",
@@ -265,15 +269,21 @@ function runChannelRead(
   return { orchestrator: required.orchestrator, runId };
 }
 
-function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
+function failureStatus(failureCode: CodingWorkbenchRuntimeStartFailureCode): number {
   if (failureCode === "active-run-conflict" || failureCode === "recovery-required") return 409;
   if (failureCode === "authority-resolution-failed") return 403;
-  if (failureCode === "model-unavailable" || failureCode === "workspace-unqualified") return 409;
+  if (
+    failureCode === "model-unavailable" ||
+    failureCode === "workspace-unqualified" ||
+    failureCode === "workspace-location-unsupported" ||
+    failureCode === "workspace-volume-unsupported"
+  )
+    return 409;
   return 400;
 }
 
 function failureResult(
-  failureCode: CodingWorkbenchRuntimeFailureCode,
+  failureCode: CodingWorkbenchRuntimeStartFailureCode,
   correlationId?: string,
   issueBindingFailure?: CodingWorkbenchIssueBindingFailure,
   modelRefusalReason?: CodingWorkbenchModelRefusalReason,
@@ -301,7 +311,7 @@ function notFound(correlationId?: string): RouteResult {
 }
 
 function refusalReason(
-  result: Extract<CodingRuntimeOrchestratorResult, { readonly ok: false }>,
+  result: Extract<CodingRuntimeStartResult, { readonly ok: false }>,
 ): RuntimeMutationRefusalReason {
   return result.startAbandoned === true ? "start-abandoned" : result.failureCode;
 }
@@ -564,12 +574,51 @@ export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps
  */
 function composedProfileReadiness(
   deps: UiHandlerDeps,
-): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs"> {
+): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs" | "toolProfile"> {
   const profile = deps.openCodeGatewayReadinessRegistry?.toolProfile ?? "direct";
   return {
     selectableAgents: openCodeSelectableAgents(profile),
     promptInputs: openCodePromptInputs(profile),
+    // A mapped profile is never labeled native (#4068 W12).
+    toolProfile: profile === "native" ? "native" : "mapped",
   };
+}
+
+// Both branches name themselves. The available branch's `??` is the fail-closed default: an
+// unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified claim
+// (audit F-01). A Windows runtime is available only while a broker it may use is ready (#4068).
+function runtimeAvailabilityFacts(
+  deps: UiHandlerDeps,
+): Pick<
+  CodingWorkbenchRuntimeReadiness,
+  "runtimeAvailable" | "runtimeEvidenceClass" | "runtimeVersion" | "runtimeUnavailableReason"
+> {
+  if (deps.codingRuntimeHostQualified !== true) {
+    return {
+      runtimeAvailable: false,
+      runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
+    };
+  }
+  const gatewayServiceReason = deps.codingRuntimeGatewayService?.unavailableReason();
+  if (gatewayServiceReason !== undefined) {
+    return { runtimeAvailable: false, runtimeUnavailableReason: gatewayServiceReason };
+  }
+  return {
+    runtimeAvailable: true,
+    runtimeEvidenceClass: deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
+    // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
+    ...(deps.codingRuntimeVersion === undefined
+      ? {}
+      : { runtimeVersion: deps.codingRuntimeVersion }),
+  };
+}
+
+// #4068: a runtime behind the Windows broker confines only a Keiko-managed worktree (ADR-0043 D18),
+// so the browser preselects one and does not offer the operator's own checkout.
+function executionLocationFacts(
+  deps: UiHandlerDeps,
+): Pick<CodingWorkbenchRuntimeReadiness, "executionLocations"> {
+  return deps.codingRuntimeGatewayService === undefined ? {} : { executionLocations: ["worktree"] };
 }
 
 export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -585,7 +634,6 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
   // The readiness projection must report the same ceiling the coding-runtime mint clamp
   // enforces; the autonomous-delivery ceiling is a separate authority knob (#2475).
   const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
-  const runtimeAvailable = deps.codingRuntimeHostQualified === true;
   return {
     status: 200,
     body: {
@@ -593,23 +641,9 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
-      runtimeAvailable,
-      // Both branches name themselves. The available branch's `??` is the fail-closed default: an
-      // unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified
-      // claim (audit F-01).
-      ...(runtimeAvailable
-        ? {
-            runtimeEvidenceClass:
-              deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
-            // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
-            ...(deps.codingRuntimeVersion === undefined
-              ? {}
-              : { runtimeVersion: deps.codingRuntimeVersion }),
-          }
-        : {
-            runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
-          }),
+      ...runtimeAvailabilityFacts(deps),
       ...composedProfileReadiness(deps),
+      ...executionLocationFacts(deps),
     },
   };
 }

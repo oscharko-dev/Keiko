@@ -40,7 +40,7 @@ const REASONS: readonly ChatToolTurnEndReason[] = [
   "model-failure",
 ];
 const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
-  "budget-exhausted": "this turn used up its tool-call or prompt budget",
+  "budget-exhausted": "this turn used up its tool-call budget",
   deadline: "this turn reached its time limit",
   "authority-invalid": "the Chat's mode, sources or connection changed",
   "authentication-failed":

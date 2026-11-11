@@ -194,13 +194,14 @@ function pruneAtStartup(store: RetainedSessionStore, activityLog: ServerLogSink 
   try {
     const pruned = store.prune();
     const prunedCount = pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota;
-    if (prunedCount > 0) {
+    if (prunedCount > 0 || pruned.blocked > 0) {
       recordSessionContinuity(activityLog, {
         runId,
         action: "prune",
         outcome: "pruned",
         entryCount: pruned.entryCount,
         prunedCount,
+        blockedCount: pruned.blocked,
       });
     }
   } catch (error) {
@@ -321,6 +322,8 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
       maxLength: 128,
       maxItems: 5,
     },
+    // Entries a pruning left in place because a process holds them open; the next pruning retries.
+    blockedCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -345,6 +348,7 @@ export interface SessionContinuityRecord {
   readonly messageCount?: number;
   readonly entryCount?: number;
   readonly prunedCount?: number;
+  readonly blockedCount?: number;
   readonly ageMs?: number;
   readonly auditCheck?: RetentionAuditCheck;
   /** The failure behind a `failed` outcome; only its class, frames and cause chain are written. */

@@ -646,7 +646,6 @@ export interface CodingWorkbenchNetworkPolicy {
 export interface CodingWorkbenchBudget {
   readonly maxRuntimeMs: number;
   readonly maxToolCalls: number;
-  readonly maxPromptTokens: number;
   readonly maxPatchBytes: number;
 }
 

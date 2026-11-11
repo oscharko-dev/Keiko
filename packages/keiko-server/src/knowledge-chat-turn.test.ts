@@ -14,11 +14,9 @@ import {
 } from "./conversation-readiness-admission.js";
 import { realpathSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import type { EditorAgentGovernedAuthorityReference } from "@oscharko-dev/keiko-contracts";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type { ExternalMcpConnection } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
-import { reserveCurrentKnowledgeChatAuthority } from "./knowledge-chat-authority.js";
 import {
   knowledgeDocumentSnapshot,
   knowledgeDocumentScope,
@@ -410,26 +408,6 @@ function expectReviewFits(
     countGatewayPromptTokens(request) + (request.maxOutputTokens ?? 0) + profile.safetyMarginTokens,
   ).toBeLessThanOrEqual(profile.maxInputTokens);
 }
-function expectRemainingReviewAuthority(
-  deps: UiHandlerDeps,
-  pod: PodFixture,
-  reference: EditorAgentGovernedAuthorityReference | undefined,
-  remaining: number,
-): void {
-  if (reference === undefined) throw new Error("Expected retained Knowledge authority");
-  const reserve = (promptTokens: number): ReturnType<typeof reserveCurrentKnowledgeChatAuthority> =>
-    reserveCurrentKnowledgeChatAuthority(
-      deps,
-      pod.chatId,
-      reference,
-      { toolCalls: 0, promptTokens, patchBytes: 0 },
-      new Date().toISOString(),
-      "knowledge-source-proof",
-    );
-  expect(reserve(remaining + 1).ok).toBe(false);
-  expect(reserve(remaining).ok).toBe(true);
-}
-
 it.each([
   {
     rotate: false,
@@ -463,7 +441,7 @@ it.each([
   "shares review admission with external MCP tools (rotated: $rotate, caller calls: $callerCalls, output: $maxOutputTokens)",
   async ({ rotate, callerCalls, maxOutputTokens, contextWindow, expectedOutput }) => {
     const { pod, deps } = await fixture(1, maxOutputTokens, contextWindow);
-    const { settings, registry } = requiredReviewOwners(deps);
+    const { settings } = requiredReviewOwners(deps);
     const server: McpServerDefinition = {
       name: "synthetic",
       description: "Read-only test tools",
@@ -499,7 +477,6 @@ it.each([
       chatToolTurnBudget: {
         maxRuntimeMs: 60_000,
         maxToolCalls: 10,
-        maxPromptTokens: 1000,
         maxPatchBytes: 0,
       },
       mcpConnections: {
@@ -513,13 +490,6 @@ it.each([
     installMcpChatCatalogRuntime(deps, {
       primary: createBufferedServerLogSink(),
       diagnostics: { record: () => undefined },
-    });
-    let references: readonly EditorAgentGovernedAuthorityReference[] = [];
-    const register = registry.registerChatSources.bind(registry);
-    vi.spyOn(registry, "registerChatSources").mockImplementation((...args) => {
-      const result = register(...args);
-      if (result.ok) references = result.authorityRefs;
-      return result;
     });
     let reviewArguments: Record<string, string> = {};
     pod.withStore((store) => {
@@ -650,7 +620,6 @@ it.each([
       expect(outer).toHaveLength(2);
       expect(semantic).toHaveLength(0);
       expect(callerSettlement).toHaveBeenCalledTimes(2);
-      expectRemainingReviewAuthority(deps, pod, references[0], 800);
       return;
     }
     await work;
@@ -665,7 +634,6 @@ it.each([
         .findMessageById(admitted.userMessage.id)
         ?.toolTranscript?.exchanges.map((exchange) => exchange.result?.status),
     ).toEqual(["completed", "completed", "completed"]);
-    expectRemainingReviewAuthority(deps, pod, references[0], 600);
   },
 );
 
@@ -677,7 +645,6 @@ it.each(["call", "stream", "meter"] as const)(
       chatToolTurnBudget: {
         maxRuntimeMs: 60_000,
         maxToolCalls: 1,
-        maxPromptTokens: 100_000,
         maxPatchBytes: 0,
       },
     });
@@ -715,7 +682,7 @@ it.each(["call", "stream", "meter"] as const)(
       call: { name: "knowledge_documents" },
       result: { status: "completed" },
     });
-    expect(answer.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(answer.content).toContain("this turn used up its tool-call budget");
     expect(answer.content).not.toContain("Source coverage:");
     expect(turn.endedEarly).toBe(true);
     if (entry === "call") {
@@ -820,25 +787,10 @@ it.each([
       chatToolTurnBudget: {
         maxRuntimeMs: 60_000,
         maxToolCalls: 10,
-        maxPromptTokens: 1000,
         maxPatchBytes: 0,
       },
     });
     if (external) installSemanticExternalCatalog(deps);
-    const { registry } = requiredReviewOwners(deps);
-    let authority: EditorAgentGovernedAuthorityReference | undefined;
-    const register = registry.registerChat.bind(registry);
-    vi.spyOn(registry, "registerChat").mockImplementation((...args) => {
-      const result = register(...args);
-      if (result.ok) authority = result.authorityRef;
-      return result;
-    });
-    const registerSources = registry.registerChatSources.bind(registry);
-    vi.spyOn(registry, "registerChatSources").mockImplementation((...args) => {
-      const result = registerSources(...args);
-      if (result.ok) authority = result.authorityRefs[0];
-      return result;
-    });
     let argumentsByDocument: Record<string, string>[] = [];
     pod.withStore((store) => {
       argumentsByDocument = knowledgeDocumentSnapshot(deps, store, pod.chatId).documents.map(
@@ -958,21 +910,6 @@ it.each([
       promptTokens: failure === "none" ? 100 : 300,
       completionTokens: failure === "none" ? 10 : 30,
     });
-    const reference = authority;
-    if (reference === undefined) throw new Error("Expected accepted source authority");
-    const reserve = (
-      promptTokens: number,
-    ): ReturnType<typeof reserveCurrentKnowledgeChatAuthority> =>
-      reserveCurrentKnowledgeChatAuthority(
-        deps,
-        pod.chatId,
-        reference,
-        { toolCalls: 0, promptTokens, patchBytes: 0 },
-        new Date().toISOString(),
-        "semantic-ledger-proof",
-      );
-    expect(reserve(301).ok).toBe(false);
-    expect(reserve(300).ok).toBe(true);
     // Synthesis has its own pending usage; the turn registry above accounts for every tool round.
     const pendingSynthesis = budget.pendingUsage();
     const remainingInput = 1000 - pendingSynthesis.promptTokens;
@@ -1023,7 +960,6 @@ it.each([
     chatToolTurnBudget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 10,
-      maxPromptTokens: 100,
       maxPatchBytes: 0,
     },
   });
@@ -1119,9 +1055,6 @@ it.each([
     expect(sent).toHaveLength(1);
     expect(sent[0]?.toolCatalog).toBeUndefined();
     expect(budget.pendingUsage()).toEqual({ promptTokens: 60, completionTokens: 3 });
-    // The same turn has only forty prompt tokens left; repair cannot acquire a fresh envelope.
-    await expect(invoke()).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
-    expect(sent).toHaveLength(1);
   } else {
     await expect(invoke()).rejects.toThrow();
     expect(sent).toHaveLength(state === "unexpected-tool" ? 1 : 0);

@@ -1408,8 +1408,8 @@ now announces every correction to the caller admission (`attemptAdmission` input
 provider retry of it, never on a call that did not ask for one). The grounded attempt tracker then
 moves the preceding unusable attempt (an exhausted round, or a tool call rejected before execution)
 out of the synthesis grant into tool-round orchestration, exactly as a confirmed tool round: its usage
-stays in the reported total and the turn's Authority Envelope (`maxModelCalls`, prompt budget) still
-bounds and counts the correction. The correction itself is admitted against the grant like any
+stays in the reported total and the turn's Authority Envelope (`maxModelCalls`) still bounds and
+counts the correction. The correction itself is admitted against the grant like any
 attempt, so there is still exactly one steered repair per call, the gateway's schema-repair allowance
 is unchanged, and a further unusable answer fails closed. Schema corrections joined this path on
 2026-11-01: the lab showed a Pod-sourced turn whose second schema correction was refused
@@ -1420,8 +1420,8 @@ failure (S08 of epic #4173: Gemma's second `jira.create` without `links[].type` 
 dead end). The Chat tool turn sends one further round carrying the same body-free correction, and
 announces it to the caller admission as a correction. The allowance is once per streak: a round
 that dispatches a tool call restores it, and a second rejection without progress ends the turn with
-its transcript answer as before. Every round stays inside the Authority Envelope's model-call and
-prompt budget, the rejected call executed nothing, and a later synthesis pass of the same turn never
+its transcript answer as before. Every round stays inside the Authority Envelope's model-call
+budget, the rejected call executed nothing, and a later synthesis pass of the same turn never
 inherits the correction. `chat.tool-turn.corrected` records each such round with the turn's settled
 exchange count and `correctionKind` `tool-schema`.
 A round the model completes with no text, no tool call and no reasoning takes the same path with

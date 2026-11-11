@@ -1055,6 +1055,19 @@ function reportUninstallException(
   return 1;
 }
 
+// The LocalSystem broker lies outside the state this command owns, and removing it takes an
+// administrator's approval (ADR-0043 D19). Say so instead of silently leaving a service behind.
+export function gatewayServiceUninstallNotice(
+  platform: NodeJS.Platform,
+  programFiles: string | undefined,
+  exists: (path: string) => boolean,
+): string | undefined {
+  if (platform !== "win32" || programFiles === undefined) return undefined;
+  return exists(join(programFiles, "KeikoRuntimeGateway"))
+    ? "keiko uninstall: the Windows runtime gateway service stays installed. Before removing the Keiko package, run: keiko gateway-service uninstall\n"
+    : undefined;
+}
+
 export async function runUninstallCli(
   args: readonly string[],
   io: CliIo,
@@ -1072,6 +1085,12 @@ export async function runUninstallCli(
     return 2;
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
+  const gatewayNotice = gatewayServiceUninstallNotice(
+    process.platform,
+    env.ProgramFiles,
+    existsSync,
+  );
+  if (gatewayNotice !== undefined) io.out(gatewayNotice);
   const activity = prepareUninstallActivity(opts, stateDir, env, io, resolved, {
     activityStateDir: deps.activityStateDir,
     factory: deps.securityLogSinkFactory,

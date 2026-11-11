@@ -280,7 +280,8 @@ same turn deadline bounds `expiresAt` and runtime. The envelope budget is the tu
 (#4175, owner decision 2026-10-31): the shared Chat tool loop derives its iteration and model-call
 ceilings from it rather than from the coding-harness defaults, and the stored tool transcript holds
 one exchange per admitted tool call. The default (`CHAT_TOOL_TURN_BUDGET`) is sized for backlog
-work — 60 minutes, 250 tool calls and 5,000,000 cumulative prompt tokens — and a composition may
+work — 60 minutes and 250 tool calls, with no prompt-token bound (owner decision 2026-11-11,
+ADR-0137 D2; the earlier 5,000,000-token allowance is removed) — and a composition may
 narrow it; a request cannot. A composed value above the default is clamped to it field by field,
 because the default is also the stored transcript's exchange bound. Jira and MCP sources of one turn
 share it. A round past the tool-call budget is refused before any model call. Before a call starts,

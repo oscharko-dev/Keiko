@@ -307,7 +307,7 @@ describe("accepted ordinary Chat turn authority", () => {
         first.reference,
         first.envelope.subject,
         "autonomous-delivery",
-        { toolCalls: first.envelope.budget.maxToolCalls, promptTokens: 0, patchBytes: 0 },
+        { toolCalls: first.envelope.budget.maxToolCalls, patchBytes: 0 },
         CHAT_AUTHORITY_TEST_NOW,
       ).ok,
     ).toBe(true);
@@ -321,7 +321,7 @@ describe("accepted ordinary Chat turn authority", () => {
         first.reference,
         first.envelope.subject,
         "autonomous-delivery",
-        { toolCalls: 1, promptTokens: 0, patchBytes: 0 },
+        { toolCalls: 1, patchBytes: 0 },
         CHAT_AUTHORITY_TEST_NOW,
       ),
     ).toEqual({ ok: false, reason: "budget-exceeded" });
@@ -603,15 +603,12 @@ function decide(
   );
 }
 
-function reserve(
-  toolCalls = 1,
-  promptTokens = 0,
-): ReturnType<typeof reserveCurrentJiraChatAuthority> {
+function reserve(toolCalls = 1): ReturnType<typeof reserveCurrentJiraChatAuthority> {
   return reserveCurrentJiraChatAuthority(
     deps,
     chat.id,
     reference,
-    { toolCalls, promptTokens, patchBytes: 0 },
+    { toolCalls, patchBytes: 0 },
     CHAT_AUTHORITY_TEST_NOW,
     "chat-policy-proof",
   );
@@ -650,11 +647,11 @@ describe("ordinary Chat composes the existing Atlassian policy", () => {
 
   it("does not charge pending policy decisions and accumulates reservations", () => {
     registerCurrentAuthority({
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 2, maxPromptTokens: 10, maxPatchBytes: 0 },
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 2, maxPatchBytes: 0 },
     });
     for (let i = 0; i < 4; i++) expect(decide("create-issue").kind).toBe("review-required");
-    expect(reserve(1, 4).ok).toBe(true);
-    expect(reserve(1, 6).ok).toBe(true);
+    expect(reserve(1).ok).toBe(true);
+    expect(reserve(1).ok).toBe(true);
     expect(reserve()).toEqual({ ok: false, reason: "budget-exceeded" });
   });
 
@@ -678,7 +675,7 @@ it("reconstructs Chat policy and reservation through the real Activity Log", () 
     expect(decide("jira.issue").kind).toBe("allowed");
     expect(decide("create-issue").kind).toBe("allowed");
     expect(decide("create-page").kind).toBe("policy-denied");
-    expect(reserve(1, 2).ok).toBe(true);
+    expect(reserve(1).ok).toBe(true);
     const lines = persistedActivityLogLines(
       readPersistedActivityLog(project),
       "chat.tool-authority.operation",
@@ -701,9 +698,10 @@ it("reconstructs Chat policy and reservation through the real Activity Log", () 
     });
     expect(records.find((line) => line.phase === "reserve")).toMatchObject({
       toolCalls: 1,
-      promptTokens: 2,
       outcome: "allowed",
     });
+    // Keiko does not limit tokens (#4346): the reservation line counts no prompt tokens.
+    expect(records.find((line) => line.phase === "reserve")).not.toHaveProperty("promptTokens");
     expect(records.every((line) => line.correlationId === "chat-policy-proof")).toBe(true);
     expect(lines.join("\n")).not.toContain("private-credential-reference");
     expect(lines.join("\n")).not.toContain(chat.id);
@@ -1115,7 +1113,7 @@ describe("ordinary Chat catalog read admission", () => {
     "refuses handler entry when %s changes while read approval is pending",
     async (change) => {
       registerCurrentAuthority({
-        budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 100, maxPatchBytes: 0 },
+        budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPatchBytes: 0 },
       });
       const accept = consent;
       let resume = (): void => undefined;
@@ -1192,7 +1190,6 @@ describe("ordinary Chat catalog read admission", () => {
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 0,
       },
     });
@@ -1229,7 +1226,6 @@ describe("ordinary Chat catalog read admission", () => {
         budget: {
           maxRuntimeMs: 7_200_000,
           maxToolCalls: 20,
-          maxPromptTokens: 10_000,
           maxPatchBytes: 0,
         },
       });
@@ -1257,7 +1253,6 @@ describe("ordinary Chat catalog read admission", () => {
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 0,
       },
     });
@@ -1281,7 +1276,6 @@ describe("ordinary Chat catalog read admission", () => {
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 0,
       },
     });
@@ -1310,7 +1304,6 @@ describe("ordinary Chat catalog read admission", () => {
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 0 as const,
       },
     };
@@ -1344,7 +1337,6 @@ describe("ordinary Chat catalog read admission", () => {
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 0,
       },
     });
@@ -1364,7 +1356,6 @@ describe("ordinary Chat catalog read admission", () => {
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 0,
       },
     });
@@ -1694,7 +1685,6 @@ describe("ordinary Chat exact-action write approval admission", () => {
       budget: {
         maxRuntimeMs: 3 * ATLASSIAN_ACTION_APPROVAL_TTL_MS,
         maxToolCalls: 20,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 0,
       },
     });

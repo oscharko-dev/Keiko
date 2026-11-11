@@ -770,7 +770,11 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "runtime-history-failed",
   "runtime-lifecycle-failed",
   "runtime-start-failed",
+  "runtime-turn-expired",
   "runtime-turn-failed",
+  // #4346: an operator still sets the retired `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`, which
+  // Keiko no longer reads because it does not cap prompt tokens.
+  "retired-setting-ignored",
   "safe-activity-dropped-validation-rejected",
   "safe-activity-dropped-redactor-collapsed",
   "safe-activity-dropped-projection-rejected",

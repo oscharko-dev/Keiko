@@ -21,6 +21,7 @@ const roots: string[] = [];
 afterEach(() => {
   closeFileServerLogSinks();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -353,6 +354,10 @@ it.each(["off", "no-dependencies"] as const)(
 it.each([{ exitCode: 1, stderr: "PRIVATE_CHILD_FAILURE" }, { stdout: "PRIVATE_CHILD_FAILURE" }])(
   "retains the original failed bootstrap report and one body-free diagnostic: %j",
   async (change) => {
+    // Hermetic against the host's Docker state: a remote endpoint is refused as unsupported without
+    // a diagnostic, so a stopped local engine cannot add an isolation-probe diagnostic (#4068).
+    vi.stubEnv("DOCKER_HOST", "tcp://127.0.0.1:2375");
+    vi.stubEnv("DOCKER_CONTEXT", "");
     const workspace = fixture();
     writeFileSync(
       join(workspace.root, "package.json"),

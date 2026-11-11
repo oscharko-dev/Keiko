@@ -142,7 +142,6 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     bindingGeneration: OPTIONAL_COUNT,
     authenticationGeneration: OPTIONAL_COUNT,
     toolCalls: OPTIONAL_COUNT,
-    promptTokens: OPTIONAL_COUNT,
     affectedCount: OPTIONAL_COUNT,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -178,7 +177,6 @@ interface AuthorityEvidence {
   readonly subject?: ChatToolAuthoritySubject | undefined;
   readonly chatId?: string | undefined;
   readonly toolCalls?: number | undefined;
-  readonly promptTokens?: number | undefined;
   readonly affectedCount?: number | undefined;
 }
 
@@ -285,7 +283,6 @@ export function recordChatAuthorityResult<T extends Outcome>(
       ...(evidence.chatId === undefined ? {} : { chatDigest: sha256Hex(evidence.chatId) }),
       ...subjectFields(evidence.subject),
       ...countField("toolCalls", evidence.toolCalls),
-      ...countField("promptTokens", evidence.promptTokens),
       ...countField("affectedCount", evidence.affectedCount),
       completeness: "complete",
       loss: "none",

@@ -180,6 +180,31 @@ export function workspaceFsBoundToCanonicalRoot(
     : bound;
 }
 
+// A search names one root, an explicit multi-root scope a handful; past this the port stops
+// remembering and resolves each further root on every use, exactly as an unbound port does.
+const OPERATION_ROOT_IDENTITIES_MAX = 16;
+
+/**
+ * One operation's port that admits each workspace root once: the first successful resolution of a
+ * root's canonical identity holds for the rest of the operation, the same structural binding
+ * discovery.ts and repoSearchEntries.ts give their walks. Without it every per-file read resolved
+ * the root's realpath again (four times per file in a repository search; on Windows each native
+ * realpath opens a handle), and a root repointed mid-operation was admitted afresh by whichever read
+ * met it. A failed resolution is not remembered, so it fails again on the next use, as before.
+ * Create one per operation, never per process: a later operation must admit the root on its own.
+ */
+export function workspaceFsWithOperationRootIdentity(fs: WorkspaceFs): WorkspaceFs {
+  const admitted = new Map<string, string>();
+  const bound = forwardWorkspaceFs(fs, (root): string => {
+    const known = admitted.get(root);
+    if (known !== undefined) return known;
+    const canonical = fs.canonicalWorkspaceRoot?.(root) ?? fs.realPath(root);
+    if (admitted.size < OPERATION_ROOT_IDENTITIES_MAX) admitted.set(root, canonical);
+    return canonical;
+  });
+  return preserveOwnedRootAuthority(fs, bound);
+}
+
 export function assertCanonicalWorkspaceRootIdentity(fs: WorkspaceFs, canonicalRoot: string): void {
   if (!validAbsoluteRoot(canonicalRoot) || fs.realPath(canonicalRoot) !== canonicalRoot) {
     throwDeniedWorkspaceRoot();

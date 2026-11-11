@@ -1,4 +1,4 @@
-import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
+import { admitChatToolModelCall } from "../chat-tool-approvals.js";
 import { createMcpChatMutationIntent } from "./mcpChatMutation.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
@@ -80,8 +80,8 @@ export class McpChatToolTurn extends ChatToolTurn<McpChatCatalogContext> {
         }),
     });
   }
-  protected override reserveAuthorityPrompt(promptTokens: number): boolean {
-    return reserveChatToolPrompt(this.mcpOptions, reserveCurrentMcpChatAuthority, promptTokens);
+  protected override admitAuthorityModelCall(): boolean {
+    return admitChatToolModelCall(this.mcpOptions, reserveCurrentMcpChatAuthority);
   }
   protected override observedMutation(
     call: NormalizedResponse["toolCalls"][number],

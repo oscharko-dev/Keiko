@@ -73,7 +73,6 @@ const PARENT_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   budget: {
     maxRuntimeMs: 120_000,
     maxToolCalls: 12,
-    maxPromptTokens: 24_000,
     maxPatchBytes: 32_768,
   },
   expiresAt: AUTHORITY_EXPIRES_AT,
@@ -128,7 +127,7 @@ function ports(
         runId: "run-2387",
       }),
     },
-    reservePromptTokens: () => true,
+    admitModelCall: () => true,
     taskId: "task-2387",
     runId: "run-2387",
     workspaceId: () => "workspace-2387",

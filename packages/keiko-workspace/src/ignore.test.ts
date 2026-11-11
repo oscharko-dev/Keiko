@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CREDENTIAL_PATH_DENY_PATTERNS,
   TOOL_STATE_PATH_DENY_PATTERNS,
@@ -164,6 +164,41 @@ describe("isDenied (always-on security)", () => {
     });
   }
 
+  // W7 of #4068: Windows names one file by spellings the lexical deny list never saw. An alternate
+  // data stream suffix and trailing dots or spaces are stripped by the Win32 layer, so each of
+  // these opens the denied file (observed on NTFS: `.env::$DATA` reads `.env`).
+  for (const aliased of [
+    ".env::$DATA",
+    ".env:stream",
+    ".env ",
+    ".env. ",
+    "id_rsa::$DATA",
+    "id_rsa.",
+    "config/secrets/key.pem::$DATA",
+    "node_modules::$INDEX_ALLOCATION/x",
+    ".git::$INDEX_ALLOCATION/config",
+    ".git./config",
+    "app/.ENV::$data",
+  ]) {
+    it(`denies the Windows alias ${JSON.stringify(aliased)}`, () => {
+      expect(isDenied(aliased)).toBe(true);
+    });
+  }
+
+  // The `.env.example` exception is an exact, literal match: an aliased spelling of it is denied
+  // with the rest of `.env*`, which only ever denies more.
+  for (const aliasedExample of [".env.example::$DATA", ".env.example."]) {
+    it(`keeps the .env.example exception literal for ${JSON.stringify(aliasedExample)}`, () => {
+      expect(isDenied(aliasedExample)).toBe(true);
+    });
+  }
+
+  for (const allowedAlias of ["src/index.ts::$DATA", "a:b.txt"]) {
+    it(`does not over-deny the alias ${JSON.stringify(allowedAlias)}`, () => {
+      expect(isDenied(allowedAlias)).toBe(false);
+    });
+  }
+
   it("denies regardless of leading ./ and backslashes", () => {
     expect(isDenied("./node_modules/x")).toBe(true);
     expect(isDenied("node_modules\\x\\y")).toBe(true);
@@ -180,6 +215,50 @@ describe("isDenied (always-on security)", () => {
   it("still allows .env.example regardless of case", () => {
     expect(isDenied(".env.example")).toBe(false);
     expect(isDenied(".ENV.EXAMPLE")).toBe(false);
+  });
+});
+
+describe("isDenied 8.3 short names (Windows only, #4068)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function onPlatform(platform: NodeJS.Platform): void {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  }
+
+  it("denies an 8.3 short name that can alias a denied entry on Windows", () => {
+    onPlatform("win32");
+    expect(isDenied("GIT~1/config")).toBe(true);
+    expect(isDenied("src/ENV~1")).toBe(true);
+    expect(isDenied("src/ENV~2.LOC")).toBe(true);
+    expect(isDenied("NPMRC~1")).toBe(true);
+    expect(isDenied("GIT-CR~1")).toBe(true);
+    expect(isDenied("certs/SERVER~1.PEM")).toBe(true);
+    expect(isDenied("SERVIC~1.JSO")).toBe(true);
+    expect(isDenied("WP-CON~1.PHP")).toBe(true);
+    expect(isDenied("TERRAF~1.D")).toBe(true);
+    expect(isDenied("NODE_M~1/pkg/index.js")).toBe(true);
+    // Hash form: two basis characters, four hex digits.
+    expect(isDenied("GI1A2B~1")).toBe(true);
+  });
+
+  it("admits an ordinary 8.3 short name on Windows, such as a runner profile in a temp path", () => {
+    onPlatform("win32");
+    expect(isDenied("C:/Users/RUNNER~1/AppData/Local/Temp/keiko-smoke/Keiko")).toBe(false);
+    expect(isDenied("C:/PROGRA~1/app/readme.md")).toBe(false);
+    expect(isDenied("src/PROGRA~1.TXT")).toBe(false);
+    expect(isDenied("src/plain.ts")).toBe(false);
+    expect(isDenied("src/a.b~1")).toBe(false);
+    // A short name whose extension cannot be `.pem` does not alias `*.pem`.
+    expect(isDenied("certs/SERVER~1.TXT")).toBe(false);
+  });
+
+  it("leaves the same spelling alone on POSIX", () => {
+    onPlatform("linux");
+    expect(isDenied("short-name-check/GIT~2/config")).toBe(false);
+    onPlatform("darwin");
+    expect(isDenied("short-name-check/GIT~3/config")).toBe(false);
   });
 });
 

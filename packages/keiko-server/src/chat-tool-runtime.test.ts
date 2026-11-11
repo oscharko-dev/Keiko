@@ -97,7 +97,6 @@ interface Options {
 const NARROW_BUDGET = {
   maxRuntimeMs: 300_000,
   maxToolCalls: 30,
-  maxPromptTokens: 100_000,
   maxPatchBytes: 0,
 } as const;
 function context(body: Record<string, unknown>, params: Record<string, string> = {}): RouteContext {
@@ -1211,13 +1210,17 @@ it("shares the envelope's physical tool limit across alternating Jira and MCP ca
   // No further model round is requested once the shared tool-call budget is spent.
   expect(f.calls).toHaveLength(1);
 });
-it("keeps the prompt allowance shared when source execution changes", async () => {
-  const f = fixture({ repeat: true, promptTokens: 60_000, budget: NARROW_BUDGET });
+// Keiko does not limit tokens (#4346). The turn envelope used to carry a cumulative prompt allowance
+// (5,000,000 tokens) shared by every source the turn reads, and it refused the model round crossing
+// it. Each round here reports 700,000 prompt tokens, so the turn passes 5,000,000 after seven rounds
+// and keeps going until the tool-call bound ends it.
+it("never ends a turn on its cumulative prompt tokens, only on its tool-call budget", async () => {
+  const f = fixture({ repeat: true, promptTokens: 700_000, budget: NARROW_BUDGET });
   const pending = send(f);
   void pending.catch(() => undefined);
   await pending;
-  expect(f.effects).toEqual(["mcp-read", "jira-read"]);
-  expect(f.calls).toHaveLength(2);
+  expect(f.effects).toHaveLength(NARROW_BUDGET.maxToolCalls);
+  expect(f.calls.length * 700_000).toBeGreaterThan(5_000_000);
 });
 
 it("preserves complete parallel assistant exchanges through real Gateway and reloaded Chat history", async () => {

@@ -1709,6 +1709,36 @@ describe("turn port terminal semantics", () => {
     );
   });
 
+  // W9 (#4068): a turn whose wait ran out of the run's envelope duration is the run's bound, which
+  // its settlement records as `envelope-duration-exhausted`; it must not open a support incident as
+  // an `internal` dispatch failure first.
+  it.each([
+    [true, "routine", "RuntimeTaskWaitExpired", "stage=dispatch:reason=turn-expired"],
+    [false, undefined, "RuntimeTaskDispatchFailure", "stage=dispatch:reason=terminal-failed"],
+  ] as const)(
+    "records a failed turn whose wait expired=%s with outcome %s",
+    async (expired, outcome, errorClass, code) => {
+      const records: ServerDiagnosticRecord[] = [];
+      const run = record("run-open", {
+        submitTurn: () => Promise.resolve(true),
+        abortTurn: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve("failed" as const),
+        turnWaitExpired: () => expired,
+      });
+      const dispatcher = createProductionRuntimeTaskDispatcher(new Map([["run-open", run]]), {
+        record: (diagnostic): void => void records.push(diagnostic),
+      });
+
+      const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+      if (!dispatched.ok) throw new Error("expected accepted task");
+      await expect(dispatched.completion).resolves.toBe("failed");
+      expect(records).toEqual([
+        expect.objectContaining({ correlationId: "run-open", errorClass, code }),
+      ]);
+      expect(records[0]?.diagnosticOutcome).toBe(outcome);
+    },
+  );
+
   it("reports pending-mutations-unsettled only when the coordinator never went idle", async () => {
     const records: ServerDiagnosticRecord[] = [];
     const run = record("run-open", {

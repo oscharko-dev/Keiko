@@ -84,6 +84,7 @@ import {
 } from "./deps.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
@@ -823,6 +824,34 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     } finally {
       closeFileServerLogSinks();
     }
+  }, 15000);
+
+  // #4068 (W9): the graph opened the memory vault's node:sqlite handle and never closed it, so
+  // `dispose` left `keiko-memory.db` with its `-wal`/`-shm` siblings open. POSIX tolerates unlinking
+  // an open file; Windows does not, so the state directory of a disposed graph could not be removed
+  // and the WAL was never checkpointed. The closed handle is asserted on every OS; the removal is
+  // the Windows-visible consequence.
+  it("closes the memory vault it opened when the graph is disposed", async (): Promise<void> => {
+    const stateDir = tmp("memory-vault-dispose-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-dispose-ev-"),
+      env: { KEIKO_STATE_DIR: stateDir },
+      uiDbPath: join(stateDir, "ui-db", "keiko-ui.db"),
+    });
+    const vault = deps.memoryVault;
+    if (vault === undefined) throw new Error("memory vault not composed");
+    expect(vault.listMemoryScopes()).toEqual([]);
+    expect(existsSync(join(stateDir, "memory", "keiko-memory.db"))).toBe(true);
+
+    await deps.dispose?.();
+
+    expect(() => vault.listMemoryScopes()).toThrow();
+    // A second dispose (SIGTERM plus the CLI's finally block) must not fault on the closed vault.
+    await expect(deps.dispose?.()).resolves.toBeUndefined();
+    expect(() => {
+      rmSync(stateDir, { recursive: true, force: true });
+    }).not.toThrow();
   }, 15000);
 
   // Owner review, PR #3452: the teardown's cleanup can fail on its own. Both branches of that failure
@@ -3319,16 +3348,41 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     });
   }
 
-  // #3873: both Authority Envelope bounds are operator settings parsed once at composition, before
+  // #3873: the Authority Envelope duration is an operator setting parsed once at composition, before
   // runtime activation; an invalid value fails the composition closed instead of minting a silently
-  // defaulted envelope later, whether or not the runtime activates on this host.
+  // defaulted envelope later, whether or not the runtime activates on this host. Keiko does not limit
+  // tokens (#4346): the former `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` setting is no longer read, so
+  // even an invalid value of it no longer fails the composition.
   it("fails closed at composition on an invalid envelope bound setting", () => {
     expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES: "0" })).toThrow(
       RangeError,
     );
-    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).toThrow(
-      RangeError,
-    );
+    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).not.toThrow();
+  });
+
+  it("records once, body-free, that the retired prompt-token setting is ignored (#4346)", () => {
+    const record = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation(() => undefined);
+    try {
+      depsWithEnv({});
+      expect(
+        record.mock.calls.filter(([entry]) => entry.message === "retired-setting-ignored"),
+      ).toEqual([]);
+      depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "200000" });
+      const retired = record.mock.calls
+        .map(([entry]) => entry)
+        .filter((entry) => entry.message === "retired-setting-ignored");
+      expect(retired).toHaveLength(1);
+      expect(retired[0]).toMatchObject({
+        operation: "coding-runtime.composition.retired-setting",
+        diagnosticOutcome: "routine",
+        code: "setting=prompt-token-allowance",
+      });
+      expect(JSON.stringify(retired[0])).not.toContain("200000");
+    } finally {
+      record.mockRestore();
+    }
   });
 
   it("intersects explicit option and environment ceilings before defaulting to all-mode availability", () => {

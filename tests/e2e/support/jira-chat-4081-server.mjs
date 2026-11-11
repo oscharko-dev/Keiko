@@ -82,7 +82,7 @@ Object.defineProperty(deps, "chatToolTurnBudget", {
   enumerable: true,
   get: () =>
     existsSync(join(directory, "draft-deadline.json"))
-      ? { maxRuntimeMs: 15_000, maxToolCalls: 100, maxPromptTokens: 1_000_000, maxPatchBytes: 0 }
+      ? { maxRuntimeMs: 15_000, maxToolCalls: 100, maxPatchBytes: 0 }
       : undefined,
 });
 for (const id of [modelId, unavailableModelId]) {

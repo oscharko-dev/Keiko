@@ -1,0 +1,182 @@
+/* Actual local named-pipe peers; no installed service, elevation, filter or exemption changes. */
+#include "gateway_peer.h"
+#include <rpc.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <wchar.h>
+
+/* mode 1 connects anonymously, mode 2 at identification level (what the product client uses),
+ * any other value at impersonation level. */
+int gateway_peer_client(const char *pipe_name, int mode) {
+  HANDLE pipe;
+  DWORD count = 0;
+  char byte = 'K';
+  pipe = CreateFileA(pipe_name, GENERIC_READ | FILE_WRITE_DATA, 0, NULL, OPEN_EXISTING,
+                     SECURITY_SQOS_PRESENT | (mode == 1 ? SECURITY_ANONYMOUS : mode == 2 ? SECURITY_IDENTIFICATION : SECURITY_IMPERSONATION), NULL);
+  if (pipe == INVALID_HANDLE_VALUE) {
+    return (int)GetLastError();
+  }
+  if (!WriteFile(pipe, &byte, 1, &count, NULL) || count != 1 ||
+      !ReadFile(pipe, &byte, 1, &count, NULL) || count != 1 || byte != 'A') {
+    CloseHandle(pipe); return 42;
+  }
+  CloseHandle(pipe);
+  return 0;
+}
+
+static int finish_io(HANDLE pipe, OVERLAPPED *operation, BOOL started, DWORD expected) {
+  DWORD transferred = 0, error = started ? ERROR_SUCCESS : GetLastError();
+  if (error != ERROR_SUCCESS && error != ERROR_IO_PENDING) return 0;
+  if (!started && WaitForSingleObject(operation->hEvent, 5000) != WAIT_OBJECT_0) {
+    (void)CancelIoEx(pipe, operation);
+    (void)GetOverlappedResult(pipe, operation, &transferred, TRUE);
+    return 0;
+  }
+  return GetOverlappedResult(pipe, operation, &transferred, FALSE) && transferred == expected;
+}
+
+static int peer_case(const wchar_t *executable, HANDLE approved_image, int mode, int accepted) {
+  wchar_t name[128];
+  wchar_t *command = calloc(33000, sizeof(wchar_t));
+  RPC_WSTR id_text = NULL;
+  UUID id;
+  HANDLE pipe = INVALID_HANDLE_VALUE;
+  PROCESS_INFORMATION child = {0};
+  STARTUPINFOW startup = {0};
+  OVERLAPPED operation = {0};
+  struct keiko_gateway_peer peer = {0};
+  DWORD code = 99, authenticated = ERROR_INVALID_DATA;
+  char byte = 0;
+  int ok = 0, stage = 0;
+  if (command == NULL || UuidCreate(&id) != RPC_S_OK || UuidToStringW(&id, &id_text) != RPC_S_OK)
+    goto done;
+  if (_snwprintf_s(name, 128, _TRUNCATE, L"\\\\.\\pipe\\KeikoGatewayFixture-%ls", id_text) < 0)
+    goto done;
+  pipe = keiko_gateway_service_pipe(name);
+  if (pipe == INVALID_HANDLE_VALUE) goto done;
+  HANDLE duplicate = keiko_gateway_service_pipe(name);
+  if (duplicate != INVALID_HANDLE_VALUE) { CloseHandle(duplicate); goto done; }
+  operation.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (pipe == INVALID_HANDLE_VALUE || operation.hEvent == NULL ||
+      _snwprintf_s(command, 33000, _TRUNCATE, L"\"%ls\" --peer-client %ls %d",
+                    executable, name, mode) < 0) goto done;
+  startup.cb = sizeof(startup);
+  if (!CreateProcessW(executable, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                       NULL, NULL, &startup, &child)) goto done;
+  stage = 1;
+  {
+    BOOL connected = ConnectNamedPipe(pipe, &operation);
+    DWORD error = connected ? ERROR_SUCCESS : GetLastError();
+    if (error != ERROR_PIPE_CONNECTED && !finish_io(pipe, &operation, connected, 0)) goto done;
+  }
+  ResetEvent(operation.hEvent);
+  if (!finish_io(pipe, &operation, ReadFile(pipe, &byte, 1, NULL, &operation), 1) || byte != 'K') goto done;
+  stage = 2;
+  authenticated = keiko_gateway_peer_authenticate(pipe, approved_image, &peer);
+  if (accepted) {
+    ok = authenticated == ERROR_SUCCESS && peer.pid == child.dwProcessId &&
+         peer.process != NULL && peer.token != NULL &&
+         WaitForSingleObject(peer.process, 0) == WAIT_TIMEOUT &&
+         keiko_gateway_peer_authenticate(pipe, approved_image, &peer) == ERROR_INVALID_PARAMETER;
+  } else ok = authenticated != ERROR_SUCCESS && peer.process == NULL && peer.token == NULL;
+  byte = 'A';
+  ResetEvent(operation.hEvent);
+  if (!finish_io(pipe, &operation, WriteFile(pipe, &byte, 1, NULL, &operation), 1)) ok = 0;
+  if (WaitForSingleObject(child.hProcess, 5000) != WAIT_OBJECT_0 ||
+      !GetExitCodeProcess(child.hProcess, &code) || code != 0) ok = 0;
+done:
+  if (!ok && child.hProcess != NULL) (void)GetExitCodeProcess(child.hProcess, &code);
+  if (!ok) printf("gateway-peer-case: stage=%d expected=%d mode=%d authentication=%lu child=%lu\n",
+                   stage, accepted, mode, authenticated, code);
+  keiko_gateway_peer_close(&peer);
+  if (child.hProcess != NULL) {
+    if (WaitForSingleObject(child.hProcess, 0) != WAIT_OBJECT_0) {
+      (void)TerminateProcess(child.hProcess, 43);
+      (void)WaitForSingleObject(child.hProcess, 5000);
+    }
+    CloseHandle(child.hProcess);
+  }
+  if (child.hThread != NULL) CloseHandle(child.hThread);
+  if (operation.hEvent != NULL) CloseHandle(operation.hEvent);
+  if (pipe != INVALID_HANDLE_VALUE && pipe != NULL) CloseHandle(pipe);
+  if (id_text != NULL) RpcStringFreeW(&id_text);
+  free(command);
+  return ok;
+}
+
+typedef struct { const wchar_t *name; DWORD wait_ms; HANDLE pipe; DWORD error; } waiting_client;
+
+static DWORD WINAPI wait_for_pipe(LPVOID context) {
+  waiting_client *client = (waiting_client *)context;
+  client->pipe = keiko_gateway_client_pipe(client->name, client->wait_ms);
+  client->error = client->pipe == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  return 0;
+}
+
+/* Closes a handle that may be NULL or INVALID_HANDLE_VALUE; the analyzer requires both checks. */
+static void close_if_open(HANDLE handle) {
+  if (handle != NULL && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+}
+
+/* #4242: the product client waits for the single broker instance instead of failing on
+ * ERROR_PIPE_BUSY, stays bounded, and holds identification level only. */
+static int client_pipe_tests(void) {
+  static const wchar_t name[] = L"\\\\.\\pipe\\KeikoGatewayFixture-ClientWait";
+  HANDLE server = keiko_gateway_service_pipe(name), first = INVALID_HANDLE_VALUE;
+  OVERLAPPED connect = {0};
+  waiting_client quick = {name, 200, INVALID_HANDLE_VALUE, 0};
+  waiting_client patient = {name, 10000, INVALID_HANDLE_VALUE, 0};
+  HANDLE worker = NULL;
+  int ok = 0;
+  connect.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (server == INVALID_HANDLE_VALUE || connect.hEvent == NULL) goto done;
+  if (!ConnectNamedPipe(server, &connect) && GetLastError() != ERROR_IO_PENDING) goto done;
+  first = keiko_gateway_client_pipe(name, 0);
+  if (first == NULL || first == INVALID_HANDLE_VALUE) goto done;
+  (void)wait_for_pipe(&quick);
+  if (quick.pipe != INVALID_HANDLE_VALUE || quick.error != ERROR_PIPE_BUSY) goto done;
+  worker = CreateThread(NULL, 0, wait_for_pipe, &patient, 0, NULL);
+  if (worker == NULL) goto done;
+  Sleep(300);
+  CloseHandle(first);
+  first = INVALID_HANDLE_VALUE;
+  if (!DisconnectNamedPipe(server)) goto done;
+  ResetEvent(connect.hEvent);
+  if (!ConnectNamedPipe(server, &connect) && GetLastError() != ERROR_IO_PENDING &&
+      GetLastError() != ERROR_PIPE_CONNECTED) goto done;
+  ok = WaitForSingleObject(worker, 12000) == WAIT_OBJECT_0 && patient.pipe != INVALID_HANDLE_VALUE;
+done:
+  if (!ok) printf("gateway-client-pipe: quick=%lu patient=%lu\n", quick.error, patient.error);
+  if (worker != NULL) { (void)WaitForSingleObject(worker, 12000); CloseHandle(worker); }
+  close_if_open(patient.pipe);
+  close_if_open(first);
+  if (connect.hEvent != NULL) CloseHandle(connect.hEvent);
+  close_if_open(server);
+  return ok;
+}
+
+int gateway_peer_tests(void) {
+  wchar_t *executable = calloc(32768, sizeof(wchar_t));
+  wchar_t *short_path = calloc(32768, sizeof(wchar_t));
+  wchar_t system_image[MAX_PATH];
+  HANDLE approved = INVALID_HANDLE_VALUE, other = INVALID_HANDLE_VALUE;
+  int ok = 0;
+  if (executable == NULL || short_path == NULL || GetModuleFileNameW(NULL, executable, 32768) == 0 ||
+      GetShortPathNameW(executable, short_path, 32768) == 0 ||
+      GetSystemDirectoryW(system_image, MAX_PATH) == 0 ||
+      wcscat_s(system_image, MAX_PATH, L"\\kernel32.dll") != 0) goto done;
+  approved = CreateFileW(executable, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+  other = CreateFileW(system_image, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+  if (approved == INVALID_HANDLE_VALUE || other == INVALID_HANDLE_VALUE) goto done;
+  ok = peer_case(executable, approved, 0, 1) && peer_case(short_path, approved, 0, 1) &&
+       peer_case(executable, other, 0, 0) &&
+       peer_case(executable, approved, 1, 0) && peer_case(executable, approved, 2, 1) &&
+       client_pipe_tests();
+done:
+  if (approved != INVALID_HANDLE_VALUE) CloseHandle(approved);
+  if (other != INVALID_HANDLE_VALUE) CloseHandle(other);
+  free(executable);
+  free(short_path);
+  puts(ok ? "gateway-local-peer-authentication: passed" : "gateway-local-peer-authentication: failed");
+  return ok ? 0 : 1;
+}

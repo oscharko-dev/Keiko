@@ -134,6 +134,10 @@ import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
+
+const WINDOWS_PRE_EPOCH_MTIME_SKIP =
+  "Windows utimes cannot plant a pre-epoch mtime on this host; the case runs on POSIX hosts";
 
 const DIGEST = "a".repeat(64);
 // #3873: through the production facade an edit is the replacement form with every member present;
@@ -557,8 +561,7 @@ describe("production managed worktree tools", () => {
       verifiedCommitService: service,
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => repairLive, settle }),
-        canChargePrompt: () => ({ accepted: true }),
-        chargePrompt: () => ({ accepted: true }),
+        admitModelCall: () => ({ accepted: true }),
         observed: vi.fn(),
       },
       runToReport: async () => {
@@ -5673,7 +5676,7 @@ describe("inactive private native text snapshot admission", () => {
     },
   );
 
-  it("settles the actual same-FD pre-epoch timestamp snapshot without rewriting metadata", async () => {
+  it("settles the actual same-FD pre-epoch timestamp snapshot without rewriting metadata", async (testContext) => {
     const f = fixture("Pre-epoch file content");
     const path = join(f.runtime.root, "fixture.ts");
     const timestamp = new Date("1969-12-31T23:59:58.000Z");
@@ -5686,6 +5689,9 @@ describe("inactive private native text snapshot admission", () => {
       closeSync(fd);
     }
     expect(Number.isFinite(mtimeMs)).toBe(true);
+    // Windows' utimes wraps a pre-epoch time to an unsigned 32-bit second count, so this host
+    // cannot plant the fixture the case is about; every other host must.
+    if (WINDOWS_HOST && mtimeMs >= 0) testContext.skip(WINDOWS_PRE_EPOCH_MTIME_SKIP);
     expect(mtimeMs).toBeLessThan(0);
     const result = await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f));
     expect(result).toMatchObject({ ok: true, info: { type: "file", mtimeMs } });
@@ -5784,7 +5790,7 @@ describe("inactive private native text snapshot admission", () => {
       liveFacts: f.liveFacts(),
       delegationId: "consume-authorized-budget",
       idempotencyKey: "consume-authorized-budget",
-      usage: { toolCalls: f.runtime.trusted.budget.maxToolCalls, patchBytes: 0, promptTokens: 0 },
+      usage: { toolCalls: f.runtime.trusted.budget.maxToolCalls, patchBytes: 0 },
       workspaceRoot: f.runtime.root,
       deploymentCeiling: "autonomous-delivery",
       nowIso: RUNTIME_NOW,
@@ -5804,8 +5810,7 @@ describe("inactive private native text snapshot admission", () => {
     const f = fixture("safe source\n", {
       ciRepairBudget: {
         admitTool,
-        canChargePrompt: () => ({ accepted: true }),
-        chargePrompt: () => ({ accepted: true }),
+        admitModelCall: () => ({ accepted: true }),
         observed: vi.fn(),
       },
     });
@@ -5852,8 +5857,7 @@ describe("inactive private native text snapshot admission", () => {
     const f = fixture("PRIVATE_NATIVE_TEXT_SENTINEL", {
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => leaseLive, settle }),
-        canChargePrompt: () => ({ accepted: true }),
-        chargePrompt: () => ({ accepted: true }),
+        admitModelCall: () => ({ accepted: true }),
         observed: vi.fn(),
       },
     });
@@ -6305,7 +6309,7 @@ describe("accepted initial instruction acquisition", () => {
         f.runtime.minted.authorityRef,
         f.runtime.root,
         "autonomous-delivery",
-        { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        { toolCalls: 1, patchBytes: 0 },
         RUNTIME_NOW,
       );
     const result = await f.facade.acceptedInitialization?.run(async (io) => {

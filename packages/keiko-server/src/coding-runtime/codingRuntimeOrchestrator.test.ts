@@ -35,7 +35,7 @@ import {
   MAX_QUEUED_APPROVALS_PER_RUN,
   type CodingRuntimeDescriptionSupport,
   type CodingRuntimeIssueIntake,
-  type CodingRuntimeOrchestratorResult,
+  type CodingRuntimeStartResult,
   type CodingRuntimeLaunchResolver,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
@@ -119,7 +119,7 @@ type OptionalOrchestratorDeps = Pick<
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
 
-function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
+function successfulSnapshot(result: CodingRuntimeStartResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
   return result.snapshot;
 }
@@ -1000,7 +1000,7 @@ function issueIntake(
   };
 }
 
-function refusedStart(result: CodingRuntimeOrchestratorResult) {
+function refusedStart(result: CodingRuntimeStartResult) {
   if (result.ok) throw new Error("expected a refused start");
   return result;
 }
@@ -1030,6 +1030,21 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start({ ...start, modelId: "PRIVATE_MODEL_CANARY", agent: "plan" });
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      primaryAgent: "plan",
+      modelIdDigest: sha256Hex("PRIVATE_MODEL_CANARY"),
+    });
+    expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_MODEL_CANARY");
+  });
+
   // #4279 (lifecycle audit): a start that shutdown overtook would launch a runtime nobody stops.
   describe("a start that shutdown overtook", () => {
     it("launches nothing when it reaches the lane after shutdown began", async () => {
@@ -2764,6 +2779,37 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // A workspace that holds the runtime is the one managed start failure the operator can repair, so
+  // it alone leaves the internal-error code. Its precise reason stays in the diagnostic either way.
+  it.each([
+    ["workspace-unqualified", "workspace-unqualified"],
+    ["sidecar-unmanaged", "runtime-failed"],
+    ["spawn-failed", "runtime-failed"],
+  ] as const)(
+    "settles a start the manager refused with %s as %s",
+    async (managerCode, failureCode) => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+        state: "failed",
+        failureCode,
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: `stage=start:reason=${managerCode}`,
+        }),
+      );
+    },
+  );
+
   // #3565 Observation 17: a model the gateway does not admit reached the customer as
   // `authority-resolution-failed` (403) and the log named no cause. The start now answers with
   // `model-unavailable` and the diagnostic carries the sidecar's closed reason.
@@ -2816,6 +2862,29 @@ describe("CodingRuntimeOrchestrator", () => {
         operation: "coding-runtime.start",
         message: "runtime-start-failed",
         code: "stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient",
+      }),
+    );
+  });
+
+  // #4068: a Windows start the broker cannot confine is refused before any run exists, with a code
+  // the Workbench names and the diagnostic's closed reason.
+  it.each([
+    ["workspace-location-unsupported", "local-checkout"],
+    ["workspace-volume-unsupported", "non-system-volume"],
+  ] as const)("refuses a Windows start as %s and records %s", async (failureCode, reason) => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError(failureCode, false, reason);
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode, runId: "run-1" });
+    expect(f.orchestrator.getSnapshot("run-1")).toBeUndefined();
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: `stage=start:reason=launch-resolution:${failureCode}:${reason}`,
       }),
     );
   });
@@ -2949,6 +3018,62 @@ describe("CodingRuntimeOrchestrator", () => {
         }),
       );
       expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
+    });
+
+    it("states the live run's model and agent on its snapshot across follow-ups (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(
+        await f.orchestrator.start({ ...start, modelId: "gemma-4-31b-it", agent: "plan" }),
+      );
+      expect(started).toMatchObject({ modelId: "gemma-4-31b-it", agent: "plan" });
+
+      const switched = successfulSnapshot(
+        await f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-build",
+          expectedRevision: started.revision,
+          taskIntent: "now implement it",
+          agent: "build",
+        }),
+      );
+      expect(switched).toMatchObject({ modelId: "gemma-4-31b-it", agent: "build" });
+
+      const kept = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: switched.revision,
+        taskIntent: "and test it",
+      });
+      expect(successfulSnapshot(kept)).toMatchObject({ agent: "build" });
+    });
+
+    it("keeps the run's agent when its follow-up was refused (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(await f.orchestrator.start({ ...start, agent: "plan" }));
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false, reason: "agent-unsupported" });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-refused",
+        expectedRevision: started.revision,
+        taskIntent: "try another agent",
+        agent: "build",
+      });
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({ agent: "plan" });
+    });
+
+    it("states a default start's agent and no model it was not told (#4068 W12)", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const snapshot = f.orchestrator.getSnapshot("run-1");
+      expect(snapshot).toMatchObject({ agent: "build" });
+      expect(snapshot).not.toHaveProperty("modelId");
+    });
+
+    it("reports no identity for a run this process did not start (#4068 W12)", () => {
+      const f = fixture(undefined, undefined, [settledRow("run-9", "2026-07-13T12:00:00.000Z", 3)]);
+      const snapshot = f.orchestrator.getSnapshot("run-9");
+      expect(snapshot).toBeDefined();
+      expect(snapshot).not.toHaveProperty("agent");
+      expect(snapshot).not.toHaveProperty("modelId");
     });
 
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
@@ -7485,14 +7610,10 @@ describe("terminal run cause (F9, #3873)", () => {
 
   function terminalFacts(
     lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
-    promptAllowanceExhausted = false,
     envelopeDurationExhausted = false,
     providerUnavailable = false,
   ) {
     return {
-      promptAllowanceExhausted: vi.fn(
-        (runId: string) => runId === RUN_ID && promptAllowanceExhausted,
-      ),
       envelopeDurationExhausted: vi.fn(
         (runId: string) => runId === RUN_ID && envelopeDurationExhausted,
       ),
@@ -7542,62 +7663,11 @@ describe("terminal run cause (F9, #3873)", () => {
     );
   }
 
-  it("settles a run its prompt allowance refused as prompt-allowance-exhausted, never internal", async () => {
-    const { f, records } = settledWith("failed", terminalFacts("turn-rejected", true));
-    await f.orchestrator.start(start);
-    await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      });
-    });
-
-    expect(f.eventHub.publish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "status",
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    expect(f.evidence.settle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    const settled = settledLine(records);
-    expect(settled).toMatchObject({
-      correlationId: RUN_ID,
-      errorKind: "authority-denied",
-      extra: {
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-        failureBasis: "prompt-allowance",
-        modelCallFailure: "turn-rejected",
-        taskOutcomeStatus: "failed",
-      },
-    });
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.run.settled.emitted-line",
-        formatActivityLogProofLine(settled),
-      ),
-    ).toMatchObject({
-      failureCode: "prompt-allowance-exhausted",
-      failureBasis: "prompt-allowance",
-      modelCallFailure: "turn-rejected",
-    });
-    expect(JSON.stringify(records)).not.toContain(start.taskIntent);
-  });
-
   // Run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model
   // call in flight: the gateway's outcome line said `cancelled` with `cancellationCause=run-stopped`,
   // no call had failed, and the run settled `runtime-failed`, an internal error.
   it("settles a run whose envelope ran out of time as envelope-duration-exhausted, never internal", async () => {
-    const facts = terminalFacts(undefined, false, true);
+    const facts = terminalFacts(undefined, true);
     const { f, records } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7664,10 +7734,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // provider could not serve the call. The run settles on the outage, and the line says which fact
   // named it.
   it("settles a run whose last call the gateway found the provider unable to serve as provider-unavailable", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", false, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", false, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
@@ -7699,19 +7766,16 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("keeps a bound of the run ahead of the provider outage it also read", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", true, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", true, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
         state: "failed",
-        failureCode: "prompt-allowance-exhausted",
+        failureCode: "envelope-duration-exhausted",
       });
     });
     expect(settledLine(records)).toMatchObject({
-      extra: { failureCode: "prompt-allowance-exhausted", failureBasis: "prompt-allowance" },
+      extra: { failureCode: "envelope-duration-exhausted", failureBasis: "envelope-duration" },
     });
   });
 
@@ -7733,7 +7797,7 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("reads the terminal facts before the runtime is stopped for settlement", async () => {
-    const facts = terminalFacts("provider-failed", false, false, true);
+    const facts = terminalFacts("provider-failed", false, true);
     const { f } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7744,7 +7808,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(facts.lastModelCallProviderUnavailable.mock.invocationCallOrder[0]).toBeLessThan(
       stopOrder,
     );
-    expect(facts.promptAllowanceExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
     expect(facts.envelopeDurationExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
   });
 
@@ -7766,7 +7829,7 @@ describe("terminal run cause (F9, #3873)", () => {
   it.each(["succeeded", "cancelled"] as const)(
     "never names a bound or model-call cause for a %s task outcome",
     async (outcome) => {
-      const facts = terminalFacts("stream-incomplete", true, true);
+      const facts = terminalFacts("stream-incomplete", true);
       const { f, records } = settledWith(outcome, facts);
       await f.orchestrator.start(start);
       await vi.waitFor(() => {
@@ -7776,9 +7839,8 @@ describe("terminal run cause (F9, #3873)", () => {
         expect(settledLine(records).extra).not.toHaveProperty("failureBasis");
       });
       expect(f.orchestrator.getSnapshot(RUN_ID)?.failureCode).not.toBe(
-        "prompt-allowance-exhausted",
+        "envelope-duration-exhausted",
       );
-      expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
       expect(facts.envelopeDurationExhausted).not.toHaveBeenCalled();
       expect(facts.lastModelCallFailure).not.toHaveBeenCalled();
       expect(facts.lastModelCallProviderUnavailable).not.toHaveBeenCalled();
@@ -7788,7 +7850,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // An operator stop settles `cancelled` through the stop path, before the turn's own cancelled
   // completion arrives, so the run's terminal state names the operator, not a failure.
   it("settles an operator-stopped run as cancelled with no failure cause", async () => {
-    const facts = terminalFacts("stream-incomplete", true, true);
+    const facts = terminalFacts("stream-incomplete", true);
     const log = captureActivityLog();
     const f = fixture(
       undefined,
@@ -7815,7 +7877,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(settled).toMatchObject({ errorKind: "cancelled", extra: { state: "cancelled" } });
     expect(settled.extra).not.toHaveProperty("failureCode");
     expect(settled.extra).not.toHaveProperty("failureBasis");
-    expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
   });
 });
 

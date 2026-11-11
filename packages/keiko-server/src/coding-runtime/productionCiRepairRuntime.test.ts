@@ -92,7 +92,7 @@ function binding(snapshot: CodingRuntimeSnapshot): VerifiedCommitRuntimeBinding 
       },
       networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
       gates: [],
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 1000, maxPatchBytes: 1024 },
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPatchBytes: 1024 },
       expiresAt: "2099-01-01T00:00:00.000Z",
     },
   };
@@ -221,7 +221,7 @@ function fixture(
     prNumber: 17,
     correlationId: "run-1",
     stillAuthorized: (): boolean => true,
-    limits: { maxRuntimeMs: 60000, maxToolCalls: 1, maxPromptTokens: 1000 },
+    limits: { maxRuntimeMs: 60000, maxToolCalls: 1 },
   };
   if (options.seedExhaustedBudget !== false) {
     expect(
@@ -239,7 +239,6 @@ function fixture(
         attemptId: "attempt-1",
         chargeId: "call-1",
         toolCalls: 1,
-        promptTokens: 0,
         expectedRevision: 0,
       }),
     ).toMatchObject({ status: "blocked", reason: "tool-budget-exhausted" });
@@ -283,25 +282,19 @@ const editRequest = {
   idempotencyKey: "edit-next",
 } as const;
 describe("production CI repair accounting availability", () => {
-  it("admits a model prompt while the runtime authority is live and the snapshot is starting", () => {
+  it("admits a model call while the runtime authority is live and the snapshot is starting", () => {
     const test = fixture(false, { seedExhaustedBudget: false, starting: true });
     expect(test.snapshots.get("run-1")?.state).toBe("starting");
     const budget = createProductionCiRepairBudget(test.deps, test.verified, test.current);
-    expect(budget?.canChargePrompt(1)).toEqual({ accepted: true });
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.admitModelCall()).toEqual({ accepted: true });
     expect(test.events.filter((event) => event.extra?.phase === "prompt-admission")).toMatchObject([
       {
         op: "git.ci-repair.budget",
-        extra: {
-          phase: "prompt-admission",
-          status: "available",
-          requestedPromptTokenCount: 1,
-          runId: "run-1",
-        },
+        extra: { phase: "prompt-admission", status: "available", runId: "run-1" },
       },
     ]);
     const event = test.events.find((entry) => entry.extra?.phase === "prompt-admission");
-    if (event === undefined) throw new Error("Missing prompt admission evidence");
+    if (event === undefined) throw new Error("Missing model-call admission evidence");
     const line = formatActivityLogProofLine(event);
     const persisted: unknown = JSON.parse(line);
     expect(persisted).toMatchObject({
@@ -309,117 +302,37 @@ describe("production CI repair accounting availability", () => {
       correlationId: UNKNOWN_CORRELATION_ID,
       runId: "run-1",
       phase: "prompt-admission",
-      requestedPromptTokenCount: 1,
       status: "available",
     });
+    // Keiko does not limit tokens (#4346): the line counts no prompt tokens.
+    expect(persisted).not.toHaveProperty("requestedPromptTokenCount");
   });
-  it.each(["prompt-budget-exhausted", "authority-denied", "storage-unavailable"] as const)(
-    "records the exact %s refusal after a successful prompt precheck",
-    (reason) => {
-      const test = fixture(false, { starting: true });
-      let authorized = true;
-      const current = { ...test.current, stillAuthorized: (): boolean => authorized };
-      const deps = {
-        ...test.deps,
-        snapshots: { ...test.snapshots, ciRepairBudget: test.ciRepairBudget },
-      };
-      const budget = createProductionCiRepairBudget(deps, test.verified, current);
-      expect(budget?.canChargePrompt(500)).toEqual({ accepted: true });
-      if (reason === "prompt-budget-exhausted")
-        expect(budget?.chargePrompt(600)).toEqual({ accepted: true });
-      else if (reason === "authority-denied") authorized = false;
-      else {
-        const db = databases.at(-1);
-        if (db === undefined) throw new Error("Missing budget database");
-        db.exec(
-          "CREATE TEMP TRIGGER reject_budget_charge BEFORE UPDATE ON coding_runtime_ci_repair_budgets BEGIN SELECT RAISE(ABORT, 'PRIVATE_BUDGET_WRITE'); END",
-        );
-      }
-      expect(budget?.chargePrompt(500)).toEqual({ accepted: false, reason });
-      const event = test.events.filter((entry) => entry.extra?.phase === "prompt-admission").at(-1);
-      if (event === undefined) throw new Error("Missing refused prompt evidence");
-      const line = formatActivityLogProofLine(event);
-      expect(expectActivityLogProof("git.ci-repair.budget.emitted-line", line)).toMatchObject({
-        op: "git.ci-repair.budget",
-        correlationId: UNKNOWN_CORRELATION_ID,
-        runId: "run-1",
-        phase: "prompt-admission",
-        status: "blocked",
-        reason,
-        requestedPromptTokenCount: 500,
-        errorKind:
-          reason === "authority-denied"
-            ? "authority-denied"
-            : reason === "storage-unavailable"
-              ? "unavailable"
-              : "rate-limited",
-      });
-      expect(line).not.toContain("PRIVATE_");
-    },
-  );
-
-  // #3873 review (PR #3876): a prompt the precheck refused left no line of its own and the recorded
-  // fact carried no reason, so the log could not say what had refused the run's last model call. The
-  // precheck is where a refusal is decided before any reservation, so it writes the same body-free
-  // admission line the charge does, with the closed reason; a healthy precheck stays silent, because
-  // the charge that follows it records the admission.
-  it.each(["prompt-budget-exhausted", "authority-denied"] as const)(
-    "records the exact %s refusal of a prompt precheck, which charges nothing",
-    (reason) => {
-      const test = fixture(false, { starting: true });
-      let authorized = true;
-      const current = { ...test.current, stillAuthorized: (): boolean => authorized };
-      const deps = {
-        ...test.deps,
-        snapshots: { ...test.snapshots, ciRepairBudget: test.ciRepairBudget },
-      };
-      const budget = createProductionCiRepairBudget(deps, test.verified, current);
-      const admissions = (): ServerLogEvent[] =>
-        test.events.filter((entry) => entry.extra?.phase === "prompt-admission");
-      budget?.chargePrompt(600);
-      expect(admissions().map(({ extra }) => extra?.status)).toEqual(["available"]);
-      if (reason === "authority-denied") authorized = false;
-
-      const refusal = budget?.canChargePrompt(500);
-
-      const refused = admissions().at(-1);
-      expect(admissions()).toHaveLength(2);
-      if (refused === undefined) throw new Error("Missing refused prompt precheck evidence");
-      const line = formatActivityLogProofLine(refused);
-      expect(expectActivityLogProof("git.ci-repair.budget.emitted-line", line)).toMatchObject({
-        op: "git.ci-repair.budget",
-        correlationId: UNKNOWN_CORRELATION_ID,
-        runId: "run-1",
-        phase: "prompt-admission",
-        status: "blocked",
-        reason,
-        requestedPromptTokenCount: 500,
-        errorKind: reason === "authority-denied" ? "authority-denied" : "rate-limited",
-      });
-      expect(refusal).toEqual({ accepted: false, reason });
-      if (reason === "prompt-budget-exhausted") {
-        // The precheck consumed nothing: the 400 tokens the refused 500 did not fit are still there.
-        expect(budget?.chargePrompt(400)).toEqual({ accepted: true });
-        expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason });
-      }
-    },
-  );
-  it("stays silent for a prompt precheck that fits, leaving the admission to the charge", () => {
+  it("records the exact authority-denied refusal of a model call, body-free", () => {
     const test = fixture(false, { starting: true });
+    let authorized = true;
+    const current = { ...test.current, stillAuthorized: (): boolean => authorized };
     const deps = {
       ...test.deps,
       snapshots: { ...test.snapshots, ciRepairBudget: test.ciRepairBudget },
     };
-    const budget = createProductionCiRepairBudget(deps, test.verified, test.current);
-    const admissions = (): ServerLogEvent[] =>
-      test.events.filter((entry) => entry.extra?.phase === "prompt-admission");
+    const budget = createProductionCiRepairBudget(deps, test.verified, current);
+    expect(budget?.admitModelCall()).toEqual({ accepted: true });
+    authorized = false;
 
-    const fits = budget?.canChargePrompt(500);
-    expect(admissions()).toEqual([]);
+    expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "authority-denied" });
 
-    const charged = budget?.chargePrompt(500);
-    expect(admissions().map(({ extra }) => extra?.status)).toEqual(["available"]);
-    expect([fits, charged]).toEqual([{ accepted: true }, { accepted: true }]);
+    const refused = test.events.filter((entry) => entry.extra?.phase === "prompt-admission").at(-1);
+    if (refused === undefined) throw new Error("Missing refused model-call evidence");
+    const line = formatActivityLogProofLine(refused);
+    expect(expectActivityLogProof("git.ci-repair.budget.emitted-line", line)).toMatchObject({
+      op: "git.ci-repair.budget",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      runId: "run-1",
+      phase: "prompt-admission",
+      status: "blocked",
+      reason: "authority-denied",
+      errorKind: "authority-denied",
+    });
   });
   it.each([
     [false, "ciRepairBudget"],
@@ -444,7 +357,7 @@ describe("production CI repair accounting availability", () => {
         outcome: "failed",
       });
       expect(run).not.toHaveBeenCalled();
-      expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason: "storage-unavailable" });
+      expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "storage-unavailable" });
       expect(budget?.chargeDelegatedRead?.("child", "read")).toBe(false);
       expect(budget?.canChargeDelegatedRead?.()).toBe(false);
       // #3384 B3-16: the fixture's "run-1"/"run-2" runIds are shorter than correlation.ts's
@@ -479,10 +392,10 @@ describe("production CI repair accounting availability", () => {
       test.current,
     );
     expect(budget?.admitTool(request)?.check()).toBe(true);
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.admitModelCall()).toEqual({ accepted: true });
     confirmed = true;
     expect(budget?.admitTool(request)).toBeUndefined();
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason: "storage-unavailable" });
+    expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "storage-unavailable" });
   });
   it("retains a recovered predecessor's confirmed PR before current-run adoption appears", () => {
     const test = fixture(true);
@@ -504,7 +417,7 @@ describe("production CI repair accounting availability", () => {
       test.current,
     );
     expect(budget?.admitTool(request)).toBeUndefined();
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason: "storage-unavailable" });
+    expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "storage-unavailable" });
   });
   it("requires predecessor PR adoption even when both accounting stores are healthy", () => {
     const test = fixture(true);
@@ -524,7 +437,7 @@ describe("production CI repair accounting availability", () => {
       test.current,
     );
     expect(budget?.admitTool(request)).toBeUndefined();
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason: "tool-budget-exhausted" });
+    expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "tool-budget-exhausted" });
     expect(budget?.chargeDelegatedRead?.("child", "read")).toBe(false);
     expect(budget?.canChargeDelegatedRead?.()).toBe(false);
   });
@@ -569,7 +482,7 @@ describe("production CI repair accounting availability", () => {
       { ...test.verified, snapshots },
       test.current,
     );
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.admitModelCall()).toEqual({ accepted: true });
     expect(budget?.admitTool(request)?.check()).toBe(true);
   });
   it("requires a fresh CI observation for inherited post-PR work and admits the retry", async () => {
@@ -631,7 +544,6 @@ describe("production CI repair accounting availability", () => {
         limits: {
           maxRuntimeMs: test.current.context.budget.maxRuntimeMs,
           maxToolCalls: test.current.context.budget.maxToolCalls,
-          maxPromptTokens: test.current.context.budget.maxPromptTokens,
         },
       }).record,
     ).toBeUndefined();
@@ -652,7 +564,7 @@ describe("production CI repair accounting availability", () => {
       { ...test.verified, snapshots },
       test.current,
     );
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason: "recovery-required" });
+    expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "recovery-required" });
     expect(budget?.admitTool(request)).toBeUndefined();
   });
   it("starts a bounded repair attempt from an exact failed predecessor observation", () => {
@@ -679,7 +591,7 @@ describe("production CI repair accounting availability", () => {
       { ...test.verified, snapshots },
       test.current,
     );
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.admitModelCall()).toEqual({ accepted: true });
     const lease = budget?.admitTool(request);
     expect(lease?.check()).toBe(true);
     expect(
@@ -689,7 +601,7 @@ describe("production CI repair accounting availability", () => {
         prNumber: 17,
         correlationId: "run-2",
         stillAuthorized: (): boolean => true,
-        limits: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 1_000 },
+        limits: { maxRuntimeMs: 60_000, maxToolCalls: 1 },
       }).record,
     ).toMatchObject({ attempts: [{ runId: "run-2", status: "active" }] });
   });
@@ -703,8 +615,7 @@ describe("production CI repair accounting availability", () => {
     expect(draft?.pullRequest?.state).toBe("open");
     expect(test.current.context.issueBinding).toBeUndefined();
     const budget = createProductionCiRepairBudget(test.deps, test.verified, test.current);
-    expect(budget?.canChargePrompt(1)).toEqual({ accepted: true });
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.admitModelCall()).toEqual({ accepted: true });
     expect(budget?.admitTool(request)?.check()).toBe(true);
     expect(test.events.filter((event) => event.extra?.status === "blocked")).toEqual([]);
   });
@@ -717,7 +628,7 @@ describe("production CI repair accounting availability", () => {
       test.current,
     );
     expect(budget?.admitTool(request)).toBeUndefined();
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason: "invalid-binding" });
+    expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "invalid-binding" });
   });
   it("keeps ordinary generic work available without introducing repair accounting", () => {
     const test = fixture(false);
@@ -728,12 +639,12 @@ describe("production CI repair accounting availability", () => {
       context: genericContext,
     });
     expect(budget?.admitTool(request)?.check()).toBe(true);
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.admitModelCall()).toEqual({ accepted: true });
   });
   it("does not infer pre-PR status from missing issue-bound history", () => {
     const test = fixture(true);
     const budget = createProductionCiRepairBudget(undefined, undefined, test.current);
-    expect(budget?.chargePrompt(1)).toEqual({ accepted: false, reason: "storage-unavailable" });
+    expect(budget?.admitModelCall()).toEqual({ accepted: false, reason: "storage-unavailable" });
     expect(budget?.admitTool(request)).toBeUndefined();
   });
 

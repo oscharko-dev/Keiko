@@ -1,7 +1,7 @@
 import { createJiraChatHumanInput } from "./jiraChatHumanInput.js";
 import { createJiraPrivateLifetime } from "./httpPrivateIdentity.js";
 import { chatKnowledgeScopes } from "../requirement-inventory.js";
-import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
+import { admitChatToolModelCall } from "../chat-tool-approvals.js";
 import { jiraTurnGuidance } from "./jiraOpenDraft.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
@@ -453,8 +453,8 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
     this.sourcePreparation = sourcePreparation;
     this.humanInput = humanInput;
   }
-  protected override reserveAuthorityPrompt(promptTokens: number): boolean {
-    return reserveChatToolPrompt(this.jiraOptions, reserveCurrentJiraChatAuthority, promptTokens);
+  protected override admitAuthorityModelCall(): boolean {
+    return admitChatToolModelCall(this.jiraOptions, reserveCurrentJiraChatAuthority);
   }
 
   protected override observedMutation(

@@ -45,7 +45,7 @@ describe("selected model schema accounting", () => {
     ).toEqual([]);
   });
 
-  it("admits the requested subset but refuses the complete schema set and exhausted prompt grant", () => {
+  it("admits the requested subset but refuses the complete schema set", () => {
     const definitions = Array.from({ length: 100 }, (_, index) => ({
       name: `bounded_${String(index)}`,
       description: "Typed operation description. ".repeat(100),
@@ -56,15 +56,13 @@ describe("selected model schema accounting", () => {
         additionalProperties: false,
       },
     }));
-    expect(chatToolSelectionFits(request, definitions.slice(0, 1), profile, 100000)).toBe(true);
-    expect(chatToolSelectionFits(request, definitions, profile, 100000)).toBe(false);
-    expect(chatToolSelectionFits(request, definitions.slice(0, 1), profile, 1)).toBe(false);
+    expect(chatToolSelectionFits(request, definitions.slice(0, 1), profile)).toBe(true);
+    expect(chatToolSelectionFits(request, definitions, profile)).toBe(false);
     expect(
       chatToolSelectionFits(
         { ...request, messages: [{ role: "user", content: "context ".repeat(30000) }] },
         [],
         profile,
-        100000,
       ),
     ).toBe(false);
   });

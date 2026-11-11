@@ -101,7 +101,11 @@ const ENVELOPE_KEYS = [
   "expiresAt",
   "approvalProofDigest",
 ] as const;
-const BUDGET_KEYS = ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"] as const;
+const BUDGET_KEYS = ["maxRuntimeMs", "maxToolCalls", "maxPatchBytes"] as const;
+// Envelopes minted before the cumulative prompt-token allowance was removed (#4346) may still carry
+// this key: it is accepted while it keeps its old shape (a positive safe integer), never required
+// and never enforced.
+const LEGACY_BUDGET_KEY = "maxPromptTokens";
 const CONNECTOR_SCOPES = new Set([
   "issue-tracker.read",
   "issue-tracker.write",
@@ -199,13 +203,21 @@ function validateCapabilities(value: Record<string, unknown>, errors: string[]):
   }
 }
 
+function legacyBudgetKeys(budget: Record<string, unknown>): readonly string[] {
+  return Object.hasOwn(budget, LEGACY_BUDGET_KEY) ? [LEGACY_BUDGET_KEY] : [];
+}
+
 function validateBudget(value: unknown, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push("chatAuthority.budget must be an object");
     return;
   }
-  validateKeys(value, BUDGET_KEYS, errors);
-  for (const key of ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens"]) {
+  validateKeys(
+    Object.fromEntries(Object.entries(value).filter(([key]) => key !== LEGACY_BUDGET_KEY)),
+    BUDGET_KEYS,
+    errors,
+  );
+  for (const key of ["maxRuntimeMs", "maxToolCalls", ...legacyBudgetKeys(value)]) {
     if (!positiveCount(value[key]))
       errors.push(`chatAuthority.budget.${key} must be a positive safe integer`);
   }

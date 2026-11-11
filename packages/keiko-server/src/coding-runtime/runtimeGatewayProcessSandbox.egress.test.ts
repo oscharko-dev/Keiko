@@ -16,6 +16,7 @@ import {
   recordRuntimeGatewayConfinementSpawned,
 } from "./runtimeGatewayProcessSandbox.js";
 import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
+import { WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -112,8 +113,13 @@ function wrapperProfile(paths: Fixture, policy: ReturnType<typeof native>): stri
   return decision.args[1] ?? "";
 }
 
+// The native filesystem capability describes the POSIX Seatbelt/namespace backends and validates
+// its roots with `path.posix` (keiko-sandbox seatbelt-execution-root), so a Windows host's
+// drive-letter temp roots can never form a valid native policy; those cases run on POSIX hosts.
+const itWithPosixNativeRoots = it.skipIf(WINDOWS_HOST);
+
 describe("native profile egress disposition (#3897)", () => {
-  it.each([
+  itWithPosixNativeRoots.each([
     ["loopback-only", true],
     [undefined, true],
     ["inherited", false],
@@ -124,7 +130,7 @@ describe("native profile egress disposition (#3897)", () => {
     expect(profile.includes('(allow network-outbound (remote ip "localhost:*"))')).toBe(denied);
   });
 
-  it.each(["loopback-only", "inherited"] as const)(
+  itWithPosixNativeRoots.each(["loopback-only", "inherited"] as const)(
     "records the %s disposition on the spawned-confinement line",
     (egress) => {
       const paths = fixture();

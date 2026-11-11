@@ -3013,7 +3013,6 @@ const AUTHORITY_FAILURES: readonly AuthorityFailureCase[] = [
       budget: {
         maxRuntimeMs: 60_000,
         maxToolCalls: 50,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 65_536,
       },
     },

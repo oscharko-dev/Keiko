@@ -132,6 +132,17 @@ describe("resolveTargetedTests", () => {
 });
 
 describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => {
+  // The step runs in a Linux container, where a Windows separator selects no test: Vitest
+  // normalizes a backslash only when it runs on Windows itself. `join` spells the host's form.
+  it("plans a host-spelled test path with POSIX separators", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    ws.writeFile("src/nested/a.test.ts", "");
+
+    const steps = planDirectTargetedTests(ws.info, [join("src", "nested", "a.test.ts")]);
+
+    expect(steps.map((step) => step.args)).toEqual([["vitest", "run", "src/nested/a.test.ts"]]);
+  });
+
   it("selects the nested Vitest project without widening the repository execution root", () => {
     const ws = makeWorkspace({ testFramework: "vitest" });
     ws.writeFile(
@@ -244,7 +255,7 @@ describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => 
 
   it("selects nested configuration beneath the exact admitted managed root", () => {
     const fixture = makeWorkspace({ testFramework: "vitest" });
-    const root = join(realpathSync(fixture.root), ".keiko", "task-workspaces", "accepted");
+    const root = join(realpathSync.native(fixture.root), ".keiko", "task-workspaces", "accepted");
     mkdirSync(join(root, "packages/ui/src"), { recursive: true });
     writeFileSync(
       join(root, "package.json"),

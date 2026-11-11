@@ -1,3 +1,6 @@
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -253,6 +256,53 @@ describe("query-named explicit path admission", () => {
       else expect(normalized).toBeUndefined();
     },
   );
+  // #4068 (W7): on Windows `path.relative` answers with backslashes, which the strict scope
+  // validator refuses, so a pasted absolute path or a `file:///C:/…` stack frame was never admitted
+  // as an explicit file there. A native root keeps the case portable.
+  describe("native absolute references (#4068)", () => {
+    const nativeRoot = resolve(tmpdir(), "keiko-explicit-native-root");
+    const nested = join(nativeRoot, "src", "lib", "checker.ts");
+    it.each([
+      ["an absolute path", nested],
+      ["a file URL", pathToFileURL(nested).href],
+    ])("admits %s inside the root with forward slashes", (_label, path) => {
+      expect(normalizedExplicitReferencePath({ path, origin: "query" }, nativeRoot)).toBe(
+        "src/lib/checker.ts",
+      );
+    });
+    it("still refuses an absolute path outside the root", () => {
+      const outside = join(dirname(nativeRoot), "other", "checker.ts");
+      expect(
+        normalizedExplicitReferencePath({ path: outside, origin: "query" }, nativeRoot),
+      ).toBeUndefined();
+    });
+    it.each(["docs/a.md:hidden", "docs/a.md::$DATA", "docs/CON", "nul.md", "src/aux.ts/x.ts"])(
+      "refuses the Windows stream or device reference %s before any filesystem call",
+      (path) => {
+        expect(
+          normalizedExplicitReferencePath({ path, origin: "query" }, nativeRoot, "win32"),
+        ).toBeUndefined();
+      },
+    );
+    it.each(["docs/a.md", "docs/console.md", "src/aux-helper.ts"])(
+      "keeps the ordinary Windows reference %s",
+      (path) => {
+        expect(
+          normalizedExplicitReferencePath({ path, origin: "query" }, nativeRoot, "win32"),
+        ).toBe(path);
+      },
+    );
+    it("leaves a colon in a POSIX file name to the existing validator", () => {
+      expect(
+        normalizedExplicitReferencePath(
+          { path: "docs/a:b.md", origin: "query" },
+          nativeRoot,
+          "linux",
+        ),
+      ).toBe("docs/a:b.md");
+    });
+  });
+
   it("formats correlated content-free admission and read evidence", async () => {
     const { log } = await retrieve(`Why does ${TARGET}:1 fail?`);
     const source = log.events.find(

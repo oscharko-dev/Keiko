@@ -73,6 +73,10 @@ export {
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
 };
 export type { CodingWorkbenchRuntimeFailureCode, CodingWorkbenchRuntimeStateName };
+export type {
+  CodingWorkbenchRuntimeStartFailureCode,
+  CodingWorkbenchRuntimeStartRefusalCode,
+} from "./coding-workbench-runtime-constants.js";
 export const CODING_WORKBENCH_TASK_INTENT_MAX_CHARS = 65_536;
 
 export type CodingWorkbenchLifecycleCommand = "start" | "stop" | "takeover" | "recover";
@@ -335,7 +339,6 @@ export interface CodingWorkbenchRuntimeAuthorityFacts {
 export interface CodingWorkbenchRuntimeDelegationUsage {
   readonly toolCalls: number;
   readonly patchBytes: number;
-  readonly promptTokens: number;
 }
 
 export interface CodingWorkbenchRuntimeAdapterStartRequest {

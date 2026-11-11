@@ -63,7 +63,7 @@ import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadP
  * the first message. That message is re-sent with every turn: what the model receives is the window
  * `keiko_workspace_read` would answer for the first 800 lines, cut to 16 KiB and to the turn's
  * remaining prompt budget, about 4,000 tokens per turn, and the context line records the estimate
- * (`estimatedTokens`) so the cost is reconstructable against the run's allowance (#3873 review).
+ * (`estimatedTokens`) so the cost is reconstructable against the run's context window (#3873 review).
  * The block is framed by a nonce drawn after the text exists and checked against it, so the file can
  * never close its own frame early; every other part of the first message has the frame's tag
  * neutralized (`withoutRepositoryInstructionsTags`), so no issue body or memory can forge one
@@ -179,7 +179,7 @@ const CODING_RUNTIME_REPOSITORY_INSTRUCTIONS_CONTEXT_OPERATION = defineActivityL
     contentSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     // #3873 review: the attached block's estimated prompt tokens. It rides in the first message and
     // is therefore re-sent with every model turn, so this is its per-turn cost against the run's
-    // prompt allowance. A count; present whenever a block was attached.
+    // context window. A count; present whenever a block was attached.
     estimatedTokens: { type: "integer", dataClass: "count", required: false },
     totalByteCount: { type: "integer", dataClass: "count", required: false },
     totalLineCount: { type: "integer", dataClass: "count", required: false },
@@ -334,7 +334,7 @@ export interface BoundedRepositoryInstructions {
 /**
  * Accepts exactly `true` or `false` (case-insensitive, surrounding whitespace ignored); absence is
  * the default `true`. Any other explicit value fails closed at composition, like the neighbouring
- * `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` does, so a typo never silently picks a behaviour.
+ * `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` does, so a typo never silently picks a behaviour.
  */
 export function configuredCodingRuntimeRepositoryInstructionsEnabled(
   value: string | undefined,
