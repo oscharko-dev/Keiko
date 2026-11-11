@@ -6038,7 +6038,6 @@
     },
     "packages/keiko-security/src/secret-vault.ts": {
       "anti-slop/no-conditional-empty-object-spread": 4,
-      "anti-slop/no-reflect-get": 1,
       "anti-slop/no-runtime-typeof": 9,
       "anti-slop/no-unknown-parameters": 6,
       "anti-slop/no-unknown-returns": 1,
@@ -17647,7 +17646,6 @@
       "anti-slop/no-conditional-empty-object-spread": 2
     },
     "packages/keiko-ui/src/lib/client-error-evidence.ts": {
-      "anti-slop/no-reflect-get": 1,
       "anti-slop/no-runtime-typeof": 3,
       "anti-slop/no-unknown-parameters": 4,
       "anti-slop/no-unknown-returns": 1
