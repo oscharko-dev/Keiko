@@ -326,6 +326,16 @@
       ]
     },
     {
+      "path": "native/runtime-supervisor/windows/gateway_user_lock.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-user-environment-boundary"
+      ]
+    },
+    {
       "path": "native/runtime-supervisor/windows/gateway_grants.c",
       "language": "c",
       "platforms": ["windows"],

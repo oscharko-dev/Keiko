@@ -32,6 +32,7 @@ try {
     filesystem = $volume.FileSystem
     node = (node --version)
     supervisorSha256 = (Get-FileHash -LiteralPath $helper).Hash
+    supervisorSizeBytes = (Get-Item -LiteralPath $helper).Length
     observerSha256 = (Get-FileHash -LiteralPath (Join-Path $install "gateway-service-probe.exe")).Hash
   } | ConvertTo-Json -Compress
   node scripts/testing/test-windows-gateway-service.mjs unavailable $helper
