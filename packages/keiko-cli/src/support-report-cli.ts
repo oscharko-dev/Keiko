@@ -262,7 +262,7 @@ function hardenOwnedReportDirectory(directory: string): void {
   } catch (error) {
     // A final symlink (ELOOP) or a non-directory is a redirected destination; anything else is the
     // filesystem failure itself.
-    const code: unknown = error instanceof Error ? Reflect.get(error, "code") : undefined;
+    const code: unknown = error instanceof Error && "code" in error ? error.code : undefined;
     if (code === "ELOOP" || code === "ENOTDIR") throw unsafeReportDirectory();
     throw error;
   }
