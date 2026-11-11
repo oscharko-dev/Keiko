@@ -1988,8 +1988,11 @@ function WorkbenchColumns({
         )}
       </div>
       <div className={styles.composerDock}>
-        {repositorySelector}
+        {/* Readiness can surface a checkout notice after the person already pressed the
+            repository control; above it, that notice grows the bottom-anchored dock upward
+            and leaves the control where the gesture started. */}
         <LocationBindingNotices locationState={locationState} />
+        {repositorySelector}
         <CodingTaskForkNotice fork={history.fork} onCancel={history.cancelFork} />
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
