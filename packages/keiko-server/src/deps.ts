@@ -1050,8 +1050,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly mcpChatCatalog?: McpChatCatalogRuntime;
   /** Projection of the existing Memory admission for the productive grounded phase only. */
   readonly groundedMemoryContextAvailable?: boolean;
-  // Whether an operator configured the memory deployment ceiling. Only a configured `governed-assist` ceiling keeps
-  // routine facts for review; the absent baseline accepts them in every mode (#4206).
+  // Whether an operator configured the memory deployment ceiling. Only a configured
+  // `governed-assist` ceiling keeps routine facts for review; the absent baseline accepts them in
+  // every mode (#4206).
   readonly memoryDeploymentCeilingConfigured?: boolean | undefined;
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
