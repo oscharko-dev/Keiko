@@ -118638,6 +118638,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.composition.retired-setting",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:6429",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:158",
@@ -121545,7 +121552,7 @@
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1129",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1132",
       "package": "keiko-server"
     },
     {
@@ -122369,6 +122376,7 @@
     "coding-runtime.backend-run",
     "coding-runtime.commands.listed",
     "coding-runtime.compaction",
+    "coding-runtime.composition.retired-setting",
     "coding-runtime.context-usage.observed",
     "coding-runtime.descendants.swept",
     "coding-runtime.description",
