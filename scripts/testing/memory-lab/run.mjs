@@ -403,6 +403,7 @@ async function runUnit(scenario, arm, repetition, options, stateRoot, label) {
       repetition,
       foldedKeys: instance.foldedKeys,
       instanceStartMs,
+      startupRereads: instance.startupRereads,
       logTextLeaks,
     };
   } finally {
@@ -470,6 +471,7 @@ function timingRows(results, sealed) {
     arm: result.arm,
     repetition: result.repetition,
     instanceStartMs: result.instanceStartMs,
+    startupRereads: result.startupRereads,
     learnMs: result.timing.learnMs,
     probeMs: result.timing.probeMs,
     ...(isFailedUnit(result) ? { failed: true } : {}),

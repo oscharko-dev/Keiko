@@ -85,7 +85,10 @@ start. A model that reports no readiness yet is still being checked, so the lab 
 second for up to 60 seconds. A subject without the startup fix of ADR-0171 D2 answers the settling
 read while catalog discovery's renewed check is still running: seen on dev 4e1f07ea0 with a LiteLLM
 endpoint that serves more models than the configuration names. That model was ready two seconds
-later. A model that is not configured, or whose check answered not ready, ends the instance at once.
+later. A model that is not configured, or whose check answered not ready, ends the instance at once;
+a model that never reports readiness ends it after the 60 seconds. The wait stays visible: every
+unit's row in `timing.json` carries `startupRereads` (a sealed run keeps only its means per arm and
+repetition, as before).
 
 **A unit that cannot be measured costs that unit, not the run.** Any error inside a unit (an instance
 that does not start, a request that fails, learning that does not settle in time) is recorded as a

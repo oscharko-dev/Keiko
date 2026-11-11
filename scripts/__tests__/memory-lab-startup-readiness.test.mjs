@@ -26,9 +26,14 @@ describe("memory lab startup readiness", () => {
     // renewed check ran, and the model reported no readiness yet. The lab ended the whole run
     // although the model was ready two seconds later.
     const bff = scriptedBff([undefined, undefined, true]);
-    await expect(awaitStartupReadiness(bff, MODEL, FAST)).resolves.toBeUndefined();
+    // The run records the re-reads, so a subject that needed the wait stays visible in its results.
+    await expect(awaitStartupReadiness(bff, MODEL, FAST)).resolves.toBe(2);
     expect(bff.paths[0]).toBe("GET /api/models?settleStartup=1");
-    expect(bff.paths).toHaveLength(3);
+    expect(bff.paths.slice(1)).toEqual(["GET /api/models", "GET /api/models"]);
+  });
+
+  it("records no re-read when the model is ready at the settling read", async () => {
+    await expect(awaitStartupReadiness(scriptedBff([true]), MODEL, FAST)).resolves.toBe(0);
   });
 
   it("ends the run at once when the startup check failed", async () => {
@@ -51,6 +56,26 @@ describe("memory lab startup readiness", () => {
       "conversationReady=undefined",
     );
     expect(bff.paths.length).toBeGreaterThan(1);
+  });
+
+  it("ends the run when the model disappears while the check settles", async () => {
+    const bff = scriptedBff([undefined, "absent"]);
+    await expect(awaitStartupReadiness(bff, MODEL, FAST)).rejects.toThrow("not configured");
+    expect(bff.paths).toHaveLength(2);
+  });
+
+  it("refuses a failed read while the check settles", async () => {
+    let reads = 0;
+    const bff = {
+      request: async () => {
+        reads += 1;
+        return reads === 1
+          ? { status: 200, json: { models: [{ id: MODEL }] } }
+          : { status: 503, json: undefined };
+      },
+    };
+    await expect(awaitStartupReadiness(bff, MODEL, FAST)).rejects.toThrow("HTTP 503");
+    expect(reads).toBe(2);
   });
 
   it("refuses a failed model read", async () => {

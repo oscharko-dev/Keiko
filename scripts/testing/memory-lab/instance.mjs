@@ -154,14 +154,17 @@ export async function awaitStartupReadiness(bff, modelId, timing = {}) {
   const { settleMs = STARTUP_SETTLE_MS, pollMs = STARTUP_POLL_MS } = timing;
   const deadline = Date.now() + settleMs;
   let model = await startupModel(bff, modelId, "/api/models?settleStartup=1");
+  let rereads = 0;
   while (model !== undefined && model.conversationReady === undefined && Date.now() < deadline) {
     await delay(pollMs);
     model = await startupModel(bff, modelId, "/api/models");
+    rereads += 1;
   }
   if (model?.conversationReady !== true)
     throw new LabConfigurationError(
       `the answer model did not pass the product's startup readiness check (${model === undefined ? "not configured" : `conversationReady=${String(model.conversationReady)}`})`,
     );
+  return rereads;
 }
 
 function stubProxy() {
@@ -237,8 +240,9 @@ export async function startLabInstance(options) {
     OFFLINE_CONTEXT_WINDOW,
     async () => ({ project: prepared.project, env: prepared.env }),
   );
+  let startupRereads;
   try {
-    await awaitStartupReadiness(started.bff, answerModelId);
+    startupRereads = await awaitStartupReadiness(started.bff, answerModelId);
   } catch (error) {
     await started.close();
     throw error;
@@ -246,6 +250,7 @@ export async function startLabInstance(options) {
   return {
     dir: options.dir,
     logDirectory: join(prepared.env.KEIKO_STATE_DIR, "logs"),
+    startupRereads,
     ...(learnsInPasses(options.subjectRoot) ? { learningIdleMs: LAB_LEARNING_IDLE_MS } : {}),
     project: prepared.project,
     foldedKeys: prepared.foldedKeys,
