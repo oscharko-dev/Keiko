@@ -1470,9 +1470,11 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
     `model input tokens ${String(usage.modelInputTokens)}/${String(budget.modelInputTokensMax)}`,
     `model output tokens ${String(usage.modelOutputTokens)}/${String(budget.modelOutputTokensMax)}`,
     `rerank calls ${String(usage.rerankCalls)}/${String(budget.rerankCallsMax)}`,
+    // The configured limit only: the measured search time depends on machine load, and as prompt
+    // text it changed the fitted evidence of an otherwise identical request (#4335).
     budget.elapsedMsMax === null
-      ? `elapsed ${String(usage.elapsedMs)} ms (no search time limit)`
-      : `elapsed ${String(usage.elapsedMs)}/${String(budget.elapsedMsMax)} ms`,
+      ? "search time limit none"
+      : `search time limit ${String(budget.elapsedMsMax)} ms`,
   ].join("; ");
 }
 
