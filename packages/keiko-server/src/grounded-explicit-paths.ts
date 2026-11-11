@@ -47,6 +47,7 @@ import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/in
 import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import { safeProperty } from "@oscharko-dev/keiko-activity-log";
 import { isConnectedDocumentPath } from "./grounded-document-evidence.js";
+import { isWindowsOrdinaryPathComponent } from "./windowsHostPath.js";
 
 export const EXPLICIT_PATH_REJECTION_REASONS = [
   "outside-scope",
@@ -146,6 +147,7 @@ export function explicitPathReferences(text: string): readonly ExplicitPathRefer
 export function normalizedExplicitReferencePath(
   reference: ExplicitPathReference,
   root: string,
+  platform: NodeJS.Platform = process.platform,
 ): string | undefined {
   let path = reference.path;
   if (path.startsWith("file://")) {
@@ -161,7 +163,13 @@ export function normalizedExplicitReferencePath(
   // A leading current-directory spelling does not change the target. Keep all interior and
   // parent segments for the strict canonical validator; path.normalize would erase that evidence.
   path = path.replace(/^(?:\.\/)+/u, "");
-  return isValidScopePath(path, { mustBeRelative: true }) ? path : undefined;
+  if (!isValidScopePath(path, { mustBeRelative: true })) return undefined;
+  // On Windows an alternate data stream (`a.md:hidden`) or a DOS device name (`docs/CON`) is no
+  // ordinary file: refuse it before any filesystem call, as the other W7 sites do (#4068).
+  if (platform === "win32" && !path.split("/").every(isWindowsOrdinaryPathComponent)) {
+    return undefined;
+  }
+  return path;
 }
 
 function localFileUrlPath(url: URL): string | undefined {

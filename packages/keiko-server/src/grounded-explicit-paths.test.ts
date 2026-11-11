@@ -276,6 +276,31 @@ describe("query-named explicit path admission", () => {
         normalizedExplicitReferencePath({ path: outside, origin: "query" }, nativeRoot),
       ).toBeUndefined();
     });
+    it.each(["docs/a.md:hidden", "docs/a.md::$DATA", "docs/CON", "nul.md", "src/aux.ts/x.ts"])(
+      "refuses the Windows stream or device reference %s before any filesystem call",
+      (path) => {
+        expect(
+          normalizedExplicitReferencePath({ path, origin: "query" }, nativeRoot, "win32"),
+        ).toBeUndefined();
+      },
+    );
+    it.each(["docs/a.md", "docs/console.md", "src/aux-helper.ts"])(
+      "keeps the ordinary Windows reference %s",
+      (path) => {
+        expect(
+          normalizedExplicitReferencePath({ path, origin: "query" }, nativeRoot, "win32"),
+        ).toBe(path);
+      },
+    );
+    it("leaves a colon in a POSIX file name to the existing validator", () => {
+      expect(
+        normalizedExplicitReferencePath(
+          { path: "docs/a:b.md", origin: "query" },
+          nativeRoot,
+          "linux",
+        ),
+      ).toBe("docs/a:b.md");
+    });
   });
 
   it("formats correlated content-free admission and read evidence", async () => {
