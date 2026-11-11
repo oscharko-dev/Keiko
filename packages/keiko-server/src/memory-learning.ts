@@ -176,6 +176,8 @@ export class MemoryLearningRuntime {
   private retryMs = FIRST_RETRY_MS;
   private disposed = false;
   private openedChatId: string | undefined;
+  // The last turn noted since a pass claimed the runtime; that pass learns it, so it clears it.
+  private notedTurnCorrelation: string | undefined;
   private readonly failedAttempts = new Map<string, number>();
   private readonly unsubscribe: () => void;
 
@@ -184,7 +186,7 @@ export class MemoryLearningRuntime {
     this.unsubscribe = onChatForegroundChange(deps, (active) => {
       if (active) this.cancelRunning();
       // Chat work restarts the pause; a waiting backoff is kept.
-      else if (this.hasLearningStore()) this.arm("inactivity");
+      else if (this.hasLearningStore()) this.arm("inactivity", this.pauseParent());
     });
   }
 
@@ -201,6 +203,7 @@ export class MemoryLearningRuntime {
       surface: mark.surface,
       ...(mark.mode === undefined ? {} : { mode: mark.mode }),
     });
+    this.notedTurnCorrelation = correlationId;
     this.arm("inactivity", correlationId);
   }
 
@@ -231,6 +234,12 @@ export class MemoryLearningRuntime {
 
   private hasLearningStore(): boolean {
     return this.deps.store.memoryLearning !== undefined && this.deps.memoryVault !== undefined;
+  }
+
+  // The pause after Chat work belongs to the turn it noted, else to what the waiting timer holds.
+  private pauseParent(): string | undefined {
+    if (this.notedTurnCorrelation !== undefined) return this.notedTurnCorrelation;
+    return this.timer === undefined ? undefined : this.timerParent;
   }
 
   private arm(trigger: MemoryLearningTrigger, parent?: string): void {
@@ -291,6 +300,7 @@ export class MemoryLearningRuntime {
     if (chatForegroundActive(this.deps)) return undefined;
     const running: RunningPass = { controller: new AbortController() };
     this.running = running;
+    this.notedTurnCorrelation = undefined;
     const ids = { passId: randomUUID(), parentCorrelationId: parent };
     try {
       return await this.runClaimedPass(store, running, trigger, ids);

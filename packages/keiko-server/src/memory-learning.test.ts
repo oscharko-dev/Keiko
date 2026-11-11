@@ -421,6 +421,63 @@ describe("memory learning passes", () => {
     expect(JSON.stringify(sink.events)).not.toContain("Atlas");
   });
 
+  it("links the pass after a Chat turn to that turn, not to the end of the turn's work", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const learner = fakeLearner();
+    const deps = makeDeps({ modelPortFactory: () => learner.port });
+    const chat = makeChat(deps);
+    // The turn is committed and noted while its Chat work still runs; the pause starts when it ends.
+    const noted = await runSerializedChatTurn(deps, chat.chatId, new AbortController().signal, () =>
+      writeTurn(deps, chat, "I write Atlas in Rust."),
+    );
+    if (typeof noted !== "object") throw new Error("expected the turn to run");
+    await vi.advanceTimersByTimeAsync(16_000);
+    await vi.waitFor(() => {
+      expect(bodies(deps, chat)).toEqual(["I write Atlas in Rust."]);
+    });
+    const started = sink.events.find((event) => event.op === "memory.learn.pass.started");
+    expect(started?.parentCorrelationId).toBe(noted.assistantId);
+  });
+
+  it("links the pass that resumes a cancelled one to it when the Chat work noted no turn", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const learner = fakeLearner();
+    const signals: AbortSignal[] = [];
+    const firstSlow: ModelPort = {
+      call(request, signal): Promise<NormalizedResponse> {
+        if (signals.length > 0) return learner.port.call(request, signal);
+        signals.push(signal);
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        });
+      },
+    };
+    const deps = makeDeps({ modelPortFactory: () => firstSlow });
+    const chat = makeChat(deps);
+    writeTurn(deps, chat, "I write Atlas in Rust.");
+    const pass = memoryLearningRuntime(deps).runPass("inactivity", undefined);
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(1);
+    });
+    // Chat work that notes no turn, such as a Chat with memory off, cancels the pass.
+    await runSerializedChatTurn(deps, chat.chatId, new AbortController().signal, async () => {
+      await expect(pass).resolves.toBe("cancelled");
+    });
+    await vi.advanceTimersByTimeAsync(16_000);
+    await vi.waitFor(() => {
+      expect(bodies(deps, chat)).toEqual(["I write Atlas in Rust."]);
+    });
+    const started = sink.events.filter((event) => event.op === "memory.learn.pass.started");
+    expect(started).toHaveLength(2);
+    expect(started[1]?.parentCorrelationId).toBe(started[0]?.correlationId);
+  });
+
   it("never hands capture the text of an attached document", async () => {
     const prompts: string[] = [];
     const learner = fakeLearner();
