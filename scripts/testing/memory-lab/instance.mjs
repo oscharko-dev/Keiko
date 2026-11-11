@@ -135,11 +135,29 @@ async function labEnvironment(dir, options, source = process.env) {
 // has passed. A person waits for the start; the lab does too, through the product's own settling
 // read, so a first turn never races the check. A model whose check failed ends the instance here
 // with a reason instead of failing every turn of the run.
-async function awaitStartupReadiness(bff, modelId) {
-  const result = await bff.request("GET", "/api/models?settleStartup=1");
+//
+// A model that reports no readiness yet is still being checked: a subject without the startup fix
+// of ADR-0171 D2 answers the settling read while catalog discovery's renewed check runs (seen on
+// dev 4e1f07ea0, ready two seconds later). A person sees the model become ready a moment later, so
+// the lab reads again for a bounded time; an answer of not ready still ends the instance at once.
+const STARTUP_SETTLE_MS = 60_000;
+const STARTUP_POLL_MS = 1000;
+
+async function startupModel(bff, modelId, path) {
+  const result = await bff.request("GET", path);
   if (result.status !== 200)
     throw new Error(`startup model read failed with HTTP ${String(result.status)}`);
-  const model = result.json?.models?.find((entry) => entry.id === modelId);
+  return result.json?.models?.find((entry) => entry.id === modelId);
+}
+
+export async function awaitStartupReadiness(bff, modelId, timing = {}) {
+  const { settleMs = STARTUP_SETTLE_MS, pollMs = STARTUP_POLL_MS } = timing;
+  const deadline = Date.now() + settleMs;
+  let model = await startupModel(bff, modelId, "/api/models?settleStartup=1");
+  while (model !== undefined && model.conversationReady === undefined && Date.now() < deadline) {
+    await delay(pollMs);
+    model = await startupModel(bff, modelId, "/api/models");
+  }
   if (model?.conversationReady !== true)
     throw new LabConfigurationError(
       `the answer model did not pass the product's startup readiness check (${model === undefined ? "not configured" : `conversationReady=${String(model.conversationReady)}`})`,

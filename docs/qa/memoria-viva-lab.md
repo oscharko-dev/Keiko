@@ -79,6 +79,14 @@ is removed unless `--keep` is given. The state directory is named
 `<scenario>-<arm>-r<repetition>-<random>`, which `usage.mjs` reads back. A server whose parent died
 exits on its own when the parent's IPC channel closes.
 
+**The first turn waits for the product's startup check.** Before the first turn the lab reads the
+models through the product's settling read (`/api/models?settleStartup=1`), as a person waits for the
+start. A model that reports no readiness yet is still being checked, so the lab reads again once a
+second for up to 60 seconds. A subject without the startup fix of ADR-0171 D2 answers the settling
+read while catalog discovery's renewed check is still running: seen on dev 4e1f07ea0 with a LiteLLM
+endpoint that serves more models than the configuration names. That model was ready two seconds
+later. A model that is not configured, or whose check answered not ready, ends the instance at once.
+
 **A unit that cannot be measured costs that unit, not the run.** Any error inside a unit (an instance
 that does not start, a request that fails, learning that does not settle in time) is recorded as a
 result with an `error` (the error's class name, and a message with paths and credential shapes
