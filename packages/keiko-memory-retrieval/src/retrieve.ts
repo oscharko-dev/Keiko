@@ -31,7 +31,7 @@ import type {
 import { assembleContextBlock } from "./context.js";
 import { DEFAULT_MMR_LAMBDA, reorderByMmr } from "./diversity.js";
 import { RetrievalError } from "./errors.js";
-import { sharedInformativeWordCount, tokenize } from "./relevance.js";
+import { sharedInformativeWordCountInText, tokenize } from "./relevance.js";
 import { rankMemories, type RankMemoriesQuery } from "./ranking.js";
 import { isMemorySuppressed } from "./suppression.js";
 import {
@@ -217,10 +217,6 @@ function applyFilters(
   const candidates: MemoryRecord[] = [];
   const omitted: OmittedMemory[] = [];
   for (const r of records) {
-    if (request.excludeMemoryIds?.has(r.id) === true) {
-      omitted.push({ memoryId: r.id, reason: "standing-profile" });
-      continue;
-    }
     if (typeFilter !== undefined && !typeFilter.includes(r.type)) {
       omitted.push({ memoryId: r.id, reason: "type-filtered" });
       continue;
@@ -359,22 +355,91 @@ function strictMinSharedWords(request: MemoryRetrievalRequest): number {
   return value;
 }
 
+// A correction is still about what it corrected: "Ab jetzt bevorzuge ich Listen." answers "Wie
+// sollst du mir Zahlen zeigen?" because the fact it superseded spoke of numbers (lab 2026-11-11,
+// update-lists-de). Under the strict floor a memory therefore also shares the informative words of
+// the facts it superseded, up to this many steps back. Only the match reads them; a superseded fact
+// never reaches the answer, and a forgotten one contributes nothing.
+const SUPERSEDED_WORD_DEPTH = 4;
+
+interface Lineage {
+  readonly origin: MemoryId;
+  readonly record: MemoryRecord;
+}
+
+function supersededPredecessors(
+  lineage: Lineage,
+  edges: ReadonlyMap<MemoryId, readonly MemoryEdge[]>,
+  byId: ReadonlyMap<MemoryId, MemoryRecord>,
+): readonly Lineage[] {
+  return (edges.get(lineage.record.id) ?? [])
+    .filter((edge) => edge.kind === "supersedes" && edge.toMemoryId === lineage.record.id)
+    .map((edge) => byId.get(edge.fromMemoryId))
+    .filter((record): record is MemoryRecord => record?.status === "superseded")
+    .map((record) => ({ origin: lineage.origin, record }));
+}
+
+// The candidates' own edges are already fetched for ranking; only older generations cost a fetch.
+function supersededBodies(
+  port: MemoryQueryPort,
+  candidates: readonly MemoryRecord[],
+  fetched: readonly MemoryRecord[],
+  candidateEdges: ReadonlyMap<MemoryId, readonly MemoryEdge[]> | undefined,
+): ReadonlyMap<MemoryId, readonly string[]> {
+  const byId = new Map(fetched.map((record) => [record.id, record]));
+  const bodies = new Map<MemoryId, string[]>();
+  const seen = new Set(candidates.map((record) => record.id));
+  let frontier: readonly Lineage[] = candidates.map((record) => ({ origin: record.id, record }));
+  for (let depth = 0; depth < SUPERSEDED_WORD_DEPTH && frontier.length > 0; depth += 1) {
+    const edges =
+      depth === 0
+        ? candidateEdges
+        : buildEdgesIndex(
+            port,
+            frontier.map((lineage) => lineage.record),
+          );
+    if (edges === undefined) break;
+    const next = frontier
+      .flatMap((lineage) => supersededPredecessors(lineage, edges, byId))
+      .filter((lineage) => !seen.has(lineage.record.id));
+    for (const { origin, record } of next) {
+      seen.add(record.id);
+      bodies.set(origin, [...(bodies.get(origin) ?? []), record.body]);
+    }
+    frontier = next;
+  }
+  return bodies;
+}
+
+interface StrictFloorInput {
+  readonly request: MemoryRetrievalRequest;
+  readonly candidates: ReadonlyMap<MemoryId, MemoryRecord>;
+  readonly superseded: ReadonlyMap<MemoryId, readonly string[]>;
+}
+
+function sharedWords(input: StrictFloorInput, memoryId: MemoryId): number {
+  const record = input.candidates.get(memoryId);
+  if (record === undefined) return 0;
+  const texts = [record.body, ...(input.superseded.get(memoryId) ?? [])];
+  return Math.max(
+    ...texts.map((text) => sharedInformativeWordCountInText(input.request.queryText, text)),
+  );
+}
+
 // The strict floor of #4228: only a memory the question is about is retrieved. The standing
-// profile carries standing facts to every answer, so no record-derived signal is exempt here.
+// profile carries standing facts to every answer, so no record-derived signal is exempt here, and
+// a profile fact needs the question's own words (see standingProfileIds).
 function applyStrictRelevanceFloor(
   ranked: readonly IncludedMemory[],
-  request: MemoryRetrievalRequest,
-  candidates: readonly MemoryRecord[],
+  input: StrictFloorInput,
 ): ThresholdStep {
-  const minShared = strictMinSharedWords(request);
-  const byId = new Map(candidates.map((record) => [record.id, record]));
+  const minShared = strictMinSharedWords(input.request);
+  const profileIds = input.request.standingProfileIds;
   const kept: IncludedMemory[] = [];
   const omitted: OmittedMemory[] = [];
   for (const entry of ranked) {
-    const record = byId.get(entry.memoryId);
-    const lexical =
-      record === undefined ? 0 : sharedInformativeWordCount(request.queryText, record);
-    if (entry.subscores.semantic > 0 || lexical >= minShared) kept.push(entry);
+    const semantic = entry.subscores.semantic > 0 && profileIds?.has(entry.memoryId) !== true;
+    if (semantic || sharedWords(input, entry.memoryId) >= minShared) kept.push(entry);
     else omitted.push({ memoryId: entry.memoryId, reason: "below-threshold" });
   }
   return { ranked: kept, omitted };
@@ -384,9 +449,14 @@ function applyRelevanceFloor(
   ranked: readonly IncludedMemory[],
   request: MemoryRetrievalRequest,
   candidates: readonly MemoryRecord[],
+  superseded: () => ReadonlyMap<MemoryId, readonly string[]>,
 ): ThresholdStep {
   if (request.strictRelevanceFloor === true) {
-    return applyStrictRelevanceFloor(ranked, request, candidates);
+    return applyStrictRelevanceFloor(ranked, {
+      request,
+      candidates: new Map(candidates.map((record) => [record.id, record])),
+      superseded: superseded(),
+    });
   }
   if (!hasQuerySignal(request)) {
     return { ranked, omitted: [] };
@@ -473,7 +543,9 @@ export function retrieveMemoryContext(
     rankQuery,
     edgesByMemory === undefined ? {} : { edgesByMemory },
   );
-  const thresholded = applyRelevanceFloor(ranked, relevanceRequest, filtered.candidates);
+  const thresholded = applyRelevanceFloor(ranked, relevanceRequest, filtered.candidates, () =>
+    supersededBodies(port, filtered.candidates, deduped, edgesByMemory),
+  );
   // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
   // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.
   const selectionOrder = reorderSelection(thresholded.ranked, request);

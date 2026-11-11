@@ -28,6 +28,7 @@ interface MemorySelectionLogFields {
   readonly profileEntryCount?: number;
   readonly profileTokens?: number;
   readonly profileDroppedCount?: number;
+  readonly profileRetrievedCount?: number;
   readonly retrievedMemoryCount?: number;
   readonly belowFloorMemoryCount?: number;
 }
@@ -36,6 +37,7 @@ const MEMORY_SELECTION_LOG_FIELDS = {
   profileEntryCount: { type: "integer", dataClass: "count", required: false },
   profileTokens: { type: "integer", dataClass: "count", required: false },
   profileDroppedCount: { type: "integer", dataClass: "count", required: false },
+  profileRetrievedCount: { type: "integer", dataClass: "count", required: false },
   retrievedMemoryCount: { type: "integer", dataClass: "count", required: false },
   belowFloorMemoryCount: { type: "integer", dataClass: "count", required: false },
 } as const;
@@ -461,6 +463,7 @@ export function memorySelectionLogFields(
     profileEntryCount: memory.context.profile?.entries.length ?? 0,
     profileTokens: memory.context.profile?.tokens ?? 0,
     profileDroppedCount: memory.context.profile?.droppedCount ?? 0,
+    profileRetrievedCount: memory.context.profileRetrievedCount ?? 0,
     retrievedMemoryCount: memory.context.memories.length,
     belowFloorMemoryCount: memory.context.belowFloorCount ?? 0,
   };

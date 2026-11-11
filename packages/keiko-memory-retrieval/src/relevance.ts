@@ -218,8 +218,16 @@ export function sharedInformativeWordCount(
   queryText: string | undefined,
   record: MemoryRecord,
 ): number {
+  return sharedInformativeWordCountInText(queryText, record.body);
+}
+
+/** The same count for any text a memory stands for, such as a fact it superseded. */
+export function sharedInformativeWordCountInText(
+  queryText: string | undefined,
+  text: string,
+): number {
   if (queryText === undefined || queryText === "") return 0;
-  const recordWords = informativeWords(record.body);
+  const recordWords = informativeWords(text);
   if (recordWords.length === 0) return 0;
   return informativeWords(queryText).filter((word) =>
     recordWords.some((recordWord) => sameMemoryWord(word, recordWord)),

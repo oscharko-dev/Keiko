@@ -586,7 +586,8 @@ effective input budget and image reserve. This evidence survives generation time
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded. With memory on it and
 the grounded `chat.response.message` also count the standing profile and recall (#4228):
-`profileEntryCount`, `profileTokens`, `profileDroppedCount`, `retrievedMemoryCount` and
+`profileEntryCount`, `profileTokens`, `profileDroppedCount`, `profileRetrievedCount` (profile
+facts the question was about, sent once with recall), `retrievedMemoryCount` and
 `belowFloorMemoryCount`, never a fact
 ([MemoriaViva standing profile](docs/memory/memoria-viva-standing-profile.md)).
 

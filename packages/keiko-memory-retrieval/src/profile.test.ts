@@ -11,6 +11,7 @@ import {
   DEFAULT_STANDING_PROFILE_CAPS,
   selectStandingProfile,
   standingProfileSuccession,
+  standingProfileWithout,
   type StandingProfileCandidate,
 } from "./profile.js";
 import { buildRecord, projectScope, type BuildRecordOptions } from "./_support.js";
@@ -121,19 +122,29 @@ describe("selectStandingProfile", () => {
     ).toEqual(["public"]);
   });
 
-  it("marks a clipped fact so retrieval may still supply it whole", () => {
+  it("takes a fact recall supplied out of the profile for that answer and recounts its tokens", () => {
+    // The failure this pins (lab 2026-11-11, Gemma): a preference the question was about reached
+    // the answer only as a profile line, and the model missed it in two of three runs.
     const profile = selectStandingProfile(
       [
-        candidate({ id: "long", body: "eins zwei drei vier fünf sechs sieben" }, 1),
-        candidate({ id: "short", body: "Tabellen" }),
+        candidate({ id: "lists", body: "Ab jetzt bevorzuge ich Listen." }, 1),
+        candidate({ id: "de" }),
       ],
       NOW,
-      { maxEntries: 5, maxTokens: 100, entryMaxTokens: 4 },
     );
-    expect(profile.entries.map((entry) => [entry.id, entry.clipped])).toEqual([
-      ["long", true],
-      ["short", false],
-    ]);
+    const lists = profile.entries.find((entry) => entry.id === "lists");
+    const answer = standingProfileWithout(
+      profile,
+      new Set([lists?.id].filter((id) => id !== undefined)),
+    );
+    expect(answer.entries.map((entry) => entry.id)).toEqual(["de"]);
+    expect(answer.tokens).toBe(profile.tokens - (lists?.tokens ?? 0));
+    expect(answer.dropped).toEqual(profile.dropped);
+  });
+
+  it("keeps the profile unchanged when recall supplied none of its facts", () => {
+    const profile = selectStandingProfile([candidate({ id: "lists" })], NOW);
+    expect(standingProfileWithout(profile, new Set())).toBe(profile);
   });
 
   it("lets a pinned fact in and keeps an unpinned, excluded fact out", () => {

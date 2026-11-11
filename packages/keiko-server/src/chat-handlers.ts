@@ -109,6 +109,7 @@ import {
   DEFAULT_BUDGET_TOKENS,
   DEFAULT_STANDING_PROFILE_CAPS,
   retrieveMemoryContext,
+  standingProfileWithout,
   type StandingProfile,
 } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -1344,12 +1345,18 @@ function recordConversationMemoryRetrieval(
 function toMemoryResult(
   retrieval: ReturnType<typeof retrieveMemoryContext>,
   profile: StandingProfile = EMPTY_STANDING_PROFILE,
+  profileRetrievedCount = 0,
 ): ConversationMemoryResultWire {
   return {
     context: {
       ...(profile.entries.length > 0 ? { profile: standingProfileWire(profile) } : {}),
-      belowFloorCount: retrieval.omitted.filter((entry) => entry.reason === "below-threshold")
-        .length,
+      ...(profileRetrievedCount > 0 ? { profileRetrievedCount } : {}),
+      // A fact the profile supplies anyway was not held back from the answer.
+      belowFloorCount: retrieval.omitted.filter(
+        (entry) =>
+          entry.reason === "below-threshold" &&
+          !profile.entries.some((fact) => fact.id === entry.memoryId),
+      ).length,
       enabled: true,
       text: retrieval.contextBlock.text,
       memories: retrieval.contextBlock.memories.map((item) => ({
@@ -1472,16 +1479,12 @@ async function retrieveChatMemory(
       ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
       ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
       fusion: conversationFusionMode(deps),
-      // #4228: only memories the question is about, never a profile fact a second time.
+      // #4228: only memories the question is about. A profile fact the question names is
+      // retrieved too and then leaves the profile for this answer (standingProfileWithout).
       strictRelevanceFloor: true,
       maxIncluded: CHAT_MAX_RETRIEVED_MEMORIES,
       ...(profile.entries.length > 0
-        ? {
-            // A clipped fact stays retrievable, so a related question can still get it whole.
-            excludeMemoryIds: new Set(
-              profile.entries.filter((entry) => !entry.clipped).map((entry) => entry.id),
-            ),
-          }
+        ? { standingProfileIds: new Set(profile.entries.map((entry) => entry.id)) }
         : {}),
       nowMs,
     },
@@ -1527,7 +1530,14 @@ export async function buildMemoryResult(
   // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
   // free-running background loop.
   maybeRunChatAutoMaintenance(deps, vault);
-  const result = toMemoryResult(retrieval, profile);
+  // A profile fact the question is about reaches the answer once, with the retrieved memories.
+  const retrievedIds = new Set(retrieval.contextBlock.memories.map((item) => item.memoryId));
+  const answerProfile = standingProfileWithout(profile, retrievedIds);
+  const result = toMemoryResult(
+    retrieval,
+    answerProfile,
+    profile.entries.length - answerProfile.entries.length,
+  );
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
 }

@@ -252,9 +252,19 @@ describe("Chat memory with the standing profile (#4228)", () => {
     const store = vaultWithTablesAndDog();
     const result = await buildMemoryResult(ask("Wie heißt mein Hund?"), deps(store), ctx);
     expect(result.context.memories.map((memory) => memory.memoryId)).toEqual(["dog"]);
+    expect(result.context.profile?.entries.map((entry) => entry.memoryId)).toEqual(["tables"]);
+    expect(result.context.profileRetrievedCount).toBeUndefined();
+  });
+
+  it("sends a profile fact the question is about with the retrieved memories, once", async () => {
+    // The failure this pins (lab 2026-11-11, Gemma, update-lists-de): "Wie sollst du mir Zahlen
+    // zeigen?" received the preference only as a profile line, and the model missed it in two of
+    // three runs; dev, which retrieved it, answered all three.
+    const store = vaultWithTablesAndDog();
     const tables = await buildMemoryResult(ask("Wie zeigst du mir Zahlen?"), deps(store), ctx);
-    expect(tables.context.memories).toEqual([]);
-    expect(tables.context.profile?.entries.map((entry) => entry.memoryId)).toEqual(["tables"]);
+    expect(tables.context.memories.map((memory) => memory.memoryId)).toEqual(["tables"]);
+    expect(tables.context.profile).toBeUndefined();
+    expect(tables.context.profileRetrievedCount).toBe(1);
   });
 
   it("supplies nothing when memory is off for the Chat", async () => {

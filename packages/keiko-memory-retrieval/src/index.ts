@@ -83,6 +83,7 @@ export {
   compareStandingProfileOrder,
   isStandingFact,
   standingProfileSuccession,
+  standingProfileWithout,
   selectStandingProfile,
   type StandingProfile,
   type StandingProfileCandidate,

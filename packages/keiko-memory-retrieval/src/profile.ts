@@ -60,8 +60,6 @@ export interface StandingProfileEntry {
   readonly text: string;
   readonly tokens: number;
   readonly pinned: boolean;
-  /** True when the fact was longer than one entry may be; retrieval may still supply it whole. */
-  readonly clipped: boolean;
 }
 
 export type StandingProfileDropReason =
@@ -79,6 +77,23 @@ export interface StandingProfile {
   readonly entries: readonly StandingProfileEntry[];
   readonly tokens: number;
   readonly dropped: Readonly<Partial<Record<StandingProfileDropReason, number>>>;
+}
+
+/**
+ * The profile one answer receives once recall supplied some of its facts. A fact the question is
+ * about reaches the answer once, in the question's own memory context, and leaves the profile for
+ * this answer: a model applies a fact there more reliably than a background profile line it is told
+ * not to mention unprompted (lab 2026-11-11, Gemma: "Wie sollst du mir Zahlen zeigen?" missed a
+ * profile-only preference in two of three runs). Facts recall did not supply stay where they are.
+ */
+export function standingProfileWithout(
+  profile: StandingProfile,
+  retrievedIds: ReadonlySet<MemoryId>,
+): StandingProfile {
+  const entries = profile.entries.filter((entry) => !retrievedIds.has(entry.id));
+  if (entries.length === profile.entries.length) return profile;
+  const tokens = entries.reduce((sum, entry) => sum + entry.tokens, 0);
+  return { entries, tokens, dropped: profile.dropped };
 }
 
 /** A fact of a standing type, or one capture marked standing. Pinning is checked separately. */
@@ -213,14 +228,12 @@ export function selectStandingProfile(
     if (text.length === 0) drop("empty");
     else if (tokens + cost > caps.maxTokens) drop("token-cap");
     else {
-      const clipped = text !== record.body.replace(/\s+/gu, " ").trim();
       entries.push({
         id: record.id,
         type: record.type,
         text,
         tokens: cost,
         pinned: record.pinned,
-        clipped,
       });
       tokens += cost;
     }

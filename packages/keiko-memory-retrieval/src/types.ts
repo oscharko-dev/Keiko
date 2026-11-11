@@ -166,8 +166,13 @@ export interface MemoryRetrievalRequest {
   readonly strictRelevanceFloor?: boolean;
   /** Informative words a memory must share with the question under the strict floor; default 1. */
   readonly lexicalMinSharedWords?: number;
-  /** Memories already supplied as the standing profile; they are never retrieved a second time. */
-  readonly excludeMemoryIds?: ReadonlySet<MemoryId>;
+  /**
+   * Memories the standing profile supplies to the answer anyway. Under the strict floor one is
+   * retrieved only when the question shares an informative word with it or with a fact it
+   * superseded, never on semantic similarity alone: retrieval adds nothing to such a fact but the
+   * claim that this question is about it.
+   */
+  readonly standingProfileIds?: ReadonlySet<MemoryId>;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────
@@ -221,8 +226,7 @@ export type OmittedReason =
   | "budget-exceeded"
   | "max-included-exceeded"
   | "out-of-scope"
-  | "type-filtered"
-  | "standing-profile";
+  | "type-filtered";
 
 export interface OmittedMemory {
   readonly memoryId: MemoryId;

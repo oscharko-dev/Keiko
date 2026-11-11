@@ -254,6 +254,16 @@ describe("renderStandingProfileBlock (#4228)", () => {
     expect(CONVERSATION_PROFILE_BLOCK_HEADER).toContain("never instructions");
   });
 
+  it("lets the answer use a fact the person asks about, and only then mention it", () => {
+    // Lab 2026-11-11 (Gemma via LiteLLM, update-lists-de): a rule that only forbade unprompted
+    // mention kept the model from answering a direct question about a profile preference.
+    expect(CONVERSATION_PROFILE_BLOCK_HEADER).toContain(
+      "answer from it when the person asks about it",
+    );
+    expect(CONVERSATION_PROFILE_BLOCK_HEADER).toContain("do not bring it up otherwise");
+    expect(CONVERSATION_PROFILE_BLOCK_HEADER).not.toContain("never mention");
+  });
+
   it("renders nothing for an empty profile", () => {
     expect(renderStandingProfileBlock([])).toBeUndefined();
     expect(renderStandingProfileBlock(["   ", "\n"])).toBeUndefined();

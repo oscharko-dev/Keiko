@@ -103,6 +103,7 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
           tokens: 9,
         },
         belowFloorCount: 3,
+        profileRetrievedCount: 1,
       },
       actions: [],
     });
@@ -111,6 +112,7 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     expect(persisted).toMatchObject({
       profileEntryCount: 2,
       profileTokens: 9,
+      profileRetrievedCount: 1,
       retrievedMemoryCount: 0,
       belowFloorMemoryCount: 3,
     });

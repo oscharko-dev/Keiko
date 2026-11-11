@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryEdge, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
 import { RetrievalError } from "./errors.js";
 import { sharedInformativeWordCount } from "./relevance.js";
 import { retrieveMemoryContext } from "./retrieve.js";
 import type { MemoryQueryPort, MemoryRetrievalRequest } from "./types.js";
-import { buildRecord, memoryId, userScope, type BuildRecordOptions } from "./_support.js";
+import {
+  buildEdge,
+  buildRecord,
+  memoryId,
+  userScope,
+  type BuildRecordOptions,
+} from "./_support.js";
 
 const NOW = 7 * 86_400_000;
 
@@ -16,6 +22,18 @@ function record(id: string, body: string, options: BuildRecordOptions = {}): Mem
 
 function port(records: readonly MemoryRecord[]): MemoryQueryPort {
   return { listByScope: () => records };
+}
+
+function edgedPort(
+  records: readonly MemoryRecord[],
+  edges: readonly MemoryEdge[],
+): MemoryQueryPort {
+  const incident = (id: string): readonly MemoryEdge[] =>
+    edges.filter((edge) => edge.fromMemoryId === id || edge.toMemoryId === id);
+  return {
+    listByScope: () => records,
+    listEdgesForMemories: (ids) => new Map(ids.map((id) => [id, incident(id)])),
+  };
 }
 
 function strict(
@@ -122,15 +140,6 @@ describe("retrieveMemoryContext with the strict relevance floor", () => {
     expect(included(request, vault)).toEqual([]);
   });
 
-  it("never retrieves a memory already supplied as the standing profile", () => {
-    const result = retrieveMemoryContext(
-      strict("Wie sollst du mir Zahlen zeigen?", { excludeMemoryIds: new Set([tables.id]) }),
-      port(vault),
-    );
-    expect(result.included).toEqual([]);
-    expect(result.omitted).toContainEqual({ memoryId: tables.id, reason: "standing-profile" });
-  });
-
   it("keeps the permissive floor for callers that do not opt in", () => {
     const permissive = included(
       {
@@ -148,5 +157,62 @@ describe("retrieveMemoryContext with the strict relevance floor", () => {
     expect(() =>
       retrieveMemoryContext(strict("Zahlen", { lexicalMinSharedWords: value }), port(vault)),
     ).toThrow(RetrievalError);
+  });
+});
+
+describe("the strict floor and corrections (#4228, lab 2026-11-11)", () => {
+  // The failure this pins (Gemma via LiteLLM, update-lists-de): the person corrected "Ich bevorzuge
+  // Tabellen, wenn du mir Zahlen zeigst." with "Ab jetzt bevorzuge ich Listen.", and the question
+  // "Wie sollst du mir Zahlen zeigen?" shares no word with the correction itself.
+  const tables = record("tables", "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.", {
+    status: "superseded",
+  });
+  const lists = record("lists", "Ab jetzt bevorzuge ich Listen.");
+  const supersedes = buildEdge({ from: "tables", to: "lists", kind: "supersedes" });
+  const question = strict("Wie sollst du mir Zahlen zeigen?");
+
+  function retrieved(records: readonly MemoryRecord[], edges: readonly MemoryEdge[]): string[] {
+    return retrieveMemoryContext(question, edgedPort(records, edges)).included.map(
+      (entry) => entry.memoryId,
+    );
+  }
+
+  it("lets a correction answer a question about the fact it superseded, never the old fact", () => {
+    expect(retrieved([tables, lists], [supersedes])).toEqual(["lists"]);
+  });
+
+  it("does not read the corrected fact's words without the supersession", () => {
+    expect(retrieved([tables, lists], [])).toEqual([]);
+    const related = buildEdge({ from: "tables", to: "lists", kind: "related" });
+    expect(retrieved([tables, lists], [related])).toEqual([]);
+  });
+
+  it("follows a chain of corrections back to the fact that named the topic", () => {
+    const listsBefore = record("lists", "Ab jetzt bevorzuge ich Listen.", { status: "superseded" });
+    const prose = record("prose", "Jetzt doch lieber Fließtext.");
+    const chain = [supersedes, buildEdge({ from: "lists", to: "prose", kind: "supersedes" })];
+    expect(retrieved([tables, listsBefore, prose], chain)).toEqual(["prose"]);
+  });
+
+  it("takes no words from a forgotten predecessor", () => {
+    const forgotten = record("tables", tables.body, { status: "forgotten" });
+    expect(retrieved([forgotten, lists], [supersedes])).toEqual([]);
+  });
+
+  it("retrieves a profile fact on the question's words, never on semantic similarity alone", () => {
+    // The profile supplies the fact anyway; retrieval would only claim the question is about it.
+    // "Welche Farbe mag ich am liebsten?" and a table preference scored 0.47 with qwen3-embedding,
+    // above the 0.40 of the correction the question really was about, so no threshold separates them.
+    const preference = record("pref", "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.");
+    const semanticById = new Map([[memoryId("pref"), 0.47]]);
+    const profile = new Set([memoryId("pref")]);
+    const colour = strict("Welche Farbe mag ich am liebsten?", { semanticById });
+    expect(included(colour, [preference])).toEqual(["pref"]);
+    expect(included({ ...colour, standingProfileIds: profile }, [preference])).toEqual([]);
+    const numbers = strict("Wie sollst du mir Zahlen zeigen?", {
+      semanticById,
+      standingProfileIds: profile,
+    });
+    expect(included(numbers, [preference])).toEqual(["pref"]);
   });
 });
