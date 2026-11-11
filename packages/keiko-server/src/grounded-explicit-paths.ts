@@ -149,13 +149,8 @@ export function normalizedExplicitReferencePath(
   root: string,
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  let path = reference.path;
-  if (path.startsWith("file://")) {
-    if (!URL.canParse(path)) return undefined;
-    const url = new URL(path);
-    if (url.hostname !== "" && url.hostname !== "localhost") return undefined;
-    path = localFileUrlPath(url) ?? "";
-  }
+  let path = referenceFilePath(reference.path);
+  if (path === undefined) return undefined;
   // `relative` answers in the platform's separator. On Windows that is a backslash, which the
   // strict scope validator refuses, so a native absolute reference is rejoined with `/` there
   // (#4068). Elsewhere a backslash is an ordinary filename character and stays as it is.
@@ -166,10 +161,19 @@ export function normalizedExplicitReferencePath(
   if (!isValidScopePath(path, { mustBeRelative: true })) return undefined;
   // On Windows an alternate data stream (`a.md:hidden`) or a DOS device name (`docs/CON`) is no
   // ordinary file: refuse it before any filesystem call, as the other W7 sites do (#4068).
-  if (platform === "win32" && !path.split("/").every(isWindowsOrdinaryPathComponent)) {
-    return undefined;
-  }
-  return path;
+  return isOrdinaryOnPlatform(path, platform) ? path : undefined;
+}
+
+function referenceFilePath(path: string): string | undefined {
+  if (!path.startsWith("file://")) return path;
+  if (!URL.canParse(path)) return undefined;
+  const url = new URL(path);
+  if (url.hostname !== "" && url.hostname !== "localhost") return undefined;
+  return localFileUrlPath(url) ?? "";
+}
+
+function isOrdinaryOnPlatform(path: string, platform: NodeJS.Platform): boolean {
+  return platform !== "win32" || path.split("/").every(isWindowsOrdinaryPathComponent);
 }
 
 function localFileUrlPath(url: URL): string | undefined {
