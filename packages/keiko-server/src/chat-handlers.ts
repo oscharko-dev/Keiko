@@ -1492,6 +1492,20 @@ async function retrieveChatMemory(
   );
 }
 
+// The profile facts recall sent at least as fully as the profile would: a retrieved excerpt clipped
+// shorter than the profile line leaves the line in place, so no part of a fact is lost.
+function wholeRetrievedIds(
+  retrieval: ReturnType<typeof retrieveMemoryContext>,
+  profile: StandingProfile,
+): ReadonlySet<MemoryId> {
+  const profileText = new Map(profile.entries.map((entry) => [entry.id, entry.text]));
+  return new Set(
+    retrieval.contextBlock.memories
+      .filter((item) => item.bodyExcerpt.length >= (profileText.get(item.memoryId)?.length ?? 0))
+      .map((item) => item.memoryId),
+  );
+}
+
 export async function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -1531,7 +1545,7 @@ export async function buildMemoryResult(
   // free-running background loop.
   maybeRunChatAutoMaintenance(deps, vault);
   // A profile fact the question is about reaches the answer once, with the retrieved memories.
-  const retrievedIds = new Set(retrieval.contextBlock.memories.map((item) => item.memoryId));
+  const retrievedIds = wholeRetrievedIds(retrieval, profile);
   const answerProfile = standingProfileWithout(profile, retrievedIds);
   const result = toMemoryResult(
     retrieval,

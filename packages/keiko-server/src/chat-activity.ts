@@ -460,12 +460,20 @@ export function memorySelectionLogFields(
 ): MemorySelectionLogFields {
   if (memory?.context.enabled !== true) return {};
   return {
-    profileEntryCount: memory.context.profile?.entries.length ?? 0,
-    profileTokens: memory.context.profile?.tokens ?? 0,
-    profileDroppedCount: memory.context.profile?.droppedCount ?? 0,
+    ...profileLogFields(memory.context.profile),
     profileRetrievedCount: memory.context.profileRetrievedCount ?? 0,
     retrievedMemoryCount: memory.context.memories.length,
     belowFloorMemoryCount: memory.context.belowFloorCount ?? 0,
+  };
+}
+
+function profileLogFields(
+  profile: ConversationMemoryResultWire["context"]["profile"],
+): Pick<MemorySelectionLogFields, "profileEntryCount" | "profileTokens" | "profileDroppedCount"> {
+  return {
+    profileEntryCount: profile?.entries.length ?? 0,
+    profileTokens: profile?.tokens ?? 0,
+    profileDroppedCount: profile?.droppedCount ?? 0,
   };
 }
 

@@ -169,12 +169,33 @@ describe("the strict floor and corrections (#4228, lab 2026-11-11)", () => {
   });
   const lists = record("lists", "Ab jetzt bevorzuge ich Listen.");
   const supersedes = buildEdge({ from: "tables", to: "lists", kind: "supersedes" });
-  const question = strict("Wie sollst du mir Zahlen zeigen?");
 
-  function retrieved(records: readonly MemoryRecord[], edges: readonly MemoryEdge[]): string[] {
-    return retrieveMemoryContext(question, edgedPort(records, edges)).included.map(
+  // Every current fact here is a standing profile fact unless a test says otherwise.
+  function retrieved(
+    records: readonly MemoryRecord[],
+    edges: readonly MemoryEdge[],
+    queryText = "Wie sollst du mir Zahlen zeigen?",
+    profile: readonly string[] = records.map((entry) => entry.id),
+  ): string[] {
+    const request = strict(queryText, { standingProfileIds: new Set(profile.map(memoryId)) });
+    return retrieveMemoryContext(request, edgedPort(records, edges)).included.map(
       (entry) => entry.memoryId,
     );
+  }
+
+  function chain(length: number): { records: MemoryRecord[]; edges: MemoryEdge[] } {
+    // g0 named the topic; g1..g(length-1) each corrected the one before; the last is current.
+    const records = Array.from({ length }, (_, index) =>
+      record(`g${String(index)}`, index === 0 ? tables.body : `Format Nummer ${String(index)}.`, {
+        status: index === length - 1 ? "accepted" : "superseded",
+      }),
+    );
+    const edges = records
+      .slice(1)
+      .map((entry, index) =>
+        buildEdge({ from: `g${String(index)}`, to: entry.id, kind: "supersedes" }),
+      );
+    return { records, edges };
   }
 
   it("lets a correction answer a question about the fact it superseded, never the old fact", () => {
@@ -192,6 +213,34 @@ describe("the strict floor and corrections (#4228, lab 2026-11-11)", () => {
     const prose = record("prose", "Jetzt doch lieber Fließtext.");
     const chain = [supersedes, buildEdge({ from: "lists", to: "prose", kind: "supersedes" })];
     expect(retrieved([tables, listsBefore, prose], chain)).toEqual(["prose"]);
+  });
+
+  it("stops four corrections back", () => {
+    const four = chain(5);
+    expect(retrieved(four.records, four.edges)).toEqual(["g4"]);
+    const five = chain(6);
+    expect(retrieved(five.records, five.edges)).toEqual([]);
+  });
+
+  it("ends a cycle of supersessions", () => {
+    const back = buildEdge({ id: "back", from: "lists", to: "tables", kind: "supersedes" });
+    expect(retrieved([tables, lists], [supersedes, back])).toEqual(["lists"]);
+  });
+
+  it("lends a fact two corrections superseded to both", () => {
+    const tablesKept = record("charts", "Ab jetzt bevorzuge ich Diagramme.");
+    const both = [supersedes, buildEdge({ from: "tables", to: "charts", kind: "supersedes" })];
+    expect(retrieved([tables, lists, tablesKept], both).sort()).toEqual(["charts", "lists"]);
+  });
+
+  it("lends no words to a memory outside the standing profile", () => {
+    // Such a memory keeps its semantic match; inherited words would pull a current fact into a
+    // question that only names its old value.
+    const siemens = record("siemens", "Ich arbeite bei Siemens.", { status: "superseded" });
+    const bosch = record("bosch", "Ich arbeite jetzt bei Bosch.", { type: "semantic-fact" });
+    const moved = buildEdge({ from: "siemens", to: "bosch", kind: "supersedes" });
+    expect(retrieved([siemens, bosch], [moved], "Was macht Siemens eigentlich?", [])).toEqual([]);
+    expect(retrieved([tables, lists], [supersedes], undefined, [])).toEqual([]);
   });
 
   it("takes no words from a forgotten predecessor", () => {

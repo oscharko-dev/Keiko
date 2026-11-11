@@ -69,11 +69,14 @@ exemption from the floor; a pinned fact reaches every answer through the profile
 fact is retrieved only when the question shares an informative word with it, never on semantic
 similarity alone (`standingProfileIds`): the profile supplies it anyway, and retrieval adds only the
 claim that this question is about it. A retrieved profile fact leaves the profile for that answer
-(`standingProfileWithout`), so it is sent once, in the question's own memory context.
+(`standingProfileWithout`), so it is sent once, in the question's own memory context. When the
+memory budget let recall send only part of it, its full profile line stays.
 
-**Corrections keep their topic.** Under the strict floor a memory also shares the informative words
-of the facts it superseded (`supersedes` edges, up to four steps back, forgotten facts excluded). Only
-the match reads them; a superseded fact never reaches the answer.
+**Corrections keep their topic.** Under the strict floor a standing profile fact also shares the
+informative words of the facts it superseded (`supersedes` edges, up to four steps back on each
+lineage, forgotten facts excluded). Only the match reads them; a superseded fact never reaches the
+answer. Other memories inherit nothing: they keep their semantic match, and inherited words would let
+a question that names only an old value ("Was macht Siemens?") retrieve the fact that replaced it.
 
 The lab showed why (2026-11-11, Gemma via LiteLLM, `update-lists-de` and `preference-tables-*`). The
 person corrected "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst." with "Ab jetzt bevorzuge ich

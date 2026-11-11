@@ -170,7 +170,7 @@ export interface MemoryRetrievalRequest {
    * Memories the standing profile supplies to the answer anyway. Under the strict floor one is
    * retrieved only when the question shares an informative word with it or with a fact it
    * superseded, never on semantic similarity alone: retrieval adds nothing to such a fact but the
-   * claim that this question is about it.
+   * claim that this question is about it. Only these memories inherit superseded facts' words.
    */
   readonly standingProfileIds?: ReadonlySet<MemoryId>;
 }

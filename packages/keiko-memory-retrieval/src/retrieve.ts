@@ -357,9 +357,12 @@ function strictMinSharedWords(request: MemoryRetrievalRequest): number {
 
 // A correction is still about what it corrected: "Ab jetzt bevorzuge ich Listen." answers "Wie
 // sollst du mir Zahlen zeigen?" because the fact it superseded spoke of numbers (lab 2026-11-11,
-// update-lists-de). Under the strict floor a memory therefore also shares the informative words of
-// the facts it superseded, up to this many steps back. Only the match reads them; a superseded fact
-// never reaches the answer, and a forgotten one contributes nothing.
+// update-lists-de). Under the strict floor a standing profile fact therefore also shares the
+// informative words of the facts it superseded, up to this many steps back. Only profile facts
+// inherit them: they are the memories semantic similarity may not admit, while another memory
+// keeps its semantic match and would otherwise be pulled into a question that only names its old
+// value ("Ich arbeite bei Bosch" for "Was macht Siemens?"). Only the match reads these words; a
+// superseded fact never reaches the answer, and a forgotten one contributes nothing.
 const SUPERSEDED_WORD_DEPTH = 4;
 
 interface Lineage {
@@ -379,6 +382,17 @@ function supersededPredecessors(
     .map((record) => ({ origin: lineage.origin, record }));
 }
 
+function standingProfileCandidates(
+  candidates: readonly MemoryRecord[],
+  profileIds: ReadonlySet<MemoryId> | undefined,
+): readonly MemoryRecord[] {
+  return profileIds === undefined ? [] : candidates.filter((record) => profileIds.has(record.id));
+}
+
+function lineageKey(origin: MemoryId, memoryId: MemoryId): string {
+  return `${origin}\u0000${memoryId}`;
+}
+
 // The candidates' own edges are already fetched for ranking; only older generations cost a fetch.
 function supersededBodies(
   port: MemoryQueryPort,
@@ -388,7 +402,8 @@ function supersededBodies(
 ): ReadonlyMap<MemoryId, readonly string[]> {
   const byId = new Map(fetched.map((record) => [record.id, record]));
   const bodies = new Map<MemoryId, string[]>();
-  const seen = new Set(candidates.map((record) => record.id));
+  // Per lineage, so a fact two corrections superseded lends its words to both; it also ends cycles.
+  const seen = new Set(candidates.map((record) => lineageKey(record.id, record.id)));
   let frontier: readonly Lineage[] = candidates.map((record) => ({ origin: record.id, record }));
   for (let depth = 0; depth < SUPERSEDED_WORD_DEPTH && frontier.length > 0; depth += 1) {
     const edges =
@@ -401,9 +416,9 @@ function supersededBodies(
     if (edges === undefined) break;
     const next = frontier
       .flatMap((lineage) => supersededPredecessors(lineage, edges, byId))
-      .filter((lineage) => !seen.has(lineage.record.id));
+      .filter((lineage) => !seen.has(lineageKey(lineage.origin, lineage.record.id)));
     for (const { origin, record } of next) {
-      seen.add(record.id);
+      seen.add(lineageKey(origin, record.id));
       bodies.set(origin, [...(bodies.get(origin) ?? []), record.body]);
     }
     frontier = next;
@@ -544,7 +559,12 @@ export function retrieveMemoryContext(
     edgesByMemory === undefined ? {} : { edgesByMemory },
   );
   const thresholded = applyRelevanceFloor(ranked, relevanceRequest, filtered.candidates, () =>
-    supersededBodies(port, filtered.candidates, deduped, edgesByMemory),
+    supersededBodies(
+      port,
+      standingProfileCandidates(filtered.candidates, request.standingProfileIds),
+      deduped,
+      edgesByMemory,
+    ),
   );
   // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
   // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.

@@ -267,6 +267,62 @@ describe("Chat memory with the standing profile (#4228)", () => {
     expect(tables.context.profileRetrievedCount).toBe(1);
   });
 
+  it("answers a question about a corrected preference with the correction, never the old value", async () => {
+    // Lab 2026-11-11 (Gemma, update-lists-de) end to end: the correction shares no word with the
+    // question; the fact it superseded does.
+    const store = vault();
+    seed(store, { id: "tables", body: "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst." });
+    const before = store.getMemory("tables" as MemoryId);
+    if (before === undefined) throw new Error("seed missing");
+    store.updateMemory(
+      "tables" as MemoryId,
+      { provenance: { ...before.provenance, evidenceSpan: before.body } },
+      NOW - 900,
+    );
+    const learned = store.getMemory("tables" as MemoryId);
+    if (learned === undefined) throw new Error("seed missing");
+    applyLearnedSupersession(
+      store,
+      {
+        ...learned,
+        id: "lists" as MemoryId,
+        body: "Ab jetzt bevorzuge ich Listen.",
+        createdAt: NOW - 800,
+        updatedAt: NOW - 800,
+      },
+      learned.id,
+      { status: learned.status, updatedAt: learned.updatedAt },
+    );
+    expect(store.getMemory("tables" as MemoryId)?.status).toBe("superseded");
+    const result = await buildMemoryResult(
+      ask("Wie sollst du mir Zahlen zeigen?"),
+      deps(store),
+      ctx,
+    );
+    expect(result.context.memories.map((memory) => memory.memoryId)).toEqual(["lists"]);
+    expect(result.context.profile).toBeUndefined();
+    expect(result.context.profileRetrievedCount).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("Tabellen");
+  });
+
+  it("keeps the profile line when recall could send only a shorter excerpt", async () => {
+    const store = vault();
+    const long =
+      "Bevorzugt Tabellen mit Spaltenköpfen, Einheiten und Summenzeile, wenn du mir Zahlen zeigst.";
+    seed(store, { id: "tables", body: long });
+    const request = {
+      content: "Wie zeigst du mir Zahlen?",
+      memory: { enabled: true, budgetTokens: 30, context: {} },
+    } as unknown as SendDesktopChatRequest;
+    const result = await buildMemoryResult(request, deps(store), ctx);
+    const excerpt = result.context.memories[0]?.bodyExcerpt ?? "";
+    const line = result.context.profile?.entries[0]?.text ?? "";
+    // Recall had room only for part of the fact, so its full profile line stays.
+    expect(excerpt.length).toBeGreaterThan(0);
+    expect(excerpt.length).toBeLessThan(long.length);
+    expect(line).toBe(long);
+  });
+
   it("supplies nothing when memory is off for the Chat", async () => {
     const store = vaultWithTablesAndDog();
     const off = {
