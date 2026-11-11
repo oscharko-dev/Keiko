@@ -113,6 +113,11 @@ static DWORD WINAPI wait_for_pipe(LPVOID context) {
   return 0;
 }
 
+/* Closes a handle that may be NULL or INVALID_HANDLE_VALUE; the analyzer requires both checks. */
+static void close_if_open(HANDLE handle) {
+  if (handle != NULL && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+}
+
 /* #4242: the product client waits for the single broker instance instead of failing on
  * ERROR_PIPE_BUSY, stays bounded, and holds identification level only. */
 static int client_pipe_tests(void) {
@@ -127,7 +132,7 @@ static int client_pipe_tests(void) {
   if (server == INVALID_HANDLE_VALUE || connect.hEvent == NULL) goto done;
   if (!ConnectNamedPipe(server, &connect) && GetLastError() != ERROR_IO_PENDING) goto done;
   first = keiko_gateway_client_pipe(name, 0);
-  if (first == INVALID_HANDLE_VALUE) goto done;
+  if (first == NULL || first == INVALID_HANDLE_VALUE) goto done;
   (void)wait_for_pipe(&quick);
   if (quick.pipe != INVALID_HANDLE_VALUE || quick.error != ERROR_PIPE_BUSY) goto done;
   worker = CreateThread(NULL, 0, wait_for_pipe, &patient, 0, NULL);
@@ -143,10 +148,10 @@ static int client_pipe_tests(void) {
 done:
   if (!ok) printf("gateway-client-pipe: quick=%lu patient=%lu\n", quick.error, patient.error);
   if (worker != NULL) { (void)WaitForSingleObject(worker, 12000); CloseHandle(worker); }
-  if (patient.pipe != INVALID_HANDLE_VALUE) CloseHandle(patient.pipe);
-  if (first != INVALID_HANDLE_VALUE) CloseHandle(first);
+  close_if_open(patient.pipe);
+  close_if_open(first);
   if (connect.hEvent != NULL) CloseHandle(connect.hEvent);
-  if (server != INVALID_HANDLE_VALUE) CloseHandle(server);
+  close_if_open(server);
   return ok;
 }
 
