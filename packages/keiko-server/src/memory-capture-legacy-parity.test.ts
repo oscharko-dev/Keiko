@@ -172,7 +172,7 @@ describe("legacy fail-closed parity for mode-aware capture", () => {
         "gpt-test",
         "ok",
       );
-      expect(actions.map(normalizeAction)).toEqual([
+      expect(actions.map((action) => normalizeAction(action))).toEqual([
         {
           kind: "candidate",
           proposalId: "<uuid>",

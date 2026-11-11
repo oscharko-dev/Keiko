@@ -177,7 +177,9 @@ describe("the strict floor and corrections (#4228, lab 2026-11-11)", () => {
     queryText = "Wie sollst du mir Zahlen zeigen?",
     profile: readonly string[] = records.map((entry) => entry.id),
   ): string[] {
-    const request = strict(queryText, { standingProfileIds: new Set(profile.map(memoryId)) });
+    const request = strict(queryText, {
+      standingProfileIds: new Set(profile.map((id) => memoryId(id))),
+    });
     return retrieveMemoryContext(request, edgedPort(records, edges)).included.map(
       (entry) => entry.memoryId,
     );
@@ -222,15 +224,27 @@ describe("the strict floor and corrections (#4228, lab 2026-11-11)", () => {
     expect(retrieved(five.records, five.edges)).toEqual([]);
   });
 
-  it("ends a cycle of supersessions", () => {
-    const back = buildEdge({ id: "back", from: "lists", to: "tables", kind: "supersedes" });
-    expect(retrieved([tables, lists], [supersedes, back])).toEqual(["lists"]);
+  it("ends a cycle among superseded facts", () => {
+    const old = record("old", tables.body, { status: "superseded" });
+    const mid = record("mid", "Format Nummer 1.", { status: "superseded" });
+    const edges = [
+      buildEdge({ from: "old", to: "mid", kind: "supersedes" }),
+      buildEdge({ id: "back", from: "mid", to: "old", kind: "supersedes" }),
+      buildEdge({ from: "mid", to: "lists", kind: "supersedes" }),
+    ];
+    expect(retrieved([old, mid, lists], edges)).toEqual(["lists"]);
   });
 
-  it("lends a fact two corrections superseded to both", () => {
-    const tablesKept = record("charts", "Ab jetzt bevorzuge ich Diagramme.");
-    const both = [supersedes, buildEdge({ from: "tables", to: "charts", kind: "supersedes" })];
-    expect(retrieved([tables, lists, tablesKept], both).sort()).toEqual(["charts", "lists"]);
+  it("lends a fact to every correction that reaches it, at any depth", () => {
+    // The shared fact lies one step behind "charts" and two behind "lists".
+    const mid = record("mid", "Format Nummer 1.", { status: "superseded" });
+    const charts = record("charts", "Ab jetzt bevorzuge ich Diagramme.");
+    const edges = [
+      buildEdge({ from: "tables", to: "charts", kind: "supersedes" }),
+      buildEdge({ from: "tables", to: "mid", kind: "supersedes" }),
+      buildEdge({ from: "mid", to: "lists", kind: "supersedes" }),
+    ];
+    expect(retrieved([tables, mid, lists, charts], edges).sort()).toEqual(["charts", "lists"]);
   });
 
   it("lends no words to a memory outside the standing profile", () => {

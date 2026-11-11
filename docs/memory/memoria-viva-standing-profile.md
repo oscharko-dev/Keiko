@@ -77,6 +77,8 @@ informative words of the facts it superseded (`supersedes` edges, up to four ste
 lineage, forgotten facts excluded). Only the match reads them; a superseded fact never reaches the
 answer. Other memories inherit nothing: they keep their semantic match, and inherited words would let
 a question that names only an old value ("Was macht Siemens?") retrieve the fact that replaced it.
+Inheritance follows actual profile membership: a correction the profile caps left out, or one the
+person removed from the profile, matches on its own words and semantic similarity only.
 
 The lab showed why (2026-11-11, Gemma via LiteLLM, `update-lists-de` and `preference-tables-*`). The
 person corrected "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst." with "Ab jetzt bevorzuge ich

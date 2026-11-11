@@ -1892,7 +1892,7 @@ export function rememberRequestRefusedIn(
   if (request.memory?.enabled !== true || vault === undefined) return false;
   const outcomes = turnCaptureOutcomes(request, vault, deps, context);
   return (
-    outcomes.some(asksToRemember) &&
+    outcomes.some((outcome) => asksToRemember(outcome)) &&
     !outcomes.some((outcome) => keepsRememberedStatement(outcome, vault))
   );
 }
