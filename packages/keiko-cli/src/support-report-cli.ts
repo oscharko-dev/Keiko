@@ -68,6 +68,7 @@ import {
 import { resolveStateDir } from "./state-paths.js";
 import { loadActivityLog, loadToolLifecycle } from "./lazy-modules.js";
 import { collectSupportReportQuery } from "./support-selective-export.js";
+import { errorCode } from "./ui-process-stop.js";
 import { type SupportQueryRun, type SupportSelectorArgs } from "./support-query-cli.js";
 import {
   emitSupportReportStarted,
@@ -262,7 +263,7 @@ function hardenOwnedReportDirectory(directory: string): void {
   } catch (error) {
     // A final symlink (ELOOP) or a non-directory is a redirected destination; anything else is the
     // filesystem failure itself.
-    const code: unknown = error instanceof Error && "code" in error ? error.code : undefined;
+    const code = errorCode(error);
     if (code === "ELOOP" || code === "ENOTDIR") throw unsafeReportDirectory();
     throw error;
   }
