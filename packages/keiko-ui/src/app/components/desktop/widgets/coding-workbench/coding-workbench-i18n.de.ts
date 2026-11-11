@@ -1293,8 +1293,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko lässt in diesem Ordner keinen Agenten arbeiten, weil er Keikos eigene Installation enthält, die der Agent sonst verändern könnte. Wähle einen Projektordner außerhalb der Keiko-Installation und starte die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
-  "codingWorkbench.event.failure.prompt-allowance-exhausted":
-    "Der Lauf hat sein Prompt-Kontingent aufgebraucht – die Prompt-Tokens, die ein Lauf insgesamt an das Modell senden darf –, deshalb hat Keiko seinen nächsten Modellaufruf abgelehnt. Das ist ein Limit, kein Fehler. Deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich: Starte die Aufgabe als neuen Lauf mit frischem Kontingent erneut oder teile sie in kleinere Aufgaben auf. Ein Betreiber kann das Kontingent mit KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS bis höchstens 20.000.000 Tokens erhöhen. Keiko liest die Einstellung nur beim Start: Nach einer Änderung muss Keiko neu gestartet werden.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
     "Der Lauf hat sein Zeitlimit aufgebraucht – wie lange ein Lauf arbeiten darf –, deshalb endete er, bevor die Aufgabe erledigt war. Das ist ein Limit, kein Fehler. Deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich: Starte die Aufgabe als neuen Lauf mit frischem Zeitlimit erneut oder teile sie in kleinere Aufgaben auf. Ein Betreiber kann das Limit mit KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES bis höchstens 480 Minuten verlängern. Keiko liest die Einstellung nur beim Start: Nach einer Änderung muss Keiko neu gestartet werden.",
   "codingWorkbench.event.failure.output-exhausted-repeated":

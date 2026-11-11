@@ -1249,8 +1249,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko does not let an agent work in this folder because it contains Keiko's own installation, which the agent could otherwise change. Choose a project folder outside the Keiko installation, then start the task again.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
-  "codingWorkbench.event.failure.prompt-allowance-exhausted":
-    "The run used up its prompt allowance, the total prompt tokens one run may send to the model, so Keiko refused its next model call. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh allowance, or split the task into smaller ones. An operator can raise the allowance with KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS, up to 20,000,000 tokens. Keiko reads the setting only when it starts: restart Keiko after changing it.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
     "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES, up to 480 minutes. Keiko reads the setting only when it starts: restart Keiko after changing it.",
   "codingWorkbench.event.failure.output-exhausted-repeated":

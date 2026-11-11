@@ -300,7 +300,6 @@ describe("eventDetail auxiliary outcome", () => {
   // F9 (#3873): a failed run names the closed cause its settlement carries. The internal-error
   // sentence belongs to `runtime-failed` alone; every bound and model-call cause has its own copy.
   it.each([
-    ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
     ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
     ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
     ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
@@ -319,9 +318,20 @@ describe("eventDetail auxiliary outcome", () => {
     expect(eventDetail(settled, t)).toBe(key);
   });
 
+  // Keiko does not limit tokens (#4346): a run settled by an older Keiko with the retired
+  // `prompt-allowance-exhausted` code still decodes and renders the generic sentence, never an
+  // internal error and never the retired allowance copy.
+  it("renders a run settled with the retired prompt-allowance code as a generic failure", () => {
+    const settled = runtimeEvent({
+      kind: "status",
+      state: "failed",
+      failureCode: "prompt-allowance-exhausted",
+    });
+    expect(eventDetail(settled, t)).toBe("codingWorkbench.event.failure.generic");
+  });
+
   it("keeps the internal-error sentence off every run cause but runtime-failed", () => {
     for (const failureCode of [
-      "prompt-allowance-exhausted",
       "envelope-duration-exhausted",
       "output-exhausted-repeated",
       "provider-unavailable",

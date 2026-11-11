@@ -436,7 +436,6 @@ describe("Coding Workbench translations", () => {
   // internal error". Each terminal model-call cause is plain language with a next step in both
   // catalogs, German in the informal du-form, and only `runtime-failed` speaks of an internal error.
   it.each([
-    "codingWorkbench.event.failure.prompt-allowance-exhausted",
     "codingWorkbench.event.failure.envelope-duration-exhausted",
     "codingWorkbench.event.failure.output-exhausted-repeated",
     "codingWorkbench.event.failure.provider-unavailable",
@@ -454,14 +453,8 @@ describe("Coding Workbench translations", () => {
     expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
   });
 
-  it("names the exhausted allowance and the outage window an operator can raise", () => {
+  it("names the time limit and the outage window an operator can raise", () => {
     for (const locale of ["en", "de"] as const) {
-      expect(
-        translateCodingWorkbench(
-          locale,
-          "codingWorkbench.event.failure.prompt-allowance-exhausted",
-        ),
-      ).toContain("KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS");
       expect(
         translateCodingWorkbench(
           locale,
@@ -476,9 +469,6 @@ describe("Coding Workbench translations", () => {
       ).toContain("max_output_tokens");
     }
     expect(
-      translateCodingWorkbench("en", "codingWorkbench.event.failure.prompt-allowance-exhausted"),
-    ).toMatch(/prompt allowance/iu);
-    expect(
       translateCodingWorkbench("en", "codingWorkbench.event.failure.provider-unavailable"),
     ).toMatch(/could not be reached/iu);
   });
@@ -488,11 +478,6 @@ describe("Coding Workbench translations", () => {
   // Each message states the cap and that Keiko must be restarted, in both languages. The caps are
   // pinned against the server's own constants by tests/qa/coding-limit-message-parity.test.ts.
   it.each([
-    [
-      "codingWorkbench.event.failure.prompt-allowance-exhausted",
-      "20,000,000 tokens",
-      "20.000.000 Tokens",
-    ],
     ["codingWorkbench.event.failure.envelope-duration-exhausted", "480 minutes", "480 Minuten"],
   ] as const)("states the cap and the restart in %s", (key, enCap, deCap) => {
     const en = translateCodingWorkbench("en", key);
