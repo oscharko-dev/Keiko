@@ -113,7 +113,7 @@ function shortNameAliasRule(pattern: string): ShortNameAliasRule {
   const name = pattern.slice(start).replace(SHORT_NAME_INVALID_CHARS, "_");
   const dot = name.lastIndexOf(".");
   const base = globLiteralPrefix((dot === -1 ? name : name.slice(0, dot)).replace(/[. ]/gu, ""));
-  const ext = dot === -1 ? null : globLiteralPrefix(name.slice(dot + 1).replace(/ /gu, ""));
+  const ext = dot === -1 ? null : globLiteralPrefix(name.slice(dot + 1).replaceAll(" ", ""));
   return {
     baseLiteral: base.literal,
     baseWildcard: base.wildcard,
