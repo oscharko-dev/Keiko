@@ -515,7 +515,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.folderModeHint":
     "Not a Git repository: the agent edits, runs and verifies here, without commits or pushes.",
   "codingWorkbench.repository.folderModeUnsupported":
-    "On Windows, Keiko runs a coding task only in a new worktree of a Git repository, so it cannot work in this folder. Choose a Git repository.",
+    "Here, Keiko runs a coding task only in a new worktree of a Git repository, so it cannot work in this folder. Choose a Git repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
@@ -585,7 +585,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can still bind a workspace. On Windows, npm installations do not include a supported coding runtime: the required Windows network isolation is not implemented yet. Rebinding the workspace or installing a macOS runtime package will not enable Windows coding runs. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
+    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can still bind a workspace. On Windows, coding runs also need the Windows runtime gateway. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
   "codingWorkbench.setup.runtimeEvaluation":
     "This installation runs an unverified evaluation runtime. It carries no Apple or Microsoft code signature, and on macOS it runs without the Endpoint Security containment a release build uses. Its payload integrity is still checked byte for byte on every start.",
   "codingWorkbench.readiness.modelSource.label": "Model source",
@@ -1411,7 +1411,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.modelSourceRefreshFailed": "Model source could not be refreshed.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime could not be refreshed.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active. On Windows, npm installations do not include a supported coding runtime: the required Windows network isolation is not implemented yet. Rebinding the workspace or installing a macOS runtime package will not enable Windows coding runs. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
+    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active. On Windows, coding runs also need the Windows runtime gateway. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
   "codingWorkbench.alert.workspaceRefreshFailed": "Workspace could not be refreshed.",
   "codingWorkbench.alert.workspaceBindFailed":
     "The workspace could not be bound. Review the repository path and target branch.",

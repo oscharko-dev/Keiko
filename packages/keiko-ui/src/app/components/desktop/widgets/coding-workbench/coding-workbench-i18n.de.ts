@@ -541,7 +541,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.folderModeHint":
     "Kein Git-Repository: Der Agent bearbeitet, führt aus und prüft hier, ohne Commits oder Pushes.",
   "codingWorkbench.repository.folderModeUnsupported":
-    "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
+    "Hier führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
@@ -612,7 +612,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Du kannst weiterhin einen Workspace binden. Unter Windows enthalten npm-Installationen keine unterstützte Coding-Runtime: Die erforderliche Windows-Netzwerkisolation ist noch nicht implementiert. Erneutes Binden des Workspace oder die Installation eines macOS-Runtime-Pakets ermöglicht keine Coding-Läufe unter Windows. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
+    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Du kannst weiterhin einen Workspace binden. Unter Windows braucht ein Coding-Lauf zusätzlich das Windows-Runtime-Gateway. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.setup.runtimeEvaluation":
     "Diese Installation nutzt eine ungeprüfte Evaluations-Runtime. Sie trägt keine Apple- oder Microsoft-Codesignatur und läuft unter macOS ohne die Endpoint-Security-Eingrenzung eines Release-Builds. Die Integrität ihrer Nutzdaten wird bei jedem Start weiterhin Byte für Byte geprüft.",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
@@ -1461,7 +1461,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Modellquelle konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Unter Windows enthalten npm-Installationen keine unterstützte Coding-Runtime: Die erforderliche Windows-Netzwerkisolation ist noch nicht implementiert. Erneutes Binden des Workspace oder die Installation eines macOS-Runtime-Pakets ermöglicht keine Coding-Läufe unter Windows. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
+    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Unter Windows braucht ein Coding-Lauf zusätzlich das Windows-Runtime-Gateway. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceBindFailed":

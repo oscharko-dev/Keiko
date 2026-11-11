@@ -132,6 +132,11 @@ interface LocationInput {
   readonly workspaceLoading: boolean;
   readonly workspaceError: boolean;
   readonly runIsActive: boolean;
+  /**
+   * The runtime has not yet said which work locations it can confine (#4068). Until it does, no
+   * location is known to be safe: nothing is bound and the selection stays pending.
+   */
+  readonly locationsPending?: boolean | undefined;
   readonly refresh: () => Promise<boolean>;
 }
 
@@ -147,6 +152,7 @@ function useStableLocationInput(input: LocationInput): LocationInput {
     workspaceLoading,
     workspaceError,
     runIsActive,
+    locationsPending,
     refresh,
   } = input;
   return useMemo(
@@ -161,6 +167,7 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       workspaceLoading,
       workspaceError,
       runIsActive,
+      locationsPending,
       refresh,
     }),
     [
@@ -174,6 +181,7 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       workspaceLoading,
       workspaceError,
       runIsActive,
+      locationsPending,
       refresh,
     ],
   );
@@ -196,6 +204,7 @@ function shouldBind(
 ): boolean {
   return (
     !ready &&
+    input.locationsPending !== true &&
     !input.branchLoading &&
     !input.branchError &&
     !input.workspaceLoading &&
@@ -209,6 +218,7 @@ function shouldBind(
 function selectionNeedsBinding(previous: LocationInput, current: LocationInput): boolean {
   return (
     !selectionChanged(previous, current) &&
+    current.locationsPending !== true &&
     !current.branchLoading &&
     !current.branchError &&
     !current.workspaceLoading &&
@@ -355,11 +365,16 @@ export function useWorkbenchExecutionLocation(
 ): WorkbenchExecutionLocationState {
   const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}\0${String(input.folderMode)}`;
   const ready =
+    input.locationsPending !== true &&
     !input.workspaceLoading &&
     !input.workspaceError &&
     bindingReady(input.activeInstance, input.root, input.branch, input.location, input.folderMode);
   const attempt = useBindingAttempt(input, ready, key);
-  const pending = attempt.pending || input.workspaceLoading || (!ready && input.branchLoading);
+  const pending =
+    attempt.pending ||
+    input.locationsPending === true ||
+    input.workspaceLoading ||
+    (!ready && input.branchLoading);
   return {
     ready,
     pending,

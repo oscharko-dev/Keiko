@@ -9,6 +9,7 @@ import {
   isChatJiraPodId,
   isDesktopChatCreationRequestId,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/text-safety";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
@@ -179,12 +180,26 @@ function boundedSecretFreeText(value: unknown, maxLength: number): AppWindow["cf
   return value;
 }
 
+// eslint-disable-next-line no-control-regex -- C0 and DEL are exactly what is refused
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
+
+// A restored root is a local absolute path (POSIX or Windows drive): never relative, home-relative,
+// a UNC share, a device path or a URL, and never carrying a control character.
 function sanitizeCodingRoot(value: unknown): AppWindow["cfg"][string] {
-  return boundedSecretFreeText(value, MAX_CODING_ROOT_LENGTH);
+  const text = boundedSecretFreeText(value, MAX_CODING_ROOT_LENGTH);
+  if (typeof text !== "string" || CONTROL_CHARACTER.test(text)) return undefined;
+  return isLocalAbsolutePath(text) ? text : undefined;
 }
 
+// A restored branch keeps a git ref-name shape: no control character, space, `..`, leading `-`,
+// or ref-forbidden character.
+const GIT_REF_FORBIDDEN = /[\s~^:?*[\\]|\.\.|@\{|\/\/|\.lock(?:\/|$)|[./]$/u;
+
 function sanitizeCodingBranch(value: unknown): AppWindow["cfg"][string] {
-  return boundedSecretFreeText(value, MAX_CODING_BRANCH_LENGTH);
+  const text = boundedSecretFreeText(value, MAX_CODING_BRANCH_LENGTH);
+  if (typeof text !== "string" || CONTROL_CHARACTER.test(text)) return undefined;
+  if (text.startsWith("-") || text.startsWith("/") || text.startsWith(".")) return undefined;
+  return GIT_REF_FORBIDDEN.test(text) ? undefined : text;
 }
 
 const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;

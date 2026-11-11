@@ -603,6 +603,14 @@ function offeredExecutionLocations(
   return state.runtime.value?.executionLocations;
 }
 
+/** Readiness has not answered yet, so which locations the runtime confines is unknown (#4068). */
+function executionLocationsPending(state: Pick<CodingWorkbenchRuntimeState, "runtime">): boolean {
+  return (
+    state.runtime.value === null &&
+    (state.runtime.status === "idle" || state.runtime.status === "loading")
+  );
+}
+
 // A folder is always Local: there is no repository to put a worktree in. A repository takes the
 // locations the runtime can confine (#4068).
 function workbenchExecutionLocation(
@@ -1055,6 +1063,7 @@ export function CodingWorkbenchWindow({
     workspaceLoading: locationSelectionPending(activeWorkspace, history, historySelection),
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
+    locationsPending: executionLocationsPending(state),
     refresh: refreshCheckout,
   });
   const alert = visibleAlert(

@@ -359,6 +359,39 @@ describe("workspace-persistence", () => {
     expect(retained?.[0]?.cfg).toEqual(cfg);
   });
 
+  it("keeps POSIX and Windows drive roots and drops every other root or branch shape", () => {
+    for (const root of ["/repos/a b", "C:\\repos\\keiko", "D:/repos/keiko"]) {
+      const kept = sanitizePersistedWindows([
+        {
+          ...win({ id: "w", type: "coding" }),
+          cfg: { repositoryPath: root, targetBranchRoot: root },
+        },
+      ]);
+      expect(kept[0]?.cfg).toEqual({ repositoryPath: root, targetBranchRoot: root });
+    }
+    const rejected: readonly Record<string, unknown>[] = [
+      ...[
+        "../../x",
+        "~/x",
+        "file:///etc",
+        "\\\\srv\\sh",
+        "\\\\?\\C:\\x",
+        "//srv/sh",
+        "/a\nb",
+        "rel/x",
+      ].flatMap((root) => [{ repositoryPath: root }, { targetBranchRoot: root }]),
+      ...["a..b", "-x", "a b", "a\nb", "a:b", "a~1", "x.lock", "a/", "/a", "a//b", "a@{1}"].map(
+        (targetBranch) => ({ targetBranch }),
+      ),
+    ];
+    for (const cfg of rejected) {
+      const sanitized = sanitizePersistedWindows([
+        { ...win({ id: "workbench", type: "coding" }), cfg },
+      ]);
+      expect(sanitized[0]?.cfg).toEqual({});
+    }
+  });
+
   it("drops a Coding Workbench selection that is not a bounded, secret-free value", () => {
     const secretRoot = `/repos/ghp_${"a".repeat(36)}`;
     expect(isSecretShapedString(secretRoot)).toBe(true);

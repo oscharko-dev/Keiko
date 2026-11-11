@@ -34,16 +34,28 @@ describe("Coding Workbench translations", () => {
   it.each([
     "codingWorkbench.setup.runtimeUnavailable",
     "codingWorkbench.alert.runtimeUnqualified",
-  ] as const)("explains the Windows npm runtime limitation in %s", (key) => {
-    const en = translateCodingWorkbench("en", key);
-    const de = translateCodingWorkbench("de", key);
-    expect(en).toContain("Windows network isolation is not implemented yet");
-    expect(de).toContain("Windows-Netzwerkisolation ist noch nicht implementiert");
-    for (const text of [en, de]) {
-      expect(text).toContain("npm");
-      expect(text).toContain("Mac");
-      expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-arm64");
-      expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-x64");
+  ] as const)(
+    "names the Mac runtime package and the Windows gateway, claiming no gap, in %s",
+    (key) => {
+      const en = translateCodingWorkbench("en", key);
+      const de = translateCodingWorkbench("de", key);
+      expect(en).toContain("Windows runtime gateway");
+      expect(de).toContain("Windows-Runtime-Gateway");
+      for (const text of [en, de]) {
+        expect(text).not.toMatch(/not implemented|nicht implementiert/iu);
+        expect(text).toContain("npm");
+        expect(text).toContain("Mac");
+        expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-arm64");
+        expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-x64");
+      }
+    },
+  );
+
+  // The notice shows whenever the offered locations exclude Local, on any platform.
+  it("words the folder notice without naming a platform", () => {
+    const key = "codingWorkbench.repository.folderModeUnsupported";
+    for (const text of [translateCodingWorkbench("en", key), translateCodingWorkbench("de", key)]) {
+      expect(text).not.toMatch(/windows/iu);
     }
   });
 
