@@ -148,19 +148,20 @@ export function readBytes(reader, length) {
  */
 // KEIKO-0690: keep the per-kind payload contract in one place. Both Windows and macOS
 // supervisors emit the exact same three response kinds through the shared KRS1 codec:
-//   kind 1 RESPONSE_LAUNCHED  → 0 bytes
+//   kind 1 RESPONSE_LAUNCHED  → 0 bytes, or 8 bytes for a confined Windows launch
+//                               (u32 stale tree grants removed, u32 sweep failures; #4068)
 //   kind 2 RESPONSE_REAPED    → exactly 8 bytes (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION excerpt)
 //   kind 3 RESPONSE_ERROR     → exactly 2 bytes (little-endian error code)
 // Confirmed against `enum response_kind` in native/runtime-supervisor/{windows,macos}/keiko_
 // runtime_supervisor.c. A pre-fix short frame would drop past the `length <= 64` upper bound and
 // throw ERR_OUT_OF_RANGE inside Buffer.readUInt32LE instead of producing a protocol assertion
 // that names the observed length.
-const EXPECTED_PAYLOAD_LENGTH_BY_KIND = new Map([
-  [1, 0],
-  [2, 8],
-  [3, 2],
-  [4, 36], // Persistent application admission: root PID and launch ID.
-  [5, 32], // Durable application ownership committed.
+const EXPECTED_PAYLOAD_LENGTHS_BY_KIND = new Map([
+  [1, [0, 8]],
+  [2, [8]],
+  [3, [2]],
+  [4, [36]], // Persistent application admission: root PID and launch ID.
+  [5, [32]], // Durable application ownership committed.
 ]);
 
 export async function response(reader) {
@@ -170,16 +171,15 @@ export async function response(reader) {
   const kind = responseHeader.readUInt16LE(6);
   const length = responseHeader.readUInt32LE(8);
   assert.ok(length <= 64);
-  const expected = EXPECTED_PAYLOAD_LENGTH_BY_KIND.get(kind);
+  const expected = EXPECTED_PAYLOAD_LENGTHS_BY_KIND.get(kind);
   assert.notEqual(
     expected,
     undefined,
     `unknown KRS1 response kind ${String(kind)} (length=${String(length)})`,
   );
-  assert.equal(
-    length,
-    expected,
-    `KRS1 response kind ${String(kind)} must carry ${String(expected)} bytes, observed ${String(length)}`,
+  assert.ok(
+    expected.includes(length),
+    `KRS1 response kind ${String(kind)} must carry ${expected.join(" or ")} bytes, observed ${String(length)}`,
   );
   return {
     kind,

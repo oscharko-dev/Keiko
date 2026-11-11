@@ -93,8 +93,13 @@ async function qualify(valid, unavailable = false) {
       assert.equal(output.length, 0, "child ran before policy submission");
       child.stdio[3].write(frame(valid));
     }
-    assert.equal((await response(responses)).kind, valid ? 1 : 3);
+    const launched = await response(responses);
+    assert.equal(launched.kind, valid ? 1 : 3);
     if (valid) {
+      // A confined launch reports its stale-grant sweep; an empty grants frame touches nothing.
+      assert.equal(launched.payload.length, 8);
+      assert.equal(launched.payload.readUInt32LE(0), 0);
+      assert.equal(launched.payload.readUInt32LE(4), 0);
       await observe(probe, ["--inspect-filters"], { timeout: 6000, windowsHide: true });
       child.stdin.end("X\n");
       const reap = await response(responses);
