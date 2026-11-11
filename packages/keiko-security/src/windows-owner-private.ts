@@ -331,9 +331,10 @@ export function protectWindowsOwnerPrivateFile(
     const sid = currentUserSid(runner, binary("whoami.exe"));
     const icacls = binary("icacls.exe");
     const access = options.inheritToChildren === true ? "(OI)(CI)(F)" : "(F)";
-    // One call: /inheritance:r runs before the grant, so no step ever leaves the path inheriting a
-    // broader parent DACL. A /reset first would re-enable inheritance for that window; an explicit
-    // entry of another principal a file already held is refused by the owner-private read check.
+    // /reset first drops explicit entries, which /grant:r alone would keep for other principals.
+    // Between the two calls the path inherits its parent's DACL; callers protect a path they just
+    // created in their own directory, so that window grants nothing beyond the parent's own entries.
+    runSystemBinary(runner, icacls, [path, "/reset"]);
     runSystemBinary(runner, icacls, [
       path,
       "/inheritance:r",

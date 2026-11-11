@@ -7,7 +7,11 @@
  * exclusive byte-range lock on a file under the user's own LocalAppData needs no privilege, spans
  * sessions, and is released by the system when the holder dies, so no abandoned state exists.
  *
- * The file is created with a protected DACL that grants only its owner (and SYSTEM). Included by
+ * The directory comes from the LocalAppData known folder of the caller's token, never from the
+ * LOCALAPPDATA variable: the supervisor helper starts with an empty environment. The file is created
+ * with a protected DACL that grants only the calling user's SID (not the owner, which an elevated
+ * first creation would make Administrators) and SYSTEM, and the opened handle must be a regular
+ * file, not a planted directory or reparse point. Included by
  * the translation units that take the lock; every function is file-local so each native test
  * executable keeps linking exactly the sources it did before. */
 #ifndef KEIKO_GATEWAY_USER_LOCK_H
@@ -18,8 +22,13 @@
 #endif
 #include <windows.h>
 #include <sddl.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "uuid.lib")
 
 #define KEIKO_USER_LOCK_PATH_CHARS 512u
 #define KEIKO_USER_LOCK_POLL_MS 20u
@@ -36,11 +45,7 @@ static int keiko_user_lock_leaf_valid(const wchar_t *leaf) {
   return 1;
 }
 
-static DWORD keiko_user_lock_directory(wchar_t *directory) {
-  wchar_t base[MAX_PATH];
-  DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-  if (length == 0 || length >= MAX_PATH || base[1] != L':' || base[2] != L'\\')
-    return ERROR_PATH_NOT_FOUND;
+static DWORD keiko_user_lock_directory_under(const wchar_t *base, wchar_t *directory) {
   if (_snwprintf_s(directory, KEIKO_USER_LOCK_PATH_CHARS, _TRUNCATE, L"%ls\\Keiko", base) < 0)
     return ERROR_BUFFER_OVERFLOW;
   if (!CreateDirectoryW(directory, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
@@ -51,6 +56,52 @@ static DWORD keiko_user_lock_directory(wchar_t *directory) {
   if (!CreateDirectoryW(directory, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
     return GetLastError();
   return ERROR_SUCCESS;
+}
+
+static DWORD keiko_user_lock_directory(wchar_t *directory) {
+  PWSTR base = NULL;
+  DWORD result;
+  if (FAILED(SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, NULL, &base)))
+    return ERROR_PATH_NOT_FOUND;
+  if (base == NULL || wcslen(base) >= MAX_PATH || base[0] == L'\0' || base[1] != L':' ||
+      base[2] != L'\\')
+    result = ERROR_PATH_NOT_FOUND;
+  else
+    result = keiko_user_lock_directory_under(base, directory);
+  CoTaskMemFree(base);
+  return result;
+}
+
+/* The lock file's protected DACL: the calling user's own SID and SYSTEM, nothing broader. */
+static DWORD keiko_user_lock_descriptor(PSECURITY_DESCRIPTOR *descriptor) {
+  union {
+    TOKEN_USER user;
+    BYTE bytes[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+  } info;
+  HANDLE token = NULL;
+  DWORD size = 0, error = ERROR_SUCCESS;
+  LPWSTR sid = NULL;
+  wchar_t sddl[256];
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return GetLastError();
+  if (!GetTokenInformation(token, TokenUser, &info, sizeof(info), &size)) error = GetLastError();
+  CloseHandle(token);
+  if (error != ERROR_SUCCESS) return error;
+  if (!ConvertSidToStringSidW(info.user.User.Sid, &sid)) return GetLastError();
+  if (_snwprintf_s(sddl, 256, _TRUNCATE, L"D:P(A;;FA;;;%ls)(A;;FA;;;SY)", sid) < 0)
+    error = ERROR_BUFFER_OVERFLOW;
+  LocalFree(sid);
+  if (error == ERROR_SUCCESS &&
+      !ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, descriptor, NULL))
+    error = GetLastError();
+  return error;
+}
+
+/* Only a regular file may carry the lock: never a directory or a reparse point planted there. */
+static int keiko_user_lock_regular_file(HANDLE lock) {
+  BY_HANDLE_FILE_INFORMATION information;
+  return GetFileInformationByHandle(lock, &information) &&
+         (information.dwFileAttributes &
+          (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
 }
 
 /* The lock file's path for a leaf; creates the user's lock directory. */
@@ -75,11 +126,8 @@ static HANDLE keiko_user_lock_take(const wchar_t *leaf, DWORD wait_ms, DWORD *er
   ULONGLONG deadline = GetTickCount64() + wait_ms;
   *error = keiko_user_lock_path(leaf, path);
   if (*error != ERROR_SUCCESS) return NULL;
-  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;OW)(A;;FA;;;SY)",
-                                                            SDDL_REVISION_1, &descriptor, NULL)) {
-    *error = GetLastError();
-    return NULL;
-  }
+  *error = keiko_user_lock_descriptor(&descriptor);
+  if (*error != ERROR_SUCCESS) return NULL;
   security.lpSecurityDescriptor = descriptor;
   lock = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                      &security, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
@@ -87,6 +135,11 @@ static HANDLE keiko_user_lock_take(const wchar_t *leaf, DWORD wait_ms, DWORD *er
   *error = lock == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
   LocalFree(descriptor);
   if (lock == INVALID_HANDLE_VALUE) return NULL;
+  if (!keiko_user_lock_regular_file(lock)) {
+    *error = ERROR_CANT_ACCESS_FILE;
+    CloseHandle(lock);
+    return NULL;
+  }
   for (;;) {
     OVERLAPPED range = {0};
     if (LockFileEx(lock, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &range))

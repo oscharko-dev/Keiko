@@ -442,10 +442,11 @@ export function closeGatewaySpendBudget(budget: GatewaySpendBudget | undefined):
 }
 
 const budgetsByEnvironment = new WeakMap<object, GatewaySpendBudget | undefined>();
-// How many dependency graphs hold the cached budget of one environment, and which environment it
-// is cached under. Only a graph that acquired a budget may release it, and the ledger closes with
-// its last holder: a budget another graph still uses, or one injected from outside, is never closed.
-const leasesByBudget = new WeakMap<GatewaySpendBudget, { holders: number; env: object }>();
+// How many dependency graphs hold the cached budget of one environment. Only a graph that acquired
+// a budget may release it, and the ledger file closes with its last holder: a budget another graph
+// still uses, or one injected from outside, is never closed. The budget object itself stays cached,
+// so every caller of one environment keeps sharing one ledger, which reopens on its next use.
+const leasesByBudget = new WeakMap<GatewaySpendBudget, { holders: number }>();
 
 export function gatewaySpendBudgetForEnv(
   env: Readonly<Record<string, string | undefined>> | undefined,
@@ -457,15 +458,15 @@ export function gatewaySpendBudgetForEnv(
 
 /**
  * The environment's shared budget, held by the caller until the returned `release` runs (#4068).
- * `release` is idempotent; the ledger is closed and dropped from the cache once every holder has
- * released, so a later graph over the same environment opens a fresh ledger.
+ * `release` is idempotent; the ledger file is closed once every holder has released. The cached
+ * budget object stays the environment's only one and reopens the same ledger on its next use.
  */
 export function acquireGatewaySpendBudgetForEnv(
   env: Readonly<Record<string, string | undefined>> | undefined,
 ): { readonly budget: GatewaySpendBudget | undefined; readonly release: () => void } {
   const budget = gatewaySpendBudgetForEnv(env);
   if (budget === undefined || env === undefined) return { budget, release: () => undefined };
-  const lease = leasesByBudget.get(budget) ?? { holders: 0, env };
+  const lease = leasesByBudget.get(budget) ?? { holders: 0 };
   lease.holders += 1;
   leasesByBudget.set(budget, lease);
   let released = false;
@@ -477,7 +478,6 @@ export function acquireGatewaySpendBudgetForEnv(
       lease.holders -= 1;
       if (lease.holders > 0) return;
       leasesByBudget.delete(budget);
-      if (budgetsByEnvironment.get(lease.env) === budget) budgetsByEnvironment.delete(lease.env);
       closeGatewaySpendBudget(budget);
     },
   };

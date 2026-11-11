@@ -219,9 +219,10 @@ describe("protecting a file Keiko writes", () => {
     expect(calls.map((call) => call.command)).toEqual([
       binaries("whoami.exe"),
       binaries("icacls.exe"),
+      binaries("icacls.exe"),
     ]);
-    expect(calls.some((call) => call.args.includes("/reset"))).toBe(false);
-    expect(calls[1]?.args).toEqual([
+    expect(calls[1]?.args).toEqual([FILE, "/reset"]);
+    expect(calls[2]?.args).toEqual([
       FILE,
       "/inheritance:r",
       "/grant:r",
@@ -229,7 +230,7 @@ describe("protecting a file Keiko writes", () => {
       "*S-1-5-18:(F)",
       "*S-1-5-32-544:(F)",
     ]);
-    expect(calls[1]?.env).toEqual({
+    expect(calls[2]?.env).toEqual({
       SystemRoot: String.raw`C:\Windows`,
       WINDIR: String.raw`C:\Windows`,
       SystemDrive: "C:",
@@ -251,7 +252,7 @@ describe("protecting a file Keiko writes", () => {
       inheritToChildren: true,
     });
 
-    expect(calls[1]?.args).toEqual([
+    expect(calls[2]?.args).toEqual([
       FILE,
       "/inheritance:r",
       "/grant:r",

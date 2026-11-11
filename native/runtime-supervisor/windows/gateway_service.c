@@ -263,7 +263,10 @@ done:
      * deny guard still blocks and that no later process can obtain. */
     (void)keiko_gateway_firewall_revoke(&rule);
     /* #4242: the guard is the breadcrumb prune_stale_exemptions follows, so it stays when the
-     * revoke failed; the failure ends this serve and the next broker start retries the revoke. */
+     * revoke failed; the failure ends this serve and the next broker start retries the revoke.
+     * That is only sound because service_main stops the service on any non-zero serve result:
+     * the filter engine and job handles left open here are freed by process exit, and the SCM
+     * restart runs prune_stale_exemptions before serving again. */
     if (exempted) revoked = keiko_gateway_loopback_revoke(sid);
     /* Retain durable denies if termination cannot be verified within the shutdown budget. */
     cleanup = keiko_gateway_filters_close_after_revoke(&filters, revoked);

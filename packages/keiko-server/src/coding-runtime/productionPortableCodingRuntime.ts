@@ -192,9 +192,37 @@ export function releasedWindowsGatewayHelperPin(runtime: {
     : undefined;
 }
 
+// A status read that could not run the verified helper, or could not remove its private copy,
+// leaves one body-free diagnostic; the read itself still answers null, the unknown state (#4068).
+function recordGatewayStatusFailure(operation: string, error: unknown): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation,
+      source: "coding.runtime.windows-gateway-service",
+      error,
+      redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    }),
+  );
+}
+
+function verifiedStatusHelper(
+  helperPath: string,
+  helperSha256: string,
+): VerifiedHelperExecutionCopy | undefined {
+  try {
+    return verifiedHelperExecutionCopy(helperPath, helperSha256);
+  } catch (error) {
+    recordGatewayStatusFailure("coding.runtime.windows-gateway-service.verify", error);
+    return undefined;
+  }
+}
+
 /**
  * Asks the attested helper for the broker state without blocking the event loop; resolves to null
- * when it did not run to an exit, including a spawn failure or the 2 s timeout (#4068).
+ * when it did not run to an exit, including a refused digest, a spawn failure or the 2 s timeout
+ * (#4068). It never rejects, and the private copy is removed on every path.
  */
 export function readWindowsGatewayServiceStatus(
   helperPath: string,
@@ -203,27 +231,38 @@ export function readWindowsGatewayServiceStatus(
   return new Promise((resolve) => {
     // The same digest check a launch applies: bytes that do not match the pin never execute, and the
     // helper that runs is a private copy of the verified bytes, not the path that could be swapped.
-    let copy: VerifiedHelperExecutionCopy;
-    try {
-      copy = verifiedHelperExecutionCopy(helperPath, helperSha256);
-    } catch {
+    const copy = verifiedStatusHelper(helperPath, helperSha256);
+    if (copy === undefined) {
       resolve(null);
       return;
     }
+    let settled = false;
     const finish = (code: number | null): void => {
-      copy.cleanup();
+      if (settled) return;
+      settled = true;
       resolve(code);
+      try {
+        copy.cleanup();
+      } catch (error) {
+        recordGatewayStatusFailure("coding.runtime.windows-gateway-service.cleanup", error);
+      }
     };
-    const child = spawn(copy.path, ["--gateway-service-status", helperSha256], {
-      stdio: "ignore",
-      windowsHide: true,
-      shell: false,
-      timeout: 2_000,
-    });
-    child.once("error", () => {
+    try {
+      const child = spawn(copy.path, ["--gateway-service-status", helperSha256], {
+        stdio: "ignore",
+        windowsHide: true,
+        shell: false,
+        timeout: 2_000,
+      });
+      child.once("error", (error) => {
+        recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
+        finish(null);
+      });
+      child.once("close", finish);
+    } catch (error) {
+      recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
       finish(null);
-    });
-    child.once("close", finish);
+    }
   });
 }
 

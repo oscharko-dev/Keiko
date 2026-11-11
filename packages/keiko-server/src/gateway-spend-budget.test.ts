@@ -13,6 +13,7 @@ import {
   acquireGatewaySpendBudgetForEnv,
   closeGatewaySpendBudget,
   createGatewaySpendBudget,
+  gatewaySpendBudgetForEnv,
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
@@ -174,7 +175,7 @@ describe("shared persistent model spend admission", () => {
 
   // #4068: a graph's disposal closed the ledger cached per environment object, under another graph
   // that shared it, and one it had not opened.
-  it("closes a shared ledger only with its last holder and drops it from the cache", () => {
+  it("closes a shared ledger only with its last holder and keeps one budget per environment", () => {
     const env = {
       [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "150",
       [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(directory, "shared.db"),
@@ -196,9 +197,16 @@ describe("shared persistent model spend admission", () => {
     expect(close).not.toHaveBeenCalled();
     third.release();
     expect(close).toHaveBeenCalledTimes(1);
-    const fresh = acquireGatewaySpendBudgetForEnv(env);
-    expect(fresh.budget).not.toBe(first.budget);
-    fresh.release();
+    // Every caller of the environment still shares this one budget; it reopens the same ledger,
+    // with the charges already settled, instead of a second, never-closed ledger appearing.
+    const later = acquireGatewaySpendBudgetForEnv(env);
+    expect(later.budget).toBe(first.budget);
+    expect(gatewaySpendBudgetForEnv(env)).toBe(first.budget);
+    expect(() =>
+      later.budget?.reserve(capability, request, "reopened").settle(response.usage),
+    ).not.toThrow();
+    later.release();
+    expect(close).toHaveBeenCalledTimes(2);
     close.mockRestore();
   });
 

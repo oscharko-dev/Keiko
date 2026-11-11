@@ -3,12 +3,15 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 
 import { readWindowsGatewayServiceStatus } from "./productionPortableCodingRuntime.js";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -35,7 +38,15 @@ describe.skipIf(process.platform === "win32")("readWindowsGatewayServiceStatus",
   it("does not execute a swapped helper and reports not-ready", async () => {
     const pinned = "#!/bin/sh\nexit 0\n";
     const { path, marker } = helper("#!/bin/sh\ntouch MARKER\nexit 0\n");
+    const recorded = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation(() => undefined);
     expect(await readWindowsGatewayServiceStatus(path, digest(pinned))).toBeNull();
     expect(existsSync(marker)).toBe(false);
+    // The refused digest is evidence, never a silent null.
+    expect(recorded).toHaveBeenCalledTimes(1);
+    expect(recorded.mock.calls[0]?.[0]).toMatchObject({
+      operation: "coding.runtime.windows-gateway-service.verify",
+    });
   });
 });

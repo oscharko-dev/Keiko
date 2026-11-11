@@ -1823,7 +1823,14 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
       return startRun(input, deps, target, cwd, immediate);
     }
     return acquireWindowsSlot(input, deps, capacity)
-      .then((reservation) => startRunAfterWait(input, deps, target, cwd, reservation))
+      .then(
+        (reservation) => startRunAfterWait(input, deps, target, cwd, reservation),
+        (error: unknown) => {
+          // No slot, no run: what the first target prepared is released, as on a refusal.
+          releaseExecutionHome(deps, cwd, target.executionHome);
+          throw error;
+        },
+      )
       .catch((error: unknown) => {
         throw asError(error, "command execution failed");
       });

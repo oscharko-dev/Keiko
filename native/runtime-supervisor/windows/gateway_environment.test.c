@@ -344,6 +344,18 @@ static int fixture_names(void) {
 
 /* #4242: the user-wide lock must exclude across handles and sessions (a kernel byte-range lock, not
  * a `Local\\` mutex), accept only a plain leaf, and live in a protected, owner-only file. */
+/* The supervisor helper starts with an empty environment: the lock directory must still resolve,
+ * to the same path, from the token's LocalAppData known folder (#4242 review). */
+static int lock_path_without_environment(const wchar_t *leaf, const wchar_t *expected) {
+  wchar_t saved[MAX_PATH], path[KEIKO_USER_LOCK_PATH_CHARS];
+  DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", saved, MAX_PATH);
+  int ok;
+  if (length == 0 || length >= MAX_PATH || !SetEnvironmentVariableW(L"LOCALAPPDATA", NULL)) return 0;
+  ok = keiko_user_lock_path(leaf, path) == ERROR_SUCCESS && wcscmp(path, expected) == 0;
+  (void)SetEnvironmentVariableW(L"LOCALAPPDATA", saved);
+  return ok;
+}
+
 static int user_lock_rules(void) {
   wchar_t path[KEIKO_USER_LOCK_PATH_CHARS], text[KEIKO_USER_LOCK_PATH_CHARS];
   DWORD error = ERROR_SUCCESS, second = ERROR_SUCCESS, path_error;
@@ -359,6 +371,7 @@ static int user_lock_rules(void) {
                    GetCurrentProcessId()) < 0)
     return 1;
   ok = keiko_user_lock_path(text, path) == ERROR_SUCCESS && wcsstr(path, L"\\Keiko\\") != NULL;
+  ok = ok && lock_path_without_environment(text, path);
   for (size_t i = 0; refused[i] != NULL; i++) ok = ok && !keiko_user_lock_leaf_valid(refused[i]);
   ok = ok && keiko_user_lock_take(L"a\\b", 10, &path_error) == NULL &&
        path_error == ERROR_INVALID_NAME;
@@ -376,7 +389,7 @@ static int user_lock_rules(void) {
              !ConvertSecurityDescriptorToStringSecurityDescriptorW(
                  descriptor, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &sddl, NULL) ||
              wcsstr(sddl, L";WD)") != NULL || wcsstr(sddl, L";AU)") != NULL ||
-             wcsstr(sddl, L";BU)") != NULL))
+             wcsstr(sddl, L";BU)") != NULL || wcsstr(sddl, L";OW)") != NULL))
     ok = 0;
   if (sddl != NULL) LocalFree(sddl);
   if (descriptor != NULL) LocalFree(descriptor);

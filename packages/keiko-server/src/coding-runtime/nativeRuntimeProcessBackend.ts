@@ -20,7 +20,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import {
+  causeChain,
+  keikoStackFrames,
+  reportServerLogFailure,
+} from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   encodeLaunchPacket,
@@ -321,14 +325,24 @@ function resolvedWindowsFilesystemGrants(
  * fail silently just because its refusal is synchronous and pre-spawn. Same op, same shape, same
  * correlation id — a support bundle reconstructs either lane's refusal identically.
  */
+// The launch's own error is what the caller sees: a sink that throws here reports its loss on the
+// body-free stderr channel and never replaces that error.
 function recordNativeConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {
-  sink.write(
-    activityLogEvent(
-      RUNTIME_CONFINEMENT_FAILED_OPERATION,
-      { level: "error", correlationId: runId, errorKind: nativeConfinementErrorKind(error) },
-      { frames: keikoStackFrames(error), causeChain: causeChain(error) },
-    ),
-  );
+  try {
+    sink.write(
+      activityLogEvent(
+        RUNTIME_CONFINEMENT_FAILED_OPERATION,
+        { level: "error", correlationId: runId, errorKind: nativeConfinementErrorKind(error) },
+        { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+      ),
+    );
+  } catch (sinkError) {
+    reportServerLogFailure(sinkError, {
+      op: RUNTIME_CONFINEMENT_FAILED_OPERATION.op,
+      correlationId: runId,
+      loss: "event-dropped",
+    });
+  }
 }
 
 function nativeConfinementErrorKind(error: unknown): ActivityLogErrorKind {
