@@ -1,23 +1,51 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import {
   draftResult,
   type DraftItemResult,
 } from "../../packages/keiko-server/src/atlassian/jiraChatDraft.js";
-import { JIRA_MUTATION_DECLARATIONS } from "../../packages/keiko-server/src/atlassian/jiraManagedMutationDescriptors.js";
-import { jiraToolOutcomeView } from "../../packages/keiko-ui/src/app/components/desktop/jira-tool-outcome.js";
+import { jiraMutationDeclaration } from "../../packages/keiko-server/src/atlassian/jiraManagedMutationDescriptors.js";
 
 // The Chat card reads the result the production draft builder returns. Fixtures here are produced
 // by that builder and checked against the declared result schema, so a schema change that the
 // card does not follow turns this red instead of leaving a hand-written literal green.
 const BASE_URL = "https://jira.example.test";
-const SCHEMA = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft")?.descriptor
-  .resultSchema;
+const SCHEMA = jiraMutationDeclaration("jira.draft").descriptor.resultSchema;
 
-function viewOf(items: readonly DraftItemResult[]): ReturnType<typeof jiraToolOutcomeView> {
+// keiko-ui is type-checked by its own bundler program (`@/` paths, extensionless imports), so the
+// root program loads the card's view at run time instead of compiling the UI sources a second time.
+const UI_OUTCOME_MODULE = "../../packages/keiko-ui/src/app/components/desktop/jira-tool-outcome.ts";
+
+interface OutcomeView {
+  readonly issues: readonly { readonly key: string; readonly href?: string }[];
+  readonly problems: readonly unknown[];
+  readonly itemValidations: readonly unknown[];
+  readonly hiddenIssueCount?: number;
+}
+type OutcomeViewer = (exchange: ChatToolExchange) => OutcomeView;
+
+let jiraToolOutcomeView: OutcomeViewer;
+
+function outcomeViewer(loaded: unknown): OutcomeViewer {
+  if (
+    typeof loaded === "object" &&
+    loaded !== null &&
+    "jiraToolOutcomeView" in loaded &&
+    typeof loaded.jiraToolOutcomeView === "function"
+  ) {
+    return loaded.jiraToolOutcomeView as OutcomeViewer;
+  }
+  throw new TypeError("jira-tool-outcome.ts does not export jiraToolOutcomeView");
+}
+
+beforeAll(async () => {
+  jiraToolOutcomeView = outcomeViewer(await import(UI_OUTCOME_MODULE));
+});
+
+function viewOf(items: readonly DraftItemResult[]): OutcomeView {
   const { data } = draftResult(BASE_URL, items);
-  expect(describeCatalogSchemaMismatch(SCHEMA ?? {}, data)).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(SCHEMA, data)).toBeUndefined();
   const exchange = {
     call: { id: "draft-1", name: "jira_draft", arguments: {} },
     result: { status: "completed", data },

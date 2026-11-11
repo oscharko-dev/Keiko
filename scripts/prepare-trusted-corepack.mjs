@@ -9,6 +9,12 @@ const modulePath = fileURLToPath(import.meta.url);
 const corepackPackageRoot = dirname(fileURLToPath(import.meta.resolve("corepack/package.json")));
 
 function shimSource() {
+  if (process.platform === "win32") {
+    // Pin the Node that prepared the fixture. Quoting handles spaces; cmd expands
+    // percent variables even inside quotes, so escape literal percent signs in the batch file.
+    const node = process.execPath.replaceAll("%", "%%");
+    return `@echo off\r\nsetlocal DisableDelayedExpansion\r\n"${node}" "%~dp0..\\package\\dist\\corepack.js" %*\r\n`;
+  }
   return [
     "#!/bin/sh",
     'SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
@@ -25,7 +31,7 @@ export function prepareTrustedCorepack(options = {}) {
   const binDir = join(installRoot, "bin");
   cpSync(sourceRoot, packageRoot, { errorOnExist: true, force: false, recursive: true });
   mkdirSync(binDir);
-  const shimPath = join(binDir, "corepack");
+  const shimPath = join(binDir, process.platform === "win32" ? "corepack.cmd" : "corepack");
   writeFileSync(shimPath, shimSource(), "utf8");
   chmodSync(shimPath, 0o755);
   return { binDir, packageRoot, version: corepackManifest.version };

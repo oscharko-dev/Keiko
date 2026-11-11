@@ -1,3 +1,10 @@
+import {
+  jiraOperationBindingForTool,
+  jiraOperationForTool,
+} from "../atlassian/jiraManagedProvider.js";
+import { jiraChatWriteAction } from "../atlassian/jiraChatCatalogWrite.js";
+import { jiraOperationActionDigest } from "../atlassian/jiraOperationRegistry.js";
+import { mcpChatWriteAction } from "../mcp/mcpChatCatalogAdmission.js";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatToolMutationIntent } from "./chatToolMutationTypes.js";
 import {
@@ -13,11 +20,13 @@ import {
   CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
   CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
   chatToolExchangeReservation,
+  chatToolTranscriptOccupancy,
 } from "./chatToolTranscript.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { JIRA_MUTATION_DECLARATIONS } from "../atlassian/jiraManagedMutationDescriptors.js";
+import { jiraMutationDeclarations } from "../atlassian/jiraManagedMutationDescriptors.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { runMigrations } from "./schema.js";
+import { managedCatalogProjection } from "../tool-catalog/managedProviderCatalog.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
   formatActivityLogProofLine,
@@ -28,6 +37,8 @@ import type {
   ToolDescriptor,
   ToolResultEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 const disposals: (() => void)[] = [];
 afterEach(() => {
@@ -693,7 +704,62 @@ function acknowledgeMutation(f: ReturnType<typeof observedMutationFixture>): voi
   journal.settle(f.intent.invocationId, "succeeded-unconfirmed");
 }
 
+function firstStoredExchange(f: ReturnType<typeof fixture>): ChatToolExchange | undefined {
+  return f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+}
+
 describe("authoritative late mutation history", () => {
+  it.each([
+    { kind: "current", sourceDigest: undefined },
+    { kind: "retired", sourceDigest: undefined },
+    { kind: "current", sourceDigest: "a".repeat(64) },
+    { kind: "retired", sourceDigest: "a".repeat(64) },
+  ])(
+    "recovers a late acknowledgement from its $kind contract and source $sourceDigest without a write approval",
+    ({ kind, sourceDigest }) => {
+      const f = observedMutationFixture(false);
+      const current = contractApproval(f).operationBinding;
+      const operationBinding =
+        kind === "current" ? current : { ...current, contractDigest: "d".repeat(64) };
+      if (f.intent.sourceKind === "configured-mcp") throw new TypeError("Expected Jira fixture");
+      const intent = {
+        ...f.intent,
+        actionDigest: jiraOperationActionDigest(
+          f.intent.operation,
+          sha256Hex(canonicalise(mutationCall.arguments)),
+          operationBinding,
+          sourceDigest,
+        ),
+      };
+      f.db.prepare("UPDATE chat_messages SET tool_transcript_json = NULL WHERE id = ?").run(f.id);
+      f.store.updateChatToolTranscript(
+        f.id,
+        { kind: "started", call: mutationCall, operationBinding },
+        "late-contract-proof",
+      );
+      if (sourceDigest !== undefined)
+        f.store.updateChatToolTranscript(
+          f.id,
+          { kind: "write-prepared", callId: mutationCall.id, sourceDigest },
+          "late-contract-proof",
+        );
+      const journal = f.store.chatToolMutations;
+      if (journal === undefined) throw new TypeError("Missing mutation journal");
+      journal.prepare(intent);
+      expect(journal.beginDispatch(intent.invocationId, () => true)).toBe(true);
+      f.db.prepare("UPDATE chat_messages SET client_turn_state = 'failed' WHERE id = ?").run(f.id);
+      expect(firstStoredExchange(f)?.mutationOutcome).toBe("unknown");
+      journal.acknowledge(intent.invocationId, 201);
+      journal.settle(intent.invocationId, "succeeded");
+      const exchange = firstStoredExchange(f);
+      expect(exchange?.mutationOutcome).toBe("succeeded");
+      expect(exchange?.approval).toBeUndefined();
+      expect(exchange?.result).toBeUndefined();
+      expect(exchange).not.toHaveProperty("operationBinding");
+      expect(exchange).not.toHaveProperty("sourceDigest");
+    },
+  );
+
   // The journal commits before any dispatch, so a call it never saw cannot have reached the source:
   // a card that was never decided must not read as a change that may have been applied.
   it("reports a reviewed call the journal never saw as not sent once its turn has ended", () => {
@@ -986,6 +1052,701 @@ describe("interrupted draft receipt retention", () => {
       f.store.updateChatToolTranscript(f.id, bad as typeof candidate, "draft-receipt-refusal");
     }).toThrow();
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.result).toBeUndefined();
+  });
+});
+
+function contractApproval(f: ReturnType<typeof fixture>): {
+  approval: ChatToolWriteApprovalView;
+  operationBinding: NonNullable<ReturnType<typeof jiraOperationBindingForTool>>;
+} {
+  const view = approval(f);
+  const operationBinding = jiraOperationBindingForTool(view.operation);
+  if (operationBinding === undefined) throw new TypeError("Missing operation contract");
+  const intent = jiraChatWriteAction({
+    actionId: view.invocationId,
+    idempotencyKey: "synthetic-contract-approval",
+    tool: view.operation,
+    argumentsDigest: sha256Hex(canonicalise(mutationCall.arguments)),
+    operationBinding,
+  });
+  if (intent === undefined) throw new TypeError("Missing governed write intent");
+  return { approval: { ...view, actionDigest: intent.actionDigest }, operationBinding };
+}
+
+describe("persisted Jira operation approval contracts", () => {
+  it("captures a read with its schema snapshot and refuses write metadata or an effect claim", () => {
+    const f = fixture();
+    const contract = jiraOperationForTool("jira.projects");
+    if (contract === undefined) throw new Error("Expected read contract");
+    const projection = managedCatalogProjection(
+      [{ name: "jira.projects", alias: "jira_projects" }],
+      [contract.declaration],
+      { id: "read-capture-fixture", version: 1 },
+      0,
+    );
+    const binding = {
+      descriptor: contract.declaration.descriptor,
+      projectionDigest: projection.projectionDigest,
+    };
+    const call = { id: "mcp-read-synthetic", name: "jira_projects", arguments: {} };
+    const data = {
+      outcome: "succeeded",
+      items: [],
+      startAt: 0,
+      total: 0,
+      operationBinding: contract.binding,
+    };
+    const result = validateToolResultEnvelope(
+      {
+        schemaVersion: 1,
+        invocationId: call.id,
+        toolRef: binding.descriptor.toolRef,
+        projectionDigest: binding.projectionDigest,
+        status: "completed",
+        reason: "none",
+        effectStarted: false,
+        data,
+        page: { truncated: false, reason: "none", cursor: null },
+        metrics: {
+          inputBytes: 2,
+          outputBytes: Buffer.byteLength(JSON.stringify(data)),
+          resultCount: 0,
+          durationMs: 0,
+        },
+      },
+      binding,
+    );
+    const captured = { kind: "captured", call, result, binding } as const;
+    f.store.updateChatToolTranscript(f.id, captured, "native-read");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toEqual([{ call, result }]);
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          mutationOutcome: "succeeded",
+        },
+        "native-read",
+      );
+    }).toThrow();
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          operationBinding: contract.binding,
+        },
+        "native-read",
+      );
+    }).toThrow();
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          result: { ...result, effectStarted: true },
+        },
+        "native-read",
+      );
+    }).toThrow();
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          call: { ...call, name: "jira_guessed" },
+        },
+        "native-read",
+      );
+    }).toThrow();
+    expect(chatToolTranscriptOccupancy(f.db, f.id).exchangeCount).toBe(1);
+  });
+
+  it("captures a native result atomically with its private snapshot and no intermediate start", () => {
+    const f = fixture();
+    const contract = jiraOperationForTool("jira.comment");
+    const prior = mutationResult();
+    if (contract === undefined || prior.projectionDigest === null)
+      throw new Error("Expected snapshot");
+    const binding = {
+      descriptor: contract.declaration.descriptor,
+      projectionDigest: prior.projectionDigest,
+    };
+    const nativeCall = { ...mutationCall, id: "mcp-synthetic-native-call" };
+    const result = validateToolResultEnvelope(
+      { ...prior, invocationId: nativeCall.id, toolRef: binding.descriptor.toolRef },
+      binding,
+    );
+    const captured = {
+      kind: "captured",
+      call: nativeCall,
+      result,
+      binding,
+      nativeArgumentsDigest: sha256Hex(canonicalise(nativeCall.arguments)),
+      operationBinding: contract.binding,
+      mutationOutcome: "not-dispatched",
+    } as const;
+    f.store.updateChatToolTranscript(f.id, captured, "native-result");
+    const stored = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(stored).toMatchObject({ call: nativeCall, result, mutationOutcome: "not-dispatched" });
+    expect(stored).not.toHaveProperty("operationBinding");
+    expect(stored).not.toHaveProperty("resultBinding");
+    expect(stored).not.toHaveProperty("nativeArgumentsDigest");
+    expect(chatToolTranscriptOccupancy(f.db, f.id)).toEqual({
+      exchangeCount: 1,
+      bytes: Buffer.byteLength(
+        String(
+          f.db
+            .prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id=?")
+            .get(f.id)?.json,
+        ),
+      ),
+    });
+    expect(
+      f.logs.events
+        .filter((event) => event.op === "chat.tool-transcript.updated")
+        .map((event) => event.extra?.phase),
+    ).toEqual(["captured"]);
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          call: { ...mutationCall, id: "invalid-capture" },
+          result: {
+            ...result,
+            status: "failed",
+            reason: "provider-reported-error",
+            page: null,
+            data: { unexpected: "private-token" },
+          } satisfies ToolResultEnvelope,
+        },
+        "native-result",
+      );
+    }).toThrow();
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toHaveLength(1);
+    expect(JSON.stringify(f.logs.events)).not.toContain("private-token");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          kind: "captured",
+          call: nativeCall,
+          result,
+          binding,
+        },
+        "native-result",
+      );
+    }).toThrow();
+  });
+
+  it.each(["jira.create-project", "jira.update-project"] as const)(
+    "binds a hyphenated project operation to its normalized call alias: %s",
+    (operation) => {
+      const f = fixture();
+      const projectCall = {
+        id: "project-call",
+        name: operation.replace(/[.-]/gu, "_"),
+        arguments: { projectIdOrKey: "SYN", name: "Updated" },
+      };
+      const operationBinding = jiraOperationBindingForTool(operation);
+      if (operationBinding === undefined) throw new TypeError("Missing project contract");
+      const view = {
+        ...approval(f),
+        operation,
+        invocationId: sha256Hex(canonicalise({ messageId: f.id, callId: projectCall.id })),
+        actionDigest: jiraOperationActionDigest(
+          operation,
+          sha256Hex(canonicalise(projectCall.arguments)),
+          operationBinding,
+        ),
+      };
+      f.store.updateChatToolTranscript(
+        f.id,
+        { kind: "started", call: projectCall, operationBinding },
+        "project-alias",
+      );
+      f.store.updateChatToolTranscript(
+        f.id,
+        { kind: "write-approval", callId: projectCall.id, approval: view },
+        "project-alias",
+      );
+      expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval).toEqual(view);
+    },
+  );
+
+  it("pins the prepared source before approval and keeps it private across history reads", () => {
+    const f = fixture();
+    const bound = contractApproval(f);
+    const sourceDigest = "a".repeat(64);
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "started", call: mutationCall, operationBinding: bound.operationBinding },
+      "source-proof",
+    );
+    const prepared = { kind: "write-prepared" as const, callId: mutationCall.id, sourceDigest };
+    f.store.updateChatToolTranscript(f.id, prepared, "source-proof");
+    f.store.updateChatToolTranscript(f.id, prepared, "source-proof");
+    const reviewed = {
+      ...bound.approval,
+      actionDigest: jiraOperationActionDigest(
+        bound.approval.operation,
+        sha256Hex(canonicalise(mutationCall.arguments)),
+        bound.operationBinding,
+        sourceDigest,
+      ),
+    };
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "write-approval", callId: mutationCall.id, approval: reviewed },
+      "source-proof",
+    );
+    const exchange = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(exchange?.approval).toEqual(reviewed);
+    expect(exchange).not.toHaveProperty("sourceDigest");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        { ...prepared, sourceDigest: "b".repeat(64) },
+        "source-proof",
+      );
+    }).toThrow();
+    const row = f.db
+      .prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id = ?")
+      .get(f.id) as { json: string };
+    const stored = JSON.parse(row.json) as { exchanges: { sourceDigest: string }[] };
+    expect(stored.exchanges[0]?.sourceDigest).toBe(sourceDigest);
+    if (stored.exchanges[0] === undefined) throw new TypeError("Missing exchange");
+    stored.exchanges[0].sourceDigest = "b".repeat(64);
+    f.db
+      .prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?")
+      .run(JSON.stringify(stored), f.id);
+    expect(() => f.store.findMessageById(f.id)).toThrow();
+  });
+
+  it.each(["approved", "settled", "foreign", "unbound", "malformed"] as const)(
+    "refuses a source snapshot that is %s before it can change reviewed history",
+    (kind) => {
+      const f = fixture();
+      const bound = contractApproval(f);
+      const ownCall =
+        kind === "foreign" ? { ...mutationCall, name: "mcp_synthetic_write" } : mutationCall;
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          kind: "started",
+          call: ownCall,
+          ...(kind === "foreign" || kind === "unbound"
+            ? {}
+            : { operationBinding: bound.operationBinding }),
+        },
+        "source-refusal",
+      );
+      if (kind === "approved")
+        f.store.updateChatToolTranscript(
+          f.id,
+          { kind: "write-approval", callId: mutationCall.id, approval: bound.approval },
+          "source-refusal",
+        );
+      if (kind === "settled")
+        f.store.updateChatToolTranscript(
+          f.id,
+          { kind: "settled", callId: mutationCall.id, result: result() },
+          "source-refusal",
+        );
+      expect(() => {
+        f.store.updateChatToolTranscript(
+          f.id,
+          {
+            kind: "write-prepared",
+            callId: mutationCall.id,
+            sourceDigest: kind === "malformed" ? "invalid" : "a".repeat(64),
+          },
+          "source-refusal",
+        );
+      }).toThrow();
+    },
+  );
+
+  it("pins the write contract before its first approval and refuses replacement or omission", () => {
+    const f = fixture();
+    const bound = contractApproval(f);
+    const start = {
+      kind: "started" as const,
+      call: mutationCall,
+      operationBinding: bound.operationBinding,
+    };
+    f.store.updateChatToolTranscript(f.id, start, "captured-contract");
+    f.store.updateChatToolTranscript(f.id, start, "captured-contract");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        { kind: "started", call: mutationCall },
+        "captured-contract",
+      );
+    }).toThrow("Tool call identity conflict");
+    const operationBinding = { ...bound.operationBinding, contractDigest: "e".repeat(64) };
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          kind: "write-approval",
+          callId: mutationCall.id,
+          operationBinding,
+          approval: {
+            ...bound.approval,
+            actionDigest: jiraOperationActionDigest(
+              bound.approval.operation,
+              sha256Hex(canonicalise(mutationCall.arguments)),
+              operationBinding,
+            ),
+          },
+        },
+        "captured-contract",
+      );
+    }).toThrow("Tool approval identity conflict");
+  });
+
+  it("preserves the external MCP approval digest without accepting a Jira snapshot", () => {
+    const f = fixture();
+    const mcpCall = { ...mutationCall, name: "mcp_synthetic_write" };
+    const identity = mcpChatWriteAction({
+      actionId: sha256Hex(canonicalise({ messageId: f.id, callId: mcpCall.id })),
+      idempotencyKey: "external-approval",
+      name: mcpCall.name,
+      serverName: "synthetic",
+      toolName: "write",
+      risk: "write",
+      argumentsDigest: sha256Hex(canonicalise(mcpCall.arguments)),
+    });
+    const view = approval(f);
+    const mcpApproval = {
+      kind: "mcp-chat-write" as const,
+      approvalId: view.approvalId,
+      chatId: f.chatId,
+      configurationDigest: "c".repeat(64),
+      requestedAt: view.requestedAt,
+      expiresAt: view.expiresAt,
+      state: view.state,
+      ...identity,
+    };
+    f.store.updateChatToolTranscript(f.id, { kind: "started", call: mcpCall }, "mcp-proof");
+    const update = { kind: "write-approval" as const, callId: mcpCall.id, approval: mcpApproval };
+    f.store.updateChatToolTranscript(f.id, update, "mcp-proof");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval).toEqual(
+      mcpApproval,
+    );
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...update,
+          operationBinding: contractApproval(f).operationBinding,
+        },
+        "mcp-proof",
+      );
+    }).toThrow("Tool approval identity conflict");
+  });
+
+  it("saves a current contract-bound approval and keeps its binding private across state transitions", () => {
+    const f = fixture();
+    const bound = contractApproval(f);
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "started", call: mutationCall },
+      "contract-proof",
+    );
+    const update = { kind: "write-approval" as const, callId: mutationCall.id, ...bound };
+    f.store.updateChatToolTranscript(f.id, update, "contract-proof");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval).toEqual(
+      bound.approval,
+    );
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]).not.toHaveProperty(
+      "operationBinding",
+    );
+    saveApproval(f, { ...bound.approval, state: "expired" });
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval?.state).toBe(
+      "expired",
+    );
+    const row = f.db
+      .prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id = ?")
+      .get(f.id) as { json: string };
+    expect(JSON.parse(row.json)).toMatchObject({
+      exchanges: [{ operationBinding: bound.operationBinding }],
+    });
+  });
+
+  it("reads legacy approval history without giving it a current operation binding", () => {
+    const f = fixture();
+    const view = startWrite(f);
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval).toEqual(view);
+    expect(view.actionDigest).not.toBe(contractApproval(f).approval.actionDigest);
+  });
+
+  it("reads a retired contract snapshot while the write owner refuses it for execution", () => {
+    const f = fixture();
+    const bound = contractApproval(f);
+    const operationBinding = { ...bound.operationBinding, contractDigest: "d".repeat(64) };
+    const argumentsDigest = sha256Hex(canonicalise(mutationCall.arguments));
+    const historical = {
+      ...bound.approval,
+      actionDigest: jiraOperationActionDigest(
+        bound.approval.operation,
+        argumentsDigest,
+        operationBinding,
+      ),
+      state: "expired" as const,
+    };
+    f.db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+      JSON.stringify({
+        schemaVersion: 1,
+        exchanges: [
+          {
+            call: mutationCall,
+            approval: historical,
+            operationBinding: operationBinding,
+          },
+        ],
+      }),
+      f.id,
+    );
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval).toEqual(
+      historical,
+    );
+    expect(
+      jiraChatWriteAction({
+        actionId: historical.invocationId,
+        idempotencyKey: "retired-contract",
+        tool: historical.operation,
+        argumentsDigest,
+        operationBinding,
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each(["missing", "digest", "identity", "extra-field"] as const)(
+    "refuses a stored approval with a %s contract snapshot",
+    (kind) => {
+      const f = fixture();
+      const bound = contractApproval(f);
+      const changed =
+        kind === "missing"
+          ? undefined
+          : kind === "digest"
+            ? { ...bound.operationBinding, contractDigest: "e".repeat(64) }
+            : kind === "identity"
+              ? { ...bound.operationBinding, identity: "POST /retired" }
+              : { ...bound.operationBinding, endpoint: "untrusted" };
+      f.db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+        JSON.stringify({
+          schemaVersion: 1,
+          exchanges: [
+            {
+              call: mutationCall,
+              approval: bound.approval,
+              operationBinding: changed,
+            },
+          ],
+        }),
+        f.id,
+      );
+      expect(() => f.store.findMessageById(f.id)).toThrow("Stored Chat tool transcript is invalid");
+    },
+  );
+
+  it("does not replace the contract snapshot of an existing approval", () => {
+    const f = fixture();
+    const bound = contractApproval(f);
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "started", call: mutationCall },
+      "contract-proof",
+    );
+    const update = { kind: "write-approval" as const, callId: mutationCall.id, ...bound };
+    f.store.updateChatToolTranscript(f.id, update, "contract-proof");
+    const operationBinding = { ...bound.operationBinding, contractDigest: "e".repeat(64) };
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...update,
+          operationBinding,
+          approval: {
+            ...bound.approval,
+            state: "approved",
+            actionDigest: jiraOperationActionDigest(
+              bound.approval.operation,
+              sha256Hex(canonicalise(mutationCall.arguments)),
+              operationBinding,
+            ),
+          },
+        },
+        "contract-proof",
+      );
+    }).toThrow("Tool approval identity conflict");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval).toEqual(
+      bound.approval,
+    );
+  });
+});
+
+describe("private Jira input transcript ownership", () => {
+  const inputCall = {
+    id: "private-input-call",
+    name: "jira_login",
+    arguments: { expectedActorKey: "actor-key" },
+  };
+  const awaiting = {
+    requestId: `jhi_${"a".repeat(64)}`,
+    revision: "12345678-1234-4123-8123-123456789abc",
+    purpose: "login" as const,
+    state: "awaiting-input" as const,
+    expiresAt: 100000,
+    fields: ["password" as const],
+    optionalFields: [],
+  };
+  it("retains only closed metadata and prevents replacing a ready input or reviving cancellation", () => {
+    const { store, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: inputCall }, "private-input-proof");
+    const update = (
+      view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView,
+    ): void => {
+      store.updateChatToolTranscript(
+        id,
+        { kind: "human-input", callId: inputCall.id, view },
+        "private-input-proof",
+      );
+    };
+    update(awaiting);
+    const ready = {
+      ...awaiting,
+      state: "ready" as const,
+      revision: "87654321-1234-4123-8123-123456789abc",
+    };
+    update(ready);
+    expect(() => {
+      update({ ...ready, revision: awaiting.revision });
+    }).toThrow();
+    expect(() => {
+      update({ ...ready, requestId: `jhi_${"b".repeat(64)}` });
+    }).toThrow();
+    expect(() => {
+      update({ ...ready, expiresAt: ready.expiresAt + 1 });
+    }).toThrow();
+    const cancelled = { ...ready, state: "cancelled" as const };
+    update(cancelled);
+    expect(() => {
+      update(ready);
+    }).toThrow();
+    expect(store.findMessageById(id)?.toolTranscript?.exchanges[0]?.humanInput).toEqual(cancelled);
+  });
+  it("rejects secret-bearing extras and metadata attached to another operation", () => {
+    const { store, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: inputCall }, "private-input-proof");
+    for (const view of [
+      { ...awaiting, values: { password: "synthetic-never-store" } },
+      { ...awaiting, purpose: "validate-license", fields: ["license"] },
+    ]) {
+      expect(() => {
+        store.updateChatToolTranscript(
+          id,
+          { kind: "human-input", callId: inputCall.id, view: view as typeof awaiting },
+          "private-input-proof",
+        );
+      }).toThrow();
+    }
+    expect(JSON.stringify(store.findMessageById(id)?.toolTranscript)).not.toContain(
+      "synthetic-never-store",
+    );
+  });
+  it("retains a pending native identity without fabricating a result and settles only that exact call", () => {
+    const f = fixture();
+    const contract = jiraOperationForTool("jira.login");
+    if (contract === undefined) throw new TypeError("Missing private login contract");
+    const nativeCall = { ...inputCall, id: "mcp-private-input-call" };
+    const digest = sha256Hex(canonicalise(nativeCall.arguments));
+    const started = {
+      kind: "started",
+      call: nativeCall,
+      operationBinding: contract.binding,
+      nativeArgumentsDigest: digest,
+    } as const;
+    f.store.updateChatToolTranscript(f.id, started, "coding-private-input");
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "human-input", callId: nativeCall.id, view: awaiting },
+      "coding-private-input",
+    );
+    const pending = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(pending).toMatchObject({ call: nativeCall, humanInput: awaiting });
+    expect(pending).not.toHaveProperty("result");
+    expect(pending).not.toHaveProperty("mutationOutcome");
+    const projection = managedCatalogProjection(
+      [{ name: "jira.login", alias: "jira_login" }],
+      [contract.declaration],
+      { id: "pending-input-fixture", version: 1 },
+      0,
+    );
+    const binding = {
+      descriptor: contract.declaration.descriptor,
+      projectionDigest: projection.projectionDigest,
+    };
+    const completed = validateToolResultEnvelope(
+      {
+        ...result(),
+        invocationId: nativeCall.id,
+        toolRef: binding.descriptor.toolRef,
+        projectionDigest: binding.projectionDigest,
+      },
+      binding,
+    );
+    const captured = {
+      kind: "captured",
+      call: nativeCall,
+      operationBinding: contract.binding,
+      nativeArgumentsDigest: digest,
+      result: completed,
+      binding,
+      mutationOutcome: "not-dispatched",
+    } as const;
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          call: {
+            ...nativeCall,
+            arguments: { expectedActorKey: "other" },
+          },
+        },
+        "coding-private-input",
+      );
+    }).toThrow();
+    f.store.updateChatToolTranscript(f.id, captured, "coding-private-input");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]).toMatchObject({
+      humanInput: awaiting,
+      result: { status: "denied", effectStarted: false },
+      mutationOutcome: "not-dispatched",
+    });
+  });
+  it("refuses forged pending native digests and does not accept them on ordinary Chat IDs", () => {
+    const f = fixture();
+    const operationBinding = jiraOperationBindingForTool("jira.login");
+    if (operationBinding === undefined) throw new TypeError("Missing private login contract");
+    const digest = sha256Hex(canonicalise(inputCall.arguments));
+    for (const update of [
+      { kind: "started", call: inputCall, operationBinding, nativeArgumentsDigest: digest },
+      {
+        kind: "started",
+        call: { ...inputCall, id: "mcp-private-input" },
+        operationBinding,
+        nativeArgumentsDigest: "f".repeat(64),
+      },
+    ] as const)
+      expect(() => {
+        f.store.updateChatToolTranscript(f.id, update, "coding-private-input");
+      }).toThrow();
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeUndefined();
   });
 });
 

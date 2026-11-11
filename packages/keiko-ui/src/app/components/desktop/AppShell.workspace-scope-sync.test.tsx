@@ -8,6 +8,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import type { Chat, ChatConnectedScope } from "@/lib/types";
@@ -1345,7 +1346,7 @@ describe("AppShell canonical workspace scope synchronization", () => {
 it("retains a displayed file and the other connected root through a background root refresh", async () => {
   const native = await nativeFilesChatFixture();
   try {
-    const secondRoot = `${native.root}/Beta`;
+    const secondRoot = join(native.root, "Beta");
     const initial = fixture([native.root, secondRoot]);
     const files = initial.wins.find((win) => win.id === "files-0");
     const target = initial.wins.find((win) => win.type === "chat");

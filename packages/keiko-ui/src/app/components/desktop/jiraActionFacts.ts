@@ -12,6 +12,39 @@ import {
   type JiraDraftValue,
 } from "./jiraDraftTree";
 import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
+import { jiraAgileArgumentLabel } from "./jira-agile-presentation";
+import { jiraProjectMetadataArgumentLabel } from "./jira-project-metadata-presentation";
+import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
+import {
+  jiraMonitoringArgumentLabel,
+  jiraMonitoringFixedTarget,
+} from "./jira-monitoring-presentation";
+import { jiraPropertyMutationFacts } from "./jira-property-mutation-presentation";
+import {
+  jiraSavedConfigurationFacts,
+  jiraSavedConfigurationContextFacts,
+} from "./jira-saved-configuration-approval";
+import {
+  jiraStructuralMutationFacts,
+  jiraStructuralMutationContextFacts,
+} from "./jira-structural-mutation-approval";
+import {
+  jiraConfigurationMutationFacts,
+  jiraConfigurationMutationContextFacts,
+} from "./jira-configuration-mutation-approval";
+import {
+  jiraPlanningMutationFacts,
+  jiraPlanningMutationContextFacts,
+} from "./jira-planning-mutation-approval";
+import {
+  jiraAccessConfigurationFacts,
+  jiraAccessConfigurationContextFacts,
+} from "./jira-access-configuration-approval";
+import {
+  jiraAdministrativeMutationFacts,
+  jiraAdministrativeMutationContextFacts,
+} from "./jira-administrative-mutation-approval";
+import { jiraSystemActionFacts, jiraSystemActionContextFacts } from "./jira-system-action-approval";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -23,11 +56,125 @@ const ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   issueTypeId: "chat.jira.fact.issueType",
   transitionId: "chat.jira.fact.transition",
   body: "chat.jira.fact.comment",
+  commentId: "chat.jira.fact.commentId",
   assigneeName: "chat.jira.fact.assignee",
   name: "chat.jira.fact.fileName",
   requirementIds: "chat.jira.fact.requirements",
 };
+const PROJECT_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  key: "chat.jira.fact.projectKey",
+  projectIdOrKey: "chat.jira.fact.projectIdOrKey",
+  name: "chat.jira.fact.projectName",
+  lead: "chat.jira.fact.projectLead",
+  projectTypeKey: "chat.jira.fact.projectType",
+  projectTemplateKey: "chat.jira.fact.projectTemplate",
+  description: "chat.jira.fact.projectDescription",
+  url: "chat.jira.fact.projectWebsite",
+  assigneeType: "chat.jira.fact.projectAssignee",
+};
 
+const WORKLOG_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  worklogId: "chat.jira.fact.worklogId",
+  timeSpentSeconds: "chat.jira.fact.timeSpentSeconds",
+  started: "chat.jira.fact.workStarted",
+  comment: "chat.jira.fact.worklogComment",
+};
+const DELETE_OPERATIONS = new Set([
+  "jira.delete-comment",
+  "jira.delete-attachment",
+  "jira.delete-worklog",
+]);
+const DELETE_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  expectedBody: "chat.jira.fact.reviewedComment",
+  attachmentId: "chat.jira.fact.attachmentId",
+  filename: "chat.jira.fact.fileName",
+  size: "chat.jira.fact.sizeBytes",
+};
+function deletionFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
+  if (operation === undefined || !DELETE_OPERATIONS.has(operation)) return undefined;
+  if (key === "expectedVisibility" || key === "visibility")
+    return operation === "jira.delete-worklog" && value === null
+      ? unrestrictedVisibility(t)
+      : worklogVisibility(value, t);
+  const label = DELETE_ARGUMENT_LABELS[key] ?? WORKLOG_ARGUMENT_LABELS[key];
+  if (label === undefined) return undefined;
+  return [
+    {
+      id: t(label),
+      value:
+        value === "" ? textValue(t("chat.jira.fact.reviewedEmptyText")) : jiraDraftValueOf(value),
+    },
+  ];
+}
+function unrestrictedVisibility(t: OptionalWidgetTranslate): readonly Fact[] {
+  return [
+    {
+      id: t("chat.jira.fact.visibility"),
+      value: textValue(t("chat.jira.fact.unrestrictedVisibility")),
+    },
+  ];
+}
+function deletionContextFacts(
+  raw: Raw,
+  operation: string | undefined,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] {
+  if (operation === "jira.delete-comment" && !Object.hasOwn(raw, "expectedVisibility"))
+    return unrestrictedVisibility(t);
+  return operation === "jira.delete-worklog"
+    ? [
+        {
+          id: t("chat.jira.fact.remainingEstimate"),
+          value: textValue(t("chat.jira.fact.preserveRemainingEstimate")),
+        },
+      ]
+    : [];
+}
+function worklogFacts(
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+  clearComment: boolean,
+): readonly Fact[] | undefined {
+  if (clearComment && key === "comment" && value === "")
+    return [
+      {
+        id: t("chat.jira.fact.worklogComment"),
+        value: textValue(t("chat.jira.fact.clearWorklogComment")),
+      },
+    ];
+  const label = WORKLOG_ARGUMENT_LABELS[key];
+  if (label !== undefined) return [{ id: t(label), value: jiraDraftValueOf(value) }];
+  return key === "visibility" ? worklogVisibility(value, t) : undefined;
+}
+function worklogVisibility(
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
+  const visibility = record(value);
+  if (
+    visibility === undefined ||
+    typeof visibility.value !== "string" ||
+    (visibility.type !== "group" && visibility.type !== "role") ||
+    Object.keys(visibility).length !== 2
+  )
+    return undefined;
+  return [
+    {
+      id: t(
+        visibility.type === "group"
+          ? "chat.jira.fact.visibleToGroup"
+          : "chat.jira.fact.visibleToRole",
+      ),
+      value: textValue(visibility.value),
+    },
+  ];
+}
 function record(value: unknown): Raw | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Raw)
@@ -89,6 +236,62 @@ function sourceValue(source: unknown): JiraDraftValue {
   const path = record(source)?.path;
   return typeof path === "string" ? textValue(path) : jiraDraftValueOf(source);
 }
+function screenTabFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
+  const label = jiraScreenTabArgumentLabel(operation, key);
+  if (label === undefined) return undefined;
+  if (key !== "expectedFieldIds") return [{ id: t(label), value: jiraDraftValueOf(value) }];
+  return [
+    {
+      id: t(label),
+      value: reviewedFieldValue(value, t),
+    },
+  ];
+}
+function monitoringFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
+  const label = jiraMonitoringArgumentLabel(operation, key);
+  if (label === undefined) return undefined;
+  return [
+    {
+      id: t(label),
+      value: monitoringValue(value, t),
+    },
+  ];
+}
+function monitoringContextFacts(
+  operation: string | undefined,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] {
+  if (jiraMonitoringArgumentLabel(operation, "expectedEnabled") === undefined) return [];
+  const target = jiraMonitoringFixedTarget(operation);
+  const targetFacts: readonly Fact[] =
+    target === undefined
+      ? []
+      : [
+          {
+            id: t("chat.jira.monitoring.requestedState"),
+            value: textValue(
+              t(target ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled"),
+            ),
+          },
+        ];
+  return [
+    ...targetFacts,
+    {
+      id: t("chat.jira.monitoring.scope"),
+      value: textValue(t("chat.jira.monitoring.instanceScope")),
+    },
+  ];
+}
 
 /** One argument of a managed Jira write as one or more facts, in request order. */
 function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] {
@@ -124,6 +327,31 @@ function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): rea
   }
 }
 
+const OPERATION_FACTS = [
+  jiraSystemActionFacts,
+  deletionFacts,
+  jiraPropertyMutationFacts,
+  jiraSavedConfigurationFacts,
+  jiraStructuralMutationFacts,
+  jiraConfigurationMutationFacts,
+  jiraAccessConfigurationFacts,
+  jiraAdministrativeMutationFacts,
+  jiraPlanningMutationFacts,
+  screenTabFacts,
+  monitoringFacts,
+] as const;
+function operationFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
+  for (const present of OPERATION_FACTS) {
+    const facts = present(operation, key, value, t);
+    if (facts !== undefined) return facts;
+  }
+  return undefined;
+}
 /**
  * The facts of a write approval. `managed` is a Jira write whose argument names the page knows;
  * any other write (an MCP tool) shows its argument names as the model sent them.
@@ -133,15 +361,43 @@ export function jiraActionFacts(
   managed: boolean,
   t: OptionalWidgetTranslate,
   names: JiraNames = NO_JIRA_NAMES,
+  operation?: string,
 ): readonly Fact[] {
   const raw = record(args);
   if (raw === undefined)
     return [{ id: t("chat.jira.writeApproval.preview"), value: jiraDraftValueOf(args) }];
-  return Object.entries(raw).flatMap(([key, value]) =>
-    managed
+  const project = operation === "jira.create-project" || operation === "jira.update-project";
+  const worklog = operation === "jira.create-worklog" || operation === "jira.update-worklog";
+  const facts = Object.entries(raw).flatMap(([key, value]) => {
+    if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
+    const specificPreview = operationFacts(operation, key, value, t);
+    if (specificPreview !== undefined) return specificPreview;
+    const worklogPreview = worklog
+      ? worklogFacts(key, value, t, operation === "jira.update-worklog")
+      : undefined;
+    if (worklogPreview !== undefined) return worklogPreview;
+    const label = project
+      ? PROJECT_ARGUMENT_LABELS[key]
+      : (jiraAgileArgumentLabel(operation, key) ??
+        jiraProjectMetadataArgumentLabel(operation, key));
+    return label === undefined
       ? managedFacts(key, value, raw, t, names)
-      : [{ id: key, value: jiraDraftValueOf(value) }],
-  );
+      : [{ id: t(label), value: jiraDraftValueOf(value) }];
+  });
+  return managed
+    ? [
+        ...facts,
+        ...deletionContextFacts(raw, operation, t),
+        ...monitoringContextFacts(operation, t),
+        ...jiraSavedConfigurationContextFacts(operation, raw, t),
+        ...jiraStructuralMutationContextFacts(operation, t),
+        ...jiraConfigurationMutationContextFacts(operation, t),
+        ...jiraPlanningMutationContextFacts(operation, t),
+        ...jiraAccessConfigurationContextFacts(operation, raw, t),
+        ...jiraAdministrativeMutationContextFacts(operation, raw, t),
+        ...jiraSystemActionContextFacts(operation, t),
+      ]
+    : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(
@@ -162,8 +418,17 @@ function managedFacts(
         key !== "fields" ||
         !restatesTarget(fact, stringOf(raw.projectId), stringOf(raw.issueTypeId)),
     )
-    .map((fact) => (key === "fields" ? jiraNamed(fact, names, raw) : fact));
+    .map((fact) => (key === "fields" ? jiraNamed(fact, names, raw, t) : fact));
 }
 function stringOf(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+function reviewedFieldValue(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
+  if (!Array.isArray(value)) return jiraDraftValueOf(value);
+  if (value.length === 0) return textValue(t("chat.jira.screenTabs.reviewedEmptyFields"));
+  return listOf(value.map((entry: unknown) => jiraDraftValueOf(entry)));
+}
+function monitoringValue(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
+  if (typeof value !== "boolean") return jiraDraftValueOf(value);
+  return textValue(t(value ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled"));
 }

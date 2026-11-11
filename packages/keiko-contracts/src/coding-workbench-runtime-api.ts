@@ -1,5 +1,6 @@
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
+  type CodingWorkbenchConnectorScope,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
@@ -561,7 +562,12 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "payload-tampered"
   | "secure-read-unavailable"
   | "loopback-unavailable"
-  | "runtime-unqualified";
+  | "runtime-unqualified"
+  | "gateway-service-absent"
+  | "gateway-service-stopped"
+  | "gateway-service-stale"
+  | "gateway-service-unknown"
+  | "gateway-service-unqualified";
 
 export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbenchRuntimeUnavailableReason[] =
   Object.freeze([
@@ -574,6 +580,11 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "secure-read-unavailable",
     "loopback-unavailable",
     "runtime-unqualified",
+    "gateway-service-absent",
+    "gateway-service-stopped",
+    "gateway-service-stale",
+    "gateway-service-unknown",
+    "gateway-service-unqualified",
   ] as const);
 
 /**
@@ -619,12 +630,38 @@ export interface CodingWorkbenchRuntimeReadiness {
    */
   readonly promptInputs?: CodingWorkbenchRuntimePromptInputs | undefined;
   /**
+   * Which tools the composed OpenCode profile runs (#4068 W12): OpenCode's own (`native`), or
+   * Keiko's mapped equivalents (`mapped`), which never amount to complete native parity. Absent
+   * reads as not reported, never as native.
+   */
+  readonly toolProfile?: CodingWorkbenchRuntimeToolProfile | undefined;
+  /**
    * The version facts of the activated runtime (#3904 AC4), only when it is available. Absent reads
    * as not reported, never as the pinned version: a server that cannot name the runtime it
    * verified must not let the browser claim one.
    */
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  /**
+   * The work locations this deployment's runtime can confine (#4068). Absent reads as both. A
+   * confined Windows runtime reads only what it is granted, and Keiko grants a workspace only as a
+   * Keiko-managed worktree (ADR-0043 D18), so it lists `worktree` alone: the browser then preselects
+   * a new worktree and does not offer the operator's own checkout, which the server would refuse
+   * (`workspace-location-unsupported`).
+   */
+  readonly executionLocations?: readonly CodingWorkbenchExecutionLocation[] | undefined;
 }
+
+/** See `CodingWorkbenchRuntimeReadiness.executionLocations`. */
+export type CodingWorkbenchExecutionLocation = "local" | "worktree";
+
+export const CODING_WORKBENCH_EXECUTION_LOCATIONS: readonly CodingWorkbenchExecutionLocation[] =
+  Object.freeze(["local", "worktree"] as const);
+
+/** See `CodingWorkbenchRuntimeReadiness.toolProfile`. */
+export type CodingWorkbenchRuntimeToolProfile = "native" | "mapped";
+
+export const CODING_WORKBENCH_RUNTIME_TOOL_PROFILES: readonly CodingWorkbenchRuntimeToolProfile[] =
+  Object.freeze(["native", "mapped"] as const);
 
 /** Where the activated runtime came from (#3904 AC4); see `CodingWorkbenchRuntimeVersion`. */
 export type CodingWorkbenchRuntimeOrigin =
@@ -754,6 +791,12 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * the run exactly as before. An id, never a name, URL or credential.
    */
   readonly jiraPodId?: string | undefined;
+  /**
+   * Additional human-selected connector grants for this start. Currently only
+   * issue-tracker.admin is accepted, and only with jiraPodId. Absent or [] adds nothing;
+   * the server still derives ordinary scopes from the selected mode and verified Pod.
+   */
+  readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   /**
    * The centrally configured MCP servers the human selected for this run (owner decision
    * 2026-11-02). Absent offers every enabled server; an empty list offers none. The selection only
@@ -1161,6 +1204,13 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly effectiveMode?: CodingWorkbenchMode | undefined;
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
+  /**
+   * The model this run was started with and the primary agent of its latest accepted turn
+   * (#4068 W12). The server process that started the run holds them; absent reads as not reported,
+   * never as the browser's current selection.
+   */
+  readonly modelId?: string | undefined;
+  readonly agent?: CodingWorkbenchAgent | undefined;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
   /** Honest runtime/provider accounting; unavailable never implies a guessed model limit. */
   readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
@@ -1374,6 +1424,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateProjectMemoryRequest(value.projectMemory, errors);
   validateStartAgent(value.agent, errors);
   validateJiraPodId(value.jiraPodId, errors);
+  validateStartConnectorScopes(value.connectorScopes, value.jiraPodId, errors);
   validateMcpServerSelection(value.mcpServers, errors);
   validateStartPromptInputs(value, errors);
   if (
@@ -1405,6 +1456,7 @@ const START_REQUEST_KEYS: readonly string[] = [
   "mentions",
   "fork",
   "jiraPodId",
+  "connectorScopes",
   "mcpServers",
 ];
 
@@ -1412,6 +1464,22 @@ const START_REQUEST_KEYS: readonly string[] = [
 // server against the caller's own, ready Pods, never by this shape.
 function validateJiraPodId(value: unknown, errors: string[]): void {
   if (value !== undefined && !isChatJiraPodId(value)) errors.push("jiraPodId is invalid");
+}
+
+/** Start selections cannot invent scopes; Jira grants require an explicit Pod selection. */
+function validateStartConnectorScopes(value: unknown, podId: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    !Array.isArray(value) ||
+    value.length > 1 ||
+    !value.every((scope) => scope === "issue-tracker.admin") ||
+    new Set(value).size !== value.length
+  ) {
+    errors.push("connectorScopes is invalid");
+    return;
+  }
+  if (value.length > 0 && !isChatJiraPodId(podId))
+    errors.push("Jira connectorScopes require jiraPodId");
 }
 
 // Names only; which of them a run may use is decided by the server against its registry.
@@ -1636,37 +1704,37 @@ export function parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest(
   return result(value, errors);
 }
 
+const CODING_WORKBENCH_RUNTIME_SNAPSHOT_KEYS = [
+  "schemaVersion",
+  "state",
+  "revision",
+  "updatedAt",
+  "runId",
+  "requestedMode",
+  "effectiveMode",
+  "runtimeSource",
+  "modelSource",
+  "modelId",
+  "agent",
+  "failureCode",
+  "contextUsage",
+  "recoveryAcknowledged",
+  "pendingPermission",
+  "pauseReason",
+  "result",
+  "issueBinding",
+  "verifiedCommitResult",
+  "draftDelivery",
+  "ciReadiness",
+  "descriptionStatus",
+  "conversationId",
+] as const;
+
 export function validateCodingWorkbenchRuntimeSnapshot(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSnapshot> {
   if (!isRecord(value)) return invalid("runtime snapshot must be an object");
-  const errors = exactKeys(
-    value,
-    [
-      "schemaVersion",
-      "state",
-      "revision",
-      "updatedAt",
-      "runId",
-      "requestedMode",
-      "effectiveMode",
-      "runtimeSource",
-      "modelSource",
-      "failureCode",
-      "contextUsage",
-      "recoveryAcknowledged",
-      "pendingPermission",
-      "pauseReason",
-      "result",
-      "issueBinding",
-      "verifiedCommitResult",
-      "draftDelivery",
-      "ciReadiness",
-      "descriptionStatus",
-      "conversationId",
-    ],
-    "runtimeSnapshot",
-  );
+  const errors = exactKeys(value, CODING_WORKBENCH_RUNTIME_SNAPSHOT_KEYS, "runtimeSnapshot");
   validateSnapshotFields(value, errors);
   if (value.conversationId !== undefined)
     validateSafeId(value.conversationId, "conversationId", errors, 128);
@@ -1960,26 +2028,26 @@ export function validateCodingWorkbenchRuntimeStatus(
   return validateCodingWorkbenchRuntimeSnapshot(value);
 }
 
+const CODING_WORKBENCH_RUNTIME_READINESS_KEYS = [
+  "schemaVersion",
+  "requestedMode",
+  "deploymentCeiling",
+  "effectiveMode",
+  "runtimeAvailable",
+  "runtimeUnavailableReason",
+  "runtimeEvidenceClass",
+  "selectableAgents",
+  "promptInputs",
+  "toolProfile",
+  "runtimeVersion",
+  "executionLocations",
+] as const;
+
 export function validateCodingWorkbenchRuntimeReadiness(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeReadiness> {
   if (!isRecord(value)) return invalid("runtime readiness must be an object");
-  const errors = exactKeys(
-    value,
-    [
-      "schemaVersion",
-      "requestedMode",
-      "deploymentCeiling",
-      "effectiveMode",
-      "runtimeAvailable",
-      "runtimeUnavailableReason",
-      "runtimeEvidenceClass",
-      "selectableAgents",
-      "promptInputs",
-      "runtimeVersion",
-    ],
-    "runtimeReadiness",
-  );
+  const errors = exactKeys(value, CODING_WORKBENCH_RUNTIME_READINESS_KEYS, "runtimeReadiness");
   if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
     errors.push("schemaVersion is invalid");
   }
@@ -1990,7 +2058,14 @@ export function validateCodingWorkbenchRuntimeReadiness(
   validateRuntimeEvidenceClass(value, errors);
   validateSelectableAgents(value, errors);
   validatePromptInputs(value.promptInputs, errors);
+  validateOptionalEnum(
+    value.toolProfile,
+    CODING_WORKBENCH_RUNTIME_TOOL_PROFILES,
+    "toolProfile",
+    errors,
+  );
   validateRuntimeVersion(value, errors);
+  validateExecutionLocations(value.executionLocations, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -2007,6 +2082,19 @@ export function validateCodingWorkbenchRuntimeReadiness(
   }
   if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
   return result(value, errors);
+}
+
+/** A nonempty list of distinct known work locations, when present. */
+function validateExecutionLocations(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    new Set(value).size !== value.length ||
+    !value.every((location) => isOneOf(location, CODING_WORKBENCH_EXECUTION_LOCATIONS))
+  ) {
+    errors.push("executionLocations is invalid");
+  }
 }
 
 /**
@@ -2196,6 +2284,8 @@ function validateOptionalSnapshotFields(value: Record<string, unknown>, errors: 
     errors,
   );
   validateOptionalEnum(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES, "modelSource", errors);
+  validateRuntimeModelId(value.modelId, errors);
+  validateAgent(value.agent, errors);
 }
 
 function validateSnapshotModeRelationship(value: Record<string, unknown>, errors: string[]): void {

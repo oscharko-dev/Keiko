@@ -27,6 +27,13 @@ none of them in either its JavaScript or TypeScript rule repository. All four af
 were correctly classified as main sources, rather than tests. Review these shapes explicitly until
 the pinned local analyzer contains the rules; a clean local scan cannot check an absent rule.
 
+PR #4288 (2026-11-10) showed the same gap for `S9381` and `S9382`: SonarCloud added them on
+2026-09-29, after the then-pinned 26.7.0 image (508 TypeScript rules against SonarCloud's 552). The
+pin is now 26.11.0, which carries both, and the runner selects SonarCloud's profile (below).
+Verified by scanning the PR's earlier head: the local gate reports exactly the three findings
+SonarCloud reported. Keep the pin current: an analyzer older than SonarCloud's is a broken
+measuring instrument, not a smaller one. Compare the two rule counts after every bump.
+
 | Cloud rule | Required shape                                         | Preserved behavior                                                                                                            |
 | ---------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | `S9382`    | Check whether loop iterations are independent.         | Keep dependent retries, readiness probes and backpressure yields sequential; parallelize only independent work.               |
@@ -157,10 +164,17 @@ complete substitute: SonarCloud's `shelldre:S7679` (bind a positional parameter 
 against those two as well.
 
 **It is not the gate.** The verdict stays with SonarCloud on the pull request
-([`local-gates.md`](local-gates.md)). Three things differ by construction:
+([`local-gates.md`](local-gates.md)). These things differ by construction:
 
-- the quality **profile** is SonarQube's built-in "Sonar way", not the organisation's profile, so a
-  rule the organisation activated or silenced may differ;
+- the quality **profile** is SonarQube's built-in "Sonar way comprehensive", the one SonarCloud
+  applies to this project for JavaScript, TypeScript, CSS, JSON and YAML. A fresh SonarQube defaults
+  to the smaller "Sonar way core", which leaves `S9381` and `S9382` inactive, so `run-sonar.sh`
+  selects comprehensive on every run and fails closed if the image lacks it. Issues the organisation
+  marked as false positives on `dev` are not imported, so a changed file can show older findings
+  SonarCloud no longer reports on new code;
+- an older pinned image keeps its schema in the persisted `sonar-data` volume, and the embedded
+  database cannot be migrated. The runner recreates that disposable cache once when the server
+  reports `DB_MIGRATION_NEEDED`;
 - **coverage is not imported**, on purpose — coverage has its own gate
   (`npm run check:coverage:new-code`) and importing it here would double the runtime for no signal.
 - **new-code density conditions are invisible to it.** The cloud gate scores duplication and

@@ -12,7 +12,6 @@ import {
 import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   parseJiraIssueTemplate,
-  projectJiraDescriptionInput,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -27,7 +26,12 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
-import { field, LINKS_FIELD, response } from "../../../../tests/support/jira-managed-remote.js";
+import {
+  field,
+  LABEL_FIELD,
+  LINKS_FIELD,
+  response,
+} from "../../../../tests/support/jira-managed-remote.js";
 import { podFixture, specification, type PodFixture } from "../_requirementSupport.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { resetRequirementTurnCache } from "../requirement-inventory.js";
@@ -56,6 +60,7 @@ const CREATE_FIELDS = [
     name: "Description",
     schema: { type: "string", system: "description" },
   },
+  LABEL_FIELD,
   LINKS_FIELD,
 ];
 
@@ -81,7 +86,10 @@ function templateFor(section: string, ...frontMatter: readonly string[]): JiraIs
   return result.template;
 }
 
-function connection(templates: JiraIssueTemplateSet | undefined): JiraManagedConnection {
+function connection(
+  templates: JiraIssueTemplateSet | undefined,
+  createFields: readonly Record<string, unknown>[],
+): JiraManagedConnection {
   const http: AtlassianHttpBodyPort = (request) => {
     const path = new URL(request.url).pathname;
     if (path.endsWith("/project/DENIED")) return Promise.resolve(response({}, 401));
@@ -111,11 +119,11 @@ function connection(templates: JiraIssueTemplateSet | undefined): JiraManagedCon
     if (path.includes("createmeta"))
       return Promise.resolve(
         response({
-          values: CREATE_FIELDS,
+          values: createFields,
           start: 0,
           size: 100,
           last: true,
-          total: CREATE_FIELDS.length,
+          total: createFields.length,
         }),
       );
     return Promise.resolve(response({}, 404));
@@ -180,6 +188,7 @@ interface Harness {
     args: Record<string, unknown>,
     options?: {
       readonly templates?: JiraIssueTemplateSet | undefined;
+      readonly createFields?: readonly Record<string, unknown>[];
       readonly model?: boolean;
       readonly beforeEffect?: () => boolean;
       readonly signal?: AbortSignal;
@@ -188,6 +197,7 @@ interface Harness {
     },
   ) => ReturnType<ReturnType<typeof createJiraDraftBatchExecutor>>;
   readonly requests: GatewayCallRequest[];
+  readonly answers: string[];
   readonly progress: ChatToolBatchProgress[];
   readonly confirmed: NormalizedResponse[];
   readonly store: JiraDraftStore;
@@ -204,6 +214,7 @@ async function harness(
   fixtures.push(f);
   const logs = createBufferedServerLogSink();
   const requests: GatewayCallRequest[] = [];
+  const answers: string[] = [];
   const progress: ChatToolBatchProgress[] = [];
   const confirmed: NormalizedResponse[] = [];
   const store = createJiraDraftStore({
@@ -214,6 +225,7 @@ async function harness(
     call: (request) => {
       requests.push(request);
       const answer = script(request, requests.length);
+      if (typeof answer === "string") answers.push(answer);
       return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(reply(answer));
     },
   };
@@ -226,6 +238,7 @@ async function harness(
   const executor = createJiraDraftBatchExecutor(deps, draftTool(deps, store));
   return {
     requests,
+    answers,
     progress,
     confirmed,
     store,
@@ -256,8 +269,21 @@ async function harness(
       return executor(
         args as CatalogJsonObject,
         context,
-        connection("templates" in runOptions ? runOptions.templates : WITH_TEMPLATE),
-      );
+        connection(
+          "templates" in runOptions ? runOptions.templates : WITH_TEMPLATE,
+          runOptions.createFields ?? CREATE_FIELDS,
+        ),
+      ).then((result) => {
+        // Every result must pass the descriptor the managed MCP host enforces; an undeclared
+        // field refused all 370 drafted Epics in a live run (#4288).
+        expect(
+          describeCatalogSchemaMismatch(
+            JIRA_DRAFT_BATCH_DECLARATION.descriptor.resultSchema,
+            result.data,
+          ),
+        ).toBeUndefined();
+        return result;
+      });
     },
   };
 }
@@ -318,8 +344,16 @@ async function pausingHarness(spec: number, storeNow?: () => number): Promise<Pa
 }
 
 function descriptionOf(item: CatalogJsonObject | undefined): string {
-  const fields = item?.fields as { readonly description?: { readonly text?: string } } | undefined;
-  return fields?.description?.text ?? "";
+  const fields: unknown = item?.fields;
+  if (
+    fields === null ||
+    typeof fields !== "object" ||
+    Array.isArray(fields) ||
+    !("description" in fields) ||
+    typeof fields.description !== "string"
+  )
+    throw new TypeError("Expected a staged native Jira wiki description string");
+  return fields.description;
 }
 
 function firstRequest(h: Harness): GatewayCallRequest {
@@ -375,11 +409,39 @@ describe("jira.draft-batch (#4173)", () => {
     expect(references).toHaveLength(spec.ids.length);
     expect(references).not.toContain("model:invented");
     // The source criteria are written by Keiko verbatim, so the source trace accepts every issue.
-    const fields = items[0]?.fields as { readonly description: { readonly text: string } };
-    expect(fields.description.text).toContain("Thema 1 ist verfügbar.");
+    expect(descriptionOf(items[0])).toContain("* Thema 1 ist verfügbar.");
     expect(items.every((item) => item.projectId === "10000")).toBe(true);
     // The model confirmed each page it used, so tens of pages cannot exhaust the synthesis grant.
     expect(h.confirmed).toHaveLength(h.requests.length);
+  });
+
+  it("refuses trace labels absent from create metadata without another model call or a draft", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(1).text }],
+    );
+
+    const result = await h.run(ARGS, {
+      createFields: CREATE_FIELDS.filter((candidate) => candidate !== LABEL_FIELD),
+    });
+
+    expect(h.requests).toHaveLength(1);
+    const reference = /^- ([^\s]+:LH-001):/mu.exec(promptOf(firstRequest(h)))?.[1];
+    if (reference === undefined) throw new TypeError("Expected the selected requirement reference");
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({
+      outcome: "failed",
+      reason: "nothing-drafted",
+      itemCount: 0,
+      draftedCount: 0,
+      failedCount: 1,
+      coveredRequirementCount: 0,
+      failedRequirementRefs: [reference],
+    });
+    expect(h.store.peek(DRAFT_ID, h.chatId)).toBeUndefined();
+    expect(proofLines(h)).toContainEqual(
+      expect.objectContaining({ phase: "page", outcome: "refused", pageItemCount: 1 }),
+    );
   });
 
   it("asks every page and outline call for no reasoning", async () => {
@@ -485,10 +547,12 @@ describe("jira.draft-batch (#4173)", () => {
     expect(promptOf(firstRequest(h))).toContain("Required sections: []");
     const description = descriptionOf(stagedItems(h)[0]);
     expect(description).toContain(
-      "## Acceptance criteria\n\n- Thema 1 ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet.",
+      "h2. Acceptance criteria\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet.",
     );
     expect(description).not.toContain("Criteria ");
+    expect(description).not.toMatch(/^## |^- /mu);
     expect(description.match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    expect(description.match(/Fehler zu Thema 1 werden gemeldet/gu)).toHaveLength(1);
   });
 
   it("keeps the criteria out of the page prompt so a description lists each one once", async () => {
@@ -513,7 +577,10 @@ describe("jira.draft-batch (#4173)", () => {
     const prompt = promptOf(firstRequest(h));
     expect(prompt).toContain("Keiko appends each requirement's acceptance criteria verbatim");
     expect(prompt).not.toContain("ist verfügbar");
-    expect(descriptionOf(stagedItems(h)[0]).match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    const description = descriptionOf(stagedItems(h)[0]);
+    expect(description).toContain("h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.");
+    expect(description.match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    expect(description.match(/Fehler zu Thema 1 werden gemeldet/gu)).toHaveLength(1);
   });
 
   it("accepts a German acceptance-criteria section from a model that wrote no sections", async () => {
@@ -531,7 +598,9 @@ describe("jira.draft-batch (#4173)", () => {
 
     expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
     expect(h.requests).toHaveLength(1);
-    expect(descriptionOf(stagedItems(h)[0])).toContain("## Akzeptanzkriterien\n\n- Thema 1");
+    expect(descriptionOf(stagedItems(h)[0])).toContain(
+      "h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet.",
+    );
   });
 
   it("asks for the criteria section only for an issue whose requirements carry none", async () => {
@@ -551,8 +620,8 @@ describe("jira.draft-batch (#4173)", () => {
     });
     expect(promptOf(firstRequest(h))).toContain('Also write the sections ["Acceptance criteria"]');
     const [first, second] = stagedItems(h);
-    expect(descriptionOf(first)).toContain("- Thema 8 ist verfügbar.");
-    expect(descriptionOf(second)).toContain("Criteria ");
+    expect(descriptionOf(first)).toContain("* Thema 8 ist verfügbar.");
+    expect(descriptionOf(second)).toContain("h2. Acceptance criteria\n\nCriteria ");
   });
 
   it("appends a list in the document's language when the template has no criteria section", async () => {
@@ -565,13 +634,13 @@ describe("jira.draft-batch (#4173)", () => {
 
     expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
     const description = descriptionOf(stagedItems(h)[0]);
-    expect(description).toContain("## Context\n\nCriteria ");
-    expect(description).toContain("## Akzeptanzkriterien\n\n- Thema 1 ist verfügbar.");
-    // Jira receives it as headings and a bullet list.
-    const wiki = projectJiraDescriptionInput({ format: "markdown", text: description })?.text ?? "";
-    expect(wiki).toContain(
-      "h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1",
+    expect(description).toContain("h2. Context\n\nCriteria ");
+    expect(description).toContain(
+      "h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet.",
     );
+    expect(description).not.toMatch(/^## |^- /mu);
+    expect(description.match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    expect(description.match(/Fehler zu Thema 1 werden gemeldet/gu)).toHaveLength(1);
   });
 
   it("groups requirements into one issue that names all of them", async () => {
@@ -774,7 +843,8 @@ describe("jira.draft-batch (#4173)", () => {
 
       expect(noMap.data).toMatchObject({ outcome: "succeeded", draftedCount: 1 });
       expect(withMap.data).toMatchObject({ outcome: "succeeded", draftedCount: 1, failedCount: 0 });
-      expect(descriptionOf(stagedItems(grounded)[0])).toContain("Thema 1 ist verfügbar [1].");
+      expect(descriptionOf(stagedItems(grounded)[0])).toContain("* Thema 1 ist verfügbar \\[1\\].");
+      expect(descriptionOf(stagedItems(grounded)[0])).toBe(descriptionOf(stagedItems(control)[0]));
       expect(descriptionOf(stagedItems(grounded)[0])).not.toContain("Unrelated design memo");
     });
 
@@ -1226,6 +1296,190 @@ describe("jira.draft-batch (#4173)", () => {
   });
 });
 
+describe("jira.draft-batch against Data Center Epic metadata and repeated documents (#4288)", () => {
+  const EPIC_NAME = {
+    ...field("customfield_10103", "string", true),
+    name: "Epic Name",
+    schema: { type: "string", custom: "com.pyxis.greenhopper.jira:gh-epic-label", customId: 10103 },
+  };
+
+  function requiredFieldIds(request: GatewayCallRequest): string[] {
+    const line = /^Required fields: (\[[^\]]*\])/mu.exec(promptOf(request))?.[1];
+    return line === undefined ? [] : (JSON.parse(line) as string[]);
+  }
+
+  function pageWithFields(request: GatewayCallRequest): string {
+    const ids = requiredFieldIds(request);
+    return JSON.stringify({
+      items: keysOf(request).map((key) => ({
+        key,
+        summary: `Summary ${key}`,
+        sections: { "Acceptance criteria": `Criteria ${key}` },
+        fields: Object.fromEntries(ids.map((id) => [id, `Name ${key}`])),
+      })),
+    });
+  }
+
+  it("logs why a page answer was sent back, as counts and never its text (#4288)", async () => {
+    const spec = specification(3);
+    let calls = 0;
+    const h = await harness(
+      (request) => {
+        calls += 1;
+        if (calls === 1) return "not json at all";
+        if (calls === 2)
+          return JSON.stringify({
+            items: keysOf(request)
+              .slice(1)
+              .map((key) => ({ key, summary: `Summary ${key}`, sections: {} })),
+          });
+        return pageWithFields(request);
+      },
+      [{ capsuleId: "cap-a", text: spec.text }],
+    );
+
+    const result = await h.run({ ...ARGS, requirements: { ids: [...spec.ids] } });
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", itemCount: 3 });
+    const corrected = proofLines(h).filter((line) => line.outcome === "corrected");
+    expect(corrected[0]).toMatchObject({
+      unreadableAnswer: true,
+      missingItemCount: 0,
+      missingSectionItemCount: 0,
+      missingFieldItemCount: 0,
+    });
+    expect(corrected[1]).toMatchObject({
+      unreadableAnswer: false,
+      missingItemCount: 1,
+      missingSectionItemCount: 0,
+      missingFieldItemCount: 0,
+    });
+    expect(JSON.stringify(proofLines(h))).not.toMatch(/not json|Summary /u);
+  });
+
+  it("asks the model for the Epic Name Jira requires and stages every Epic with it", async () => {
+    const spec = specification(3);
+    const h = await harness(pageWithFields, [{ capsuleId: "cap-a", text: spec.text }]);
+
+    const result = await h.run(
+      { ...ARGS, create: true },
+      { createFields: [...CREATE_FIELDS, EPIC_NAME] },
+    );
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", itemCount: 3, failedCount: 0 });
+    expect(promptOf(firstRequest(h))).toContain(
+      'Required fields: ["customfield_10103"] (customfield_10103 is "Epic Name"; key each by its id)',
+    );
+    const names = stagedItems(h).map(
+      (item) => (item.fields as Record<string, unknown>).customfield_10103,
+    );
+    expect(names).toHaveLength(3);
+    expect(names.every((name) => typeof name === "string" && name.startsWith("Name "))).toBe(true);
+  });
+
+  it("asks once for an Epic Name the template already names by its display name", async () => {
+    const spec = specification(1);
+    const h = await harness(pageWithFields, [{ capsuleId: "cap-a", text: spec.text }]);
+    const named: JiraIssueTemplateSet = {
+      templates: [template("requiredFields: [Epic Name]")],
+      unreadable: 0,
+    };
+
+    await h.run(
+      { ...ARGS, create: true },
+      { createFields: [...CREATE_FIELDS, EPIC_NAME], templates: named },
+    );
+
+    expect(requiredFieldIds(firstRequest(h))).toEqual(["Epic Name"]);
+  });
+
+  it("asks for no field Jira defaults, Keiko writes or the model cannot write as text", async () => {
+    const spec = specification(1);
+    const h = await harness(pageWithFields, [{ capsuleId: "cap-a", text: spec.text }]);
+    const defaulted = { ...field("customfield_10200", "string", true), hasDefaultValue: true };
+    const option = {
+      ...field("customfield_10300", "option", true),
+      schema: {
+        type: "option",
+        custom: "com.atlassian.jira.plugin.system.customfieldtypes:select",
+      },
+      allowedValues: [{ id: "1", value: "A" }],
+    };
+    const reporter = {
+      ...field("reporter", "user", true),
+      schema: { type: "user", system: "reporter" },
+    };
+
+    await h.run(
+      { ...ARGS, create: true },
+      { createFields: [...CREATE_FIELDS, defaulted, option, reporter] },
+    );
+
+    expect(requiredFieldIds(firstRequest(h))).toEqual([]);
+  });
+
+  it("drafts one requirements document held in several formats once", async () => {
+    const spec = specification(3);
+    const h = await harness(pageWithFields, [
+      { capsuleId: "cap-a", text: spec.text },
+      { capsuleId: "cap-b", text: spec.text.replaceAll("\n\n", "\n\n\n") },
+      { capsuleId: "cap-c", text: spec.text },
+    ]);
+
+    const result = await h.run({ ...ARGS, create: true, requirements: { ids: [...spec.ids] } });
+
+    // The managed MCP host refuses a result its descriptor does not declare (live run, #4288).
+    expect(
+      describeCatalogSchemaMismatch(
+        JIRA_DRAFT_BATCH_DECLARATION.descriptor.resultSchema,
+        result.data,
+      ),
+    ).toBeUndefined();
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      itemCount: 3,
+      requirementCount: 3,
+      copyDocumentsSkipped: 2,
+    });
+    expect(stagedItems(h)).toHaveLength(3);
+  });
+
+  it("refuses IDs that documents with different content share before any model call", async () => {
+    const spec = specification(3);
+    const h = await harness(pageWithFields, [
+      { capsuleId: "cap-a", text: spec.text },
+      { capsuleId: "cap-b", text: specification(3, { revise: [2] }).text },
+    ]);
+
+    const result = await h.run({ ...ARGS, create: true, requirements: { ids: [...spec.ids] } });
+
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({
+      outcome: "failed",
+      reason: "requirements-ambiguous",
+      availableRequirementCount: 6,
+    });
+    const documents = result.data.availableDocuments as string[];
+    expect(documents).toHaveLength(2);
+    expect(result.data.guidance).toEqual(expect.stringContaining("requirements.documents"));
+    expect(h.requests).toHaveLength(0);
+    expect(stagedItems(h)).toEqual([]);
+    expect(proofLines(h).at(-1)).toMatchObject({
+      phase: "refused",
+      refusal: "requirements-ambiguous",
+      errorKind: "invalid-request",
+    });
+
+    const chosen = await h.run({
+      ...ARGS,
+      create: true,
+      requirements: { ids: [...spec.ids], documents: [documents[0]] },
+    });
+
+    expect(chosen.data).toMatchObject({ outcome: "succeeded", itemCount: 3, requirementCount: 3 });
+  });
+});
+
 describe("rulesText", () => {
   const rules = (facts: readonly unknown[]): Parameters<typeof rulesText>[0] =>
     ({ facts }) as unknown as Parameters<typeof rulesText>[0];
@@ -1240,5 +1494,104 @@ describe("rulesText", () => {
     expect(rulesText(rules([]))).toBe("{}");
     expect(rulesText(rules([{ a: 1 }]))).toBe('[{"a":1}]');
     expect(rulesText(rules([{ name: "x".repeat(20_000) }]))).toBe("{}");
+  });
+});
+
+function s17Diagnostics(h: Harness, data: CatalogJsonObject): string {
+  return JSON.stringify({
+    data,
+    requests: h.requests.map((request, index) => {
+      const last = request.messages.at(-1);
+      const text = last === undefined ? "" : contentText(last.content);
+      return {
+        keys: keysOf(request),
+        correction: text.includes("Your previous answer") ? text.slice(0, 1500) : undefined,
+        answer: h.answers[index]?.slice(0, 1500),
+      };
+    }),
+    batch: proofLines(h),
+  });
+}
+
+function s17TemplateAnswer(request: GatewayCallRequest): string {
+  const correction = request.messages.some((message) => {
+    const text = contentText(message.content);
+    return text.includes("Your previous answer") && text.includes("summary-too-short");
+  });
+  if (!correction) return page(keysOf(request));
+  return JSON.stringify({
+    items: keysOf(request).map((key) => ({
+      key,
+      summary: `S17 corrected summary for ${key} with sufficient detail`,
+      sections: { "Acceptance criteria": "The supplied requirement is implemented." },
+    })),
+  });
+}
+
+describe("S17 real batch stage corrections", () => {
+  it("keeps parse and real template-stage attempts distinct and logs only closed rule counts", async () => {
+    const h = await harness(
+      (request, call) => (call === 1 ? "not json" : s17TemplateAnswer(request)),
+      [{ capsuleId: "cap-a", text: specification(1).text }],
+    );
+    const strict: JiraIssueTemplateSet = {
+      templates: [template("summaryMinLength: 30")],
+      unreadable: 0,
+    };
+    const result = await h.run(ARGS, { templates: strict });
+    expect(result.data, s17Diagnostics(h, result.data)).toMatchObject({
+      outcome: "succeeded",
+      draftedCount: 1,
+      failedCount: 0,
+    });
+    expect(h.requests).toHaveLength(3);
+    const correction = h.requests[2];
+    if (correction === undefined) throw new Error("Expected the real template correction call");
+    expect(promptOf(correction)).toContain("summary-too-short");
+    expect(stagedItems(h)).toHaveLength(1);
+    const lines = proofLines(h);
+    const refused = lines.find((line) => line.phase === "page" && line.outcome === "refused");
+    expect(refused).toMatchObject({
+      parseAttemptCount: 2,
+      stageAttemptCount: 1,
+      summaryTooShortCount: 1,
+    });
+    expect(refused?.guidanceDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(lines.find((line) => line.phase === "page" && line.outcome === "staged")).toMatchObject({
+      parseAttemptCount: 3,
+      stageAttemptCount: 2,
+    });
+    const logged = h.logs.events.map((event) => formatActivityLogProofLine(event)).join("\n");
+    expect(logged).not.toContain("S17 corrected summary");
+    expect(logged).not.toContain("Your previous answer");
+    expect(logged).not.toContain("The supplied requirement is implemented.");
+  });
+
+  it("returns the unchanged-stage-rejection reason without a smaller-page retry", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(3).text }],
+    );
+    const strict: JiraIssueTemplateSet = {
+      templates: [template("summaryMinLength: 30")],
+      unreadable: 0,
+    };
+    const result = await h.run(ARGS, { templates: strict });
+    expect(result.isError).toBe(true);
+    expect(result.data, s17Diagnostics(h, result.data)).toMatchObject({
+      outcome: "failed",
+      reason: "stage-rejection-unchanged",
+      draftedCount: 0,
+      failedCount: 3,
+    });
+    expect(h.requests).toHaveLength(2);
+    expect(stagedItems(h)).toEqual([]);
+    expect(proofLines(h).some((line) => line.outcome === "split")).toBe(false);
+    expect(proofLines(h).at(-1)).toMatchObject({
+      phase: "completed",
+      stopReason: "stage-rejection-unchanged",
+      outcome: "failed",
+      errorKind: "validation-failed",
+    });
   });
 });

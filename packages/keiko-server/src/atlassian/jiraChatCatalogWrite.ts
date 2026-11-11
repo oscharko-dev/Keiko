@@ -1,7 +1,7 @@
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   JIRA_MANAGED_ACTION_TYPES,
   JIRA_MUTATION_OPERATIONS,
+  isJiraAvatarUploadOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ToolAuthorityAvailability } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
@@ -16,7 +16,10 @@ import type {
 } from "./chatWriteApprovalState.js";
 import { sameWriteAction } from "./chatWriteApprovalState.js";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
+import { isCurrentJiraOperationBinding } from "./jiraManagedProvider.js";
+import { jiraOperationActionDigest } from "./jiraOperationRegistry.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
+import { chatApprovalContinuationIsLive } from "../chat-approval-continuation-state.js";
 import {
   isCurrentJiraChatWriteApproval,
   requestJiraChatWriteApproval,
@@ -30,13 +33,18 @@ export function jiraChatWriteAction(
   action: JiraChatCatalogAction,
 ): JiraChatWriteActionIdentity | undefined {
   const operation = JIRA_MUTATION_OPERATIONS.find((value) => value === action.tool);
-  return operation === undefined
+  return operation === undefined ||
+    !isCurrentJiraOperationBinding(action.tool, action.operationBinding)
     ? undefined
     : {
         invocationId: action.actionId,
         operation,
-        actionDigest: sha256Hex(
-          canonicalise({ operation, argumentsDigest: action.argumentsDigest }),
+        actionDigest: jiraOperationActionDigest(
+          operation,
+          action.argumentsDigest,
+          action.operationBinding,
+          action.sourceDigest,
+          action.humanInputRevision,
         ),
       };
 }
@@ -52,11 +60,21 @@ interface CurrentWrite {
   readonly entry: ChatWriteApprovalEntry | undefined;
   readonly nowIso: string;
 }
+function continuationIsLive(
+  options: JiraChatAdmissionOptions,
+  context: JiraChatCatalogContext,
+): boolean {
+  return (
+    context.userMessageId === undefined ||
+    chatApprovalContinuationIsLive(options.deps.store, context.userMessageId)
+  );
+}
 function currentWrite(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
 ): CurrentWrite | undefined {
   const context = options.context();
+  if (!continuationIsLive(options, context)) return undefined;
   const identity = jiraChatWriteAction(action);
   const nowIso = new Date(options.now()).toISOString();
   const current = resolveCurrentJiraChatAuthority(
@@ -79,6 +97,7 @@ function currentWrite(
     identity.invocationId,
     context.correlationId,
   );
+  if (!continuationIsLive(options, context)) return undefined;
   return { context, identity, current, registry, policy, entry, nowIso };
 }
 
@@ -89,7 +108,13 @@ function currentEntry(
   const entry = facts.entry;
   return entry !== undefined &&
     sameWriteAction(entry.approval, facts.identity) &&
-    isCurrentJiraChatWriteApproval(options.deps, entry, facts.nowIso, facts.context.correlationId)
+    isCurrentJiraChatWriteApproval(
+      options.deps,
+      entry,
+      facts.nowIso,
+      facts.context.correlationId,
+    ) &&
+    continuationIsLive(options, facts.context)
     ? entry
     : undefined;
 }
@@ -129,7 +154,12 @@ async function reviewedIdentity(
   action: JiraChatCatalogAction,
   identity: JiraChatWriteActionIdentity,
 ): Promise<JiraChatWriteActionIdentity | undefined> {
-  if (identity.operation !== "jira.attach") return identity;
+  if (
+    identity.operation !== "jira.attach" &&
+    identity.operation !== "jira.upload-email-template-pack" &&
+    !isJiraAvatarUploadOperation(identity.operation)
+  )
+    return identity;
   const attachment = await options.attachmentPreview?.(action);
   return attachment === undefined ? undefined : { ...identity, attachment };
 }

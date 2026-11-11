@@ -67,6 +67,8 @@ import type {
   ClientStageId,
   ClientStageIngestRequest,
   ClientStageSettledIngestRequest,
+  ClientChatHistoryDeletionAction,
+  ClientChatHistoryDeletionCounts,
   ClientStageStartedIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
@@ -77,11 +79,14 @@ import {
   CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
   CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+  CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
   CLIENT_CODING_WORKBENCH_DELIVERY_STEPS,
   CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
   CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
+  CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
   CLIENT_BROWSER_APPROVAL_OPERATIONS,
+  CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
   CLIENT_BROWSER_APPROVAL_OUTCOMES,
   CLIENT_MODULE_LOAD_FAILURES,
   CLIENT_COMPOSER_ACTIVITIES,
@@ -124,6 +129,8 @@ import {
   createInlineCompletionRateLimiter,
   type InlineCompletionRateLimiter,
 } from "./editor/inlineCompletionRateLimiter.js";
+import { logClientJiraResult } from "./client-jira-result-log.js";
+import { logClientJiraFields } from "./client-jira-fields-log.js";
 import { getServerLogger } from "./observability/index.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
@@ -366,6 +373,13 @@ const CLIENT_MARKDOWN_LAYOUT_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// The reporting page load's own random reference (#4068). Tabs and windows of one origin share the
+// session cookie, so only this separates their stream reports; a support export reduces it to an
+// artifact-local reference like every other opaque id.
+const CLIENT_DOCUMENT_FIELDS = {
+  documentRef: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+} as const;
+
 const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -374,6 +388,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    ...CLIENT_DOCUMENT_FIELDS,
     composerCodeStage: {
       type: "string",
       dataClass: "closed-enum",
@@ -614,6 +629,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "transcript-navigation",
   "browser-approval",
   "knowledge-pod-selection",
+  "jira-human-input",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -638,6 +654,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "transcript navigation": "transcript-navigation",
   "browser approval": "browser-approval",
   "knowledge pod selection": "knowledge-pod-selection",
+  "jira human input": "jira-human-input",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -653,6 +670,12 @@ const CLIENT_STAGE_FIELDS = {
     values: CLIENT_STAGE_ACTIVITY_LOG_IDS,
   },
   ordinal: { type: "integer", dataClass: "count", required: true },
+  deletionAction: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
+  },
   requestedCount: { type: "integer", dataClass: "count", required: false },
   deletedCount: { type: "integer", dataClass: "count", required: false },
   failedCount: { type: "integer", dataClass: "count", required: false },
@@ -984,6 +1007,7 @@ const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
       required: true,
       maxLength: 128,
     },
+    ...CLIENT_DOCUMENT_FIELDS,
   },
   causal: "correlation",
   lifecycle: "end",
@@ -1017,6 +1041,7 @@ const CLIENT_SESSION_REPAIR_ACKNOWLEDGED_OPERATION = defineActivityLogOperation(
       required: true,
       maxLength: 128,
     },
+    ...CLIENT_DOCUMENT_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1054,6 +1079,7 @@ const CLIENT_SESSION_REPAIR_FAILED_OPERATION = defineActivityLogOperation({
       required: true,
       maxLength: 128,
     },
+    ...CLIENT_DOCUMENT_FIELDS,
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -1429,6 +1455,7 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logCodingClientReport",
   fields: {
+    ...CLIENT_DOCUMENT_FIELDS,
     interaction: {
       type: "string",
       dataClass: "closed-enum",
@@ -1477,6 +1504,14 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
       required: false,
       values: CLIENT_CODING_WORKBENCH_HELD_NOTICES,
     },
+    modelReported: { type: "boolean", dataClass: "closed-enum", required: false },
+    agentReported: { type: "boolean", dataClass: "closed-enum", required: false },
+    toolProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
+    },
     deliveryStep: {
       type: "string",
       dataClass: "closed-enum",
@@ -1488,6 +1523,12 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
       dataClass: "closed-enum",
       required: false,
       values: CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
+    },
+    repositorySource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -1993,6 +2034,15 @@ const CLIENT_LOSS_PROJECTION = [
   string,
 ])[];
 
+// The page load's reference, re-checked here: the registered writer would refuse a malformed one
+// and drop the whole line, so a malformed reference is omitted instead.
+function clientDocumentFields(request: { readonly documentRef?: string | undefined }): {
+  readonly documentRef?: string;
+} {
+  const { documentRef } = request;
+  return documentRef !== undefined && isValidCorrelationId(documentRef) ? { documentRef } : {};
+}
+
 function projectClientLoss(
   loss: ClientDiagnosticLossCounts | undefined,
   extra: Record<string, unknown>,
@@ -2423,6 +2473,14 @@ function logPresentationClientReport(
 ): boolean {
   return (
     logClientUpdateNotice(request, correlationId) ||
+    logClientJiraFields(
+      request.jiraFieldPresentation,
+      clientDiagnosticCorrelation(request, correlationId),
+    ) ||
+    logClientJiraResult(
+      request.jiraResultPresentation,
+      clientDiagnosticCorrelation(request, correlationId),
+    ) ||
     logClientEditorLineEnding(request, correlationId)
   );
 }
@@ -2592,6 +2650,7 @@ function logCodingClientReport(
     getServerLogger().info(
       activityLogEvent(CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION, envelope, {
         ...interaction,
+        ...clientDocumentFields(request),
         ...closed,
       }),
     );
@@ -2648,6 +2707,7 @@ function logClientDiagnostic(
   }
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
+    ...clientDocumentFields(request),
   };
   projectClientFailure(request, extra);
   projectClientStageContext(request, extra);
@@ -2722,6 +2782,15 @@ function composerSubmissionFields(
   };
 }
 
+function chatHistoryDeletionActivityFields(
+  deletion: ClientChatHistoryDeletionCounts | undefined,
+): Partial<Record<"deletionAction", ClientChatHistoryDeletionAction>> &
+  Partial<Record<"requestedCount" | "deletedCount" | "failedCount", number>> {
+  if (deletion === undefined) return {};
+  const { action, ...counts } = deletion;
+  return action === undefined ? counts : { ...counts, deletionAction: action };
+}
+
 function logClientStageStarted(
   request: ClientStageStartedIngestRequest,
   correlationId: string,
@@ -2733,7 +2802,7 @@ function logClientStageStarted(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
-        ...request.deletion,
+        ...chatHistoryDeletionActivityFields(request.deletion),
         ...(request.browserApproval === undefined
           ? {}
           : { browserOperation: request.browserApproval.operation }),
@@ -2796,7 +2865,7 @@ function logClientStageSettled(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
-        ...request.deletion,
+        ...chatHistoryDeletionActivityFields(request.deletion),
         ...sourcePreviewActivityFields(request.preview),
         ...modelCatalogActivityFields(request.modelCatalog),
         ...(request.browserApproval === undefined
@@ -3085,10 +3154,12 @@ function logClientBinding(
 function sessionRepairCorrelation(request: ClientSessionRepairIngestRequest): {
   readonly repairCorrelationId: string;
   readonly stream?: NonNullable<ClientSessionRepairIngestRequest["stream"]>;
+  readonly documentRef?: string;
 } {
   return {
     repairCorrelationId: request.repairCorrelationId,
     ...(request.stream === undefined ? {} : { stream: request.stream }),
+    ...clientDocumentFields(request),
   };
 }
 
@@ -3262,6 +3333,10 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
   );
 }
 
+function hasJiraPresentation(report: ClientDiagnosticIngestRequest): boolean {
+  return report.jiraResultPresentation !== undefined || report.jiraFieldPresentation !== undefined;
+}
+
 // The closed report shapes: a select dismissal and a catalog picture are routine, and an answer copy
 // spends the failure budget only when it failed.
 function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget | undefined {
@@ -3270,6 +3345,7 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
   if (
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||
+    hasJiraPresentation(report) ||
     report.answerSpeech !== undefined ||
     isRoutineScopedReport(report)
   ) {

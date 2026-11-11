@@ -1,5 +1,6 @@
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { recordConnectionCheck } from "./credentialActivity.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { recordConnectionCheck, recordJiraHumanInput } from "./credentialActivity.js";
+import { createJiraPrivatePorts, type JiraPrivatePortOptions } from "./httpPrivateIdentity.js";
 import type {
   AtlassianCredentialHttpOptions,
   AtlassianConnectorCredentialDeps,
@@ -16,7 +17,19 @@ import {
   type AtlassianCredentialVaultPort,
   type AtlassianCredentialCustodyDeps,
   type AtlassianCredentialExecutionResolver,
+  type AtlassianHttpRequest,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpResult,
+  type JiraPrivateSessionBinding,
+  type JiraPrivateSessionAccess,
+  AtlassianCredentialCustodyError,
+  verifyJiraDataCenterIdentity,
 } from "@oscharko-dev/keiko-connectors";
+import {
+  ambiguousJiraAuthenticationResponse,
+  currentJiraAuthenticationObservation,
+  withJiraAuthenticationObservation,
+} from "./jiraAuthenticationObservation.js";
 // Composition-root wiring for Atlassian connector credential custody (Issue #2241, ADR-0128 D1).
 //
 // keiko-server assembles the concrete pieces the keiko-connectors domain logic declares as ports:
@@ -71,16 +84,32 @@ export interface BuildAtlassianConnectorCredentialDepsOptions {
 // first custody operation, never at BFF construction time.
 function lazyVaultPort(
   options: BuildAtlassianConnectorCredentialDepsOptions,
+  onReady: () => void,
 ): AtlassianCredentialVaultPort {
   let vault: LocalSecretVault | undefined;
-  const open = (): LocalSecretVault =>
-    (vault ??= openAtlassianCredentialVault({
+  let maintained = false;
+  let maintaining = false;
+  const open = (): LocalSecretVault => {
+    vault ??= openAtlassianCredentialVault({
       configPath: options.configPath,
       env: options.env,
       ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
       securityLogSink: options.securityLogSink,
-    }));
+    });
+    // Re-entry is the same opened vault used by the bounded retention pass, not another open.
+    if (!maintained && !maintaining) {
+      maintaining = true;
+      try {
+        onReady();
+        maintained = true;
+      } finally {
+        maintaining = false;
+      }
+    }
+    return vault;
+  };
   return {
+    list: () => open().list(),
     get: (reference: string): string | undefined => open().get(reference),
     set: (reference: string, secret: string): void => {
       open().set(reference, secret);
@@ -88,7 +117,61 @@ function lazyVaultPort(
     delete: (reference: string): void => {
       open().delete(reference);
     },
+    compareAndSet: (reference, expected, next): boolean => {
+      const compare = open().compareAndSet;
+      if (compare === undefined) throw new AtlassianCredentialCustodyError("vault-unavailable");
+      return compare(reference, expected, next);
+    },
+    acquireLease: (reference, scope): (() => void) | undefined => {
+      const acquire = open().acquireLease;
+      if (acquire === undefined) throw new AtlassianCredentialCustodyError("vault-unavailable");
+      return acquire(reference, scope);
+    },
   };
+}
+
+function legacyAvatarRelease(metadata: AtlassianCredentialMetadata): "10.3" | "10.4" | undefined {
+  if (metadata.deployment !== "data-center") return undefined;
+  const pod = metadata.livePod;
+  if (
+    pod?.verificationStatus !== "ok" ||
+    pod.verificationInProgress ||
+    pod.credentialOperation !== undefined
+  )
+    return undefined;
+  return legacyVersion(pod.compatibility?.versionNumbers);
+}
+
+function legacyVersion(version: readonly number[] | undefined): "10.3" | "10.4" | undefined {
+  if (version?.[0] !== 10) return undefined;
+  if (version[1] === 3) return "10.3";
+  return version[1] === 4 ? "10.4" : undefined;
+}
+
+function boundPrivateOptions(
+  selected: AtlassianCredentialMetadata,
+  current: AtlassianCredentialMetadata | undefined,
+  options: JiraPrivatePortOptions,
+): JiraPrivatePortOptions {
+  // Never accept a caller's compatibility hint: use the same current persisted verification.
+  const { legacyTemporaryRelease: _hint, ...retained } = options;
+  if (selected.deployment !== "data-center" || current?.deployment !== "data-center")
+    return retained;
+  if (!samePrivateVerification(selected, current)) return retained;
+  const legacyTemporaryRelease = legacyAvatarRelease(current);
+  return legacyTemporaryRelease === undefined ? retained : { ...retained, legacyTemporaryRelease };
+}
+
+function samePrivateVerification(
+  selected: Extract<AtlassianCredentialMetadata, { deployment: "data-center" }>,
+  current: Extract<AtlassianCredentialMetadata, { deployment: "data-center" }>,
+): boolean {
+  return (
+    selected.generation === current.generation &&
+    selected.baseUrl === current.baseUrl &&
+    selected.livePod?.podId === current.livePod?.podId &&
+    selected.livePod?.verificationRevision === current.livePod?.verificationRevision
+  );
 }
 
 export function buildAtlassianConnectorCredentialDeps(
@@ -96,46 +179,101 @@ export function buildAtlassianConnectorCredentialDeps(
 ): AtlassianConnectorCredentialDeps {
   const listenerPorts = new Set<number>();
   const metadataStore = createAtlassianCredentialMetadataStore({ configPath: options.configPath });
+  let maintainInputs = (): void => undefined;
   const { custody, executionResolver } = createAtlassianCredentialCustody({
-    vault: lazyVaultPort(options),
+    vault: lazyVaultPort(options, () => {
+      maintainInputs();
+    }),
     metadataStore,
     onLivePodInvalidated: options.onLivePodInvalidated,
+    onHumanInputCleared: (correlationId, phase): void => {
+      recordJiraHumanInput(options, correlationIdOrUnknown(correlationId), phase);
+    },
   });
+  maintainInputs = (): void => {
+    custody.humanInputs?.sweepExpired();
+  };
+  const owner = { options, listenerPorts, executionResolver, custody, metadataStore };
   return {
     custody,
+    jiraPrivatePortFactory: privatePortFactory(owner),
     registerListener: (port): (() => void) => {
       listenerPorts.add(port);
       return (): void => {
         listenerPorts.delete(port);
       };
     },
-    httpPortFactory: (metadata, correlationId, lifecycle) =>
-      createGatewayAtlassianHttpPort(
-        credentialTransportOptions(
-          { options, listenerPorts, executionResolver, custody, metadataStore },
-          metadata,
-          correlationId,
-          lifecycle,
-        ),
-      ),
-    httpBodyPortFactory: (metadata, correlationId, lifecycle) =>
-      createGatewayAtlassianHttpBodyPort(
-        credentialTransportOptions(
-          { options, listenerPorts, executionResolver, custody, metadataStore },
-          metadata,
-          correlationId,
-          lifecycle,
-        ),
-      ),
+    httpPortFactory: (metadata, correlationId, lifecycle = {}) =>
+      observedPort(owner, metadata, correlationId, lifecycle, createGatewayAtlassianHttpPort),
+    httpBodyPortFactory: (metadata, correlationId, lifecycle = {}) =>
+      observedPort(owner, metadata, correlationId, lifecycle, createGatewayAtlassianHttpBodyPort),
     ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
   };
+}
+
+function privatePortFactory(
+  owner: CredentialTransportOwner,
+): NonNullable<AtlassianConnectorCredentialDeps["jiraPrivatePortFactory"]> {
+  return (metadata, context, options, lifecycle = {}): ReturnType<typeof createJiraPrivatePorts> =>
+    createJiraPrivatePorts(
+      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle),
+      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle, false),
+      context,
+      boundPrivateOptions(metadata, owner.custody.getMetadata(metadata.authRef), options),
+    );
 }
 
 function generationBoundResolver(
   resolver: AtlassianCredentialExecutionResolver,
   generation: number,
 ): AtlassianCredentialExecutionResolver {
-  return { resolveForExecution: (authRef) => resolver.resolveForExecution(authRef, generation) };
+  const inputs = resolver.humanInputs;
+  const sessions = resolver.sessions;
+  const boundInputs: AtlassianCredentialExecutionResolver["humanInputs"] =
+    inputs === undefined
+      ? undefined
+      : {
+          claim: (
+            id,
+            binding,
+            revision,
+          ): ReturnType<
+            NonNullable<AtlassianCredentialExecutionResolver["humanInputs"]>["claim"]
+          > => {
+            if (binding.authenticationGeneration !== generation)
+              throw new AtlassianCredentialCustodyError("credential-changed");
+            return inputs.claim(id, binding, revision);
+          },
+        };
+  const boundSessions = generationBoundSessions(sessions, generation);
+  return {
+    resolveForExecution: (authRef) => resolver.resolveForExecution(authRef, generation),
+    ...(boundInputs === undefined ? {} : { humanInputs: boundInputs }),
+    ...(boundSessions === undefined ? {} : { sessions: boundSessions }),
+  };
+}
+
+function generationBoundSessions(
+  sessions: AtlassianCredentialExecutionResolver["sessions"],
+  generation: number,
+): AtlassianCredentialExecutionResolver["sessions"] {
+  return sessions === undefined
+    ? undefined
+    : {
+        withLease: <T>(
+          binding: JiraPrivateSessionBinding,
+          execute: (session: JiraPrivateSessionAccess) => Promise<T>,
+        ): Promise<T> => {
+          if (binding.authenticationGeneration !== generation)
+            throw new AtlassianCredentialCustodyError("credential-changed");
+          return sessions.withLease(binding, execute);
+        },
+        finish: (binding, revision, logout): Promise<void> => {
+          if (binding.authenticationGeneration !== generation)
+            throw new AtlassianCredentialCustodyError("credential-changed");
+          return sessions.finish(binding, revision, logout);
+        },
+      };
 }
 
 interface CredentialTransportOwner {
@@ -144,6 +282,57 @@ interface CredentialTransportOwner {
   readonly executionResolver: AtlassianCredentialExecutionResolver;
   readonly custody: AtlassianCredentialCustody;
   readonly metadataStore: AtlassianCredentialMetadataStore;
+}
+
+function identityObservation(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string,
+  lifecycle: AtlassianCredentialHttpOptions,
+): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<boolean> {
+  const current = (): boolean =>
+    currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef));
+  const port = createGatewayAtlassianHttpBodyPort({
+    ...credentialTransportOptions(owner, metadata, correlationId, {
+      beforeDispatch: (request): boolean => {
+        if (!current()) throw new AtlassianCredentialCustodyError("credential-changed");
+        return lifecycle.beforeDispatch === undefined || lifecycle.beforeDispatch(request);
+      },
+    }),
+    // This direct port owns its awaited identity observation and retains normal target admission.
+    onResponse: (): boolean => true,
+    singleAttempt: true,
+  });
+  return async (deadlineAt, signal): Promise<boolean> => {
+    const status = await verifyJiraDataCenterIdentity(port, metadata.baseUrl, {
+      deadlineAt,
+      signal,
+    });
+    if (status === "auth-failed") observedAuthentication(owner, metadata, correlationId)(401);
+    else recordConnectionCheck(owner.options, correlationId, status, undefined, "request");
+    return status === "ok";
+  };
+}
+
+function observedPort<
+  TRequest extends AtlassianHttpRequest | AtlassianHttpBodyRequest,
+  TResult extends AtlassianHttpResult,
+>(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string | undefined,
+  lifecycle: AtlassianCredentialHttpOptions,
+  create: (options: CreateAtlassianHttpPortOptions) => (request: TRequest) => Promise<TResult>,
+): (request: TRequest) => Promise<TResult> {
+  const port = create(credentialTransportOptions(owner, metadata, correlationId, lifecycle));
+  if (lifecycle.purpose === "verification") return port;
+  return withJiraAuthenticationObservation(
+    metadata,
+    port,
+    () =>
+      currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef)),
+    identityObservation(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID, lifecycle),
+  );
 }
 
 function observedAuthentication(
@@ -193,10 +382,11 @@ function credentialTransportOptions(
   metadata: AtlassianCredentialMetadata,
   correlationId: string | undefined,
   lifecycle: AtlassianCredentialHttpOptions = {},
+  observeCredentialAuthentication = true,
 ): CreateAtlassianHttpPortOptions {
   const { options, listenerPorts, executionResolver } = owner;
   const observe =
-    lifecycle.purpose === "verification"
+    lifecycle.purpose === "verification" || !observeCredentialAuthentication
       ? (): void => undefined
       : observedAuthentication(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID);
   const beforeDispatch = lifecycle.beforeDispatch;
@@ -215,7 +405,7 @@ function credentialTransportOptions(
       try {
         return onResponse === undefined || onResponse(request, status);
       } finally {
-        observe(status);
+        if (!ambiguousJiraAuthenticationResponse(metadata, request)) observe(status);
       }
     },
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),

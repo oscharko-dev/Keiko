@@ -618,6 +618,79 @@ describe("representable gateway schemas", () => {
   });
 });
 
+describe("provider-facing alternatives schema (customer test 2026-11-10)", () => {
+  it("advertises a top-level oneOf as one flat object and keeps the catalog schema untouched", () => {
+    const initial = createInitialToolCatalog();
+    const original = initial.descriptors[0];
+    if (original === undefined) throw new TypeError("Missing fixture descriptor");
+    const declaration = Object.fromEntries(
+      Object.entries(original).filter(([key]) => key !== "descriptorDigest"),
+    );
+    // Only the external JSON Schema dialect can express alternatives (as jira.draft does).
+    const inputSchema = {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      oneOf: [
+        {
+          type: "object",
+          properties: { key: { type: "string", maxLength: 64 } },
+          required: ["key"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: { id: { type: "string", maxLength: 64 } },
+          required: ["id"],
+          additionalProperties: false,
+        },
+      ],
+    };
+    const descriptor = createToolDescriptor({ ...declaration, inputSchema });
+    const catalog = createToolCatalog(
+      {
+        descriptors: [descriptor],
+        profiles: [
+          {
+            profile: { id: "alternatives-fixture", version: 1 },
+            toolRefs: [{ toolRef: descriptor.toolRef, alias: "alternatives" }],
+            nativeExtensions: [],
+            adapterDialect: { id: "gateway-json-schema", version: 1 },
+            adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
+            compatibility: [],
+          },
+        ],
+        compatibility: [],
+      },
+      { referenceTimeMs: NOW },
+    );
+    const projection = compileToolProjection(catalog, { id: "alternatives-fixture", version: 1 });
+    const offered = {
+      ...advertisement().offered,
+      binding: {
+        ...advertisement().offered.binding,
+        catalogRevision: catalog.catalogRevision,
+        profile: projection.profile,
+        projectionDigest: projection.projectionDigest,
+      },
+      toolRefs: [descriptor.toolRef],
+    };
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: { kind: "bound", catalog, projection, offered } },
+      (): number => NOW,
+    );
+    const [tool] = bridge.tools;
+    expect(tool?.name).toBe("alternatives");
+    expect(tool?.parameters).not.toHaveProperty("oneOf");
+    expect(tool?.parameters).toMatchObject({
+      type: "object",
+      properties: { key: { type: "string" }, id: { type: "string" } },
+      additionalProperties: false,
+    });
+    expect(tool?.description).toContain("Provide exactly one of these argument sets: key; or id.");
+    expect(descriptor.inputSchema).toHaveProperty("oneOf");
+  });
+});
+
 describe("frozen bound advertisements (#4173)", () => {
   it("binds every round against that round's own offer over one frozen catalog", () => {
     const full = advertisement();

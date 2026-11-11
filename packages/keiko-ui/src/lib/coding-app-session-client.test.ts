@@ -352,23 +352,26 @@ describe("repairLocalCodingAppSession (ADR-0141 D5)", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("never lets a denied local-session request re-enter the repair it is running", async () => {
-    // The BFF answers the ensure request itself with the same 403 DENIED as a stale-session read.
-    // Routed through the self-heal, the repair would join its own attempt in flight and never
-    // settle; it must instead fail closed after exactly one request.
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ error: { code: "DENIED", message: "no" } }), {
-          status: 403,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it.each([401, 403])(
+    "never treats a denied local-session request (%s) as repaired or re-enters it",
+    async (status) => {
+      // The BFF answers the ensure request itself with the same 403 DENIED as a stale-session read.
+      // Routed through the self-heal, the repair would join its own attempt in flight and never
+      // settle; it must instead fail closed after exactly one request.
+      const fetchMock = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: { code: "DENIED", message: "no" } }), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
 
-    await expect(repairLocalCodingAppSession()).resolves.toBe(false);
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
+      await expect(repairLocalCodingAppSession()).resolves.toBe(false);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("starts a fresh repair once the previous one settled", async () => {
     const fetchMock = vi.fn(() =>

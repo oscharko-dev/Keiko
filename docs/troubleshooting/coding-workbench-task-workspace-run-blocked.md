@@ -276,6 +276,133 @@ the root's own authority. Nothing has to be migrated; start the run again.
 
 ---
 
+## A run fails at once because the repository holds Keiko's own runtime
+
+| Field             | Value                                                 |
+| ----------------- | ----------------------------------------------------- |
+| Severity          | Medium                                                |
+| Surface           | Local UI / Coding Workbench                           |
+| Stable identifier | `workspace-contains-runtime`, `workspace-unqualified` |
+
+**Symptom**
+
+The run fails within seconds, before any model call, with "Keiko refused this repository because its
+own coding runtime is stored inside it". Earlier builds showed `Failed. Failure: runtime-failed` and
+"The coding run ended with an internal error" for the same cause, with the advice to start the task
+again, which never helped.
+
+**Root Cause**
+
+The selected workspace holds the runtime's managed root. That is a Keiko checkout after
+`npm run dev:start`, which stages the runtime at `.portable-sidecar-payloads`, or any folder above the
+place Keiko is installed. A run must not be able to write to its own runtime, so the manager refuses
+before anything spawns. The refusal is not configurable.
+
+**Diagnostic Steps**
+
+1. Activity log, the run id: `op: "coding-runtime.start"` with
+   `code: "stage=start:reason=workspace-contains-runtime"`.
+2. In a dev checkout, the same code appears on the `[keiko-server:diagnostic]` line of
+   `.keiko/dev/dev-ui.log`.
+3. `stage=start:reason=sidecar-unmanaged` is a different cause: the runtime's executable lies outside
+   its own managed root, which points at a damaged payload rather than at the selected repository.
+
+**Resolution**
+
+Select another repository. To work on Keiko itself with Keiko, select a separate checkout or worktree
+of it, not the one that ran `dev:start`. On Windows the Workbench runs a task only in a new worktree
+(next section), which is a fresh checkout without the staged runtime, so this refusal does not occur
+there.
+
+---
+
+## "Start coding run" is refused on Windows with `WORKSPACE_LOCATION_UNSUPPORTED` or `WORKSPACE_VOLUME_UNSUPPORTED`
+
+| Field             | Value                                                                                          |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                         |
+| Surface           | Local UI / Coding Workbench (Windows)                                                          |
+| Stable identifier | `CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED`, `CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED` |
+
+**Symptom**
+
+The start is refused at once, before any run exists, with "On Windows, Keiko runs a coding task only
+in a new worktree, not in your own checkout or folder" or with "Keiko keeps its worktrees on another
+drive than Windows". An ordinary folder shows "On Windows, Keiko runs a coding task only in a new
+worktree of a Git repository" under the repository selector. Earlier builds started the run in the
+operator's checkout and failed it inside the runtime, typically with a `gateway-challenge` HTTP 500
+or a `readiness-failed` handshake.
+
+**Root Cause**
+
+On Windows each run's process tree is confined in its own AppContainer, and the tree reads only what
+Keiko grants it (ADR-0043 D18). Keiko grants a workspace only as a Keiko-managed worktree, through
+that worktree's own capability, so a run in the operator's checkout or in an ordinary folder could
+not read its workspace at all. The AppContainer also cannot resolve a path on another volume than
+the one Windows runs from (`SystemDrive`, usually `C:`). Managed worktrees live in
+`<stateDir>/task-workspaces`, so a state directory on another drive puts every worktree there. Both
+starts are refused before anything spawns. Behind the Windows broker, readiness lists
+`executionLocations: ["worktree"]`, so the Workbench preselects a new worktree and offers no other
+location.
+
+**Diagnostic Steps**
+
+1. The start's 409 response carries the code and a Support ID.
+2. Activity log, the run id: `op: "coding-runtime.start"` with
+   `code: "stage=start:reason=launch-resolution:workspace-location-unsupported:local-checkout"` or
+   `code: "stage=start:reason=launch-resolution:workspace-volume-unsupported:non-system-volume"`.
+3. `GET /api/coding-workbench/runtime/readiness` reports `executionLocations: ["worktree"]` while
+   the broker serves the runtime.
+
+**Resolution**
+
+- `WORKSPACE_LOCATION_UNSUPPORTED`: select a Git repository and keep "New local worktree" as the work
+  location. An ordinary folder cannot run on Windows yet.
+- `WORKSPACE_VOLUME_UNSUPPORTED`: set `KEIKO_STATE_DIR` to a folder on the Windows drive and restart
+  Keiko. A development checkout on another drive (`npm run dev:start`) needs the same, for example
+  `KEIKO_STATE_DIR=C:\Users\<you>\.keiko-dev`. The repository itself may stay on any drive: only the
+  worktree Keiko creates for the task must be on the Windows drive.
+
+---
+
+## A follow-up on Windows fails within seconds with `runtime-reap-unproven`
+
+| Field             | Value                                                               |
+| ----------------- | ------------------------------------------------------------------- |
+| Severity          | High                                                                |
+| Surface           | Local server / Coding Workbench (Windows)                           |
+| Stable identifier | `stage=start:reason=runtime-reap-unproven`, `RuntimeUnexpectedExit` |
+
+**Symptom**
+
+The first run of a task succeeds. The next one in the same task fails a few seconds after it starts,
+before any model call, as `runtime-failed`. A further follow-up then starts fresh and succeeds, but
+without the earlier conversation in the runtime.
+
+**Root Cause**
+
+A follow-up resumes the task's retained session: Keiko copies the retained database into the new
+run's state directory. Builds before 2026-11-06 then replaced the copy's DACL with a protected
+owner-only one. On Windows the runtime runs under its own per-tree SID, which reaches the state
+directory only through an inheritable grant (ADR-0043 D18), and a protected file does not inherit
+it. The runtime could not open its database and exited (ADR-0182).
+
+**Diagnostic Steps**
+
+1. Activity log, the run id: `coding-runtime.session-continuity` shows `action: "retain"`,
+   `outcome: "retained"` on the previous run of the task.
+2. The failed run has `runtime.confinement.spawned` with `backend: "windows-wfp"`, then
+   `server.diagnostic.failure` with `diagnosticOperation: "coding-runtime.exit"` and
+   `diagnosticErrorClass: "RuntimeUnexpectedExit"`, and no `coding-runtime.readiness.phase` line.
+3. It ends with `code: "stage=start:reason=runtime-reap-unproven"`.
+
+**Resolution**
+
+Update Keiko. The run's state directory is now owner-private with inheritable entries, and the copy
+is handed back to that inherited DACL, so it stays private and the tree's grant reaches it.
+
+---
+
 ## A run fails `runtime-failed` right after a long model turn, with `GATEWAY_MALFORMED_TOOL_CALL`
 
 | Field             | Value                                                                                                          |
@@ -590,8 +717,7 @@ would restore the false green it replaced.
 **Symptom**
 
 A run ends as failed, and the Workbench names why instead of "The coding run ended with an internal
-error": the prompt allowance is used up (`prompt-allowance-exhausted`), the run's time limit is used
-up (`envelope-duration-exhausted`), the model used its whole output budget again after a repair
+error": the run's time limit is used up (`envelope-duration-exhausted`), the model used its whole output budget again after a repair
 attempt (`output-exhausted-repeated`), the model provider could not be reached or stopped answering
 (`provider-unavailable`), or the last model step failed for the reason the failed step above it
 names (`model-turn-failed`). The run's `coding-runtime.run.settled` line carries the same
@@ -607,13 +733,6 @@ The failed turn ended on one of the run's bounds or on a model call, not on a Ke
 F9; runs `run-65084062444586162471229658028402064666` and
 `run-272120967981827964065820685403290179367`). `failureBasis` names the fact the cause came from:
 
-- `prompt-allowance` — the run's cumulative prompt allowance (`maxPromptTokens` of the Authority
-  Envelope) refused its most recent model call. The gateway answered that call with
-  `coding-sidecar.gateway.rejected reason=runtime-prompt-budget-denied` and a `turn-rejected` turn
-  failure. The same cause names a call the run's CI-repair budget refused for its own
-  `prompt-budget-exhausted`, which counts the same `maxPromptTokens` over the repair; no other
-  reason of that budget does (see the last bullet). Failed model calls keep their reserved prompt
-  estimate, so a long provider outage spends the allowance too.
 - `envelope-duration` — the run's Authority Envelope ran out of time (`maxRuntimeMs` after minting,
   or its `expiresAt`). A model call in flight at that moment ends with
   `coding-sidecar.gateway.outcome outcome=cancelled cancellationCause=run-stopped`; a call started
@@ -634,13 +753,15 @@ F9; runs `run-65084062444586162471229658028402064666` and
 - `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
   settles `runtime-failed`: the runtime crashed or failed internally.
 
+Keiko does not cap a run's prompt tokens (owner decision 2026-11-11, ADR-0137 D2); a run stored
+before that decision may still read `prompt-allowance-exhausted`, which no current run produces.
+
 A CI repair's budget refuses a model call before the authority is asked, and a refusal names no limit
-of the run unless it is the repair's own prompt allowance or runtime limit (#3873 review): a repair
+of the run unless it is the repair's own runtime limit (#3873 review): a repair
 out of failed attempts (`attempt-budget-exhausted`), a withdrawn authority (`authority-denied`), a
 failed or full store (`storage-unavailable`, `storage-capacity`), a binding or clock fault
 (`invalid-binding`, `clock-drift`) and the rest settle `model-turn-failed` with
-`modelCallFailure: turn-rejected`, never `prompt-allowance-exhausted`, because no allowance setting
-can lift them. The closed reason is on the `git.ci-repair.budget` line of the refused call.
+`modelCallFailure: turn-rejected`, because no run setting can lift them. The closed reason is on the `git.ci-repair.budget` line of the refused call.
 
 A run that settles `provider-unavailable` on a `provider-failed` call still shows "The model provider
 rejected this turn" on its last failed step: the per-turn wording names the gateway's answer, while
@@ -655,20 +776,16 @@ the run's own cause names the outage.
    keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
    ```
 
-2. For `prompt-allowance`, `coding-runtime.authority.minted` names the run's `maxPromptTokens`, and the
-   `coding-sidecar.gateway.usage-settled` lines under the run sum what each model call spent
-   (`promptSource` tells a provider-reported count from a kept estimate).
-3. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
+2. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
    (`maxRuntimeMs` on `coding-runtime.authority.minted`, where the composition reports it).
    A CI repair whose own limit ran out while the envelope still had time settles the same cause;
    the `git.ci-repair.budget` line of the next step then carries `reason: deadline-exhausted`.
-4. For a call the run's CI-repair budget refused, read the `git.ci-repair.budget` line with
+3. For a call the run's CI-repair budget refused, read the `git.ci-repair.budget` line with
    `phase: prompt-admission` and `status: blocked` under the run's correlation: its `reason` is the
-   closed reason the budget refused with (`prompt-budget-exhausted`, `deadline-exhausted`,
-   `attempt-budget-exhausted`, `authority-denied`, `storage-unavailable`, ...) and
-   `requestedPromptTokenCount` the estimate it was asked about. A check that refused the call and a
+   closed reason the budget refused with (`deadline-exhausted`, `attempt-budget-exhausted`,
+   `authority-denied`, `storage-unavailable`, ...). A check that refused the call and a
    charge that refused it after the authority admitted it write the same line.
-5. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
+4. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
    names the cause (`failureCode`), whether the provider could not serve the call
    (`providerUnavailable`) and whether the runtime could retry it (`runtimeRetry`); a
    `gateway.retry.exhausted` or `gateway.circuit.wait outcome=budget-refused` under the same chat
@@ -676,11 +793,6 @@ the run's own cause names the outage.
 
 **Resolution**
 
-- `prompt-allowance-exhausted`: start the task again as a new run, which gets a fresh allowance and the
-  changes already in the task workspace, or split the task. Where tasks of this size are routine, an
-  operator raises `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` before starting the server; see the
-  operator runbook. A run that spends its allowance on a loop of refused edits is a defect to report,
-  not a reason to raise it.
 - `envelope-duration-exhausted`: start the task again as a new run, which gets a fresh time limit and
   the changes already in the task workspace, or split the task. Where slow models make tasks of this
   size routine, an operator lengthens the envelope duration before starting the server (see the
@@ -962,4 +1074,4 @@ settles `failed` (ADR-0137 D3):
   choose another model.
 
 The bounds are fixed and deliberately small: each refused attempt resends the run's growing context to
-the model, so a run that loops on a refusal spends its prompt allowance on nothing (ADR-0137).
+the model, so a run that loops on a refusal spends tokens and time on nothing (ADR-0137).

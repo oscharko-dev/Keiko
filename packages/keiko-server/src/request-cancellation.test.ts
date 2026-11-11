@@ -53,6 +53,16 @@ function context(): {
 }
 
 describe("request cancellation", () => {
+  it("keeps an explicitly retained server-owned approval wait alive after its response closes", () => {
+    const fixture = context();
+    const cancellation = createRequestCancellation(fixture.ctx, "cancelled", {
+      retainOnClose: () => true,
+    });
+    fixture.res.emit("close");
+    expect(cancellation.signal.aborted).toBe(false);
+    cancellation.dispose();
+  });
+
   it("removes request and response listeners when disposed", () => {
     const fixture = context();
     const cancellation = createRequestCancellation(fixture.ctx, "cancelled");

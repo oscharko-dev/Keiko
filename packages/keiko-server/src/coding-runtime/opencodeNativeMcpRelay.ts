@@ -83,6 +83,7 @@ function managedInvocationContext(
     signal,
     beforeEffect: () => !signal.aborted,
     onUncertainMutation,
+    beginReadCapture: (request) => mutation.journal?.beginReadCapture({ ...request, runId }),
     beginMutation: (request) =>
       mutation.journal?.begin({
         ...request,

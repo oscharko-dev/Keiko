@@ -6,7 +6,7 @@
 // review of Ask for approval and the package-script trust pause for you. The driver acts as the
 // operator, so it is fail-closed: the approval policy and the lab repository are always named, and
 // the repository must be a lab copy.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
@@ -89,7 +89,11 @@ const SETTLE_MS = 1500;
 const POLL_MS = 3000;
 const UI_TIMEOUT_MS = 60_000;
 
-/** Opens the Workbench window bound to the lab repository, as the desktop would restore it. */
+/**
+ * Opens the Workbench window bound to the lab repository, as the desktop would restore it. The
+ * window keeps the canonical path, as Keiko registers a project: an alias such as macOS's `/var`
+ * for `/private/var` never matches the canonical root of the task workspace bound to it (#4271).
+ */
 export async function seedWorkbenchWindow(page, repo) {
   await page.addInitScript(
     ({ argument: root, storageKeys }) => {
@@ -107,11 +111,11 @@ export async function seedWorkbenchWindow(page, repo) {
       };
       globalThis.localStorage.setItem(storageKeys.workspace, JSON.stringify([windowState]));
     },
-    await workspaceStorageArgs(page, repo),
+    await workspaceStorageArgs(page, realpathSync(repo)),
   );
 }
 
-async function waitForWorkbench(page) {
+export async function waitForWorkbench(page) {
   const workbench = page.locator(WORKBENCH);
   await workbench.waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
   await sleep(SETTLE_MS);
@@ -131,7 +135,7 @@ export function selectCheckout(page, repo, branch) {
 }
 
 /** Reloads the page so the Workbench opens on the repository the dev server just selected. */
-async function reopenWorkbench(page) {
+export async function reopenWorkbench(page) {
   await page.reload();
   return waitForWorkbench(page);
 }
@@ -192,7 +196,7 @@ async function chooseOptionOnce(page, comboName, optionLabel, settle) {
   await options.nth(index).click();
 }
 
-async function startRun(page, workbench, { model, mode, text, jiraPod }) {
+export async function startRun(page, workbench, { model, mode, text, jiraPod }) {
   const newTask = page.getByRole("button", { name: "New task", exact: true });
   if (await newTask.isVisible().catch(() => false)) {
     await newTask.click();
@@ -309,7 +313,7 @@ async function declineQuestion(page) {
   await reject.click();
 }
 
-async function watchRun(page, runId, { approve, deadline, shots }) {
+export async function watchRun(page, runId, { approve, deadline, shots }) {
   let last = "";
   let shotCount = 0;
   let snapshot = {};

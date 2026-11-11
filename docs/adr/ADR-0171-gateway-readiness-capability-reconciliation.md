@@ -9,6 +9,8 @@ Amended 2026-11-05 (owner decision): D2 retains basic-chat readiness for the con
 and current process; Chat operations and passive reads never initiate readiness probes. Explicit
 Settings verification and connection replacement remain the refresh boundaries. Passive browser
 reloads also reuse completed catalog discovery and never restart an exhausted startup burst.
+Amended 2026-11-08: interactive tool-calling refusals distinguish unsupported capability from
+missing, expired or configuration-invalidated proof through the existing error and admission owners.
 
 ## Context
 
@@ -378,6 +380,18 @@ group summary) never clears a recorded identity. The first observation on a prov
 also withdraws its proof once, because nothing proves the earlier proof was issued for the
 deployment now reported. A gateway declaration such as `supports_function_calling` never grants
 `toolCalling`: only the forced live probe does.
+
+Interactive tool-calling admission preserves the closed reason `unsupported`, `unverified`, `stale`
+or `configuration-changed` in its existing server error and body-free
+`gateway.conversation.admission` record. An unsupported tool-calling capability maps to the existing
+`CONVERSATION_UNAVAILABLE_MODEL` error code and tells the person to choose a model that supports the
+required capabilities. The other three reasons map to `CONVERSATION_MODEL_NOT_READY` and direct the
+person to **Settings > Models** to run the readiness check. The EN/DE notice says the check is
+missing, no longer valid or failed; it does not turn missing proof into evidence of unsupported
+capability. These existing codes preserve the remedy through the UI's saved-error round trip,
+alongside the existing support correlation. No new error-wire schema, inferred classification from
+provider prose or request-time readiness probe is introduced. Basic-chat readiness retains D2's
+connection/process lifetime; `stale` does not create a new age limit for that observation.
 
 ## Consequences
 

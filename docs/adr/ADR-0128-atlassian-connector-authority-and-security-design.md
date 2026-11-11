@@ -246,6 +246,11 @@ additionally requires `egress.pinProxiedConnectTarget` when this connector's tra
 (ADR-0038 D6) — proxied deployments are first-class for this lane (below).
 
 **Saved Data Center target admission (owner correction, 2026-11-04; #4082).**
+Fixed native experimental and permission-attribute request opt-ins retain the same HTTPS floor,
+including for loopback. They do not introduce an HTTP exception. The concrete HTTP owner checks
+the configured origin and context-path containment before constructing the opt-in lifecycle or
+materializing credentials; a path suffix alone never authorizes an outbound target.
+
 The canonical HTTPS base URL explicitly saved through the authenticated Jira Data Center
 connection form is the target authority. A second entry in `atlassian.privateTargets` is
 not required. That legacy configuration block remains readable for compatibility but no
@@ -475,7 +480,10 @@ also a valid wiki list marker and never proves Markdown provenance. Owner decisi
 (#4173 AC2): models write Markdown as a plain string, and Data Center rendered it as literal
 asterisks and broken links, so such a string is converted like the strict explicit value
 `{ format: "markdown", text: "..." }`, which remains advertised on the description field's create
-metadata. Both serialize supported ATX and setext headings as native `hN.` wiki headings through
+metadata. That advertised schema states the contract the projection applies: in a string, `h2. Title`
+is a heading and a `#` or `##` line is a numbered-list item, and Markdown headings need the explicit
+object. Its earlier wording ("Markdown is converted") led a model to send `## Title` strings, which
+stayed native wiki and failed every required template section (LIM28). Both serialize supported ATX and setext headings as native `hN.` wiki headings through
 the bounded canonical heading reader, then emphasis, inline code, links, lists, rules, tables and
 fences as wiki markup (`jira-markdown-wiki.ts`); code, fences, wiki macros and quoted lines are
 copied verbatim, and an unterminated fence keeps the heading-only result. It preserves code/fences,
@@ -563,6 +571,12 @@ No Pod identity or verification status confers Chat authority. Verification comp
 and checks the current credential generation and latest probe revision against the retained record;
 it cannot recreate deleted metadata. Failed verification advances the authorization generation.
 Starting a new check retains previously observed readiness until that check has a result.
+It clears the previous private compatibility observation. A successful current ticket may retain
+validated release numbers, the declared Server/Data Center deployment and the observed REST-v2
+identity capability. These facts belong to that credential record and verification revision;
+failed or aborted checks, observed authentication failure, token rotation and deletion clear them.
+Legacy records have no inferred compatibility observation. These facts are neither a permission
+grant nor evidence of Agile support.
 
 Authenticated credential creation obtains the existing local operator identity from the server;
 the request cannot select an owner. List, verify and delete enforce that owner for Live Pods.
@@ -586,7 +600,19 @@ removal. Older/repeated generation notifications are harmless. The existing Chat
 then interrupts affected generations; other Pods' Chats remain untouched. A running tool turn that
 already holds a write takes a scope change itself (2026-11-03, S17): it stops at once and answers from
 its transcript, naming those writes, with `authority-invalid` on `chat.tool-turn.ended`. A turn with
-no write to report, a human stop and queued turns stay cancellations. Applied scope changes
+no write to report, a human stop and queued turns stay cancellations. Observed authentication
+revocation is carried as a server-owned interruption reason from custody through the same
+serializer, including the running tool-turn callback. A turn that holds a write finishes with its
+saved receipt answer and explicit re-verification guidance; its closed Activity Log end reason is
+`authentication-failed`. The answer distinguishes acknowledged and uncertain effects and never
+invents a key absent from the receipt. Other interrupted turns terminate with
+`JIRA_AUTHENTICATION_FAILED` in buffered, streamed and grounded Chat; a stream that already
+started emits the stable code in its terminal error frame. A completed response takes precedence
+over a later signal change. The cause is
+not inferred from mutable credential state after cancellation, so a later successful verification
+cannot rewrite the interrupted request’s outcome. HTTP 409 denotes the invalidated bound Jira
+credential, not failed local app-session authentication; EN/DE remediation points to the
+Knowledge Pods hub. Neither the old request nor its effects are retried. Applied scope changes
 and requested cancellation use the registered `chat.scope.update` event. Request correlation passes
 through custody and invalidation, linking the HTTP result, binding effects and cancellation; only
 operations outside a request mint a fresh server correlation. Cleanup failure cannot restore access: incomplete token replacement
@@ -610,14 +636,70 @@ coverage, including restart cases, remains explicit in the epic evidence matrix.
 Both outbound HTTP factories forward the private dispatch/response hooks so the same current
 policy guard can run after transport preparation and before credential materialization. A
 response observer captures the selected Live Pod generation and verification revision by value.
-An observed 401 invalidates only that still-current verified credential, advances its generation
+An ordinary observed 401 invalidates only that still-current verified credential, advances its generation
 and notifies the existing dependent-Chat lifecycle owner. A newer/pending verification, rotation,
 deletion or 403 permission denial cannot revoke another/current credential. Response acknowledgement
 runs before invalidation and body consumption; the existing Activity Log distinguishes observed
-request status from an explicit verification probe. Probe construction marks its server-owned
-purpose explicitly and omits the observed-request handler; its existing verification owner records
+request status from explicit connection verification. Connection-verification probes mark their server-owned
+purpose explicitly and omit the observed-request handler; the existing verification owner records
 the result once. This classification does not depend on a possibly stale metadata snapshot.
 This does not introduce credential polling.
+
+The retained native API also documents 401 for missing WebSudo or view permission on specific
+server-owned GET identities, including workflow-scheme and screen observations. Jira 11.3's
+`ScreensResource` additionally documents administrator-permission 401 responses for exactly
+`POST /screens/{screenId}/tabs` and `PUT`/`DELETE /screens/{screenId}/tabs/{tabId}`
+([native screen resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/ScreensResource.html)).
+Only those enumerated method/path identities await one bounded
+same-target `myself` read before deciding whether the credential failed. The original status and
+synchronous response acknowledgement remain unchanged. The identity read retains ordinary saved
+target admission, the original authority guard, signal, remaining deadline and captured credential
+generation/verification revision; it neither retries nor begins connection verification. A current,
+active identity adds the closed port observation `authentication: "confirmed"`, which classifies
+the original 401 as an operation permission denial without granting authority or changing stored
+compatibility. An explicit authentication failure still invalidates through the existing custody
+owner. Timeout, malformed data, revoked authority, cancellation or stale observations are not proof
+of credential failure. Upstream JSON cannot supply this port-owned observation.
+
+Screen-tab create, rename and delete remain high-risk actions in the existing authority and
+approval pipeline. Admission binds the current screen ID/name and the complete tab snapshot;
+deletion also matches the reviewed ordered field IDs and requires another tab to remain.
+Each invocation performs at most one mutation. A fresh same-parent read confirms the observed
+tab ID and name, or exact absence with a remaining tab. Creation without an acknowledged new
+tab ID stays unknown; a name match cannot recover identity. A journal replay never calls the
+provider or starts automatic reconciliation, and private receipts remain in the existing
+transcript, not in new journal columns. Reading an exactly matching durable journal outcome is
+also permitted after its original turn ended, including after startup recovery. The journal
+checks the complete mutation identity before returning that outcome; a changed identity, a new
+write, attachment retirement or dispatch still requires a current turn. A replay returns the
+stored outcome and replay marker, without reconstructing private resource receipts from journal
+fields. The native documented 400 refusals, delete-only 412,
+and positively classified administrator 401 settle as rejected only with the existing
+structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
+bulk-operation rule is widened.
+
+Application monitoring, in-product diagnostics and JMX exposure changes are high-risk actions
+through the same approval and journal owners. Each fixed native POST requires an explicit reviewed
+boolean state, reads that current state before dispatch and independently reads it again after the
+acknowledgement. An unchanged target produces a no-op without POST. The private receipt's
+`monitoringEnabled` or `jmxMetricsExposed` boolean describes the requested target when the result is
+unknown or unconfirmed; only a successful independent readback establishes the resulting state.
+False is preserved as a real value. These endpoints add no authentication exception or assumed
+atomic-error rule, and an uncertain invocation is never replayed. They do not fetch metric contents
+or start reindex, snapshot or upgrade jobs.
+
+Entity-property set and delete actions use the same high-risk authority, reviewed action digest
+and durable journal. The input reuses the existing complete typed JSON Pointer projection:
+set requires a target value and exactly one reviewed prior value or explicit expected absence;
+delete requires the reviewed prior value. Null, false and empty data remain present values.
+Admission binds the canonical entity, reads its complete property keys and the exact value, and
+accepts absence only when an unlisted key agrees with that exact value's native 404. After one
+fixed PUT or DELETE, the same parent is independently rebound and both observations are repeated.
+Dashboard item identity remains explicitly selected context because Jira exposes no independent
+item-detail read here. Property receipts retain only the exact context, key and requested presence;
+that presence is a target, not confirmation, in an unknown or unconfirmed outcome. Uncertain
+invocations reload from the existing journal without calling the provider again. No broader
+authentication exception, assumed atomic error or separate transport/receipt store is introduced.
 
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport
@@ -638,6 +720,258 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
+**Explicit instance administration (#4287, review 4503902861).** The one hundred thirty-nine source-defined administration writes—application/IPD monitoring, JMX exposure
+start/stop, screen-tab and screen-field layout changes, issue-type and user property set/delete, filter creation,
+future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes, issue-type/priority/workflow-scheme configuration, four closed instance settings, email-template upload/apply/revert, group lifecycle/membership, schema configuration, directory access/layout, maintenance requests, avatar effects, user lifecycle, configured reciprocal linking, project lifecycle changes, another-user password update, human-attested anonymization unlock and instance-wide sprint synchronization cleanup—use the separate connector class
+`connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
+these operations, including in Full access. They retain high risk and the same Workbench
+`connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
+approval/journal owners. User-property writes require this grant even when the selected user is the
+connected actor; selecting that identity does not replace administration authority. The other
+entity-property writes retain ordinary write scope. Native
+permissions are checked independently; possessing a local scope never asserts Jira permissions.
+New anonymous `anyone` permission grants are restricted to the reviewed read permissions
+`BROWSE_PROJECTS`, `VIEW_DEV_TOOLS` and `VIEW_READONLY_WORKFLOW`; all other new anonymous grants
+fail before effects. Existing observed anonymous grants remain readable and removable, so this
+restriction does not prevent an administrator from repairing an unsafe native configuration.
+Issue-type property writes require the native issue-type edit permission
+([resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/IssueTypePropertyResource.html));
+its [permission helper](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/bc/issuetype/property/IssueTypePropertyHelper.html)
+uses the global issue-type permission service. The retained 11.3 issue-type update contract
+requires Jira administration. Keiko classifies those two writes as administration accordingly.
+
+The classification follows the operation's effect boundary, rather than copying Jira's permission
+names. Instance runtime, shared schema configuration and filter creation/publication or sharing changes
+require the explicit administration scope. Filter creation inherits native default sharing and has
+no atomic private override; explicit acceptance and independent actual-permission readback are
+required. Ordinary owned-filter metadata, columns, deletion and documented nonsecret current-user
+preferences retain write scope. Local scope and native ownership/permissions remain independent.
+Project creation and ordinary project metadata updates are project lifecycle actions under
+`issue-tracker.write`; they retain their high-risk, exact approval and durable readback contracts.
+Jira Data Center independently requires the global Jira Administrators permission to create a
+project and project administration to update one. A local ordinary-write grant neither supplies
+those native permissions nor permits a privileged credential fallback. Conversely, a credential
+with native project-creation permission does not acquire Keiko's instance-administration scope.
+This keeps the accepted project-setup workflow distinct from changing instance runtime or shared
+schema configuration, while enforcing both local task authority and the actual Jira permission.
+
+Role/default/project-membership and permission-scheme/grant/attribute changes require that same
+explicit administration grant. Native principal namespaces remain exact: user key and username are
+independently bound, while group name is the documented native group principal. Default actors and
+project membership stay separate. A matched configuration proves only that configuration; complete
+effective access and aggregate group/project/scheme consequences are separate facts. Role deletion,
+five actor mutations and permission-scheme deletion therefore remain acknowledged/unconfirmed.
+
+Project-category create/update/delete modify shared instance categorization and require explicit administration.
+Their native global-admin permission remains independent. Version-link metadata upserts retain ordinary
+write/medium risk and deletions ordinary write/high risk; native version/project edit and browse
+permissions still govern the actual request. Agile rank/estimation/Epic-removal retain ordinary
+write/high risk and check existing formal edit rules for every affected selected issue and anchor.
+Native partial207 is never an atomic no-effect refusal or an absolute rank proof.
+
+Board deletion/refined-velocity and selected sprint replacement/deletion/swap/unmap retain ordinary
+write scope and high risk. Selected unmap changes synchronization only; instance-wide unmap is an
+administration action even when the reviewed input contains only a sample. Only the two exact native
+unmap PUT routes accept the server-owned literal experimental opt-in; the custody owner validates it
+before dispatch admission and emits a fixed header. Model-supplied headers or arbitrary experimental
+routes have no execution path. Native project/board permissions remain independent of local scope.
+
+The fixed permission-scheme attribute port uses the native resource's `text/plain` Boolean contract
+([PermissionSchemeResource](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/admin/permissionscheme/PermissionSchemeResource.html)).
+Only literal `true` or `false` bytes on the exact PUT attribute route can select this media type.
+The custody owner validates the canonical string-int64 scheme ID, encoded attribute key and static
+opt-in before dispatch admission or credential materialisation. Ordinary serialized requests retain
+their JSON media type. This transport contract remains inside the existing authority, custody,
+timeouts and method-aware retry owner; the operation's local administration and native permissions
+remain independently required.
+
+Group changes bind exact native names and independent user key/username identities. Complete native
+membership includes subgroups and cannot establish direct assignment. Fuzzy lookup omissions stay
+unavailable with explicit bounded-search/Jira remediation. Notification acknowledgement never proves
+delivery or permits replay; exact pin confirmation reuses the same-parent comment/pinned owners.
+These two issue actions retain ordinary write scope (pin medium, notification high).
+
+Schema mutation reuses the existing formal owner for known field/type/link effects. Type rename
+can alter saved rule selection and is assessed across all relevant activations. A partial native
+field deletion or hidden migration/order population is not complete success; native null and
+omitted review data stay distinct. No blanket layout/prose enforcement is invented.
+
+Role configuration uses native collection strong ETag and If-Match, with no model token/header
+selector. Native412 is a conflict only in that fixed port and is never automatically retried.
+Exact application-access POST/DELETE uses the documented scoped experimental flag; named-user
+columns use a fixed form port preserving complete order/repetitions. Admin actor and target user
+identities remain separate. Five directory effects remain unconfirmed for global access/default
+provenance; only exact observed same-user column configuration may confirm.
+
+Maintenance requests bind native observed prerequisites, typed flags and exact issue/node
+selection, then perform one fixed effect. Every maintenance ACK remains unconfirmed for global
+cluster/index/migration completion. Opaque upgrade execution has no exposed per-issue field plan;
+it never claims saved-rule compliance or unchanged issue values. No background follow-up is added.
+
+Issue-type/priority schemes bind complete configured order/defaults and canonical project identities.
+Association and deletion acknowledgements do not prove aggregate issue consequences. Workflow
+scheme mutations bind the complete parent and, where selected, the exact reviewed draft. Base
+writes fix `updateDraftIfNeeded:false`; no call publishes or fabricates status migration. Native
+in-use restrictions remain independent, and draft PUT has no atomic compare-and-swap: a concurrently
+recreated draft cannot become confirmed success. Base mapping/default effects remain unconfirmed;
+exact draft configuration is not deployment. These configuration changes do not activate prose
+skills or invent a formal bulk-field migration; later issue writes rebind native metadata and rules.
+
+Closed instance-setting writes bind the exact actor and prior configuration. Four documented
+nonsecret application keys use native string values; global columns use the primary JSON overload
+with complete ordered IDs and repetitions. Base URL values are comparison-only, never new outbound
+routing; the desired value is safe HTTPS and global consequences remain unconfirmed. Read-only
+confirmation proves only the observed Boolean configuration. Target receipt bytes are bounded
+before any request; values/URLs are digests in private receipts.
+
+Email-template export is an explicit administration read with low risk, despite Jira's documented
+temporary local export ZIP. Only fixed raw `application/zip` download/upload is admitted, through
+the same custody, bounds, current authority and ACK/retry owners. Upload reuses connected-file
+containment, currentness and the credential floor; allowed mode mints a private immutable file
+snapshot under accepted authority, while review-required mode binds the existing approved snapshot.
+Model file metadata grants no authority and allowed mode gains no new mandatory prompt. Strict ZIP
+inspection reuses the existing bounded reader, rejects unsafe/unsupported entries and returns
+only manifest metadata/hashes. Unsupported export representations remain explicitly unavailable.
+Upload/apply/revert always stay acknowledged/unconfirmed: staged selection has no readable stable
+ID or CAS and active export is not proof of global email consequences. No replay is scheduled.
+
+Three native anonymization validation/progress observations use that same explicit admin scope
+while retaining low read risk and the existing per-Chat read grant. Their GET contracts do not
+schedule anonymization, reruns or unlock. Native task selection is separate from observed job
+identity; completion status alone does not prove an error-free job. POST search and selected
+worklog lookup are explicit remote reads, despite their HTTP method, and acquire no mutation
+approval or journal entry. The fixed auth/1 session GET reads only the bound connection after
+current-user equality; passwords, cookies and login/logout remain separate capabilities.
+
+Three additional native POST observations consume protected human input through the existing
+custody owner. Password-policy validation has ordinary read scope and low risk. License validation
+is an explicit administration read with high risk; it does not activate a license. Thus five native
+reads require administration: license validation, three anonymization GETs and the email
+pack GET. The three POST validators never acquire mutation-journal entries merely because they
+use POST. Only acceptance and a bounded violation count leave the private transport; echoed
+password/license values and reflected native messages do not.
+
+The [private account owner](../../packages/keiko-connectors/src/jira-managed-private-account.ts)
+binds actor and selected user key/username before dispatch. Current-user edits expose only reviewed
+display-name changes, with independent identity/active-state readback. Self-password, login, logout
+and websudo release retain ordinary write authority; another-user password requires administration.
+All retain high risk and existing approval semantics. Password updates, logout and websudo release
+remain acknowledged/unconfirmed for global credential/session consequences. A login success is
+restricted to a same-actor session independently established by cookie-only current-user and session
+reads. A PAT identity observation is never substituted for cookie proof.
+
+Protected values are supplied by authenticated human input, bound to the existing call's canonical
+arguments, current authority, actor and connector generation. They stay in the existing vault and
+one-use custody path, outside the catalog, model, transcript and Activity Log. The public pending
+view contains no secret and grants no authority. Supplying a missing secret or shutdown fact is
+distinct from granting action approval: required-review mode still uses the existing exact approval,
+while allowed mode does not acquire an extra mandatory approval. No new approval registry, generic
+header selector or credential forwarding route is introduced. The actual owners are
+[HumanInput custody](../../packages/keiko-connectors/src/jira-human-input-custody.ts) and the
+[fixed private HTTP boundary](../../packages/keiko-server/src/atlassian/httpPrivateIdentity.ts).
+
+Avatar effects require administration and use the existing authorized file/content snapshot path
+with strict PNG/JPEG admission and bounded immutable bytes. Their private cookie-only session is
+actor/generation/authority-bound; one exclusive lease covers target reads and its temporary slot.
+A new upload clears prior temporary state before dispatch, including a lost response. Crop/create
+consume only the exact reviewed slot and never infer an owner from generic temporary metadata.
+Only complete independent project/user selection metadata can confirm a selection. Other avatar
+ACKs remain unconfirmed for image content or assignment. Legacy generic upload/crop routes require
+a matching retained-release binding and are not exposed as working 11.3 APIs. Missing connected-file
+authority, including an uncomposed Coding source, refuses before upload; a task path is not a grant.
+The [avatar leaf](../../packages/keiko-connectors/src/jira-managed-avatar-mutations.ts),
+[file composition](../../packages/keiko-server/src/atlassian/jiraAvatarComposition.ts) and
+[private session custody](../../packages/keiko-connectors/src/jira-private-session-custody.ts)
+retain these distinct responsibilities.
+
+Native user/project/issue lifecycle effects preserve exact reviewed identities and known ACK IDs
+without asserting global access, hidden population or complete migration. Bulk create prepares all
+items through the existing create metadata, formal, trace and duplicate owners before one native
+request; partial ACK entries do not imply positional attribution or a retry. Reciprocal linking
+uses only an existing configured application link, never an arbitrary model URL or foreign probe.
+Issue/project deletion evaluates surviving required parent/link/issue-picker references through
+the existing formal-impact owner, refusing an unresolved global population. Deleted objects' own
+summary/labels are not fabricated surviving post-states; archive does not invent a field migration.
+Project restore acknowledgement does not start a second reindex effect. Configuration observations
+alone still cannot establish effective access or full global consequences.
+
+Anonymization unlock requires administration and an actual human-only shutdown attestation for the
+observed executing node and complete task snapshot. The
+[unlock owner](../../packages/keiko-connectors/src/jira-managed-anonymization-unlock.ts) rereads actor
+and native task immediately before one fixed bodyless DELETE. It identifies the shutdown statement
+as human-supplied information, not independent process evidence; node OFFLINE is insufficient.
+No model Boolean, invented task ID or progress unit is admitted. Native unlock has no task CAS and
+remains acknowledged/unconfirmed despite matching prereads. No automatic shutdown or replay follows.
+
+These are constrained source contracts. The existing 439-row coverage ledger keeps every runtime
+qualification unknown and AC1–AC9 open until actual current-head verification and original journey
+acceptance; neither a descriptor count nor this ADR supplies that evidence.
+
+Native shapes are read as Jira Data Center 10.3 actually returns them, as observed in the AC7
+qualification; each reading stays fail-closed. A version remote link's `link` is a `@JsonRawValue`
+string field, so the wire value already is the stored JSON and is not decoded a second time; an
+omitted member is unavailable and an explicit null is the stored JSON null. An issue remote link's
+`self` may name the bound issue by key or by ID; any other issue is refused. A backlog move is
+proven on the core Sprint field: a closed sprint stays there as history, so only entries that name
+exactly one closed state are ignored, and an open or unreadable entry remains a conflict.
+`mypreferences` and `monitoring/jmx/getAvailableMetrics` answer `text/plain` and are read as bounded
+text scalars that refuse control characters. A workflow-scheme issue-type read omits `workflow` for
+an unmapped type; only that read accepts the omission. Once a custom field's value changed,
+`customFields` reports its `lastValueUpdate` as epoch milliseconds; it is read as that exact UTC
+instant in ISO-8601 text, text from other releases stays as observed, and a negative, fractional or
+out-of-range number is malformed.
+
+The same qualification fixed five transport and reading rules, each scoped to the observed case:
+a bodiless native write (`PUT`, `POST` or `DELETE` without a body) carries
+`X-Atlassian-Token: no-check`, as the attachment upload does, because Jira refuses it with
+"XSRF check failed" otherwise; the header disables only Jira's browser-CSRF check, which a
+server-side client holding explicit credentials does not need, and the raw `application/zip`
+email-template upload keeps its exact closed header set. `PUT /settings/baseUrl` sends the base URL
+as raw text, which is the only form Jira accepts there; every other string body stays JSON. The bulk
+archive request `POST /issue/archive` asks for `text/plain`, the only representation Jira returns
+(`application/json` answers 406). Default (global) role actors are sent by user key: Jira answers
+400 for a username and 200 for the key, while project-role actors stay usernames; the default-actor
+removal uses the same key and is not yet qualified live. After an epic removal Jira reads the
+epicless issue as an explicit `fields: null`, which means no epic; a missing `fields` key or an
+object without the epic key stays malformed.
+
+A full sprint replacement (`PUT /sprint/{sprintId}`) may carry a reviewed incomplete-issues
+destination for a future or active sprint, not only for the closing replacement. Jira 10.3 accepts
+it with 200 and returns it on the next read, while it omits a null destination. Because an omitted
+field is never read as a confirmed clear, an open destination is the only way a full replacement
+can prove every field; a closed destination remains refused before any effect. Renaming a sprint
+for everyday planning uses the partial update (`POST /sprint/{sprintId}`), which the Chat and the
+qualification both prove by its native name.
+
+Native issue-link changes bind both canonical parents and the complete reviewed relations;
+saved templates judge the planned native post-relation before a single effect. Remote-link
+replacement reuses one supported typed snapshot and does not follow its metadata URLs. Native
+project-wide component/version removal and reassignment cannot establish every hidden issue
+post-state from visible entity collections or JQL. The existing formal-rule owner therefore
+refuses affected or unresolved edit-active required-field/parent-field rules before that bulk
+effect, with governed per-issue editing as remediation. Unrelated rules and prose skills do not
+activate enforcement; pure version ordering does not alter issue references. Native removal or
+merge acknowledgement plus entity absence still leaves aggregate reference effects unconfirmed.
+
+The human selects administration explicitly in the existing connector menu, separately from the
+mode. `Chat.jiraAdministrationEnabled` is false when absent, is stored in the existing Chat Jira
+state and can be enabled only for the unchanged currently verified Pod. HTTP updates require the
+existing scope-identity compare-and-swap. Changing the selection advances the binding generation,
+interrupts the current turn and revokes prior authority and approvals through the existing owners.
+Pod replacement, disconnection or credential invalidation clears the selection. Accepted-turn mint
+adds the admin scope only from that stored true selection; a mode change, legacy row or ready Pod
+alone cannot grant it. The existing body-free scope-update event records only the boolean and
+binding generation alongside its existing counts and digests.
+
+Coding sends the explicit opt-in through its existing connector scope vocabulary on the start
+request. The one-use start confirmation binds the resolved scopes and Pod. The run's registered
+Authority Envelope remains the sole scope authority: discovery filters actual admitted tools and
+every native effect rechecks the current required scope. Mode narrowing may preserve an already
+accepted admin scope but cannot manufacture it. No new mode, approval store or authority registry
+is introduced. Each affected operation now has an explicit `instance-admin-*` permission tag in
+its existing contract digest; an older ordinary-write approval cannot execute under the changed
+contract. Historical receipts remain readable with their captured contract snapshots.
+
 This is the normative mapping for every v1 governed connector operation. Rows are derived from
 `CODING_WORKBENCH_MODE_POLICIES`'s `internet` resource-scope row (all connector actions reach an
 external system over HTTPS) composed with `decideCodingWorkbenchActionForMode`'s scope gate
@@ -651,8 +985,9 @@ supervised-action path) for write operations — one connector scope, and one
 `CodingWorkbenchApprovalRisk`, and the disposition columns are the corresponding tri-state effect
 (`allowed | review-required | denied`) **assuming the required connector scope is present in the
 Authority Envelope.** The `Action class / kind` column below records both identifiers
-uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
-`CodingWorkbenchSupervisedActionKind`.
+uniformly for the original rows: reads name the `CodingWorkbenchActionClass`, writes name the
+`CodingWorkbenchSupervisedActionKind`. The administration extension above adds a distinct
+connector policy class without adding a Workbench action kind.
 
 | # | Action | Provider | Action class / kind | Connector scope | Approval risk | Ask for approval | Supervised workspace | Full access |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -677,9 +1012,68 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 The shared action vocabulary and registered outcome event include all twenty-two rows. The managed
 tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
 `jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
-`transition-issue`, and `jira.attach` → `update-issue-fields`. The eleven read tools retain their
-names. Assignment has the same medium risk
+`transition-issue`, and `jira.attach` → `update-issue-fields`. Every read tool in
+[`JIRA_MANAGED_READ_TOOLS`](../../packages/keiko-contracts/src/jira-tool-fields.ts) retains its
+name. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
+
+**Operation contracts (#4287, #4290).** The managed provider binds each implemented native
+operation to a server-owned method/path identity, reviewed effects, existing authority action,
+permission policy and typed argument/result descriptor. Composites have a distinct identity and
+pin their constituent contracts. A canonical digest binds these facts together. It travels through
+catalog validation, the exact write approval and journal action digest, dispatch and validated
+result projection, including preflight refusals. A caller cannot supply a URL or substitute a stale
+contract; the write owner compares the captured binding with the current registry before any
+effect. The HTTP verb alone never determines the operation's authority. Existing template,
+source, credential-generation, permission and one-use approval guards remain the execution owners.
+Persisted approval views use the private historical snapshot described in ADR-0181, without
+restoring execution authority from history. The discovery tools described there expose metadata
+under current accepted Chat authority, without Jira HTTP or a Jira read-grant lookup. Selecting
+schemas does not approve a remote operation; remote calls retain their existing authority checks.
+
+Native project setup and Software planning extend the same provider and policy vocabulary.
+Project creation and Board/Sprint/Epic planning writes carry high risk; ordinary project metadata
+updates carry medium risk. All retain `connector-write`, the existing `issue-tracker.write` scope,
+the mode-derived disposition and native Jira permissions. Software operations use the fixed
+`/rest/agile/1.0` root within the verified instance/context path; verification of the core REST
+identity does not establish Software availability or operation permission. Backlog rows and the
+Epic collection are distinct reads. Filter inspection preserves explicit sharing facts; no filter
+creation or default-sharing change is inferred from board creation.
+
+Comment, attachment and worklog deletion are distinct high-risk actions. Approval binds the
+reviewed native content/visibility or attachment filename/size, as well as the exact issue and
+resource identity. Execution revalidates that snapshot before its single DELETE. The native
+endpoints provide no conditional-delete guarantee; Keiko does not claim compare-and-swap behavior.
+Acknowledgement alone or a bare 404 never confirms removal: the same parent must remain readable
+and its complete bounded native collection must omit the exact target. Worklog deletion preserves
+the remaining estimate and admits the observed time-spent change through the existing saved-rule
+gate. Lost responses and incomplete readback retain known identities and never cause an automatic
+retry. Forward journal migration V66 preserves existing records while admitting these actions.
+
+Planning changes to issue fields reuse the existing edit-template gate before approval and
+again before effects. Native partial Sprint updates preserve omitted fields, and state transitions
+are checked against the current Sprint. Success requires independent readback; unavailable
+confirmation remains uncertain. Reviewed single-resource Board/Sprint/Epic, component/version,
+worklog and current-user watch/vote writes can establish no effect from Jira's structured rejection.
+Bulk membership errors remain uncertain even when
+structured and never authorize replay. Post-effect readback has its own bounded, read-only phase;
+bounded concurrent member reads preserve the original authority and cancellation. Unexpected
+confirmation errors reach the existing diagnostic owner with their cause and retained receipt.
+
+Forward UI-store migrations V62–V66 extend the mutation journal's closed native operation constraint
+for project, Software, component/version, comment, worklog, current-user participation and guarded
+resource deletion writes. They preserve the existing columns, rows, indexes and foreign keys;
+unknown operations and the non-dispatched draft composite remain refused. Reverting to older
+readers requires a compatible forward repair or the pre-update database backup.
+
+Native component/version confirmations reuse field-kind comparisons for clearable text and user
+names. Names with surrounding whitespace are refused before effects. A readable identity from an
+unexpected successful create response is retained and independently checked. An adapter that
+observes the requested state before effects explicitly marks `detail.unchanged=true`; only that
+closed evidence selects unchanged-result guidance, never the presence of a resource identifier.
+Comment updates preserve the current role/group visibility and independently confirm its body,
+identity and visibility. Saved-view reads expose observed dashboard and filter-sharing facts without
+claiming effective actor permission, changing sharing defaults or following upstream URLs.
 
 **Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
 changes an existing issue exactly as an edit does and is governed, approved, journaled and
@@ -840,9 +1234,14 @@ the draft's invocation and action digest, so an item already sent is never sent 
 The journal keeps no arguments or results, so a replayed refusal cannot repeat its reasons: it says that
 the same request was already refused and cannot pass (2026-11-03, S16, where a model resent a refused
 draft and read bare `failed` rows). A template refusal says how to correct it; a section is a line of
-its own, `h2. Title`. The advice about a draft that names no requirement applies once per set of item
-refs in a turn: corrected items pass as sent, a draft of other items is advised again. Before approval
-it comes after the field checks, so the human reviews the draft the model settled on.
+its own, `h2. Title`. A draft that names no requirement while the Chat holds requirements (S16,
+2026-11-08) stays refused with the `untraced` refusal until its source is corrected (references in
+`requirementIds`, criteria copied verbatim) or the exact draft is approved through the existing
+human review card, where the mode's policy already requires review (`review-required`). Resending the
+same draft never confirms it; the log notes a set of item refs once per turn, the refusal does not
+lapse. No approval card is added in Full access. The review card states the missing trace in plain
+EN/DE words. Before approval the check comes after the field checks, so the human reviews the draft
+the model settled on.
 The draft's one approval is claimed once at the first item's dispatch and covers its remaining
 items; Full access admits the draft under its envelope exactly as it admits a single create. The
 journal's bound of 32 single writes per turn counts records that may have reached Jira and does not
@@ -1009,8 +1408,8 @@ now announces every correction to the caller admission (`attemptAdmission` input
 provider retry of it, never on a call that did not ask for one). The grounded attempt tracker then
 moves the preceding unusable attempt (an exhausted round, or a tool call rejected before execution)
 out of the synthesis grant into tool-round orchestration, exactly as a confirmed tool round: its usage
-stays in the reported total and the turn's Authority Envelope (`maxModelCalls`, prompt budget) still
-bounds and counts the correction. The correction itself is admitted against the grant like any
+stays in the reported total and the turn's Authority Envelope (`maxModelCalls`) still bounds and
+counts the correction. The correction itself is admitted against the grant like any
 attempt, so there is still exactly one steered repair per call, the gateway's schema-repair allowance
 is unchanged, and a further unusable answer fails closed. Schema corrections joined this path on
 2026-11-01: the lab showed a Pod-sourced turn whose second schema correction was refused
@@ -1021,8 +1420,8 @@ failure (S08 of epic #4173: Gemma's second `jira.create` without `links[].type` 
 dead end). The Chat tool turn sends one further round carrying the same body-free correction, and
 announces it to the caller admission as a correction. The allowance is once per streak: a round
 that dispatches a tool call restores it, and a second rejection without progress ends the turn with
-its transcript answer as before. Every round stays inside the Authority Envelope's model-call and
-prompt budget, the rejected call executed nothing, and a later synthesis pass of the same turn never
+its transcript answer as before. Every round stays inside the Authority Envelope's model-call
+budget, the rejected call executed nothing, and a later synthesis pass of the same turn never
 inherits the correction. `chat.tool-turn.corrected` records each such round with the turn's settled
 exchange count and `correctionKind` `tool-schema`.
 A round the model completes with no text, no tool call and no reasoning takes the same path with
@@ -1089,15 +1488,37 @@ the approval.
   status>` for a definition of ready), `summaryMinLength`/`summaryMaxLength`/`summaryPattern`,
   `requiredFields` (instance field ids or names; a field is present when its value has any content,
   not only a name, key or id: a time-tracking estimate counts), `requiredLabels`/`labelPattern`/`minLabels`,
-  `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`. The
+  `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`.
+  Optional `parentIssueTypes: [Task]` requires `parentField` and a nonempty bounded list of native
+  issue-type names or IDs. The existing pre-effect gate resolves that field's post-write parent,
+  independently reads its native type through the bound issue reader, and refuses unreadable or
+  contradictory identities and disallowed types. Embedded/model-supplied type hints are no proof.
+  Without this clause the existing parent-presence rule is unchanged. Validation reads the native
+  type catalog; saving and activation still use the ordinary Markdown skill library. The report
+  checker reuses the same independently bound parent reader through its existing GET-only HTTP
+  owner, current admission, cancellation signal and read-slice deadline. Measured disallowed types
+  count as deviations; unavailable or contradictory evidence marks compliance `unavailable` and the
+  report incomplete without adding a deviation. Already measured partial facts remain explicit.
+  A slice exhausted during a parent read resumes that issue under the next call's fresh admission.
+  Prose-only skills never enter this enforcement path. The
   level-2 headings of the template body (`## Title`, or a setext title underlined with `---`) are
   the required description sections, each of which must be present and carry content. One reader
   (`jira-description-sections.ts`) uses Markdown mode for template bodies and explicitly tagged
   Markdown: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings. The projected
   Data Center wire description is judged in native wiki mode: only `hN.` headings count, so a
   native `#` numbered list or setext-looking text never satisfies a required section. Explicit
-  Markdown, and a plain string that reads as Markdown only, is serialized to native wiki before
-this check; native strings remain unchanged.
+  Markdown is projected before this check and before the reviewed draft/action digest. The same
+  bounded canonical heading reader and wiki writer described above supply the wire description,
+  template section identities and source-criterion matching. Safe image destinations become wiki
+  images; quoted source lines keep their literal `>` prefix. Code contents remain literal, and an
+  unterminated fence keeps the heading pass's result. An untagged plain string that reads as
+  Markdown only uses this projection too (#4173); ambiguous native strings remain unchanged.
+  Input and projected output must both fit the field's existing bounds; refusal never returns
+  partially converted fields. The existing public headings-only helper remains unchanged.
+  Existing Chat/Coding mutation evidence records the closed `supported-markdown` projection for
+  an explicit Markdown value or an actual rewrite, even without a heading, alongside any positive
+  converted-heading count. An unchanged native string carries neither conversion claim. Neither
+  field contains description content, and no second parser or projection owner is introduced.
   Backtick and tilde fences are Markdown syntax only: native descriptions and the native samples
   from which a template is proposed recognize matching `{code}` and `{noformat}` blocks instead.
   Markdown heading discovery ignores backtick/tilde fences and wiki code macros. Native wire
@@ -1132,10 +1553,15 @@ this check; native strings remain unchanged.
   added. Jira takes one `issuelinks` operation per request, so a `parentLink` rule is judged on the
   link that rides on the create or edit itself, never on one written afterwards: the gate puts a link
   of a required type first, and a state that the primary write cannot make conforming is refused
-  before any request. (2) In Ask-for-approval and Supervised modes Chat additionally runs the same pipeline as a
-  dry run (`checkJiraManagedMutationTemplates`) after the read grant and before the write approval
-  is created, so a human is never asked to approve a draft that would be refused. A failed dry run
-  is recorded and falls through to the gate. Every item of a backlog draft is dry-run when it is
+  before any request. (2) In every autonomy mode Chat additionally runs the same pipeline as a
+  dry run (`checkJiraManagedMutationTemplates`) before reservation and the effect boundary: in
+  Ask-for-approval and Supervised modes after the read grant and before the write approval is
+  created, so a human is never asked to approve a draft that would be refused, and in Full access
+  through the catalog binder's approval-free `preflight` hook. A refused write therefore settles with
+  `effectStarted: false` and is not dispatched in every mode; before 2026-11-09 Full access skipped
+  the dry run, so the gate refused only after the effect boundary and the receipt claimed a started
+  effect (#4321). The dry run's refusal is logged as stage `pre-approval` in every mode, including
+  Full access, where no approval follows. A failed dry run is recorded and falls through to the gate. Every item of a backlog draft is dry-run when it is
   staged (`jira.draft-stage`) and again before the draft's approval, staged or inline, with the
   relations the item proposes (a link to another draft item stands in as a placeholder key): a draft
   with a violating item is refused with that item's ref and violations before a human is asked, and
@@ -1156,6 +1582,13 @@ this check; native strings remain unchanged.
   pagination remains authoritative. These are rule facts, not another selected instruction skill;
   the user's explicitly selected skill remains unchanged. Staging, pre-approval and dispatch still
   re-read and enforce the current library independently of this advisory discovery result.
+- **Draft batch inputs (#4288).** `keiko.jira.draft.batch` asks the model for the template's
+  required fields plus every string field the current create metadata requires without a default
+  that neither Keiko nor Jira sets (a Data Center Epic's Epic Name, named with Jira's display
+  name). A failed metadata read adds nothing; staging still validates against current metadata. A
+  selection without a `documents` filter whose requirement IDs occur in more than one document
+  (one Lastenheft as Markdown, DOCX and PDF) is refused as `requirements-ambiguous` before any
+  model call, naming those documents, so a batch never drafts one requirement once per format.
 - **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
   /api/skills/jira-templates/validate` validates a template against the live instance through a
   Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or
@@ -1172,7 +1605,12 @@ this check; native strings remain unchanged.
   `chat.tool-authority.operation` records a repeated guard's allowed decision once per correlation
   and phase until it changes (2026-11-03: a large report's unchanged decisions were 67% of a lab's log
   bytes); every refusal is written. `jira.field.admission` records a pre-approval refusal by Keiko's own field validation: the
-  operation, the refused count and the closed validation classes, never a field or a value. The skill
+  closed operation class `jira-write`, the SHA-256 `operationDigest` of the exact tool name,
+  the refused count and the closed validation classes, never a property key or value. A refusal at
+  dispatch also carries `stage=dispatch`, the closed `fieldClass` (`system`, `custom`, `other`), the
+  `systemFieldId` only for a closed allow-list of system fields (never a custom field id) and the
+  `templateViolationCount`.
+  This log-only projection leaves the execution and approval identity unchanged. The skill
   library lines gain the actions `jira-template-list`, `-validate` and `-propose`.
 - **Scope.** Comments carry no field state and are not governed; an assignment is an edit of the
   `assignee` field and is. Organization-wide
@@ -1183,8 +1621,7 @@ this check; native strings remain unchanged.
 `issue-tracker.read`) and the one place where Keiko, not the model, produces project numbers. For a
 project (`projectKey`), a JQL scope (`jql`) or both, the connector pages Jira's search to
 completion itself and computes, as plain arithmetic over what it read: issues per status category
-and per issue type and status name, own estimates (`timeoriginalestimate` seconds, or a numeric
-field the caller names) done/total/remaining, unassigned and overdue open issues, progress per
+and per issue type and status name, own estimates done/total/remaining, unassigned and overdue open issues, progress per
 container (an epic, or any root issue holding non-sub-task work; hierarchy comes from `parent`,
 from app-defined fields the instance lists with an opaque value shape — schema type `any`, a custom
 type, no Jira system role — whose values are issue keys on the issues read, or from caller-named
@@ -1226,6 +1663,23 @@ field list was not read, makes the report incomplete with reason `template-unrea
 compliance `checker: unavailable` instead of zero deviations), and coverage of declared `requirementIds`
 (a requirement is covered by an issue naming its identifier in summary, labels or description;
 items traced through the covering issue's descendants and, for a container, its linked issues).
+**Estimate field selection (#4321 C4, 2026-11-08).** An explicit `estimateFieldId` wins.
+Otherwise, a project report reads its Agile board configurations with the existing item bound
+and worker-pool concurrency bound. A board field is eligible only when the project's create
+screens expose that numeric field; `timeoriginalestimate` requires `timetracking` on the screens.
+One consistent eligible board field wins. If the boards have no consistent usable field or their
+configuration cannot be read, the report selects a unique numeric Story Points field from the
+project's screens, then screen-backed `timetracking` as `timeoriginalestimate` in seconds.
+A global field name alone does not establish applicability. Without an applicable field, or when
+the board inventory exceeds its bound, the report records a closed unavailability reason and
+`estimate: null`, never invented zero totals or an invented unestimated-issue count. Cancellation
+and denied effect admission still stop the read. A JQL-only scope without a project preserves the
+original-time-estimate default in seconds. The summary and card name the selected field; model
+figures, exports and the report comment disclose unavailable estimates. The existing
+`atlassian.jira-report` line records `estimateSource` (`explicit-field`, `board-configuration`,
+`project-screen`, `time-tracking`, `unavailable`) and an optional closed
+`estimateUnavailableReason`, with no field id or display name.
+
 `requirementsFromPods: true` makes Keiko list the requirement identifiers of the Chat's
 Knowledge Pods itself (the read `knowledge.requirements` serves; stable derived `DRV-` handles are
 listed with the explicit ones, because an issue can name them in a trace footer or `keiko-req-` label
@@ -1237,9 +1691,8 @@ yourself); no report is started.
 The model supplies scope and options only and narrates the result; the digest of the report
 excludes read timing so the same Jira data always yields the same digest.
 
-Estimates are seconds of original time estimate unless the caller names a numeric field
-(`estimateFieldId`), whose own unit applies; the report, its exports and the tool description state
-the unit. Overdue is judged on an explicit UTC date (`asOf`, default the day of the first call),
+Estimates use the selected field's unit: original time estimates are seconds, while numeric
+custom fields keep their own unit. The report, exports and tool description state the unit. Overdue is judged on an explicit UTC date (`asOf`, default the day of the first call),
 recorded in the report and in the digest, which also covers a hash of every export row. Lists sort
 by Unicode code point, never by locale.
 
@@ -1478,20 +1931,33 @@ without answer or tool-result bodies.
   updates) is applied first and the trace merged into the one legal field mutation, so it neither
   conflicts with it nor removes trace labels the caller's set left out. What the instance dropped is returned in the tool
   result as `trace {labelsApplied, footerApplied, droppedLabels}` and counted on the log. The item
-  identity, the journal and the approval are unaffected; `jira.draft` keeps its byte bound and no item-count limit.
+  identity and existing journal remain authoritative; `jira.draft` keeps its byte bound and no item-count limit.
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
-  pre-approval dry run of a create or edit judges the values as the model wrote them.
+  pre-approval dry run judges the prepared source-derived values before asking for approval.
+  Preparation binds the canonical description, applied footer and labels, and complete document and
+  requirement revision digests. This private source digest participates in the exact action digest
+  and is persisted before approval or effects; truncated display digests are insufficient. A staged
+  draft commits to its prepared items and private source bindings before returning its preview.
+  Execution rechecks the bound revisions and refuses changed or unavailable sources rather than
+  substituting a new footer under an old approval. A traced staged draft without that binding must
+  be staged again. Unreferenced writes do not open Knowledge Pods.
   A traced draft also preserves the original acceptance criteria before a page is staged, before
   human approval and again before final execution. Each referenced unit requires all its original
   criteria; an explicit criterion reference requires that exact criterion. The canonical description
   projection must contain each criterion as a whole active paragraph or list item, or the complete
   ordered criterion set as one paragraph. Unicode normalization and whitespace wrapping may differ;
-  prefixes, substrings, headings, quotes and code do not establish preservation. A missing criterion
-  refuses the draft with `acceptance-criteria-missing` before a digest, approval or Jira mutation;
-  no approved description is silently rewritten. This proves content preservation, not semantic
-  implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
+  prefixes, substrings, headings, quotes and code do not establish preservation. A criterion the
+  author's description lacks is written by Keiko itself, verbatim from the source, into its own
+  replaceable trace block (owner decision, 2026-11-10, #4335). This happens during preparation, before the digest, the preview
+  and the human approval, so the payload the person approves already carries it and no approved
+  description is rewritten afterwards. The completed description is checked again; a criterion that
+  is still missing, or one without checkable text (for example a macro), refuses the draft with
+  `acceptance-criteria-missing` before a digest, approval or Jira mutation.
+  `knowledge.requirement-trace.applied` counts the completed criteria. This proves content
+  preservation, not semantic implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
   preview digest, template checks, journal and idempotent reconciliation continue to apply.
+  Direct create and edit calls apply the same criterion check whenever they supply a description.
 - _Change check._ A new document version is compared with the backlog through the labels alone;
   no earlier inventory is kept anywhere, so the baseline is what Jira holds. `change-queries`
   returns, per document, label-only JQL batches under the JQL length bound for items whose revision
@@ -1549,8 +2015,9 @@ without answer or tool-result bodies.
   `report-required`, `report-reading` or `report-not-found` and the closed `baselineSource`
   `explicit`/`turn`, never an identifier or key);
   `knowledge.requirement-trace.applied` records, per create, edit or draft, the traced,
-  refused and problem counts and the labels, footers and dropped labels applied. Counts and closed
-  words only.
+  refused and problem counts, the labels, footers and dropped labels applied, and how many source
+  acceptance criteria Keiko wrote verbatim into its own trace block of a written description
+  (`acceptanceCriteriaCompletedCount`). Counts and closed words only.
 - _Limits stated openly._ The tool is available only in a Chat with a Jira binding. The `removed`
   query is omitted when it would exceed the JQL bound. HTML flattening is a heuristic. PDF
   inventories depend on the extracted line structure. The detector is evaluated on the lab corpus
@@ -1693,10 +2160,15 @@ are covered through the real routes and the existing log reader. Managed Jira to
 `mcp.managed.lifecycle` producer; HTTP/provider failures are refused through that owner. No response
 body, URL, credential reference or token is copied into these registered projections.
 
-Every connector action attempt — allowed, review-required, denied, and failed — produces exactly
-one content-free audit record: action type, connector id, provider, target key/id (an issue key or
-page id — an identifier, not a body), disposition, reason code, correlation id, duration, and
-result status. A sync run additionally records the D5 counts, the outcome enum, and the run's
+Connector attempts retain the existing local activity ring for ordinary UI target identities.
+The global Activity Log instead records closed action classes, provider, disposition, reason,
+correlation, duration and outcome; it carries no connector or target key, remote URL or content.
+Managed Jira reads and writes use the bounded `jira-read` / `jira-write` classes. The exact original
+policy action type remains joinable through `actionTypeDigest`; Coding records the corresponding
+`toolClass` and `toolDigest` of the exact tool name. These SHA-256 digests cover server-owned
+operation names, not arguments. The real policy and execution types remain unchanged. This keeps
+the existing closed-enum bound as the operation inventory grows; it introduces no arbitrary log
+labels or wider authority. A sync run additionally records the D5 counts, the outcome enum, and the run's
 fingerprint-set digest. Rejected content in every audit and evidence record: issue/page bodies,
 comment text, ADF/storage-format payloads, field values, raw JQL, tokens, and any token-bearing
 URL — the same rejected-content list ADR-0124 D7 already fixes for coding evidence, applied here
@@ -1722,13 +2194,30 @@ describes is not redacted at the workspace layer.
 
 ### D7 — Qualified platforms and named follow-ups
 
-Cloud REST behavior remains supported. Epic #4081 adds a bounded Jira Data Center 10.3.26
-REST-v2/PAT connection path. Version and active identity are verified with bounded `serverInfo`
-and `myself` JSON reads under one deadline; HTML, redirects, authentication, permission, version,
-TLS and network failures have closed outcomes. Context paths are preserved. This implementation
-is not a qualification claim: real lab and model acceptance is recorded in
-[the epic evidence matrix](../qa/jira-chat-pods-4081.md). Other Data Center versions and
-Confluence Data Center remain unsupported. The existing sync lane remains Cloud-only.
+Cloud REST behavior remains supported. Epic #4081 added the bounded Jira Data Center REST-v2/PAT
+connection path, initially pinned to 10.3.26. Under #4287, connection admission requires a released
+version of **10.3.0 or later**, coherent numeric release/deployment facts and an active REST-v2
+identity. The lower bound is the oldest supported
+[official API source baseline](https://developer.atlassian.com/server/jira/platform/jira_software_dc_10003_swagger.v3.json),
+not a claim that all earlier releases lack REST v2. In particular, successful identity probes alone
+cannot establish compatibility with the split create-metadata endpoints
+[introduced in Jira 8.4](https://developer.atlassian.com/server/jira/platform/jira-rest-api-examples/).
+The same baseline validation applies to privately persisted compatibility facts; lower releases
+are refused after `serverInfo`, before requesting identity. There is no exact patch allow-list or
+upper-version ceiling. Coherent later releases, including versions newer than 11.3, may pass the
+two probes as observed releases but remain unqualified until their live acceptance is recorded.
+Bounded `serverInfo` and `myself` JSON reads share one deadline; HTML, redirects, authentication,
+permission, malformed or inconsistent version evidence, TLS and network failures have closed
+outcomes. Context paths are preserved. Compatibility facts record REST-v2 identity verification
+and leave Agile unverified; they do not claim that every operation exists or that the actor has
+permission to execute it. Task-required metadata and actual operation responses remain authoritative.
+There are no continuous probes or write-based discovery calls.
+
+Connection compatibility is not live qualification: real lab and model acceptance is recorded
+separately from deterministic protocol tests, including
+[the existing epic evidence matrix](../qa/jira-chat-pods-4081.md). Qualify the 10.3, 10.4, 11.2 and 11.3
+baselines where an environment exists; unavailable environments remain explicit limitations.
+Confluence Data Center remains unsupported. The existing sync lane remains Cloud-only.
 
 The following capabilities remain deferred:
 - **OAuth 2.0 (3LO).** API-token Basic auth is sufficient for a single local user's own credential

@@ -388,7 +388,9 @@ describe("app-session stream transport and completion remain distinct", () => {
       expect(record).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           operation: "coding-app-session.channel.subscribe",
-          correlationId: sessionId,
+          // The stream's diagnostics carry the request correlation, not the internal session id
+          // (sessionChannel.ts subscribeToContent, #4321).
+          correlationId: CORRELATION,
           source: "coding-app-session.session-channel.publish",
           message: "sse-backpressure",
           errorClass: "Error",
@@ -397,6 +399,7 @@ describe("app-session stream transport and completion remain distinct", () => {
       // The rejected `write` has already placed this one bounded frame in Node's buffer. The
       // app-session stream stops publishing and ends the response so that frame can flush; an
       // abrupt socket destroy would turn ordinary pressure into a client-visible offline error.
+      expect(JSON.stringify(record.mock.calls)).not.toContain(sessionId);
       expect(response.writableEnded).toBe(true);
       expect(response.destroyed).toBe(false);
       expect(terminalReason()).toBe("backpressure-killed");
@@ -541,13 +544,14 @@ describe("app-session stream transport and completion remain distinct", () => {
     expect(record).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         operation: "coding-app-session.channel.subscribe",
-        correlationId: sessionId,
+        correlationId: CORRELATION,
         source: "coding-app-session.session-channel.publish",
         message: "sse-listener-failed",
         errorClass: "TypeError",
       }),
     );
     expect(JSON.stringify(record.mock.calls)).not.toMatch(/private|secret/u);
+    expect(JSON.stringify(record.mock.calls)).not.toContain(sessionId);
     expect(response.destroyed).toBe(true);
     expect(terminalReason()).toBe("server-error");
     projection.purge("run-stream", "stop");

@@ -14,6 +14,8 @@ import type {
 // Keiko's closed write-failure and field-validation vocabularies. `localRefusal` assigns the
 // contract types to them, so a reason the contracts add fails the type check until it is listed.
 const REFUSAL_REASONS = [
+  "effect-denied",
+  "cancelled",
   "auth-failed",
   "permission-denied",
   "not-found",
@@ -96,6 +98,12 @@ const MUTATION_STATE = defineActivityLogOperation({
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
     linkFailedCount: { type: "integer", dataClass: "count", required: false },
     descriptionConvertedHeadingCount: { type: "integer", dataClass: "count", required: false },
+    descriptionProjection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["supported-markdown"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -136,13 +144,17 @@ function serializationMetrics(
   metrics: ChatToolMutationMetrics | undefined,
 ): ChatToolMutationMetrics {
   const count = metrics?.descriptionConvertedHeadingCount;
-  return event === "settled" &&
-    typeof count === "number" &&
-    Number.isInteger(count) &&
-    count > 0 &&
-    count <= 32768
-    ? { descriptionConvertedHeadingCount: count }
-    : {};
+  if (event !== "settled") return {};
+  const headingCount =
+    typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 32768
+      ? { descriptionConvertedHeadingCount: count }
+      : {};
+  return {
+    ...headingCount,
+    ...(metrics?.descriptionProjection === "supported-markdown"
+      ? { descriptionProjection: "supported-markdown" }
+      : {}),
+  };
 }
 export function recordChatToolMutation(
   log: ServerLogSink,

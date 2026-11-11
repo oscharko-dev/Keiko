@@ -39,11 +39,18 @@ function escaped(version: string): string {
   return version.replaceAll(".", String.raw`\.`);
 }
 
+let scannedSources: readonly { readonly path: string; readonly text: string }[] | undefined;
+
+// Read once and shared by both scans: the tree is several thousand files, and reading it twice under
+// a loaded parallel run timed out on Windows (#4068).
 function repositorySources(): readonly { readonly path: string; readonly text: string }[] {
-  return SCANNED_ROOTS.flatMap((root) => sourceFiles(join(REPOSITORY_ROOT, root))).map((path) => ({
-    path: relative(REPOSITORY_ROOT, path).split(sep).join("/"),
-    text: readFileSync(path, "utf8"),
-  }));
+  scannedSources ??= SCANNED_ROOTS.flatMap((root) => sourceFiles(join(REPOSITORY_ROOT, root))).map(
+    (path) => ({
+      path: relative(REPOSITORY_ROOT, path).split(sep).join("/"),
+      text: readFileSync(path, "utf8"),
+    }),
+  );
+  return scannedSources;
 }
 
 describe("the one OpenCode version boundary", () => {
@@ -75,8 +82,11 @@ describe("the one OpenCode version boundary", () => {
       String.raw`opencode-${escaped(OPENCODE_PINNED_VERSION)}\b|pinned (?:${versions})\b`,
       "u",
     );
+    const named = OPENCODE_RUNTIME_VERSION_PINS.map((pin) => pin.version);
     const offenders = repositorySources().flatMap(({ path, text }) => {
       if (VERSION_FACT_MODULES.has(path)) return [];
+      // Both patterns contain a pinned version verbatim, so a file naming none cannot match.
+      if (!named.some((version) => text.includes(version))) return [];
       const isTest = TEST_FILE.test(path);
       const restated = text.split("\n").filter((line) => {
         // A test may use a version as sample data; its fixture paths still follow the pin.

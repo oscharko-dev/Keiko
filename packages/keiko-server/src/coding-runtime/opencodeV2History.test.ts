@@ -2604,6 +2604,35 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     ]);
   });
 
+  // #4068 W12: Windows console output (CRLF, bare-CR progress rewrites, a megabyte-long line and
+  // replacement characters) never becomes timeline text: the call projects its state and exit
+  // status alone, whatever the runtime kept of its output.
+  it("projects no part of a large Windows-shaped shell output", () => {
+    const output = `PRIVATE_OUT\r\n[##  ] 50%\r[####] 100%\r\n${"y".repeat(1_048_576)}\uFFFD\r\n`;
+    const history = shellHistory({
+      status: "completed",
+      input: { command: "npm install" },
+      content: [{ type: "text", text: output }],
+      metadata: { status: "completed", truncated: true, exit: 0 },
+    });
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-shell",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const signals = projection
+      .project("ses_shell", history, undefined)
+      .flatMap((event) => projection.takeSignal(event) ?? []);
+
+    expect(signals.filter((signal) => signal.kind === "tool")).toEqual([
+      expect.objectContaining({ callId: "call_shell", state: "succeeded", exitCode: 0 }),
+    ]);
+    const serialized = JSON.stringify(signals);
+    expect(serialized).not.toContain("PRIVATE_OUT");
+    expect(serialized).not.toContain("100%");
+    expect(serialized.length).toBeLessThan(4_096);
+  });
+
   // #4271: a command the runtime killed reports no exit status at all, only how it ended.
   it.each([
     ["ran out of its timeout", { status: "completed", truncated: false, timeout: true }],
@@ -2615,6 +2644,31 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(signal).toEqual(expect.objectContaining({ callId: "call_shell", state: "failed" }));
     expect(signal).not.toHaveProperty("exitCode");
     expect(signal).not.toHaveProperty("exitStatusCheck");
+  });
+
+  // #4271: OpenCode settled the call as rejected by a permission decision (a configured rule, Keiko's policy
+  // or a person); the token names no origin.
+  // Only the closed `permission.rejected` token marks that; the upstream message is never read.
+  it.each([
+    [
+      "the closed permission.rejected token",
+      { type: "permission.rejected", message: "PRIVATE_X" },
+      "denied",
+    ],
+    ["another error type", { type: "tool.failed", message: "PRIVATE_X" }, "failed"],
+    ["a near-miss token", { type: "permission.rejected.other", message: "PRIVATE_X" }, "failed"],
+    ["no error type", { message: "PRIVATE_X" }, "failed"],
+    ["a bare string error", "permission.rejected", "failed"],
+  ])("projects a command whose part errored with %s as %s", (_name, error, state) => {
+    const signals = toolSignals(
+      shellHistory({
+        status: "error",
+        input: { command: "cd .. && ls", workdir: "/private/workspace" },
+        error,
+      }),
+    );
+    expect(signals).toEqual([expect.objectContaining({ callId: "call_shell", state })]);
+    expect(JSON.stringify(signals)).not.toMatch(/PRIVATE_|external_directory|workspace/u);
   });
 
   it("projects a command that exited zero as succeeded with its exit status", () => {

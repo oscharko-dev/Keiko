@@ -1,4 +1,11 @@
 import type { ProductionManagedWorktreeToolInput } from "./productionManagedWorktreeTools.js";
+import {
+  jiraPrivateSessionReference,
+  jiraSessionBindingForInput,
+  type JiraHumanInputBinding,
+} from "@oscharko-dev/keiko-connectors";
+import { privateJiraCustodyFixture } from "../../../../tests/support/jira-private-custody-fixture.js";
+import { createJiraPrivatePorts } from "../atlassian/httpPrivateIdentity.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local resolver fixtures are contextually typed. */
 import * as processLog from "../process-log-sink.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -63,7 +70,7 @@ const ciRepairNotifierCapture = vi.hoisted(() => ({
 }));
 
 // #3873: a fixture without delivery storage composes the unavailable CI-repair budget, which refuses
-// every prompt charge. The one test that drives a run's model calls through the composed prompt
+// every model call. The one test that drives a run's model calls through the composed admission
 // ledger replaces it with a budget that admits them; every other test composes the original.
 const ciRepairBudgetOverride = vi.hoisted(() => ({
   current: undefined as CiRepairExecutionBudget | undefined,
@@ -117,6 +124,7 @@ vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
 });
 
 const roots: string[] = [];
+const WORKSPACE_NOW = Date.parse("2026-07-13T12:00:00.000Z");
 
 afterEach(() => {
   ciRepairBudgetOverride.current = undefined;
@@ -1176,6 +1184,7 @@ describe("production coding runtime resolver", () => {
         connections: vi.fn(),
         attach: vi.fn(),
         close: vi.fn(),
+        closeRun: vi.fn(() => Promise.resolve()),
       };
       return { pods, port: pods as unknown as CodingJiraPods };
     }
@@ -1185,9 +1194,10 @@ describe("production coding runtime resolver", () => {
         readonly resolution?: CodingJiraPodResolution;
         readonly toolProfile?: OpenCodeToolProfile;
         readonly withPods?: boolean;
+        readonly durationMinutes?: number;
       } = {},
     ) {
-      const fixture = workspaceFixture();
+      const fixture = workspaceFixture(options.durationMinutes);
       const confirmations = confirmationFixture();
       const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
         backendRun(input.request.runId),
@@ -1204,6 +1214,263 @@ describe("production coding runtime resolver", () => {
       return { host, createRun, pods, confirmations, fixture, request };
     }
 
+    it("binds admin opt-in to the confirmation and exposes live scopes only through the run envelope", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+          ...request,
+          jiraPod: BOUND,
+          connectorScopes: ["issue-tracker.admin"],
+        }),
+      );
+      host.launchResolver.resolve({
+        ...request,
+        jiraPodId: POD,
+        connectorScopes: ["issue-tracker.admin"],
+      });
+      const launched = createRun.mock.calls[0]?.[0];
+      expect(launched?.context.connectorScopes).toContain("issue-tracker.admin");
+      expect(launched?.jiraAuthority?.currentScopes("discovery")).toContain("issue-tracker.admin");
+      expect(launched?.jiraAuthority?.currentScopes("effect")).toBeUndefined();
+    });
+    it("binds Jira private cleanup to the existing run controller through normal manager stop", async () => {
+      const { host, createRun, confirmations, fixture, request, pods } = jiraHost();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(fixture.nowMs());
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+          ...request,
+          jiraPod: BOUND,
+        }),
+      );
+      const launch = host.launchResolver.resolve({ ...request, jiraPodId: POD });
+      const manager = host.createManager(vi.fn());
+      const backend = createRun.mock.calls[0]?.[0];
+      const authority = backend?.jiraAuthority;
+      if (
+        authority === undefined ||
+        !("signal" in authority) ||
+        !(authority.signal instanceof AbortSignal)
+      )
+        throw new TypeError("Missing bound Jira run lifetime signal");
+      expect(authority.signal.aborted).toBe(false);
+      await manager.start({
+        ...launch,
+        runId: request.runId,
+        workspaceRoot: fixture.workspace,
+        requestedMode: request.requestedMode,
+      });
+      await manager.stop(request.runId);
+      expect(authority.signal.aborted).toBe(true);
+      expect(pods.closeRun).toHaveBeenCalledWith(request.runId);
+    });
+
+    async function idleRun(durationMinutes = 1) {
+      const h = jiraHost({ durationMinutes });
+      vi.useFakeTimers();
+      const mintedAt = h.fixture.nowMs();
+      vi.setSystemTime(mintedAt);
+      h.confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(h.fixture.authority, {
+          ...h.request,
+          jiraPod: BOUND,
+        }),
+      );
+      const launch = h.host.launchResolver.resolve({ ...h.request, jiraPodId: POD });
+      const backend = h.createRun.mock.calls[0]?.[0];
+      const signal = backend?.jiraAuthority?.signal;
+      if (backend === undefined || signal === undefined)
+        throw new TypeError("Missing bound run lifetime");
+      const manager = h.host.createManager(vi.fn());
+      await manager.start({
+        ...launch,
+        runId: h.request.runId,
+        workspaceRoot: h.fixture.workspace,
+        requestedMode: h.request.requestedMode,
+      });
+      const expiresAt = Math.min(
+        Date.parse(backend.context.expiresAt),
+        mintedAt + backend.context.budget.maxRuntimeMs,
+      );
+      return { ...h, backend, signal, manager, expiresAt, remainingMs: expiresAt - mintedAt };
+    }
+
+    function idlePrivateSession(run: Awaited<ReturnType<typeof idleRun>>, withInput: boolean) {
+      const custody = privateJiraCustodyFixture("jira.login");
+      custody.advance(Date.now() - (custody.binding.expiresAt - 60_000));
+      const binding: JiraHumanInputBinding = {
+        ...custody.binding,
+        context: {
+          kind: "coding",
+          taskId: run.backend.context.taskId,
+          runId: run.request.runId,
+          callId: "idle-login",
+        },
+        authority: run.backend.minted.authorityRef,
+        expiresAt: Date.now() + 60_000,
+      };
+      const sessionScope = { ...jiraSessionBindingForInput(binding), expiresAt: run.expiresAt };
+      const selection = withInput
+        ? (() => {
+            const pending = custody.inputs.prepare(binding);
+            const ready = custody.inputs.submit(pending.requestId, binding, pending.revision, {
+              password: "synthetic-idle-test-password",
+            });
+            return { requestId: ready.requestId, revision: ready.revision, binding };
+          })()
+        : undefined;
+      const baseUrl = "https://jira.example.invalid/context";
+      const cookie = { name: "JSESSIONID", value: "synthetic-idle-test-cookie" };
+      const fetchImpl = vi.fn<typeof fetch>((input, init) => {
+        const url = privateFixtureUrl(input);
+        if (url === `${baseUrl}/rest/api/2/myself`)
+          return Promise.resolve(Response.json({ key: "actor-key", name: "Native Actor" }));
+        if (url !== `${baseUrl}/rest/auth/1/session`)
+          return Promise.reject(new TypeError("Unexpected private fixture URL"));
+        if (init?.method === "POST") return Promise.resolve(Response.json({ session: cookie }));
+        if (init?.method === "GET") return Promise.resolve(Response.json({ name: "Native Actor" }));
+        if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.reject(new TypeError("Unexpected private fixture method"));
+      });
+      const options = {
+        baseUrl,
+        authRef: binding.authRef,
+        credentials: custody.executionResolver,
+        fetchImpl,
+      };
+      const vaultReads = vi.spyOn(custody.vault, "get");
+      const vaultLists = vi.spyOn(custody.vault, "list");
+      const vaultWrites = vi.spyOn(custody.vault, "compareAndSet");
+      const ports = createJiraPrivatePorts(
+        options,
+        options,
+        {
+          invocationId: "idle-login",
+          correlationId: run.request.runId,
+          signal: run.signal,
+          beforeEffect: () => true,
+        },
+        {
+          sessionScope,
+          lifetimeSignal: run.signal,
+          ...(selection === undefined ? {} : { selection }),
+        },
+      );
+      return {
+        ...custody,
+        ports,
+        fetchImpl,
+        sessionScope,
+        cookie,
+        vaultReads,
+        vaultLists,
+        vaultWrites,
+      };
+    }
+
+    it.each([1, 2])(
+      "expires an entirely idle run at its accepted %s-minute boundary and logs out once",
+      async (minutes) => {
+        const run = await idleRun(minutes);
+        const f = idlePrivateSession(run, true);
+        try {
+          expect(await f.ports.identity.perform("login", {})).toMatchObject({
+            ok: true,
+            body: { sessionEstablished: true },
+          });
+          const reference = jiraPrivateSessionReference(f.sessionScope);
+          f.advance(run.remainingMs - 1);
+          run.fixture.advanceNow(run.remainingMs - 1);
+          await vi.advanceTimersByTimeAsync(run.remainingMs - 1);
+          expect(run.signal.aborted).toBe(false);
+          expect(f.sealedPortEntries.get(reference)).toContain(f.cookie.value);
+          expect(
+            f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE"),
+          ).toHaveLength(0);
+          f.advance(1);
+          run.fixture.advanceNow(1);
+          await vi.advanceTimersByTimeAsync(1);
+          // No authority query, tool call, manager stop or manual abort triggers this transition.
+          expect(run.signal.aborted).toBe(true);
+          expect(f.sealedPortEntries.has(reference)).toBe(false);
+          const logout = f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE");
+          expect(logout).toHaveLength(1);
+          const logoutInput = logout[0]?.[0];
+          if (logoutInput === undefined) throw new TypeError("Missing logout request");
+          expect(privateFixtureUrl(logoutInput)).toBe(
+            "https://jira.example.invalid/context/rest/auth/1/session",
+          );
+          expect(new Headers(logout[0]?.[1]?.headers).get("cookie")).toBe(
+            `JSESSIONID=${f.cookie.value}`,
+          );
+          expect(new Headers(logout[0]?.[1]?.headers).has("authorization")).toBe(false);
+          expect(logout[0]?.[1]?.body).toBeUndefined();
+          await vi.advanceTimersByTimeAsync(run.remainingMs);
+          expect(
+            f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE"),
+          ).toHaveLength(1);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          await run.manager.stop(run.request.runId);
+          await f.ports.finish();
+        }
+      },
+    );
+
+    it("expires an idle run without opening or allocating unused private custody", async () => {
+      const run = await idleRun();
+      const f = idlePrivateSession(run, false);
+      const before = [...f.sealedPortEntries];
+      try {
+        f.advance(run.remainingMs);
+        run.fixture.advanceNow(run.remainingMs);
+        await vi.advanceTimersByTimeAsync(run.remainingMs);
+        expect(run.signal.aborted).toBe(true);
+        expect(f.fetchImpl).not.toHaveBeenCalled();
+        expect(f.vaultReads).not.toHaveBeenCalled();
+        expect(f.vaultLists).not.toHaveBeenCalled();
+        expect(f.vaultWrites).not.toHaveBeenCalled();
+        expect([...f.sealedPortEntries]).toEqual(before);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await run.manager.stop(run.request.runId);
+        await f.ports.finish();
+      }
+    });
+
+    it.each(["stop", "revoke"])(
+      "clears the single idle-expiry impulse on normal %s",
+      async (end) => {
+        const run = await idleRun();
+        expect(vi.getTimerCount()).toBe(1);
+        if (end === "stop") await run.manager.stop(run.request.runId);
+        else await run.backend.authorityLifecycle.revokeRuntime(run.request.runId);
+        expect(run.signal.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(run.remainingMs * 2);
+        expect(vi.getTimerCount()).toBe(0);
+        await run.manager.stop(run.request.runId);
+      },
+    );
+
+    it("refuses an administrative launch under a confirmation that approved ordinary Jira access", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+          ...request,
+          jiraPod: BOUND,
+        }),
+      );
+      expect(() =>
+        host.launchResolver.resolve({
+          ...request,
+          jiraPodId: POD,
+          connectorScopes: ["issue-tracker.admin"],
+        }),
+      ).toThrow("runtime-start-unconfirmed");
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
     it("binds the chosen Pod's identity into the confirmation claim and hands it to the backend", () => {
       const { host, createRun, pods, confirmations, fixture, request } = jiraHost();
       confirmations.issue(
@@ -1216,7 +1483,11 @@ describe("production coding runtime resolver", () => {
       host.launchResolver.resolve({ ...request, jiraPodId: POD });
 
       expect(pods.resolve).toHaveBeenCalledWith(POD);
-      expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "bound" });
+      expect(pods.recordBind).toHaveBeenCalledWith(
+        "run-1",
+        { outcome: "bound" },
+        expect.arrayContaining(["issue-tracker.read", "issue-tracker.write"]),
+      );
       expect(createRun.mock.calls[0]?.[0].request.jiraPod).toEqual(BOUND);
     });
 
@@ -1275,7 +1546,11 @@ describe("production coding runtime resolver", () => {
         expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
           CodingRuntimeJiraPodRefusedError,
         );
-        expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "refused", reason });
+        expect(pods.recordBind).toHaveBeenCalledWith(
+          "run-1",
+          { outcome: "refused", reason },
+          expect.arrayContaining(["issue-tracker.read", "issue-tracker.write"]),
+        );
         expect(createRun).not.toHaveBeenCalled();
         // The one-use confirmation survived: the same start without the Pod proceeds.
         host.launchResolver.resolve(request);
@@ -1391,7 +1666,7 @@ describe("production coding runtime resolver", () => {
   });
 
   // #3873: the composed host counts a run's model calls where the sidecar gateway admits and settles
-  // them — the model-gateway capability's prompt reservation — and its tool calls where the run's
+  // them — the model-gateway capability's admission and settlement — and its tool calls where the run's
   // facade answers them, and answers both through `runEffort` for the run's settled line.
   it("counts the run's admitted model calls and answered tool calls for its effort roll-up", async () => {
     const fixture = workspaceFixture();
@@ -1401,8 +1676,7 @@ describe("production coding runtime resolver", () => {
     vi.setSystemTime(fixture.nowMs());
     ciRepairBudgetOverride.current = {
       admitTool: () => undefined,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
+      admitModelCall: () => ({ accepted: true }),
       observed: () => undefined,
     };
     const confirmations = confirmationFixture();
@@ -1419,22 +1693,23 @@ describe("production coding runtime resolver", () => {
     const backend = createRun.mock.calls[0]?.[0];
     const ledger = host.runtimeCapabilityAuthenticator;
     if (backend === undefined || ledger === undefined || !hasPromptSettlement(ledger)) {
-      throw new Error("expected a composed run and its prompt ledger");
+      throw new Error("expected a composed run and its admission ledger");
     }
     const capability = backend.minted.modelGatewayCapability;
 
     // One model call the gateway admitted and, 4 s later, settled with the provider's own count. The
     // admitted reservation answers the call's identity and the settlement names it, as the gateway
     // does, so the call is timed from its own reservation.
-    const reserved = ledger.reservePromptTokens?.(capability, 1_000);
+    const reserved = ledger.admitModelCall?.(capability, 1_000);
     expect(reserved).toMatchObject({ ok: true, modelCallId: expect.any(Number) as unknown });
     fixture.advanceNow(4_000);
     vi.setSystemTime(fixture.nowMs());
     expect(
       ledger.settlePromptTokens(capability, 1_000, 1_240, modelCallIdOf(reserved)),
     ).toMatchObject({ ok: true });
-    // A reservation the run's allowance refused is no model call: nothing was dispatched.
-    expect(ledger.reservePromptTokens?.(capability, 10_000_000)).toMatchObject({ ok: false });
+    // Keiko does not limit tokens (#4346): a call estimated at ten million prompt tokens is admitted
+    // like any other. It was never settled, so it is no completed model call of the effort roll-up.
+    expect(ledger.admitModelCall?.(capability, 10_000_000)).toMatchObject({ ok: true });
     // A malformed edit the run's facade refused is still a refused edit.
     await expect(
       backend.toolFacade.execute({
@@ -1469,8 +1744,7 @@ describe("production coding runtime resolver", () => {
     vi.setSystemTime(fixture.nowMs());
     ciRepairBudgetOverride.current = {
       admitTool: () => undefined,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
+      admitModelCall: () => ({ accepted: true }),
       observed: () => undefined,
     };
     const confirmations = confirmationFixture();
@@ -1543,6 +1817,11 @@ function childUnavailable(host: ProductionCodingRuntimeHost, runId: string): boo
   return host.runtimeCapabilityAuthenticator
     ?.unavailableOptionalTools?.(runId)
     ?.has("keiko_child_agent");
+}
+
+function privateFixtureUrl(value: Parameters<typeof fetch>[0]): string {
+  if (typeof value === "string") return value;
+  return value instanceof URL ? value.href : value.url;
 }
 
 function resolverFor(
@@ -1674,14 +1953,14 @@ function runtimeManager(runId: string) {
   };
 }
 
-function workspaceFixture() {
+function workspaceFixture(maxDurationMinutes?: number) {
   const managed = realpathSync(mkdtempSync(join(tmpdir(), "keiko-runtime-resolver-")));
   roots.push(managed);
   const workspace = join(managed, "repo", "workspace");
   mkdirSync(workspace, { recursive: true });
   let head = "1".repeat(40);
   let workspaceAccessAvailable = true;
-  let nowMs = Date.parse("2026-07-13T12:00:00.000Z");
+  let nowMs = WORKSPACE_NOW;
   const instance = {
     workspaceId: "workspace-private",
     repositoryId: "repository-private",
@@ -1703,6 +1982,7 @@ function workspaceFixture() {
       } as never,
       managedTaskWorkspaceRoot: managed,
       deploymentCeiling: "supervised-coding" as const,
+      ...(maxDurationMinutes === undefined ? {} : { maxDurationMinutes }),
       readWorkspaceHead: () => head,
       now: () => new Date(nowMs),
     },

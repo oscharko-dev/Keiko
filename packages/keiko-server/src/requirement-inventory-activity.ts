@@ -141,11 +141,15 @@ export interface RequirementTraceActivity {
   /** Unknown, ambiguous or malformed references, excluding missing source criteria. */
   readonly referenceProblemCount: number;
   readonly acceptanceCriteriaMissingCount: number;
+  /** Source criteria Keiko wrote into its own trace block of a written description. */
+  readonly acceptanceCriteriaCompletedCount?: number;
   readonly labelsAppliedCount: number;
   readonly footerAppliedCount: number;
   readonly droppedLabelCount: number;
   /** The Pods could not be read; the write was refused. */
   readonly unavailable: boolean;
+  readonly sourceRefusal?: "source-changed" | "unavailable";
+  readonly sourceChangedCount?: number;
 }
 
 const REQUIREMENT_TRACE_APPLIED_OPERATION = defineActivityLogOperation({
@@ -166,10 +170,18 @@ const REQUIREMENT_TRACE_APPLIED_OPERATION = defineActivityLogOperation({
     refusedItemCount: COUNT,
     referenceProblemCount: COUNT,
     acceptanceCriteriaMissingCount: { ...COUNT, required: false },
+    acceptanceCriteriaCompletedCount: { ...COUNT, required: false },
     labelsAppliedCount: COUNT,
     footerAppliedCount: COUNT,
     droppedLabelCount: COUNT,
     unavailable: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceRefusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["source-changed", "unavailable"],
+    },
+    sourceChangedCount: { ...COUNT, required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

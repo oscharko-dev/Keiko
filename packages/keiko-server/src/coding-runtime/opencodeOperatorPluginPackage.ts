@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { OwnerPrivateFileRefused, readOwnerPrivateFile } from "../ownerPrivateStateFile.js";
+import {
+  OwnerPrivateFileRefused,
+  ownerPrivateReaderFor,
+  type OwnerPrivateReader,
+} from "../ownerPrivateStateFile.js";
+import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 
 /**
  * An npm plugin package the operator installed locally (#3903 AC2): the runtime's own `plugin add`
@@ -33,13 +38,25 @@ export type PluginPackageRead =
   | { readonly ok: false; readonly reason: WalkRefusal | "entry-missing" };
 
 interface Walk {
+  readonly paths: string[];
   readonly files: PluginPackageFile[];
   bytes: number;
 }
 
-export function readPluginPackage(root: string, entry: string): PluginPackageRead {
-  const walk: Walk = { files: [], bytes: 0 };
-  const refusal = walkDirectory(root, "", 0, walk);
+/**
+ * Reads and hashes a package tree. On Windows a root that is not a local drive path (a UNC or device
+ * path) is refused before any filesystem call: the first listing would contact the host (#4068 W7).
+ */
+export function readPluginPackage(
+  root: string,
+  entry: string,
+  platform: NodeJS.Platform = process.platform,
+): PluginPackageRead {
+  if (platform === "win32" && !isWindowsLocalDriveFilePath(root))
+    return { ok: false, reason: "unreadable" };
+  const walk: Walk = { paths: [], files: [], bytes: 0 };
+  const listed = walkDirectory(root, "", 0, walk);
+  const refusal = readListedFiles(root, walk) ?? listed;
   if (refusal !== undefined) return { ok: false, reason: refusal };
   if (!walk.files.some((file) => file.path === entry))
     return { ok: false, reason: "entry-missing" };
@@ -67,7 +84,7 @@ function walkDirectory(
   return undefined;
 }
 
-// A directory recurses; a regular file is read; anything else (a link, a device) is skipped, as
+// A directory recurses; a regular file is listed; anything else (a link, a device) is skipped, as
 // `find -type f` skips it.
 function walkEntry(
   root: string,
@@ -77,13 +94,35 @@ function walkEntry(
   walk: Walk,
 ): WalkRefusal | undefined {
   if (entry.isDirectory()) return walkDirectory(root, path, depth + 1, walk);
-  return entry.isFile() ? readFile(root, path, walk) : undefined;
+  return entry.isFile() ? listFile(path, walk) : undefined;
 }
 
-function readFile(root: string, path: string, walk: Walk): WalkRefusal | undefined {
-  if (walk.files.length >= PLUGIN_PACKAGE_MAX_FILES) return "too-large";
+function listFile(path: string, walk: Walk): WalkRefusal | undefined {
+  if (walk.paths.length >= PLUGIN_PACKAGE_MAX_FILES) return "too-large";
+  walk.paths.push(path);
+  return undefined;
+}
+
+// The listing is complete up to its first refusal; the files listed before it are read in walk
+// order, so the first refusal in that order still wins. One owner-private reader covers the whole
+// tree, so Windows inspects it with one process instead of one per file (#4068).
+function readListedFiles(root: string, walk: Walk): WalkRefusal | undefined {
+  const reader = ownerPrivateReaderFor(walk.paths.map((path) => join(root, path)));
+  for (const path of walk.paths) {
+    const refusal = readFile(reader, root, path, walk);
+    if (refusal !== undefined) return refusal;
+  }
+  return undefined;
+}
+
+function readFile(
+  reader: OwnerPrivateReader,
+  root: string,
+  path: string,
+  walk: Walk,
+): WalkRefusal | undefined {
   try {
-    const bytes = readOwnerPrivateFile(join(root, path), PLUGIN_PACKAGE_MAX_BYTES - walk.bytes);
+    const bytes = reader.read(join(root, path), PLUGIN_PACKAGE_MAX_BYTES - walk.bytes);
     if (bytes === undefined) return "unreadable";
     walk.bytes += bytes.length;
     walk.files.push({ path, bytes });

@@ -76,15 +76,16 @@ export const handleDecideChatWriteApproval = decideChatConsent(
   },
 );
 
+// The cookie projection in `sessionCookie.ts` is exactly the prefix of these two routes.
 export const CHAT_WRITE_APPROVAL_ROUTE_GROUP: readonly RouteDefinition[] = [
   {
     method: "GET",
-    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/chat-write-approval",
+    pattern: "/api/atlassian-connectors/chat-write-approval/:approvalId",
     handler: handleGetChatWriteApproval,
   },
   {
     method: "POST",
-    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/chat-write-approval",
+    pattern: "/api/atlassian-connectors/chat-write-approval/:approvalId",
     handler: handleDecideChatWriteApproval,
   },
 ];

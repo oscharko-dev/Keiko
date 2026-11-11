@@ -156,6 +156,12 @@ function CreateCapsuleDialog({
   useDialogTabTrap(dialogRef);
   useModalInteractionLock({ initialFocusRef: inputRef });
 
+  // The modal lock only focuses the input on the next animation frame; text typed in the gap was
+  // lost (#4335). Focus on mount, synchronously, so the name field owns the keyboard at once.
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return undefined;

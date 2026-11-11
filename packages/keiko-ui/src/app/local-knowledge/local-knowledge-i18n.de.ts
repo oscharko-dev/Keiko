@@ -339,6 +339,8 @@ export const DE_LOCAL_KNOWLEDGE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.connect.repositoryFilesDisabledNote":
     "Die Auswahl einzelner Dokumente ist im Repository-Modus nicht verfügbar. Das gesamte Repository wird als eine Code-Quelle verbunden.",
   "localKnowledge.detail.connect.connect": "Verbinden",
+  "localKnowledge.detail.connect.connected":
+    "Verbunden: {source}. Nächster Schritt: indexieren, damit Keiko die Quelle durchsuchen kann.",
   "localKnowledge.detail.connect.connecting": "Verbinde…",
   "localKnowledge.detail.connect.limitSummary":
     "Maximale Größe pro Datei: {size}. Parser-Budget: {objects} Objekte, {duration} pro Dokument.",

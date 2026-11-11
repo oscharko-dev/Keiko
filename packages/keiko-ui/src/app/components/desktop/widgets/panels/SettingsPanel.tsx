@@ -605,8 +605,10 @@ function capabilityFieldLabel(field: ObservableCapabilityField, t: I18nTranslate
   return t("settings.models.capabilityStreaming");
 }
 
-function displayCapabilityValue(value: boolean | number, t: I18nTranslate): string {
-  if (typeof value === "number") return value.toLocaleString();
+// Numbers follow the UI language, never the host's default locale (#4068: a de-DE Windows host
+// rendered "4.096" inside English copy).
+function displayCapabilityValue(value: boolean | number, t: I18nTranslate, locale: string): string {
+  if (typeof value === "number") return new Intl.NumberFormat(locale).format(value);
   return value ? t("settings.models.yes") : t("settings.models.no");
 }
 
@@ -675,6 +677,7 @@ function CapabilityDisagreementActions({
   readonly onApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
+  const locale = useLocale();
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | undefined>();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -702,8 +705,8 @@ function CapabilityDisagreementActions({
         <div className="mono" key={field}>
           {t("settings.models.capabilityDifference", {
             field: capabilityFieldLabel(field, t),
-            configured: displayCapabilityValue(configured, t),
-            observed: displayCapabilityValue(observed, t),
+            configured: displayCapabilityValue(configured, t, locale),
+            observed: displayCapabilityValue(observed, t, locale),
           })}
         </div>
       ))}
@@ -796,6 +799,7 @@ function ReadinessSummary({
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
+  const locale = useLocale();
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
     return (
@@ -857,7 +861,9 @@ function ReadinessSummary({
             {report.verifiedCapabilities.testedContextTokens !== undefined ? (
               <span>
                 {t("settings.models.contextTokensShort", {
-                  count: report.verifiedCapabilities.testedContextTokens.toLocaleString(),
+                  count: new Intl.NumberFormat(locale).format(
+                    report.verifiedCapabilities.testedContextTokens,
+                  ),
                 })}
               </span>
             ) : null}

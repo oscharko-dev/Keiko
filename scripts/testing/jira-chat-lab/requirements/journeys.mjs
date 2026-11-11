@@ -154,7 +154,7 @@ async function approveWrite(ctx, exchange, decisions, observe) {
   decisions.ids.add(approval.approvalId);
   decisions.writes += 1;
   const id = encodeURIComponent(approval.approvalId);
-  const path = `/api/atlassian-connectors/action-approvals/${id}/chat-write-approval`;
+  const path = `/api/atlassian-connectors/chat-write-approval/${id}`;
   const current = await api(ctx, "write-observe", path, undefined, "GET");
   const observed = await Promise.resolve(observe?.()).catch(() => undefined);
   decisions.records.push({ approval: current.approval, call: exchange.call, observed });
@@ -197,6 +197,7 @@ async function superviseTurn(ctx, chat, prior, isSettled, { observe, during }) {
     decisions.induced ??= startDuring(during, user?.toolTranscript?.exchanges ?? [], isSettled);
     await delay(500);
   }
+  decisions.labLimitReached = !isSettled() && Date.now() - started >= TURN_LIMIT_MS;
   return decisions;
 }
 
@@ -226,6 +227,7 @@ async function chatTurn(ctx, chat, content, options = {}) {
   let settled = false;
   let failure;
   let decisions;
+  let termination;
   const send = new globalThis.AbortController();
   const pending = api(
     ctx,
@@ -252,13 +254,20 @@ async function chatTurn(ctx, chat, content, options = {}) {
     });
   } finally {
     // A turn that outlives supervision is cancelled, so it cannot write into the next journey.
-    if (!settled) send.abort();
+    if (!settled) {
+      if (decisions?.labLimitReached) termination = "lab-limit";
+      send.abort();
+    }
     await pending;
   }
   const { writes, records } = decisions;
   return {
     durationMs: Date.now() - started,
     failure,
+    termination,
+    // The live lab context exposes no resolved product turn budget. A provider request timeout
+    // is a different bound; neither it nor this supervision limit proves that product budget.
+    limits: { labTurnMs: TURN_LIMIT_MS, productTurnMs: null },
     approvals: { writes, records },
     induced: await decisions.induced,
     ...(await settledTurn(ctx, chat, prior)),
@@ -267,18 +276,78 @@ async function chatTurn(ctx, chat, content, options = {}) {
 
 // ---------- independent oracle read ----------
 
-async function jql(session, query, fields = "summary") {
-  const issues = [];
-  for (let startAt = 0; ; startAt += 100) {
-    const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&startAt=${startAt}&maxResults=100&fields=${fields}`;
-    const page = await labRequest(session, "GET", path, basicAuth(session, "admin"));
-    if (page.status !== 200) throw new TypeError(`Oracle search failed (${page.status})`);
-    issues.push(...page.value.issues);
-    if (startAt + page.value.issues.length >= page.value.total) return issues;
+function jqlPageBounds(response, startAt, total) {
+  const page = response.value;
+  if (response.status !== 200 || page === null || typeof page !== "object")
+    throw new TypeError("Oracle search response is unavailable");
+  if (!Number.isSafeInteger(page.total) || page.total < 0 || page.startAt !== startAt)
+    throw new TypeError("Oracle search page has invalid bounds");
+  if (total !== undefined && page.total !== total)
+    throw new TypeError("Oracle search total changed between pages");
+  return page;
+}
+
+function admitJqlPage(response, startAt, total) {
+  const page = jqlPageBounds(response, startAt, total);
+  if (!Array.isArray(page.issues) || page.issues.length > 100)
+    throw new TypeError("Oracle search page exceeds the requested size");
+  const end = startAt + page.issues.length;
+  if (end > page.total || (page.issues.length === 0 && end < page.total))
+    throw new TypeError("Oracle search page cannot establish complete coverage");
+  return page;
+}
+
+function appendJqlIssues(state, issues) {
+  for (const issue of issues) {
+    if (typeof issue?.key !== "string" || typeof issue.id !== "string")
+      throw new TypeError("Oracle search issue identity is unavailable");
+    if (state.keys.has(issue.key) || state.ids.has(issue.id))
+      throw new TypeError("Oracle search repeated an issue across pages");
+    state.keys.add(issue.key);
+    state.ids.add(issue.id);
+    state.issues.push(issue);
   }
 }
 
-/** The number of issues a JQL query matches (admin read, no issue is transferred). */
+/**
+ * The existing independent admin search, with receipts of the actual GET pages. `maxResults`
+ * records the fixed requested size, not the report tool's own pagination. One flat continuation
+ * keeps reads sequential without retaining one unresolved promise per native page.
+ */
+export function pagedJql(session, query, fields = "summary") {
+  const state = { issues: [], pages: [], keys: new Set(), ids: new Set(), total: undefined };
+  return new Promise((resolve, reject) => {
+    const next = () => {
+      const startAt = state.issues.length;
+      Promise.resolve()
+        .then(() => {
+          const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&startAt=${startAt}&maxResults=100&fields=${encodeURIComponent(fields)}`;
+          return labRequest(session, "GET", path, basicAuth(session, "admin"));
+        })
+        .then((response) => {
+          const page = admitJqlPage(response, startAt, state.total);
+          state.total = page.total;
+          appendJqlIssues(state, page.issues);
+          state.pages.push({
+            startAt,
+            maxResults: 100,
+            total: page.total,
+            count: page.issues.length,
+          });
+          return state.issues.length === page.total;
+        })
+        .then((complete) => {
+          if (complete) resolve({ issues: state.issues, pages: state.pages });
+          else next();
+        }, reject);
+    };
+    next();
+  });
+}
+
+async function jql(session, query, fields = "summary") {
+  return (await pagedJql(session, query, fields)).issues;
+}
 async function jqlCount(session, query) {
   const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&maxResults=0`;
   const page = await labRequest(session, "GET", path, basicAuth(session, "admin"));
@@ -369,6 +438,7 @@ function journeyContext(live, session, truth) {
     truth,
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
     search: (query, fields) => jql(session, query, fields),
+    searchPages: (query, fields) => pagedJql(session, query, fields),
     count: (query) => jqlCount(session, query),
     http: (name, path, body, method = "POST") => api(ctx, name, path, body, method),
     deselectSkill: (chat) => deselectSkill(ctx, chat),

@@ -573,6 +573,33 @@ describe("createNodeUiStore — on-disk file", () => {
     s2.close();
   });
 
+  it("settles a persisted pending turn as failed when the database reopens after a restart", () => {
+    // A held approval worker lives only in server memory. The reopen sweep is what ends a restored
+    // review whose worker is gone: the browser then reads a terminal turn instead of polling on.
+    const dbPath = join(tmpDir, "restart-pending.db");
+    const projectDir = mkdtempSync(join(tmpDir, "restart-project-"));
+    const first = createNodeUiStore(dbPath);
+    first.createProject(projectDir);
+    const chat = first.createChat(projectDir, "Restart", "example-chat-model");
+    const admission = first.admitChatTurn("restart-pending-turn", {
+      chatId: chat.id,
+      role: "user",
+      content: "Create one issue.",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(admission.kind).toBe("admitted");
+    expect(first.listMessages(chat.id)).toMatchObject([{ turnState: "pending" }]);
+    first.close();
+    const reopened = createNodeUiStore(dbPath);
+    expect(reopened.listMessages(chat.id)).toMatchObject([{ turnState: "failed" }]);
+    reopened.close();
+  });
+
   it("recovers an interrupted canonical turn without persisting an orphan assistant", () => {
     const dbPath = join(tmpDir, "canonical-turn.db");
     const projectDir = mkdtempSync(join(tmpDir, "canonical-project-"));

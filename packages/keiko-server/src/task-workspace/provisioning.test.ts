@@ -9,6 +9,7 @@ import {
 // states (SC4). The single governed spawn boundary is reused throughout; no generic git runner.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rewriteGitPointerInPlace } from "../test-support/git-pointer-fixture.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -895,7 +896,10 @@ describe("idempotent safe retry (AC3)", () => {
     const rawTarget = readFileSync(gitPointerPath, "utf8")
       .replace(/^gitdir:/u, "")
       .trim();
-    writeFileSync(gitPointerPath, `gitdir:${" ".repeat(20_000)}${rawTarget}${" ".repeat(5_000)}\n`);
+    rewriteGitPointerInPlace(
+      gitPointerPath,
+      `gitdir:${" ".repeat(20_000)}${rawTarget}${" ".repeat(5_000)}\n`,
+    );
 
     const start = Date.now();
     const second = await service.provision({

@@ -762,8 +762,9 @@ nothing but forwarded reasoning alike: the retry loop is resumed after the exhau
 of the call), the caller then sees a second reasoning passage, and no answer text or tool call is
 ever duplicated. The provider-reported usage of the repaired attempt (and of every other attempt the
 call discarded: a rejected tool call, a stream that failed after its usage arrived) rides on the
-answer as `discardedAttemptUsage`, so the coding run's prompt allowance counts every prompt the
-provider processed (ADR-0137 D2); `usage` keeps describing the answer itself. A delivered answer delta or tool call, and a repair that already ran,
+answer as `discardedAttemptUsage`, so the coding run's usage roll-up counts every prompt the
+provider processed (ADR-0137 D2; no prompt-token allowance bounds it since 2026-11-11); `usage`
+keeps describing the answer itself. A delivered answer delta or tool call, and a repair that already ran,
 close the window for good, so a later exhaustion surfaces at once. It is not a provider retry: neither `maxRetries` nor the coding outage window
 counts it, only what is left of the call's budget can refuse it (the call then ends as a budget stop
 rather than a terminal one), and the breaker never counts either answer. Its scheduled line is

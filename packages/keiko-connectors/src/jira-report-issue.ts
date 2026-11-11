@@ -11,6 +11,7 @@ import type {
   JiraReportDeviation,
   JiraReportIssue,
 } from "./jira-report-types.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /** Everything the parser needs from the instance and the request; derived once per report. */
 export interface JiraReportFieldPlan {
@@ -29,9 +30,9 @@ export interface JiraReportFieldPlan {
    * page takes its proposals back before the report is built.
    */
   readonly parentProposals: Map<string, readonly ParentProposal[]>;
-  /** Requested fields a hit left out; an omission is unreadable evidence, never an empty value. */
+  /** Requested fields omitted or unreadable in a hit; neither proves an empty value. */
   readonly omittedFields: Set<string>;
-  readonly estimateFieldId: string;
+  readonly estimateFieldId: string | undefined;
   readonly requirementIds: ReadonlySet<string>;
   readonly requiredByType: ReadonlyMap<string, readonly string[]>;
   readonly checker: JiraReportComplianceChecker | undefined;
@@ -139,8 +140,23 @@ function estimateOf(
   fields: Record<string, unknown>,
   plan: JiraReportFieldPlan,
 ): number | undefined {
+  // An explicit null is unestimated; a requested field Jira withholds is unreadable evidence.
+  if (plan.estimateFieldId === undefined) return undefined;
+  if (!Object.hasOwn(fields, plan.estimateFieldId)) plan.omittedFields.add(plan.estimateFieldId);
   const value = fields[plan.estimateFieldId];
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+function unusableEstimate(
+  fields: Record<string, unknown>,
+  fieldId: string | undefined,
+  estimate: number | undefined,
+): boolean {
+  return (
+    fieldId !== undefined &&
+    Object.hasOwn(fields, fieldId) &&
+    fields[fieldId] !== null &&
+    estimate === undefined
+  );
 }
 /** Jira returns null (or an empty collection or string) for a field without a value. */
 export function isEmptyJiraValue(value: unknown): boolean {
@@ -168,24 +184,36 @@ function assignedOf(fields: Record<string, unknown>, plan: JiraReportFieldPlan):
   if (!Object.hasOwn(fields, "assignee")) plan.omittedFields.add("assignee");
   return fields.assignee !== null && fields.assignee !== undefined;
 }
-function checkerDeviations(
+async function checkerDeviations(
   facts: Parameters<JiraReportComplianceChecker["check"]>[0],
   plan: JiraReportFieldPlan,
-): readonly JiraReportDeviation[] {
+  request: JiraMutationRequest,
+): Promise<readonly JiraReportDeviation[] | "unavailable"> {
   if (plan.checker === undefined) return [];
-  const result: JiraReportDeviation[] = [];
-  for (const item of plan.checker.check(facts)) {
-    if (!RULE_ID_PATTERN.test(item.ruleId)) continue;
-    const fieldId =
-      item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
-    const subject = subjectOf(item.subject);
-    result.push({
-      ruleId: item.ruleId,
-      ...(fieldId === undefined ? {} : { fieldId }),
-      ...(subject === undefined ? {} : { subject }),
-    });
-  }
-  return result;
+  const checked = await plan.checker.check(facts, request);
+  if (checked === "unavailable") return checked;
+  return checked.flatMap((item) => {
+    const projected = safeCheckerDeviation(item);
+    return projected === undefined ? [] : [projected];
+  });
+}
+function safeCheckerDeviation(item: JiraReportDeviation): JiraReportDeviation | undefined {
+  if (!RULE_ID_PATTERN.test(item.ruleId)) return undefined;
+  const fieldId =
+    item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
+  const subject = subjectOf(item.subject);
+  return {
+    ruleId: item.ruleId,
+    ...(fieldId === undefined ? {} : { fieldId }),
+    ...(subject === undefined ? {} : { subject }),
+  };
+}
+function templateJudged(
+  checker: JiraReportComplianceChecker | undefined,
+  facts: Parameters<JiraReportComplianceChecker["check"]>[0],
+  unavailable: boolean,
+): boolean {
+  return !unavailable && checker !== undefined && (checker.covers?.(facts) ?? true);
 }
 function dedupeDeviations(items: readonly JiraReportDeviation[]): readonly JiraReportDeviation[] {
   const seen = new Set<string>();
@@ -213,11 +241,13 @@ function trimTrailingSeparators(token: string): string {
  * Every label the response carries: the trace a write left on the issue and the requirement ids
  * are read from them, so no count cut may hide one. The memory budget charges each label.
  */
-function labelsOf(fields: Record<string, unknown>): readonly string[] {
-  const labels = asArray(fields.labels)?.filter(
-    (item): item is string => typeof item === "string" && item.length > 0,
-  );
-  return (labels ?? []).map((label) => label.slice(0, LABEL_CHARS_MAX));
+function labelsOf(fields: Record<string, unknown>, plan: JiraReportFieldPlan): readonly string[] {
+  const labels = asArray(fields.labels);
+  if (!labels?.every((item): item is string => typeof item === "string")) {
+    plan.omittedFields.add("labels");
+    return [];
+  }
+  return labels.map((label) => label.slice(0, LABEL_CHARS_MAX));
 }
 function referencedRequirements(
   summary: string,
@@ -226,6 +256,9 @@ function referencedRequirements(
   plan: JiraReportFieldPlan,
 ): readonly string[] {
   if (plan.requirementIds.size === 0) return [];
+  if (typeof fields.summary !== "string") plan.omittedFields.add("summary");
+  if (fields.description !== null && typeof fields.description !== "string")
+    plan.omittedFields.add("description");
   const description = typeof fields.description === "string" ? fields.description : "";
   const found = new Set<string>();
   for (const text of [summary, ...labels, description]) {
@@ -286,19 +319,24 @@ function identityOf(value: unknown): IssueIdentity | undefined {
 }
 
 /** Project one Jira search hit onto the compact record. A hit without key and type is refused. */
-export function parseJiraReportIssue(
+export async function parseJiraReportIssue(
   value: unknown,
   plan: JiraReportFieldPlan,
-): JiraReportIssue | undefined {
+  request: JiraMutationRequest,
+): Promise<{ readonly issue: JiraReportIssue; readonly checkerUnavailable: boolean } | undefined> {
   const identity = identityOf(value);
   if (identity === undefined) return undefined;
   const { key, fields, typeName, typeId, subtask } = identity;
+  const estimate = estimateOf(fields, plan);
+  if (unusableEstimate(fields, plan.estimateFieldId, estimate)) return undefined;
   const status = reference(fields.status);
   const statusCategory = category(status);
   const summary = stringOf(fields.summary, SUMMARY_MAX) ?? "";
   const facts = checkerFacts(key, fields, plan, { typeName, typeId, category: statusCategory });
-  const labels = labelsOf(fields);
-  return {
+  const checked = await checkerDeviations(facts, plan, request);
+  const checkerUnavailable = checked === "unavailable";
+  const labels = labelsOf(fields, plan);
+  const issue: JiraReportIssue = {
     key,
     typeName,
     subtask,
@@ -309,14 +347,15 @@ export function parseJiraReportIssue(
     linkedKeys: linkedKeysOf(fields),
     assigned: assignedOf(fields, plan),
     dueDate: stringOf(fields.duedate, 32),
-    estimate: estimateOf(fields, plan),
+    estimate,
     deviations: dedupeDeviations([
       ...requiredDeviations(fields, typeId, plan),
-      ...checkerDeviations(facts, plan),
+      ...(checkerUnavailable ? [] : checked),
     ]),
-    templateJudged: plan.checker !== undefined && (plan.checker.covers?.(facts) ?? true),
-    requiredJudged: plan.requiredByType.has(typeId),
+    templateJudged: templateJudged(plan.checker, facts, checkerUnavailable),
+    requiredJudged: (plan.requiredByType.get(typeId)?.length ?? 0) > 0,
     requirementIds: referencedRequirements(summary, labels, fields, plan),
     labels,
   };
+  return { issue, checkerUnavailable };
 }

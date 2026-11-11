@@ -190,12 +190,36 @@ export function readSupportIncidentRecord(
 /** Distinguishes an actually withdrawn record from an unreadable or unsafe retained entry. */
 export function isSupportIncidentRecordAbsent(stateDir: string, incidentId: string): boolean {
   if (!isSupportIncidentId(incidentId)) return false;
+  const directory = supportIncidentDirectory(stateDir);
   try {
-    lstatSync(join(supportIncidentDirectory(stateDir), supportIncidentFileName(incidentId)));
+    lstatSync(join(directory, supportIncidentFileName(incidentId)));
     return false;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
+    if (!isNotFound(error)) throw error;
+  }
+  assertIncidentDirectoryOrAbsent(directory);
+  return true;
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+// #4068: Windows answers ENOENT, not ENOTDIR, for an entry below a regular file, so a replaced
+// incident directory read as a withdrawn record and authorized a retry. The directory itself must be
+// a directory or absent; anything else is the same ENOTDIR refusal POSIX reports.
+function assertIncidentDirectoryOrAbsent(directory: string): void {
+  let isDirectory: boolean;
+  try {
+    isDirectory = lstatSync(directory).isDirectory();
+  } catch (error) {
+    if (isNotFound(error)) return;
     throw error;
+  }
+  if (!isDirectory) {
+    throw Object.assign(new Error("support incident directory is not a directory"), {
+      code: "ENOTDIR",
+    });
   }
 }
 

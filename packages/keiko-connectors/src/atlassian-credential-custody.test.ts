@@ -112,6 +112,141 @@ function livePodInput(): Record<string, unknown> {
   };
 }
 
+const COMPATIBILITY = {
+  schemaVersion: 1,
+  deploymentType: "Data Center",
+  versionNumbers: [11, 3, 13],
+  restApi: "v2",
+  agileApi: "unverified",
+} as const;
+
+function verifiedCompatibility(): ReturnType<typeof custodyOverFakes> & {
+  readonly authRef: string;
+  readonly revision: number;
+} {
+  const f = custodyOverFakes();
+  const created = f.custody.create(livePodInput(), "a".repeat(64));
+  const ticket = f.custody.beginVerification(created.authRef, 1);
+  assert(ticket);
+  expect(
+    f.custody.finishVerification(
+      created.authRef,
+      1,
+      ticket.revision,
+      "ok",
+      undefined,
+      COMPATIBILITY,
+    ),
+  ).toBe(true);
+  expect(f.custody.getMetadata(created.authRef)).toMatchObject({
+    livePod: { compatibility: COMPATIBILITY },
+  });
+  return { ...f, authRef: created.authRef, revision: ticket.revision };
+}
+
+describe("Jira compatibility custody", () => {
+  it.each([
+    { ...COMPATIBILITY, schemaVersion: "1" },
+    { ...COMPATIBILITY, deploymentType: "Cloud" },
+    { ...COMPATIBILITY, restApi: "v3" },
+    { ...COMPATIBILITY, agileApi: "verified" },
+    { ...COMPATIBILITY, versionNumbers: [11, 3] },
+    { ...COMPATIBILITY, versionNumbers: Object.assign(new Array<number>(3), { 0: 11 }) },
+    { ...COMPATIBILITY, versionNumbers: Object.assign([11, 3, 13], { unexpected: "refused" }) },
+    { ...COMPATIBILITY, versionNumbers: [11, -3, 13] },
+    { ...COMPATIBILITY, versionNumbers: [11, 3, Number.MAX_SAFE_INTEGER + 1] },
+    { ...COMPATIBILITY, unexpected: "not admitted" },
+    null,
+    [],
+  ])("refuses malformed persisted compatibility %j", (compatibility) => {
+    const f = verifiedCompatibility();
+    const metadata = f.custody.getMetadata(f.authRef);
+    assert(metadata?.deployment === "data-center");
+    expect(
+      isAtlassianCredentialMetadata({
+        ...metadata,
+        livePod: { ...metadata.livePod, compatibility },
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses unrecognized compatibility fields before committing verification", () => {
+    const f = verifiedCompatibility();
+    const ticket = f.custody.beginVerification(f.authRef, 1);
+    assert(ticket);
+    const hostile = { ...COMPATIBILITY, unexpected: "refused" };
+    expect(() =>
+      f.custody.finishVerification(f.authRef, 1, ticket.revision, "ok", undefined, hostile),
+    ).toThrow(AtlassianCredentialCustodyError);
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+  });
+
+  it("rejects compatibility evidence attached to a failed verification", () => {
+    const f = verifiedCompatibility();
+    const ticket = f.custody.beginVerification(f.authRef, 1);
+    assert(ticket);
+    expect(() =>
+      f.custody.finishVerification(
+        f.authRef,
+        1,
+        ticket.revision,
+        "auth-failed",
+        undefined,
+        COMPATIBILITY,
+      ),
+    ).toThrow(AtlassianCredentialCustodyError);
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+  });
+
+  it("retains validated facts only with the current verification ticket", () => {
+    const f = verifiedCompatibility();
+    expect(f.custody.getMetadata(f.authRef)).toMatchObject({
+      livePod: { compatibility: COMPATIBILITY, verificationStatus: "ok" },
+    });
+    const reopened = createAtlassianCredentialCustody(f);
+    expect(reopened.custody.getMetadata(f.authRef)).toEqual(f.custody.getMetadata(f.authRef));
+  });
+
+  it("discards previous facts before rechecking and refuses stale success", () => {
+    const f = verifiedCompatibility();
+    const next = f.custody.beginVerification(f.authRef, 1);
+    assert(next);
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+    expect(
+      f.custody.finishVerification(f.authRef, 1, f.revision, "ok", undefined, COMPATIBILITY),
+    ).toBe(false);
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+    expect(f.custody.finishVerification(f.authRef, 1, next.revision, "auth-failed")).toBe(true);
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+  });
+
+  it("clears facts after authenticated failure", () => {
+    const f = verifiedCompatibility();
+    expect(f.custody.observeAuthenticationFailure(f.authRef, 1, f.revision)).toBe(true);
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+  });
+
+  it("clears facts before replacing a credential", () => {
+    const f = verifiedCompatibility();
+    f.custody.updateLivePod(f.authRef, {
+      expectedGeneration: 1,
+      apiToken: "replacement-synthetic",
+    });
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+    expect(
+      f.custody.finishVerification(f.authRef, 1, f.revision, "ok", undefined, COMPATIBILITY),
+    ).toBe(false);
+  });
+
+  it("does not fabricate capabilities for legacy status-only verification", () => {
+    const f = verifiedCompatibility();
+    const next = f.custody.beginVerification(f.authRef, 1);
+    assert(next);
+    expect(f.custody.finishVerification(f.authRef, 1, next.revision, "ok")).toBe(true);
+    expect(f.custody.getMetadata(f.authRef)).not.toHaveProperty("livePod.compatibility");
+  });
+});
+
 describe("Jira Live Pod custody", () => {
   it("rejects a stale verification intent before changing the stored revision", () => {
     const f = custodyOverFakes();
@@ -130,7 +265,12 @@ describe("Jira Live Pod custody", () => {
     const check = f.custody.beginVerification(created.authRef);
     assert(check);
     f.custody.finishVerification(created.authRef, 1, check.revision, "auth-failed");
-    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2, undefined);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(
+      created.livePod.podId,
+      2,
+      undefined,
+      "authentication-failed",
+    );
     f.custody.finishVerification(created.authRef, 1, check.revision, "ok");
     expect(invalidated).toHaveBeenCalledTimes(1);
   });
@@ -238,6 +378,7 @@ describe("Jira Live Pod custody", () => {
     const invalidated = vi.fn();
     const f = custodyOverFakes(invalidated);
     const created = f.custody.create(livePodInput(), "a".repeat(64));
+    assert(created.deployment === "data-center" && created.livePod);
     const probe = f.custody.beginVerification(created.authRef);
     assert(probe);
     f.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
@@ -252,7 +393,12 @@ describe("Jira Live Pod custody", () => {
       generation: 2,
       livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
     });
-    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(
+      created.livePod.podId,
+      2,
+      "observed",
+      "authentication-failed",
+    );
     expect(secretRead).not.toHaveBeenCalled();
     expect(
       custodyErrorCode(() => f.executionResolver.resolveForExecution(created.authRef, 1)),

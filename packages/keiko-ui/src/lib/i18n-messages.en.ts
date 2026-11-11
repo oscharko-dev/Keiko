@@ -1,4 +1,7 @@
 export const EN_MESSAGES = {
+  "chat.pendingCancellation.unconfirmed": "Cancellation could not be confirmed. Try Stop again.",
+  "chat.pendingObservation.unknown":
+    "The status of this review is unknown. Reload the page to check it again.",
   "grounded.uncertainty.memoryKind": "Memory context",
   "grounded.files.capabilityUnattached":
     "This model does not reliably add citations itself. No evidence citations were attached to this answer.",
@@ -81,6 +84,11 @@ export const EN_MESSAGES = {
   "editor.empty.opening": "Opening…",
   "supportReport.globalFailure": "Keiko encountered an error.",
   "supportReport.readinessUnavailable": "Error reports may currently be incomplete.",
+  "memory.readiness.withheld": "Memory unavailable",
+  "memory.readiness.migrationFailed":
+    "Memory is unavailable until its local vault is repaired. Chat remains available. Resolve the cause and restart Keiko.",
+  "memory.readiness.unreadable":
+    "The saved Memory vault could not be opened. Check the available key and restart Keiko. Chat remains available.",
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.download": "Download report",
@@ -504,9 +512,10 @@ export const EN_MESSAGES = {
   "chat.modelSelectionUnavailable":
     "The selected model is temporarily unavailable. Choose another available model or wait for it to recover.",
   "chat.error.modelNotReady.title": "Model verification needed",
-  "chat.error.modelNotReady.message": "The selected model has not passed its readiness check.",
+  "chat.error.modelNotReady.message":
+    "A readiness check is missing, no longer valid, or failed for the selected model.",
   "chat.error.modelNotReady.remediation":
-    "Open model settings, run the readiness check, then send your message again.",
+    "Open Settings > Models, run the readiness check for the selected model, then send your message again.",
   "chat.error.modelNotReady.action": "Open model verification",
   "chat.error.capabilityUnavailable.title": "Model capability unavailable",
   "chat.error.capabilityUnavailable.message":
@@ -518,6 +527,10 @@ export const EN_MESSAGES = {
     "The connected sources changed in the meantime. The request was not run with an outdated source list.",
   "chat.error.scopeChanged.remediation":
     "Check the Chat's current sources, then send your request again.",
+  "chat.error.jiraAuthentication.title": "Jira authentication failed",
+  "chat.error.jiraAuthentication.message": "The Jira connection could not be authenticated.",
+  "chat.error.jiraAuthentication.remediation":
+    "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira.",
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",

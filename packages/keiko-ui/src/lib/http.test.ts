@@ -597,6 +597,7 @@ describe("bffRequestErrorKind", () => {
   it.each([
     [new ApiError("DENIED", "no", 403), "authority-denied"],
     [new ApiError("UNAUTHORIZED", "no", 401), "authority-denied"],
+    [new ApiError("JIRA_AUTHENTICATION_FAILED", "private", 409), "authority-denied"],
     [new ApiError("CONFLICT", "no", 409), "conflict"],
     [new ApiError("RATE", "no", 429), "rate-limited"],
     [new ApiError("CANCELLED", "no", 499), "cancelled"],
@@ -623,6 +624,7 @@ describe("bffCodeErrorKind", () => {
     ["GATEWAY_ATTEMPT_ADMISSION_DENIED", 403],
     ["FORBIDDEN", 403],
     ["UNAUTHORIZED", 401],
+    ["JIRA_AUTHENTICATION_FAILED", 409],
     ["CONFLICT", 409],
     ["RATE_LIMITED", 429],
     ["CANCELLED", 499],

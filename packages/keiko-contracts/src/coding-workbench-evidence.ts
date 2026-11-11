@@ -348,6 +348,7 @@ export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
   "issue-tracker",
   "issue-tracker.read",
   "issue-tracker.write",
+  "issue-tracker.admin",
   // Not one of the original 57 -- found while deriving the KEIKO-0376 acceptance test straight
   // from CODING_WORKBENCH_ACTION_CLASSES (coding-workbench.ts): "network-egress" was never in the
   // old allowlist under either vocabulary, and unlike "connector-access" (which happens to

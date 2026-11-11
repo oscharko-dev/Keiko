@@ -556,6 +556,7 @@ const DIAGNOSTIC_CODE_KIND_RULES: readonly Readonly<{
 ];
 
 function closedDiagnosticErrorKind(errorClass: string, code?: string): ActivityLogErrorKind {
+  if (code === "JIRA_AUTHENTICATION_FAILED") return "authority-denied";
   if (errorClass === "CallerAttemptAdmissionError") return "authority-denied";
   const registered = activityLogErrorKindOr(errorClass, "internal");
   if (registered !== "internal" || errorClass === "internal") return registered;
@@ -704,6 +705,8 @@ export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
 // silently loses its summary on the log line instead of ever being echoed as-is.
 const SERVER_DIAGNOSTIC_SUMMARIES = [
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  "jira-private-input-activity-log-failed",
+  "jira-private-input-cleanup-failed",
   "Provider verification failed without exposing upstream response details.",
   "Workspace index key resolution or initialization failed.",
   "Encrypted workspace index snapshot was rejected.",
@@ -732,6 +735,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The coding sidecar gateway stream failed before the first response chunk.",
   "Audit or evidence persistence failed.",
   "The memory vault could not be opened with the available key.",
+  "The memory vault could not be opened or migrated. Memory is withheld.",
   "Private context checkpoint persistence failed.",
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
@@ -766,7 +770,11 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "runtime-history-failed",
   "runtime-lifecycle-failed",
   "runtime-start-failed",
+  "runtime-turn-expired",
   "runtime-turn-failed",
+  // #4346: an operator still sets the retired `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`, which
+  // Keiko no longer reads because it does not cap prompt tokens.
+  "retired-setting-ignored",
   "safe-activity-dropped-validation-rejected",
   "safe-activity-dropped-redactor-collapsed",
   "safe-activity-dropped-projection-rejected",

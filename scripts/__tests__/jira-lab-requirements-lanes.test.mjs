@@ -10,17 +10,24 @@ import { eachJourneyInLicenseWindow } from "../testing/jira-chat-lab/requirement
 import {
   enterActive,
   otherActiveLanes,
-  registerLane,
+  registerLane as registerNativeLane,
   withExclusiveRestart,
 } from "../testing/jira-chat-lab/requirements/lab-lanes.mjs";
 
 const directories = [];
+const releases = [];
+function registerLane(...args) {
+  const release = registerNativeLane(...args);
+  releases.push(release);
+  return release;
+}
 function sessionDirectory() {
   const directory = mkdtempSync(join(tmpdir(), "keiko-lab-lanes-"));
   directories.push(directory);
   return directory;
 }
 afterEach(() => {
+  for (const release of releases.splice(0)) release();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
@@ -216,4 +223,20 @@ describe("parallel lab lanes", () => {
     rmSync(lock, { recursive: true, force: true });
     await expect(attempt).resolves.toBe(1);
   });
+});
+
+it("keeps an outer scorecard lane active after a nested product preflight releases", async () => {
+  const directory = sessionDirectory();
+  const releaseOuter = registerLane(directory, SELF);
+  await enterActive(directory, { pid: SELF, isAlive: liveSet(SELF), pollMs: 1, log: quiet });
+  const releaseInner = registerLane(directory, SELF);
+  try {
+    releaseInner();
+    releaseInner();
+    expect(otherActiveLanes(directory, OTHER, liveSet(SELF))).toEqual([SELF]);
+  } finally {
+    releaseInner();
+    releaseOuter();
+  }
+  expect(existsSync(join(directory, "lanes", String(SELF)))).toBe(false);
 });

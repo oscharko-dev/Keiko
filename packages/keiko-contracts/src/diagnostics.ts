@@ -427,6 +427,9 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-restored",
   "workspace-layout-empty",
   "workspace-layout-unowned",
+  "workspace-sync-idle",
+  "workspace-sync-active",
+  "workspace-sync-pull-pending",
   "literal-input-preserved",
   "draft-resynchronized",
   "context-details-expanded",
@@ -647,6 +650,10 @@ export interface ClientDiagnosticIngestRequest {
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
+  // The reporting page load's own random reference, minted once per document (#4068). Several tabs
+  // or windows of one origin share the session cookie, so without it their streams' reports cannot
+  // be told apart. It names no person, tab title or URL.
+  readonly documentRef?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   // The closed class of the failure the page observed, when it classified one (a refused
   // connection is `unavailable`, never `unknown`); otherwise the server derives it from `kind`.
@@ -707,6 +714,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
+  readonly jiraResultPresentation?: ClientJiraResultPresentation | undefined;
+  readonly jiraFieldPresentation?: ClientJiraFieldPresentation | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -897,6 +906,8 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
 const CLOSED_CLIENT_REPORT_KEYS = [
   "selectDismissal",
   "knowledgeCatalog",
+  "jiraResultPresentation",
+  "jiraFieldPresentation",
   "answerCopy",
   "answerSpeech",
   "citationActivation",
@@ -917,6 +928,7 @@ const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "clientTs",
   "correlationId",
   "parentCorrelationId",
+  "documentRef",
   "loss",
 ]);
 function allowsClosedReportFailureField(value: Record<string, unknown>, key: string): boolean {
@@ -956,10 +968,18 @@ function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
 }
 
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
+function hasValidCountedPresentationContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    isOptional(value.jiraResultPresentation, isClientJiraResultPresentation) &&
+    isOptional(value.jiraFieldPresentation, isClientJiraFieldPresentation)
+  );
+}
+
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
-    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    hasValidCountedPresentationContext(value) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
     hasExclusiveClosedReportContext(value) &&
@@ -999,10 +1019,17 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidClientIdentityContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.errorKind, isActivityLogErrorKind) &&
+    isOptional(value.parentCorrelationId, isCorrelationIdShape) &&
+    isOptional(value.documentRef, isActivityLogCorrelationId)
+  );
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { errorKind, loss, parentCorrelationId } = value;
-  if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
-  if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
+  const { loss } = value;
+  if (!hasValidClientIdentityContext(value)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!hasValidRenderFailure(value)) return false;
@@ -1071,6 +1098,7 @@ export const CLIENT_STAGE_IDS = [
   "transcript navigation",
   "browser approval",
   "knowledge pod selection",
+  "jira human input",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -1113,7 +1141,16 @@ export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
 // anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
 export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
 
+/** `purge` is the permanent delete from the Deleted tab; `move` is the reversible Delete (#4335). */
+export const CLIENT_CHAT_HISTORY_DELETION_ACTIONS = ["move", "purge"] as const;
+export type ClientChatHistoryDeletionAction = (typeof CLIENT_CHAT_HISTORY_DELETION_ACTIONS)[number];
+const CHAT_HISTORY_DELETION_ACTIONS: ReadonlySet<string> = new Set(
+  CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
+);
+
 export interface ClientChatHistoryDeletionCounts {
+  /** Absent means `purge`, the shape every earlier client sent. */
+  readonly action?: ClientChatHistoryDeletionAction | undefined;
   readonly requestedCount: number;
   readonly deletedCount: number;
   readonly failedCount: number;
@@ -1226,16 +1263,24 @@ function hasValidNavigationOutcome(value: Record<string, unknown>): boolean {
 }
 
 const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "action",
   "requestedCount",
   "deletedCount",
   "failedCount",
 ]);
 
+function hasValidDeletionShape(counts: Record<string, unknown>): boolean {
+  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  return (
+    counts.action === undefined ||
+    (typeof counts.action === "string" && CHAT_HISTORY_DELETION_ACTIONS.has(counts.action))
+  );
+}
+
 function hasValidStageDeletion(value: Record<string, unknown>): boolean {
   if (value.stage !== "chat history deletion") return value.deletion === undefined;
   const counts = value.deletion;
-  if (!isRecord(counts)) return false;
-  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  if (!isRecord(counts) || !hasValidDeletionShape(counts)) return false;
   if (!isBoundedPositiveInteger(counts.requestedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.deletedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
@@ -1697,6 +1742,8 @@ export interface ClientSessionRepairIngestRequest {
   readonly errorKind?: ActivityLogErrorKind | undefined;
   // The stream whose failure streak asked for the repair.
   readonly stream?: ClientSessionRepairStream | undefined;
+  // The reporting page load's own random reference (#4068), as on `ClientDiagnosticIngestRequest`.
+  readonly documentRef?: string | undefined;
 }
 
 const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -1706,6 +1753,7 @@ const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "repairCorrelationId",
   "errorKind",
   "stream",
+  "documentRef",
 ]);
 
 // Only a repair's own outcome can name a stream (a stream is never replayed), and a stream-only
@@ -1735,6 +1783,7 @@ export function isClientSessionRepairIngestRequest(
   if (!isOneOf(value.outcome, CLIENT_SESSION_REPAIR_OUTCOMES)) return false;
   if (!isOptional(value.errorKind, isActivityLogErrorKind)) return false;
   if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
+  if (!isOptional(value.documentRef, isActivityLogCorrelationId)) return false;
   return (
     isCorrelationIdShape(value.correlationId) && isCorrelationIdShape(value.repairCorrelationId)
   );
@@ -1987,6 +2036,83 @@ export function isClientDiagnosticKnowledgeCatalog(
   );
 }
 
+/** Closed presentation facts; the digest joins the existing parent transcript update event. */
+export const CLIENT_JIRA_RESULT_FAILURES = [
+  "none",
+  "auth",
+  "permission",
+  "not-found",
+  "rate-limited",
+  "conflict",
+  "transition",
+  "bounds",
+  "response",
+  "fields",
+  "unavailable",
+  "mixed",
+] as const;
+export type ClientJiraResultFailure = (typeof CLIENT_JIRA_RESULT_FAILURES)[number];
+export interface ClientJiraResultPresentation {
+  readonly messageDigest: string;
+  readonly exchangeCount: number;
+  readonly itemCount: number;
+  readonly shownCount: number;
+  readonly returnedCount: number;
+  readonly unreadableCount: number;
+  readonly problemCount: number;
+  readonly ruleCount: number;
+  readonly failure: ClientJiraResultFailure;
+  readonly restored: boolean;
+}
+const JIRA_RESULT_COUNT_KEYS = [
+  "exchangeCount",
+  "itemCount",
+  "shownCount",
+  "returnedCount",
+  "unreadableCount",
+  "problemCount",
+  "ruleCount",
+] as const;
+const JIRA_RESULT_KEYS = new Set<string>([
+  ...JIRA_RESULT_COUNT_KEYS,
+  "messageDigest",
+  "failure",
+  "restored",
+]);
+const JIRA_RESULT_FAILURE_SET: ReadonlySet<string> = new Set(CLIENT_JIRA_RESULT_FAILURES);
+export function isClientJiraResultPresentation(
+  value: unknown,
+): value is ClientJiraResultPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== JIRA_RESULT_KEYS.size) return false;
+  return (
+    Object.keys(value).every((key) => JIRA_RESULT_KEYS.has(key)) &&
+    JIRA_RESULT_COUNT_KEYS.every((key) => isBoundedNonNegativeInteger(value[key], 1_000_000_000)) &&
+    isReportDigest(value.messageDigest) &&
+    typeof value.failure === "string" &&
+    JIRA_RESULT_FAILURE_SET.has(value.failure) &&
+    typeof value.restored === "boolean" &&
+    (value.shownCount as number) <= (value.itemCount as number)
+  );
+}
+
+/** Routine presentation counts only: labels, ids and field values never cross this boundary. */
+export interface ClientJiraFieldPresentation {
+  readonly fieldCount: number;
+  readonly localizedCount: number;
+}
+export function isClientJiraFieldPresentation(
+  value: unknown,
+): value is ClientJiraFieldPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== 2) return false;
+  return (
+    Object.hasOwn(value, "fieldCount") &&
+    Object.hasOwn(value, "localizedCount") &&
+    isBoundedNonNegativeInteger(value.fieldCount, 1000) &&
+    isBoundedNonNegativeInteger(value.localizedCount, 1000) &&
+    value.localizedCount <= value.fieldCount
+  );
+}
+
 // ─── Chat answer copy (PR #3678 review) ─────────────────────────────────────────
 //
 // The copy button removes a grounded answer's in-range citation markers and keeps every other
@@ -2203,6 +2329,15 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // A history task of another workspace than the active one was returned and not activated: the
   // operator works in another workspace, an ordinary transition and not a failure (#4118).
   "history-workspace-switched",
+  // A window showing a task picked from Coding History, or a new task, did not follow a settled
+  // run of another task: the runtime status names the process's latest run, not the window's task
+  // (#4271). Once per pick; a run that becomes active afterwards owns the window again.
+  "history-run-held",
+  // A window without a stored repository decided its starting repository once the task-workspace
+  // state had answered (#4271): it took the shell's project (`repository-seeded`), or it met an
+  // active task binding and follows that (`repository-seed-skipped`). Once per window.
+  "repository-seeded",
+  "repository-seed-skipped",
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
@@ -2213,10 +2348,16 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // missing pairing once instead of every surface reporting its own failure. Closed notice only
   // (#3880).
   "notice-held",
+  // The window first showed a live run's identity: whether the server reported its model and agent,
+  // and the reported tool profile. Reported flags and the closed profile only (#4068 W12).
+  "run-identity-observed",
   // A delivery card showed a step's state: a review's load state, a verified commit's result, a
   // draft delivery's phase, the CI readiness or the journey outcome. These were warn/unknown
   // `client.diagnostic` sentences before (#4271). The step and its closed state only.
   "delivery-step-shown",
+  // The mounted window settled where its repository came from: its own saved selection, the
+  // folder the shell held, or none. The closed source only, never the path (#4068).
+  "repository-resolved",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2249,6 +2390,11 @@ export type ClientCodingWorkbenchProgressState =
 /** A built-in agent by name; every custom primary agent is `custom`, never its name. */
 export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
 export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
+
+/** The tool profile a window was told about; `unreported` when readiness named none. */
+export const CLIENT_CODING_WORKBENCH_TOOL_PROFILES = ["native", "mapped", "unreported"] as const;
+export type ClientCodingWorkbenchToolProfile =
+  (typeof CLIENT_CODING_WORKBENCH_TOOL_PROFILES)[number];
 
 /** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
 export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
@@ -2371,6 +2517,15 @@ const DELIVERY_STEP_STATES = {
   Record<ClientCodingWorkbenchDeliveryStep, readonly ClientCodingWorkbenchDeliveryState[]>
 >;
 
+/**
+ * Where a mounted Workbench window took its repository from: the window's own saved selection, the
+ * folder the shell held when the window first knew it, or none (an active task binding met the
+ * window first).
+ */
+export const CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES = ["window", "shell", "none"] as const;
+export type ClientCodingWorkbenchRepositorySource =
+  (typeof CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2399,6 +2554,9 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | { readonly interaction: "history-repository-switched" }
   | { readonly interaction: "event-stream-reconnecting" }
   | { readonly interaction: "history-workspace-switched" }
+  | { readonly interaction: "history-run-held" }
+  | { readonly interaction: "repository-seeded" }
+  | { readonly interaction: "repository-seed-skipped" }
   | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
@@ -2412,9 +2570,19 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
     }
   | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice }
   | {
+      readonly interaction: "run-identity-observed";
+      readonly modelReported: boolean;
+      readonly agentReported: boolean;
+      readonly toolProfile: ClientCodingWorkbenchToolProfile;
+    }
+  | {
       readonly interaction: "delivery-step-shown";
       readonly deliveryStep: ClientCodingWorkbenchDeliveryStep;
       readonly deliveryState: ClientCodingWorkbenchDeliveryState;
+    }
+  | {
+      readonly interaction: "repository-resolved";
+      readonly repositorySource: ClientCodingWorkbenchRepositorySource;
     };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
@@ -2429,6 +2597,9 @@ const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
 const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
 );
+const CODING_WORKBENCH_TOOL_PROFILE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
+);
 const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
 );
@@ -2437,6 +2608,9 @@ const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+);
+const CODING_WORKBENCH_REPOSITORY_SOURCE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2465,6 +2639,9 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
   "history-workspace-switched": {},
+  "history-run-held": {},
+  "repository-seeded": {},
+  "repository-seed-skipped": {},
   "bridge-registration-refused": {
     refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
   },
@@ -2486,10 +2663,18 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
   "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
+  "run-identity-observed": {
+    modelReported: (value) => typeof value === "boolean",
+    agentReported: (value) => typeof value === "boolean",
+    toolProfile: (value) => isSetMember(value, CODING_WORKBENCH_TOOL_PROFILE_SET),
+  },
   "delivery-step-shown": {
     deliveryStep: (value) =>
       typeof value === "string" && Object.hasOwn(DELIVERY_STEP_STATES, value),
     deliveryState: (value) => isSetMember(value, CODING_WORKBENCH_DELIVERY_STATE_SET),
+  },
+  "repository-resolved": {
+    repositorySource: (value) => isSetMember(value, CODING_WORKBENCH_REPOSITORY_SOURCE_SET),
   },
 };
 
@@ -2622,11 +2807,30 @@ export interface ActivityLogReadinessSnapshot {
   readonly diagnosticCapacity?: number | undefined;
 }
 
-/** The `GET /api/health` body. `diagnostics` is additive; `status`/`version` keep their meaning. */
+export type MemoryReadinessSnapshot =
+  | { readonly readiness: "ready"; readonly reason: "none" }
+  | {
+      readonly readiness: "withheld";
+      readonly reason: "vault-unreadable" | "vault-migration-failed";
+    };
+
+export function isMemoryReadinessSnapshot(value: unknown): value is MemoryReadinessSnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  if (Object.keys(snapshot).length !== 2) return false;
+  if (snapshot.readiness === "ready") return snapshot.reason === "none";
+  return (
+    snapshot.readiness === "withheld" &&
+    (snapshot.reason === "vault-unreadable" || snapshot.reason === "vault-migration-failed")
+  );
+}
+
+/** The `GET /api/health` body. Readiness projections are additive; `status` stays server liveness. */
 export interface HealthResponse {
   readonly status: "ok";
   readonly version: string;
   readonly diagnostics: ActivityLogReadinessSnapshot;
+  readonly memory?: MemoryReadinessSnapshot;
   /** The server-owned instance identity, when this process was started by a modern launcher. */
   readonly launchId?: string;
 }

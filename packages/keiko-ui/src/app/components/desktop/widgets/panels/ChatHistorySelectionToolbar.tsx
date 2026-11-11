@@ -16,6 +16,7 @@ interface DeleteSelectedChatsProps {
   readonly selectedCount: number;
   readonly busy: boolean;
   readonly clear: () => void;
+  readonly permanent: boolean;
   readonly removeSelected: () => void;
 }
 
@@ -50,13 +51,15 @@ function SelectAllChats(props: SelectAllChatsProps): ReactNode {
 
 function DeleteSelectedChats(props: DeleteSelectedChatsProps): ReactNode {
   const t = useTranslate();
-  const { busy, selectedCount, removeSelected } = props;
+  const { busy, selectedCount, permanent, removeSelected } = props;
   return (
     <button
       type="button"
       className="lk-btn lk-btn-danger"
       disabled={busy || selectedCount === 0}
-      title={t("chat.history.selection.permanent")}
+      title={t(
+        permanent ? "chat.history.selection.permanent" : "chat.history.selection.recoverable",
+      )}
       onClick={removeSelected}
       onKeyDown={(event): void => {
         if (event.key === "Escape" && !busy) props.clear();
@@ -76,6 +79,7 @@ export function ChatHistorySelectionToolbar({
   busy,
   toggleAll,
   clear,
+  permanent,
   removeSelected,
 }: ChatHistorySelectionToolbarProps): ReactNode {
   const props = {
@@ -85,6 +89,7 @@ export function ChatHistorySelectionToolbar({
     busy,
     toggleAll,
     clear,
+    permanent,
     removeSelected,
   };
   return (

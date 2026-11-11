@@ -18,7 +18,11 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
-import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
+import {
+  gatewayServiceUninstallNotice,
+  runUninstallCli,
+  type UninstallCliDeps,
+} from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
@@ -968,6 +972,8 @@ describe("runUninstallCli — running server guard", () => {
       killProcess: (pid, signal) => {
         killed.push([pid, signal]);
       },
+      // POSIX semantics on every host: the assertion is the SIGTERM a POSIX stop sends.
+      platform: () => "linux",
       sleep: () => Promise.resolve(),
       ...verifiedStopIdentity(),
     };
@@ -1187,6 +1193,8 @@ describe("runUninstallCli — running server guard", () => {
         killCount += 1;
       },
       sleep: () => Promise.resolve(),
+      // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+      platform: () => "linux",
       ...verifiedStopIdentity(),
     };
     const c = makeIo();
@@ -1764,5 +1772,18 @@ describe("runUninstallCli — package guidance", () => {
       0,
     );
     expect(c.out()).toContain("npm uninstall -g @oscharko-dev/keiko     (global install)");
+  });
+});
+
+describe("gatewayServiceUninstallNotice", () => {
+  it("names the service only on Windows when its folder exists", () => {
+    const exists = (): boolean => true;
+    const absent = (): boolean => false;
+    expect(gatewayServiceUninstallNotice("win32", "C:\\PF", exists)).toContain(
+      "keiko gateway-service uninstall",
+    );
+    expect(gatewayServiceUninstallNotice("win32", "C:\\PF", absent)).toBeUndefined();
+    expect(gatewayServiceUninstallNotice("win32", undefined, exists)).toBeUndefined();
+    expect(gatewayServiceUninstallNotice("darwin", "/PF", exists)).toBeUndefined();
   });
 });

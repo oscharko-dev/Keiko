@@ -21,6 +21,8 @@ import type {
   JiraReportFieldCatalogEntry,
   JiraReportIssueFacts,
 } from "./jira-report-types.js";
+import { bindJiraTemplateParentTypes } from "./jira-template-parent-types.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /**
  * The compliance section of the report (#4181) fed by the one template checker (#4177) and the
@@ -155,12 +157,44 @@ function checkerOf(
 ): JiraReportComplianceChecker {
   return {
     fieldIds: fieldIdsOf(templates, catalog),
+    ...(templates.some((template) => template.parent.issueTypes !== undefined)
+      ? { requiresNativeEvidence: true as const }
+      : {}),
     covers: (facts) => matchingJiraIssueTemplates(templates, subjectOf(facts)).length > 0,
-    check: (facts) =>
-      checkJiraIssueTemplates(templates, subjectOf(facts), catalog).map((violation) =>
-        deviation(violation, catalog),
-      ),
+    check: (facts, request) => checkSubject(templates, catalog, subjectOf(facts), request),
   };
+}
+
+async function checkSubject(
+  templates: readonly JiraIssueTemplate[],
+  catalog: readonly JiraFieldCatalogEntry[],
+  subject: JiraTemplateSubject,
+  request: JiraMutationRequest | undefined,
+): Promise<readonly JiraReportDeviation[] | "unavailable"> {
+  const matching = matchingJiraIssueTemplates(templates, subject);
+  const needsParent = matching.some((template) => template.parent.issueTypes !== undefined);
+  if (!parentFieldsObserved(matching, subject, catalog)) return "unavailable";
+  if (needsParent && request === undefined) return "unavailable";
+  const bound =
+    needsParent && request !== undefined
+      ? await bindJiraTemplateParentTypes(request, subject, matching, catalog)
+      : subject;
+  const violations = checkJiraIssueTemplates(matching, bound, catalog);
+  if (violations.some(({ ruleId }) => ruleId === "template-unreadable")) return "unavailable";
+  return violations.map((violation) => deviation(violation, catalog));
+}
+
+/** A withheld requested field is unknown; an observed null still proves an absent parent. */
+function parentFieldsObserved(
+  templates: readonly JiraIssueTemplate[],
+  subject: JiraTemplateSubject,
+  catalog: readonly JiraFieldCatalogEntry[],
+): boolean {
+  return templates.every(({ parent }) => {
+    if (parent.field === undefined) return true;
+    const ids = resolveJiraTemplateFieldIds(parent.field, catalog);
+    return ids.length === 1 && ids.every((id) => Object.hasOwn(subject.fields, id));
+  });
 }
 
 /**

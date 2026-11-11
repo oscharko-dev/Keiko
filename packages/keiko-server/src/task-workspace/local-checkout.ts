@@ -31,6 +31,7 @@ import { isCanonicalLocalRoot } from "./canonical-root.js";
 import {
   FOLDER_PREFIX,
   folderView,
+  requireUnchangedWorkspaceIdentity,
   selectFolderWorkspace,
   type FolderSelectionRequest,
 } from "./folder-workspace.js";
@@ -71,6 +72,8 @@ function trustedGitArgs(root: string, args: readonly string[]): string[] {
     ...GIT_BASE_ARGS,
     "-C",
     root,
+    // #4068 (W7): Git for Windows cannot check out a path of MAX_PATH or more without core.longpaths.
+    ...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []),
     "-c",
     "core.fsmonitor=false",
     "-c",
@@ -265,6 +268,8 @@ interface LocalSelectionRequest {
   readonly branch: string;
   readonly requestedBy: string;
   readonly correlationId?: string;
+  /** Reselecting a persisted record: the checkout must still have the identity it was saved with. */
+  readonly expectedWorkspaceId?: string;
 }
 
 function validatedLocalIdentity(store: UiStore, root: string): string {
@@ -434,6 +439,7 @@ function selectLocalCheckout(
   let fromState: TaskWorkspaceLifecycleState | undefined;
   try {
     identity = validatedLocalIdentity(store, request.root);
+    requireUnchangedWorkspaceIdentity(request.expectedWorkspaceId, `${LOCAL_PREFIX}${identity}`);
     fromState = instances.getById(`${LOCAL_PREFIX}${identity}`)?.lifecycleState;
     requireLocalBranch(request.root, request.branch);
     const active = activateLocalCheckout(request, identity, instances, pointerStore, getActive);
@@ -568,6 +574,7 @@ function setActiveWithLocal(
         {
           root: instance.repositoryRoot,
           requestedBy: request.requestedBy,
+          expectedWorkspaceId: request.workspaceId,
           ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
         },
         store,
@@ -584,6 +591,7 @@ function setActiveWithLocal(
         root: instance.repositoryRoot,
         branch: instance.taskBranch,
         requestedBy: request.requestedBy,
+        expectedWorkspaceId: request.workspaceId,
         ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       },
       store,
@@ -677,6 +685,7 @@ export function withLocalCheckout(
       managed.list(repositoryRoot).filter((instance) => instance.executionLocation !== "local"),
     listAll: (): readonly WorkspaceInstance[] =>
       managed.listAll().filter((instance) => instance.executionLocation !== "local"),
+    selectable: (workspaceId): boolean => instances.getById(workspaceId) !== undefined,
     getActive,
     setActive: (request): Promise<ActiveWorkspaceView> =>
       setActiveWithLocal(request, managed, store, instances, pointerStore, getActive, activityLog),

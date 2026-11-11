@@ -1,5 +1,10 @@
+import { jiraChatPrivatePorts } from "./jiraChatPrivatePorts.js";
 import { createManagedChatCatalogRuntime } from "../tool-catalog/managedChatCatalogRuntime.js";
 import { randomUUID } from "node:crypto";
+import { MANAGED_MCP_TOOLS_MAX } from "@oscharko-dev/keiko-mcp";
+import { ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
+import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
+import { jiraChatAvatarComposition } from "./jiraAvatarComposition.js";
 import {
   createJiraDraftStore,
   createJiraReportStore,
@@ -20,7 +25,7 @@ import type {
   ManagedMcpProvider,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
+import type { ChatToolWriteApprovalView, ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
@@ -31,8 +36,27 @@ import {
   managedCatalogToolDefinitions,
   type ManagedProviderCatalog,
 } from "../tool-catalog/managedProviderCatalog.js";
-import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
-import { JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  createJiraProviderForCatalog,
+  isCurrentJiraOperationBinding,
+  jiraOperationBindingForTool,
+  jiraOperationForTool,
+} from "./jiraManagedProvider.js";
+import { isCoreMutationTool } from "./jiraManagedMutationDescriptors.js";
+import {
+  createJiraCatalogDiscoveryProvider,
+  JIRA_CATALOG_DISCOVERY_TOOLS,
+  jiraToolsForIdentities,
+} from "./jiraCatalogDiscovery.js";
+import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
+import {
+  JIRA_MANAGED_ACTION_TYPES,
+  JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_READ_TOOL_FAMILIES,
+  isJiraAvatarUploadOperation,
+  type JiraAvatarUploadMutation,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import {
@@ -42,6 +66,10 @@ import {
 } from "./jiraChatCatalogConsumer.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { executeJiraChatDraft, jiraDraftRequirementRefusal } from "./jiraChatDraft.js";
+import {
+  prepareJiraDraftRequirements,
+  type PreparedJiraSource,
+} from "./jiraChatRequirementBinding.js";
 import {
   chatReportRequirementIds,
   createKnowledgeRequirementsProvider,
@@ -55,6 +83,7 @@ import {
   traceOutcomeData,
   traceRefusalData,
   type TraceTurn,
+  type ItemTrace,
 } from "../requirement-trace.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { recordJiraCitationMarkers, resolveJiraCitationMarkers } from "./jiraCitationMarkers.js";
@@ -82,10 +111,54 @@ export interface JiraChatToolScope {
   readonly knowledgeScoped: boolean;
 }
 const JIRA_DRAFT_BATCH_TOOL = "jira.draft-batch";
-const JIRA_DRAFT_BATCH_ALIAS = JIRA_DRAFT_BATCH_TOOL.replace(/[.-]/gu, "_");
+/** The draft run Keiko offers after a clean batch; a catalog that offers the batch hosts it too. */
+const JIRA_DRAFT_TOOL = "jira.draft";
+const JIRA_BATCH_TOOLS = [JIRA_DRAFT_BATCH_TOOL, JIRA_DRAFT_TOOL] as const;
+/** The existing issue-workflow families supply the curated reads; the batch has its own scope. */
+const JIRA_BASE_READS: ReadonlySet<string> = new Set([
+  ...JIRA_READ_TOOL_FAMILIES.projectList,
+  ...JIRA_READ_TOOL_FAMILIES.issueMetadata,
+  ...JIRA_READ_TOOL_FAMILIES.issues,
+  ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
+  ...JIRA_READ_TOOL_FAMILIES.localCompositions,
+]);
+/** Curated issue writes and local composition stay available alongside selected native tools. */
+const JIRA_BASE_TOOLS = [
+  ...JIRA_MANAGED_READ_TOOLS.filter(
+    (tool) => JIRA_BASE_READS.has(tool) && tool !== JIRA_DRAFT_BATCH_TOOL,
+  ),
+  ...JIRA_MUTATION_OPERATIONS.filter((tool): boolean => {
+    if (!isCoreMutationTool(tool)) return false;
+    const definition = jiraOperationForTool(tool)?.definition;
+    return (
+      definition?.kind === "composite" ||
+      (definition?.kind === "native" && /\/issue(?:\/|$)/u.test(definition.pathTemplate))
+    );
+  }),
+] satisfies typeof JIRA_CHAT_TOOLS;
+const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
+const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(
+  JIRA_BATCH_TOOLS.map((tool) => toolAlias(tool)),
+);
+const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS => [
+  ...new Set([...tools, ...JIRA_BATCH_TOOLS]),
+];
+/** The exact tool names the default (unselected) Jira chat catalog offers. */
+export const JIRA_DEFAULT_CATALOG_TOOLS: NonNullable<Parameters<typeof jiraChatCatalogRoutes>[0]> =
+  [...withBatchTools(JIRA_BASE_TOOLS), ...JIRA_CATALOG_DISCOVERY_TOOLS, ...KNOWLEDGE_CHAT_TOOLS];
+/** Without the batch, its companion goes too unless the turn selected the draft run itself. */
+const batchOnlyTools = (tools: typeof JIRA_CHAT_TOOLS): readonly string[] =>
+  tools.includes(JIRA_DRAFT_TOOL) ? [JIRA_DRAFT_BATCH_TOOL] : JIRA_BATCH_TOOLS;
+const batchOffered = (scope: JiraChatToolScope | undefined): boolean =>
+  scope?.knowledgeScoped ?? true;
 
 export interface JiraChatCatalogRuntime {
   readonly get: (scope?: JiraChatToolScope) => Promise<ChatCatalog>;
+  /** Caller-owned subset host, closed after its turn; the application also closes outstanding hosts. */
+  readonly select: (
+    identities: readonly string[],
+    scope?: JiraChatToolScope,
+  ) => Promise<ChatCatalog>;
   /**
    * The tool definitions a Chat advertises with a bound Jira Pod. Static, so it is derived once
    * from the providers the catalog hosts without admitting a host or touching a connection.
@@ -111,6 +184,7 @@ interface PreparedMutation {
   readonly current: CurrentAuthority;
   readonly intent: MutationIntent;
   readonly shared: SharedMutation;
+  readonly source: PreparedJiraSource | undefined;
 }
 
 /** Authority, the bound write action and the journaled intent; every refusal precedes any effect. */
@@ -137,7 +211,13 @@ function prepareMutation(
   );
   requireDispatch(
     write.action.tool === operation &&
-      write.action.argumentsDigest === sha256Hex(canonicalise(args)),
+      write.action.argumentsDigest === sha256Hex(canonicalise(args)) &&
+      isCurrentJiraOperationBinding(write.action.tool, write.action.operationBinding),
+    "invalid",
+    "invalid-arguments",
+  );
+  requireDispatch(
+    write.action.sourceDigest === write.source?.sourceDigest,
     "invalid",
     "invalid-arguments",
   );
@@ -156,12 +236,12 @@ function prepareMutation(
     beforeEffect: context.beforeEffect,
     beforeMutation: write.beforeMutation,
   };
-  return { current, intent, shared };
+  return { current, intent, shared, source: write.source };
 }
 
 /**
- * The drafts already advised about in a turn, oldest first; bounded like a cache. A draft is its
- * items: correcting them and sending them again is that same choice, a draft of other items is not.
+ * Refusal-log deduplication for a turn, oldest first and bounded. Repeating the same item refs
+ * never confirms an untraced write; only actual trace resolution or human approval can do that.
  */
 const ADVISED_DRAFTS_MAX = 256;
 export function untracedAdvisory(
@@ -195,49 +275,139 @@ export function untracedAdvisory(
   };
 }
 
+function executePreparedDraft(
+  deps: UiHandlerDeps,
+  input: {
+    readonly args: CatalogJsonObject;
+    readonly context: CatalogHandlerContext<JiraChatCatalogConsumer>;
+    readonly prepared: PreparedMutation;
+    readonly advised: Set<string>;
+    readonly turn: TraceTurn;
+  },
+): Promise<ManagedMcpToolResult> {
+  const { args, context, advised, turn } = input;
+  const { current, intent, shared, source } = input.prepared;
+  // The draft runs on exactly the item list the approval covered: a draft that changed or
+  // vanished since is refused here, before any item is journaled.
+  const draft = readableChatDraft(deps.jiraDraftStore, context.chatId, args);
+  if (!draft.ok) return Promise.resolve({ data: draftRefusalData(draft), isError: true });
+  if (source === undefined && hasRequirementReferences(draft.arguments))
+    return Promise.resolve(missingPreparedSource());
+  const approval = draftApproval(deps, current.envelope.subject, context, intent);
+  const completed = executeJiraChatDraft({
+    ...shared,
+    arguments: draft.arguments,
+    deselected: approval?.excludedItemRefs ?? [],
+    context,
+    retainProgress: (snapshot): void => {
+      const binding = jiraOperationBindingForTool("jira.draft");
+      requireDispatch(binding !== undefined, "invalid", "invalid-arguments");
+      context.retainDraftProgress?.(intent.invocationId, context.invocationId, () => ({
+        ...snapshot(),
+        operationBinding: { ...binding },
+      }));
+    },
+    connection: jiraChatDraftConnection(deps, current.credential),
+    openTrace: () => openTraceSession(deps, turn),
+    ...(source === undefined
+      ? {}
+      : { preparedTraces: new Map(source.items.map((item) => [item.ref, item.trace])) }),
+    // A draft a human reviewed runs as approved; the advisory guides an unreviewed one only.
+    ...(approval === undefined
+      ? {
+          adviseUntraced: untracedAdvisory(deps, advised, context),
+        }
+      : {}),
+    activity: (activity): void => {
+      recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
+    },
+  });
+  return completed.then((result) => settleDraft(deps, context.chatId, args, result));
+}
+
+/**
+ * Every item settled: the draft is done, so later turns no longer name it as the open draft and a
+ * request for other issues starts a new one instead of reconciling this one again.
+ */
+function settleDraft(
+  deps: UiHandlerDeps,
+  chatId: string,
+  args: CatalogJsonObject,
+  result: ManagedMcpToolResult,
+): ManagedMcpToolResult {
+  if (
+    result.isError !== true &&
+    typeof args.draftId === "string" &&
+    typeof args.draftDigest === "string"
+  )
+    deps.jiraDraftStore?.complete(args.draftId, chatId, args.draftDigest);
+  return result;
+}
+
 function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
   const advised = new Set<string>();
   return (operation, args, context, execute) => {
-    const { current, intent, shared } = prepareMutation(deps, operation, args, context);
+    const prepared = prepareMutation(deps, operation, args, context);
+    const { shared, source } = prepared;
     const turn = {
       chatId: context.chatId,
       userMessageId: context.userMessageId,
       correlationId: context.correlationId,
     };
-    if (operation === "jira.draft") {
-      // The draft runs on exactly the item list the approval covered: a draft that changed or
-      // vanished since is refused here, before any item is journaled.
-      const draft = readableChatDraft(deps.jiraDraftStore, context.chatId, args);
-      if (!draft.ok) return Promise.resolve({ data: draftRefusalData(draft), isError: true });
-      const approval = draftApproval(deps, current.envelope.subject, context, intent);
-      return executeJiraChatDraft({
-        ...shared,
-        arguments: draft.arguments,
-        deselected: approval?.excludedItemRefs ?? [],
-        context,
-        retainProgress: (snapshot): void => {
-          context.retainDraftProgress?.(intent.invocationId, context.invocationId, snapshot);
-        },
-        connection: jiraChatDraftConnection(deps, current.credential),
-        openTrace: () => openTraceSession(deps, turn),
-        // A draft a human reviewed runs as approved; the advisory guides an unreviewed one only.
-        ...(approval === undefined
-          ? {
-              adviseUntraced: untracedAdvisory(deps, advised, context),
-            }
-          : {}),
-        activity: (activity): void => {
-          recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
-        },
-      });
-    }
-    return executeTracedMutation(deps, turn, operation, args, (trace) =>
-      executeJiraChatMutation({
-        ...shared,
-        execute: (http) => execute(http, trace),
-      }),
+    if (operation === "jira.draft")
+      return executePreparedDraft(deps, { args, context, prepared, advised, turn });
+    if (source === undefined && args.requirementIds !== undefined)
+      return Promise.resolve(missingPreparedSource());
+    return executeTracedMutation(
+      deps,
+      turn,
+      operation,
+      args,
+      (trace) =>
+        executeJiraChatMutation({
+          ...shared,
+          execute: (http, lifecycle) => {
+            // Private cookie/body ports must share this exact journal's dispatch and ACK hooks.
+            const ports = jiraChatPrivatePorts(
+              deps,
+              context,
+              prepared.current.credential,
+              context,
+              lifecycle,
+            );
+            return execute(http, trace, {
+              privateIdentity: ports?.identity,
+              avatars: {
+                withSession: ports?.withAvatarSession,
+                legacyTemporaryRelease: ports?.legacyTemporaryRelease,
+              },
+            });
+          },
+        }),
+      source?.items[0]?.trace,
     );
   };
+}
+
+function hasRequirementReferences(args: CatalogJsonObject): boolean {
+  return (
+    Array.isArray(args.items) &&
+    args.items.some((item) => item !== null && typeof item === "object" && "requirementIds" in item)
+  );
+}
+function missingPreparedSource(): ManagedMcpToolResult {
+  return {
+    isError: true,
+    data: { outcome: "rejected", reason: "field-validation", requirementRefusal: "unavailable" },
+  };
+}
+
+function traceDescriptionCheck(
+  args: CatalogJsonObject,
+): { readonly description: unknown } | undefined {
+  const fields = args.fields;
+  if (fields === null || typeof fields !== "object" || !("description" in fields)) return undefined;
+  return { description: fields.description };
 }
 
 /** The explicit requirement references of a create or edit, validated before anything is sent. */
@@ -247,6 +417,7 @@ export async function executeTracedMutation(
   operation: string,
   args: CatalogJsonObject,
   run: (trace: JiraTraceRequest | undefined) => Promise<ManagedMcpToolResult>,
+  preparedTrace?: ItemTrace,
 ): Promise<ManagedMcpToolResult> {
   const references = parseRequirementIds(args.requirementIds);
   if (references === undefined) return malformedReferences();
@@ -256,7 +427,10 @@ export async function executeTracedMutation(
   const tally = newTally();
   const logged = operation === "jira.create" ? "create" : "edit";
   try {
-    const resolution = session.resolve(references);
+    const resolution =
+      preparedTrace === undefined
+        ? session.resolve(references, traceDescriptionCheck(args))
+        : { ok: true as const, trace: preparedTrace };
     if (!resolution.ok) {
       tallyRefusal(tally, resolution);
       logTrace(turn.correlationId, logged, tally);
@@ -269,7 +443,7 @@ export async function executeTracedMutation(
         traced = outcome;
       },
     });
-    tallyOutcome(tally, traced);
+    tallyOutcome(tally, traced, resolution.trace);
     logTrace(turn.correlationId, logged, tally);
     const data = traceOutcomeData(traced);
     return data === undefined ? result : { ...result, data: { ...result.data, trace: data } };
@@ -301,7 +475,19 @@ export function jiraChatDraftConnection(
   };
 }
 
-/** The items the human left out when approving this draft; none without an approval. */
+/** A pending or refused approval is never a human confirmation of an untraced draft. */
+export function isApprovedJiraDraft(
+  approval: ChatToolWriteApprovalView | undefined,
+  actionDigest: string,
+): approval is Extract<ChatToolWriteApprovalView, { readonly kind: "jira-chat-write" }> {
+  return (
+    approval?.kind === "jira-chat-write" &&
+    approval.operation === "jira.draft" &&
+    approval.actionDigest === actionDigest &&
+    (approval.state === "approved" || approval.state === "claimed")
+  );
+}
+
 /** The human's approval of exactly this draft action, or undefined when none reviewed it. */
 function draftApproval(
   deps: UiHandlerDeps,
@@ -315,9 +501,7 @@ function draftApproval(
     intent.invocationId,
     context.correlationId,
   )?.approval;
-  return approval?.kind === "jira-chat-write" && approval.actionDigest === intent.actionDigest
-    ? approval
-    : undefined;
+  return isApprovedJiraDraft(approval, intent.actionDigest) ? approval : undefined;
 }
 
 /**
@@ -329,8 +513,10 @@ function attachmentReview(
   deps: UiHandlerDeps,
   envelope: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>["envelope"],
   context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+  operation:
+    "jira.attach" | "jira.upload-email-template-pack" | JiraAvatarUploadMutation = "jira.attach",
 ): JiraChatAttachmentReview {
-  const policy = decideAtlassianEnvelopeAction(JIRA_MANAGED_ACTION_TYPES["jira.attach"], envelope);
+  const policy = decideAtlassianEnvelopeAction(JIRA_MANAGED_ACTION_TYPES[operation], envelope);
   const actionId = context.mutationGuard.write?.action.actionId;
   const approval =
     actionId === undefined
@@ -341,7 +527,33 @@ function attachmentReview(
           actionId,
           context.correlationId,
         )?.approval;
-  return attachmentReviewFor(policy.kind, approval);
+  return attachmentReviewFor(policy.kind, approval, operation);
+}
+function connectionAvatars(
+  deps: UiHandlerDeps,
+  envelope: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>["envelope"],
+  context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+  privatePorts: ReturnType<typeof jiraChatPrivatePorts>,
+): NonNullable<JiraManagedConnection["avatars"]> {
+  return {
+    ...jiraChatAvatarComposition(deps, {
+      chatId: context.chatId,
+      correlationId: context.correlationId,
+      signal: context.signal,
+      review: (): JiraChatAttachmentReview => {
+        const operation = context.mutationGuard.write?.action.tool;
+        return operation !== undefined && isJiraAvatarUploadOperation(operation)
+          ? attachmentReview(deps, envelope, context, operation)
+          : { required: true, reviewed: undefined };
+      },
+    }),
+    ...(privatePorts === undefined
+      ? {}
+      : {
+          withSession: privatePorts.withAvatarSession,
+          legacyTemporaryRelease: privatePorts.legacyTemporaryRelease,
+        }),
+  };
 }
 
 function connection(
@@ -357,6 +569,11 @@ function connection(
   );
   const credentials = deps.atlassianConnectorCredentials;
   requireDispatch(current.ok && credentials !== undefined, "denied", "authority-invalid");
+  // Writes receive private ports only inside the journal's tracked transport callback below.
+  const privatePorts =
+    context.mutationGuard.write === undefined
+      ? jiraChatPrivatePorts(deps, context, current.credential, context)
+      : undefined;
   return {
     baseUrl: current.credential.baseUrl,
     deployment: current.credential.deployment,
@@ -365,6 +582,15 @@ function connection(
       beforeDispatch: () => context.beforeEffect(),
     }),
     issueTemplates: jiraIssueTemplateSource(deps.store),
+    emailTemplates: jiraChatEmailTemplateComposition(deps, {
+      chatId: context.chatId,
+      correlationId: context.correlationId,
+      signal: context.signal,
+      review: () =>
+        attachmentReview(deps, current.envelope, context, "jira.upload-email-template-pack"),
+    }),
+    privateIdentity: privatePorts?.identity,
+    avatars: connectionAvatars(deps, current.envelope, context, privatePorts),
     attachmentSource: jiraChatAttachmentSource(deps, {
       chatId: context.chatId,
       correlationId: context.correlationId,
@@ -400,6 +626,17 @@ export function draftTool(
   return {
     store,
     owner: (context) => context.chatId,
+    prepareRequirements: (items, context): ReturnType<typeof prepareJiraDraftRequirements> => {
+      context.signal.throwIfAborted();
+      requireDispatch(context.beforeEffect(), "denied", "effect-denied");
+      return prepareJiraDraftRequirements(items, () =>
+        openTraceSession(deps, {
+          chatId: context.chatId,
+          userMessageId: context.userMessageId,
+          correlationId: context.correlationId,
+        }),
+      );
+    },
     checkRequirements: (items, context): ReturnType<typeof jiraDraftRequirementRefusal> => {
       context.signal.throwIfAborted();
       requireDispatch(context.beforeEffect(), "denied", "effect-denied");
@@ -456,17 +693,19 @@ function chatCatalogProviders(
   deps: UiHandlerDeps,
   store: JiraReportStore,
   draftStore: JiraDraftStore,
+  tools: typeof JIRA_CHAT_TOOLS = JIRA_BASE_TOOLS,
 ): readonly ManagedMcpProvider<CatalogHandlerContext<JiraChatCatalogConsumer>>[] {
   const draft = draftTool(deps, draftStore);
   return [
     createJiraProviderForCatalog(
-      (context) => connection(deps, context),
-      JIRA_CHAT_TOOLS,
+      (context: CatalogHandlerContext<JiraChatCatalogConsumer>) => connection(deps, context),
+      withBatchTools(tools),
       mutationExecutor(deps),
       reportTool(deps, store),
       draft,
       createJiraDraftBatchExecutor(deps, draft),
     ),
+    createJiraCatalogDiscoveryProvider(),
     createKnowledgeRequirementsProvider(deps, store),
   ];
 }
@@ -476,10 +715,15 @@ function initializeCatalog(
   log: CatalogLifecycleLogPort,
   store: JiraReportStore,
   draftStore: JiraDraftStore,
+  tools: typeof JIRA_CHAT_TOOLS = JIRA_BASE_TOOLS,
 ): Promise<ChatCatalog> {
   return createManagedProviderCatalog<JiraChatCatalogConsumer>({
-    providers: chatCatalogProviders(deps, store, draftStore),
-    routes: jiraChatCatalogRoutes(),
+    providers: chatCatalogProviders(deps, store, draftStore, tools),
+    routes: jiraChatCatalogRoutes([
+      ...withBatchTools(tools),
+      ...JIRA_CATALOG_DISCOVERY_TOOLS,
+      ...KNOWLEDGE_CHAT_TOOLS,
+    ]),
     profile: JIRA_CHAT_PROFILE,
     log,
     correlationId: randomUUID(),
@@ -496,7 +740,7 @@ function staticToolDefinitions(
   let definitions: readonly ToolDefinition[] | undefined;
   return () => {
     definitions ??= managedCatalogToolDefinitions(
-      jiraChatCatalogRoutes(),
+      jiraChatCatalogRoutes([...JIRA_DEFAULT_CATALOG_TOOLS]),
       chatCatalogProviders(deps, store, draftStore).flatMap((provider) => provider.tools()),
       JIRA_CHAT_PROFILE,
       Date.now(),
@@ -505,30 +749,98 @@ function staticToolDefinitions(
   };
 }
 
-/** One lazy SDK host per application graph; neither Pods nor turns own protocol transports. */
+type SelectedRuntime = ReturnType<typeof createManagedChatCatalogRuntime<JiraChatCatalogConsumer>>;
+/** Every tool the selected catalog's providers register: base, selection, batch, discovery, Knowledge. */
+function hostedToolCount(selection: typeof JIRA_CHAT_TOOLS): number {
+  return (
+    withBatchTools([...new Set([...JIRA_BASE_TOOLS, ...selection])]).length +
+    JIRA_CATALOG_DISCOVERY_TOOLS.length +
+    KNOWLEDGE_CHAT_TOOLS.length
+  );
+}
+
+async function admitSelectedCatalog(
+  identities: readonly string[],
+  initialize: (tools: typeof JIRA_CHAT_TOOLS) => Promise<ChatCatalog>,
+  selections: Set<SelectedRuntime>,
+  withBatch: boolean,
+): Promise<ChatCatalog> {
+  const names = new Set(jiraToolsForIdentities(identities));
+  const tools = JIRA_CHAT_TOOLS.filter((name) => names.has(name));
+  requireDispatch(tools.length === names.size, "invalid", "invalid-arguments");
+  // One host carries a bounded registry: refuse an oversized selection before building any host.
+  if (hostedToolCount(tools) > MANAGED_MCP_TOOLS_MAX) throw new ToolCatalogError("input-bound");
+  const selected = createManagedChatCatalogRuntime<JiraChatCatalogConsumer>(
+    () => [],
+    () => initialize([...new Set([...JIRA_BASE_TOOLS, ...tools])]),
+  );
+  selections.add(selected);
+  try {
+    const full = await selected.get();
+    const catalog =
+      withBatch || full.omitting === undefined ? full : full.omitting(batchOnlyTools(tools));
+    return {
+      ...catalog,
+      close: async (): Promise<void> => {
+        try {
+          await selected.close();
+        } finally {
+          selections.delete(selected);
+        }
+      },
+    };
+  } catch (error) {
+    selections.delete(selected);
+    await selected.close();
+    throw error;
+  }
+}
+
+/** The application owns the discovery host and tracks every transient narrowed SDK host. */
 export function createJiraChatCatalogRuntime(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
   store: JiraReportStore = createJiraReportStore(),
   draftStore: JiraDraftStore = createJiraDraftStore(),
 ): JiraChatCatalogRuntime {
-  const base = createManagedChatCatalogRuntime(staticToolDefinitions(deps, store, draftStore), () =>
-    initializeCatalog(deps, log, store, draftStore),
+  const initial = createManagedChatCatalogRuntime(
+    staticToolDefinitions(deps, store, draftStore),
+    () => initializeCatalog(deps, log, store, draftStore),
   );
+  const selections = new Set<
+    ReturnType<typeof createManagedChatCatalogRuntime<JiraChatCatalogConsumer>>
+  >();
+  let closed = false;
+  let closing: Promise<void> | undefined;
   let withoutBatch: { readonly of: ChatCatalog; readonly value: ChatCatalog } | undefined;
-  const offered = (scope: JiraChatToolScope | undefined): boolean => scope?.knowledgeScoped ?? true;
   return {
-    ...base,
     toolDefinitions: (scope): readonly ToolDefinition[] =>
-      offered(scope)
-        ? base.toolDefinitions()
-        : base.toolDefinitions().filter((tool) => tool.name !== JIRA_DRAFT_BATCH_ALIAS),
+      batchOffered(scope)
+        ? initial.toolDefinitions()
+        : initial.toolDefinitions().filter((tool) => !JIRA_BATCH_ALIASES.has(tool.name)),
     get: async (scope): Promise<ChatCatalog> => {
-      const full = await base.get();
-      if (offered(scope) || full.omitting === undefined) return full;
+      const full = await initial.get();
+      if (batchOffered(scope) || full.omitting === undefined) return full;
       if (withoutBatch?.of !== full)
-        withoutBatch = { of: full, value: full.omitting([JIRA_DRAFT_BATCH_TOOL]) };
+        withoutBatch = { of: full, value: full.omitting(JIRA_BATCH_TOOLS) };
       return withoutBatch.value;
+    },
+    select: async (identities, scope): Promise<ChatCatalog> => {
+      requireDispatch(!closed, "failed", "handler-unavailable");
+      return admitSelectedCatalog(
+        identities,
+        (tools) => initializeCatalog(deps, log, store, draftStore, tools),
+        selections,
+        batchOffered(scope),
+      );
+    },
+    close: (): Promise<void> => {
+      closed = true;
+      closing ??= Promise.all([
+        initial.close(),
+        ...[...selections].map((selected) => selected.close()),
+      ]).then(() => undefined);
+      return closing;
     },
   };
 }

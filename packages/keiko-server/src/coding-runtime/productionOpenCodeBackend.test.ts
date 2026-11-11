@@ -17,7 +17,6 @@ import {
   realpathSync,
   rmSync,
   linkSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -32,6 +31,7 @@ import * as gatewayBackend from "./devLaneRuntimeProcessBackend.js";
 import * as nativeBackend from "./nativeRuntimeProcessBackend.js";
 import {
   createRuntimeGatewayConfinement,
+  GATEWAY_UNSUPPORTED_ON_HOST_REASON,
   type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
@@ -46,6 +46,8 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import {
   devLaneCheckoutRoot,
   discoverDevLaneOpenCode,
@@ -57,19 +59,55 @@ import { stageDevLaneFixture } from "./devLaneFixture/_support.js";
 import { codingSafeActivityTtlMs } from "./codingSafeActivityProjection.js";
 import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support.js";
 import {
+  assertWindowsWorkspaceLocation,
   createProductionOpenCodeBackend,
+  onAnotherWindowsVolume,
   recordContextTelemetry,
+  windowsFilesystemGrants,
+  windowsWorkspaceCapability,
 } from "./productionOpenCodeBackend.js";
+import { CodingRuntimeLaunchRejectedError, refusedLaunch } from "./launchFailure.js";
+import type { OpenCodeRipgrepResolution } from "./opencodeRipgrepLaunch.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type {
   ProductionOpenCodeBackendInput,
   ResolvedPortableOpenCodeRuntime,
 } from "./productionOpenCodeBackend.js";
+import { windowsGatewayServiceFacts } from "./productionOpenCodeActivation.js";
 import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
 import type { ProductionRuntimeBackendInput } from "./productionCodingRuntimeResolver.js";
+import type {
+  RuntimeProcessBackend,
+  RuntimeSupervisorLaunchRequest,
+} from "./runtimeProcessSupervisor.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import type { OperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
+import { plantDirectoryRedirect, WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 
+// The native filesystem capability describes the POSIX Seatbelt/namespace backends and validates
+// its roots with `path.posix` (keiko-sandbox seatbelt-execution-root), so a native macOS or Linux
+// run composed on a Windows host's drive-letter temp roots is refused as
+// `runtime-gateway-policy-invalid` before anything under test runs; those cases run on POSIX hosts.
+const itWithPosixNativeRoots = it.skipIf(WINDOWS_HOST);
+
+const UNVERIFIED_RIPGREP: OpenCodeRipgrepResolution = {
+  outcome: "unverified",
+  targetKey: "win32-x64",
+  layout: "none",
+  reason: "missing",
+};
+
+function verifiedRipgrep(directory: string): OpenCodeRipgrepResolution {
+  return {
+    outcome: "verified",
+    targetKey: "win32-x64",
+    layout: "provisioned",
+    version: "15.1.0",
+    digestSource: "pinned",
+    directory,
+  };
+}
 describe("production OpenCode backend composition", () => {
   it("captures the trusted registry profile once without changing the default runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-profile-capture-"));
@@ -142,7 +180,7 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
-  it.each(["canonical", "alias", "missing"] as const)(
+  itWithPosixNativeRoots.each(["canonical", "alias", "missing"] as const)(
     "binds native filesystem and launch state to the same %s root",
     async (kind) => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-service-roots-")));
@@ -543,6 +581,254 @@ describe("production OpenCode backend composition", () => {
     },
   );
 
+  // #4068: composition binds the gateway policy into every Windows run (ADR-0043), and the native
+  // backend can enforce it only through the installed broker. A runtime that yields no broker pin
+  // (an evaluation package) therefore refuses every start, and readiness must not offer one.
+  it.each(["evaluation"] as const)(
+    "refuses every %s Windows run before a helper starts, and readiness says so",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-windows-unqualified-lane-"));
+      try {
+        const portable: ResolvedPortableOpenCodeRuntime = {
+          ...releaseQualifiedNativeRuntime(root),
+          platformAssurance: "evaluation-unqualified",
+        };
+        const request = runInput(root);
+        const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+        createProductionOpenCodeBackend(backendInput(root, portable)).createRun(request);
+        const created = factory.mock.results.at(-1)?.value as RuntimeProcessBackend;
+
+        expect(() =>
+          created.spawnOwnedTree({
+            runId: request.minted.authorityRef.runId,
+            treeBindingId: request.minted.treeBindingId,
+          } as RuntimeSupervisorLaunchRequest),
+        ).toThrow(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
+        expect(
+          windowsGatewayServiceFacts({}, portable).windowsGatewayService?.unavailableReason(),
+        ).toBe("gateway-service-unqualified");
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  // #4068 (ADR-0043 D19): a Windows dev checkout installs the same broker, pinned to the runtime
+  // supervisor it built, so its runs take the release path's confinement rather than a refusal.
+  // The npm runtime package does the same with the supervisor digest compiled into this server
+  // (owner decision 2026-11-09).
+  it.each(["dev-checkout", "npm-runtime-package"] as const)(
+    "runs a Windows %s through the broker it pinned, and readiness asks that broker",
+    (lane) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-windows-dev-checkout-"));
+      try {
+        const portable = { ...windowsDevLaneRuntime(root), lane };
+        const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+        createProductionOpenCodeBackend(backendInput(root, portable)).createRun(runInput(root));
+
+        expect(portable.nativeHelperSha256).toMatch(/^[a-f0-9]{64}$/u);
+        expect(factory).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            useInstalledWindowsGateway: true,
+            expectedHelperSha256: portable.nativeHelperSha256,
+            // A user's own checkout: the tree gets its runtime and private state, and no worktree.
+            windowsFilesystemGrants: [
+              {
+                path: join(portable.installRoot, portable.sidecar.payloadRootPath),
+                access: "read",
+                principal: "tree",
+              },
+              expect.objectContaining({ access: "modify", principal: "tree" }),
+            ],
+          }),
+        );
+        const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
+        // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
+        expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  // #4068 (proposal B1): a Keiko-managed worktree is readable through its own capability only.
+  it("grants a managed worktree read access through that worktree's capability", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-managed-grants-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const managed = {
+        ...run,
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess =>
+          ({ kind: "managed-task" }) as unknown as WorkspaceRootAccess,
+      };
+      const input = { ...backendInput(root, portable), ripgrep: UNVERIFIED_RIPGREP };
+      const grants = windowsFilesystemGrants(portable, input, managed);
+      const capability = windowsWorkspaceCapability(run.context.workspaceRoot);
+
+      expect(capability).toMatch(/^keiko\.workspace\.[a-f0-9]{32}$/u);
+      expect(windowsWorkspaceCapability(run.context.workspaceRoot.toUpperCase())).toBe(capability);
+      expect(grants.at(-1)).toEqual({
+        path: run.context.workspaceRoot,
+        access: "read",
+        principal: "capability",
+        capability,
+      });
+      expect(grants.filter((grant) => grant.access === "modify")).toHaveLength(1);
+      expect(windowsFilesystemGrants(portable, input, run)).toHaveLength(2);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  // #4068: a confined Windows tree is granted a workspace only as a Keiko-managed worktree, and its
+  // AppContainer cannot resolve a path on another volume than Windows. Both starts would spawn and
+  // then fail inside the runtime with an opaque error, so each is refused first with its own code.
+  it("refuses a Windows start outside a managed worktree, or on another volume, before spawn", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-location-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const at = (
+        workspaceRoot: string,
+        kind: "ordinary" | "managed-task",
+      ): Pick<ProductionRuntimeBackendInput, "context" | "resolveWorkspaceRootAccess"> => ({
+        context: { ...run.context, workspaceRoot },
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess =>
+          ({ kind }) as unknown as WorkspaceRootAccess,
+      });
+      const refusal = (attempt: () => void): ReturnType<typeof refusedLaunch> => {
+        try {
+          attempt();
+        } catch (error) {
+          expect(error).toBeInstanceOf(CodingRuntimeLaunchRejectedError);
+          return refusedLaunch(error);
+        }
+        throw new Error("Expected the start to be refused.");
+      };
+      const env = { SystemDrive: "C:" };
+      const windows = { portable, processEnv: env };
+
+      const start = (
+        input: Parameters<typeof assertWindowsWorkspaceLocation>[0],
+        workspaceRoot: string,
+        kind: "ordinary" | "managed-task",
+      ): (() => void) => {
+        return (): void => {
+          assertWindowsWorkspaceLocation(input, at(workspaceRoot, kind));
+        };
+      };
+
+      expect(refusal(start(windows, "C:\\repos\\keiko", "ordinary"))).toEqual({
+        ok: false,
+        failureCode: "workspace-location-unsupported",
+      });
+      expect(refusal(start(windows, "D:\\state\\task-workspaces\\t1", "managed-task"))).toEqual({
+        ok: false,
+        failureCode: "workspace-volume-unsupported",
+      });
+      // The managed worktree on the system volume starts, and so does any run without the broker.
+      expect(start(windows, "c:\\state\\task-workspaces\\t1", "managed-task")).not.toThrow();
+      expect(
+        start(
+          { portable: releaseQualifiedNativeRuntime(root), processEnv: env },
+          "D:\\repos\\keiko",
+          "ordinary",
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("names a drive letter or UNC share other than the system drive as another volume", () => {
+    const env = { SystemDrive: "E:" };
+    expect(onAnotherWindowsVolume("E:\\keiko\\state", env)).toBe(false);
+    expect(onAnotherWindowsVolume("e:/keiko/state", env)).toBe(false);
+    expect(onAnotherWindowsVolume("C:\\keiko\\state", env)).toBe(true);
+    expect(onAnotherWindowsVolume("\\\\server\\share\\keiko", env)).toBe(true);
+    expect(onAnotherWindowsVolume("C:\\keiko", {})).toBe(false);
+    expect(onAnotherWindowsVolume("D:\\keiko", {})).toBe(true);
+    // A POSIX path is no Windows host path, so it names no volume.
+    expect(onAnotherWindowsVolume("/tmp/keiko", {})).toBe(false);
+  });
+
+  // #4068: the verified ripgrep directory is the only entry on the runtime's PATH. A checkout keeps
+  // it in its own `.ripgrep`, outside the runtime root, so the tree must be able to run it there;
+  // one inside the runtime root is already covered by that root's grant.
+  it("grants the tree read access to a verified ripgrep outside its runtime root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-ripgrep-grants-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const runtimeRoot = join(portable.installRoot, portable.sidecar.payloadRootPath);
+      const outside = join(root, ".ripgrep", "15.1.0", "win32-x64");
+      const grants = windowsFilesystemGrants(
+        portable,
+        { ...backendInput(root, portable), ripgrep: verifiedRipgrep(outside) },
+        run,
+      );
+
+      expect(grants).toContainEqual({ path: outside, access: "read", principal: "tree" });
+      expect(
+        windowsFilesystemGrants(
+          portable,
+          { ...backendInput(root, portable), ripgrep: verifiedRipgrep(join(runtimeRoot, "rg")) },
+          run,
+        ),
+      ).toHaveLength(2);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  // #4068: the developer override may name any directory; a grant would expose all of it to the
+  // AppContainer, so only the Keiko-owned layouts are granted.
+  it("does not grant the directory of a ripgrep override outside the runtime root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-ripgrep-override-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const ripgrep: OpenCodeRipgrepResolution = {
+        ...verifiedRipgrep(join(root, "users-bin")),
+        layout: "override",
+      };
+      const grants = windowsFilesystemGrants(
+        portable,
+        { ...backendInput(root, portable), ripgrep },
+        runInput(root),
+      );
+      expect(grants.map((grant) => grant.path)).not.toContain(join(root, "users-bin"));
+      expect(grants).toHaveLength(2);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("asks the installed broker for a release-qualified Windows runtime", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-released-lane-"));
+    try {
+      const portable: ResolvedPortableOpenCodeRuntime = {
+        ...releaseQualifiedNativeRuntime(root),
+        nativeHelperSha256: "a".repeat(64),
+      };
+      const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
+
+      // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
+      expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("has no Windows gateway fact for another platform's runtime", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-linux-released-lane-"));
+    try {
+      expect(windowsGatewayServiceFacts({}, releaseQualifiedLinuxRuntime(root))).toEqual({});
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("composes a release-qualified Linux run through the namespace gateway backend", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-linux-gateway-composition-"));
     try {
@@ -584,7 +870,7 @@ describe("production OpenCode backend composition", () => {
 
   // #3897: the native profile's kernel network disposition follows the run's EFFECTIVE mode, and
   // the Linux native run receives the same accepted filesystem the macOS run does.
-  it.each([
+  itWithPosixNativeRoots.each([
     ["governed-assist", "loopback-only"],
     ["supervised-coding", "loopback-only"],
     ["autonomous-delivery", "inherited"],
@@ -620,6 +906,70 @@ describe("production OpenCode backend composition", () => {
       }
     },
   );
+
+  it("composes Jira selection with this run's observed context and live prompt budget", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-jira-model-budget-")));
+    try {
+      const binding = {
+        podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        authenticationGeneration: 3,
+        verificationRevision: 1,
+      };
+      const connections = vi.fn<CodingJiraPods["connections"]>(() => ({
+        generation: (): AbortSignal => new AbortController().signal,
+        serve: (): Promise<Response> => Promise.resolve(new Response(null, { status: 403 })),
+      }));
+      const pods: CodingJiraPods = {
+        currentInputContext: () => undefined,
+        resolve: () => ({ ok: true, binding }),
+        recordBind: () => undefined,
+        connections,
+        attach: () => undefined,
+        close: () => Promise.resolve(),
+        closeRun: () => Promise.resolve(),
+      };
+      const input = runInput(root);
+      const contextUsage = createCodingRuntimeContextUsageRegistry();
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      const run = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        codingJiraPods: pods,
+        mcpRelay: createMcpCredentialRelay(),
+      }).createRun({
+        ...input,
+        contextUsage,
+        request: { ...input.request, jiraPod: binding },
+        jiraAuthority: {
+          runId: input.request.runId,
+          currentScopes: () => ["issue-tracker.read"],
+        },
+      });
+      const fits = connections.mock.calls[0]?.[2]?.catalogFits;
+      const geometry = compose.mock.calls[0]?.[0].contextGeometry;
+      if (fits === undefined || geometry === undefined)
+        throw new TypeError("Missing composed model budget");
+      const tools = [
+        { name: "jira.issue", description: "Read issue", inputSchema: { type: "object" } },
+      ];
+      const result = { outcome: "succeeded", items: [] };
+      expect(fits(tools, result)).toBeUndefined();
+      const sample = {
+        sampleId: "observed",
+        capacityTokens: geometry.contextWindowTokens,
+        reservedOutputTokens: geometry.maxOutputTokens,
+        inputTokens: 1000,
+        updatedAt: "2026-11-08T05:00:00.000Z",
+      };
+      contextUsage.recordProviderSample("foreign-run", sample);
+      expect(fits(tools, result)).toBeUndefined();
+      contextUsage.recordProviderSample(input.request.runId, sample);
+      expect(fits(tools, result)).toBe(true);
+      await run.dispose?.();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   // #3903: the native composition is handed the repository items admission, bound to the host's
   // secure read and to this run's own workspace identity; the mapped profiles are handed none.
@@ -670,70 +1020,79 @@ describe("production OpenCode backend composition", () => {
       return compose.mock.calls.at(-1)?.[0].repositoryItems;
     }
 
-    it("reads through the host's secure read and writes the sanitized copy", async () => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
-      try {
-        const { source, readText } = agentSource();
-        const port = nativeRun(root, { secureWorkspaceTextRead: source });
-        const discovery = join(root, "discovery");
-        mkdirSync(discovery);
+    itWithPosixNativeRoots(
+      "reads through the host's secure read and writes the sanitized copy",
+      async () => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+        try {
+          const { source, readText } = agentSource();
+          const port = nativeRun(root, { secureWorkspaceTextRead: source });
+          const discovery = join(root, "discovery");
+          mkdirSync(discovery);
 
-        await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
 
-        // The agent, then the project's own configuration files (#3903 AC2), each read once.
-        expect(readText.mock.calls.map(([request]) => request.relativePath).sort()).toEqual([
-          ".opencode/agents/helper.md",
-          ".opencode/opencode.json",
-          ".opencode/opencode.jsonc",
-          "opencode.json",
-          "opencode.jsonc",
-        ]);
-        expect(readFileSync(join(discovery, "agents", "helper.md"), "utf8")).toBe(
-          '---\ndescription: "d"\nmode: subagent\n---\nPrompt\n',
-        );
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    });
+          // The agent, then the project's own configuration files (#3903 AC2), each read once.
+          expect(readText.mock.calls.map(([request]) => request.relativePath).sort()).toEqual([
+            ".opencode/agents/helper.md",
+            ".opencode/opencode.json",
+            ".opencode/opencode.jsonc",
+            "opencode.json",
+            "opencode.jsonc",
+          ]);
+          expect(readFileSync(join(discovery, "agents", "helper.md"), "utf8")).toBe(
+            '---\ndescription: "d"\nmode: subagent\n---\nPrompt\n',
+          );
+        } finally {
+          rmSync(root, { force: true, recursive: true });
+        }
+      },
+    );
 
-    it("reads nothing once the run's workspace is no longer the active one", async () => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
-      try {
-        const { source, readText } = agentSource();
-        const port = nativeRun(root, { secureWorkspaceTextRead: source }, () => false);
-        const discovery = join(root, "discovery");
-        mkdirSync(discovery);
+    itWithPosixNativeRoots(
+      "reads nothing once the run's workspace is no longer the active one",
+      async () => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+        try {
+          const { source, readText } = agentSource();
+          const port = nativeRun(root, { secureWorkspaceTextRead: source }, () => false);
+          const discovery = join(root, "discovery");
+          mkdirSync(discovery);
 
-        await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
 
-        expect(readText).not.toHaveBeenCalled();
-        expect(existsSync(join(discovery, "agents"))).toBe(false);
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    });
+          expect(readText).not.toHaveBeenCalled();
+          expect(existsSync(join(discovery, "agents"))).toBe(false);
+        } finally {
+          rmSync(root, { force: true, recursive: true });
+        }
+      },
+    );
 
-    it("honours the operator's switch and an unqualified host without reading", async () => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
-      try {
-        const { source, readText } = agentSource();
-        const off = nativeRun(root, {
-          secureWorkspaceTextRead: source,
-          repositoryItemsEnabled: false,
-        });
-        const missing = nativeRun(root, {});
-        const discovery = join(root, "discovery");
-        mkdirSync(discovery);
+    itWithPosixNativeRoots(
+      "honours the operator's switch and an unqualified host without reading",
+      async () => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+        try {
+          const { source, readText } = agentSource();
+          const off = nativeRun(root, {
+            secureWorkspaceTextRead: source,
+            repositoryItemsEnabled: false,
+          });
+          const missing = nativeRun(root, {});
+          const discovery = join(root, "discovery");
+          mkdirSync(discovery);
 
-        await off?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
-        await missing?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await off?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await missing?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
 
-        expect(readText).not.toHaveBeenCalled();
-        expect(existsSync(join(discovery, "agents"))).toBe(false);
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    });
+          expect(readText).not.toHaveBeenCalled();
+          expect(existsSync(join(discovery, "agents"))).toBe(false);
+        } finally {
+          rmSync(root, { force: true, recursive: true });
+        }
+      },
+    );
 
     it("hands the mapped profiles no admission at all", () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
@@ -780,7 +1139,7 @@ describe("production OpenCode backend composition", () => {
       return compose.mock.calls.at(-1)?.[0].operatorPlugins;
     }
 
-    it.each([
+    itWithPosixNativeRoots.each([
       [true, 1, true],
       [false, 0, false],
     ] as const)(
@@ -821,24 +1180,27 @@ describe("production OpenCode backend composition", () => {
     });
   });
 
-  it("binds the mode-derived egress into the policy digest so a different mode cannot replay it", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-egress-digest-")));
-    try {
-      const digests = (["governed-assist", "autonomous-delivery"] as const).map((mode) => {
-        const factory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
-        const request = runInput(root);
-        createProductionOpenCodeBackend({
-          ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
-          gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
-        }).createRun({ ...request, minted: { ...request.minted, effectiveMode: mode } });
-        return factory.mock.calls.at(-1)?.[0].gatewayConfinement?.policyDigest;
-      });
-      expect(digests[0]).toBeDefined();
-      expect(digests[0]).not.toBe(digests[1]);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+  itWithPosixNativeRoots(
+    "binds the mode-derived egress into the policy digest so a different mode cannot replay it",
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-egress-digest-")));
+      try {
+        const digests = (["governed-assist", "autonomous-delivery"] as const).map((mode) => {
+          const factory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
+          const request = runInput(root);
+          createProductionOpenCodeBackend({
+            ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+            gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+          }).createRun({ ...request, minted: { ...request.minted, effectiveMode: mode } });
+          return factory.mock.calls.at(-1)?.[0].gatewayConfinement?.policyDigest;
+        });
+        expect(digests[0]).toBeDefined();
+        expect(digests[0]).not.toBe(digests[1]);
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });
 
 /**
@@ -990,7 +1352,7 @@ function createNativeStateRoot(root: string, kind: "canonical" | "alias" | "miss
   if (kind !== "missing") mkdirSync(stateRoot, { mode: 0o700 });
   if (kind !== "alias") return stateRoot;
   const alias = join(root, "state-alias");
-  symlinkSync(stateRoot, alias, "dir");
+  plantDirectoryRedirect(stateRoot, alias);
   return alias;
 }
 
@@ -1094,7 +1456,6 @@ function trustedContext(workspaceRoot: string): CodingRuntimeTrustedContext {
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 10,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2026-09-03T00:00:00.000Z",
@@ -1718,6 +2079,7 @@ describe("ripgrep on the OpenCode launch", () => {
     readonly externalReadRoots: readonly string[] | undefined;
     readonly composedExternalReadRoots: readonly string[] | undefined;
     readonly linkedFiles: readonly string[] | undefined;
+    readonly certificateReadFiles: readonly string[] | undefined;
     readonly events: readonly ServerLogEvent[];
   }
 
@@ -1763,13 +2125,18 @@ describe("ripgrep on the OpenCode launch", () => {
     composedExternalReadRoots: readonly string[] | undefined,
   ): Pick<
     Launch,
-    "toolchainReadRoots" | "externalReadRoots" | "composedExternalReadRoots" | "linkedFiles"
+    | "toolchainReadRoots"
+    | "externalReadRoots"
+    | "composedExternalReadRoots"
+    | "linkedFiles"
+    | "certificateReadFiles"
   > {
     return {
       toolchainReadRoots: filesystem?.toolchainReadRoots,
       externalReadRoots: filesystem?.externalReadRoots,
       composedExternalReadRoots,
       linkedFiles: filesystem?.linkedFiles,
+      certificateReadFiles: filesystem?.certificateReadFiles,
     };
   }
 
@@ -1781,85 +2148,91 @@ describe("ripgrep on the OpenCode launch", () => {
     return value === undefined ? {} : { externalReadRoots: value };
   }
 
-  it("puts only the verified directory in front of the native child PATH and opens exactly it", () => {
-    const root = tmpRoot();
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      const directory = stage(join(root, "install", "runtime", "native", "rg"));
-      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "linux-x64",
-      });
+  itWithPosixNativeRoots(
+    "puts only the verified directory in front of the native child PATH and opens exactly it",
+    () => {
+      const root = tmpRoot();
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        const directory = stage(join(root, "install", "runtime", "native", "rg"));
+        const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "linux-x64",
+        });
 
-      expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
-      expect(result.allowlist).toContain("PATH");
-      // What the manager really hands the child: the allowlisted names of this very environment.
-      const child = buildSandboxEnv(result.processEnv ?? {}, result.allowlist);
-      expect(child.PATH?.split(delimiter)[0]).toBe(directory);
-      expect(child.SECRET_TOKEN).toBeUndefined();
-      expect(result.processEnv?.SECRET_TOKEN).toBe("t0k3n-value");
-      expect(result.toolchainReadRoots).toEqual([directory]);
-      // The launch also records where the workspace's Git metadata lives (#3897 review).
-      expect(result.events.map((event) => event.op)).toEqual([
-        "coding-runtime.ripgrep.resolved",
-        "coding-runtime.native-external-roots.resolved",
-        "coding-runtime.git-metadata.resolved",
-      ]);
-      expect(result.events[0]).toMatchObject({
-        op: "coding-runtime.ripgrep.resolved",
-        level: "info",
-        correlationId: "run-windows",
-        extra: {
-          targetKey: "linux-x64",
-          outcome: "verified",
-          layout: "portable",
-          toolProfile: "native",
-          digestSource: "pinned",
-          version: "0.0.0-test",
-        },
-      });
-      expect(JSON.stringify(result.events)).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
+        expect(result.allowlist).toContain("PATH");
+        // What the manager really hands the child: the allowlisted names of this very environment.
+        const child = buildSandboxEnv(result.processEnv ?? {}, result.allowlist);
+        expect(child.PATH?.split(delimiter)[0]).toBe(directory);
+        expect(child.SECRET_TOKEN).toBeUndefined();
+        expect(result.processEnv?.SECRET_TOKEN).toBe("t0k3n-value");
+        expect(result.toolchainReadRoots).toEqual([directory]);
+        // The launch also records where the workspace's Git metadata lives (#3897 review).
+        expect(result.events.map((event) => event.op)).toEqual([
+          "coding-runtime.ripgrep.resolved",
+          "coding-runtime.native-external-roots.resolved",
+          "coding-runtime.git-metadata.resolved",
+        ]);
+        expect(result.events[0]).toMatchObject({
+          op: "coding-runtime.ripgrep.resolved",
+          level: "info",
+          correlationId: "run-windows",
+          extra: {
+            targetKey: "linux-x64",
+            outcome: "verified",
+            layout: "portable",
+            toolProfile: "native",
+            digestSource: "pinned",
+            version: "0.0.0-test",
+          },
+        });
+        expect(JSON.stringify(result.events)).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   // Stress ledger F5 (2026-10-28): an unverified pinned ripgrep used to leave PATH untouched, so a
   // host `rg` ran unverified in its place. The run still starts with search degraded, but every
   // PATH entry that provides an `rg` is gone and the composition places the refusing placeholder.
-  it("starts the run without any rg-providing PATH entry when the executable does not verify", () => {
-    const root = tmpRoot();
-    const hostRipgrep = stage(join(root, "host-bin", "rg"), "an unverified host ripgrep");
-    const toolchain = join(root, "toolchain-bin");
-    mkdirSync(toolchain, { recursive: true });
-    const processEnv = { ...CONTENT_ENV, PATH: [hostRipgrep, toolchain].join(delimiter) };
-    vi.stubEnv("PATH", processEnv.PATH);
-    try {
-      stage(join(root, "install", "runtime", "native", "rg"), "not the pinned bytes");
-      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
-        native: true,
-        processEnv,
-        key: "linux-x64",
-      });
+  itWithPosixNativeRoots(
+    "starts the run without any rg-providing PATH entry when the executable does not verify",
+    () => {
+      const root = tmpRoot();
+      const hostRipgrep = stage(join(root, "host-bin", "rg"), "an unverified host ripgrep");
+      const toolchain = join(root, "toolchain-bin");
+      mkdirSync(toolchain, { recursive: true });
+      const processEnv = { ...CONTENT_ENV, PATH: [hostRipgrep, toolchain].join(delimiter) };
+      vi.stubEnv("PATH", processEnv.PATH);
+      try {
+        stage(join(root, "install", "runtime", "native", "rg"), "not the pinned bytes");
+        const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+          native: true,
+          processEnv,
+          key: "linux-x64",
+        });
 
-      expect(result.processEnv).toEqual({ ...CONTENT_ENV, PATH: toolchain });
-      expect(result.ripgrepVerified).toBe(false);
-      // The read allowlist follows the same PATH: the host ripgrep's directory is not readable.
-      expect(
-        (result.toolchainReadRoots ?? []).some((readRoot) => readRoot.endsWith("host-bin")),
-      ).toBe(false);
-      expect(result.events[0]).toMatchObject({
-        level: "warn",
-        extra: { outcome: "unverified", layout: "portable", reason: "digest-mismatch" },
-      });
-      expect(JSON.stringify(result.events)).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.processEnv).toEqual({ ...CONTENT_ENV, PATH: toolchain });
+        expect(result.ripgrepVerified).toBe(false);
+        // The read allowlist follows the same PATH: the host ripgrep's directory is not readable.
+        expect(
+          (result.toolchainReadRoots ?? []).some((readRoot) => readRoot.endsWith("host-bin")),
+        ).toBe(false);
+        expect(result.events[0]).toMatchObject({
+          level: "warn",
+          extra: { outcome: "unverified", layout: "portable", reason: "digest-mismatch" },
+        });
+        expect(JSON.stringify(result.events)).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("gives a mapped profile the verified directory alone and no inherited entry", () => {
     const root = tmpRoot();
@@ -1900,7 +2273,7 @@ describe("ripgrep on the OpenCode launch", () => {
     }
   });
 
-  it("ignores an environment override in a packaged runtime", () => {
+  itWithPosixNativeRoots("ignores an environment override in a packaged runtime", () => {
     const root = tmpRoot();
     try {
       const named = stage(join(root, "elsewhere", "rg"));
@@ -1951,69 +2324,105 @@ describe("ripgrep on the OpenCode launch", () => {
 
   // #3900 AC5: one resolution per run binds the kernel allowlist and the composition's policy
   // alike, and is recorded once; without the operator's setting neither names a root.
-  it("binds the operator's accepted external roots to the kernel and the composition once", () => {
-    const root = tmpRoot();
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-external-reference-")));
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      stage(join(root, "npm-package", "runtime", "native", "rg"));
-      const reference = join(outside, "reference", "docs");
-      mkdirSync(reference, { recursive: true });
-      const accepted = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-        externalReadRoots: reference,
-      });
-      expect(accepted.externalReadRoots).toEqual([reference]);
-      expect(accepted.composedExternalReadRoots).toEqual([reference]);
-      expect(
-        accepted.events.filter(
-          (event) => event.op === "coding-runtime.native-external-roots.resolved",
-        ),
-      ).toMatchObject([{ extra: { state: "admitted", rootCount: 1 } }]);
-      const none = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
-      expect(none.externalReadRoots).toBeUndefined();
-      expect(none.composedExternalReadRoots).toEqual([]);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-      rmSync(outside, { force: true, recursive: true });
-    }
-  });
+  itWithPosixNativeRoots(
+    "binds the operator's accepted external roots to the kernel and the composition once",
+    () => {
+      const root = tmpRoot();
+      const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-external-reference-")));
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        stage(join(root, "npm-package", "runtime", "native", "rg"));
+        const reference = join(outside, "reference", "docs");
+        mkdirSync(reference, { recursive: true });
+        const accepted = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+          externalReadRoots: reference,
+        });
+        expect(accepted.externalReadRoots).toEqual([reference]);
+        expect(accepted.composedExternalReadRoots).toEqual([reference]);
+        expect(
+          accepted.events.filter(
+            (event) => event.op === "coding-runtime.native-external-roots.resolved",
+          ),
+        ).toMatchObject([{ extra: { state: "admitted", rootCount: 1 } }]);
+        const none = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
+        expect(none.externalReadRoots).toBeUndefined();
+        expect(none.composedExternalReadRoots).toEqual([]);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+        rmSync(outside, { force: true, recursive: true });
+      }
+    },
+  );
 
   // PR #4064 review (#3900 AC2/AC5): the launch scans the workspace and every accepted reference,
   // and the kernel profile it builds names each hard-linked file there.
-  it("names the workspace's and the accepted references' hard links in the kernel profile", () => {
+  itWithPosixNativeRoots(
+    "names the workspace's and the accepted references' hard links in the kernel profile",
+    () => {
+      const root = tmpRoot();
+      const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-launch-")));
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        stage(join(root, "npm-package", "runtime", "native", "rg"));
+        const reference = join(outside, "reference");
+        mkdirSync(reference);
+        writeFileSync(join(outside, "secret.txt"), "OUTSIDE\n");
+        linkSync(join(outside, "secret.txt"), join(root, "linked.txt"));
+        linkSync(join(outside, "secret.txt"), join(reference, "aliased.txt"));
+        const result = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+          externalReadRoots: reference,
+        });
+        expect(result.linkedFiles).toEqual(
+          [join(reference, "aliased.txt"), join(root, "linked.txt")].sort(),
+        );
+        expect(
+          result.events.filter((event) => event.op === "coding-runtime.linked-files.resolved"),
+        ).toMatchObject([
+          { level: "info", extra: { outcome: "complete", rootCount: 2, linkedFileCount: 2 } },
+        ]);
+        expect(JSON.stringify(result.events)).not.toContain("aliased.txt");
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+        rmSync(outside, { force: true, recursive: true });
+      }
+    },
+  );
+
+  // #4271 lab: the run inherits SSL_CERT_FILE, so its TLS clients read that file; the kernel
+  // profile names it exactly, because its `*.pem` name is otherwise denied wherever it sits.
+  itWithPosixNativeRoots("names the operator's certificate bundle in the kernel profile", () => {
     const root = tmpRoot();
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-launch-")));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-certificate-launch-")));
     vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
     try {
       stage(join(root, "npm-package", "runtime", "native", "rg"));
-      const reference = join(outside, "reference");
-      mkdirSync(reference);
-      writeFileSync(join(outside, "secret.txt"), "OUTSIDE\n");
-      linkSync(join(outside, "secret.txt"), join(root, "linked.txt"));
-      linkSync(join(outside, "secret.txt"), join(reference, "aliased.txt"));
+      const bundle = join(outside, "corporate-ca.pem");
+      writeFileSync(bundle, "synthetic\n");
       const result = launch(root, npmLaneMacRuntime(root), {
         native: true,
-        processEnv: CONTENT_ENV,
+        processEnv: { ...CONTENT_ENV, SSL_CERT_FILE: bundle },
         key: "darwin-arm64",
-        externalReadRoots: reference,
       });
-      expect(result.linkedFiles).toEqual(
-        [join(reference, "aliased.txt"), join(root, "linked.txt")].sort(),
-      );
+      expect(result.certificateReadFiles).toEqual([bundle]);
+      expect(result.allowlist).toContain("SSL_CERT_FILE");
       expect(
-        result.events.filter((event) => event.op === "coding-runtime.linked-files.resolved"),
+        result.events.filter((event) => event.op === "coding-runtime.native-certificates.admitted"),
       ).toMatchObject([
-        { level: "info", extra: { outcome: "complete", rootCount: 2, linkedFileCount: 2 } },
+        { level: "info", extra: { namedCount: 1, admittedCount: 1, fileCount: 1 } },
       ]);
-      expect(JSON.stringify(result.events)).not.toContain("aliased.txt");
+      expect(JSON.stringify(result.events)).not.toContain("corporate-ca");
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { force: true, recursive: true });
@@ -2023,81 +2432,89 @@ describe("ripgrep on the OpenCode launch", () => {
 
   // The clean npm installation (#4064): no override, no ripgrep on the launcher's PATH. The runtime
   // package installed next to Keiko carries the executable, and the launch finds it normally.
-  it("verifies the ripgrep an npm runtime package ships and opens exactly its directory", () => {
-    const root = tmpRoot();
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      const directory = stage(join(root, "npm-package", "runtime", "native", "rg"));
-      const result = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
+  itWithPosixNativeRoots(
+    "verifies the ripgrep an npm runtime package ships and opens exactly its directory",
+    () => {
+      const root = tmpRoot();
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        const directory = stage(join(root, "npm-package", "runtime", "native", "rg"));
+        const result = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
 
-      expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
-      expect(
-        buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
-      ).toBe(directory);
-      expect(result.toolchainReadRoots).toEqual([directory]);
-      // The launch also records where the workspace's Git metadata lives (#3897 review) and the
-      // hard links its scan found (PR #4064 review, none here).
-      expect(result.events.map((event) => event.op)).toEqual([
-        "coding-runtime.ripgrep.resolved",
-        "coding-runtime.native-external-roots.resolved",
-        "coding-runtime.git-metadata.resolved",
-        "coding-runtime.linked-files.resolved",
-      ]);
-      expect(result.linkedFiles).toBeUndefined();
-      expect(result.events[0]).toMatchObject({
-        op: "coding-runtime.ripgrep.resolved",
-        level: "info",
-        extra: {
-          targetKey: "darwin-arm64",
-          outcome: "verified",
-          layout: "npm-package",
-          digestSource: "pinned",
-        },
-      });
-      expect(JSON.stringify(result.events)).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
+        expect(
+          buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
+        ).toBe(directory);
+        expect(result.toolchainReadRoots).toEqual([directory]);
+        // The launch also records where the workspace's Git metadata lives (#3897 review) and the
+        // hard links its scan found (PR #4064 review, none here).
+        expect(result.events.map((event) => event.op)).toEqual([
+          "coding-runtime.ripgrep.resolved",
+          "coding-runtime.native-external-roots.resolved",
+          "coding-runtime.git-metadata.resolved",
+          "coding-runtime.linked-files.resolved",
+          "coding-runtime.native-certificates.admitted",
+        ]);
+        expect(result.linkedFiles).toBeUndefined();
+        expect(result.certificateReadFiles).toBeUndefined();
+        expect(result.events[0]).toMatchObject({
+          op: "coding-runtime.ripgrep.resolved",
+          level: "info",
+          extra: {
+            targetKey: "darwin-arm64",
+            outcome: "verified",
+            layout: "npm-package",
+            digestSource: "pinned",
+          },
+        });
+        expect(JSON.stringify(result.events)).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
-  it("starts the run with search degraded when the npm runtime package has no verified ripgrep", () => {
-    const root = tmpRoot();
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      const absent = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
-      expect(absent.processEnv).toEqual(CONTENT_ENV);
-      expect(absent.ripgrepVerified).toBe(false);
-      expect(absent.toolchainReadRoots).toEqual([]);
-      expect(absent.events[0]).toMatchObject({
-        level: "warn",
-        extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },
-      });
+  itWithPosixNativeRoots(
+    "starts the run with search degraded when the npm runtime package has no verified ripgrep",
+    () => {
+      const root = tmpRoot();
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        const absent = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
+        expect(absent.processEnv).toEqual(CONTENT_ENV);
+        expect(absent.ripgrepVerified).toBe(false);
+        expect(absent.toolchainReadRoots).toEqual([]);
+        expect(absent.events[0]).toMatchObject({
+          level: "warn",
+          extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },
+        });
 
-      stage(join(root, "npm-package", "runtime", "native", "rg"), "not the pinned bytes");
-      const tampered = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
-      expect(tampered.processEnv).toEqual(CONTENT_ENV);
-      expect(tampered.ripgrepVerified).toBe(false);
-      expect(tampered.events[0]).toMatchObject({
-        level: "warn",
-        extra: { outcome: "unverified", layout: "npm-package", reason: "digest-mismatch" },
-      });
-      expect(JSON.stringify([absent.events, tampered.events])).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        stage(join(root, "npm-package", "runtime", "native", "rg"), "not the pinned bytes");
+        const tampered = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
+        expect(tampered.processEnv).toEqual(CONTENT_ENV);
+        expect(tampered.ripgrepVerified).toBe(false);
+        expect(tampered.events[0]).toMatchObject({
+          level: "warn",
+          extra: { outcome: "unverified", layout: "npm-package", reason: "digest-mismatch" },
+        });
+        expect(JSON.stringify([absent.events, tampered.events])).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });

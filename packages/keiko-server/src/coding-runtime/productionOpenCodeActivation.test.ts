@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/index.js";
+import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -314,6 +315,7 @@ describe("production OpenCode activation", () => {
     const staged = devLaneFixture();
     const stateDir = join(staged.root, "runtime-state");
     mkdirSync(stateDir, { recursive: true });
+    makeOwnerPrivateDirectory(stateDir);
     const create = vi.spyOn(backendModule, "createProductionOpenCodeBackend");
     resolveProductionOpenCodeActivation(
       activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { stateDir }),
@@ -362,6 +364,34 @@ describe("production OpenCode activation", () => {
       target: "windows-x64",
       evidenceClass: "functional-not-platform-qualified",
     });
+  });
+
+  // #4068 (ADR-0043 D19): a staged Windows dev lane carries its own supervisor's broker pin, so
+  // readiness reports that broker's state before anyone presses Start, instead of refusing outright.
+  it("reads the broker state for a staged Windows dev lane", () => {
+    const staged = devLaneFixture("windows-x64");
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { ...staged.env, KEIKO_UI_PORT: "1983" },
+        { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
+      ),
+    );
+
+    // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
+    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+  });
+
+  it("has no Windows gateway fact for a macOS dev lane", () => {
+    const staged = devLaneFixture();
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { ...staged.env, KEIKO_UI_PORT: "1983" },
+        { stateDir: join(staged.root, "runtime-state") },
+      ),
+    );
+
+    expect(result.unavailableReason).toBeUndefined();
+    expect(result.windowsGatewayService).toBeUndefined();
   });
 
   it("prefers an injected secure-read port over dev-lane construction", () => {

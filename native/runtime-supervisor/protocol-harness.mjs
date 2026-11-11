@@ -59,6 +59,16 @@ export function launchPacket(
 }
 
 /**
+ * Build an empty KGG1 grants frame: `(u16 count = 0)` behind the shared header. A confined
+ * (`--gateway-supervised`) launch reads this frame after the broker named the tree's SID and before
+ * the suspended root exists, so a harness that omits it leaves the supervisor waiting on fd 3. The
+ * product encoder is `encodeWindowsGatewayGrants` in nativeRuntimeProcessProtocol.ts.
+ */
+export function emptyGatewayGrants() {
+  return Buffer.concat([header("KGG1", 1, 2), Buffer.alloc(2)]);
+}
+
+/**
  * Wrap a Node stream into a bounded-read queue. Chunks accumulate until `readBytes` consumes the
  * requested prefix. `wake` is invoked once per data/end/close/error event; a stream that ends or
  * errors before the requested bytes arrive rejects the pending read rather than deadlocking.
@@ -138,7 +148,8 @@ export function readBytes(reader, length) {
  */
 // KEIKO-0690: keep the per-kind payload contract in one place. Both Windows and macOS
 // supervisors emit the exact same three response kinds through the shared KRS1 codec:
-//   kind 1 RESPONSE_LAUNCHED  → 0 bytes
+//   kind 1 RESPONSE_LAUNCHED  → 0 bytes; 8 bytes for a confined Windows launch, admitted only with
+//                               `{ confinedLaunch: true }` (u32 grants removed, u32 failures; #4068)
 //   kind 2 RESPONSE_REAPED    → exactly 8 bytes (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION excerpt)
 //   kind 3 RESPONSE_ERROR     → exactly 2 bytes (little-endian error code)
 // Confirmed against `enum response_kind` in native/runtime-supervisor/{windows,macos}/keiko_
@@ -152,15 +163,27 @@ const EXPECTED_PAYLOAD_LENGTH_BY_KIND = new Map([
   [4, 36], // Persistent application admission: root PID and launch ID.
   [5, 32], // Durable application ownership committed.
 ]);
+// Only a confined Windows launch (`--gateway-supervised`) reports its stale-grant sweep, so only a
+// caller that asks for it admits the 8-byte RESPONSE_LAUNCHED; every other harness stays exact.
+const CONFINED_LAUNCH_PAYLOAD_BYTES = 8;
 
-export async function response(reader) {
+/**
+ * Read one KRS1 response.
+ *
+ * @param {object} reader                       a `streamReader` queue
+ * @param {{ confinedLaunch?: boolean }=} options  `confinedLaunch` admits the 8-byte launch sweep
+ */
+export async function response(reader, { confinedLaunch = false } = {}) {
   const responseHeader = await readBytes(reader, 12);
   assert.equal(responseHeader.subarray(0, 4).toString("ascii"), "KRS1");
   assert.equal(responseHeader.readUInt16LE(4), 1);
   const kind = responseHeader.readUInt16LE(6);
   const length = responseHeader.readUInt32LE(8);
   assert.ok(length <= 64);
-  const expected = EXPECTED_PAYLOAD_LENGTH_BY_KIND.get(kind);
+  const expected =
+    confinedLaunch && kind === 1
+      ? CONFINED_LAUNCH_PAYLOAD_BYTES
+      : EXPECTED_PAYLOAD_LENGTH_BY_KIND.get(kind);
   assert.notEqual(
     expected,
     undefined,

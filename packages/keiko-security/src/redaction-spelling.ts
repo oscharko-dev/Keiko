@@ -104,6 +104,14 @@ const DROPPED_RANGES: readonly (readonly [number, number])[] = [
   [0xfdd0, 0xfdef],
 ];
 
+/** A secret outside the admitted spelling alphabet; distinguish this refusal from code defects. */
+export class UnsupportedSecretSpellingError extends TypeError {
+  public override readonly name = "UnsupportedSecretSpellingError";
+  public constructor() {
+    super("secret-not-printable-ascii");
+  }
+}
+
 /** A stream held back more text than any secret's spelling needs; it must end here, unpublished. */
 export class SecretSpellingOverflowError extends RangeError {
   public override readonly name = "SecretSpellingOverflowError";
@@ -406,7 +414,7 @@ export function createSecretSpellingStreamRedactor(
   secrets: readonly string[],
 ): SecretSpellingStreamRedactor {
   if (!secrets.every((secret) => PRINTABLE_ASCII.test(secret)))
-    throw new TypeError("secret-not-printable-ascii");
+    throw new UnsupportedSecretSpellingError();
   const plans = [...new Set(secrets)].filter((secret) => secret.length > 0).map(plan);
   let pending = "";
   let redacted = 0;

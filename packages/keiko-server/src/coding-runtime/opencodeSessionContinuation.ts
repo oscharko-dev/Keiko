@@ -296,24 +296,63 @@ interface RetainedSessionView {
   readonly agent: unknown;
 }
 
-async function soleSession(
+/** The run's one session and where the runtime says it is; anything else is a refusal. */
+async function locatedSession(
   client: ContinuationClient,
   expectedId: string,
-  directory: string,
   signal: AbortSignal | undefined,
-): Promise<RetainedSessionView> {
+): Promise<{ readonly view: RetainedSessionView; readonly directory: unknown }> {
   const sessions = await client.sessions(signal);
   const session = sessions[0];
   if (sessions.length !== 1 || session?.id !== expectedId) {
     throw new ContinuationRefused("session-mismatch");
   }
   const location = session.location;
-  const sessionDirectory =
-    typeof location === "object" && location !== null && "directory" in location
-      ? location.directory
-      : undefined;
-  if (sessionDirectory !== directory) throw new ContinuationRefused("session-mismatch");
-  return { id: expectedId, agent: session.agent };
+  return {
+    view: { id: expectedId, agent: session.agent },
+    directory:
+      typeof location === "object" && location !== null && "directory" in location
+        ? location.directory
+        : undefined,
+  };
+}
+
+async function soleSession(
+  client: ContinuationClient,
+  expectedId: string,
+  directory: string,
+  signal: AbortSignal | undefined,
+): Promise<RetainedSessionView> {
+  const located = await locatedSession(client, expectedId, signal);
+  if (located.directory !== directory) throw new ContinuationRefused("session-mismatch");
+  return located.view;
+}
+
+export const SESSION_MOVE_ARRIVAL_TIMEOUT_MS = 10_000;
+const SESSION_MOVE_ARRIVAL_POLL_MS = 50;
+
+/**
+ * The runtime answers `session.move` before the session has arrived: its first move into a root also
+ * registers that worktree. So only a session still at its source is waited for, and only up to the
+ * bound; one that turns up anywhere else is refused at once (#4068).
+ */
+async function arrivedSession(
+  client: ContinuationClient,
+  expectedId: string,
+  source: string,
+  directory: string,
+  signal: AbortSignal | undefined,
+): Promise<RetainedSessionView> {
+  const deadline = Date.now() + SESSION_MOVE_ARRIVAL_TIMEOUT_MS;
+  for (;;) {
+    signal?.throwIfAborted();
+    const located = await locatedSession(client, expectedId, signal); // NOSONAR typescript:S9382 -- a readiness poll: each read decides whether another is needed
+    if (located.directory === directory) return located.view;
+    if (located.directory !== source || Date.now() >= deadline) {
+      throw new ContinuationRefused("session-mismatch");
+    }
+    await new Promise((resolve) => setTimeout(resolve, SESSION_MOVE_ARRIVAL_POLL_MS)); // NOSONAR typescript:S9382 -- the poll interval between dependent reads
+  }
 }
 
 /**
@@ -335,7 +374,7 @@ async function relocatedSession(
   } catch (error) {
     throw new ContinuationRefused("move-failed", { cause: error });
   }
-  return soleSession(client, continuation.sessionId, directory, signal);
+  return arrivedSession(client, continuation.sessionId, source, directory, signal);
 }
 
 async function messageIds(
@@ -553,6 +592,7 @@ function attemptRetain(
         messageCount: result.messageCount,
         entryCount: result.entryCount,
         prunedCount: result.prunedCount,
+        blockedCount: result.blockedCount,
       });
       return;
     }

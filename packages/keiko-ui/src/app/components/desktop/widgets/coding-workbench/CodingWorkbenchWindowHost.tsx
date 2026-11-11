@@ -1,6 +1,16 @@
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import type { ClientCodingWorkbenchRepositorySource } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import {
+  reportCodingWorkbenchInteraction,
+  reportCodingWorkbenchRepositoryResolved,
+} from "@/lib/coding-workbench-interaction";
+import {
+  useOptionalActiveWorkspace,
+  type ActiveWorkspaceApi,
+} from "../../context/ActiveWorkspaceContext";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
@@ -77,14 +87,65 @@ function handledHistoryPatch(restoringHistory: boolean): WindowCfgRecord {
 // first render that knows the shell's state: a restored layout mounts this window on first paint,
 // before the shell's project has loaded, and deciding then left the window without a repository
 // for good. A window that meets an active task-workspace binding first never seeds.
-function useShellSeedRoot(context: WindowRenderContext): string | null | undefined {
+//
+// #4271: the decision also waits for the task-workspace state's first answer. Until then a null
+// binding means "not read yet", not "unbound": seeding the shell's project in that window bound
+// that folder in place of the active task workspace whenever the project loaded first. A failed
+// read decides nothing either; the next successful read does. A binding that is present was read,
+// so it decides at once. Without a provider (no task workspaces on this surface) there is nothing
+// to wait for.
+function activeBindingKnown(workspace: ActiveWorkspaceApi | null): boolean {
+  // No provider reads as `undefined`, which is not null: known.
+  return workspace?.activeBinding !== null || (!workspace.loading && workspace.error === null);
+}
+
+function shellSeed(context: WindowRenderContext): { readonly root: string | null } | null {
+  if (context.activeBinding !== null) return { root: null };
+  return typeof context.selectedRoot === "string" ? { root: context.selectedRoot } : null;
+}
+
+function useShellSeedRoot(
+  context: WindowRenderContext,
+  cfgRoot: string | undefined,
+): string | null | undefined {
+  const workspace = useOptionalActiveWorkspace();
   const seed = useRef<{ readonly root: string | null } | null>(null);
-  if (seed.current === null) {
-    if (context.activeBinding !== null) seed.current = { root: null };
-    else if (typeof context.selectedRoot === "string")
-      seed.current = { root: context.selectedRoot };
-  }
-  return seed.current?.root;
+  if (seed.current === null && cfgRoot === undefined && activeBindingKnown(workspace))
+    seed.current = shellSeed(context);
+  const decided = seed.current;
+  const reported = useRef(false);
+  useEffect((): void => {
+    if (decided === null || reported.current) return;
+    reported.current = true;
+    reportCodingWorkbenchInteraction(
+      { interaction: decided.root === null ? "repository-seed-skipped" : "repository-seeded" },
+      newClientCorrelationId(),
+    );
+  }, [decided]);
+  return decided?.root;
+}
+
+function repositorySourceOf(
+  cfgRoot: string | undefined,
+  seedRoot: string | null | undefined,
+): ClientCodingWorkbenchRepositorySource | undefined {
+  if (cfgRoot !== undefined) return "window";
+  if (seedRoot === undefined) return undefined;
+  return seedRoot === null ? "none" : "shell";
+}
+
+// #4068: record once per mounted window where its repository came from, as soon as that is
+// settled. A restored window that silently fell back to the shell's folder was the gap that kept a
+// wrong-repository start unexplained; later picks are the person's own and are not reported.
+function useRepositorySourceReport(
+  source: ClientCodingWorkbenchRepositorySource | undefined,
+): void {
+  const reported = useRef(false);
+  useEffect(() => {
+    if (reported.current || source === undefined) return;
+    reported.current = true;
+    reportCodingWorkbenchRepositoryResolved(source);
+  }, [source]);
 }
 
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
@@ -96,8 +157,9 @@ export function CodingWorkbenchWindowHost({
   readonly context: WindowRenderContext;
 }): ReactNode {
   const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
-  const seedRoot = useShellSeedRoot(context);
+  const seedRoot = useShellSeedRoot(context, cfgRoot);
   const root = cfgRoot ?? seedRoot;
+  useRepositorySourceReport(repositorySourceOf(cfgRoot, seedRoot));
   const historySelection =
     typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
   const restoringHistory = isHistoryRestore(historySelection);

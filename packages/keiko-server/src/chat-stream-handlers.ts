@@ -1,3 +1,4 @@
+import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import { browserChatMessages } from "./chat-message-projection.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { hasMixedToolGroundingScope } from "./chat-grounding.js";
@@ -90,7 +91,8 @@ import {
   activeGitChangeScope,
 } from "./chat-handlers.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
-import { createRequestCancellation } from "./request-cancellation.js";
+import { createRequestCancellation, isDetachedRequestResponse } from "./request-cancellation.js";
+import { createChatApprovalContinuation } from "./chat-approval-continuation.js";
 
 // One SSE message. JSON.stringify never emits a raw newline inside a string (newlines escape to
 // `\n`), so a single `data:` line is always valid framing — no manual escaping, mirroring sse.ts.
@@ -196,6 +198,7 @@ function tokenPublisher(
   termination: StreamTermination,
 ): (text: string) => Promise<void> {
   return async (text): Promise<void> => {
+    if (isDetachedRequestResponse(ctx.res)) return;
     let from = 0;
     while (from < text.length && !controller.signal.aborted) {
       const end = tokenChunkEnd(text, from, tokenChunkCapacity(ctx.res, text.length - from));
@@ -230,7 +233,7 @@ async function streamConversation(
   const publish = tokenPublisher(ctx, controller, termination);
   try {
     for (;;) {
-      await whenSseWritable(ctx.res);
+      await waitForStreamDelivery(ctx.res);
       if (requestIsAborted(controller.signal)) return undefined;
       const next = await iterator.next();
       if (next.done === true || controller.signal.aborted) return undefined;
@@ -250,6 +253,10 @@ async function streamConversation(
   } finally {
     releaseStreamIterator(ctx, deps, iterator);
   }
+}
+
+async function waitForStreamDelivery(res: RouteContext["res"]): Promise<void> {
+  if (!isDetachedRequestResponse(res)) await whenSseWritable(res);
 }
 
 // A backpressure kill destroys the socket; writing another SSE frame to it is a no-op at best and can
@@ -381,9 +388,28 @@ function failCancelledStreamTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   emitTerminal: boolean,
+  signal: AbortSignal,
 ): void {
-  failDesktopChatTurn(deps, request, "cancelled");
-  if (emitTerminal) writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
+  const failure = authenticationStreamFailure(ctx, deps, signal);
+  failDesktopChatTurn(deps, request, failure === undefined ? "cancelled" : "failed");
+  if (emitTerminal)
+    writeTerminalFrame(ctx, sseMessage(failure ?? { event: "cancelled", data: {} }));
+}
+
+function authenticationStreamFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+): Extract<DesktopChatStreamEvent, { event: "error" }> | undefined {
+  const failure = chatAuthenticationInterruption(
+    signal,
+    deps,
+    ctx.correlationId,
+    "POST /api/desktop/chat/stream",
+  );
+  if (failure === undefined) return undefined;
+  const body = failure.body as { error: { code: string; message: string; correlationId?: string } };
+  return { event: "error", data: body.error };
 }
 
 async function streamAndPersist(
@@ -397,7 +423,7 @@ async function streamAndPersist(
   const startedAt = Date.now();
   const memory = admitted.memory ?? (await resolveMemory(deps, request, memoryContext));
   if (requestIsAborted(controller.signal)) {
-    failCancelledStreamTurn(ctx, deps, request, true);
+    failCancelledStreamTurn(ctx, deps, request, true, controller.signal);
     return;
   }
   const termination: StreamTermination = { backpressure: false, tokenFrames: 0 };
@@ -412,7 +438,7 @@ async function streamAndPersist(
   if (turn === undefined || requestIsAborted(controller.signal)) {
     // A backpressure kill already destroyed the socket; do not write-after-destroy nor relabel it as
     // a user cancel. Only an actual (non-backpressure) cancel emits the `cancelled` terminal event.
-    failCancelledStreamTurn(ctx, deps, request, !termination.backpressure);
+    failCancelledStreamTurn(ctx, deps, request, !termination.backpressure, controller.signal);
     return;
   }
   const payload = await persistStreamedTurn(
@@ -425,7 +451,7 @@ async function streamAndPersist(
     ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
   );
   if (payload === undefined) {
-    failCancelledStreamTurn(ctx, deps, request, true);
+    failCancelledStreamTurn(ctx, deps, request, true, controller.signal);
     return;
   }
   finalizeStreamedTurn(ctx, deps, payload, assembly.compaction, admitted, startedAt);
@@ -644,7 +670,12 @@ export async function handleSendDesktopChatStream(
   requestDeps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {
   const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
-  const cancellation = createRequestCancellation(ctx, "desktop chat stream cancelled");
+  const continuationOwner: { current?: ReturnType<typeof createChatApprovalContinuation> } = {};
+  const cancellation = createRequestCancellation(ctx, "desktop chat stream cancelled", {
+    retainOnClose: () => continuationOwner.current?.retainOnClose() === true,
+  });
+  const continuation = createChatApprovalContinuation(ctx, deps, cancellation.controller);
+  continuationOwner.current = continuation;
   let releaseSession = (): void => undefined;
   try {
     // GEN-PERF-CHATSTREAM-001 — reject before any work (and before any SSE header) so the
@@ -661,7 +692,8 @@ export async function handleSendDesktopChatStream(
     }
     activeChatStreams += 1;
     try {
-      return await runDesktopChatStream(ctx, deps, cancellation.controller, (): void => {
+      return await runDesktopChatStream(ctx, deps, cancellation.controller, (message): void => {
+        continuation.admit(message);
         releaseSession = beginAppSessionOperation(deps, ctx.req, cancellation.signal, {
           correlationId: ctx.correlationId,
           surface: "streaming-chat",
@@ -672,6 +704,7 @@ export async function handleSendDesktopChatStream(
     }
   } finally {
     releaseSession();
+    continuation.dispose();
     cancellation.dispose();
   }
 }
@@ -824,12 +857,15 @@ function writeStreamFailure(
   controller: AbortController,
   error: unknown,
 ): void {
-  const cancelled = requestIsAborted(controller.signal);
+  const authentication = authenticationStreamFailure(ctx, deps, controller.signal);
+  const cancelled = requestIsAborted(controller.signal) && authentication === undefined;
   if (!settlePromptPreparationRejection(deps, turn.prepared, turn.admitted, error))
     failDesktopChatTurn(deps, turn.prepared.request, cancelled ? "cancelled" : "failed");
-  const event: DesktopChatStreamEvent = cancelled
-    ? { event: "cancelled", data: {} }
-    : { event: "error", data: errorEvent(error, deps, ctx.correlationId) };
+  const event: DesktopChatStreamEvent =
+    authentication ??
+    (cancelled
+      ? { event: "cancelled", data: {} }
+      : { event: "error", data: errorEvent(error, deps, ctx.correlationId) });
   writeTerminalFrame(ctx, sseMessage(event));
 }
 
@@ -878,7 +914,7 @@ function registerReadConsentStream(
 ): void {
   const sent = new Set<string>();
   turn.toolTurn?.onTranscript((message): void => {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || isDetachedRequestResponse(ctx.res)) return;
     for (const event of toolTranscriptEvents(message)) {
       const identity = toolEventIdentity(event);
       if (identity === undefined || sent.has(identity)) continue;
@@ -1066,7 +1102,7 @@ async function runAdmittedDesktopChatStream(
   start: PreparedDesktopChatStream,
   controller: AbortController,
   markStreamStarted: () => void,
-  onAdmitted: () => void,
+  onAdmitted: (message: ChatMessage) => void,
 ): Promise<HandlerOutcome> {
   const resolved = resolveStreamedChatPreflight(ctx, deps, start);
   if ("status" in resolved) return resolved;
@@ -1079,7 +1115,7 @@ async function runAdmittedDesktopChatStream(
     settleRejectedDesktopChatTurn(deps, prepared, admission);
     return executionAdmission;
   }
-  onAdmitted();
+  onAdmitted(admission.userMessage);
   const provider = await prepareDesktopChatProviderStream(
     deps,
     prepared,
@@ -1181,7 +1217,7 @@ async function runDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   controller: AbortController,
-  onAdmitted: () => void,
+  onAdmitted: (message: ChatMessage) => void,
 ): Promise<HandlerOutcome> {
   const start = await prepareDesktopChatStream(ctx, deps, controller.signal);
   if (controller.signal.aborted) {
@@ -1221,7 +1257,22 @@ async function runDesktopChatStream(
     controller,
   );
   if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
-  return streamState.started
-    ? STREAMING
-    : { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+  return interruptedStreamOutcome(ctx, deps, controller.signal, streamState);
+}
+
+function interruptedStreamOutcome(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+  state: DesktopChatStreamState,
+): HandlerOutcome {
+  if (state.started) return STREAMING;
+  return (
+    chatAuthenticationInterruption(
+      signal,
+      deps,
+      ctx.correlationId,
+      "POST /api/desktop/chat/stream",
+    ) ?? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+  );
 }

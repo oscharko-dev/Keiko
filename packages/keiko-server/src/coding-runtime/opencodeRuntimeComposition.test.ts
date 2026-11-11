@@ -15,11 +15,11 @@ import {
   constants,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +30,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } f
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+  WINDOWS_HOST,
+} from "../../../../tests/support/symlink-fixture.js";
 import {
   createCodingSessionContinuity,
   type CodingSessionContinuity,
@@ -349,6 +354,7 @@ interface OpenCodeRuntimeComposition {
         >)
       | undefined;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
+    readonly turnWaitExpired?: (runId: string) => boolean;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
     readonly answerQuestion: (
       runId: string,
@@ -391,6 +397,7 @@ interface OpenCodeRuntimeCompositionModule {
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
     readonly toolProfile?: "direct" | "code-mode" | "native" | undefined;
     readonly ripgrepVerified?: boolean | undefined;
+    readonly maxTurnWaitMs?: number | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
@@ -705,6 +712,13 @@ type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 interface StartBridgeControl {
   readonly buildSettingsHome?: string;
   readonly ripgrepVerified?: boolean;
+  /** #4068: observes the run state directory protection instead of changing a real ACL. */
+  readonly runStateAccess?:
+    | {
+        readonly protectRoot: (runRoot: string) => void;
+        readonly adoptCopy: (path: string) => void;
+      }
+    | undefined;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
   readonly childSessions?: readonly Record<string, unknown>[];
@@ -743,6 +757,7 @@ interface StartBridgeControl {
   /** The managed MCP relay and the servers the human chose for the run (a Jira Pod). */
   readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
   readonly mcpGrantedServers?: ReadonlySet<string>;
+  readonly mcpPlatform?: NodeJS.Platform;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
@@ -765,12 +780,16 @@ interface StartBridgeControl {
   readonly questionObservations?: string[];
   readonly safeActivity?: FixtureSafeActivity;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** The run's envelope duration, which bounds each turn's wait. */
+  readonly maxTurnWaitMs?: number;
   /** Records each delivered tool result's rendering under this run id, on `activityLog`. */
   readonly toolResultCorrelationId?: string;
   readonly runtimeEvents?: CodingWorkbenchRuntimeEvent[];
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   /** The gateway route refused the readiness challenge's model request (#3603). */
   readonly gatewayRefused?: boolean;
+  /** The runtime answers the readiness challenge's prompt with this HTTP status (#4068). */
+  readonly readinessPromptStatus?: number;
   /** Native session continuity (S02/S03, #3904): the shared service and what the runtime holds. */
   readonly continuity?: FixtureContinuity;
   readonly runControl?: {
@@ -1030,6 +1049,12 @@ function optionalDiagnostics(control: StartBridgeControl | undefined): {
   return control?.diagnostics === undefined ? {} : { diagnostics: control.diagnostics };
 }
 
+function optionalMaxTurnWait(control: StartBridgeControl | undefined): {
+  readonly maxTurnWaitMs?: number;
+} {
+  return control?.maxTurnWaitMs === undefined ? {} : { maxTurnWaitMs: control.maxTurnWaitMs };
+}
+
 function optionalRuntimeEvents(control: StartBridgeControl | undefined): {
   readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
 } {
@@ -1051,8 +1076,12 @@ function runtimeMode(
 
 function optionalRipgrepVerified(control: StartBridgeControl | undefined): {
   readonly ripgrepVerified?: boolean;
+  readonly runStateAccess?: NonNullable<StartBridgeControl["runStateAccess"]>;
 } {
-  return control?.ripgrepVerified === undefined ? {} : { ripgrepVerified: control.ripgrepVerified };
+  return {
+    ...(control?.ripgrepVerified === undefined ? {} : { ripgrepVerified: control.ripgrepVerified }),
+    ...(control?.runStateAccess === undefined ? {} : { runStateAccess: control.runStateAccess }),
+  };
 }
 
 function optionalActivityLog(control: StartBridgeControl | undefined): {
@@ -1090,6 +1119,12 @@ function optionalMcp(control: StartBridgeControl | undefined): {
       ? {}
       : { mcpGrantedServers: control.mcpGrantedServers }),
   };
+}
+
+function optionalMcpPlatform(control: StartBridgeControl | undefined): {
+  readonly mcpPlatform?: NodeJS.Platform;
+} {
+  return control?.mcpPlatform === undefined ? {} : { mcpPlatform: control.mcpPlatform };
 }
 
 function optionalOperatorPlugins(control: StartBridgeControl | undefined): {
@@ -1454,6 +1489,8 @@ async function startBridgeFixture(
     if (path.endsWith("/prompt")) {
       control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
+        if (control?.readinessPromptStatus !== undefined)
+          return Promise.resolve(new Response(null, { status: control.readinessPromptStatus }));
         readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string" && control?.runControl !== undefined) {
         return storedTurnPrompt(control.runControl, path, init.body);
@@ -1565,11 +1602,13 @@ async function startBridgeFixture(
     ...optionalSafeActivity(control),
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
+    ...optionalMaxTurnWait(control),
     ...optionalActivityLog(control),
     ...optionalRipgrepVerified(control),
     ...optionalRepositoryItems(control),
     ...optionalOperatorPlugins(control),
     ...optionalMcp(control),
+    ...optionalMcpPlatform(control),
     ...optionalRepositoryInstructions(control),
     ...optionalNativeWorktrees(control),
     ...optionalToolResultCorrelation(control),
@@ -1673,6 +1712,36 @@ it.each([
     }
   },
 );
+
+// #4068: Windows mode bits keep nobody out, so the run root is made private before anything is
+// written below it; everything the runtime and Keiko write there then inherits that protection.
+it("protects the run state directory before anything is written below it", async () => {
+  const observed: { path: string; entries: readonly string[] }[] = [];
+  const adopted: string[] = [];
+  const fixture = await startBridgeFixture(
+    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+    undefined,
+    {
+      runStateAccess: {
+        protectRoot: (path): void => {
+          observed.push({ path, entries: readdirSync(path) });
+        },
+        adoptCopy: (path): void => {
+          adopted.push(path);
+        },
+      },
+    },
+  );
+  try {
+    expect(observed).toEqual([
+      { path: join(fixture.stateBaseRoot, fixture.preparation.runId), entries: [] },
+    ]);
+    // A fresh run has no retained copy to hand over.
+    expect(adopted).toEqual([]);
+  } finally {
+    await fixture.stop();
+  }
+});
 
 it("selects native stdin ownership only after the production V2 prepare and keeps it open", async () => {
   const pipe = new PassThrough();
@@ -3001,6 +3070,52 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  // W9 (#4068): on Windows a run whose Authority Envelope ran out of time first wrote this line as
+  // an `internal` failure and opened a support incident, before the run settled with the correct
+  // `envelope-duration-exhausted`. The turn wait counts the same duration, so its expiry is the
+  // run's bound: it stays on the timeline as a routine observation, and the settlement names it.
+  it("records a turn whose wait ran out of time as a routine observation, not a failure", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      maxTurnWaitMs: 300,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      historyResponseFactory: () =>
+        Promise.resolve(v2Envelope(completedTurnHistory().slice(0, 1).reverse())),
+    });
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "a turn that never ends"),
+      ).resolves.toBe(true);
+      await expect(
+        fixture.runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(5_000)),
+      ).resolves.toBe(false);
+      expect(fixture.runtime.runPort.turnWaitExpired?.(FIXTURE_RUN_ID)).toBe(true);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode.turn",
+          errorClass: "OpenCodeTurnWaitExpired",
+          message: "runtime-turn-expired",
+          diagnosticOutcome: "routine",
+          code: "stage=terminal-expired:db=unavailable",
+        }),
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("synchronizes durable history before arming and submitting each productive turn", async () => {
     const historyCalls: Readonly<Record<string, number>>[] = [];
     const runControl = {
@@ -3814,7 +3929,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   );
 
   // #4271 A2: the human may take minutes; a link swapped in meanwhile must not ride the approval.
-  it("re-checks the paths after the human approved, so a link swapped in while waiting is refused", async () => {
+  it("re-checks the paths after the human approved, so a link swapped in while waiting is refused", async (testContext) => {
     const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
     const activityLog = createBufferedServerLogSink();
     const admit = admitWith(CHARGED);
@@ -3842,7 +3957,11 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       )?.permissionRequest;
       if (permission === undefined || Array.isArray(permission)) throw new Error("expected ask");
       writeFileSync(join(outside, "target.md"), "outside\n");
-      symlinkSync(join(outside, "target.md"), join(workspaceRoot, "swapped.md"));
+      plantSymlinkOrSkip(
+        testContext,
+        join(outside, "target.md"),
+        join(workspaceRoot, "swapped.md"),
+      );
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, permission.requestId, "once"),
       ).resolves.toBe(true);
@@ -4318,7 +4437,10 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         relay: createMcpCredentialRelay(),
         origin: "http://127.0.0.1:1983",
         secrets: {},
-        managed: pods.connections(undefined, binding),
+        managed: pods.connections(undefined, binding, {
+          runId: FIXTURE_RUN_ID,
+          currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+        }),
       },
       mcpGrantedServers: new Set(["jira"]),
     });
@@ -4367,7 +4489,10 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         relay: createMcpCredentialRelay(),
         origin: "http://127.0.0.1:1983",
         secrets: {},
-        managed: pods.connections(undefined, binding),
+        managed: pods.connections(undefined, binding, {
+          runId: FIXTURE_RUN_ID,
+          currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+        }),
       },
       mcpGrantedServers: new Set(["jira"]),
     });
@@ -4437,6 +4562,51 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       }
     },
   );
+
+  // #4068 W10: a platform without an env-scrubbing launcher admits no local MCP server, and the
+  // refusal is recorded as a count only. This is a static refusal, not a Windows pass.
+  it("leaves local MCP servers out without an env-scrubbing launcher and records the count", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog,
+      mcpPlatform: "win32",
+      mcpServers: () => [
+        {
+          name: "docs",
+          description: undefined,
+          enabled: true,
+          transport: { kind: "local", command: ["docs-mcp"], environment: {} },
+          tools: { search: "read" },
+        },
+      ],
+    });
+    try {
+      const raw = fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null";
+      expect(raw).not.toContain("/usr/bin/env");
+      const config = JSON.parse(raw) as {
+        readonly mcp?: { readonly servers?: Readonly<Record<string, unknown>> };
+      };
+      expect(config.mcp?.servers).toEqual({});
+      const refused = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-mcp-local.refused",
+      );
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+      expect(refused[0]?.extra).toMatchObject({
+        runId: FIXTURE_RUN_ID,
+        reason: "no-env-scrubbing-launcher",
+        refusedServerCount: 1,
+      });
+      expectActivityLogProof(
+        "coding-runtime.native-mcp-local.refused.emitted-line",
+        formatActivityLogProofLine(refused[0] ?? {}),
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
 
   // #4271: a native launch carries the user's mirror and registry as sanitized copies in its private
   // home, never a credential, and records the admission body-free. The mapped profiles carry none.
@@ -5811,6 +5981,33 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  // #4068: on Windows a confined run's challenge prompt failed within milliseconds, and the log held
+  // only the closed reason. The runtime's HTTP status and the error's frames now travel with it.
+  it("records the runtime's HTTP status when its challenge prompt is refused", async () => {
+    const diagnostics = persistedDiagnostics();
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readinessPromptStatus: 500,
+        startTimeoutMs: 60_000,
+        expectedStart: { ok: false, failureCode: "gateway-challenge-failed", retryable: false },
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode.gateway-challenge"),
+      ).toMatchObject({
+        diagnosticOperation: "coding-runtime.handshake",
+        code: "stage=gateway-challenge:reason=live-verification-failed",
+        httpStatus: 500,
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   // #3897 review (P1): the native profile keeps every built-in agent's own permission rules, so the
   // policy hook is what governs the run. A native run whose governing plugin the producer reports
   // failed never becomes ready, before any session or prompt; a mapped run never depends on it.
@@ -6740,6 +6937,76 @@ describe("private OpenCode tool bridge", () => {
         await fixture.stop();
       }
     });
+  });
+
+  // Lab T37 (2026-11-07, #4271): the facade answers a refused commit as a completed call that carries
+  // the refusal, so the card read "Succeeded" although nothing was committed. The bridge settles the
+  // call with the closed Git outcome, and the same word reaches the activity log, body-free.
+  describe("a Git step's closed outcome", () => {
+    const RENDER_OP = "coding-runtime.tool-result-rendered";
+    const commitBody = (callId: string): string =>
+      JSON.stringify({
+        action: "delivery",
+        actionId: `tool:${callId}`,
+        idempotencyKey: `idempotency-${callId}`,
+        intent: "commit",
+        phase: "propose",
+        message: "m",
+      });
+    const commitResult = (status: string, reason: string): CodingToolResult =>
+      ({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: status }],
+        verifiedCommit: { status, reason },
+      }) as unknown as CodingToolResult;
+
+    it.each([
+      ["verification-failed", "verification-failed", "verification-failed"],
+      ["verification-failed", "verification-missing", "verification-missing"],
+      ["succeeded", "completed", "completed"],
+    ] as const)(
+      "settles a commit answered %s/%s with the outcome %s and records it body-free",
+      async (status, reason, gitOutcome) => {
+        const activity = activityRecorder();
+        const log = createBufferedServerLogSink();
+        const facade: CodingToolFacade = {
+          execute: vi.fn(() => Promise.resolve(commitResult(status, reason))),
+        };
+        const fixture = await startBridgeFixture(facade, undefined, {
+          safeActivity: activity.safeActivity,
+          activityLog: log,
+          toolResultCorrelationId: FIXTURE_RUN_ID,
+        });
+        try {
+          await expect(
+            fixture.runtime.toolBridge.handle({
+              method: "POST",
+              headers: new Headers(authorized),
+              body: commitBody("call_commit"),
+            }),
+          ).resolves.toMatchObject({ status: 200 });
+
+          expect(activity.settlements).toEqual([
+            expect.objectContaining({
+              state: "succeeded",
+              presentation: { gitOutcome, bridgeDurationMs: expect.any(Number) as number },
+            }),
+          ]);
+          const rendered = log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.gitOutcome !== undefined,
+          );
+          expect(rendered).toHaveLength(1);
+          expect(
+            expectActivityLogProof(
+              "coding-runtime.tool-result-rendered.emitted-line",
+              formatActivityLogProofLine(rendered[0] ?? {}),
+            ),
+          ).toMatchObject({ correlationId: FIXTURE_RUN_ID, resultStatus: "completed", gitOutcome });
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
   });
 
   it("degrades an overridden Error.name to a content-free class in the diagnostic", async () => {
@@ -9934,14 +10201,12 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
   });
 
   it("refuses a hostile reference before anything is sent and logs the closed reason, not the path", async () => {
-    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    const { fixture, port, promptBodies, activityLog } = await inputsFixture();
     try {
-      symlinkSync("/etc/hosts", join(workspace, "hosts-link"));
       for (const [path, reason] of [
         ["../outside.txt", "reference-invalid"],
         ["/etc/hosts", "reference-invalid"],
         [".env", "reference-sensitive"],
-        ["hosts-link", "reference-outside-workspace"],
         ["missing.md", "reference-unreadable"],
       ] as const) {
         expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path }] })).toEqual({
@@ -9950,9 +10215,55 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
         });
       }
       expect(promptBodies).toEqual([]);
-      expect(inputLines(activityLog)).toHaveLength(5);
+      expect(inputLines(activityLog)).toHaveLength(4);
       expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
         /\/etc\/hosts|hosts-link|\.env|outside\.txt|missing\.md|SENSITIVE/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // The link case needs a file symlink, which a Windows host without the privilege cannot plant;
+  // the junction case below proves the same containment there. A Windows host that may link files
+  // has no `/etc/hosts`, so it points the link at a real file outside the workspace instead.
+  it("refuses a file symlink that leaves the workspace and logs the closed reason, not the path", async (testContext) => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      const outside = WINDOWS_HOST
+        ? join(tempDir("keiko-prompt-inputs-outside-"), "hosts")
+        : "/etc/hosts";
+      if (WINDOWS_HOST) writeFileSync(outside, "OUTSIDE-CANARY\n");
+      plantSymlinkOrSkip(testContext, outside, join(workspace, "hosts-link"));
+      expect(
+        port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path: "hosts-link" }] }),
+      ).toEqual({ ok: false, reason: "reference-outside-workspace" });
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(1);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /\/etc\/hosts|hosts-link|OUTSIDE-CANARY/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a reference through a directory redirection that leaves the workspace", async () => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      const outside = tempDir("keiko-prompt-inputs-outside-");
+      writeFileSync(join(outside, "secret.txt"), "OUTSIDE-CANARY\n");
+      // A junction on Windows (no symlink privilege), a directory symlink elsewhere.
+      plantDirectoryRedirect(outside, join(workspace, "outside-dir"));
+      expect(
+        port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+          references: [{ path: "outside-dir/secret.txt" }],
+        }),
+      ).toEqual({ ok: false, reason: "reference-outside-workspace" });
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(1);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /outside-dir|secret\.txt|OUTSIDE-CANARY/u,
       );
     } finally {
       await fixture.stop();
@@ -11438,13 +11749,14 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
             messageCount: 6,
             entryCount: 1,
             prunedCount: 0,
+            blockedCount: 0,
           }
         );
       },
       remove: (taskId) => {
         calls.removed.push(taskId);
       },
-      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0, entryCount: 0 }),
       readEntry: () => undefined,
       editEntry: () => ({ ok: false, reason: "no-retained-state" }),
       listTaskIds: () => [],
@@ -11502,6 +11814,36 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
         "DELETE /api/session/ses_scratch_2",
       ]);
       expect(world.continuity.sessions).toEqual(["ses_scratch_1"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #4068: the retained store's owner-only copy would keep the confined tree's inherited grant out,
+  // so the copy is handed to the run root's private, inherited DACL right after the checkout.
+  it("hands a resumed run's database copy to its private run state before the runtime starts", async () => {
+    const world = continuedWorld();
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const order: string[] = [];
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      runStateAccess: {
+        protectRoot: (path): void => {
+          order.push(`protect ${path}`);
+        },
+        adoptCopy: (path): void => {
+          order.push(`adopt ${path} ${String(world.calls.checkouts.length)}`);
+        },
+      },
+    });
+    try {
+      const destination = world.calls.checkouts[0]?.destinationDatabase;
+      expect(order).toEqual([
+        `protect ${join(fixture.stateBaseRoot, FIXTURE_RUN_ID)}`,
+        `adopt ${String(destination)} 1`,
+      ]);
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({ kind: "resumed" });
     } finally {
       await fixture.stop();
     }

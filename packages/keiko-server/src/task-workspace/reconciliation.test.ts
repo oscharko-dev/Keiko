@@ -12,6 +12,7 @@ import {
 // collision. The single governed spawn boundary is reused throughout; no generic git runner.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rewriteGitPointerInPlace } from "../test-support/git-pointer-fixture.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -462,7 +463,10 @@ describe("external change surfaced as explicit recoverable state (AC2)", () => {
 describe("pointer drift (negative: corrupted / moved gitdir)", () => {
   it("classifies a corrupted .git pointer as stale-pointer + recovery-required", async () => {
     const instance = await provisionTask("t1");
-    writeFileSync(join(instance.managedWorktreePath, ".git"), "garbage not a gitdir pointer\n");
+    rewriteGitPointerInPlace(
+      join(instance.managedWorktreePath, ".git"),
+      "garbage not a gitdir pointer\n",
+    );
     const report = await reconciliation().reconcile();
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("stale-pointer");
@@ -764,7 +768,10 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const rawTarget = readFileSync(gitPointerPath, "utf8")
       .replace(/^gitdir:/u, "")
       .trim();
-    writeFileSync(gitPointerPath, `gitdir:${" ".repeat(20_000)}${rawTarget}${" ".repeat(5_000)}\n`);
+    rewriteGitPointerInPlace(
+      gitPointerPath,
+      `gitdir:${" ".repeat(20_000)}${rawTarget}${" ".repeat(5_000)}\n`,
+    );
 
     const report = await reconciliation().reconcile();
 

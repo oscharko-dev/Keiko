@@ -30,6 +30,8 @@ export const JIRA_REPORT_FAILURE_REASONS = [
   "invalid-jql",
   "auth",
   "permission",
+  "effect-denied",
+  "cancelled",
   "not-found",
   "rate-limited",
   "timeout",
@@ -66,8 +68,25 @@ export const JIRA_REPORT_REQUIREMENT_ID_CHARS_MAX = 64;
 /** Time spent reading Jira in one tool call; the report continues in the next call. */
 export const JIRA_REPORT_READ_SLICE_MS = 15_000;
 /** The unit of every estimate figure: seconds of original time estimate, or a named field's own. */
-export const JIRA_REPORT_ESTIMATE_UNITS = ["seconds", "custom-field"] as const;
+export const JIRA_REPORT_ESTIMATE_UNITS = ["seconds", "custom-field", "unavailable"] as const;
 export type JiraReportEstimateUnit = (typeof JIRA_REPORT_ESTIMATE_UNITS)[number];
+/** How the report selected its estimate field; field ids and names never enter the Activity Log. */
+export const JIRA_REPORT_ESTIMATE_SOURCES = [
+  "explicit-field",
+  "board-configuration",
+  "project-screen",
+  "time-tracking",
+  "unavailable",
+] as const;
+export type JiraReportEstimateSource = (typeof JIRA_REPORT_ESTIMATE_SOURCES)[number];
+export const JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS = [
+  "project-not-specified",
+  "field-not-found",
+  "ambiguous-field",
+  "metadata-unavailable",
+] as const;
+export type JiraReportEstimateUnavailableReason =
+  (typeof JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS)[number];
 /** Entries of a covering-issue or type list in a bounded result; the export carries all. */
 export const JIRA_REPORT_RESULT_LIST_MAX = 25;
 /** Serialized bytes of one jira.report tool result (the descriptor's result bound). */

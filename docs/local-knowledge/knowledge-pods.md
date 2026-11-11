@@ -41,7 +41,8 @@ The first release does not add a second app area or a second registry.
 - **Create** — the ordinary Create Knowledge Pod dialog asks only for a name. It creates
   an existing Local Knowledge capsule under the hood, using the server's existing `standard`
   model-use policy default. Successful creation opens that exact pod's source setup;
-  connecting a source and indexing remain separate actions. Switching pods clears the source
+  connecting a source and indexing remain separate actions: a successful connect keeps the pod view
+  on screen, confirms the connected source and moves focus to **Index now**. Switching pods clears the source
   form's old selection, and late detail reads from a previous pod cannot replace the active
   pod's view.
   Creating a pod set still creates a capsule set over existing pod ids. The separate **Add HTML

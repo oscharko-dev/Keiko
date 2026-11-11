@@ -188,6 +188,8 @@ const CODEX_CONTROL_TIMEOUT_MS = 30_000;
 const CODEX_TERMINAL_POLL_MS = 25;
 
 export interface ProductionRuntimeTurnPort {
+  /** Whether the run's last failed turn wait ran out of its envelope duration (W9, #4068). */
+  readonly turnWaitExpired?: ((runId: string) => boolean) | undefined;
   /**
    * `agent` selects the primary agent for this and the following turns; absent keeps the run's
    * current agent. A port that does not list the agent in `selectableAgents` is never handed it.
@@ -662,6 +664,7 @@ export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): Product
       ? {}
       : { mcpAuthorization: runPort.mcpAuthorization }),
     abortTurn: (runId) => runPort.abortTask(runId),
+    ...(runPort.turnWaitExpired === undefined ? {} : { turnWaitExpired: runPort.turnWaitExpired }),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       const outcome = await runPort.waitForTerminal(runId, signal);
       if (outcome === true) return "succeeded";
@@ -1166,7 +1169,7 @@ async function terminalCompletion(
 ): Promise<CodingRuntimeTaskOutcome> {
   try {
     const outcome = await record.turnPort.waitForTerminal(runId, record.controller.signal);
-    if (outcome === "failed") recordRuntimeDispatchFailure(diagnostics, runId, "terminal-failed");
+    if (outcome === "failed") recordFailedTerminal(record, runId, diagnostics);
     if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
     const idle = await record.waitForPendingMutations(record.controller.signal);
     if (idle === "idle-succeeded") return "succeeded";
@@ -1230,6 +1233,32 @@ function recordRuntimeDispatchFailure(
     errorClass: error === undefined ? "RuntimeTaskDispatchFailure" : contentFreeErrorClass(error),
     message: "runtime-turn-failed",
     code: `stage=dispatch:reason=${reason}`,
+  });
+}
+
+/**
+ * A turn whose wait ran out of the run's envelope duration ended at the run's own bound, which the
+ * settlement records as `envelope-duration-exhausted` with its `timeout` error kind; it stays on
+ * the timeline as a routine observation instead of an `internal` failure (W9, #4068).
+ */
+function recordFailedTerminal(
+  record: ProductionRuntimeRunRecord,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): void {
+  if (record.turnPort.turnWaitExpired?.(runId) !== true) {
+    recordRuntimeDispatchFailure(diagnostics, runId, "terminal-failed");
+    return;
+  }
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationIdOrUnknown(runId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.task-dispatch",
+    source: "runtime.dispatcher",
+    errorClass: "RuntimeTaskWaitExpired",
+    message: "runtime-turn-expired",
+    diagnosticOutcome: "routine",
+    code: "stage=dispatch:reason=turn-expired",
   });
 }
 

@@ -32,6 +32,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { JiraTraceRequest } from "@oscharko-dev/keiko-connectors";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../deps.js";
@@ -58,12 +59,40 @@ import {
   requestCatalogWriteApproval,
 } from "./jiraChatCatalogWrite.js";
 import type { ChatWriteApprovalClaim } from "./chatWriteApprovalState.js";
+import {
+  JIRA_CATALOG_DISCOVERY_TOOLS,
+  type JiraCatalogDiscoveryToolName,
+} from "./jiraCatalogDiscovery.js";
+import {
+  isCurrentJiraOperationBinding,
+  jiraOperationForTool,
+  jiraOperationBindingForTool,
+} from "./jiraManagedProvider.js";
+import type { JiraOperationBinding } from "./jiraOperationRegistry.js";
+import { jiraCatalogResult } from "./jiraCatalogResult.js";
+import { chatApprovalContinuationIsLive } from "../chat-approval-continuation-state.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
+  /** Server-private whole-turn lifetime, shared by Jira-only and mixed-source producers. */
+  readonly privateLifetime?: ReturnType<
+    typeof import("./httpPrivateIdentity.js").createJiraPrivateLifetime
+  >;
+  readonly activeHumanInput?: () =>
+    import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
+  readonly humanInputFor?: (
+    operation: string,
+    argumentsDigest: string,
+  ) => import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
+  readonly jiraDiscoveryResultFits?: ((result: CatalogJsonObject) => boolean) | undefined;
   readonly chatId: string;
   readonly authorityReference: EditorAgentGovernedAuthorityReference;
   readonly userMessageId?: string;
+  /** Server-owned selection for the next model round, after the current invocation settles. */
+  readonly selectJiraOperations?:
+    ((identities: readonly string[], result: CatalogJsonObject) => Promise<void>) | undefined;
+  /** Identities of the current additional selection, which the next selection replaces. */
+  readonly selectedJiraOperations?: (() => readonly string[]) | undefined;
   /** Server-private pure snapshot; never serialized into model/MCP arguments. */
   readonly retainDraftProgress?:
     | ((actionId: string, invocationId: string, snapshot: () => CatalogJsonObject) => void)
@@ -82,8 +111,18 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly confirmModelOperation?: (response: NormalizedResponse) => void;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
-  readonly tool: JiraManagedReadToolName | JiraMutationOperation | KnowledgeChatToolName;
+  readonly tool:
+    | JiraManagedReadToolName
+    | JiraMutationOperation
+    | KnowledgeChatToolName
+    | JiraCatalogDiscoveryToolName;
   readonly argumentsDigest: string;
+  /** Required for Jira operations; local Knowledge/discovery reads carry no Jira binding. */
+  readonly operationBinding?: JiraOperationBinding;
+  /** Server-prepared source payload, captured before the approval identity is minted. */
+  readonly sourceDigest?: string;
+  /** Random revision of the immutable ready input, never a secret-derived hash. */
+  readonly humanInputRevision?: string;
 }
 export interface JiraChatCatalogConsumer extends CatalogConsumer {
   readonly context: JiraChatCatalogContext;
@@ -91,67 +130,129 @@ export interface JiraChatCatalogConsumer extends CatalogConsumer {
   readonly guard: ToolEffectGuard & {
     readonly write?: {
       readonly action: JiraChatCatalogAction;
-      readonly beforeMutation: () => boolean;
+      readonly beforeMutation: (itemRef?: string) => boolean;
+      readonly source?: import("./jiraChatRequirementBinding.js").PreparedJiraSource;
     };
   };
 }
 const READ_TOOLS: ReadonlySet<string> = new Set([
   ...JIRA_MANAGED_READ_TOOLS,
   ...KNOWLEDGE_CHAT_TOOLS,
+  ...JIRA_CATALOG_DISCOVERY_TOOLS,
 ]);
 export const JIRA_CHAT_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 /** Every tool the Chat catalog hosts: the Jira tools and the local Knowledge reads (#4179). */
 export const CHAT_CATALOG_TOOLS: readonly JiraChatCatalogAction["tool"][] = [
   ...JIRA_CHAT_TOOLS,
   ...KNOWLEDGE_CHAT_TOOLS,
+  ...JIRA_CATALOG_DISCOVERY_TOOLS,
 ];
 const CHAT_TOOLS: ReadonlySet<string> = new Set(CHAT_CATALOG_TOOLS);
-function isKnowledgeTool(tool: string): tool is KnowledgeChatToolName {
-  return (KNOWLEDGE_CHAT_TOOLS as readonly string[]).includes(tool);
+function isLocalCatalogRead(
+  tool: string,
+): tool is KnowledgeChatToolName | JiraCatalogDiscoveryToolName {
+  return (
+    (KNOWLEDGE_CHAT_TOOLS as readonly string[]).includes(tool) ||
+    (JIRA_CATALOG_DISCOVERY_TOOLS as readonly string[]).includes(tool)
+  );
+}
+
+function validActionFields(action: CatalogJsonObject): boolean {
+  return (
+    typeof action.actionId === "string" &&
+    typeof action.idempotencyKey === "string" &&
+    typeof action.argumentsDigest === "string" &&
+    /^[a-f0-9]{64}$/u.test(action.argumentsDigest)
+  );
+}
+function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
+  const bound = jiraOperationForTool(tool) !== undefined;
+  const revisionKey = action.humanInputRevision === undefined ? "" : "humanInputRevision,";
+  const sourceKey = action.sourceDigest === undefined ? "" : "sourceDigest,";
+  const keys = bound
+    ? `actionId,argumentsDigest,${revisionKey}idempotencyKey,operationBinding,${sourceKey}tool`
+    : "actionId,argumentsDigest,idempotencyKey,tool";
+  return (
+    Object.keys(action).sort(compareStrings).join() === keys &&
+    (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding)) &&
+    validOptionalActionRevision(action.humanInputRevision) &&
+    validOptionalSourceDigest(action.sourceDigest)
+  );
+}
+function validOptionalActionRevision(value: CatalogJsonValue | undefined): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value))
+  );
+}
+function validOptionalSourceDigest(value: CatalogJsonValue | undefined): boolean {
+  return value === undefined || (typeof value === "string" && /^[0-9a-f]{64}$/u.test(value));
+}
+function actionBinding(tool: string): Pick<JiraChatCatalogAction, "operationBinding"> {
+  const binding = jiraOperationBindingForTool(tool);
+  return binding === undefined ? {} : { operationBinding: binding };
 }
 
 function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
   const tool = CHAT_CATALOG_TOOLS.find((name) => name === action.tool);
-  if (
-    Object.keys(action).sort(compareStrings).join() !==
-      "actionId,argumentsDigest,idempotencyKey,tool" ||
-    tool === undefined ||
-    typeof action.actionId !== "string" ||
-    typeof action.idempotencyKey !== "string" ||
-    typeof action.argumentsDigest !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(action.argumentsDigest)
-  )
+  if (tool === undefined || !validActionFields(action) || !validActionBinding(tool, action))
     return undefined;
   return {
     tool,
-    actionId: action.actionId,
-    idempotencyKey: action.idempotencyKey,
-    argumentsDigest: action.argumentsDigest,
+    actionId: action.actionId as string,
+    idempotencyKey: action.idempotencyKey as string,
+    argumentsDigest: action.argumentsDigest as string,
+    ...actionBinding(tool),
+    ...(typeof action.sourceDigest === "string" ? { sourceDigest: action.sourceDigest } : {}),
+    ...(typeof action.humanInputRevision === "string"
+      ? { humanInputRevision: action.humanInputRevision }
+      : {}),
   };
 }
 
-export const jiraChatCatalogConsumerPort: CatalogConsumerPort<JiraChatCatalogConsumer> = {
-  scope: (context) => ({
-    kind: "jira-chat",
-    chatId: context.chatId,
-    authorityRunId: context.authorityReference.runId,
-    authorityDigest: context.authorityReference.envelopeDigest,
-  }),
-  staleReason: "consumer-stale",
-  requiredEffects: () => ["connector-access"],
-  captureAction: (handler, value) => {
+export function createJiraChatCatalogConsumerPort(
+  sourceDigestFor?: (actionId: string, argumentsDigest: string) => string | undefined,
+  humanInputRevisionFor?: (actionId: string, argumentsDigest: string) => string | undefined,
+): CatalogConsumerPort<JiraChatCatalogConsumer> {
+  const capture = (value: CatalogJsonValue): JiraChatCatalogAction | undefined => {
     const action = captureAction(value);
-    return handler.binding?.catalogAction === action?.tool ? action : undefined;
-  },
-  captureApprovedAction: captureAction,
-};
-
-/** Use with the application-owned managed catalog; this creates no MCP host or transport. */
-function hasNextPage(data: CatalogJsonObject): boolean {
-  return typeof data.nextStartAt === "number" || typeof data.nextCursor === "string";
+    if (action === undefined) return undefined;
+    const sourceDigest = sourceDigestFor?.(action.actionId, action.argumentsDigest);
+    if (action.sourceDigest !== undefined && action.sourceDigest !== sourceDigest) return undefined;
+    const humanInputRevision = humanInputRevisionFor?.(action.actionId, action.argumentsDigest);
+    if (action.humanInputRevision !== undefined && action.humanInputRevision !== humanInputRevision)
+      return undefined;
+    return {
+      ...action,
+      ...(sourceDigest === undefined ? {} : { sourceDigest }),
+      ...(humanInputRevision === undefined ? {} : { humanInputRevision }),
+    };
+  };
+  return {
+    scope: (context) => ({
+      kind: "jira-chat",
+      chatId: context.chatId,
+      authorityRunId: context.authorityReference.runId,
+      authorityDigest: context.authorityReference.envelopeDigest,
+    }),
+    staleReason: "consumer-stale",
+    requiredEffects: () => ["connector-access"],
+    captureAction: (handler, value): JiraChatCatalogAction | undefined => {
+      const action = capture(value);
+      const operation = action === undefined ? undefined : jiraOperationForTool(action.tool);
+      return handler.binding?.catalogAction === action?.tool &&
+        (operation === undefined ||
+          handler.descriptor.descriptorDigest === operation.declaration.descriptor.descriptorDigest)
+        ? action
+        : undefined;
+    },
+    captureApprovedAction: capture,
+  };
 }
+export const jiraChatCatalogConsumerPort = createJiraChatCatalogConsumerPort();
 
 export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
   return jiraChatCatalogRoutes(JIRA_MANAGED_READ_TOOLS);
@@ -168,28 +269,23 @@ export function jiraChatCatalogRoutes(
       ...identity,
       tool,
       argumentsDigest: sha256Hex(canonicalise({})),
+      ...actionBinding(tool),
     }),
     actionFor: (args, identity): JiraChatCatalogAction => ({
       ...identity,
       tool,
       argumentsDigest: sha256Hex(canonicalise(args)),
+      ...actionBinding(tool),
     }),
     resultFor: (data, context): CatalogHandlerResult => {
       if (READ_TOOLS.has(tool)) requireDispatch(context.beforeEffect(), "denied", "effect-denied");
-      return {
-        data,
-        page: {
-          truncated: hasNextPage(data),
-          reason: hasNextPage(data) ? "result-cap" : "none",
-          cursor: null,
-        },
-        resultCount: Array.isArray(data.items) ? data.items.length : 0,
-      };
+      return jiraCatalogResult(data);
     },
   }));
 }
 
 export interface JiraChatAdmissionOptions {
+  readonly sourcePreparation?: import("./jiraChatRequirementBinding.js").JiraChatSourcePreparation;
   readonly deps: JiraChatAuthorityDeps & Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">;
   readonly context: () => JiraChatCatalogContext;
   readonly now: () => number;
@@ -212,6 +308,8 @@ export interface JiraChatAdmissionOptions {
   readonly preflightWrite?: (
     action: JiraChatCatalogAction,
     context: JiraChatCatalogContext,
+    /** The requirement trace prepared for exactly this action, which its write receives too. */
+    trace: JiraTraceRequest | undefined,
   ) => Promise<CatalogJsonObject | undefined>;
   /** The file a `jira.attach` approval shows the human; absent when it cannot be reviewed (#4176). */
   readonly attachmentPreview?: (
@@ -226,11 +324,22 @@ const DENIED = { ok: false, reason: "authority-invalid" } as const;
 const REVIEW = { ok: false, reason: "approval-required" } as const;
 const ALLOWED = { ok: true } as const;
 
+function continuationIsLive(
+  options: JiraChatAdmissionOptions,
+  context: JiraChatCatalogContext,
+): boolean {
+  return (
+    context.userMessageId === undefined ||
+    chatApprovalContinuationIsLive(options.deps.store, context.userMessageId)
+  );
+}
+
 function readPermission(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
 ): ToolAuthorityAvailability {
   const context = options.context();
+  if (!continuationIsLive(options, context)) return DENIED;
   const nowIso = new Date(options.now()).toISOString();
   const current = resolveCurrentJiraChatAuthority(
     options.deps,
@@ -248,7 +357,8 @@ function readPermission(
     return DENIED;
   // A Knowledge Pod the human attached to this Chat is read like a grounded answer reads it: the
   // current Chat authority admits it, no Jira consent is involved (#4179).
-  if (isKnowledgeTool(action.tool)) return ALLOWED;
+  if (isLocalCatalogRead(action.tool))
+    return continuationIsLive(options, context) ? ALLOWED : DENIED;
   const policy = decideAtlassianEnvelopeAction(
     JIRA_MANAGED_ACTION_TYPES[action.tool],
     current.envelope,
@@ -259,7 +369,8 @@ function readPermission(
     context.authorityReference,
     context.correlationId,
   );
-  return grantPermission(options, entry, nowIso);
+  const permission = grantPermission(options, entry, nowIso);
+  return continuationIsLive(options, context) ? permission : DENIED;
 }
 
 function grantPermission(
@@ -310,16 +421,41 @@ function reviewableAction(
   return READ_TOOLS.has(action.tool) || options.reviewableWrite?.(action) === true;
 }
 
-/** The template dry run first: a violating draft is refused before any human is asked. */
+/**
+ * The template and field dry run of a write. A violating write is refused before any effect starts
+ * and before any human is asked, whether or not its mode asks for an approval.
+ */
+async function refuseByPreflight(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): Promise<void> {
+  if (READ_TOOLS.has(action.tool)) return;
+  const preparation = options.sourcePreparation;
+  // The dry run admits what the write will: the write receives this prepared trace too (LIM27).
+  const trace = preparation?.sourceFor(action.actionId, action.argumentsDigest)?.items[0]?.trace;
+  const refusal =
+    preparation?.refusalFor(action.actionId, action.argumentsDigest) ??
+    (await options.preflightWrite?.(action, context, trace));
+  if (refusal !== undefined) {
+    const binding = jiraOperationBindingForTool(action.tool);
+    requireDispatch(binding !== undefined, "failed", "provider-reported-error");
+    // Preflight outcomes bypass the provider wrapper, but carry the same server-owned contract.
+    // A refusal can never substitute its own operation identity or digest.
+    throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, {
+      ...refusal,
+      operationBinding: { ...binding },
+    });
+  }
+}
+
+/** The dry run first: a violating draft is refused before any human is asked. */
 async function requestWriteStage(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
   context: JiraChatCatalogContext,
 ): Promise<void> {
-  const refusal = await options.preflightWrite?.(action, context);
-  if (refusal !== undefined) {
-    throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, refusal);
-  }
+  await refuseByPreflight(options, action, context);
   await requestCatalogWriteApproval({ ...options, context: () => context }, action);
 }
 
@@ -368,6 +504,7 @@ export function createJiraChatCatalogAdmission(options: JiraChatAdmissionOptions
         options.requestReadConsent !== undefined &&
         (READ_TOOLS.has(action.tool) || options.requestWriteConsent !== undefined),
       request: (action, context) => requestConsent(options, action, context),
+      preflight: (action, context) => refuseByPreflight(options, action, context),
     },
   };
 }
@@ -377,8 +514,8 @@ function keepReadGrantCurrent(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
 ): void {
-  // A Knowledge Pod read never consulted the Jira grant, so it does not keep it alive.
-  if (isKnowledgeTool(action.tool)) return;
+  // A local catalog or Knowledge Pod read never consulted the Jira grant, so it does not keep it alive.
+  if (isLocalCatalogRead(action.tool)) return;
   const context = options.context();
   const nowMs = options.now();
   const current = resolveCurrentJiraChatAuthority(
@@ -404,6 +541,7 @@ function mutationGuard(
   action: JiraChatCatalogAction,
 ): JiraChatCatalogConsumer["guard"] {
   let claim: ChatWriteApprovalClaim | undefined;
+  const source = options.sourcePreparation?.sourceFor(action.actionId, action.argumentsDigest);
   const check = (): boolean => {
     const ok = preview(options, capability, action, claim).ok;
     if (ok) keepReadGrantCurrent(options, action);
@@ -415,8 +553,15 @@ function mutationGuard(
         check,
         write: {
           action,
-          beforeMutation: (): boolean => {
+          ...(source === undefined ? {} : { source }),
+          beforeMutation: (itemRef): boolean => {
             if (!check()) return false;
+            if (
+              action.sourceDigest !== undefined &&
+              (source?.sourceDigest !== action.sourceDigest ||
+                options.sourcePreparation?.current(source, itemRef) !== true)
+            )
+              return false;
             // One approval covers one action; a backlog draft dispatches its items under it (#4178).
             if (claim !== undefined) return true;
             const result = claimJiraChatWrite(options, action);

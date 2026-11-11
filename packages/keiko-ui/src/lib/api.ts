@@ -160,6 +160,7 @@ import type {
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
+  isMemoryReadinessSnapshot,
   classifyInvalidActivityLogReadiness,
   type ClientModuleLoadFailure,
   type HealthDiagnosticsInvalidReason,
@@ -184,7 +185,6 @@ import {
 } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
-  isDesktopChatStreamEvent,
   type ChatContextStatusWire,
   type DesktopChatCreateRequestWire,
   type DesktopChatSendRequestWire,
@@ -429,9 +429,12 @@ export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
 
 export async function fetchHealth(correlationId?: string): Promise<HealthSnapshot> {
   const response = await fetchJson<
-    Omit<HealthResponse, "diagnostics"> & { readonly diagnostics?: unknown }
+    Omit<HealthResponse, "diagnostics" | "memory"> & {
+      readonly diagnostics?: unknown;
+      readonly memory?: unknown;
+    }
   >("/api/health", undefined, undefined, correlationId);
-  const { diagnostics, ...health } = response;
+  const { diagnostics, memory, ...health } = response;
   let snapshot: HealthSnapshot = health;
   if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...health, diagnostics };
   else if (diagnostics !== undefined)
@@ -440,6 +443,7 @@ export async function fetchHealth(correlationId?: string): Promise<HealthSnapsho
       diagnosticsInvalid: true,
       diagnosticsInvalidReason: classifyInvalidActivityLogReadiness(diagnostics),
     };
+  if (isMemoryReadinessSnapshot(memory)) snapshot = { ...snapshot, memory };
   recordResponseCorrelationId(snapshot, responseCorrelationIdOf(response) ?? null);
   return snapshot;
 }
@@ -1260,6 +1264,7 @@ export async function createChat(input: CreateChatInput): Promise<ChatResponse> 
 
 export interface UpdateChatInput {
   jiraPodId?: string | null;
+  jiraAdministrationEnabled?: boolean;
   mcpServers?: readonly string[] | null;
   toolMode?: CodingWorkbenchMode;
   expectedGroundingScopeIdentity?: string;
@@ -1454,16 +1459,50 @@ export type SendDesktopChatInput = DesktopChatSendRequestWire;
 // cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
 // null` under exactOptionalPropertyTypes; convert at the boundary so callers
 // pass `AbortSignal | undefined` like every other API helper here.
+function pendingApprovalLeaseHeaders(
+  clientTurnId: string | undefined,
+  retain: boolean,
+): Record<string, string> {
+  return clientTurnId === undefined || !retain ? {} : { "x-keiko-chat-pending-lease": "bounded" };
+}
+
 export async function sendDesktopChat(
   input: SendDesktopChatInput,
   signal?: AbortSignal,
   correlationId?: string,
+  retainPendingApproval = true,
 ): Promise<DesktopChatSendResponse> {
   return fetchJson(
     "/api/desktop/chat",
-    { method: "POST", body: JSON.stringify(input), signal: signal ?? null },
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal: signal ?? null,
+      headers: pendingApprovalLeaseHeaders(input.clientTurnId, retainPendingApproval),
+    },
     undefined,
     correlationId,
+  );
+}
+
+/** Explicit Stop targets exactly one persisted canonical turn; it never cancels another send. */
+export async function cancelDesktopChatTurn(input: {
+  readonly chatId: string;
+  readonly canonicalTurnRef: string;
+}): Promise<{ readonly cancelled: boolean }> {
+  return fetchJson(
+    "/api/desktop/chat/cancel",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(5000),
+    },
+    (value) =>
+      isRecordValue(value) &&
+      Object.keys(value).length === 1 &&
+      typeof value.cancelled === "boolean"
+        ? { ok: true }
+        : { ok: false, reasons: ["invalid chat cancellation response"] },
   );
 }
 
@@ -1583,14 +1622,25 @@ function dispatchToolStreamEvent(
   }
 }
 
+type DesktopChatStreamEventGuard = (value: unknown) => value is DesktopChatStreamEvent;
+
+// The stream validation carries every governed Jira write operation an approval may name. Only a
+// Chat turn needs it, so it loads with the first streamed turn instead of with the first page
+// (`check:editor-bundle-size`). It loads before the request is sent.
+async function loadDesktopChatStreamEventGuard(): Promise<DesktopChatStreamEventGuard> {
+  const wire = await import("@oscharko-dev/keiko-contracts/runtime/desktop-chat-stream-wire");
+  return wire.isDesktopChatStreamEvent;
+}
+
 // Dispatches a parsed SSE (event, data) pair to the appropriate handler.
 function dispatchSseEvent(
   eventName: DesktopChatStreamEventType | undefined,
   parsed: unknown,
   handlers: StreamHandlers,
+  isStreamEvent: DesktopChatStreamEventGuard,
 ): void {
   const candidate = { event: eventName, data: parsed };
-  if (!isDesktopChatStreamEvent(candidate)) throw malformedDesktopChatStreamError();
+  if (!isStreamEvent(candidate)) throw malformedDesktopChatStreamError();
   switch (candidate.event) {
     case "tool-write-approval":
     case "tool-read-consent":
@@ -1624,6 +1674,7 @@ function processSseLines(
   lines: readonly string[],
   pendingEvent: DesktopChatStreamEventType | undefined,
   handlers: StreamHandlers,
+  isStreamEvent: DesktopChatStreamEventGuard,
 ): DesktopChatStreamEventType | undefined {
   let current = pendingEvent;
   for (const rawLine of lines) {
@@ -1638,7 +1689,7 @@ function processSseLines(
       } catch {
         throw malformedDesktopChatStreamError();
       }
-      dispatchSseEvent(current, parsed, handlers);
+      dispatchSseEvent(current, parsed, handlers, isStreamEvent);
       current = undefined;
     } else if (line === "") {
       current = undefined;
@@ -1748,6 +1799,7 @@ async function consumeSseStream(
   signal: AbortSignal,
   streamHandlers: StreamHandlers,
   correlationId: string,
+  isStreamEvent: DesktopChatStreamEventGuard,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -1769,14 +1821,14 @@ async function consumeSseStream(
       lineBuffer += decoder.decode(read.value, { stream: true });
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() ?? "";
-      pendingEvent = processSseLines(lines, pendingEvent, handlers);
+      pendingEvent = processSseLines(lines, pendingEvent, handlers, isStreamEvent);
     }
     // Flush any residual content left in lineBuffer when the stream ends
     // naturally (EOF). A proxy or buffer that drops the terminal \n\n would
     // otherwise silently lose the final SSE frame. Skipped on abort because
     // the contract is "stop reading without dispatching further events".
     if (reachedEof && lineBuffer !== "") {
-      processSseLines([lineBuffer], pendingEvent, handlers);
+      processSseLines([lineBuffer], pendingEvent, handlers, isStreamEvent);
     }
     if (terminated && !reachedEof) void reader.cancel();
   } finally {
@@ -1800,10 +1852,11 @@ export async function sendDesktopChatStream(
   handlers: StreamHandlers,
   correlationId = newClientCorrelationId(),
 ): Promise<void> {
+  const isStreamEvent = await loadDesktopChatStreamEventGuard();
   const requestInit: RequestInit = {
     method: "POST",
     body: JSON.stringify(input),
-    headers: { Accept: "text/event-stream" },
+    headers: { Accept: "text/event-stream", "x-keiko-chat-pending-lease": "bounded" },
   };
   const res = await fetchWithinIdleLimit(
     "/api/desktop/chat/stream",
@@ -1830,7 +1883,7 @@ export async function sendDesktopChatStream(
   }
 
   handlers.onStarted?.(responseCorrelationId);
-  await consumeSseStream(res.body, signal, handlers, responseCorrelationId);
+  await consumeSseStream(res.body, signal, handlers, responseCorrelationId, isStreamEvent);
 }
 
 // ---------------------------------------------------------------------------
@@ -2954,12 +3007,18 @@ export async function askGrounded(
   req: GroundedAskRequest,
   signal?: AbortSignal,
   correlationId?: string,
+  retainPendingApproval = true,
 ): Promise<GroundedAnswer> {
   // RequestInit.signal is `AbortSignal | null`. Under exactOptionalPropertyTypes we cannot
   // pass `undefined`, so convert here.
   return fetchJson(
     "/api/chats/messages/grounded",
-    { method: "POST", body: JSON.stringify(req), signal: signal ?? null },
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+      signal: signal ?? null,
+      headers: pendingApprovalLeaseHeaders(req.clientTurnId, retainPendingApproval),
+    },
     undefined,
     correlationId,
   );
@@ -3072,24 +3131,9 @@ export interface GitDeliveryLocalBranchCreateInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-export async function fetchGitDeliveryLocalBranchCreate(
-  input: GitDeliveryLocalBranchCreateInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/local-branch/create", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      branchName: input.branchName,
-      baseBranchName: input.baseBranchName,
-      startPointRefHash: input.startPointRefHash,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryLocalBranchCreate = deferGitDelivery(
+  "fetchGitDeliveryLocalBranchCreate",
+);
 
 export interface GitDeliveryLocalBranchSwitchInput {
   readonly projectId: string;
@@ -3097,22 +3141,9 @@ export interface GitDeliveryLocalBranchSwitchInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-export async function fetchGitDeliveryLocalBranchSwitch(
-  input: GitDeliveryLocalBranchSwitchInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/local-branch/switch", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      branchName: input.branchName,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryLocalBranchSwitch = deferGitDelivery(
+  "fetchGitDeliveryLocalBranchSwitch",
+);
 
 export interface GitRepositoryInitializeInput {
   readonly projectId: string;
@@ -3143,23 +3174,7 @@ export interface GitDeliveryStageInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-export async function fetchGitDeliveryStage(
-  input: GitDeliveryStageInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/staging/stage", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      pathspecs: input.pathspecs,
-      includeUntracked: input.includeUntracked,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryStage = deferGitDelivery("fetchGitDeliveryStage");
 
 export interface GitDeliveryUnstageInput {
   readonly projectId: string;
@@ -3167,22 +3182,7 @@ export interface GitDeliveryUnstageInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
-export async function fetchGitDeliveryUnstage(
-  input: GitDeliveryUnstageInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/staging/unstage", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      pathspecs: input.pathspecs,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryUnstage = deferGitDelivery("fetchGitDeliveryUnstage");
 
 export interface GitDeliveryCommitPreviewResponse {
   readonly schemaVersion: "1";
@@ -3204,35 +3204,9 @@ export interface GitDeliveryCommitDraftResponse {
   readonly summary: GitCommitChangeSummary;
 }
 
-export async function fetchGitDeliveryCommitPreview(
-  input: { readonly projectId: string; readonly messageDraft?: string },
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitPreviewResponse> {
-  return fetchJson("/api/git-delivery/commit/preview", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitPreview = deferGitDelivery("fetchGitDeliveryCommitPreview");
 
-export async function fetchGitDeliveryCommitDraft(
-  input: { readonly projectId: string; readonly instruction?: string },
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitDraftResponse> {
-  return fetchJson("/api/git-delivery/commit/draft", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitDraft = deferGitDelivery("fetchGitDeliveryCommitDraft");
 
 export interface GitDeliveryCommitExecuteInput {
   readonly projectId: string;
@@ -3242,23 +3216,7 @@ export interface GitDeliveryCommitExecuteInput {
   readonly userInitiated?: true | undefined;
 }
 
-export async function fetchGitDeliveryCommitExecute(
-  input: GitDeliveryCommitExecuteInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/commit/execute", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      message: input.message,
-      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-      ...(input.userInitiated === true ? { userInitiated: true } : {}),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitExecute = deferGitDelivery("fetchGitDeliveryCommitExecute");
 
 // ─── Governed remote publish (Issue #476, Epic #470) ────────────────────────────────────────────
 
@@ -3306,45 +3264,9 @@ export interface GitDeliveryPushExecuteResponse extends GitDeliveryMutationRespo
   readonly recoveryActionHint?: string;
 }
 
-function gitDeliveryPushBody(input: GitDeliveryPushInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    remoteAlias: input.remoteAlias,
-    remoteBranchName: input.remoteBranchName,
-    sourceBranchName: input.sourceBranchName,
-    ...(input.forcePush === undefined ? {} : { forcePush: input.forcePush }),
-    ...(input.setUpstreamTracking === undefined
-      ? {}
-      : { setUpstreamTracking: input.setUpstreamTracking }),
-    ...(input.verifiedCommitSha === undefined
-      ? {}
-      : { verifiedCommitSha: input.verifiedCommitSha }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
+export const fetchGitDeliveryPushPreview = deferGitDelivery("fetchGitDeliveryPushPreview");
 
-export async function fetchGitDeliveryPushPreview(
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushPreviewResponse> {
-  return fetchJson("/api/git-delivery/push/preview", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
-
-export async function fetchGitDeliveryPushExecute(
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushExecuteResponse> {
-  return fetchJson("/api/git-delivery/push/execute", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPushExecute = deferGitDelivery("fetchGitDeliveryPushExecute");
 
 // ─── Fetch / pull sync (Issue #1573 API, consumed by Issue #1576 UI) ─────────────────────────
 
@@ -3354,6 +3276,50 @@ export interface GitDeliverySyncInput {
   readonly remote?: string | undefined;
   readonly approval?: GitDeliveryApprovalClaim;
   readonly userInitiated?: true | undefined;
+}
+
+type GitWorkbenchApi = typeof import("./coding-workbench-lazy-fetchers");
+type DeferredGitDelivery =
+  | "fetchGitDeliveryLocalBranchCreate"
+  | "fetchGitDeliveryLocalBranchSwitch"
+  | "fetchGitDeliveryStage"
+  | "fetchGitDeliveryUnstage"
+  | "fetchGitDeliveryCommitPreview"
+  | "fetchGitDeliveryCommitDraft"
+  | "fetchGitDeliveryCommitExecute"
+  | "fetchGitDeliveryPushPreview"
+  | "fetchGitDeliveryPushExecute"
+  | "fetchGitDeliveryPrPreview"
+  | "fetchGitDeliveryPrExecute"
+  | "fetchGitDeliveryMergePreview"
+  | "fetchGitDeliveryMergeApprove"
+  | "fetchGitDeliveryMergeExecute"
+  | "fetchGitDeliveryPrMarkReadyApprove"
+  | "fetchGitDeliveryPrMarkReadyExecute"
+  | "fetchGitDeliveryCommitApprove"
+  | "fetchGitDeliveryPushApprove"
+  | "fetchGitDeliveryPrApprove";
+
+type DeferredFn<K extends DeferredGitDelivery> = (
+  input: Parameters<GitWorkbenchApi[K]>[1],
+  signal?: AbortSignal,
+) => ReturnType<GitWorkbenchApi[K]>;
+
+// Delivery bodies share the lazy Git owner. The command is snapshotted before the asynchronous
+// module load so caller changes cannot alter the reviewed command, and an aborted load is refused
+// before the HTTP port is invoked.
+function deferGitDelivery<K extends DeferredGitDelivery>(name: K): DeferredFn<K> {
+  return (async (input: Parameters<GitWorkbenchApi[K]>[1], signal?: AbortSignal) => {
+    const command = structuredClone(input);
+    const api = await loadGitWorkbenchApi();
+    signal?.throwIfAborted();
+    const call = api[name] as (
+      fetchJson: Parameters<GitWorkbenchApi[K]>[0],
+      command: unknown,
+      signal?: AbortSignal,
+    ) => unknown;
+    return call(fetchJson, command, signal);
+  }) as DeferredFn<K>;
 }
 
 async function loadGitWorkbenchApi(
@@ -3487,48 +3453,9 @@ export interface GitDeliveryPrExecuteResponse extends GitDeliveryMutationRespons
   readonly createdPrExternalId?: string;
 }
 
-function gitDeliveryPrBody(input: GitDeliveryPrInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    kind: input.kind,
-    ownerAndRepo: input.ownerAndRepo,
-    headBranchName: input.headBranchName,
-    baseBranchName: input.baseBranchName,
-    title: input.title,
-    body: input.body,
-    ...(input.isDraft === undefined ? {} : { isDraft: input.isDraft }),
-    ...(input.prExternalId === undefined ? {} : { prExternalId: input.prExternalId }),
-    ...(input.convertToDraft === undefined ? {} : { convertToDraft: input.convertToDraft }),
-    ...(input.convertFromDraft === undefined ? {} : { convertFromDraft: input.convertFromDraft }),
-    ...(input.verifiedCommitSha === undefined
-      ? {}
-      : { verifiedCommitSha: input.verifiedCommitSha }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
+export const fetchGitDeliveryPrPreview = deferGitDelivery("fetchGitDeliveryPrPreview");
 
-export async function fetchGitDeliveryPrPreview(
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrPreviewResponse> {
-  return fetchJson("/api/git-delivery/pr/preview", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
-
-export async function fetchGitDeliveryPrExecute(
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrExecuteResponse> {
-  return fetchJson("/api/git-delivery/pr/execute", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPrExecute = deferGitDelivery("fetchGitDeliveryPrExecute");
 
 // ─── Governed merge command center (#478, ADR-0087) ──────────────────────────────────────────────────
 
@@ -3605,60 +3532,15 @@ export interface GitDeliveryMergeExecuteResponse extends GitDeliveryMutationResp
   readonly branchDeleted?: boolean;
 }
 
-function gitDeliveryMergeBody(input: GitDeliveryMergeInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    kind: "merge",
-    ownerAndRepo: input.ownerAndRepo,
-    prExternalId: input.prExternalId,
-    baseBranchName: input.baseBranchName,
-    headBranchName: input.headBranchName,
-    mergeStrategy: input.mergeStrategy,
-    deleteBranchAfterMerge: input.deleteBranchAfterMerge,
-    ...(input.expectedHeadRefHash === undefined
-      ? {}
-      : { expectedHeadRefHash: input.expectedHeadRefHash }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
-
-export async function fetchGitDeliveryMergePreview(
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergePreviewResponse> {
-  return fetchJson("/api/git-delivery/merge/preview", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryMergePreview = deferGitDelivery("fetchGitDeliveryMergePreview");
 
 // Mints the server-issued approval claim the default approval-gated merge policy pack requires. The
 // caller must pass the EXACT SAME input (target + strategy + delete flag + expectedHeadRefHash) it
 // will subsequently pass to `fetchGitDeliveryMergeExecute` — the server binds the mint to that exact
 // typed command, and a mismatched execute call is rejected (see mergeRoutes.ts `createHandleMergeApprove`).
-export async function fetchGitDeliveryMergeApprove(
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergeApproveResponse> {
-  return fetchJson("/api/git-delivery/merge/approve", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryMergeApprove = deferGitDelivery("fetchGitDeliveryMergeApprove");
 
-export async function fetchGitDeliveryMergeExecute(
-  input: GitDeliveryMergeInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryMergeExecuteResponse> {
-  return fetchJson("/api/git-delivery/merge/execute", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryMergeExecute = deferGitDelivery("fetchGitDeliveryMergeExecute");
 
 // ---------------------------------------------------------------------------
 // Coding Workbench journey observation (#3389) — read-only refresh/reconciliation of the accepted
@@ -3866,41 +3748,13 @@ export interface GitDeliveryPrMarkReadyExecuteResponse {
   readonly rejectionReason?: string;
 }
 
-function gitDeliveryPrMarkReadyBody(input: GitDeliveryPrMarkReadyInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    ownerAndRepo: input.ownerAndRepo,
-    prExternalId: input.prExternalId,
-    headSha: input.headSha,
-    baseSha: input.baseSha,
-    baseRef: input.baseRef,
-    readinessDigest: input.readinessDigest,
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
+export const fetchGitDeliveryPrMarkReadyApprove = deferGitDelivery(
+  "fetchGitDeliveryPrMarkReadyApprove",
+);
 
-export async function fetchGitDeliveryPrMarkReadyApprove(
-  input: GitDeliveryPrMarkReadyInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrMarkReadyApproveResponse> {
-  return fetchJson("/api/git-delivery/pr/mark-ready/approve", {
-    method: "POST",
-    body: gitDeliveryPrMarkReadyBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
-
-export async function fetchGitDeliveryPrMarkReadyExecute(
-  input: GitDeliveryPrMarkReadyInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
-  return fetchJson("/api/git-delivery/pr/mark-ready/execute", {
-    method: "POST",
-    body: gitDeliveryPrMarkReadyBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPrMarkReadyExecute = deferGitDelivery(
+  "fetchGitDeliveryPrMarkReadyExecute",
+);
 
 /**
  * Mints then immediately redeems the one-use pr-mark-ready approval — the mint/execute pair a
@@ -3931,22 +3785,7 @@ export interface GitDeliveryCommitApproveResponse {
   readonly expiresAt: string;
 }
 
-export async function fetchGitDeliveryCommitApprove(
-  input: GitDeliveryCommitExecuteInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryCommitApproveResponse> {
-  return fetchJson("/api/git-delivery/commit/approve", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      message: input.message,
-      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
-      ...(input.userInitiated === true ? { userInitiated: true } : {}),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryCommitApprove = deferGitDelivery("fetchGitDeliveryCommitApprove");
 
 export interface GitDeliveryPushApproveResponse {
   readonly schemaVersion: "1";
@@ -3954,16 +3793,7 @@ export interface GitDeliveryPushApproveResponse {
   readonly expiresAt: string;
 }
 
-export async function fetchGitDeliveryPushApprove(
-  input: GitDeliveryPushInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPushApproveResponse> {
-  return fetchJson("/api/git-delivery/push/approve", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPushApprove = deferGitDelivery("fetchGitDeliveryPushApprove");
 
 export interface GitDeliveryPrApproveResponse {
   readonly schemaVersion: "1";
@@ -3971,16 +3801,7 @@ export interface GitDeliveryPrApproveResponse {
   readonly expiresAt: string;
 }
 
-export async function fetchGitDeliveryPrApprove(
-  input: GitDeliveryPrInput,
-  signal?: AbortSignal,
-): Promise<GitDeliveryPrApproveResponse> {
-  return fetchJson("/api/git-delivery/pr/approve", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
+export const fetchGitDeliveryPrApprove = deferGitDelivery("fetchGitDeliveryPrApprove");
 
 /**
  * Mints then immediately redeems the one-use commit approval — the mint/execute pair a single

@@ -93,6 +93,15 @@ describe("Windows generation staging authority", () => {
       kind: "macos-bundle-v1",
       installRoot: "/Applications/Keiko.app",
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      packageJsonPath: "/Applications/Keiko.app/Contents/Resources/app/package.json",
+      rootLauncherPath: "/Applications/Keiko.app/Contents/MacOS/Keiko",
+      rootSetupManifestPath:
+        "/Applications/Keiko.app/Contents/Resources/.portable/setup-manifest.json",
+    });
+    expect(portablePackageLayout("windows-x64", "C:/Keiko/app")).toMatchObject({
+      kind: "windows-flat-v1",
+      packageJsonPath: "C:\\Keiko\\app\\package.json",
+      rootLauncherPath: "C:\\Keiko\\Keiko.exe",
     });
   });
 

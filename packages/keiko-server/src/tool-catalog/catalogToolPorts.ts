@@ -100,6 +100,12 @@ export interface CatalogToolApprovalPort<Consumer extends CatalogConsumer = Codi
     request: Consumer["action"],
     context: Consumer["context"],
   ) => Promise<Consumer["action"] | undefined>;
+  /**
+   * The consumer's own admission of an action its authority runs without a human approval. It
+   * runs before reservation and the effect boundary, so a refusal it throws settles exactly like
+   * one raised in front of an approval request: in every autonomy mode, nothing has started.
+   */
+  readonly preflight?: (request: Consumer["action"], context: Consumer["context"]) => Promise<void>;
 }
 export interface CatalogBoundAuthorityPort<
   Consumer extends CatalogConsumer = CodingCatalogConsumer,

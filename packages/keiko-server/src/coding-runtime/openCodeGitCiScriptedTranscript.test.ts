@@ -350,6 +350,10 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     git(root, ["init", "-qb", "dev"]);
     git(root, ["config", "user.name", "Keiko Test"]);
     git(root, ["config", "user.email", "keiko@example.test"]);
+    // The governed Git lane reads the host's SYSTEM scope (it carries credential helpers), and Git
+    // for Windows sets `core.autocrlf=true` there. Exact staging is refused while a conversion is in
+    // effect, so the repository declares its own line-ending policy instead of inheriting the host's.
+    git(root, ["config", "core.autocrlf", "false"]);
     configureSshCommitSigning(root, signingRoot, "keiko@example.test");
     writeFileSync(join(root, "code.js"), "export const value = 1;\n");
     git(root, ["add", "code.js"]);
@@ -630,7 +634,6 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       readonly limits: {
         readonly maxRuntimeMs: number;
         readonly maxToolCalls: number;
-        readonly maxPromptTokens: number;
       };
       readonly stillAuthorized: () => boolean;
     } => ({
@@ -638,7 +641,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       remoteDigest: DIGEST,
       prNumber: 17,
       correlationId: "scripted-ci-repair-3388",
-      limits: { maxRuntimeMs: 600_000, maxToolCalls: 100, maxPromptTokens: 100_000 },
+      limits: { maxRuntimeMs: 600_000, maxToolCalls: 100 },
       stillAuthorized: (): boolean => true,
     });
     const repairController = new CodingRuntimeCiRepairController({
@@ -1049,7 +1052,7 @@ function liveNegativeGatewayDeps(diagnostics: ServerDiagnosticRecord[]): UiHandl
               binding: { runId: LIVE_GATEWAY_RUN_ID, adapterKind: "model-gateway-sidecar" },
             }
           : { ok: false },
-      reservePromptTokens: () => ({ ok: true, runId: LIVE_GATEWAY_RUN_ID }),
+      admitModelCall: () => ({ ok: true, runId: LIVE_GATEWAY_RUN_ID }),
     },
   };
 }

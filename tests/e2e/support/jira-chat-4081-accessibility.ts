@@ -422,6 +422,11 @@ async function writeEvidence(session: EvidenceSession, region: Locator): Promise
   await captureMatrix(session, approval, "pending-exact-write-approval");
   expect(counts().writes).toBe(before.writes);
   const allow = approval.getByRole("button", { name: copy.approve, exact: true });
+  const pendingText = await approval.innerText();
+  await session.page.reload();
+  await expect.poll(() => approval.innerText()).toBe(pendingText);
+  await expect(allow).toBeEnabled();
+  expect(counts().writes).toBe(before.writes);
   await keyboardDecision(
     session.page,
     allow,
@@ -434,6 +439,12 @@ async function writeEvidence(session: EvidenceSession, region: Locator): Promise
   const result = region.getByRole("region", { name: copy.tool, exact: true }).last();
   await expect(result.getByRole("status")).toHaveText(copy.succeeded);
   await captureMatrix(session, result, "settled-jira-result");
+  const receiptText = await result.innerText();
+  await session.page.reload();
+  await expect.poll(() => result.innerText()).toBe(receiptText);
+  await expect(approval.getByRole("button", { name: copy.approve, exact: true })).toHaveCount(0);
+  expect(counts().writes).toBe(before.writes + 1);
+  expect(counts().confirmations).toBe(before.confirmations + 1);
 }
 
 async function appendNavigationTurns(session: EvidenceSession, region: Locator): Promise<void> {

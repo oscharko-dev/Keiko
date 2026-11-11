@@ -1,3 +1,4 @@
+import { jiraActionLogFields } from "../atlassian/jiraOperationLogFields.js";
 import type {
   AtlassianConnectorActionType,
   ChatToolAuthoritySubject,
@@ -90,31 +91,17 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [
+        "jira-read",
+        "jira-write",
         "sync-space",
         "sync-project",
         "search-issues-live",
-        "create-issue",
-        "update-issue-fields",
-        "transition-issue",
-        "add-issue-comment",
         "create-page",
         "update-page",
         "add-page-comment",
-        "jira.projects",
-        "jira.issue-types",
-        "jira.create-fields",
-        "jira.edit-fields",
-        "jira.search",
-        "jira.issue",
-        "jira.comments",
-        "jira.transitions",
-        "jira.assignable-users",
-        "jira.report",
-        "jira.draft-stage",
-        "jira.draft-batch",
-        "assign-issue",
       ],
     },
+    actionTypeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     grantDigest: OPTIONAL_DIGEST,
     consentProofDigest: OPTIONAL_DIGEST,
     grantState: {
@@ -155,7 +142,6 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     bindingGeneration: OPTIONAL_COUNT,
     authenticationGeneration: OPTIONAL_COUNT,
     toolCalls: OPTIONAL_COUNT,
-    promptTokens: OPTIONAL_COUNT,
     affectedCount: OPTIONAL_COUNT,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -191,7 +177,6 @@ interface AuthorityEvidence {
   readonly subject?: ChatToolAuthoritySubject | undefined;
   readonly chatId?: string | undefined;
   readonly toolCalls?: number | undefined;
-  readonly promptTokens?: number | undefined;
   readonly affectedCount?: number | undefined;
 }
 
@@ -281,19 +266,23 @@ export function recordChatAuthorityResult<T extends Outcome>(
     CHAT_AUTHORITY_OPERATION,
     {
       correlationId: correlationIdOrUnknown(correlationId),
-      level: result.ok || result.reason === "review-required" ? "info" : "warn",
+      level:
+        result.ok ||
+        result.reason === "review-required" ||
+        (phase === "read-grant" && result.reason === "expired")
+          ? "info"
+          : "warn",
     },
     {
       phase,
       ...grantFields(evidence),
-      ...(evidence.actionType === undefined ? {} : { actionType: evidence.actionType }),
+      ...(evidence.actionType === undefined ? {} : jiraActionLogFields(evidence.actionType)),
       outcome: result.ok ? "allowed" : result.reason,
       ...(evidence.readiness === undefined ? {} : { readiness: evidence.readiness }),
       ...digestField("authorityDigest", evidence.authorityDigest),
       ...(evidence.chatId === undefined ? {} : { chatDigest: sha256Hex(evidence.chatId) }),
       ...subjectFields(evidence.subject),
       ...countField("toolCalls", evidence.toolCalls),
-      ...countField("promptTokens", evidence.promptTokens),
       ...countField("affectedCount", evidence.affectedCount),
       completeness: "complete",
       loss: "none",

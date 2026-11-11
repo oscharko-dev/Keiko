@@ -1,7 +1,11 @@
 import {
   JIRA_REPORT_INCOMPLETE_REASONS,
+  JIRA_REPORT_FAILURE_REASONS,
   JIRA_REPORT_STATUSES,
+  JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS,
+  type JiraReportEstimateUnavailableReason,
   type JiraReportIncompleteReason,
+  type JiraReportFailureReason,
   type JiraReportStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
@@ -12,6 +16,11 @@ export interface JiraReportView {
   readonly issuesRead: number;
   readonly issuesTotal: number | undefined;
   readonly reason: JiraReportIncompleteReason | undefined;
+  readonly failure?: JiraReportFailureReason;
+  readonly estimate:
+    | { readonly available: true; readonly fieldId: string; readonly fieldName: string }
+    | { readonly available: false; readonly reason: JiraReportEstimateUnavailableReason }
+    | undefined;
   readonly figures:
     | {
         readonly total: number;
@@ -81,6 +90,32 @@ function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
   return { ...status, ...audit, ...coverage, donePercent: percent, inferredParentFields: inferred };
 }
 
+function reportCompleteness(
+  report: Record<string, unknown> | undefined,
+): Pick<JiraReportView, "reason" | "failure"> {
+  const completeness = record(report?.completeness);
+  const reason = JIRA_REPORT_INCOMPLETE_REASONS.find((item) => item === completeness?.reason);
+  const failure = JIRA_REPORT_FAILURE_REASONS.find((item) => item === completeness?.failure);
+  return { reason, ...(failure === undefined ? {} : { failure }) };
+}
+
+function estimateOf(report: Record<string, unknown> | undefined): JiraReportView["estimate"] {
+  const scope = record(report?.scope);
+  if (scope === undefined) return undefined;
+  if (scope.estimateUnit === "unavailable") {
+    const reason = JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS.find(
+      (item) => item === scope.estimateUnavailableReason,
+    );
+    return { available: false, reason: reason ?? "metadata-unavailable" };
+  }
+  if (typeof scope.estimateFieldId !== "string") return undefined;
+  return {
+    available: true,
+    fieldId: scope.estimateFieldId,
+    fieldName:
+      typeof scope.estimateFieldName === "string" ? scope.estimateFieldName : scope.estimateFieldId,
+  };
+}
 /** Undefined for anything that is not a well-formed `jira.report` result. */
 export function jiraReportView(data: unknown): JiraReportView | undefined {
   const result = record(data);
@@ -95,15 +130,14 @@ export function jiraReportView(data: unknown): JiraReportView | undefined {
   )
     return undefined;
   const report = record(result.report);
-  const reason = JIRA_REPORT_INCOMPLETE_REASONS.find(
-    (item) => item === record(report?.completeness)?.reason,
-  );
+  const estimate = estimateOf(report);
   return {
     reportId: result.reportId,
     status,
     issuesRead: read,
     issuesTotal: count(progress?.issuesTotal),
-    reason,
+    ...reportCompleteness(report),
+    estimate,
     figures: report === undefined ? undefined : figuresOf(report),
   };
 }

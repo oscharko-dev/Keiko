@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
-import { useWorkbenchExecutionLocation } from "./useWorkbenchExecutionLocation";
+import {
+  activeExecutionLocation,
+  useWorkbenchExecutionLocation,
+} from "./useWorkbenchExecutionLocation";
 
 const mocks = vi.hoisted(() => ({
   fetchGitStatus: vi.fn(),
@@ -33,6 +36,26 @@ const managed = {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+// #4068: behind the Windows broker the runtime confines only a Keiko-managed worktree, so neither a
+// saved Local choice nor the Local default may bind a checkout the server would refuse.
+describe("the location a runtime can confine", () => {
+  const local = { ...managed, executionLocation: "local" } as WorkspaceInstance;
+
+  it("keeps every preference when the runtime names no locations", () => {
+    expect(activeExecutionLocation(null, "/repo", undefined)).toBe("local");
+    expect(activeExecutionLocation(null, "/repo", "worktree")).toBe("worktree");
+    expect(activeExecutionLocation(local, "/repo", undefined)).toBe("local");
+    expect(activeExecutionLocation(null, "/repo", undefined, ["local", "worktree"])).toBe("local");
+  });
+
+  it("turns a saved or default Local into a worktree where only a worktree is confined", () => {
+    expect(activeExecutionLocation(null, "/repo", undefined, ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(null, "/repo", "local", ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(local, "/repo", undefined, ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(managed, "/repo", undefined, ["worktree"])).toBe("worktree");
+  });
 });
 
 describe("workbench execution location restoration", () => {
@@ -91,6 +114,53 @@ describe("workbench execution location restoration", () => {
     mocks.selectLocalCheckout.mockResolvedValue({});
     rerender({ ...initial, branchLoading: false, branchError: false });
     await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+  });
+
+  // #4068: before readiness answers, the runtime's confinable locations are unknown, so the default
+  // Local must not be bound against the operator's own checkout.
+  describe("while the runtime has not named its locations", () => {
+    const settled = {
+      root: "/repo",
+      branch: "main",
+      activeInstance: null,
+      workspaceLoading: false,
+      workspaceError: false,
+      branchLoading: false,
+      branchError: false,
+      runIsActive: false,
+      folderMode: false,
+      refresh,
+    };
+
+    it("binds only the worktree once readiness offers nothing else", async () => {
+      mocks.bindVerifiedTaskWorkspace.mockResolvedValue({ ok: true });
+      const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
+        initialProps: {
+          ...settled,
+          location: "local" as "local" | "worktree",
+          locationsPending: true,
+        },
+      });
+      await act(async () => {});
+      expect(result.current.pending).toBe(true);
+      expect(result.current.ready).toBe(false);
+      expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+      expect(mocks.bindVerifiedTaskWorkspace).not.toHaveBeenCalled();
+      rerender({ ...settled, location: "worktree", locationsPending: false });
+      await waitFor(() => expect(mocks.bindVerifiedTaskWorkspace).toHaveBeenCalledOnce());
+      expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+    });
+
+    it("binds the local checkout as before once readiness offers both locations", async () => {
+      mocks.selectLocalCheckout.mockResolvedValue({});
+      const { rerender } = renderHook(useWorkbenchExecutionLocation, {
+        initialProps: { ...settled, location: "local" as const, locationsPending: true },
+      });
+      await act(async () => {});
+      expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+      rerender({ ...settled, location: "local", locationsPending: false });
+      await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+    });
   });
 
   it("refreshes a failed branch inventory when the user retries", async () => {

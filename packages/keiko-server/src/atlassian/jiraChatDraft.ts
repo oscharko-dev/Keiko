@@ -56,6 +56,7 @@ import {
   tallyRefusal,
   traceOutcomeData,
   traceRefusalData,
+  traceRefusalGuidance,
   type ItemTrace,
   type TraceResolution,
   type TraceSession,
@@ -79,7 +80,7 @@ export interface JiraChatDraftExecution {
   readonly connection: Omit<JiraManagedConnection, "http">;
   readonly httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions) => AtlassianHttpBodyPort;
   readonly beforeEffect: () => boolean;
-  readonly beforeMutation: () => boolean;
+  readonly beforeMutation: (itemRef?: string) => boolean;
   /**
    * The trace of the Chat's Knowledge Pods for this draft (#4179). An item's explicit
    * `requirementIds` are validated before any item is created; an unknown or ambiguous reference
@@ -87,12 +88,14 @@ export interface JiraChatDraftExecution {
    * draft is refused.
    */
   readonly openTrace?: (() => TraceSession) | undefined;
+  /** The immutable source payload covered by this write's source digest. */
+  readonly preparedTraces?: ReadonlyMap<string, ItemTrace>;
   /**
-   * Whether a draft whose items name no requirement is returned once with guidance instead of run
-   * (S14, #4179). Asked only when the Chat's Pods hold requirement units; true claims the one
-   * advisory of this turn, so sending the same draft again runs it as it is.
+   * Reports the untraced-draft refusal while the Chat's Pods hold requirements; its return value
+   * never decides admission. The runtime omits this notification only for the exact draft a human
+   * has actually approved through the existing review owner. Repetition never acknowledges it.
    */
-  readonly adviseUntraced?: ((refs: readonly string[]) => boolean) | undefined;
+  readonly adviseUntraced?: ((refs: readonly string[]) => void) | undefined;
   /** Body-free progress and end-of-run counts for the Activity Log. */
   readonly activity?: ((activity: JiraDraftActivity) => void) | undefined;
   readonly now?: (() => number) | undefined;
@@ -156,6 +159,7 @@ const DETAIL_KEYS = [
   "validation",
   "fieldErrors",
   "messages",
+  "unchanged",
   "violations",
   "replayed",
   // A created item whose further links did not all land (#4176): which are missing.
@@ -236,7 +240,7 @@ async function runItem(
         },
   );
   if (trace === undefined) return settled;
-  tallyOutcome(tally, traced);
+  tallyOutcome(tally, traced, trace);
   const data = traceOutcomeData(traced);
   return data === undefined ? settled : { ...settled, trace: data };
 }
@@ -269,7 +273,7 @@ async function runTracedItem(
     intent: jiraDraftChildIntent(input.intent, item.ref),
     httpPortFactory: input.httpPortFactory,
     beforeEffect: input.beforeEffect,
-    beforeMutation: input.beforeMutation,
+    beforeMutation: () => input.beforeMutation(item.ref),
     execute: async (http) => {
       attempt = await executeJiraDraftItem(
         item,
@@ -452,6 +456,80 @@ function acknowledgingInput(
     },
   };
 }
+
+interface DraftExecutionRun {
+  readonly input: JiraChatDraftExecution;
+  readonly draft: JiraDraft;
+  readonly traces: ReadonlyMap<string, ItemTrace>;
+  readonly tally: TraceTally;
+  readonly run: RunState;
+  readonly clock: Parameters<typeof timeIsUp>[1];
+  readonly current: DraftAcknowledgement;
+  readonly results: DraftItemResult[];
+}
+
+function retainDraftItem(
+  state: DraftExecutionRun,
+  settled: DraftItemResult,
+  attempted: boolean,
+): void {
+  const { input, draft, run, clock, current, results } = state;
+  // A valid 201/key remains known even when its read-back is interrupted.
+  const retained = withAcknowledgedKey(settled, current.acknowledgement);
+  noteSettled(run, retained, clock.now);
+  results.push(retained);
+  current.acknowledgement = undefined;
+  if (attempted) run.attempted++;
+  if (attempted && run.attempted % PROGRESS_EVERY === 0)
+    reportRun(input, "progress", results, draft.items.length, clock.now() - clock.startedAt);
+}
+
+function advanceDraftRun(
+  state: DraftExecutionRun,
+  items: Iterator<JiraDraftItem>,
+): Promise<boolean> | false {
+  const { input, run, clock, current, traces, tally } = state;
+  let next = items.next();
+  while (!next.done) {
+    const item = next.value;
+    current.acknowledgement = undefined;
+    run.stopped ||= timeIsUp(run, clock);
+    const blocked = blockedState(item, run);
+    if (blocked === undefined) {
+      return runItem(
+        acknowledgingInput(input, item, current),
+        item,
+        run.keys,
+        traces.get(item.ref),
+        tally,
+      ).then((settled) => {
+        retainDraftItem(state, settled, true);
+        return true;
+      });
+    }
+    retainDraftItem(state, blockedItem(item, blocked, run.keys), false);
+    next = items.next();
+  }
+  return false;
+}
+
+function drainDraftRun(state: DraftExecutionRun): Promise<void> {
+  const items = state.draft.items.values();
+  return new Promise<void>((resolve, reject) => {
+    // Each step finishes before the next starts. The void callback does not link the next
+    // step's promise to the previous one, so long drafts retain no growing promise chain.
+    const next = (): void => {
+      void Promise.resolve()
+        .then(() => advanceDraftRun(state, items))
+        .then((more) => {
+          if (more) next();
+          else resolve();
+        }, reject);
+    };
+    next();
+  });
+}
+
 async function runDraft(
   callerInput: JiraChatDraftExecution,
   draft: JiraDraft,
@@ -475,30 +553,7 @@ async function runDraft(
   const results: DraftItemResult[] = [];
   const current: DraftAcknowledgement = { acknowledgement: undefined };
   retainDraftProgress(input, draft, results, current, excluded);
-  for (const item of draft.items) {
-    current.acknowledgement = undefined;
-    run.stopped ||= timeIsUp(run, clock);
-    const blocked = blockedState(item, run);
-    // Each item needs the keys its earlier items received; the journal admits one effect at a time.
-    const settled: DraftItemResult =
-      blocked === undefined
-        ? await /* NOSONAR typescript:S9382 -- next item needs prior keys, journal and budget. */ runItem(
-            acknowledgingInput(input, item, current),
-            item,
-            run.keys,
-            traces.get(item.ref),
-            tally,
-          )
-        : blockedItem(item, blocked, run.keys);
-    // A valid 201/key remains known even when its read-back is interrupted.
-    const retained = withAcknowledgedKey(settled, current.acknowledgement);
-    noteSettled(run, retained, now);
-    results.push(retained);
-    current.acknowledgement = undefined;
-    if (blocked === undefined) run.attempted++;
-    if (blocked === undefined && run.attempted % PROGRESS_EVERY === 0)
-      reportRun(input, "progress", results, draft.items.length, now() - clock.startedAt);
-  }
+  await drainDraftRun({ input, draft, traces, tally, run, clock, current, results });
   reportRun(input, "executed", results, draft.items.length, now() - clock.startedAt);
   return results;
 }
@@ -566,11 +621,15 @@ export const JIRA_DRAFT_PENDING_GUIDANCE =
   "issues that already exist are recognised, so nothing is created twice. Do not show this message.";
 /**
  * A rerun that finds every issue already in Jira writes nothing (`not-dispatched`); without this the
- * model read that outcome as a failure and created the issues again one by one (S19, #4178).
+ * model read that outcome as a failure and created the issues again one by one (S19, #4178). A
+ * later request for other issues must not resume this finished draft: committing it again only
+ * reconciles its own items, so the words name the way to a new draft.
  */
 export const JIRA_DRAFT_EXISTING_GUIDANCE =
   "Every item already exists in Jira and was recognised, so nothing was created and nothing is missing. " +
-  "Report the existing keys as the result. Do not create these issues again with jira.create. Do not show this message.";
+  "Report the existing keys as the result. Do not create these issues again with jira.create. " +
+  "This draft is complete: issues it does not contain need a new draft, so call jira.draft with items and without draftId. " +
+  "Do not show this message.";
 /**
  * Jira refused some items while others are in Jira: "nothing was changed" would be false, so the
  * words name both and scope the correction to the refused items (#4178).
@@ -767,9 +826,10 @@ function resolveItemTraces(
  * a reference the issues carry no source trace, and later requirement changes cannot reach them.
  */
 export const JIRA_DRAFT_UNTRACED_GUIDANCE =
-  "Nothing was created. This Chat holds detected requirements, and no item of the draft names the requirements it derives from. " +
-  "If the items derive from them, read knowledge.requirements and put each unit's reference in requirementIds of the items that implement it, beside fields and not inside them, then send the draft again. " +
-  "If they do not, send the same draft again unchanged; it is then created as it is. Do not show this message.";
+  "Nothing was created. This Chat holds requirements but this draft has no requirementIds. " +
+  "Read knowledge.requirements, put applicable references in requirementIds beside fields, and copy their criteria verbatim into fields.description. Stage the corrected traced draft. " +
+  "For an intentionally unrelated draft, show the missing-trace warning and obtain explicit human approval of this exact draft through the existing review control. " +
+  "Repeating the call never confirms this choice.";
 
 /** No item that can run names a requirement. */
 function untracedRun(draft: JiraDraft, excluded: ReadonlySet<string>): boolean {
@@ -790,7 +850,7 @@ function untracedDraft(): ManagedMcpToolResult {
   };
 }
 
-/** The once-per-turn advisory applies only when the Chat's Pods actually hold requirement units. */
+/** The refusal applies while the Chat's Pods hold requirements and the draft remains untraced. */
 function advisesUntraced(
   input: JiraChatDraftExecution,
   session: TraceSession | undefined,
@@ -799,7 +859,8 @@ function advisesUntraced(
 ): boolean {
   if (input.adviseUntraced === undefined || session === undefined) return false;
   if (!untracedRun(draft, excluded) || session.unitCount() === 0) return false;
-  return input.adviseUntraced(draft.items.map((item) => item.ref));
+  input.adviseUntraced(draft.items.map((item) => item.ref));
+  return true;
 }
 
 /**
@@ -809,15 +870,17 @@ function advisesUntraced(
 export function jiraDraftUntracedAdvice(
   draftArguments: CatalogJsonObject,
   openTrace: () => TraceSession,
-  adviseUntraced: (refs: readonly string[]) => boolean,
+  adviseUntraced: (refs: readonly string[]) => void,
 ): CatalogJsonObject | undefined {
   const draft = parseJiraDraft(draftArguments);
   if (draft === undefined || !untracedRun(draft, new Set())) return undefined;
   const session = openTrace();
   try {
-    return session.unitCount() > 0 && adviseUntraced(draft.items.map((item) => item.ref))
-      ? untracedDraft().data
-      : undefined;
+    if (session.unitCount() > 0) {
+      adviseUntraced(draft.items.map((item) => item.ref));
+      return untracedDraft().data;
+    }
+    return undefined;
   } finally {
     session.close();
   }
@@ -832,11 +895,15 @@ function refusedDraft(
         CatalogJsonObject[] | undefined) ?? [{ ref, reference: "", reason: "malformed" }],
   );
   const first = [...refused.values()][0];
+  const guidance = [...refused.values()]
+    .map((resolution) => traceRefusalGuidance(resolution))
+    .find((value) => value !== undefined);
   return {
     data: {
       outcome: "rejected",
       reason: "field-validation",
       requirementRefusal: first?.reason ?? "references",
+      ...(guidance === undefined ? {} : { guidance }),
       requirementProblems: problems.slice(0, 32),
       items: [],
     },
@@ -881,7 +948,13 @@ export async function executeJiraChatDraft(
   const tally = newTally();
   try {
     const excluded = excludedJiraDraftRefs(draft, input.deselected);
-    const resolved = resolveItemTraces(session, draft, tally, excluded);
+    const resolved =
+      input.preparedTraces === undefined
+        ? resolveItemTraces(session, draft, tally, excluded)
+        : {
+            traces: input.preparedTraces,
+            refused: new Map<string, Extract<TraceResolution, { ok: false }>>(),
+          };
     if (resolved.refused.size > 0) {
       logTrace(input.intent.correlationId, "draft", tally);
       return refusedDraft(resolved.refused);
@@ -907,5 +980,5 @@ export function observedJiraDraftOutcome(
     .map((item) => journal.find(jiraDraftChildIntent(intent, item.ref).invocationId))
     .filter((record) => record !== undefined);
   if (records.length === 0) return undefined;
-  return jiraDraftOutcome(records.map(observedChatToolMutationOutcome));
+  return jiraDraftOutcome(records.map((record) => observedChatToolMutationOutcome(record)));
 }

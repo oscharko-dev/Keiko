@@ -9,6 +9,8 @@ import {
   definedActivityFields,
 } from "../activity-line-fields.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { JiraTemplateRuleId } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_TEMPLATE_RULE_COUNT_FIELDS, jiraTemplateRuleCountFields } from "./jiraTemplateLog.js";
 
 // Body-free evidence of a Keiko-driven draft batch (#4173): how many requirements it read, how the
 // grouping and each drafted page ended, and how the batch finished. Counts and closed words only;
@@ -46,6 +48,7 @@ export const JIRA_DRAFT_BATCH_REFUSALS = [
   "no-knowledge-pod",
   "scope-unavailable",
   "requirements-cut",
+  "requirements-ambiguous",
   "no-requirements",
   "model-unavailable",
   "budget-unavailable",
@@ -64,6 +67,7 @@ export type JiraDraftBatchRefusal = (typeof JIRA_DRAFT_BATCH_REFUSALS)[number];
  */
 export const JIRA_DRAFT_BATCH_STOP_REASONS = [
   "stage-failed",
+  "stage-rejection-unchanged",
   "call-limit",
   "model-failed",
   "deadline",
@@ -86,8 +90,17 @@ export interface JiraDraftBatchActivity {
   readonly groupCount?: number;
   readonly plannedItemTokens?: number;
   readonly completionTokens?: number;
+  readonly parseAttemptCount?: number;
+  readonly stageAttemptCount?: number;
+  readonly guidanceDigest?: string;
+  readonly violationRuleCounts?: Partial<Readonly<Record<JiraTemplateRuleId, number>>>;
   readonly durationMs?: number;
   readonly createRequested?: boolean;
+  /** A corrected page: the answer held no readable items object. */
+  readonly unreadableAnswer?: boolean;
+  readonly missingItemCount?: number;
+  readonly missingSectionItemCount?: number;
+  readonly missingFieldItemCount?: number;
   /** The thrown or stopping error, reduced to Keiko frames and a cause chain. */
   readonly error?: unknown;
 }
@@ -141,7 +154,15 @@ const JIRA_DRAFT_BATCH_OPERATION = defineActivityLogOperation({
     groupCount: COUNT,
     plannedItemTokens: COUNT,
     completionTokens: COUNT,
+    parseAttemptCount: COUNT,
+    stageAttemptCount: COUNT,
+    guidanceDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    ...JIRA_TEMPLATE_RULE_COUNT_FIELDS,
     createRequested: { type: "boolean", dataClass: "closed-enum", required: false },
+    unreadableAnswer: { type: "boolean", dataClass: "closed-enum", required: false },
+    missingItemCount: COUNT,
+    missingSectionItemCount: COUNT,
+    missingFieldItemCount: COUNT,
     durationMs: { type: "integer", dataClass: "duration", required: false },
     ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -161,6 +182,7 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftBatchRefusal, ActivityLogErrorKind>
   "no-knowledge-pod": "invalid-request",
   "scope-unavailable": "unavailable",
   "requirements-cut": "validation-failed",
+  "requirements-ambiguous": "invalid-request",
   "no-requirements": "invalid-request",
   "model-unavailable": "unavailable",
   "budget-unavailable": "unavailable",
@@ -174,6 +196,7 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftBatchRefusal, ActivityLogErrorKind>
 
 const STOP_KIND: Readonly<Record<JiraDraftBatchStopReason, ActivityLogErrorKind>> = {
   "stage-failed": "conflict",
+  "stage-rejection-unchanged": "validation-failed",
   "call-limit": "validation-failed",
   "model-failed": "unavailable",
   deadline: "timeout",
@@ -201,6 +224,12 @@ const LINE_FIELDS = [
   "groupCount",
   "plannedItemTokens",
   "completionTokens",
+  "parseAttemptCount",
+  "stageAttemptCount",
+  "guidanceDigest",
+  "missingItemCount",
+  "missingSectionItemCount",
+  "missingFieldItemCount",
   "durationMs",
 ] as const;
 
@@ -212,11 +241,13 @@ export function recordJiraDraftBatchActivity(
 ): void {
   const errorKind = errorKindOf(input);
   const fields = {
+    ...jiraTemplateRuleCountFields(input.violationRuleCounts),
     ...(definedActivityFields(input, LINE_FIELDS) as Pick<
       JiraDraftBatchActivity,
       (typeof LINE_FIELDS)[number]
     >),
     ...(input.createRequested === undefined ? {} : { createRequested: input.createRequested }),
+    ...(input.unreadableAnswer === undefined ? {} : { unreadableAnswer: input.unreadableAnswer }),
     ...(input.error === undefined
       ? {}
       : { frames: keikoStackFrames(input.error), causeChain: causeChain(input.error) }),

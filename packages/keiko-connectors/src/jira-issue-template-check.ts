@@ -29,6 +29,10 @@ export interface JiraTemplateSubject {
   readonly fields: Readonly<Record<string, unknown>>;
   /** Names of the link types the issue carries; only meaningful for edit and transition. */
   readonly linkTypes?: readonly string[] | undefined;
+  /** Independently read parent types, keyed by the resolved parent field ID; never input facts. */
+  readonly parentIssueTypes?: Readonly<
+    Record<string, { readonly id: string; readonly name: string }>
+  >;
 }
 
 export interface JiraFieldCatalogEntry {
@@ -241,6 +245,33 @@ function checkFields(context: Context): void {
   }
 }
 
+function checkParentType(context: Context): void {
+  const { field, issueTypes } = context.template.parent;
+  if (issueTypes === undefined) return;
+  if (field === undefined || issueTypes.length === 0) {
+    raise(context, "template-unreadable", "parentIssueTypes");
+    return;
+  }
+  // Ordinary presence errors remain distinct; a supplied parent requires independent type proof.
+  if (fieldPresent(context, field) !== true) return;
+  const observed = observedParentType(context, field);
+  if (observed === undefined) raise(context, "template-unreadable", field);
+  else if (!issueTypes.some((type) => type === observed.id || same(observed.name, type)))
+    raise(context, "parent-type-mismatch", `${field}: ${issueTypes.join(", ")}`);
+}
+
+function observedParentType(
+  context: Context,
+  field: string,
+): { readonly id: string; readonly name: string } | undefined {
+  const ids = resolveJiraTemplateFieldIds(field, context.catalog);
+  const id = ids.length === 1 ? ids[0] : undefined;
+  const evidence = context.subject.parentIssueTypes;
+  return id !== undefined && evidence !== undefined && Object.hasOwn(evidence, id)
+    ? evidence[id]
+    : undefined;
+}
+
 function labelsOf(context: Context): readonly string[] {
   const value = context.subject.fields.labels;
   return Array.isArray(value)
@@ -272,6 +303,7 @@ export function checkJiraIssueTemplate(
   checkSummary(context);
   checkSections(context);
   checkFields(context);
+  checkParentType(context);
   checkLabels(context);
   return context.out;
 }
@@ -325,6 +357,8 @@ export interface JiraTemplateInstanceMetadata {
   };
   /** Status names of the project's workflows, for transition targets. */
   readonly statuses?: readonly string[];
+  /** Global native type names/IDs, read only when a parent-type clause needs validation. */
+  readonly parentIssueTypes?: readonly { readonly id: string; readonly name: string }[];
 }
 
 function fieldFindings(
@@ -396,7 +430,19 @@ export function validateJiraIssueTemplateAgainstInstance(
     ...(instance.fields === undefined ? [] : fieldFindings(template, instance.fields)),
     ...linkFindings(template, instance),
     ...transitionFindings(template, instance),
+    ...parentTypeFindings(template, instance),
   ];
+}
+
+function parentTypeFindings(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): readonly JiraTemplateFinding[] {
+  return (template.parent.issueTypes ?? []).flatMap((reference): readonly JiraTemplateFinding[] =>
+    instance.parentIssueTypes?.some((type) => type.id === reference || same(type.name, reference))
+      ? []
+      : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }],
+  );
 }
 
 const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
@@ -411,8 +457,17 @@ export function jiraTemplateViolationGuidance(
   violations: readonly JiraTemplateViolation[],
 ): string | undefined {
   if (violations.length === 0) return undefined;
+  if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
+    return (
+      "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +
+      "Refresh the named native fields and project/issue-type metadata, or repair an unreadable formal skill, then check the corrected request again. " +
+      "Missing evidence does not establish a rule violation or permission to write."
+    );
+  }
   const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
-    ? " A section is a line of its own, h2. Title, with its text below; subject is its title."
+    ? " A section is a line of its own, h2. Title, with its text below; subject is its title." +
+      " Write the section text yourself from the request, the issue and the Chat's sources;" +
+      " ask the user only for a fact neither provides."
     : "";
   return (
     "Nothing was changed: this breaks the issue template of the project. " +

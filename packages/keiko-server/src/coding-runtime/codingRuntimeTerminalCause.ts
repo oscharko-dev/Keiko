@@ -1,15 +1,13 @@
 // F9 (#3873, live Gemma qualification): a run that ended on one of its own bounds or on a failed
 // model call was shown as "The coding run ended with an internal error", although nothing internal
-// failed. Run `run-65084062444586162471229658028402064666` exhausted its cumulative prompt allowance
-// (`coding-sidecar.gateway.rejected reason=runtime-prompt-budget-denied`); run
-// `run-272120967981827964065820685403290179367` reached its 30-minute envelope duration with a model
-// call in flight (`coding-sidecar.gateway.outcome outcome=cancelled cancellationCause=run-stopped`);
-// both settled `runtime-failed`. A failed task outcome carries no cause, so settlement reads the
-// cause from the layers that own the facts, never from OpenCode's error text:
+// failed. Run `run-272120967981827964065820685403290179367` reached its 30-minute envelope duration
+// with a model call in flight (`coding-sidecar.gateway.outcome outcome=cancelled
+// cancellationCause=run-stopped`) and settled `runtime-failed`. Keiko does not limit tokens
+// (#4346), so no prompt allowance ends a run any more. A failed task outcome carries no cause, so
+// settlement reads the cause from the layers that own the facts, never from OpenCode's error text:
 //
-// - the runtime authority knows whether the run's most recent model-call admission was refused by
-//   the cumulative prompt allowance (`CodingRuntimeAuthorityService.promptAllowanceExhausted`) and
-//   whether the run's Authority Envelope ran out of time (`envelopeDurationExhausted`);
+// - the runtime authority knows whether the run's Authority Envelope ran out of time
+//   (`envelopeDurationExhausted`);
 // - the event hub keeps the closed cause the coding sidecar gateway reported for the run's most
 //   recent failed model call, until a later call is answered
 //   (`CodingRuntimeEventHub.lastModelCallFailure`), and the gateway's own fact that the provider could
@@ -23,12 +21,6 @@ import type {
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 export interface CodingRuntimeTerminalFacts {
-  /**
-   * True when the run's most recent model-call admission was refused by its prompt allowance: the
-   * authority's own, or the same `maxPromptTokens` counted by the run's CI repair
-   * (`prompt-budget-exhausted`). No other reason a CI-repair budget refuses for is the allowance.
-   */
-  readonly promptAllowanceExhausted: (runId: string) => boolean;
   /**
    * True when the run's time limit has run out: its Authority Envelope's `expiresAt` / `maxRuntimeMs`,
    * or the same `maxRuntimeMs` counted by the run's CI repair (`deadline-exhausted`) refused its most
@@ -49,7 +41,6 @@ export interface CodingRuntimeTerminalFacts {
 export type CodingRuntimeTerminalFailureCode = Extract<
   CodingWorkbenchRuntimeFailureCode,
   | "runtime-failed"
-  | "prompt-allowance-exhausted"
   | "envelope-duration-exhausted"
   | "output-exhausted-repeated"
   | "provider-unavailable"
@@ -58,7 +49,7 @@ export type CodingRuntimeTerminalFailureCode = Extract<
 
 /** Which fact named the cause; `no-model-call-failure` keeps the internal `runtime-failed`. */
 export type CodingRuntimeTerminalFailureBasis =
-  "prompt-allowance" | "envelope-duration" | "model-call-failure" | "no-model-call-failure";
+  "envelope-duration" | "model-call-failure" | "no-model-call-failure";
 
 export interface CodingRuntimeTerminalFailure {
   readonly failureCode: CodingRuntimeTerminalFailureCode;
@@ -83,8 +74,7 @@ const PROVIDER_UNAVAILABLE_FAILURES: ReadonlySet<CodingWorkbenchTurnFailureCode>
 /**
  * The closed cause a failed task outcome settles the run with. A refusal by one of the run's own
  * bounds comes first, because the failed model call it caused names only its symptom (a refused
- * call reads as `turn-rejected`): the prompt allowance that refused the run's most recent call, then
- * an envelope that ran out of time. Otherwise the run's last failed model call names the cause, and
+ * call reads as `turn-rejected`): an envelope that ran out of time. Otherwise the run's last failed model call names the cause, and
  * `runtime-failed` is left for a run with no such cause on record.
  */
 export function classifyTerminalFailure(
@@ -93,9 +83,6 @@ export function classifyTerminalFailure(
 ): CodingRuntimeTerminalFailure {
   const modelCallFailure = facts.lastModelCallFailure(runId);
   const evidence = modelCallFailure === undefined ? {} : { modelCallFailure };
-  if (facts.promptAllowanceExhausted(runId)) {
-    return { failureCode: "prompt-allowance-exhausted", basis: "prompt-allowance", ...evidence };
-  }
   if (facts.envelopeDurationExhausted(runId)) {
     return { failureCode: "envelope-duration-exhausted", basis: "envelope-duration", ...evidence };
   }
@@ -133,7 +120,6 @@ function modelCallFailureCode(
 export function terminalFailureErrorKind(
   failure: CodingRuntimeTerminalFailure,
 ): ActivityLogErrorKind {
-  if (failure.failureCode === "prompt-allowance-exhausted") return "authority-denied";
   if (failure.failureCode === "envelope-duration-exhausted") return "timeout";
   if (failure.failureCode === "provider-unavailable") return "unavailable";
   if (failure.failureCode === "runtime-failed") return "internal";

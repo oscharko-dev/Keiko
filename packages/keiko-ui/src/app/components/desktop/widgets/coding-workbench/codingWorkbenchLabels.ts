@@ -416,14 +416,14 @@ export function eventDetail(
 // cause instead. F5 (#3873): a run whose edits were refused again and again names its refusal
 // class and the next step, never the generic sentence. A start the server refused before its first
 // turn (`invalid-intent`: a file the first prompt referenced, or a slash command, was not accepted)
-// names what to check.
+// names what to check. A run whose folder contains Keiko's own installation (`workspace-unqualified`,
+// #4335) names the folder as the thing to change.
 const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map<
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchMessageKey
 >([
   ["runtime-failed", "codingWorkbench.event.failure.runtime"],
   ["recovery-required", "codingWorkbench.recovery.summary"],
-  ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
   ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
   ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
@@ -432,6 +432,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["edits-blocked", "codingWorkbench.event.failure.edits-blocked"],
   ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
   ["invalid-intent", "codingWorkbench.event.failure.invalid-intent"],
+  ["workspace-unqualified", "codingWorkbench.event.failure.workspace-unqualified"],
 ]);
 
 // F9 (#3873): a run that settles `cancelled` was stopped, which is not a failure, so its terminal
@@ -712,10 +713,45 @@ function standingConditionAlert(
     state.runtime.status === "ready" &&
     state.runtime.value?.runtimeAvailable === false
   ) {
-    return t("codingWorkbench.alert.runtimeUnqualified");
+    return t(
+      gatewayServiceMessageKey(state.runtime.value.runtimeUnavailableReason) ??
+        "codingWorkbench.alert.runtimeUnqualified",
+    );
   }
   return null;
 }
+
+const GATEWAY_SERVICE_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+  ["gateway-service-absent", "codingWorkbench.gatewayService.absent"],
+  ["gateway-service-stopped", "codingWorkbench.gatewayService.stopped"],
+  ["gateway-service-stale", "codingWorkbench.gatewayService.stale"],
+  ["gateway-service-unknown", "codingWorkbench.gatewayService.unknown"],
+  ["gateway-service-unqualified", "codingWorkbench.gatewayService.unqualified"],
+]);
+
+/** The sentence naming what the human can do about the Windows broker, when that is the cause. */
+export function gatewayServiceMessageKey(
+  reason: string | undefined,
+): CodingWorkbenchMessageKey | undefined {
+  return reason === undefined ? undefined : GATEWAY_SERVICE_MESSAGE_KEYS.get(reason);
+}
+
+// #4068: a start the Windows broker cannot confine names what to change: the work location, or the
+// drive Keiko keeps its worktrees on.
+const START_REFUSAL_SUMMARY_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+  [
+    "CODING_RUNTIME_WORKSPACE_UNQUALIFIED",
+    "codingWorkbench.alert.startRefusedWorkspaceUnqualified",
+  ],
+  [
+    "CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED",
+    "codingWorkbench.alert.startRefusedWorkspaceLocation",
+  ],
+  [
+    "CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED",
+    "codingWorkbench.alert.startRefusedWorkspaceVolume",
+  ],
+]);
 
 // #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that
 // tells the operator what to do, not the generic "review the live state and retry". #3603: a model
@@ -731,10 +767,7 @@ function startRefusalSummaryKey(
       return "codingWorkbench.alert.startRefusedModelVerificationPending";
     return "codingWorkbench.alert.startRefusedModelUnavailable";
   }
-  if (code === "CODING_RUNTIME_WORKSPACE_UNQUALIFIED") {
-    return "codingWorkbench.alert.startRefusedWorkspaceUnqualified";
-  }
-  return "codingWorkbench.alert.actionFailedCode";
+  return START_REFUSAL_SUMMARY_KEYS.get(code) ?? "codingWorkbench.alert.actionFailedCode";
 }
 
 export function visibleAlert(

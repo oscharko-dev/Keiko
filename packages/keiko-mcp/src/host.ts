@@ -36,6 +36,35 @@ const RESERVED_ARGUMENTS = new Set([
   "_meta",
 ]);
 
+type SchemaValidator = ReturnType<typeof fromJsonSchema<CatalogJsonObject>>;
+/** Compiled schemas are pure and immutable, so equal schema content shares one compilation. */
+const VALIDATORS_MAX = 1024;
+const validatorsByIdentity = new WeakMap<object, SchemaValidator>();
+const validatorsByContent = new Map<string, SchemaValidator>();
+
+/**
+ * Compiling a JSON Schema is the dominant cost of building a host's SDK server, which the
+ * stateless handler does for every request (initialize, list, each call), and every turn admits
+ * its own host over the same descriptors. Reuse the validator by object identity, then by
+ * canonical content; the content cache is bounded and evicts the oldest entry.
+ */
+function validatorFor(schema: CatalogJsonObject): SchemaValidator {
+  const known = validatorsByIdentity.get(schema);
+  if (known !== undefined) return known;
+  const key = canonicalise(schema);
+  let validator = validatorsByContent.get(key);
+  if (validator === undefined) {
+    validator = fromJsonSchema<CatalogJsonObject>(schema);
+    if (validatorsByContent.size >= VALIDATORS_MAX) {
+      const oldest = validatorsByContent.keys().next();
+      if (oldest.done !== true) validatorsByContent.delete(oldest.value);
+    }
+    validatorsByContent.set(key, validator);
+  }
+  validatorsByIdentity.set(schema, validator);
+  return validator;
+}
+
 function failure(error: unknown, signal?: AbortSignal): ManagedMcpError {
   if (signal?.aborted) return new ManagedMcpError("aborted");
   return error instanceof ManagedMcpError ? error : new ManagedMcpError("protocol-error");
@@ -62,9 +91,9 @@ async function capturedResult<Context extends ManagedMcpInvocationContext>(
     throw new ManagedMcpError("protocol-error");
   // Capture before the asynchronous validator so a provider cannot mutate an admitted result.
   const captured: unknown = JSON.parse(encoded);
-  const validated = await fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema)[
-    "~standard"
-  ].validate(captured);
+  const validated = await validatorFor(tool.descriptor.resultSchema)["~standard"].validate(
+    captured,
+  );
   if (validated.issues !== undefined) throw new ManagedMcpError("protocol-error");
   return validated.value;
 }
@@ -107,11 +136,14 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     private readonly log: ManagedMcpLogPort,
   ) {
     const tools = toolsOf(providers);
+    const frozen = tools.map((tool) => isDeepFrozen(tool.descriptor));
     this.#tools = deepFreeze(
-      tools.map(({ name, risk, descriptor, execute, title, annotations }) => ({
+      tools.map(({ name, risk, descriptor, execute, title, annotations }, index) => ({
         name,
         risk,
-        descriptor: structuredClone(descriptor),
+        // A deeply frozen descriptor cannot change, so it is admitted as itself: a clone would
+        // drop the identity the tool catalog uses to skip verifying it again on every turn.
+        descriptor: frozen[index] === true ? descriptor : structuredClone(descriptor),
         execute,
         ...(title === undefined ? {} : { title }),
         ...(annotations === undefined ? {} : { annotations: structuredClone(annotations) }),
@@ -122,7 +154,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
-    this.#frozenDescriptors = tools.every((tool) => isDeepFrozen(tool.descriptor))
+    this.#frozenDescriptors = frozen.every(Boolean)
       ? tools.map((tool) => tool.descriptor)
       : undefined;
     this.#registrySha256 = sha256Hex(this.#declarations);
@@ -206,8 +238,8 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         {
           ...(definition.title === undefined ? {} : { title: definition.title }),
           description: tool.descriptor.description,
-          inputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.inputSchema),
-          outputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema),
+          inputSchema: validatorFor(tool.descriptor.inputSchema),
+          outputSchema: validatorFor(tool.descriptor.resultSchema),
           annotations: { ...definition.annotations },
         },
         async (args, sdkContext) => {

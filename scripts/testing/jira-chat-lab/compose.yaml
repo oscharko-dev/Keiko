@@ -4,8 +4,9 @@ services:
     restart: "no"
     depends_on:
       jira: { condition: service_started }
-    ports: ["127.0.0.1:18443:18443"]
-    command: [node, /opt/tls-front.mjs, /tls, "18443", "8080", compose]
+    ports: ["127.0.0.1:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}"]
+    command:
+      [node, /opt/tls-front.mjs, /tls, "${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}", "8080", compose]
     volumes:
       - ./tls-front.mjs:/opt/tls-front.mjs:ro
       - ${KEIKO_JIRA_LAB_STATE_DIR:?private laboratory state directory required}/secrets/tls/server.key:/tls/server.key:ro
@@ -35,7 +36,7 @@ services:
     logging:
       options: { max-size: 10m, max-file: "3" }
   jira:
-    image: atlassian/jira-software:10.3.26@sha256:ddcddc61ee43067fa274538b888d36408c47bc6a4ec14e41113dc304b8529168
+    image: atlassian/jira-software:${KEIKO_JIRA_LAB_JIRA_VERSION:-10.3.26}@sha256:${KEIKO_JIRA_LAB_JIRA_SHA256:-ddcddc61ee43067fa274538b888d36408c47bc6a4ec14e41113dc304b8529168}
     restart: "no"
     depends_on:
       database: { condition: service_healthy }

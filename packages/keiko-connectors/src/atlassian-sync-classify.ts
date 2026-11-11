@@ -24,7 +24,7 @@ export function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function parseAtlassianJsonValue(bodyText: string): unknown {
+export function parseAtlassianJsonValue(bodyText: string): unknown {
   try {
     return JSON.parse(bodyText) as unknown;
   } catch {
@@ -38,6 +38,31 @@ export function parseJsonRecord(bodyText: string): Record<string, unknown> | und
 
 export function parseJsonArray(bodyText: string): readonly unknown[] | undefined {
   return asArray(parseAtlassianJsonValue(bodyText));
+}
+
+/** Explicit primitive mode; false, zero, empty text and null are observations, not parse failures. */
+export function parseJsonScalar(bodyText: string): string | number | boolean | null | undefined {
+  const value = parseAtlassianJsonValue(bodyText);
+  return value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+    ? value
+    : undefined;
+}
+
+/** Some native versioned resources document both a wrapper object and an older bare collection. */
+export function parseJsonObjectOrArray(bodyText: string):
+  | {
+      readonly body: Record<string, unknown> | undefined;
+      readonly items?: readonly unknown[];
+    }
+  | undefined {
+  const value = parseAtlassianJsonValue(bodyText);
+  const items = asArray(value);
+  if (items !== undefined) return { body: undefined, items };
+  const body = asRecord(value);
+  return body === undefined ? undefined : { body };
 }
 
 // ─── Single-host, API-root-scoped URL construction (ADR-0128 D3) ──────────────

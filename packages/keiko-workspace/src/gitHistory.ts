@@ -2,7 +2,9 @@
 // via the WorkspaceFs port — never spawns `git` and never imports `child_process`. The shared
 // always-on deny list refuses `.git`; this adapter is the SOLE legitimate consumer of those paths.
 // It authorizes the canonical `<workspace>/.git` base, an allowed contained pointer target, or an
-// exact external `.git/worktrees/<name>` gitdir. Reads stay constrained to HEAD and logs/HEAD, with
+// exact external `.git/worktrees/<name>` gitdir (absolute, or the relative form Git writes with
+// `worktree.useRelativePaths`) whose backpointer names the workspace `.git` back. Reads stay
+// constrained to HEAD and logs/HEAD, with
 // a size cap and redaction. This adapter stays repo-level; grounded chat adds per-file evidence in
 // the server layer where spawning bounded `git log` commands is already governed.
 // Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts, sibling workspace
@@ -11,7 +13,8 @@
 // sub-folder.
 
 import { createHash } from "node:crypto";
-import { basename, dirname, isAbsolute, normalize, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
+import { isLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/text-safety";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { WorkspaceDescriptorReadCompleteness, WorkspaceFs } from "./fs.js";
@@ -124,14 +127,60 @@ function canonicalWorkspaceDotGit(
   }
 }
 
-function singleAbsolutePath(raw: string): string | undefined {
+// Git (>= 2.48 with `worktree.useRelativePaths`) may write both worktree pointers relative: the
+// `.git` file relative to the worktree root and the admin `gitdir` backpointer relative to the
+// admin directory. Only a leading run of `..` segments is accepted, so a pointer can never step back
+// out after naming its real path components (the `<gitdir>/../../../victim` class stays refused).
+function leadingParentRelativePath(base: string, target: string): string | undefined {
+  if (isAbsolute(target)) return undefined;
+  const segments = target.split(/[\\/]+/u).filter((segment) => segment.length > 0);
+  const firstNamed = segments.findIndex((segment) => segment !== "..");
+  if (firstNamed <= 0) return undefined;
+  const named = segments.slice(firstNamed);
+  if (named.some((segment) => segment === ".." || segment === ".")) return undefined;
+  return normalize(join(base, ...segments));
+}
+
+function singlePointerPath(raw: string, relativeBase: string): string | undefined {
   const trimmed = raw.trim();
-  return trimmed.length > 0 &&
-    !trimmed.includes("\n") &&
-    !trimmed.includes("\u0000") &&
-    isAbsolute(trimmed)
-    ? normalize(trimmed)
-    : undefined;
+  if (trimmed.length === 0 || /[\r\n]/u.test(trimmed) || trimmed.includes("\u0000")) {
+    return undefined;
+  }
+  if (!isAbsolute(trimmed)) return leadingParentRelativePath(relativeBase, trimmed);
+  return isLocalAbsolutePath(trimmed) ? normalize(trimmed) : undefined;
+}
+
+// The backpointer names the workspace `.git` when it is spelled exactly like it, or when the
+// filesystem resolves it to the same canonical file. The second form covers what a
+// case-insensitive volume treats as one path (a case-only rename of the worktree directory, a
+// lower-case drive letter) without assuming case-insensitivity: a spelling the volume does not
+// resolve to that file still fails closed.
+function backpointerNamesDotGit(fs: WorkspaceFs, target: string, canonicalDotGit: string): boolean {
+  if (sameCanonicalPath(target, canonicalDotGit)) return true;
+  try {
+    return sameCanonicalPath(fs.realPath(target), canonicalDotGit);
+  } catch (error) {
+    // A target the filesystem cannot resolve names no `.git` file; any other fault propagates.
+    if (isUnresolvablePathError(error)) return false;
+    throw error;
+  }
+}
+
+const UNRESOLVABLE_PATH_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "ELOOP",
+  "ENAMETOOLONG",
+  "EINVAL",
+]);
+
+function isUnresolvablePathError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    UNRESOLVABLE_PATH_CODES.has(error.code)
+  );
 }
 
 function hasReciprocalWorktreePointer(
@@ -142,10 +191,12 @@ function hasReciprocalWorktreePointer(
 ): boolean {
   const raw = readGuardedContainedRaw(fs, base.path, "gitdir", GIT_POINTER_MAX_BYTES, "complete");
   if (raw === undefined) return false;
-  const target = singleAbsolutePath(raw);
+  const target = singlePointerPath(raw, base.path);
   if (target === undefined) return false;
   const lexicalDotGit = resolveWithinWorkspace(workspaceRoot, ".git");
-  return sameCanonicalPath(target, lexicalDotGit) || sameCanonicalPath(target, canonicalDotGit);
+  return (
+    sameCanonicalPath(target, lexicalDotGit) || backpointerNamesDotGit(fs, target, canonicalDotGit)
+  );
 }
 
 function authorizeWorktreeGitdir(
@@ -255,17 +306,33 @@ function readWorktreePointerTarget(
   return target;
 }
 
+// An external linked-worktree admin directory: a local absolute pointer without any `..`, or a
+// relative pointer resolved against the CANONICAL worktree root (the directory Git resolves it
+// against). A network (UNC) or device pointer is refused before any filesystem call resolves it.
+function externalWorktreeCandidate(
+  location: CanonicalWorkspaceGitLocation,
+  target: string,
+): string | undefined {
+  if (!isAbsolute(target)) return leadingParentRelativePath(location.workspaceRoot, target);
+  return isLocalAbsolutePath(target) && !containsParentTraversal(target)
+    ? normalize(target)
+    : undefined;
+}
+
 function resolvePointedGitdir(
   fs: WorkspaceFs,
   root: string,
-  canonicalDotGit: string,
+  location: CanonicalWorkspaceGitLocation,
   target: string,
-  candidate: string,
 ): AuthorizedGitMetadataBase | undefined {
-  const contained = authorizeContainedGitdir(fs, root, candidate);
+  const candidate = pointedGitdirCandidate(root, target);
+  const contained =
+    candidate === undefined ? undefined : authorizeContainedGitdir(fs, root, candidate);
   if (contained !== undefined) return contained;
-  if (containsParentTraversal(target)) return undefined;
-  return authorizeWorktreeGitdir(fs, candidate, root, canonicalDotGit);
+  const external = externalWorktreeCandidate(location, target);
+  return external === undefined
+    ? undefined
+    : authorizeWorktreeGitdir(fs, external, root, location.dotGit);
 }
 
 function pointedGitdirCandidate(root: string, target: string): string | undefined {
@@ -367,9 +434,7 @@ function pointedGitdir(
   if (stat?.isFile !== true || stat.isSymbolicLink) return undefined;
   const target = readWorktreePointerTarget(fs, workspaceRoot, dotGit);
   if (target === undefined) return undefined;
-  const candidate = pointedGitdirCandidate(root, target);
-  if (candidate === undefined) return undefined;
-  return resolvePointedGitdir(fs, root, dotGit, target, candidate);
+  return resolvePointedGitdir(fs, root, location, target);
 }
 
 // Resolve the gitdir root: for a plain repo it is `workspace.root/.git/`; for a worktree

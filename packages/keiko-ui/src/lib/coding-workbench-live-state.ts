@@ -22,6 +22,7 @@ import type {
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchRuntimeToolProfile,
   CodingWorkbenchSidecarGatewayResult,
   GatewayVerificationState,
   ModelReasoningEffort,
@@ -150,6 +151,10 @@ export interface CodingWorkbenchRuntimeState {
    * disappear and reappear; never widened by the browser.
    */
   readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
+  /** The tool profile the server's last readiness read reported; null until one did (#4068 W12). */
+  readonly toolProfile: CodingWorkbenchRuntimeToolProfile | null;
+  /** The run whose identity this window already adopted, so later snapshots cannot undo a choice. */
+  readonly identityAdoptedRunId: string | null;
   /**
    * What the server's last readiness read said the composed runtime can do with a prompt's inputs
    * (ADR-0137 D10): send a message while a turn runs, and attach referenced workspace files. Kept
@@ -241,6 +246,8 @@ export function createInitialCodingWorkbenchRuntimeState(
     requestedMode,
     agent: DEFAULT_CODING_WORKBENCH_AGENT,
     selectableAgents: [DEFAULT_CODING_WORKBENCH_AGENT],
+    toolProfile: null,
+    identityAdoptedRunId: null,
     promptInputs: NO_CODING_WORKBENCH_PROMPT_INPUTS,
     runtimePreference,
     selectedModelId: null,
@@ -475,6 +482,46 @@ function withOfferedAgent(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
     : { ...state, agent: DEFAULT_CODING_WORKBENCH_AGENT };
 }
 
+function liveRunOf(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeSnapshot | null {
+  const run = state.run.value;
+  return run?.runId !== undefined && !isConcreteTerminalState(run.state) ? run : null;
+}
+
+// A reloaded window adopts its live run's model and agent once (#4068 W12): a follow-up otherwise
+// states the default agent and silently switches a `plan` run to the editing `build` agent. It waits
+// for readiness when the snapshot arrives first, because an agent is adopted only while offered.
+function withLiveRunIdentity(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  const run = liveRunOf(state);
+  if (run === null || run.agent === undefined || state.identityAdoptedRunId === run.runId) {
+    return state;
+  }
+  if (!isOfferedCodingWorkbenchAgent(state, run.agent)) return state;
+  return {
+    ...state,
+    agent: run.agent,
+    identityAdoptedRunId: run.runId ?? null,
+    ...(run.modelId !== undefined && state.runtimePreference === "managed-gateway"
+      ? { selectedModelId: run.modelId }
+      : {}),
+  };
+}
+
+/**
+ * What the Workbench may state as the model and agent right now (#4068 W12). A live run states its
+ * own, `null` where the server did not report one, never the picker's: that selection describes the
+ * next run. Without a live run the selection is all there is, and it says so.
+ */
+export function codingWorkbenchVisibleIdentity(state: CodingWorkbenchRuntimeState): {
+  readonly source: "run" | "selection";
+  readonly modelId: string | null;
+  readonly agent: CodingWorkbenchAgent | null;
+} {
+  const run = liveRunOf(state);
+  return run === null
+    ? { source: "selection", modelId: state.selectedModelId, agent: state.agent }
+    : { source: "run", modelId: run.modelId ?? null, agent: run.agent ?? null };
+}
+
 function selectAgent(
   state: CodingWorkbenchRuntimeState,
   agent: CodingWorkbenchAgent,
@@ -552,13 +599,15 @@ function acceptSnapshot(
   }
   if (shouldIgnoreOlderSnapshot(current, snapshot)) return state;
   const changedRun = current?.runId !== snapshot.runId;
-  return projectReadiness({
-    ...state,
-    run: ready(snapshot),
-    stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
-    ...(changedRun ? { events: [] } : {}),
-    ...(snapshotSupersedesFailure(state.mutation, snapshot) ? { mutation: IDLE_MUTATION } : {}),
-  });
+  return projectReadiness(
+    withLiveRunIdentity({
+      ...state,
+      run: ready(snapshot),
+      stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
+      ...(changedRun ? { events: [] } : {}),
+      ...(snapshotSupersedesFailure(state.mutation, snapshot) ? { mutation: IDLE_MUTATION } : {}),
+    }),
+  );
 }
 
 function terminalSnapshotFromEvents(
@@ -640,12 +689,15 @@ const runtimeActionHandlers = {
       : projectReadiness({ ...state, source: ready(action.source) }),
   "runtime-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness(
-      withOfferedAgent({
-        ...state,
-        runtime: ready(action.readiness),
-        selectableAgents: action.readiness.selectableAgents,
-        promptInputs: action.readiness.promptInputs ?? NO_CODING_WORKBENCH_PROMPT_INPUTS,
-      }),
+      withLiveRunIdentity(
+        withOfferedAgent({
+          ...state,
+          runtime: ready(action.readiness),
+          selectableAgents: action.readiness.selectableAgents,
+          toolProfile: action.readiness.toolProfile ?? null,
+          promptInputs: action.readiness.promptInputs ?? NO_CODING_WORKBENCH_PROMPT_INPUTS,
+        }),
+      ),
     ),
   "workspace-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({

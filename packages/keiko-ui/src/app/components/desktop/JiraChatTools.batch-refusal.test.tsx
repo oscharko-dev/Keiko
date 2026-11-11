@@ -31,14 +31,20 @@ const COPY = {
     "project-not-found": "Project not found",
     "issue-type-not-found": "Issue type not available in this project",
     "no-usable-issue-type": "No issue type available for drafting in this project",
-    "template-unavailable": "Could not complete",
+    "template-unavailable": "The project's template rules could not be read from Jira",
+    "requirements-ambiguous":
+      "The same requirement IDs appear in documents with different content. Name the document to draft from",
+    "an-unknown-reason": "Could not complete",
   },
   de: {
     "no-requirements": "Keine Anforderung passte zur Auswahl",
     "project-not-found": "Projekt nicht gefunden",
     "issue-type-not-found": "Vorgangstyp in diesem Projekt nicht verfügbar",
     "no-usable-issue-type": "Kein Vorgangstyp zum Entwerfen in diesem Projekt verfügbar",
-    "template-unavailable": "Konnte nicht abgeschlossen werden",
+    "template-unavailable": "Die Vorlagenregeln des Projekts konnten nicht aus Jira gelesen werden",
+    "requirements-ambiguous":
+      "Dieselben Anforderungs-IDs stehen in Dokumenten mit unterschiedlichem Inhalt. Nenne das Dokument, aus dem entworfen werden soll",
+    "an-unknown-reason": "Konnte nicht abgeschlossen werden",
   },
 } as const;
 

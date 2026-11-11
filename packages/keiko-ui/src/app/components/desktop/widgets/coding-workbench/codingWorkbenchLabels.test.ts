@@ -31,6 +31,7 @@ import {
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
+  gatewayServiceMessageKey,
 } from "./codingWorkbenchLabels";
 import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 
@@ -299,7 +300,6 @@ describe("eventDetail auxiliary outcome", () => {
   // F9 (#3873): a failed run names the closed cause its settlement carries. The internal-error
   // sentence belongs to `runtime-failed` alone; every bound and model-call cause has its own copy.
   it.each([
-    ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
     ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
     ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
     ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
@@ -309,15 +309,29 @@ describe("eventDetail auxiliary outcome", () => {
     // ADR-0137 D10: a start the server refused before its first turn, because a file the first
     // prompt referenced or the slash command it opened with was not accepted.
     ["invalid-intent", "codingWorkbench.event.failure.invalid-intent"],
+    // #4335: a run refused because its folder contains Keiko's own installation names the folder
+    // as the thing to change, never the internal-error sentence.
+    ["workspace-unqualified", "codingWorkbench.event.failure.workspace-unqualified"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
     expect(eventDetail(settled, t)).toBe(key);
   });
 
+  // Keiko does not limit tokens (#4346): a run settled by an older Keiko with the retired
+  // `prompt-allowance-exhausted` code still decodes and renders the generic sentence, never an
+  // internal error and never the retired allowance copy.
+  it("renders a run settled with the retired prompt-allowance code as a generic failure", () => {
+    const settled = runtimeEvent({
+      kind: "status",
+      state: "failed",
+      failureCode: "prompt-allowance-exhausted",
+    });
+    expect(eventDetail(settled, t)).toBe("codingWorkbench.event.failure.generic");
+  });
+
   it("keeps the internal-error sentence off every run cause but runtime-failed", () => {
     for (const failureCode of [
-      "prompt-allowance-exhausted",
       "envelope-duration-exhausted",
       "output-exhausted-repeated",
       "provider-unavailable",
@@ -878,6 +892,15 @@ describe("visibleAlert mutation failures (F-09a)", () => {
       "CODING_RUNTIME_WORKSPACE_UNQUALIFIED",
       "codingWorkbench.alert.startRefusedWorkspaceUnqualified",
     ],
+    // #4068: a start the Windows broker cannot confine names the location or the drive to change.
+    [
+      "CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED",
+      "codingWorkbench.alert.startRefusedWorkspaceLocation",
+    ],
+    [
+      "CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED",
+      "codingWorkbench.alert.startRefusedWorkspaceVolume",
+    ],
     ["CODING_RUNTIME_RUNTIME_UNAVAILABLE", "codingWorkbench.alert.actionFailedCode"],
   ])("explains a refused start with code %s through %s", (code, key) => {
     const alert = visibleAlert(failedMutationState("ui-correlation-3", code), tv, false);
@@ -1184,5 +1207,28 @@ describe("readinessFacts runtime assurance", () => {
     expect(
       visibleAlert(runtimeState(true, "functional-not-platform-qualified"), t, false),
     ).toBeNull();
+  });
+});
+
+describe("gatewayServiceMessageKey", () => {
+  it("names a sentence only for the Windows broker reasons", () => {
+    expect(gatewayServiceMessageKey("gateway-service-absent")).toBe(
+      "codingWorkbench.gatewayService.absent",
+    );
+    expect(gatewayServiceMessageKey("gateway-service-stopped")).toBe(
+      "codingWorkbench.gatewayService.stopped",
+    );
+    expect(gatewayServiceMessageKey("gateway-service-stale")).toBe(
+      "codingWorkbench.gatewayService.stale",
+    );
+    expect(gatewayServiceMessageKey("gateway-service-unknown")).toBe(
+      "codingWorkbench.gatewayService.unknown",
+    );
+    expect(gatewayServiceMessageKey("gateway-service-unqualified")).toBe(
+      "codingWorkbench.gatewayService.unqualified",
+    );
+    expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
+    expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
+    expect(gatewayServiceMessageKey(undefined)).toBeUndefined();
   });
 });

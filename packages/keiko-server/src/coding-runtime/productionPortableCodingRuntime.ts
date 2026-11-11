@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   closeSync,
@@ -47,6 +47,10 @@ import {
   macosReleaseTeamIdentifier,
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
+import {
+  verifiedHelperExecutionCopy,
+  type VerifiedHelperExecutionCopy,
+} from "./nativeRuntimeProcessBackend.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import { declaredPortableRuntimeLane, type PortableRuntimeLane } from "./portableRuntimeLane.js";
 import { verifyLinuxQualificationBundle } from "./linuxPortableSigstore.js";
@@ -178,6 +182,101 @@ interface CandidateRuntimeBindings {
  * (unreadable or malformed manifests, partial tree, attestation errors) emits the redacted
  * discovery diagnostic (audit finding F-12c).
  */
+export function releasedWindowsGatewayHelperPin(runtime: {
+  readonly target: UpdatePortableTarget;
+  readonly platformAssurance: PortableRuntimeLane;
+  readonly nativeHelperSha256?: string;
+}): string | undefined {
+  return runtime.target === "windows-x64" && runtime.platformAssurance === "release-qualified"
+    ? runtime.nativeHelperSha256
+    : undefined;
+}
+
+// A status read that could not run the verified helper, or could not remove its private copy,
+// leaves one body-free diagnostic; the read itself still answers null, the unknown state (#4068).
+function recordGatewayStatusFailure(operation: string, error: unknown): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation,
+      source: "coding.runtime.windows-gateway-service",
+      error,
+      redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    }),
+  );
+}
+
+function verifiedStatusHelper(
+  helperPath: string,
+  helperSha256: string,
+): VerifiedHelperExecutionCopy | undefined {
+  try {
+    return verifiedHelperExecutionCopy(helperPath, helperSha256);
+  } catch (error) {
+    recordGatewayStatusFailure("coding.runtime.windows-gateway-service.verify", error);
+    return undefined;
+  }
+}
+
+/**
+ * Asks the attested helper for the broker state without blocking the event loop; resolves to null
+ * when it did not run to an exit, including a refused digest, a spawn failure or the 2 s timeout
+ * (#4068). It never rejects, and the private copy is removed on every path.
+ */
+export function readWindowsGatewayServiceStatus(
+  helperPath: string,
+  helperSha256: string,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    // The same digest check a launch applies: bytes that do not match the pin never execute, and the
+    // helper that runs is a private copy of the verified bytes, not the path that could be swapped.
+    const copy = verifiedStatusHelper(helperPath, helperSha256);
+    if (copy === undefined) {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const finish = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(code);
+      try {
+        copy.cleanup();
+      } catch (error) {
+        recordGatewayStatusFailure("coding.runtime.windows-gateway-service.cleanup", error);
+      }
+    };
+    try {
+      const child = spawn(copy.path, ["--gateway-service-status", helperSha256], {
+        stdio: "ignore",
+        windowsHide: true,
+        shell: false,
+        timeout: 2_000,
+      });
+      child.once("error", (error) => {
+        recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
+        finish(null);
+      });
+      child.once("close", finish);
+    } catch (error) {
+      recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
+      finish(null);
+    }
+  });
+}
+
+/** The helper `keiko gateway-service` may install: only the bytes a launch would accept (#4068). */
+export function discoverReleasedWindowsGatewayHelper(
+  input: PortableOpenCodeDiscoveryInput,
+): { readonly helperPath: string; readonly helperSha256: string } | undefined {
+  const runtime = discoverQualifiedPortableOpenCode(input);
+  const helperSha256 = runtime === undefined ? undefined : releasedWindowsGatewayHelperPin(runtime);
+  return runtime === undefined || helperSha256 === undefined
+    ? undefined
+    : { helperPath: runtime.nativeHelperPath, helperSha256 };
+}
+
 export function discoverQualifiedPortableOpenCode(
   input: PortableOpenCodeDiscoveryInput,
 ): QualifiedPortableOpenCodeRuntime | undefined {
@@ -773,8 +872,20 @@ function realPortableRoots(
 // ONLY a genuinely missing path is an expected absence. ENOTDIR deliberately does NOT belong here:
 // it means a path component exists but is the wrong kind (e.g. `.portable` is a regular file), which
 // is a malformed installation and must keep reaching the corruption diagnostic (#2843 review).
+// Windows reports that same case as ENOENT, so an ENOENT whose nearest existing ancestor is not a
+// directory is classified as malformed too (#4068).
 function isAbsentPathError(error: unknown): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (!(error instanceof Error)) return false;
+  const { code, path } = error as NodeJS.ErrnoException;
+  return code === "ENOENT" && (path === undefined || !blockedByNonDirectoryAncestor(path));
+}
+
+function blockedByNonDirectoryAncestor(path: string): boolean {
+  for (let current = dirname(path); ; current = dirname(current)) {
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (entry !== undefined) return !entry.isDirectory() && !entry.isSymbolicLink();
+    if (dirname(current) === current) return false;
+  }
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {

@@ -7,7 +7,10 @@ import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { catalogArray, catalogObject, catalogString, copyCatalogJson } from "./json.js";
 import { requireCatalog, type CatalogSchemaMismatch } from "./errors.js";
 import { isExternalJsonSchemaDialect } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { compileExternalCatalogSchema, externalCatalogSchemaMismatch } from "./external-schema.js";
+import {
+  compileOwnedExternalCatalogSchema,
+  externalCatalogSchemaMismatch,
+} from "./external-schema.js";
 
 const TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 const COMMON_KEYS = new Set(["type", "description", "enum", "const"]);
@@ -143,7 +146,7 @@ function normalizeTypedSchema(schema: CatalogJsonObject, type: string): CatalogJ
 export function compileCatalogSchema(value: unknown): CatalogJsonObject {
   const schema = catalogObject(copyCatalogJson(value));
   return isExternalJsonSchemaDialect(schema.$schema)
-    ? compileExternalCatalogSchema(schema)
+    ? compileOwnedExternalCatalogSchema(schema)
     : normalizeSchema(schema);
 }
 

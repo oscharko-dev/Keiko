@@ -7,7 +7,7 @@
 //   - Bounded backoff reusing the sync lane's D3 constants: 500 ms base, factor 2, 8 000 ms
 //     per-attempt cap, at most 5 attempts total, `Retry-After` honored and capped at the same
 //     ceiling.
-//   - Only GET may retry 429/5xx. POST and PUT are dispatched at most once, even
+//   - Only GET may retry 429/5xx. POST, PUT and DELETE are dispatched at most once, even
 //     with Retry-After: a response can be lost or replaced after the mutation committed.
 //     Replaying PUT can also overwrite a concurrent actor's intervening change.
 //     Mutation outcome reconciliation and any explicit new intent belong to the caller.
@@ -21,18 +21,30 @@
 
 import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
 import {
+  JIRA_ATTACHMENT_MAX_BYTES,
   sanitizeJiraMutationFailureDetail,
   type JiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
+  isAtlassianApplicationRoleVersion,
+  type AtlassianApplicationRoleRequest,
   type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
   type AtlassianHttpBodyResult,
   type AtlassianHttpUpload,
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
-import { asRecord, parseJsonArray, parseJsonRecord } from "./atlassian-sync-classify.js";
+import {
+  asRecord,
+  parseAtlassianJsonValue,
+  parseJsonArray,
+  parseJsonObjectOrArray,
+  parseJsonRecord,
+  parseJsonScalar,
+} from "./atlassian-sync-classify.js";
+import type { JiraHumanInputHttpRequest } from "./jira-private-identity-ports.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
@@ -48,7 +60,7 @@ export const ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS = 90_000;
 // generous for those payloads and small enough that a hostile upstream cannot flood the lane.
 export const ATLASSIAN_WRITE_RESPONSE_MAX_BYTES = 262_144;
 
-export type AtlassianWriteHttpMethod = "GET" | "POST" | "PUT";
+export type AtlassianWriteHttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
 export interface AtlassianWriteHttpRequest {
   readonly method: AtlassianWriteHttpMethod;
@@ -58,8 +70,28 @@ export interface AtlassianWriteHttpRequest {
   readonly bodyJson?: string | undefined;
   // One governed multipart upload (POST only, #4176); never combined with `bodyJson`.
   readonly upload?: AtlassianHttpUpload | undefined;
-  // Object/collection response shape, or status only. Both JSON shapes share the same byte cap.
-  readonly expect: "json" | "json-array" | "none";
+  /** Closed native opt-in; never a caller-provided header map. */
+  readonly jiraExperimental?: true | undefined;
+  /** The same true/false bytes use text/plain only on the fixed permission attribute PUT. */
+  readonly jiraPermissionAttribute?: true | undefined;
+  /** Fixed email-template ZIP GET/POST; the server independently verifies method/path/media. */
+  readonly jiraEmailTemplateArchive?: true | undefined;
+  readonly jiraApplicationRole?: AtlassianApplicationRoleRequest | undefined;
+  readonly jiraUserApplication?: true | undefined;
+  readonly jiraUserColumns?: true | undefined;
+  readonly jiraIdentityExperimental?: true | undefined;
+  readonly jiraProjectPriority?: true | undefined;
+  readonly jiraHumanInput?: JiraHumanInputHttpRequest | undefined;
+  readonly jiraAvatarImage?: true | undefined;
+  // Closed JSON response shapes, or status only; every JSON mode shares the same byte cap.
+  readonly expect:
+    | "json"
+    | "json-array"
+    | "json-object-or-array"
+    | "json-scalar"
+    | "text-scalar"
+    | "none"
+    | "jira-email-template-zip";
 }
 
 export interface AtlassianWriteHttpDeps {
@@ -79,6 +111,11 @@ export type AtlassianWriteHttpOutcome =
       readonly status: number;
       readonly body: Record<string, unknown> | undefined;
       readonly items?: readonly unknown[];
+      /** Present only for the explicit json-scalar response mode; null, false and zero are values. */
+      readonly scalar?: string | number | boolean | null;
+      /** Private fixed-route archive bytes; never a model result, diagnostic or raw header. */
+      readonly bytes?: Uint8Array<ArrayBuffer>;
+      readonly applicationRoleVersion?: string;
     }
   | {
       readonly ok: false;
@@ -143,32 +180,86 @@ function classifyFailure(
       : undefined;
   return {
     ok: false,
-    reason: failureReasonForWriteStatus(result.status),
+    reason:
+      result.status === 401 && result.authentication === "confirmed"
+        ? "permission-denied"
+        : failureReasonForWriteStatus(result.status),
     httpStatus: result.status,
     ...(remote === undefined ? {} : { remote }),
   };
 }
 
+/** Jira serves some scalar resources (getAvailableMetrics, mypreferences) as text/plain. A JSON
+ * string is unquoted; anything else is the literal text, bounded and free of control characters
+ * other than line breaks and tabs. */
+function hasForbiddenControl(text: string): boolean {
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    const lineBreakOrTab = code === 0x09 || code === 0x0a || code === 0x0d;
+    if ((code < 0x20 && !lineBreakOrTab) || code === 0x7f) return true;
+  }
+  return false;
+}
+function plainTextScalar(bodyText: string): string | undefined {
+  if (hasForbiddenControl(bodyText)) return undefined;
+  const decoded = parseAtlassianJsonValue(bodyText);
+  return typeof decoded === "string" ? decoded : bodyText;
+}
+type JsonResponsePayload = Pick<
+  Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>,
+  "body" | "items" | "scalar"
+>;
+function jsonResponsePayload(
+  bodyText: string,
+  expect: Exclude<AtlassianWriteHttpRequest["expect"], "none" | "jira-email-template-zip">,
+): JsonResponsePayload | undefined {
+  switch (expect) {
+    case "json-array": {
+      const items = parseJsonArray(bodyText);
+      return items === undefined ? undefined : { body: undefined, items };
+    }
+    case "text-scalar": {
+      const scalar = plainTextScalar(bodyText);
+      return scalar === undefined ? undefined : { body: undefined, scalar };
+    }
+    case "json-scalar": {
+      const scalar = parseJsonScalar(bodyText);
+      return scalar === undefined ? undefined : { body: undefined, scalar };
+    }
+    case "json-object-or-array":
+      return parseJsonObjectOrArray(bodyText);
+    case "json": {
+      const body = parseJsonRecord(bodyText);
+      return body === undefined ? undefined : { body };
+    }
+  }
+}
 function classifyResponse(
   result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
   expect: AtlassianWriteHttpRequest["expect"],
 ): AtlassianWriteHttpOutcome {
   if (result.status < 200 || result.status >= 300) return classifyFailure(result);
   if (expect === "none") return { ok: true, status: result.status, body: undefined };
-  if (result.truncated) {
+  if (expect === "jira-email-template-zip") return classifyArchive(result);
+  const parsed = result.truncated ? undefined : jsonResponsePayload(result.bodyText, expect);
+  return parsed === undefined
+    ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
+    : { ok: true, status: result.status, ...parsed };
+}
+
+function classifyArchive(
+  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
+): AtlassianWriteHttpOutcome {
+  if (result.truncated || result.bodyBytes > JIRA_ATTACHMENT_MAX_BYTES)
+    return { ok: false, reason: "bounds-exceeded", httpStatus: result.status };
+  const bytes = result.archiveBytes;
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength !== result.bodyBytes ||
+    result.bodyText !== ""
+  )
     return { ok: false, reason: "malformed-payload", httpStatus: result.status };
-  }
-  if (expect === "json-array") {
-    const items = parseJsonArray(result.bodyText);
-    return items === undefined
-      ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
-      : { ok: true, status: result.status, body: undefined, items };
-  }
-  const body = parseJsonRecord(result.bodyText);
-  if (body === undefined) {
-    return { ok: false, reason: "malformed-payload", httpStatus: result.status };
-  }
-  return { ok: true, status: result.status, body };
+  return { ok: true, status: result.status, body: undefined, bytes };
 }
 
 async function issueOnce(
@@ -176,18 +267,36 @@ async function issueOnce(
   request: AtlassianWriteHttpRequest,
   timeoutMs: number,
 ): Promise<AtlassianHttpBodyResult> {
-  return deps.http({
+  const native: AtlassianHttpBodyRequest = {
     method: request.method,
     url: request.url,
     timeoutMs,
-    maxBodyBytes: ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
-    ...(request.bodyJson === undefined ? {} : { bodyJson: request.bodyJson }),
-    ...(request.upload === undefined ? {} : { upload: request.upload }),
-    // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
-    // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
-    // observed between attempts — the between-attempt checks alone only stopped a LATER retry.
+    maxBodyBytes:
+      request.expect === "jira-email-template-zip"
+        ? JIRA_ATTACHMENT_MAX_BYTES
+        : ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
+    // Cancellation reaches the transport so an abort tears down the in-flight request.
     ...(deps.signal === undefined ? {} : { signal: deps.signal }),
-  });
+  };
+  // This closed projection preserves absence and never forwards arbitrary request properties.
+  for (const field of [
+    "bodyJson",
+    "upload",
+    "jiraExperimental",
+    "jiraPermissionAttribute",
+    "jiraEmailTemplateArchive",
+    "jiraApplicationRole",
+    "jiraUserApplication",
+    "jiraUserColumns",
+    "jiraIdentityExperimental",
+    "jiraProjectPriority",
+    "jiraHumanInput",
+    "jiraAvatarImage",
+  ] as const) {
+    const value = request[field];
+    if (value !== undefined) Object.assign(native, { [field]: value });
+  }
+  return deps.http(native);
 }
 
 // KEIKO-0318: clamp the per-request timeout to whatever budget the aggregate deadline still
@@ -275,6 +384,9 @@ function driveRetryLoop(
 function requestBodyRefusal(
   request: AtlassianWriteHttpRequest,
 ): Extract<AtlassianWriteHttpOutcome, { ok: false }> | undefined {
+  if (!validArchiveRequest(request)) return { ok: false, reason: "malformed-payload" };
+  if (request.bodyJson !== undefined && !new Set(["POST", "PUT"]).has(request.method))
+    return { ok: false, reason: "malformed-payload" };
   if (request.upload !== undefined) {
     if (request.method !== "POST" || request.bodyJson !== undefined)
       return { ok: false, reason: "malformed-payload" };
@@ -286,6 +398,35 @@ function requestBodyRefusal(
     UTF8_ENCODER.encode(request.bodyJson).byteLength > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES
     ? { ok: false, reason: "bounds-exceeded" }
     : undefined;
+}
+
+function validArchiveRequest(
+  request: Omit<AtlassianWriteHttpRequest, "jiraEmailTemplateArchive"> & {
+    readonly jiraEmailTemplateArchive?: unknown;
+  },
+): boolean {
+  if (request.jiraEmailTemplateArchive === undefined)
+    return request.expect !== "jira-email-template-zip";
+  if (
+    request.jiraEmailTemplateArchive !== true ||
+    request.bodyJson !== undefined ||
+    request.jiraExperimental !== undefined ||
+    request.jiraPermissionAttribute !== undefined
+  )
+    return false;
+  return archiveRequestShape(request);
+}
+function archiveRequestShape(
+  request: Pick<AtlassianWriteHttpRequest, "method" | "expect" | "upload">,
+): boolean {
+  if (request.method === "GET")
+    return request.expect === "jira-email-template-zip" && request.upload === undefined;
+  return (
+    request.method === "POST" &&
+    request.expect === "none" &&
+    request.upload?.contentType === "application/zip" &&
+    request.upload.bytes instanceof Uint8Array
+  );
 }
 
 // Execute one bounded write-lane request with the method-aware D3 retry discipline. Returns a
@@ -308,5 +449,12 @@ export async function executeAtlassianWriteRequest(
   );
   const result = await driveRetryLoop(deps, request, initial, deadlineAt, now, isAborted, sleep);
   if (result.kind !== "response") return classifyTransport(result);
-  return classifyResponse(result, request.expect);
+  const classified = classifyResponse(result, request.expect);
+  if (
+    request.jiraApplicationRole === "version" &&
+    classified.ok &&
+    isAtlassianApplicationRoleVersion(result.applicationRoleVersion)
+  )
+    return { ...classified, applicationRoleVersion: result.applicationRoleVersion };
+  return classified;
 }

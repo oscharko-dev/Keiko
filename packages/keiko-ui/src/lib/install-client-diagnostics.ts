@@ -70,7 +70,12 @@ import {
   takeClientDiagnosticLoss,
 } from "./client-diagnostics";
 import { ApiError } from "./api-shared-primitives";
+import { newClientCorrelationId } from "./bff-correlation";
 import { bffFetchJson } from "./http";
+
+// This document's own random reference, minted once per page load (#4068). Tabs and windows of one
+// origin share the session cookie, so only this tells their reports apart in the Activity Log.
+const DOCUMENT_REF = newClientCorrelationId();
 
 function writeToBrowserConsole(message: string, meta?: ClientDiagnosticMeta): void {
   // The single sanctioned console access in keiko-ui production code. Everything above this line is
@@ -221,6 +226,7 @@ function clientSessionRepairPostBody(
     repairCorrelationId,
     errorKind: report.errorKind,
     stream: report.stream,
+    documentRef: validCorrelationId(DOCUMENT_REF),
   };
 }
 
@@ -288,6 +294,31 @@ function citationReportFields(
   return { citationActivation: meta.citationActivation, citationHighlight: meta.citationHighlight };
 }
 
+// Closed composer facts share the existing diagnostic transport.
+function composerReportFields(
+  meta: ClientDiagnosticMeta,
+): Pick<
+  ClientDiagnosticIngestRequest,
+  "composerActivity" | "composerSubmission" | "composerFocusIndicator" | "composerCodeStage"
+> {
+  return {
+    composerActivity: meta.composerActivity,
+    composerSubmission: meta.composerSubmission,
+    composerFocusIndicator: meta.composerFocusIndicator,
+    composerCodeStage: meta.composerCodeStage,
+  };
+}
+
+// Closed Jira presentation facts share the existing diagnostic transport.
+function jiraPresentationFields(
+  meta: ClientDiagnosticMeta,
+): Pick<ClientDiagnosticIngestRequest, "jiraResultPresentation" | "jiraFieldPresentation"> {
+  return {
+    jiraResultPresentation: meta.jiraResultPresentation,
+    jiraFieldPresentation: meta.jiraFieldPresentation,
+  };
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -310,6 +341,7 @@ function clientMessagePostBody(
     clientTs: new Date().toISOString(),
     correlationId: validCorrelationId(meta.correlationId),
     parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
+    documentRef: validCorrelationId(DOCUMENT_REF),
     errorKind: meta.errorKind,
     renderFailure: meta.renderFailure,
     voiceDialogueStage: meta.voiceDialogueStage,
@@ -335,10 +367,8 @@ function clientMessagePostBody(
     updateNotice: meta.updateNotice,
     editorLineEnding: meta.editorLineEnding,
     ...codingReportFields(meta),
-    composerActivity: meta.composerActivity,
-    composerSubmission: meta.composerSubmission,
-    composerFocusIndicator: meta.composerFocusIndicator,
-    composerCodeStage: meta.composerCodeStage,
+    ...composerReportFields(meta),
+    ...jiraPresentationFields(meta),
     loss,
   };
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
@@ -446,6 +476,8 @@ function routineClosedReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.gitRetryAttemptReport !== undefined ||
     meta.selectDismissal !== undefined ||
     meta.knowledgeCatalog !== undefined ||
+    meta.jiraResultPresentation !== undefined ||
+    meta.jiraFieldPresentation !== undefined ||
     meta.answerSpeech !== undefined ||
     routineSupportReportEvidence(meta)
   );

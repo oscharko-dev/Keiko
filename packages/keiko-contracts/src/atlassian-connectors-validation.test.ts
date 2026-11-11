@@ -620,9 +620,34 @@ describe("validateAtlassianConnectorActivityRecord (ADR-0128 D6 evidence)", () =
       errorsOf(validateAtlassianConnectorActivityRecord(activity({ provider: "confluence" }))),
     ).toContain("activity.provider must match the D4 table for the action type");
     expect(
-      errorsOf(validateAtlassianConnectorActivityRecord(activity({ actionType: "delete-issue" }))),
+      errorsOf(validateAtlassianConnectorActivityRecord(activity({ actionType: "not-an-action" }))),
     ).toContain("activity.actionType is invalid");
+    expectOk(validateAtlassianConnectorActivityRecord(activity({ actionType: "delete-issue" })));
   });
+
+  it.each(["set-user-property", "delete-user-property"])(
+    "accepts %s activity only with the administration class",
+    (actionType) => {
+      expectOk(
+        validateAtlassianConnectorActivityRecord(
+          activity({
+            actionType,
+            actionClass: "connector-admin",
+          }),
+        ),
+      );
+      expect(
+        errorsOf(
+          validateAtlassianConnectorActivityRecord(
+            activity({
+              actionType,
+              actionClass: "connector-write",
+            }),
+          ),
+        ),
+      ).toContain("activity.actionClass must match the D4 table for the action type");
+    },
+  );
 
   it("requires exactly the right reason vocabulary per disposition", () => {
     expectOk(
@@ -942,6 +967,34 @@ describe("validateAtlassianConnectorPendingApproval (Issue #2244 → #2245 UI)",
     const value = expectOk(validateAtlassianConnectorPendingApproval(approval()));
     expect(value.actionType).toBe("create-issue");
   });
+
+  it.each(["set-user-property", "delete-user-property"])(
+    "binds %s approval to the explicit administration scope and class",
+    (actionType) => {
+      const reviewed = approval({
+        actionType,
+        actionClass: "connector-admin",
+        requiredScope: "issue-tracker.admin",
+      });
+      expectOk(validateAtlassianConnectorPendingApproval(reviewed));
+      expect(
+        errorsOf(
+          validateAtlassianConnectorPendingApproval({
+            ...reviewed,
+            requiredScope: "issue-tracker.write",
+          }),
+        ),
+      ).toContain("approval.requiredScope must match the D4 table for the action type");
+      expect(
+        errorsOf(
+          validateAtlassianConnectorPendingApproval({
+            ...reviewed,
+            actionClass: "connector-write",
+          }),
+        ),
+      ).toContain("approval.actionClass must match the D4 table for the action type");
+    },
+  );
 
   it("rejects unknown keys — body-like fields can never ride an approval", () => {
     for (const key of ["summary", "descriptionText", "commentText", "bodyText", "token"]) {

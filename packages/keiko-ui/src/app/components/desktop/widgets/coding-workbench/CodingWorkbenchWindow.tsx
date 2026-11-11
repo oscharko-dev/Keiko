@@ -1,6 +1,7 @@
 "use client";
 
 import { isCodingWorkbenchBuiltInAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
@@ -50,6 +51,7 @@ import type {
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchAgent,
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
@@ -100,6 +102,7 @@ import {
 } from "@/lib/useCodingWorkbenchRuntime";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import {
+  codingWorkbenchVisibleIdentity,
   offeredCodingWorkbenchAgents,
   offeredCodingWorkbenchPromptInputs,
   type CodingWorkbenchClientError,
@@ -200,6 +203,7 @@ import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
+import { useCodingWorkbenchIdentityEvidence } from "./useCodingWorkbenchIdentityEvidence";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
 import { useCodingWorkbenchConnectors } from "./useCodingWorkbenchConnectors";
@@ -592,16 +596,33 @@ function workbenchFolderMode(
   );
 }
 
-// A folder is always Local: there is no repository to put a worktree in.
+/** The work locations the runtime can confine (#4068); undefined offers every location. */
+function offeredExecutionLocations(
+  state: Pick<CodingWorkbenchRuntimeState, "runtime">,
+): readonly WorkbenchExecutionLocation[] | undefined {
+  return state.runtime.value?.executionLocations;
+}
+
+/** Readiness has not answered yet, so which locations the runtime confines is unknown (#4068). */
+function executionLocationsPending(state: Pick<CodingWorkbenchRuntimeState, "runtime">): boolean {
+  return (
+    state.runtime.value === null &&
+    (state.runtime.status === "idle" || state.runtime.status === "loading")
+  );
+}
+
+// A folder is always Local: there is no repository to put a worktree in. A repository takes the
+// locations the runtime can confine (#4068).
 function workbenchExecutionLocation(
   branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
   activeWorkspace: WorkbenchWorkspaceApi,
   repositoryRoot: string | null,
   selected: WorkbenchExecutionLocation | undefined,
+  offered: readonly WorkbenchExecutionLocation[] | undefined,
 ): WorkbenchExecutionLocation {
   return workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot)
     ? "local"
-    : activeExecutionLocation(activeWorkspace.activeInstance, repositoryRoot, selected);
+    : activeExecutionLocation(activeWorkspace.activeInstance, repositoryRoot, selected, offered);
 }
 
 function repositoryBranchReadRoot(
@@ -659,6 +680,7 @@ function WorkbenchContextControls({
   onSelectBranch,
   onOpenGit,
   location,
+  offeredLocations,
   onSelectLocation,
   placement = "composer",
 }: {
@@ -672,6 +694,7 @@ function WorkbenchContextControls({
   readonly onSelectBranch: (branch: string) => void;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   readonly location: WorkbenchExecutionLocation;
+  readonly offeredLocations: readonly WorkbenchExecutionLocation[] | undefined;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly placement?: "composer" | "setup";
 }): ReactNode {
@@ -686,6 +709,7 @@ function WorkbenchContextControls({
       onSelect={onSelectRepository}
       onSelectBranch={onSelectBranch}
       location={location}
+      offeredLocations={offeredLocations}
       onSelectLocation={onSelectLocation}
       onOpenGit={() => onOpenGit({ root: repositoryRoot, binding: "repository" })}
       placement={placement}
@@ -887,9 +911,10 @@ function initialHistoryLocation(
   workspace: UseCodingWorkbenchRuntimeInput["workspace"],
   selectedRoot: string | undefined,
   selectedLocation: WorkbenchExecutionLocation | undefined,
+  offered: readonly WorkbenchExecutionLocation[] | undefined,
 ): WorkbenchExecutionLocation {
   const root = selectedRoot ?? workspace.activeInstance?.repositoryRoot ?? null;
-  return activeExecutionLocation(workspace.activeInstance, root, selectedLocation);
+  return activeExecutionLocation(workspace.activeInstance, root, selectedLocation, offered);
 }
 
 function locationSelectionPending(
@@ -913,12 +938,15 @@ function useCheckoutRefresh(
 /**
  * The composer's task and follow-up text lives in the window's private server draft (#4271), so a
  * reload while a start is in flight, or before a follow-up is sent, restores what was typed. Without
- * a window identity (an embedded or test render) it stays local to the component.
+ * a window identity the server keeps drafts for (an embedded or test render, or a window restored
+ * under another id) it stays local to the component instead of asking for a draft it cannot have.
  */
 function useWorkbenchComposerDraft(
   draftKey: string | undefined,
 ): readonly [string, (value: string) => void] {
-  const draft = usePrivateDraft(draftKey, "coding-workbench");
+  const key =
+    draftKey !== undefined && isCodingWorkbenchDraftWindowId(draftKey) ? draftKey : undefined;
+  const draft = usePrivateDraft(key, "coding-workbench");
   useChatDraftUnloadGuard(draft.controller, 0);
   return [draft.text, draft.setText];
 }
@@ -956,13 +984,19 @@ export function CodingWorkbenchWindow({
   const { state: runtimeState, actions } = useCodingWorkbenchRuntime({
     workspace: activeWorkspace,
   });
+  useCodingWorkbenchIdentityEvidence(runtimeState);
   const [taskIntent, setTaskIntent] = useWorkbenchComposerDraft(draftKey);
   const history = useCodingTaskSession({
     snapshot: runtimeState.run.value,
     active: activeRunState(runtimeState.run.value?.state),
     workspace: workspaceContext,
     root: selectedRoot,
-    location: initialHistoryLocation(activeWorkspace, selectedRoot, selectedLocation),
+    location: initialHistoryLocation(
+      activeWorkspace,
+      selectedRoot,
+      selectedLocation,
+      offeredExecutionLocations(runtimeState),
+    ),
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
     onDraftReset: (): void => setTaskIntent(""),
@@ -1015,6 +1049,7 @@ export function CodingWorkbenchWindow({
     activeWorkspace,
     repositoryRoot,
     selectedLocation,
+    offeredExecutionLocations(state),
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
@@ -1028,6 +1063,7 @@ export function CodingWorkbenchWindow({
     workspaceLoading: locationSelectionPending(activeWorkspace, history, historySelection),
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
+    locationsPending: executionLocationsPending(state),
     refresh: refreshCheckout,
   });
   const alert = visibleAlert(
@@ -1723,6 +1759,7 @@ function WorkbenchColumns({
     taskIntent,
     projectMemoryEnabled,
     jiraPodId: connectors.jiraPodId,
+    connectorScopes: connectors.connectorScopes,
     mcpServers: connectors.mcpServers,
     conversationId: history.conversationId,
     fork: history.fork,
@@ -1788,6 +1825,7 @@ function WorkbenchColumns({
       onSelectRepository={onSelectRepository}
       onSelectBranch={onSelectBranch}
       location={location}
+      offeredLocations={offeredExecutionLocations(state)}
       onSelectLocation={onSelectLocation}
       onOpenGit={onOpenGit}
     />
@@ -1810,6 +1848,7 @@ function WorkbenchColumns({
               onSelectRepository={onSelectRepository}
               onSelectBranch={onSelectBranch}
               location={location}
+              offeredLocations={offeredExecutionLocations(state)}
               onSelectLocation={onSelectLocation}
               onOpenGit={onOpenGit}
               placement="setup"
@@ -1819,6 +1858,7 @@ function WorkbenchColumns({
           selectedBaseBranch={selectedBaseBranch(activeWorkspace, repositoryRoot, selectedBranch)}
           refreshWorkspace={activeWorkspace.refresh}
           runtimePosture={runtimePosture}
+          runtimeUnavailableReason={state.runtime.value?.runtimeUnavailableReason}
           onBoundRepository={(boundRoot): void => {
             // A successful bind flips the shared context back to a bound state and persists the
             // Workbench's own repository selection for the next opening.
@@ -1948,8 +1988,11 @@ function WorkbenchColumns({
         )}
       </div>
       <div className={styles.composerDock}>
-        {repositorySelector}
+        {/* Readiness can surface a checkout notice after the person already pressed the
+            repository control; above it, that notice grows the bottom-anchored dock upward
+            and leaves the control where the gesture started. */}
         <LocationBindingNotices locationState={locationState} />
+        {repositorySelector}
         <CodingTaskForkNotice fork={history.fork} onCancel={history.cancelFork} />
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
@@ -1985,6 +2028,7 @@ function WorkbenchColumns({
         <CodingWorkbenchInboxPanel
           runId={runId}
           running={state.run.value?.state === "running"}
+          offered={offeredCodingWorkbenchPromptInputs(state).delivery}
           revision={state.run.value?.revision}
           deliveredSignal={deliveredMessageSignal(activity.feed)}
           busy={state.mutation.status === "pending"}
@@ -2149,6 +2193,42 @@ function sessionInfoFacts(input: SessionInfoSources): readonly CodingWorkbenchIn
   ];
 }
 
+// A custom primary agent (#3903 AC1) is shown by its own name.
+function agentFactValue(
+  agent: CodingWorkbenchAgent | null,
+  unstated: string,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (agent === null) return unstated;
+  return isCodingWorkbenchBuiltInAgent(agent)
+    ? t(`codingWorkbench.composer.agent.${agent}`)
+    : agent;
+}
+
+function runtimeIdentityFacts(
+  state: CodingWorkbenchRuntimeState,
+  agent: CodingWorkbenchAgent | null,
+  unstated: string,
+  t: CodingWorkbenchTranslate,
+): readonly CodingWorkbenchInfoFact[] {
+  const facts: CodingWorkbenchInfoFact[] = [];
+  // The primary agent is stated only where the server offers a choice (#3897).
+  if (offeredCodingWorkbenchAgents(state).length > 1) {
+    facts.push({
+      label: t("codingWorkbench.info.agent"),
+      value: agentFactValue(agent, unstated, t),
+    });
+  }
+  // A mapped profile says so plainly: it is never presented as native parity (#4068 W12).
+  if (state.runtimePreference === "managed-gateway" && state.toolProfile !== null) {
+    facts.push({
+      label: t("codingWorkbench.info.toolProfile"),
+      value: t(`codingWorkbench.info.toolProfile.${state.toolProfile}`),
+    });
+  }
+  return facts;
+}
+
 function sessionRunFacts(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -2156,6 +2236,8 @@ function sessionRunFacts(
   const snapshot = state.run.value;
   const issue = snapshot?.issueBinding;
   const none = t("codingWorkbench.info.none");
+  const identity = codingWorkbenchVisibleIdentity(state);
+  const unstated = identity.source === "run" ? t("codingWorkbench.info.notReported") : none;
   const facts: CodingWorkbenchInfoFact[] = [
     {
       label: t("codingWorkbench.info.runState"),
@@ -2163,7 +2245,7 @@ function sessionRunFacts(
     },
     {
       label: t("codingWorkbench.info.model"),
-      value: valueOrNone(state.selectedModelId, none),
+      value: valueOrNone(identity.modelId, unstated),
       primary: true,
     },
     {
@@ -2171,16 +2253,7 @@ function sessionRunFacts(
       value: valueOrNone(state.source.value?.verification, t("codingWorkbench.info.notReported")),
     },
   ];
-  // The primary agent is stated only where the server offers a choice (#3897).
-  if (offeredCodingWorkbenchAgents(state).length > 1) {
-    facts.push({
-      label: t("codingWorkbench.info.agent"),
-      // A custom primary agent (#3903 AC1) is shown by its own name.
-      value: isCodingWorkbenchBuiltInAgent(state.agent)
-        ? t(`codingWorkbench.composer.agent.${state.agent}`)
-        : state.agent,
-    });
-  }
+  facts.push(...runtimeIdentityFacts(state, identity.agent, unstated, t));
   if (issue !== undefined) {
     facts.push({
       primary: true,
@@ -2886,6 +2959,7 @@ const CONNECTOR_SCOPE_MESSAGE_KEYS: Record<
   "source-control.write": "codingWorkbench.approval.connectorScope.source-control.write",
   "issue-tracker.read": "codingWorkbench.approval.connectorScope.issue-tracker.read",
   "issue-tracker.write": "codingWorkbench.approval.connectorScope.issue-tracker.write",
+  "issue-tracker.admin": "codingWorkbench.approval.connectorScope.issue-tracker.admin",
   "knowledge-base.read": "codingWorkbench.approval.connectorScope.knowledge-base.read",
   "knowledge-base.write": "codingWorkbench.approval.connectorScope.knowledge-base.write",
 };

@@ -5,6 +5,8 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { jiraActionLogFields } from "./jiraOperationLogFields.js";
 // Issue #2244 — route-level governance tests for the Confluence/Jira write actions. Hermetic: no
 // network (the transport port is a counting fixture), no wall-clock races (envelopes register
 // far-future or with pinned past instants), singleton registries reset around every test.
@@ -199,7 +201,6 @@ function envelope(
     budget: {
       maxRuntimeMs: 3_600_000,
       maxToolCalls: 50,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2099-01-01T00:00:00.000Z",
@@ -920,7 +921,6 @@ describe("write-action route — envelope authority (AC3)", () => {
         budget: {
           maxRuntimeMs: 60_000,
           maxToolCalls: 50,
-          maxPromptTokens: 10_000,
           maxPatchBytes: 65_536,
         },
       },
@@ -936,7 +936,7 @@ describe("write-action route — envelope authority (AC3)", () => {
     const counter: FetchCounter = { count: 0, requests: [] };
     const guard = guardWith(counter);
     const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES, {
-      budget: { maxRuntimeMs: 3_600_000, maxToolCalls: 1, maxPromptTokens: 1, maxPatchBytes: 1 },
+      budget: { maxRuntimeMs: 3_600_000, maxToolCalls: 1, maxPatchBytes: 1 },
     });
     const first = await postAction("add-issue-comment", authority, "autonomous-delivery", guard);
     expect(first.body.disposition).toBe("allowed");
@@ -1318,6 +1318,7 @@ it("records one failed write attempt without resending a possibly committed PUT 
     failureReason: "unavailable",
     deploymentCeiling: "autonomous-delivery",
     actionType: "update-issue-fields",
+    actionTypeDigest: sha256Hex("update-issue-fields"),
     provider: "jira",
   });
   const timeline = analyzeLogText(line).timelines.find(
@@ -1325,6 +1326,9 @@ it("records one failed write attempt without resending a possibly committed PUT 
   );
   expect(timeline?.lines.some((item) => item.op === "atlassian.action.outcome")).toBe(true);
   expect(line).not.toContain(JIRA_AUTH_REF);
+  expect(JSON.stringify(jiraActionLogFields("update-issue-fields"))).not.toContain(
+    "update-issue-fields",
+  );
   expect(line).not.toContain("Sharper");
   expect(line).not.toContain("example.atlassian.net");
 });
@@ -1366,8 +1370,13 @@ it.each(["{", "[]"])(
       outcome: "failed",
       failureReason: "malformed-payload",
       actionType: "transition-issue",
+      actionTypeDigest: sha256Hex("transition-issue"),
+      provider: "jira",
     });
     expect(analyzeLogText(line).timelines).toHaveLength(1);
     expect(line).not.toContain(JIRA_AUTH_REF);
+    expect(JSON.stringify(jiraActionLogFields("transition-issue"))).not.toContain(
+      "transition-issue",
+    );
   },
 );

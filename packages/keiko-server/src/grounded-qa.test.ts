@@ -1191,14 +1191,17 @@ describe("mappedWorkspaceError", () => {
 });
 
 describe("grounded prompt elapsed budget", () => {
+  // #3687 pinned that a missing search time limit never renders as "/null ms" and that the single-
+  // and multi-source folder prompts state the budget the same way. The measured wall-clock time is
+  // not prompt content: it made the fitted prompt depend on machine load, so one slow search could
+  // drop an excerpt from a tight model window that a fast one kept.
   it.each([
-    { elapsedMsMax: null, elapsedMs: 37, expected: "elapsed 37 ms (no search time limit)" },
-    { elapsedMsMax: 1000, elapsedMs: 37, expected: "elapsed 37/1000 ms" },
-    { elapsedMsMax: 0, elapsedMs: 0, expected: "elapsed 0/0 ms" },
-  ])(
-    "renders $expected consistently in each folder prompt",
-    ({ elapsedMsMax, elapsedMs, expected }) => {
-      const base = emptyPack();
+    { elapsedMsMax: null, expected: "search time limit none" },
+    { elapsedMsMax: 1000, expected: "search time limit 1000 ms" },
+    { elapsedMsMax: 0, expected: "search time limit 0 ms" },
+  ])("renders $expected consistently in each folder prompt", ({ elapsedMsMax, expected }) => {
+    const base = emptyPack();
+    const prompts = [0, 37, 12_345].map((elapsedMs) => {
       const pack = {
         ...base,
         budget: { ...base.budget, modelInputTokensMax: 16_000, elapsedMsMax },
@@ -1215,10 +1218,12 @@ describe("grounded prompt elapsed budget", () => {
       );
       for (const messages of [single, multi]) {
         expect(JSON.stringify(messages)).toContain(`- budget/usage: ${summary}`);
-        expect(JSON.stringify(messages)).not.toContain("/null ms");
+        expect(JSON.stringify(messages)).not.toContain("null");
       }
-    },
-  );
+      return JSON.stringify([single, multi]);
+    });
+    expect(new Set(prompts).size).toBe(1);
+  });
 });
 
 describe("buildGroundedGatewayMessages", () => {

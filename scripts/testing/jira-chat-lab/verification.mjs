@@ -12,13 +12,14 @@ import {
   basicAuth,
   labRequest,
   requireLicense,
+  labSessionConnection,
 } from "./lab-client.mjs";
 import { privateJson } from "./private-json.mjs";
+import { inspectServices, labDocker as docker } from "./lab-services.mjs";
+export { validateServices, validateLabImage } from "./lab-services.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const execute = promisify(execFile);
-const JIRA_IMAGE =
-  "atlassian/jira-software:10.3.26@sha256:ddcddc61ee43067fa274538b888d36408c47bc6a4ec14e41113dc304b8529168";
 const save = (group) => privateJson(group.pendingPath, group);
 const api = (context, path, body, method = "POST") =>
   jsonRequest(context.origin, context.cookie, "native-verification", path, body, method);
@@ -38,7 +39,7 @@ async function createCredential(context, token) {
     deployment: "data-center",
     authScheme: "bearer-pat",
     displayName: "Synthetic native verification",
-    baseUrl: "https://127.0.0.1:18443",
+    baseUrl: labSessionConnection(context.session).httpsOrigin,
     apiToken: token,
     livePodCreationRequestId: randomUUID(),
   });
@@ -226,39 +227,6 @@ async function qualifyPat(context, group, delay) {
   await verify(context, invalid, "auth-failed");
   group.results.push({ case: "invalid-pat", status: "auth-failed", generationAdvanced: true });
   save(group);
-}
-
-export function validateServices(session, containers) {
-  assert.match(session.project, /^keiko-jira-4081-[a-z0-9-]{1,32}$/u);
-  const services = {};
-  for (const container of containers) {
-    assert.equal(container.Config.Labels["com.docker.compose.project"], session.project);
-    const service = container.Config.Labels["com.docker.compose.service"];
-    assert.ok(new Set(["jira", "tls", "database"]).has(service));
-    assert.equal(services[service], undefined);
-    assert.match(container.Id, /^[a-f0-9]{64}$/u);
-    assert.equal(container.State.Running, true);
-    services[service] = container;
-  }
-  assert.equal(Object.keys(services).length, 3);
-  assert.equal(services.jira.Config.Image, JIRA_IMAGE);
-  assert.deepEqual(services.jira.NetworkSettings.Ports["8080/tcp"], [
-    { HostIp: "127.0.0.1", HostPort: String(session.httpPort) },
-  ]);
-  return services;
-}
-
-async function docker(args) {
-  const result = await execute("docker", args, { timeout: 60_000, maxBuffer: 1_048_576 });
-  return result.stdout.trim();
-}
-
-async function inspectServices(session) {
-  const ids = (
-    await docker(["ps", "-q", "--filter", `label=com.docker.compose.project=${session.project}`])
-  ).split("\n");
-  assert.equal(ids.length, 3);
-  return validateServices(session, JSON.parse(await docker(["inspect", ...ids])));
 }
 
 function volumes(container) {

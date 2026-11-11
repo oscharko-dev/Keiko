@@ -264,7 +264,6 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
     budget: {
       maxRuntimeMs: 300_000,
       maxToolCalls: 8,
-      maxPromptTokens: 1,
       maxPatchBytes: 65_536,
     },
     expiresAt: new Date(Date.now() + 300_000).toISOString(),

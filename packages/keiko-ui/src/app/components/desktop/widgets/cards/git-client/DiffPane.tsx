@@ -42,6 +42,10 @@ const SCOPES: readonly { readonly id: GitDiffScope; readonly label: string }[] =
   { id: "staged", label: "Staged" },
 ];
 
+// The truncation notice is English copy, so its numbers use English grouping whatever the host's
+// default locale is (#4068: a de-DE Windows host rendered "524.288 bytes").
+const ENGLISH_NUMBER = new Intl.NumberFormat("en-US");
+
 function structuredScope(scope: GitDiffScope): GitEditorDiffScope {
   return scope === "staged" ? "staged" : "unstaged";
 }
@@ -289,8 +293,9 @@ function DiffBody({
           className="rv-truncated"
           style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, padding: 14 }}
         >
-          This diff is large and has been truncated at {state.response.maxBytes.toLocaleString()}{" "}
-          bytes or {state.response.maxFiles.toLocaleString()} files.
+          This diff is large and has been truncated at{" "}
+          {ENGLISH_NUMBER.format(state.response.maxBytes)} bytes or{" "}
+          {ENGLISH_NUMBER.format(state.response.maxFiles)} files.
         </output>
       ) : null}
       {state.response.files.map((file, index) => (

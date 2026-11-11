@@ -1,4 +1,135 @@
+import { isJiraProjectLifecycleMutation } from "./jira-project-lifecycle-values.js";
+import {
+  isJiraPrivateAccountRead,
+  executeJiraPrivateAccountRead,
+} from "./jira-managed-private-account.js";
+import { executeJiraSearchPostRead, isJiraSearchPostRead } from "./jira-managed-search-post.js";
+import {
+  executeJiraWorklogsByIdRead,
+  isJiraWorklogsByIdRead,
+} from "./jira-managed-worklogs-by-id.js";
+import {
+  executeJiraAnonymizationRead,
+  isJiraAnonymizationRead,
+} from "./jira-managed-anonymization-reads.js";
+import { executeJiraSessionRead, isJiraSessionRead } from "./jira-managed-session-read.js";
+import { executeJiraEmailTemplateRead } from "./jira-managed-email-templates.js";
+import { jiraManagedEmailTemplatePorts } from "./jira-managed-email-template-ports.js";
+import {
+  executeJiraIssueTypeSchemeRead,
+  isJiraIssueTypeSchemeRead,
+} from "./jira-managed-issue-type-schemes.js";
+import {
+  executeJiraWorkflowSchemeRead,
+  isJiraWorkflowSchemeRead,
+} from "./jira-managed-workflow-schemes.js";
+import { executeJiraScreenRead, isJiraScreenRead } from "./jira-managed-screen-reads.js";
+import { executeJiraUserRead, isJiraUserRead } from "./jira-managed-user-reads.js";
+import { executeJiraDirectoryRead, isJiraDirectoryRead } from "./jira-managed-directory-reads.js";
+import {
+  executeJiraAccessSchemeRead,
+  isJiraAccessSchemeRead,
+} from "./jira-managed-access-schemes.js";
+import {
+  executeJiraNotificationSchemeRead,
+  isJiraNotificationSchemeRead,
+} from "./jira-managed-notification-schemes.js";
+import {
+  executeJiraProjectAssociationRead,
+  isJiraProjectAssociationRead,
+} from "./jira-managed-project-associations.js";
+import { jiraProjectLifecycleRequests } from "./jira-project-lifecycle-request.js";
+import {
+  executeJiraCoreMetadataRead,
+  isJiraCoreMetadataRead,
+} from "./jira-managed-core-metadata.js";
+import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
+import {
+  executeJiraConfigurationRead,
+  isJiraConfigurationRead,
+} from "./jira-managed-configuration-reads.js";
+import {
+  executeJiraRuntimeSettingsRead,
+  isJiraRuntimeSettingsRead,
+} from "./jira-managed-runtime-settings.js";
+import {
+  executeJiraMaintenanceRead,
+  isJiraMaintenanceRead,
+} from "./jira-managed-maintenance-reads.js";
+import {
+  executeJiraJobObservationRead,
+  isJiraJobObservationRead,
+} from "./jira-managed-job-observations.js";
+import {
+  executeJiraAccountDiagnosticRead,
+  isJiraAccountDiagnosticRead,
+} from "./jira-managed-account-diagnostics.js";
+import {
+  executeJiraApplicationSettingsRead,
+  isJiraApplicationSettingsRead,
+} from "./jira-managed-application-settings.js";
+import {
+  executeJiraAdministrativeObservationRead,
+  isJiraAdministrativeObservationRead,
+} from "./jira-managed-administrative-observations.js";
+import {
+  executeJiraRemoteVersionLinkRead,
+  isJiraRemoteVersionLinkRead,
+} from "./jira-managed-remote-version-links.js";
+import { executeJiraWorklogFeedRead, isJiraWorklogFeedRead } from "./jira-managed-worklog-feeds.js";
+import {
+  executeJiraEntityPropertyRead,
+  isJiraEntityPropertyRead,
+} from "./jira-managed-entity-properties.js";
+import {
+  executeJiraIssueContextRead,
+  isJiraIssueContextRead,
+} from "./jira-managed-issue-context-reads.js";
+import {
+  executeJiraResourceLookupRead,
+  isJiraResourceLookupRead,
+} from "./jira-managed-resource-lookups.js";
+import { executeJiraColumnRead, isJiraColumnRead } from "./jira-managed-column-reads.js";
+import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
+import {
+  executeJiraPrioritySchemeRead,
+  isJiraPrioritySchemeRead,
+} from "./jira-managed-priority-schemes.js";
+import { executeJiraReleaseRead, isJiraReleaseRead } from "./jira-managed-release-reads.js";
+import {
+  executeJiraScopedDirectoryRead,
+  isJiraScopedDirectoryRead,
+} from "./jira-managed-scoped-directory.js";
+import {
+  executeJiraFieldDirectoryRead,
+  isJiraFieldDirectoryRead,
+} from "./jira-managed-field-directory.js";
+import { executeJiraJqlMetadataRead, isJiraJqlMetadataRead } from "./jira-managed-jql-metadata.js";
+import {
+  executeJiraParticipationRead,
+  isJiraParticipationRead,
+} from "./jira-managed-participation.js";
 import { jiraBrowseUrl } from "./jira-browse-url.js";
+import { JIRA_AGILE_READ_OPERATIONS, executeJiraAgileRead } from "./jira-agile-reads.js";
+import { executeJiraAgileContextRead, isJiraAgileContextRead } from "./jira-agile-context-reads.js";
+import { jiraAgileRequest } from "./jira-agile-request.js";
+import { JIRA_FILTER_READ_OPERATIONS, executeJiraFilterRead } from "./jira-filter-reads.js";
+import { jiraProjectBrowseUrl } from "./jira-project-browse-url.js";
+import { executeJiraComponentRead, isJiraComponentRead } from "./jira-managed-components.js";
+import { executeJiraVersionRead, isJiraVersionRead } from "./jira-managed-versions.js";
+import { executeJiraIssueDetailRead, isJiraIssueDetailRead } from "./jira-managed-issue-details.js";
+import { executeJiraCommentRead, isJiraCommentRead } from "./jira-managed-comments.js";
+import { executeJiraSavedViewRead, isJiraSavedViewRead } from "./jira-managed-saved-views.js";
+import {
+  executeJiraAttachmentRead,
+  isJiraAttachmentRead,
+} from "./jira-managed-attachment-reads.js";
+import { executeJiraAvatarRead, isJiraAvatarRead } from "./jira-managed-avatar-reads.js";
+import {
+  executeJiraProjectRead,
+  isJiraProjectRead,
+  isJiraProjectMutation,
+} from "./jira-managed-projects.js";
 import { jiraIssueFieldsQuery, selectedJiraReadFields } from "./jira-managed-field-reads.js";
 import {
   jiraAssignableUsersPath,
@@ -29,6 +160,7 @@ import {
   metadataItems,
   remoteJiraPage,
 } from "./jira-managed-metadata.js";
+import { JIRA_CREATE_ASSIGNED_FIELDS } from "./jira-field-metadata.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -40,9 +172,9 @@ import type {
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 export type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
-import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
+import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
-import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import { executeJiraManagedMutation, requestFor } from "./jira-managed-mutations.js";
 import { createJiraDraftStore } from "./jira-draft-store.js";
 import { executeJiraDraftStageTool, type JiraDraftToolDeps } from "./jira-draft-stage-tool.js";
 import { createJiraReportStore } from "./jira-report-store.js";
@@ -83,7 +215,11 @@ export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationCont
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
   context: Context,
-  execute: (http: AtlassianHttpBodyPort, trace?: JiraTraceRequest) => Promise<JiraMutationAttempt>,
+  execute: (
+    http: AtlassianHttpBodyPort,
+    trace?: JiraTraceRequest,
+    privatePorts?: Pick<JiraManagedConnection, "privateIdentity" | "avatars">,
+  ) => Promise<JiraMutationAttempt>,
 ) => Promise<ManagedMcpToolResult>;
 
 interface Project extends CatalogJsonObject {
@@ -246,7 +382,19 @@ function objectReadResult(
 /** Machine-readable provenance for new Markdown; native wiki strings remain verbatim (ADR-0128). */
 function createMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
   const items = metadataItems(value);
-  return items === undefined ? undefined : descriptionMetadataItems(items);
+  return items === undefined
+    ? undefined
+    : descriptionMetadataItems(items).map((item) => assignedOnCreate(item));
+}
+/**
+ * Jira's create metadata marks the reporter required without a default, yet Jira sets it to the
+ * calling user when a create omits it, and create admission already treats it so. Shown raw, the
+ * field told the model to invent a reporter, which Jira then refused as unknown user.
+ */
+function assignedOnCreate(item: CatalogJsonObject): CatalogJsonObject {
+  return typeof item.id === "string" && JIRA_CREATE_ASSIGNED_FIELDS.has(item.id)
+    ? { ...item, hasDefaultValue: true }
+    : item;
 }
 function descriptionMetadataItems(
   items: readonly CatalogJsonObject[],
@@ -257,7 +405,7 @@ function descriptionMetadataItems(
           ...item,
           inputSchema: structuredClone(JIRA_DESCRIPTION_INPUT_SCHEMA),
           nativeFormat: "jira-wiki",
-          markdownSerialization: "headings-only",
+          markdownSerialization: "supported-markdown",
         }
       : item,
   );
@@ -286,7 +434,268 @@ function arrayResult(
     ? projectPage(values, startAt, maxResults)
     : jiraAssignableUsersResult(values, startAt, maxResults);
 }
+async function agileOrFilterRead<Context extends ManagedMcpInvocationContext>(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult | undefined> {
+  const agile = JIRA_AGILE_READ_OPERATIONS.find((operation) => operation === name);
+  const agileContext = isJiraAgileContextRead(name) ? name : undefined;
+  const filter = JIRA_FILTER_READ_OPERATIONS.find((operation) => operation === name);
+  if (agile === undefined && agileContext === undefined && filter === undefined) return undefined;
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  if (agileContext !== undefined)
+    return executeJiraAgileContextRead(agileContext, args, context, connected);
+  return agile !== undefined
+    ? executeJiraAgileRead(agile, args, context, connected)
+    : executeJiraFilterRead(name, args, context, connected);
+}
 async function read<Context extends ManagedMcpInvocationContext>(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  const connected = await agileOrFilterRead(name, args, context, connection);
+  if (connected !== undefined) return connected;
+  if (isJiraComponentRead(name) || isJiraVersionRead(name))
+    return projectMetadataRead(name, args, context, connection);
+  if (isNativeDetailRead(name)) return nativeDetailRead(name, args, context, connection);
+  return isJiraProjectRead(name)
+    ? projectRead(name, args, context, connection)
+    : readIssueOrMetadata(name, args, context, connection);
+}
+
+type NativeDetailRead =
+  | Parameters<typeof executeJiraPrivateAccountRead>[0]
+  | "jira.email-template-pack"
+  | "jira.search-post"
+  | "jira.worklogs-by-id"
+  | "jira.current-session"
+  | Parameters<typeof executeJiraAnonymizationRead>[0]
+  | Parameters<typeof executeJiraRemoteVersionLinkRead>[0]
+  | Parameters<typeof executeJiraWorklogFeedRead>[0]
+  | Parameters<typeof executeJiraAdministrativeObservationRead>[0]
+  | Parameters<typeof executeJiraApplicationSettingsRead>[0]
+  | Parameters<typeof executeJiraAccountDiagnosticRead>[0]
+  | Parameters<typeof executeJiraIssueContextRead>[0]
+  | Parameters<typeof executeJiraEntityPropertyRead>[0]
+  | Parameters<typeof executeJiraJobObservationRead>[0]
+  | Parameters<typeof executeJiraResourceLookupRead>[0]
+  | Parameters<typeof executeJiraColumnRead>[0]
+  | Parameters<typeof executeJiraMaintenanceRead>[0]
+  | Parameters<typeof executeJiraRuntimeSettingsRead>[0]
+  | Parameters<typeof executeJiraConfigurationRead>[0]
+  | Parameters<typeof executeJiraIssueDetailRead>[0]
+  | "jira.get-comment"
+  | Parameters<typeof executeJiraSavedViewRead>[0]
+  | Parameters<typeof executeJiraAttachmentRead>[0]
+  | Parameters<typeof executeJiraAvatarRead>[0]
+  | Parameters<typeof executeJiraParticipationRead>[0]
+  | Parameters<typeof executeJiraIssueTypeSchemeRead>[0]
+  | Parameters<typeof executeJiraWorkflowSchemeRead>[0]
+  | Parameters<typeof executeJiraScreenRead>[0]
+  | Parameters<typeof executeJiraUserRead>[0]
+  | Parameters<typeof executeJiraDirectoryRead>[0]
+  | Parameters<typeof executeJiraAccessSchemeRead>[0]
+  | Parameters<typeof executeJiraNotificationSchemeRead>[0]
+  | Parameters<typeof executeJiraProjectAssociationRead>[0]
+  | Parameters<typeof executeJiraCoreMetadataRead>[0]
+  | Parameters<typeof executeJiraInstanceRead>[0]
+  | Parameters<typeof executeJiraRoleRead>[0]
+  | Parameters<typeof executeJiraPrioritySchemeRead>[0]
+  | Parameters<typeof executeJiraReleaseRead>[0]
+  | Parameters<typeof executeJiraScopedDirectoryRead>[0]
+  | Parameters<typeof executeJiraFieldDirectoryRead>[0]
+  | Parameters<typeof executeJiraJqlMetadataRead>[0];
+function isNativeDetailRead(name: string): name is NativeDetailRead {
+  if (name === "jira.email-template-pack") return true;
+  return [
+    isJiraPrivateAccountRead,
+    isJiraSearchPostRead,
+    isJiraWorklogsByIdRead,
+    isJiraAnonymizationRead,
+    isJiraSessionRead,
+    isJiraRemoteVersionLinkRead,
+    isJiraWorklogFeedRead,
+    isJiraAdministrativeObservationRead,
+    isJiraApplicationSettingsRead,
+    isJiraAccountDiagnosticRead,
+    isJiraIssueContextRead,
+    isJiraEntityPropertyRead,
+    isJiraJobObservationRead,
+    isJiraResourceLookupRead,
+    isJiraColumnRead,
+    isJiraMaintenanceRead,
+    isJiraRuntimeSettingsRead,
+    isJiraConfigurationRead,
+    isJiraIssueDetailRead,
+    isJiraCommentRead,
+    isJiraSavedViewRead,
+    isJiraAttachmentRead,
+    isJiraAvatarRead,
+    isJiraParticipationRead,
+    isJiraIssueTypeSchemeRead,
+    isJiraWorkflowSchemeRead,
+    isJiraScreenRead,
+    isJiraUserRead,
+    isJiraDirectoryRead,
+    isJiraAccessSchemeRead,
+    isJiraNotificationSchemeRead,
+    isJiraProjectAssociationRead,
+    isJiraCoreMetadataRead,
+    isJiraInstanceRead,
+    isJiraRoleRead,
+    isJiraPrioritySchemeRead,
+    isJiraReleaseRead,
+    isJiraScopedDirectoryRead,
+    isJiraFieldDirectoryRead,
+    isJiraJqlMetadataRead,
+  ].some((accepts) => accepts(name));
+}
+type NativeReadHandler = (
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>,
+) => Promise<ManagedMcpToolResult> | undefined;
+/** Keep family narrowing at the call site without duplicating the dispatch chain. */
+function nativeReadHandler<Name extends NativeDetailRead>(
+  accepts: (name: string) => name is Name,
+  execute: (
+    name: Name,
+    args: CatalogJsonObject,
+    request: ReturnType<typeof requestFor>,
+  ) => Promise<ManagedMcpToolResult>,
+): NativeReadHandler {
+  return (name, args, request) => (accepts(name) ? execute(name, args, request) : undefined);
+}
+const ADMINISTRATION_READS: readonly NativeReadHandler[] = [
+  nativeReadHandler(isJiraAdministrativeObservationRead, executeJiraAdministrativeObservationRead),
+  nativeReadHandler(isJiraResourceLookupRead, executeJiraResourceLookupRead),
+  nativeReadHandler(isJiraColumnRead, executeJiraColumnRead),
+  nativeReadHandler(isJiraScreenRead, executeJiraScreenRead),
+  nativeReadHandler(isJiraIssueTypeSchemeRead, executeJiraIssueTypeSchemeRead),
+  nativeReadHandler(isJiraWorkflowSchemeRead, executeJiraWorkflowSchemeRead),
+  nativeReadHandler(isJiraAccessSchemeRead, executeJiraAccessSchemeRead),
+  nativeReadHandler(isJiraNotificationSchemeRead, executeJiraNotificationSchemeRead),
+  nativeReadHandler(isJiraProjectAssociationRead, executeJiraProjectAssociationRead),
+  nativeReadHandler(isJiraRoleRead, executeJiraRoleRead),
+  nativeReadHandler(isJiraPrioritySchemeRead, executeJiraPrioritySchemeRead),
+  nativeReadHandler(isJiraApplicationSettingsRead, executeJiraApplicationSettingsRead),
+  nativeReadHandler(isJiraConfigurationRead, executeJiraConfigurationRead),
+  nativeReadHandler(isJiraRuntimeSettingsRead, executeJiraRuntimeSettingsRead),
+  nativeReadHandler(isJiraMaintenanceRead, executeJiraMaintenanceRead),
+  nativeReadHandler(isJiraJobObservationRead, executeJiraJobObservationRead),
+  nativeReadHandler(isJiraAccountDiagnosticRead, executeJiraAccountDiagnosticRead),
+  nativeReadHandler(isJiraUserRead, executeJiraUserRead),
+  nativeReadHandler(isJiraDirectoryRead, executeJiraDirectoryRead),
+  nativeReadHandler(isJiraCoreMetadataRead, executeJiraCoreMetadataRead),
+  nativeReadHandler(isJiraInstanceRead, executeJiraInstanceRead),
+  nativeReadHandler(isJiraReleaseRead, executeJiraReleaseRead),
+  nativeReadHandler(isJiraScopedDirectoryRead, executeJiraScopedDirectoryRead),
+  nativeReadHandler(isJiraFieldDirectoryRead, executeJiraFieldDirectoryRead),
+  nativeReadHandler(isJiraJqlMetadataRead, executeJiraJqlMetadataRead),
+  nativeReadHandler(isJiraRemoteVersionLinkRead, executeJiraRemoteVersionLinkRead),
+  nativeReadHandler(isJiraWorklogFeedRead, executeJiraWorklogFeedRead),
+];
+function administrationRead(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>,
+): Promise<ManagedMcpToolResult> | undefined {
+  for (const read of ADMINISTRATION_READS) {
+    const result = read(name, args, request);
+    if (result !== undefined) return result;
+  }
+  return undefined;
+}
+function linkedIssueDetailRead(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>,
+  baseUrl: string,
+): Promise<ManagedMcpToolResult> {
+  if (isJiraIssueContextRead(name))
+    return executeJiraIssueContextRead(name, args, request, baseUrl);
+  if (isJiraCommentRead(name)) return executeJiraCommentRead(name, args, request, baseUrl);
+  if (isJiraIssueDetailRead(name)) return executeJiraIssueDetailRead(name, args, request);
+  throw new TypeError("Unsupported Jira detail read");
+}
+function selectedObservationRead(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  request: ReturnType<typeof requestFor>,
+): Promise<ManagedMcpToolResult> | undefined {
+  if (name === "jira.project-priority-scheme")
+    return executeJiraProjectAssociationRead(
+      name,
+      args,
+      request,
+      jiraProjectLifecycleRequests(connection, context).priority.read,
+    );
+  if (name === "jira.email-template-pack") {
+    const ports = jiraManagedEmailTemplatePorts(connection, context, request, true);
+    return ports === undefined
+      ? Promise.resolve(failure("unavailable"))
+      : executeJiraEmailTemplateRead(args, ports);
+  }
+  if (isJiraPrivateAccountRead(name))
+    return executeJiraPrivateAccountRead(name, args, request, connection.privateIdentity);
+  if (isJiraSearchPostRead(name))
+    return executeJiraSearchPostRead(args, request, connection.baseUrl);
+  if (isJiraWorklogsByIdRead(name)) return executeJiraWorklogsByIdRead(args, request);
+  if (isJiraAnonymizationRead(name)) return executeJiraAnonymizationRead(name, args, request);
+  if (isJiraSessionRead(name)) return executeJiraSessionRead(args, context, connection);
+  return undefined;
+}
+async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  const request = requestFor(connected, context);
+  const selectedObservation = selectedObservationRead(name, args, context, connected, request);
+  if (selectedObservation !== undefined) return selectedObservation;
+  if (isJiraEntityPropertyRead(name))
+    return executeJiraEntityPropertyRead(name, args, {
+      platform: request,
+      agile: jiraAgileRequest(connected, context),
+      baseUrl: connected.baseUrl,
+    });
+  const administration = administrationRead(name, args, request);
+  if (administration !== undefined) return administration;
+  if (isJiraParticipationRead(name))
+    return executeJiraParticipationRead(name, args, request, connected.baseUrl);
+  if (isJiraSavedViewRead(name)) return executeJiraSavedViewRead(name, args, request);
+  if (isJiraAttachmentRead(name)) return executeJiraAttachmentRead(name, args, request);
+  if (isJiraAvatarRead(name)) return executeJiraAvatarRead(name, args, request);
+  const result = await linkedIssueDetailRead(name, args, request, connected.baseUrl);
+  return boundJiraReadResult(withIssueLink(result, connected.baseUrl, args.issueKey));
+}
+
+async function projectMetadataRead<Context extends ManagedMcpInvocationContext>(
+  name:
+    Parameters<typeof executeJiraComponentRead>[0] | Parameters<typeof executeJiraVersionRead>[0],
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  const request = requestFor(connected, context);
+  const result = isJiraComponentRead(name)
+    ? await executeJiraComponentRead(name, args, request)
+    : await executeJiraVersionRead(name, args, request);
+  return boundJiraReadResult(result);
+}
+async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
   context: Context,
@@ -295,19 +704,14 @@ async function read<Context extends ManagedMcpInvocationContext>(
   const selected = selection(name, args);
   if (selected === undefined) return failure("invalid-input");
   const connected = await connection(context);
-  const { deployment, baseUrl, http } = connected;
+  const { deployment, baseUrl } = connected;
   if (deployment !== "data-center") return failure("unsupported-deployment");
   const url = atlassianApiUrl(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"), selected.path);
-  const outcome = await executeAtlassianWriteRequest(
-    {
-      signal: context.signal,
-      http: (request) =>
-        context.signal.aborted || !context.beforeEffect()
-          ? Promise.resolve({ kind: "network-error" })
-          : http(request),
-    },
-    { method: "GET", url, expect: ARRAY_READ_NAMES.has(name) ? "json-array" : "json" },
-  );
+  const outcome = await executeAdmittedJiraRequest(connected, context, context.signal, {
+    method: "GET",
+    url,
+    expect: ARRAY_READ_NAMES.has(name) ? "json-array" : "json",
+  });
   if (!outcome.ok) return failure(outcome.reason, outcome.remote);
   const { startAt, maxResults } = selected;
   if (ARRAY_READ_NAMES.has(name))
@@ -325,6 +729,26 @@ async function read<Context extends ManagedMcpInvocationContext>(
       ? result
       : withIssueLink(result, baseUrl, args.issueKey),
   );
+}
+
+async function projectRead<Context extends ManagedMcpInvocationContext>(
+  name: Parameters<typeof executeJiraProjectRead>[0],
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  const result = await executeJiraProjectRead(name, args, requestFor(connected, context));
+  return boundJiraReadResult(withProjectLink(result, connected.baseUrl));
+}
+
+function withProjectLink(result: ManagedMcpToolResult, baseUrl: string): ManagedMcpToolResult {
+  const data = { ...result.data };
+  delete data.browseUrl;
+  const url = jiraProjectBrowseUrl(baseUrl, data.projectKey);
+  if (url !== undefined) data.browseUrl = url;
+  return { ...result, data };
 }
 
 function withIssueLink(
@@ -353,6 +777,45 @@ function batchTool<Context extends ManagedMcpInvocationContext>(
   });
 }
 
+function mutationTool<Context extends ManagedMcpInvocationContext>(
+  declaration: ManagedMcpToolDeclaration,
+  operation: (typeof JIRA_MUTATION_OPERATIONS)[number],
+  connection: JiraManagedProviderDeps<Context>["connection"],
+  executeMutation: JiraManagedMutationExecutor<Context>,
+): ManagedMcpTool<Context> {
+  return Object.freeze({
+    ...declaration,
+    execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
+      const snapshot = structuredClone(args);
+      const selected = Object.freeze({ ...(await connection(context)) });
+      const result = await executeMutation(
+        operation,
+        structuredClone(snapshot),
+        context,
+        (http, trace, privatePorts) =>
+          executeJiraManagedMutation(
+            operation,
+            snapshot,
+            context,
+            {
+              ...selected,
+              http,
+              ...privatePorts,
+              avatars: { ...selected.avatars, ...privatePorts?.avatars },
+            },
+            trace,
+          ),
+      );
+      if (isJiraProjectMutation(operation) || isJiraProjectLifecycleMutation(operation))
+        return withProjectLink(result, selected.baseUrl);
+      return withIssueLink(
+        result,
+        selected.baseUrl,
+        operation === "jira.create" ? undefined : snapshot.issueKey,
+      );
+    },
+  });
+}
 /** Private connection/context stays outside the MCP declaration and arguments. */
 function managedTool<Context extends ManagedMcpInvocationContext>(
   declaration: ManagedMcpToolDeclaration,
@@ -383,25 +846,7 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
   const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === declaration.name);
   if (operation === undefined || declaration.risk !== "write" || executeMutation === undefined)
     throw new TypeError("Unsupported Jira declaration");
-  return Object.freeze({
-    ...declaration,
-    execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
-      const snapshot = structuredClone(args);
-      const selected = Object.freeze({ ...(await connection(context)) });
-      const result = await executeMutation(
-        operation,
-        structuredClone(snapshot),
-        context,
-        (http, trace) =>
-          executeJiraManagedMutation(operation, snapshot, context, { ...selected, http }, trace),
-      );
-      return withIssueLink(
-        result,
-        selected.baseUrl,
-        operation === "jira.create" ? undefined : snapshot.issueKey,
-      );
-    },
-  });
+  return mutationTool(declaration, operation, connection, executeMutation);
 }
 
 export function createJiraManagedProvider<Context extends ManagedMcpInvocationContext>(

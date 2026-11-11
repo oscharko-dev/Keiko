@@ -12,6 +12,7 @@ import {
   type JiraMutationRequest,
 } from "./jira-managed-mutation-metadata.js";
 import { readJiraFieldCatalog } from "./jira-managed-template-gate.js";
+import { jiraTemplateNativeIssueType } from "./jira-template-parent-types.js";
 
 /**
  * Read-only instance facts for the Jira Pod template settings (#4177): what a template is
@@ -24,6 +25,7 @@ export type JiraTemplateInstanceRead<T> =
 
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 const SAMPLE_SIZE = 25;
+const LINK_TYPES_MAX = 1000;
 const ISSUE_TYPES_MAX = 12;
 const SECTIONS_MAX = 8;
 const ROUTING_FIELDS: ReadonlySet<string> = new Set([
@@ -74,11 +76,14 @@ async function readProject(
 
 async function readLinkTypes(
   request: JiraMutationRequest,
-): Promise<JiraTemplateInstanceMetadata["linkTypes"]> {
+): Promise<
+  JiraTemplateInstanceRead<{ readonly linkTypes: JiraTemplateInstanceMetadata["linkTypes"] }>
+> {
   const response = await request("issueLinkType");
   const types = response.ok ? asArray(response.body?.issueLinkTypes) : undefined;
-  if (types === undefined || types.length > 1000) return undefined;
-  return types.flatMap((item) => {
+  if (types === undefined) return { ok: true, linkTypes: undefined };
+  if (types.length > LINK_TYPES_MAX) return { ok: false, reason: "bounds-exceeded" };
+  const linkTypes = types.flatMap((item) => {
     const record = asRecord(item);
     if (typeof record?.name !== "string") return [];
     return [
@@ -89,6 +94,7 @@ async function readLinkTypes(
       },
     ];
   });
+  return { ok: true, linkTypes };
 }
 
 async function readStatuses(
@@ -126,6 +132,45 @@ function statusNames(types: readonly unknown[], wantedId: string | undefined): r
   return [...names];
 }
 
+async function readParentIssueTypes(request: JiraMutationRequest): Promise<
+  JiraTemplateInstanceRead<{
+    readonly types: readonly { readonly id: string; readonly name: string }[];
+  }>
+> {
+  const response = await request("issuetype", "GET", undefined, "json-array");
+  if (!response.ok) return response;
+  if (response.status !== 200 || response.items === undefined) return MALFORMED;
+  if (response.items.length > 1000) return { ok: false, reason: "bounds-exceeded" };
+  const types: { id: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const item of response.items) {
+    const type = jiraTemplateNativeIssueType(item);
+    if (type === undefined) return MALFORMED;
+    if (seen.has(type.id)) return MALFORMED;
+    seen.add(type.id);
+    types.push({ id: type.id, name: type.name });
+  }
+  return { ok: true, types } as const;
+}
+
+function readParentTypesIfRequired(
+  request: JiraMutationRequest,
+  template: JiraIssueTemplate,
+): Promise<Awaited<ReturnType<typeof readParentIssueTypes>> | undefined> {
+  return template.parent.issueTypes === undefined
+    ? Promise.resolve(undefined)
+    : readParentIssueTypes(request);
+}
+function readStatusesIfProject(
+  request: JiraMutationRequest,
+  template: JiraIssueTemplate,
+  project: ProjectFacts | undefined,
+): Promise<readonly string[] | undefined> {
+  return project === undefined
+    ? Promise.resolve(undefined)
+    : readStatuses(request, template, project);
+}
+
 /** The live facts one template is validated against; unreadable parts are left out, not guessed. */
 export async function readJiraTemplateInstanceMetadata(
   request: JiraMutationRequest,
@@ -134,16 +179,20 @@ export async function readJiraTemplateInstanceMetadata(
   const read = await readProject(request, template.project);
   if (!read.ok) return read;
   const { project } = read;
+  const parentTypes = await readParentTypesIfRequired(request, template);
+  if (parentTypes !== undefined && !parentTypes.ok) return parentTypes;
   const fields = await readJiraFieldCatalog(request);
-  const linkTypes = await readLinkTypes(request);
-  const statuses =
-    project === undefined ? undefined : await readStatuses(request, template, project);
+  const links = await readLinkTypes(request);
+  if (!links.ok) return links;
+  const { linkTypes } = links;
+  const statuses = await readStatusesIfProject(request, template, project);
   return {
     ok: true,
     instance: {
       ...(fields === undefined ? {} : { fields }),
       ...(linkTypes === undefined ? {} : { linkTypes }),
       ...(statuses === undefined ? {} : { statuses }),
+      ...(parentTypes === undefined ? {} : { parentIssueTypes: parentTypes.types }),
       ...(project === undefined
         ? {}
         : { project: { key: project.key, issueTypes: project.issueTypes } }),

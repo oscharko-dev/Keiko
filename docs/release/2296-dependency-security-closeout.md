@@ -35,6 +35,46 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
+### 2026-10-31 follow-up (#4090)
+
+The CI-identical OSV Scanner 2.7.0 scan reproduced three affected package instances:
+`glob@13.0.6`, modern `minimatch@10.2.6` and dev-only legacy `minimatch@3.1.5`.
+The root overrides now resolve `glob@14.0.3` and modern `minimatch@11.0.3`, including
+the shipped `@tufjs/models` dependency. The legacy brace-expansion pin stays in place;
+the modern matcher requires the already patched `brace-expansion@^5.0.12` itself.
+
+The remaining legacy instance uses the callable CommonJS API required by the latest
+`eslint-plugin-import@2.32.0`, `eslint-plugin-react@7.37.5` and
+`eslint-plugin-jsx-a11y@6.10.2`. Replacing it with 11.0.3's object export would break
+their rules. The 3.1.5 source lacks the `optimizationLevel` and `firstPhasePreProcess`
+amplification described in [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249),
+although the advisory's version range matches it. The applicability triage in
+`osv-scanner.toml` expires on 2026-11-30. `check:osv-waiver-scope` now additionally
+requires that exact dev-only legacy path/version and patched 11.0.3 everywhere else,
+and requires removing the triage when the legacy copy disappears. The existing
+independent npm/OSV check still refuses any suppression affecting shipped packages.
+
+The complete OSV scan reports zero unwaived findings after this change; it filters
+one explicitly recorded legacy finding. This is not a claim that the upstream
+advisory has been corrected. No package-wide override or indefinite suppression is
+introduced. The earlier security snapshots below remain historical evidence.
+
+The first customer-shape CI run exposed a delivery mismatch: the version-qualified
+modern override initially installed 11.0.1 locally but was not handled by the existing exact-flat-pin
+runtime staging planner. The real installed-closure test reproduced `missing: ["minimatch"]`.
+Using the supported exact `minimatch: "11.0.3"` pin fixes that staging mismatch; changing the override key alone leaves the
+lockfile and installed versions unchanged; the earlier version-qualified legacy brace-expansion exception
+still retains 3.1.5 for the lint plugins. Staging now delivers the three affected TUF ancestors
+with exact sibling/leaf peers, preserving their upstream source and license bytes. The package
+test asserts both the bounded archive inventory and the actual staged 11.0.3 dependency.
+
+The patch versions are aligned with PR #4168 (minimatch 11.0.3 and glob 14.0.3).
+The exact-flat runtime override and the earlier legacy exception are retained because
+the staging projector does not support #4168's major-qualified modern override.
+The narrower 2026-11-30 legacy triage expiry and exact inventory guard are retained.
+Each branch must regenerate its own source-bound design and catalog evidence; evidence
+from #4168 cannot be copied across differing package manifests.
+
 | Source                     | Result                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `npm audit --json`         | Rechecked 2026-10-06: 6 dev-only nodes for 2 recorded advisories; production audit: 0 vulnerabilities |
@@ -144,6 +184,15 @@ patched without enabling HTML or changing parser options. The same recursive sca
 zero unwaived findings, and all 74 existing Composer/parser controls pass. Existing waiver IDs,
 expiry dates and reachability limits remain unchanged. Earlier qualification records retain their
 original dependency inputs; current release qualification is repeated for the patched resolution.
+
+For #4291, the Contracts package directly pins the same resolved `markdown-it` 14.3.3 and
+`@types/markdown-it` 14.2.0 for explicit Markdown description projection. This adds no internal
+package dependency or parser types to the public API. The MIT-licensed ESM parser also supports
+browser consumers. This separate consumer recognizes HTML tokens solely to refuse them; it never
+renders HTML, loads plugins or fetches links. Input and output are bounded to 32,768 characters,
+nesting is bounded, and a limited Jira wiki writer refuses unsupported or lossy structures. Native
+Jira strings bypass conversion. The existing patched resolutions are reused; this scope change
+does not claim a new repository-wide vulnerability scan or currency qualification.
 
 ### How this queue must be queried — and the trap in it
 

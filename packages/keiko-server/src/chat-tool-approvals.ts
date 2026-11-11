@@ -1,3 +1,4 @@
+import { jiraOperationBindingForTool } from "./atlassian/jiraManagedProvider.js";
 import type {
   CatalogConsumer,
   CatalogBoundAuthorityPort,
@@ -28,6 +29,7 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
+import { validateChatApprovalContinuation } from "./chat-approval-continuation-state.js";
 
 export interface ChatToolApprovalContext {
   readonly deps: Pick<UiHandlerDeps, "store" | "atlassianActionApprovalRegistry">;
@@ -82,6 +84,13 @@ export async function acceptChatToolReadGrant(
   );
   await input.publish();
 }
+function approvalOperationBinding(approval: ChatToolWriteApprovalView): {
+  readonly operationBinding?: NonNullable<ReturnType<typeof jiraOperationBindingForTool>>;
+} {
+  const binding = jiraOperationBindingForTool(approval.operation);
+  return binding === undefined ? {} : { operationBinding: binding };
+}
+
 export async function waitForChatToolWriteConsent(
   input: ChatToolApprovalContext,
   approval: ChatToolWriteApprovalView,
@@ -93,13 +102,19 @@ export async function waitForChatToolWriteConsent(
   const save = (view: ChatToolWriteApprovalView): void => {
     deps.store.updateChatToolTranscript(
       message.id,
-      { kind: "write-approval", callId: exchange.call.id, approval: view },
+      {
+        kind: "write-approval",
+        callId: exchange.call.id,
+        approval: view,
+        ...approvalOperationBinding(view),
+      },
       correlationId,
     );
   };
   save(approval);
   await input.publish();
   await registry.waitForChatWriteApproval(approval.approvalId, signal);
+  validateChatApprovalContinuation(deps.store, message);
   if (signal.aborted) registry.revokeChatWriteApproval(approval.approvalId, correlationId);
   save(
     registry.getChatWriteApproval(approval.approvalId, correlationId)?.approval ?? {
@@ -129,7 +144,7 @@ export function refreshChatToolWriteApproval(
     return;
   deps.store.updateChatToolTranscript(
     message.id,
-    { kind: "write-approval", callId, approval: observed },
+    { kind: "write-approval", callId, approval: observed, ...approvalOperationBinding(observed) },
     correlationId,
   );
 }
@@ -335,7 +350,7 @@ export function reserveChatToolInvocation<Deps>(
     options.deps,
     context.chatId,
     context.authorityReference,
-    { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+    { toolCalls: 1, patchBytes: 0 },
     new Date(options.now()).toISOString(),
     context.correlationId,
   ).ok;
@@ -485,7 +500,11 @@ export function createChatWriteApprovalOwner<
   };
 }
 
-export function reserveChatToolPrompt<Deps>(
+/**
+ * Admits one model call of a Chat tool turn: the turn's retained authority must still be live.
+ * Keiko does not limit tokens (#4346), so nothing is charged — the reservation books no usage.
+ */
+export function admitChatToolModelCall<Deps>(
   options: {
     readonly deps: Deps;
     readonly message: { readonly chatId: string };
@@ -500,13 +519,12 @@ export function reserveChatToolPrompt<Deps>(
     nowIso: string,
     correlationId: string,
   ) => { readonly ok: boolean },
-  promptTokens: number,
 ): boolean {
   return reserve(
     options.deps,
     options.message.chatId,
     options.authority.reference,
-    { toolCalls: 0, promptTokens, patchBytes: 0 },
+    { toolCalls: 0, patchBytes: 0 },
     new Date().toISOString(),
     options.correlationId,
   ).ok;

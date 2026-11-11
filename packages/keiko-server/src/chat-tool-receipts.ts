@@ -10,6 +10,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
+import {
+  jiraOperationForTool,
+  isCurrentJiraOperationBinding,
+} from "./atlassian/jiraManagedProvider.js";
 
 /**
  * The Jira receipts a stored tool result carries, read from its validated structure (#4175): the
@@ -147,6 +151,18 @@ function stagedDraftRefs(value: unknown, count: number): value is readonly strin
     new Set(value).size === value.length
   );
 }
+function supportedStageContract(
+  version: number,
+  data: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  // Legacy stored receipts remain readable; only the current version uses the registry binding.
+  if (version === 1) return true;
+  const contract = jiraOperationForTool("jira.draft-stage");
+  return (
+    version === contract?.declaration.descriptor.toolRef.contractVersion &&
+    isCurrentJiraOperationBinding("jira.draft-stage", data?.operationBinding)
+  );
+}
 function stagedDraftData(
   exchange: ChatToolExchange,
 ): Readonly<Record<string, unknown>> | undefined {
@@ -154,7 +170,7 @@ function stagedDraftData(
   const data = record(result?.data);
   if (
     result?.toolRef?.canonicalId !== "keiko.jira.draft.stage" ||
-    result.toolRef.contractVersion !== 1 ||
+    !supportedStageContract(result.toolRef.contractVersion, data) ||
     result.status !== "completed" ||
     data?.outcome !== "succeeded" ||
     exchange.mutationOutcome !== undefined

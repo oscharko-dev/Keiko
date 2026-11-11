@@ -1530,6 +1530,8 @@ describe("coding runtime routes", () => {
         selectableAgents: ["build"],
         // ...and the prompt inputs default to none: no delivery, no references, no commands.
         promptInputs: { delivery: false, references: false, commands: false, mentions: false },
+        // ...and an unthreaded profile is never reported as native (#4068 W12).
+        toolProfile: "mapped",
       },
     });
     const serialized = JSON.stringify(result.body);
@@ -1567,6 +1569,26 @@ describe("coding runtime routes", () => {
     expect(
       selectable({ codingRuntimeHostQualified: true, openCodeGatewayReadinessRegistry: {} }),
     ).toEqual(["build"]);
+  });
+
+  it("reports the composed tool profile and never labels a mapped one native (#4068 W12)", () => {
+    const toolProfile = (overrides: Partial<Record<string, unknown>>): unknown => {
+      const result = handleCodingRuntimeReadiness(
+        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
+      );
+      return (result.body as { toolProfile?: unknown }).toolProfile;
+    };
+    const registry = (profile: string): Record<string, unknown> => ({
+      openCodeGatewayReadinessRegistry: { toolProfile: profile },
+    });
+    expect(toolProfile({ codingRuntimeHostQualified: true, ...registry("native") })).toBe("native");
+    for (const profile of ["direct", "code-mode"]) {
+      expect(toolProfile({ codingRuntimeHostQualified: true, ...registry(profile) })).toBe(
+        "mapped",
+      );
+    }
+    expect(toolProfile({ codingRuntimeHostQualified: true })).toBe("mapped");
   });
 
   it("computes the prompt inputs from the composed OpenCode tool profile (ADR-0137 D10)", () => {
@@ -1652,6 +1674,76 @@ describe("coding runtime routes", () => {
     });
     expect(unavailable).not.toHaveProperty("runtimeVersion");
     expect(validateCodingWorkbenchRuntimeReadiness(unavailable)).toMatchObject({ ok: true });
+  });
+
+  it("reports a qualified Windows host unavailable until its gateway broker is ready", () => {
+    const read = (
+      reason: "gateway-service-absent" | "gateway-service-stale" | undefined,
+    ): unknown =>
+      handleCodingRuntimeReadiness(
+        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+        runtime({
+          codingRuntimeHostQualified: true,
+          codingRuntimeOrchestrator: undefined,
+          codingRuntimeGatewayService: { unavailableReason: () => reason },
+        }),
+      );
+    expect(read("gateway-service-absent")).toMatchObject({
+      status: 200,
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "gateway-service-absent" },
+    });
+    expect(read("gateway-service-stale")).toMatchObject({
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "gateway-service-stale" },
+    });
+    expect(read(undefined)).toMatchObject({ body: { runtimeAvailable: true } });
+    const body = (read("gateway-service-absent") as { body: unknown }).body;
+    expect(validateCodingWorkbenchRuntimeReadiness(body)).toMatchObject({ ok: true });
+  });
+
+  // #4068: the broker confines only a Keiko-managed worktree, so its readiness offers that location
+  // alone and the Workbench never preselects the operator's own checkout. Other hosts name none.
+  it("offers only the worktree location behind the Windows broker", () => {
+    const read = (broker: boolean): Record<string, unknown> =>
+      (
+        handleCodingRuntimeReadiness(
+          context(
+            "",
+            {},
+            "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding",
+          ),
+          runtime({
+            codingRuntimeHostQualified: true,
+            codingRuntimeOrchestrator: undefined,
+            ...(broker
+              ? { codingRuntimeGatewayService: { unavailableReason: () => undefined } }
+              : {}),
+          }),
+        ) as { body: Record<string, unknown> }
+      ).body;
+    const windows = read(true);
+
+    expect(windows.executionLocations).toEqual(["worktree"]);
+    expect(validateCodingWorkbenchRuntimeReadiness(windows)).toMatchObject({ ok: true });
+    expect(read(false)).not.toHaveProperty("executionLocations");
+  });
+
+  it("does not ask the broker when the host itself is unqualified", () => {
+    const unavailable = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+      runtime({
+        codingRuntimeHostQualified: false,
+        codingRuntimeUnavailableReason: "payload-tampered",
+        codingRuntimeOrchestrator: undefined,
+        codingRuntimeGatewayService: {
+          unavailableReason: () => {
+            throw new Error("must not read the broker");
+          },
+        },
+      }),
+    );
+    expect(unavailable).toMatchObject({
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "payload-tampered" },
+    });
   });
 
   it("names the precise unavailable reason exactly while the runtime host is unqualified", () => {

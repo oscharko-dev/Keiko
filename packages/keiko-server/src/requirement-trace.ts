@@ -11,17 +11,24 @@ import {
   REQUIREMENT_TRACE_FOOTER_START,
   REQUIREMENT_REVISION_LABEL_PREFIX,
   requirementTrace,
+  requirementReference,
   resolveRequirementReferences,
   normaliseText,
   type RequirementReferenceProblem,
   type RequirementTraceUnit,
   type ResolvedRequirementReference,
 } from "@oscharko-dev/keiko-quality-intelligence";
-import type { JiraTraceOutcome, JiraTraceRequest } from "@oscharko-dev/keiko-connectors";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
+  descriptionWithFooter,
+  type JiraTraceOutcome,
+  type JiraTraceRequest,
+} from "@oscharko-dev/keiko-connectors";
 import {
   projectJiraDescriptionInput,
   JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
   readJiraDescriptionBlocks,
+  withoutJiraSourceLabels,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
@@ -44,7 +51,10 @@ import {
 } from "./requirement-inventory-activity.js";
 
 /** The labels and footer of a validated item; the connector applies them and reports back. */
-export type ItemTrace = Omit<JiraTraceRequest, "report">;
+export type ItemTrace = Omit<JiraTraceRequest, "report"> & {
+  /** Source criteria Keiko wrote into its own trace block because the description lacked them. */
+  readonly completedCriteriaCount?: number;
+};
 
 type TraceProblem =
   | RequirementReferenceProblem
@@ -58,7 +68,7 @@ interface TraceDescriptionCheck {
 }
 
 export type TraceResolution =
-  | { readonly ok: true; readonly trace: ItemTrace }
+  | { readonly ok: true; readonly trace: ItemTrace; readonly sourceDigest: string }
   | {
       readonly ok: false;
       readonly reason: "no-knowledge-pod" | "unavailable" | "references";
@@ -111,6 +121,9 @@ function withPage(store: KnowledgeStore, unit: LocatedRequirementUnit): Requirem
   return pageLabel === undefined ? unit : { ...unit, source: { ...unit.source, pageLabel } };
 }
 
+/** The heading of the source criteria Keiko writes into its own trace block. */
+const SOURCE_CRITERIA_HEADING = "Acceptance criteria (verbatim from the source):";
+
 function criterionText(value: string): string {
   return normaliseText(value).replace(/\s+/gu, " ");
 }
@@ -127,18 +140,36 @@ function criterionForms(text: string): readonly string[] {
   // No readable block (for example a literal `{code}` macro marker): it has no checkable
   // representation, so the caller refuses it instead of treating it as present.
   if (blocks.length === 0) return [];
-  const converted = blocks.map(criterionText).join(" ");
+  const converted = blocks.map((block) => criterionText(block)).join(" ");
   return converted === text ? [text] : [text, converted];
 }
 
-function acceptanceCriteriaProblems(
+/** Each description block as checked text, and again without Keiko's own source labels. */
+function descriptionBlocks(description: unknown, documents: readonly string[]): Set<string> {
+  const projected = projectJiraDescriptionInput(description)?.text ?? "";
+  return new Set(
+    readJiraDescriptionBlocks(projected, "jira-wiki").flatMap((block) => {
+      const text = block.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1");
+      // Keiko's own source labels for the model's `[n]` markers add no criterion text (LIM32).
+      const bare = withoutJiraSourceLabels(text, documents);
+      return bare === text ? [criterionText(text)] : [criterionText(text), criterionText(bare)];
+    }),
+  );
+}
+
+interface MissingCriterion {
+  readonly reference: string;
+  /** The redacted source criterion as one line; empty when it has no checkable representation. */
+  readonly text: string;
+}
+
+function missingAcceptanceCriteria(
   resolved: readonly ResolvedRequirementReference[],
   description: TraceDescriptionCheck,
   redact: (value: string) => string,
-): readonly TraceProblem[] {
-  const projected = projectJiraDescriptionInput(description.description)?.text ?? "";
-  const syntax = typeof description.description === "string" ? "jira-wiki" : "markdown";
-  const blocks = new Set(readJiraDescriptionBlocks(projected, syntax).map(criterionText));
+  documents: readonly string[],
+): readonly MissingCriterion[] {
+  const blocks = descriptionBlocks(description.description, documents);
   const criteria = new Map<string, string>();
   for (const item of resolved) {
     const required =
@@ -158,11 +189,95 @@ function acceptanceCriteriaProblems(
     [0, 1].some((index) =>
       blocks.has(traceable.map((options) => options[index] ?? options[0] ?? "").join(" ")),
     );
-  return [...forms].flatMap(([reference, options]): TraceProblem[] =>
+  return [...forms].flatMap(([reference, options]): MissingCriterion[] =>
     options.length > 0 && (completeBlock || options.some((form) => blocks.has(form)))
       ? []
-      : [{ reference, reason: "acceptance-criteria-missing" }],
+      : [{ reference, text: options.length > 0 ? (criteria.get(reference) ?? "") : "" }],
   );
+}
+
+function missingProblems(missing: readonly MissingCriterion[]): readonly TraceProblem[] {
+  return missing.map(({ reference }) => ({ reference, reason: "acceptance-criteria-missing" }));
+}
+
+/**
+ * The source criteria a description lacks, written by Keiko itself as a bullet list inside its own
+ * trace block: the model is not asked to copy them, and a later source edit replaces the block.
+ */
+function withSourceCriteria(trace: ItemTrace, missing: readonly MissingCriterion[]): ItemTrace {
+  const markdown = missing.map(({ text }) => `- ${text}`).join("\n");
+  const list = projectJiraDescriptionInput({ format: "markdown", text: markdown })?.text ?? "";
+  const block = `${SOURCE_CRITERIA_HEADING}\n${list}`;
+  // A replacer function: a criterion such as "price in $$" must not be read as a replacement pattern.
+  return {
+    ...trace,
+    footer: trace.footer.replace(
+      `${trace.footerStart}\n`,
+      () => `${trace.footerStart}\n${block}\n\n`,
+    ),
+    completedCriteriaCount: missing.length,
+  };
+}
+
+/** Keiko's own completion must satisfy the same check; otherwise the write is refused as before. */
+function completedCriteriaRemain(
+  resolved: readonly ResolvedRequirementReference[],
+  description: TraceDescriptionCheck,
+  trace: ItemTrace,
+  redact: (value: string) => string,
+  documents: readonly string[],
+): readonly MissingCriterion[] {
+  const base = projectJiraDescriptionInput(description.description)?.text;
+  const completed = descriptionWithFooter(base, trace);
+  return missingAcceptanceCriteria(resolved, { description: completed }, redact, documents);
+}
+
+/**
+ * The description as its author wrote it. A staged item is prepared again before its write; its
+ * description then already carries Keiko's own trace footer, criteria block included. Checked
+ * without that footer, both preparations complete the same criteria and bind the same digest.
+ */
+function authoredDescription(description: TraceDescriptionCheck): TraceDescriptionCheck {
+  const text = projectJiraDescriptionInput(description.description)?.text;
+  if (text?.includes(REQUIREMENT_TRACE_FOOTER_START) !== true) return description;
+  const withoutFooter = descriptionWithFooter(text, {
+    footer: "",
+    footerStart: REQUIREMENT_TRACE_FOOTER_START,
+    footerEnd: REQUIREMENT_TRACE_FOOTER_END,
+  });
+  return { description: withoutFooter.trim() };
+}
+
+type LocatedReference = Parameters<typeof requirementTrace>[0][number];
+
+function sourceDigestOf(located: readonly LocatedReference[]): string {
+  return sha256Hex(
+    canonicalise(
+      located.map(({ unit, criterion }) => ({
+        reference: requirementReference(unit.entry),
+        requirementDigest: unit.entry.digest,
+        source: unit.source,
+        sectionPath: unit.entry.sectionPath,
+        characterStart: unit.entry.characterStart,
+        characterEnd: unit.entry.characterEnd,
+        criterion: criterion?.id ?? null,
+      })),
+    ),
+  );
+}
+
+function baseTrace(
+  located: readonly LocatedReference[],
+  redact: (value: string) => string,
+): ItemTrace {
+  const { labels, footer } = requirementTrace(located, redact);
+  return {
+    labels,
+    footer,
+    footerStart: REQUIREMENT_TRACE_FOOTER_START,
+    footerEnd: REQUIREMENT_TRACE_FOOTER_END,
+    replaceLabelPrefixes: [REQUIREMENT_REVISION_LABEL_PREFIX],
+  };
 }
 
 function resolveAgainst(
@@ -173,25 +288,32 @@ function resolveAgainst(
 ): TraceResolution {
   const resolution = resolveRequirementReferences(references, opened.collection.units);
   if (!resolution.ok) return { ok: false, reason: "references", problems: resolution.problems };
-  if (description !== undefined) {
-    const problems = acceptanceCriteriaProblems(resolution.resolved, description, redact);
-    if (problems.length > 0) return { ok: false, reason: "references", problems };
-  }
+  const documents = opened.collection.documents.flatMap(({ name }) => [name, redact(name)]);
+  const authored = description === undefined ? undefined : authoredDescription(description);
+  const missing =
+    authored === undefined
+      ? []
+      : missingAcceptanceCriteria(resolution.resolved, authored, redact, documents);
+  if (missing.some(({ text }) => text.length === 0))
+    return { ok: false, reason: "references", problems: missingProblems(missing) };
   const located = resolution.resolved.map((item) => ({
     ...item,
     unit: withPage(opened.store, item.unit),
   }));
-  const { labels, footer } = requirementTrace(located, redact);
-  return {
-    ok: true,
-    trace: {
-      labels,
-      footer,
-      footerStart: REQUIREMENT_TRACE_FOOTER_START,
-      footerEnd: REQUIREMENT_TRACE_FOOTER_END,
-      replaceLabelPrefixes: [REQUIREMENT_REVISION_LABEL_PREFIX],
-    },
-  };
+  const base = baseTrace(located, redact);
+  const trace = missing.length === 0 ? base : withSourceCriteria(base, missing);
+  if (authored !== undefined && missing.length > 0) {
+    const remaining = completedCriteriaRemain(
+      resolution.resolved,
+      authored,
+      trace,
+      redact,
+      documents,
+    );
+    if (remaining.length > 0)
+      return { ok: false, reason: "references", problems: missingProblems(remaining) };
+  }
+  return { ok: true, sourceDigest: sourceDigestOf(located), trace };
 }
 
 /** One session per write call: the Pods are read at most once, and closed when the call is done. */
@@ -240,13 +362,29 @@ export function openTraceSession(deps: UiHandlerDeps, turn: TraceTurn): TraceSes
 
 // ─── Results and evidence ────────────────────────────────────────────────────
 
+/** Fixed repair instructions; never substitute references or labels for the source criteria. */
+export function traceRefusalGuidance(
+  resolution: Extract<TraceResolution, { ok: false }>,
+): string | undefined {
+  if (!resolution.problems.some((problem) => problem.reason === "acceptance-criteria-missing"))
+    return undefined;
+  return (
+    "Nothing was changed. Read the referenced requirements with knowledge.requirements. " +
+    "Copy each missing acceptance criterion verbatim into fields.description. " +
+    "Keep requirementIds beside fields; IDs, labels and paraphrases do not replace the literal criteria. " +
+    "For a draft, stage the corrected traced items before submitting them. Do not remove requirementIds to bypass this refusal."
+  );
+}
+
 export function traceRefusalData(
   resolution: Extract<TraceResolution, { ok: false }>,
   ref?: string,
 ): CatalogJsonObject {
+  const guidance = traceRefusalGuidance(resolution);
   return {
     reason: "field-validation",
     requirementRefusal: resolution.reason,
+    ...(guidance === undefined ? {} : { guidance }),
     requirementProblems: resolution.problems.map((problem): CatalogJsonObject => ({
       ...(ref === undefined ? {} : { ref }),
       reference: problem.reference.slice(0, JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
@@ -275,6 +413,7 @@ export interface TraceTally {
   refusedItems: number;
   problems: number;
   acceptanceCriteriaMissing: number;
+  acceptanceCriteriaCompleted: number;
   labelsApplied: number;
   footersApplied: number;
   droppedLabels: number;
@@ -287,6 +426,7 @@ export function newTally(): TraceTally {
     refusedItems: 0,
     problems: 0,
     acceptanceCriteriaMissing: 0,
+    acceptanceCriteriaCompleted: 0,
     labelsApplied: 0,
     footersApplied: 0,
     droppedLabels: 0,
@@ -294,11 +434,19 @@ export function newTally(): TraceTally {
   };
 }
 
-export function tallyOutcome(tally: TraceTally, outcome: JiraTraceOutcome | undefined): void {
+export function tallyOutcome(
+  tally: TraceTally,
+  outcome: JiraTraceOutcome | undefined,
+  trace?: ItemTrace,
+): void {
   tally.tracedItems += 1;
   if (outcome === undefined) return;
   if (outcome.labelsApplied) tally.labelsApplied += 1;
-  if (outcome.footerApplied) tally.footersApplied += 1;
+  if (outcome.footerApplied) {
+    tally.footersApplied += 1;
+    // Criteria count as completed only when the block that carries them reached the description.
+    tally.acceptanceCriteriaCompleted += trace?.completedCriteriaCount ?? 0;
+  }
   tally.droppedLabels += outcome.droppedLabels.length;
 }
 
@@ -327,6 +475,7 @@ export function logTrace(
     refusedItemCount: tally.refusedItems,
     referenceProblemCount: tally.problems - tally.acceptanceCriteriaMissing,
     acceptanceCriteriaMissingCount: tally.acceptanceCriteriaMissing,
+    acceptanceCriteriaCompletedCount: tally.acceptanceCriteriaCompleted,
     labelsAppliedCount: tally.labelsApplied,
     footerAppliedCount: tally.footersApplied,
     droppedLabelCount: tally.droppedLabels,

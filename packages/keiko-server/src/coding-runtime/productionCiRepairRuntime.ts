@@ -69,8 +69,8 @@ function recordPromptAdmission(
   deps: DraftDeliveryDependencies,
   verified: VerifiedCommitRuntimeDependencies,
   binding: VerifiedCommitRuntimeBinding,
-): (tokens: number, outcome: CiRepairPromptAdmission) => void {
-  return (tokens, outcome): void => {
+): (outcome: CiRepairPromptAdmission) => void {
+  return (outcome): void => {
     (
       deps.execution?.activityLog ??
       verified.execution?.activityLog ??
@@ -88,7 +88,6 @@ function recordPromptAdmission(
           status: outcome.accepted ? "available" : "blocked",
           ...(outcome.accepted ? {} : { reason: outcome.reason }),
           runId: binding.runId,
-          requestedPromptTokenCount: tokens,
         },
       ),
     );
@@ -165,7 +164,6 @@ function budgetContext(
     limits: {
       maxRuntimeMs: budget.maxRuntimeMs,
       maxToolCalls: budget.maxToolCalls,
-      maxPromptTokens: budget.maxPromptTokens,
     },
     stillAuthorized: (): boolean =>
       binding.stillAuthorized() &&
@@ -196,8 +194,7 @@ function unavailableBudget(
   return {
     admitTool: () => (allowed() ? { check: allowed, settle: () => undefined } : undefined),
     // The availability guard writes its own line for the refusal and names the closed reason.
-    canChargePrompt: availability,
-    chargePrompt: availability,
+    admitModelCall: availability,
     chargeDelegatedRead: allowed,
     canChargeDelegatedRead: allowed,
     observed: () => undefined,
@@ -256,7 +253,7 @@ function gateBudget(
   budget: CodingRuntimeCiRepairController,
   availability: () => CiRepairPromptAdmission,
   recordObservationRequired: () => void,
-  recordPrompt: (tokens: number, outcome: CiRepairPromptAdmission) => void,
+  recordPrompt: (outcome: CiRepairPromptAdmission) => void,
 ): CiRepairExecutionBudget {
   const allowed = (): boolean => availability().accepted;
   return {
@@ -267,19 +264,12 @@ function gateBudget(
         ? undefined
         : { ...lease, check: () => allowed() && lease.check() };
     },
-    // A refused check is the decision of a call that reserves nothing afterwards, so it is recorded
-    // where it is made, with the closed reason (#3873 review). A check that fits stays silent: the
-    // charge that follows it records the admission.
-    canChargePrompt: (tokens): CiRepairPromptAdmission => {
+    // Every admitted or refused model call is recorded where it is decided, with the closed reason
+    // of a refusal (#3873 review).
+    admitModelCall: (): CiRepairPromptAdmission => {
       const available = availability();
-      const outcome = available.accepted ? budget.canChargePrompt(tokens) : available;
-      if (!outcome.accepted) recordPrompt(tokens, outcome);
-      return outcome;
-    },
-    chargePrompt: (tokens): CiRepairPromptAdmission => {
-      const available = availability();
-      const outcome = available.accepted ? budget.chargePrompt(tokens) : available;
-      recordPrompt(tokens, outcome);
+      const outcome = available.accepted ? budget.admitModelCall() : available;
+      recordPrompt(outcome);
       return outcome;
     },
     chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead(id, key),

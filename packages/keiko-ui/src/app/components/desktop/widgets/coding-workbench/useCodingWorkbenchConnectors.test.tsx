@@ -63,6 +63,70 @@ beforeEach(() => {
 });
 
 describe("the Jira Pod the person picks for the next run", () => {
+  it("grants administration only through a separate ready-Pod selection and drops it on every Pod switch", async () => {
+    const list = vi.fn(() =>
+      Promise.resolve([pod(READY_POD, "Acme Jira"), pod(OTHER_POD, "Other Jira")]),
+    );
+    const { result } = renderHook(() => useCodingWorkbenchConnectors(list));
+    await waitFor(() => expect(result.current.menu.pods).toHaveLength(2));
+    expect(result.current.menu.jiraAdministrationEnabled).toBe(false);
+    act(() => result.current.menu.onJiraAdministrationChange?.(true));
+    expect(result.current.connectorScopes).toBeUndefined();
+    act(() => result.current.menu.onPodChange(READY_POD));
+    expect(result.current.connectorScopes).toBeUndefined();
+    act(() => result.current.menu.onJiraAdministrationChange?.(true));
+    expect(result.current.menu.jiraAdministrationEnabled).toBe(true);
+    expect(result.current.connectorScopes).toEqual(["issue-tracker.admin"]);
+    act(() => result.current.menu.onPodChange(OTHER_POD));
+    expect(result.current.menu.jiraAdministrationEnabled).toBe(false);
+    expect(result.current.connectorScopes).toBeUndefined();
+    act(() => result.current.menu.onPodChange(READY_POD));
+    expect(result.current.connectorScopes).toBeUndefined();
+    act(() => result.current.menu.onJiraAdministrationChange?.(true));
+    act(() => result.current.menu.onJiraAdministrationChange?.(false));
+    expect(result.current.connectorScopes).toBeUndefined();
+  });
+
+  it("never restores an administration opt-in after the selected Pod lost readiness", async () => {
+    let pods = [pod(READY_POD, "Acme Jira")];
+    const list = vi.fn(() => Promise.resolve(pods));
+    const { result } = renderHook(() => useCodingWorkbenchConnectors(list));
+    await waitFor(() => expect(result.current.menu.pods).toHaveLength(1));
+    act(() => result.current.menu.onPodChange(READY_POD));
+    act(() => result.current.menu.onJiraAdministrationChange?.(true));
+    expect(result.current.connectorScopes).toEqual(["issue-tracker.admin"]);
+    pods = [pod(READY_POD, "Acme Jira", { verificationInProgress: true })];
+    act(() => result.current.menu.onOpen?.());
+    await waitFor(() => expect(result.current.jiraPodId).toBeUndefined());
+    expect(result.current.connectorScopes).toBeUndefined();
+    pods = [pod(READY_POD, "Acme Jira")];
+    act(() => result.current.menu.onOpen?.());
+    await waitFor(() => expect(result.current.jiraPodId).toBe(READY_POD));
+    expect(result.current.menu.jiraAdministrationEnabled).toBe(false);
+    expect(result.current.connectorScopes).toBeUndefined();
+  });
+
+  it("drops administration after a failed Pod refresh and starts a new window without a selection", async () => {
+    const list = vi.fn(() => Promise.resolve([pod(READY_POD, "Acme Jira")]));
+    const first = renderHook(() => useCodingWorkbenchConnectors(list));
+    await waitFor(() => expect(first.result.current.menu.pods).toHaveLength(1));
+    act(() => first.result.current.menu.onPodChange(READY_POD));
+    act(() => first.result.current.menu.onJiraAdministrationChange?.(true));
+    expect(first.result.current.connectorScopes).toEqual(["issue-tracker.admin"]);
+    list.mockRejectedValueOnce(new Error("Synthetic listing unavailable"));
+    act(() => first.result.current.menu.onOpen?.());
+    await waitFor(() => expect(first.result.current.menu.failed).toBe(true));
+    expect(first.result.current.connectorScopes).toBeUndefined();
+    act(() => first.result.current.menu.onOpen?.());
+    await waitFor(() => expect(first.result.current.menu.loading).toBe(false));
+    expect(first.result.current.connectorScopes).toBeUndefined();
+    first.unmount();
+    const next = renderHook(() => useCodingWorkbenchConnectors(list));
+    await waitFor(() => expect(next.result.current.menu.pods).toHaveLength(1));
+    expect(next.result.current.jiraPodId).toBeUndefined();
+    expect(next.result.current.connectorScopes).toBeUndefined();
+  });
+
   it("offers nothing, and selects nothing, when no ready Pod exists", async () => {
     const list = vi.fn(() =>
       Promise.resolve([

@@ -1,4 +1,4 @@
-import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
+import { admitChatToolModelCall } from "./chat-tool-approvals.js";
 import { ChatToolTurn, bindChatToolCatalog, mintAndBoundChatTurn } from "./chat-tool-turn.js";
 import {
   mintAcceptedKnowledgeChatAuthority,
@@ -66,12 +66,8 @@ export class KnowledgeChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> 
   protected override observedMutation(): undefined {
     return undefined;
   }
-  protected override reserveAuthorityPrompt(promptTokens: number): boolean {
-    return reserveChatToolPrompt(
-      this.knowledgeOptions,
-      reserveCurrentKnowledgeChatAuthority,
-      promptTokens,
-    );
+  protected override admitAuthorityModelCall(): boolean {
+    return admitChatToolModelCall(this.knowledgeOptions, reserveCurrentKnowledgeChatAuthority);
   }
 }
 export async function createKnowledgeChatToolTurn(

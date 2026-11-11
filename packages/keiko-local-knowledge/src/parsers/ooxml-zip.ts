@@ -5,10 +5,17 @@
 // authoritative.
 
 import { Buffer } from "node:buffer";
+import { crc32 } from "node:zlib";
 
 import yauzl from "yauzl";
 
 import type { ParserOptions } from "./types.js";
+import {
+  admitStrictZipEntry,
+  completeStrictZipLayout,
+  strictZipLayout,
+  type StrictZipLayout,
+} from "./zip-entry-admission.js";
 
 const OOXML_SCAN_BUDGET_EXCEEDED = Symbol("keiko:ooxml:scanBudgetExceeded");
 const OOXML_SCAN_CANCELLED = Symbol("keiko:ooxml:scanCancelled");
@@ -16,6 +23,8 @@ const OOXML_ENTRY_OVERSIZED = Symbol("keiko:ooxml:entryOversized");
 const MAX_INFLATE_RATIO = 100;
 
 export interface OoxmlZipReadPlan {
+  /** Closed submission admission; existing document parsing keeps its prior behavior. */
+  readonly rejectNonRegularEntries?: boolean;
   /** Short format label used in error messages (no content). */
   readonly format: string;
   /** Selects the entries to inflate; every other entry is skipped without decompression. */
@@ -218,6 +227,8 @@ async function inflateWantedEntry(
       ? Number.POSITIVE_INFINITY
       : plan.maxTotalInflatedBytes - progress.totalInflated;
   const bytes = await readEntryBytes(zip, entry, plan, remaining);
+  if (plan.rejectNonRegularEntries === true && crc32(bytes) !== entry.crc32)
+    throw new Error("archive entry checksum mismatch");
   progress.totalInflated += bytes.byteLength;
   progress.parts.set(entry.fileName, bytes);
 }
@@ -226,6 +237,7 @@ interface EntryWalk {
   readonly zip: yauzl.ZipFile;
   readonly limits: ScanLimits;
   readonly progress: ScanProgress;
+  readonly strictLayout?: StrictZipLayout;
   /** Claims the single settlement; false once the read already settled. */
   readonly claim: () => boolean;
 }
@@ -243,6 +255,7 @@ async function walkEntry(
     return;
   }
   try {
+    if (walk.strictLayout !== undefined) await admitStrictZipEntry(zip, entry, walk.strictLayout);
     if (limits.plan.isWanted(entry.fileName)) {
       await inflateWantedEntry(zip, entry, limits.plan, progress);
     }
@@ -253,7 +266,11 @@ async function walkEntry(
   }
 }
 
-function walkEntries(zip: yauzl.ZipFile, limits: ScanLimits): Promise<ReadonlyMap<string, Buffer>> {
+function walkEntries(
+  zip: yauzl.ZipFile,
+  limits: ScanLimits,
+  strictLayout?: StrictZipLayout,
+): Promise<ReadonlyMap<string, Buffer>> {
   const { plan } = limits;
   return new Promise((resolve, reject) => {
     const progress: ScanProgress = { parts: new Map(), entriesSeen: 0, totalInflated: 0 };
@@ -263,12 +280,21 @@ function walkEntries(zip: yauzl.ZipFile, limits: ScanLimits): Promise<ReadonlyMa
       settled = true;
       return true;
     };
-    const walk: EntryWalk = { zip, limits, progress, claim };
+    const walk: EntryWalk = {
+      zip,
+      limits,
+      progress,
+      claim,
+      ...(strictLayout === undefined ? {} : { strictLayout }),
+    };
     zip.on("entry", (entry: yauzl.Entry) => {
       void walkEntry(walk, entry, reject);
     });
     zip.once("end", () => {
-      if (claim()) resolve(progress.parts);
+      if (!claim()) return;
+      if (strictLayout !== undefined && !completeStrictZipLayout(strictLayout))
+        reject(new Error("archive contains unaccounted local entries"));
+      else resolve(progress.parts);
     });
     zip.once("error", (error: unknown) => {
       if (claim()) reject(toError(error, `failed to read ${plan.format} zip`));
@@ -290,7 +316,11 @@ export async function readOoxmlZipEntryBytes(
 ): Promise<ReadonlyMap<string, Buffer>> {
   const zip = await openZip(bytes, plan.format);
   try {
-    return await walkEntries(zip, { plan, options, startedAt });
+    return await walkEntries(
+      zip,
+      { plan, options, startedAt },
+      plan.rejectNonRegularEntries === true ? strictZipLayout(zip, bytes) : undefined,
+    );
   } finally {
     // A buffer-backed archive releases no descriptor; close only marks it closed.
     zip.close();

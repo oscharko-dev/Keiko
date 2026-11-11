@@ -1147,3 +1147,19 @@ it("declares local knowledge tools as closed-world with a non-idempotent semanti
     },
   ]);
 });
+
+it("shares one issued descriptor per Knowledge tool across provider constructions", async () => {
+  // Every Jira chat selection constructs these providers again; their descriptors are constants,
+  // so building, compiling and hashing them per selection was repeated work (#4288).
+  const f = await fixture([{ capsuleId: "shared-descriptors", text: specification(1).text }]);
+  const first = createKnowledgeRequirementsProvider(f.deps, reports).tools();
+  const second = createKnowledgeRequirementsProvider(f.deps, reports).tools();
+  expect(first.map((tool) => tool.name)).toEqual([
+    "knowledge.requirements",
+    "knowledge.documents",
+    "knowledge.review",
+  ]);
+  first.forEach((tool, index) => {
+    expect(second[index]?.descriptor).toBe(tool.descriptor);
+  });
+});

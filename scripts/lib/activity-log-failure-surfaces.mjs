@@ -48,6 +48,7 @@ export const ACTIVITY_LOG_FAILURE_MODES = ["rejection", "dependency-failure", "c
 export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-mcp", emitterPrefix: "", surface: "tools-workflows" },
   { owner: "keiko-cli", emitterPrefix: "audit", surface: "runtime-packages" },
+  { owner: "keiko-cli", emitterPrefix: "gateway-service", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "install-layout", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-browser-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-health-activity", surface: "ui" },
@@ -73,6 +74,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "atlassian", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "bounded-request-body", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "support-report-evidence", surface: "bff" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "chat-approval-continuation-state",
+    surface: "tools-workflows",
+  },
   { owner: "keiko-server", emitterPrefix: "chat-activity", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-message-projection", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-scope-update-log", surface: "bff" },
@@ -83,6 +89,8 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     emitterPrefix: "client-diagnostics-routes",
     surface: "client-diagnostics",
   },
+  { owner: "keiko-server", emitterPrefix: "client-jira-fields-log", surface: "client-diagnostics" },
+  { owner: "keiko-server", emitterPrefix: "client-jira-result-log", surface: "client-diagnostics" },
   { owner: "keiko-server", emitterPrefix: "coding-app-session", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-context", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-runtime", surface: "tools-workflows" },

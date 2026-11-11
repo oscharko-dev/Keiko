@@ -20,6 +20,11 @@ export interface UseCodingWorkbenchInboxInput {
   readonly runId: string | undefined;
   /** Only a run whose turn is running holds messages the runtime has not taken yet. */
   readonly live: boolean;
+  /**
+   * The run's profile takes a message while a turn runs (`promptInputs.delivery`). Without it the
+   * server has no inbox to read and refuses every read as unsupported (mapped profile, #4068).
+   */
+  readonly offered: boolean;
   /** The run revision: every cancel, Send now and delivered message advances it. */
   readonly revision: number | undefined;
   /**
@@ -64,7 +69,8 @@ interface ScopedInbox {
 export function useCodingWorkbenchInbox(
   input: UseCodingWorkbenchInboxInput,
 ): UseCodingWorkbenchInboxResult {
-  const { runId, live, revision, deliveredSignal } = input;
+  const { runId, revision, deliveredSignal } = input;
+  const live = input.live && input.offered;
   const [scoped, setScoped] = useState<ScopedInbox>({ runId: undefined, value: IDLE });
   // Bumped only by `retry()` to re-run the read below without any input having changed.
   const [epoch, setEpoch] = useState(0);

@@ -79,7 +79,6 @@ function trustedContext(): CodingRuntimeTrustedContext {
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 256,
-      maxPromptTokens: 20_000,
       maxPatchBytes: 262_144,
     },
     expiresAt: new Date(now + 60_000).toISOString(),

@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 import { prepareChat } from "../testing/jira-chat-lab/chat-read.mjs";
 
 const origin = "http://127.0.0.1:1983";
@@ -19,7 +20,7 @@ function actorSession() {
     writeFileSync(join(directory, "secrets", `${actor}-token`), `fixture-pat-${actor}`, {
       mode: 0o600,
     });
-  return { directory };
+  return { ...DEFAULT_LAB_CONNECTION, directory };
 }
 function pairedApi() {
   const chat = { id: "chat", groundingScopeIdentity: "scope", jiraPodBinding: { podId: "pod" } };
@@ -41,6 +42,9 @@ describe("live Chat seeded actor custody selection", () => {
     async (actor) => {
       const fetch = pairedApi();
       await prepareChat(origin, "fixture-cookie", actorSession(), "project", "model", actor);
+      expect(JSON.parse(fetch.mock.calls[0][1].body).baseUrl).toBe(
+        `https://127.0.0.1:${DEFAULT_LAB_CONNECTION.httpsPort}`,
+      );
       expect(JSON.parse(fetch.mock.calls[0][1].body).apiToken).toBe(
         `fixture-pat-${actor ?? "api"}`,
       );

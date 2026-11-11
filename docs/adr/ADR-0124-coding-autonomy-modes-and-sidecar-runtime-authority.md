@@ -189,7 +189,15 @@ the diagnosed cause, and retest. A refused continuation or exhausted continuatio
 `verification-not-evidenced`; ordinary read-only tasks need no invented verification work.
 A human-denied verification command or an actually unavailable selected verifier stops automatic
 repair continuation without claiming verification. An unavailable unrelated verifier does not
-introduce a new proof obligation or block repair of the selected test. The existing ledger records
+introduce a new proof obligation or block repair of the selected test. A target-scoped refusal
+(no project, no runnable step, script trust, an unavailable runner, a check that did not run)
+blocks repair only for a selected target that has not passed: while no target is selected, the
+refused target is unrelated to any proof, so the continuation still runs, and the repository's own
+check in the model's shell can evidence the edit (#4271). Only a line whose exit status is the
+check's own counts there (the check alone, or `&&` with `cd` and other checks; never a pipe, `;`,
+`||` or `&`), and the continuation intent and the verifier and commit guidance say so. The
+`not-evidenced` continuation line names the blocker that stopped repair as a closed
+`blockedReason`. The existing ledger records
 these producer-owned facts. A later actually executed, still-authorized verifier may clear its
 applicable blocker through an invocation-local admission callback; a verifier admitted before a
 subsequent human denial cannot clear that denial by completing later. Edits do not clear denials.

@@ -1,11 +1,46 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type { JiraLivePodCredential } from "./jiraPodAccess.js";
+import { SCREEN_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-screen-configuration-fixture.js";
+import { BOARD_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-board-configuration-fixture.js";
+import { SPRINT_LIFECYCLE_FIXTURE_CASES } from "../../../../tests/support/jira-sprint-lifecycle-fixture.js";
+import { AGILE_PLANNING_FIXTURE_CASES } from "../../../../tests/support/jira-agile-planning-fixture.js";
+import { VERSION_LINK_MUTATION_CASES } from "../../../../tests/support/jira-version-link-mutation-fixture.js";
+import { PROJECT_CATEGORY_FIXTURE_CASES } from "../../../../tests/support/jira-project-category-fixture.js";
+import { ROLE_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-role-mutation-fixture.js";
+import { PERMISSION_SCHEME_MUTATION_CASES } from "../../../../tests/support/jira-permission-scheme-mutation-fixture.js";
+import { OPTION_SCHEME_MUTATION_CASES } from "../../../../tests/support/jira-option-scheme-fixture.js";
+import { WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-workflow-scheme-mutation-fixture.js";
+import { INSTANCE_SETTING_FIXTURE_CASES } from "../../../../tests/support/jira-instance-setting-mutation-fixture.js";
+import { GROUP_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-group-mutation-fixture.js";
+import { ISSUE_ACTION_FIXTURE_CASES } from "../../../../tests/support/jira-issue-action-fixture.js";
+import { MAINTENANCE_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-maintenance-mutation-fixture.js";
+import { DIRECTORY_ACCESS_FIXTURE_CASES } from "../../../../tests/support/jira-directory-access-fixture.js";
+import { SCHEMA_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-schema-mutation-fixture.js";
 import {
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  JIRA_GROUP_MUTATIONS,
+  JIRA_ISSUE_ACTION_MUTATIONS,
+  JIRA_MAINTENANCE_MUTATIONS,
+  JIRA_SCHEMA_MUTATIONS,
+  JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  JIRA_AVATAR_MUTATIONS,
+  JIRA_IDENTITY_MUTATIONS,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
+  type JiraMutationOperation,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -37,7 +72,12 @@ import {
   type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
-import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import { podFixture, specification } from "../_requirementSupport.js";
+import { openTraceSession, type TraceResolution } from "../requirement-trace.js";
+import {
+  createJiraProviderForCatalog,
+  jiraOperationBindingForTool,
+} from "./jiraManagedProvider.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
@@ -55,10 +95,39 @@ import {
   recordJiraTemplateRefusal,
 } from "./jiraTemplateLog.js";
 
-vi.mock("./jiraChatAuthority.js", () => ({
+const preflightAuthority = vi.hoisted<{ mode: CodingWorkbenchMode }>(() => ({
+  mode: "autonomous-delivery",
+}));
+vi.mock("./jiraChatAuthority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./jiraChatAuthority.js")>()),
   resolveCurrentJiraChatAuthority: (): unknown => ({
     ok: true,
-    credential: { baseUrl: "https://jira.example.invalid/context", deployment: "data-center" },
+    credential: {
+      schemaVersion: "1",
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      authRef: "preflight-credential",
+      generation: 1,
+      displayName: "Synthetic Jira",
+      baseUrl: "https://jira.example.invalid/context",
+      createdAt: 1,
+      livePod: {
+        podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        ownerDigest: "a".repeat(64),
+        creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
+        verificationRevision: 1,
+        verificationInProgress: false,
+        verificationStatus: "ok",
+      },
+    } satisfies JiraLivePodCredential,
+    envelope: {
+      requestedMode: preflightAuthority.mode,
+      effectiveMode: preflightAuthority.mode,
+      deploymentCeiling: "autonomous-delivery",
+      connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
+      actionClasses: ["connector-access"],
+    },
   }),
 }));
 
@@ -81,6 +150,7 @@ const TEMPLATE = [
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const close of cleanup.splice(0)) close();
+  preflightAuthority.mode = "autonomous-delivery";
   resetServerLogger();
 });
 
@@ -175,8 +245,180 @@ describe("the model-facing refusal", () => {
       refusedCount: JIRA_FIELD_VALIDATION_FAILURES.length,
       validations: JIRA_FIELD_VALIDATION_FAILURES,
     });
-    expect(sink.events).toHaveLength(1);
+    expect(sink.events).toHaveLength(2);
     expect(sink.events[0]?.extra?.validations).toEqual([...JIRA_FIELD_VALIDATION_FAILURES]);
+  });
+  it("projects every closed mutation onto one body-free field-admission class and its exact tool digest", () => {
+    const sink = logs();
+    for (const operation of JIRA_MUTATION_OPERATIONS)
+      recordJiraFieldRefusal("field-digest", {
+        operation,
+        refusedCount: 1,
+        validations: ["invalid-field"],
+      });
+    expect(
+      sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra),
+    ).toEqual(
+      JIRA_MUTATION_OPERATIONS.map((operation) => ({
+        operation: "jira-write",
+        operationDigest: createHash("sha256").update(operation).digest("hex"),
+        refusedCount: 1,
+        validations: ["invalid-field"],
+        completeness: "complete",
+        loss: "none",
+      })),
+    );
+    expect(
+      sink.events
+        .filter(({ op }) => op.startsWith("jira.operation."))
+        .map(({ extra }) => extra?.operation),
+    ).toEqual(JIRA_MUTATION_OPERATIONS);
+    expect(sink.lines().join()).not.toMatch(/propertyKey|valueNodes|expectedValueNodes/u);
+  });
+  it("logs administrative role and permission refusals without principal, scheme or attribute facts", () => {
+    const sink = logs();
+    const operations = [
+      ...ROLE_MUTATION_FIXTURE_CASES.map(({ name }) => name),
+      ...PERMISSION_SCHEME_MUTATION_CASES.map(({ tool }) => tool),
+    ];
+    for (const operation of operations)
+      recordJiraFieldRefusal("admin-refusal", {
+        operation,
+        refusedCount: 1,
+        validations: ["invalid-field"],
+      });
+    expect(
+      sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra),
+    ).toEqual(
+      operations.map((operation) => ({
+        operation: "jira-write",
+        operationDigest: createHash("sha256").update(operation).digest("hex"),
+        refusedCount: 1,
+        validations: ["invalid-field"],
+        completeness: "complete",
+        loss: "none",
+      })),
+    );
+    expect(sink.lines().join()).not.toMatch(
+      /actorUserKeys|actorGroupNames|principals|roleId|schemeId|attributeKey|synthetic-actor/u,
+    );
+  });
+  it("uses the same body-free field refusal owner for scheme, instance and email changes", () => {
+    const sink = logs();
+    const operations = [
+      ...JIRA_OPTION_SCHEME_MUTATIONS,
+      ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+      ...JIRA_INSTANCE_SETTING_MUTATIONS,
+      ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+    ];
+    for (const operation of operations)
+      recordJiraFieldRefusal("configuration-refusal", {
+        operation,
+        refusedCount: 1,
+        validations: ["invalid-field"],
+      });
+    expect(
+      sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra),
+    ).toEqual(
+      operations.map((operation) => ({
+        operation: "jira-write",
+        operationDigest: createHash("sha256").update(operation).digest("hex"),
+        refusedCount: 1,
+        validations: ["invalid-field"],
+        completeness: "complete",
+        loss: "none",
+      })),
+    );
+    expect(sink.lines().join()).not.toMatch(
+      /schemeId|workflowName|projectIds|columnIds|baseUrl|uploadSha256|manifest|jira\.option|synthetic-actor/u,
+    );
+  });
+  it("records system/directory/schema refusals without raw targets, recipients or configuration", () => {
+    const sink = logs();
+    const operations = [
+      ...JIRA_GROUP_MUTATIONS,
+      ...JIRA_ISSUE_ACTION_MUTATIONS,
+      ...JIRA_MAINTENANCE_MUTATIONS,
+      ...JIRA_SCHEMA_MUTATIONS,
+      ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+    ];
+    for (const operation of operations)
+      recordJiraFieldRefusal("system-refusal", {
+        operation,
+        refusedCount: 1,
+        validations: ["invalid-field"],
+      });
+    expect(
+      sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra),
+    ).toEqual(
+      operations.map((operation) => ({
+        operation: "jira-write",
+        operationDigest: createHash("sha256").update(operation).digest("hex"),
+        refusedCount: 1,
+        validations: ["invalid-field"],
+        completeness: "complete",
+        loss: "none",
+      })),
+    );
+    expect(sink.lines().join()).not.toMatch(
+      /actorUserKey|groupName|nodeId|reindexRequestIds|recipientUserKeys|fieldIds|linkTypeIds|columnIds|synthetic-actor/u,
+    );
+  });
+  it("admits the five modeled schema impacts into the existing body-free template log", () => {
+    const sink = logs();
+    const operations = [
+      "jira.delete-custom-fields",
+      "jira.delete-issue-type",
+      "jira.update-issue-type",
+      "jira.delete-link-type",
+      "jira.update-link-type",
+    ] as const;
+    for (const operation of operations)
+      recordJiraTemplateRefusal("schema-rule-refusal", {
+        operation,
+        stage: "dispatch",
+        violations: [VIOLATION],
+      });
+    expect(sink.events.map((event) => event.extra?.operation)).toEqual(operations);
+    expect(sink.events.map((event) => event.extra?.ruleIds)).toEqual(
+      operations.map(() => [VIOLATION.ruleId]),
+    );
+    expect(sink.lines().join()).not.toMatch(
+      /fieldIds|issueTypeId|replacementIssueTypeId|linkTypeId|Acceptance criteria|SYN\/Story/u,
+    );
+  });
+  it("retains body-free resource/account/avatar refusal details alongside exact operation facts", () => {
+    const sink = logs();
+    const operations = [
+      ...JIRA_AVATAR_MUTATIONS,
+      ...JIRA_IDENTITY_MUTATIONS,
+      ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+      ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+      ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+      "jira.create-issues",
+      "jira.create-reciprocal-remote-link",
+    ] as const;
+    for (const operation of operations)
+      recordJiraFieldRefusal("resource-account-refusal", {
+        operation,
+        refusedCount: 1,
+        validations: ["invalid-field"],
+      });
+    expect(
+      sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra),
+    ).toEqual(
+      operations.map((operation) => ({
+        operation: "jira-write",
+        operationDigest: createHash("sha256").update(operation).digest("hex"),
+        refusedCount: 1,
+        validations: ["invalid-field"],
+        completeness: "complete",
+        loss: "none",
+      })),
+    );
+    expect(sink.lines().join()).not.toMatch(
+      /username|actorUserKey|"password"\s*:|cookie|sessionEstablished|applicationLinkId|temporaryCrop|projectId|issueKey/u,
+    );
   });
 });
 
@@ -382,10 +624,59 @@ describe("the template marker", () => {
 });
 
 describe("the dry run before approval", () => {
+  it.each([
+    ...JIRA_GROUP_MUTATIONS,
+    ...JIRA_ISSUE_ACTION_MUTATIONS,
+    ...JIRA_MAINTENANCE_MUTATIONS,
+    ...JIRA_SCHEMA_MUTATIONS,
+    ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  ])("refuses missing reviewed %s input before HTTP and approval", async (operation) => {
+    const f = preflight(TEMPLATE, {}, operation);
+    expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "field-validation" });
+    expect(f.http).not.toHaveBeenCalled();
+  });
+  it.each([
+    ...JIRA_OPTION_SCHEME_MUTATIONS,
+    ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+    ...JIRA_INSTANCE_SETTING_MUTATIONS,
+    ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  ])("refuses incomplete reviewed %s inputs before HTTP or approval", async (operation) => {
+    const f = preflight(TEMPLATE, {}, operation);
+    expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "field-validation" });
+    expect(f.http).not.toHaveBeenCalled();
+  });
+  it.each([
+    ...GROUP_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...ISSUE_ACTION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...MAINTENANCE_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...DIRECTORY_ACCESS_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...SCHEMA_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...OPTION_SCHEME_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...INSTANCE_SETTING_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...SCREEN_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...BOARD_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...SPRINT_LIFECYCLE_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...AGILE_PLANNING_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...VERSION_LINK_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...PROJECT_CATEGORY_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...ROLE_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...PERMISSION_SCHEME_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
+  ])(
+    "refuses denied $tool prerequisites before approval or any native write",
+    async ({ tool, args }) => {
+      const f = preflight(TEMPLATE, args, tool);
+      f.http.mockImplementation(() =>
+        Promise.resolve(response({ errorMessages: ["Denied"] }, 403)),
+      );
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "permission-denied" });
+      expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+    },
+  );
   function preflight(
     templateText: string,
     args: Record<string, unknown> | undefined,
-    tool: "jira.create" | "jira.draft" = "jira.create",
+    tool: JiraMutationOperation = "jira.create",
     jira: {
       readonly fields?: readonly unknown[];
       readonly existing?: readonly unknown[];
@@ -396,7 +687,7 @@ describe("the dry run before approval", () => {
       readonly untracedAdvice?: JiraChatTemplatePreflightPorts["untracedAdvice"];
     } = {},
   ): {
-    run: () => Promise<unknown>;
+    run: (trace?: JiraTraceRequest) => Promise<unknown>;
     http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
   } {
     const db = new DatabaseSync(":memory:");
@@ -406,13 +697,28 @@ describe("the dry run before approval", () => {
     cleanup.push(() => {
       store.close();
     });
+    const created = store.createChat(store.createProject(process.cwd()).path, "Preflight", "model");
+    const chat = store.updateChat(
+      created.id,
+      {
+        jiraPodId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        toolMode: preflightAuthority.mode,
+      },
+      {
+        verifiedJiraPod: {
+          podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+          authenticationGeneration: 1,
+        },
+      },
+    );
     store.markdownSkills.import({
       fileName: "template.md",
       contentBase64: Buffer.from(templateText).toString("base64"),
     });
     const http = vi.fn<AtlassianHttpBodyPort>((request) => {
       const path = new URL(request.url).pathname;
-      if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+      if (path.endsWith("/project/10000"))
+        return Promise.resolve(response({ id: "10000", key: "SYN" }));
       if (path.endsWith("/issuetype/10001"))
         return Promise.resolve(response({ id: "10001", name: "Story" }));
       if (path.endsWith("/search")) {
@@ -448,13 +754,17 @@ describe("the dry run before approval", () => {
     });
     return {
       http,
-      run: () =>
-        preflight({ tool, actionId: "a", idempotencyKey: "a", argumentsDigest: "d" }, {
-          chatId: "chat",
-          correlationId: "preflight-1",
-          authorityReference: {},
-          signal: jira.signal ?? new AbortController().signal,
-        } as never),
+      run: (trace) =>
+        preflight(
+          { tool, actionId: "a", idempotencyKey: "a", argumentsDigest: "d" },
+          {
+            chatId: chat.id,
+            correlationId: "preflight-1",
+            authorityReference: {},
+            signal: jira.signal ?? new AbortController().signal,
+          } as never,
+          trace,
+        ),
     };
   }
   const CREATE = { projectId: "10000", issueTypeId: "10001", fields: { summary: "Add login" } };
@@ -475,12 +785,335 @@ describe("the dry run before approval", () => {
     expect(events.map((event) => event.extra?.stage)).toEqual(["pre-approval"]);
   });
 
+  it.each([
+    ...JIRA_AVATAR_MUTATIONS,
+    ...JIRA_IDENTITY_MUTATIONS,
+    ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+    ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+    ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+    "jira.create-issues",
+    "jira.create-reciprocal-remote-link",
+    ...JIRA_ENTITY_PROPERTY_MUTATIONS,
+    "jira.create-screen-tab",
+    "jira.set-app-monitoring",
+    "jira.set-ipd-monitoring",
+    "jira.start-jmx-metrics",
+    "jira.stop-jmx-metrics",
+    "jira.rename-screen-tab",
+    "jira.delete-screen-tab",
+    "jira.create-project",
+    "jira.update-project",
+    "jira.create-component",
+    "jira.update-component",
+    "jira.create-version",
+    "jira.update-version",
+  ] as const)(
+    "refuses invalid %s metadata before approval without a Jira write",
+    async (operation) => {
+      logs();
+      const f = preflight(TEMPLATE, {}, operation);
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "field-validation" });
+      expect(f.http).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      "jira.set-issue-property",
+      {
+        issueIdOrKey: "SYN-1",
+        propertyKey: "display",
+        expectedValueNodes: [{ path: "", kind: "null" }],
+        valueNodes: [{ path: "", kind: "boolean", booleanValue: false }],
+      },
+    ],
+    [
+      "jira.delete-issue-property",
+      {
+        issueIdOrKey: "SYN-1",
+        propertyKey: "display",
+        expectedValueNodes: [{ path: "", kind: "null" }],
+      },
+    ],
+    [
+      "jira.set-board-property",
+      {
+        boardId: "7",
+        propertyKey: "display",
+        expectedValueNodes: [{ path: "", kind: "null" }],
+        valueNodes: [{ path: "", kind: "boolean", booleanValue: false }],
+      },
+    ],
+    [
+      "jira.delete-board-property",
+      { boardId: "7", propertyKey: "display", expectedValueNodes: [{ path: "", kind: "null" }] },
+    ],
+  ] as const)(
+    "reads the complete reviewed %s property state before approval with no effect or issue-template inference",
+    async (operation, args) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation((request) => {
+        const path = new URL(request.url).pathname;
+        const body = path.endsWith("/properties")
+          ? { keys: [{ key: "display" }] }
+          : path.endsWith("/properties/display")
+            ? { key: "display", value: null }
+            : path.includes("/board/")
+              ? { id: 7, name: "Synthetic board" }
+              : { id: "10001", key: "SYN-1", fields: { summary: "Synthetic issue" } };
+        return Promise.resolve(response(body));
+      });
+      expect(await f.run()).toBeUndefined();
+      expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "GET"]);
+      expect(f.http.mock.calls.at(-1)?.[0].url).toMatch(
+        /\/(?:issue\/10001|board\/7)\/properties\/display$/u,
+      );
+    },
+  );
+
+  it.each([
+    [
+      "jira.set-issue-property",
+      {
+        issueIdOrKey: "SYN-1",
+        propertyKey: "display",
+        expectedValueNodes: [{ path: "", kind: "boolean", booleanValue: false }],
+        valueNodes: [{ path: "", kind: "null" }],
+      },
+    ],
+    [
+      "jira.delete-issue-property",
+      {
+        issueIdOrKey: "SYN-1",
+        propertyKey: "display",
+        expectedValueNodes: [{ path: "", kind: "boolean", booleanValue: false }],
+      },
+    ],
+  ] as const)(
+    "refuses a changed reviewed %s value before asking a human",
+    async (operation, args) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation((request) =>
+        Promise.resolve(
+          response(
+            request.url.includes("/properties/display")
+              ? { key: "display", value: null }
+              : request.url.endsWith("/properties")
+                ? { keys: [{ key: "display" }] }
+                : { id: "10001", key: "SYN-1", fields: { summary: "Synthetic" } },
+          ),
+        ),
+      );
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "conflict" });
+      expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "GET"]);
+    },
+  );
+
+  it.each([
+    [
+      "jira.set-issue-property",
+      {
+        issueIdOrKey: "SYN-1",
+        propertyKey: "display",
+        expectAbsent: true,
+        valueNodes: [{ path: "", kind: "null" }],
+      },
+    ],
+    [
+      "jira.create-screen-tab",
+      { screenId: "11", expectedScreenName: "Review screen", name: "Additional" },
+    ],
+    ["jira.set-app-monitoring", { expectedEnabled: false, enabled: true }],
+  ] as const)(
+    "preserves denied %s prerequisite reads as a refusal before approval",
+    async (operation, args) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation(() =>
+        Promise.resolve(response({ errorMessages: ["Denied"] }, 403)),
+      );
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "permission-denied" });
+      expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+    },
+  );
+
+  it.each([
+    [
+      "jira.rename-screen-tab",
+      {
+        screenId: "11",
+        expectedScreenName: "Prior screen",
+        tabId: "21",
+        expectedName: "Fields",
+        name: "Renamed",
+      },
+      {
+        startAt: 0,
+        maxResults: 100,
+        total: 1,
+        isLast: true,
+        screens: [{ id: 11, name: "Changed screen" }],
+      },
+    ],
+    ["jira.set-app-monitoring", { expectedEnabled: false, enabled: true }, { enabled: true }],
+  ] as const)(
+    "preserves a stale %s reviewed state as a conflict before approval",
+    async (operation, args, body) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation(() => Promise.resolve(response(body)));
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "conflict" });
+      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    },
+  );
+
+  it.each([
+    ["jira.create-component", { projectIdOrKey: "SYN", name: "New component" }],
+    ["jira.update-component", { componentId: "20000", name: "New component" }],
+    ["jira.create-version", { projectId: "10000", name: "New version" }],
+    ["jira.update-version", { versionId: "30000", released: true }],
+  ] as const)(
+    "checks %s metadata without applying an issue template or dispatching",
+    async (operation, args) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation((request) => {
+        const path = new URL(request.url).pathname;
+        const body = path.includes("/component/")
+          ? { id: "20000", project: "SYN", name: "Old component" }
+          : path.includes("/version/")
+            ? { id: "30000", projectId: 10000, name: "Old version", released: false }
+            : { id: "10000", key: "SYN" };
+        return Promise.resolve(response(body));
+      });
+      expect(await f.run()).toBeUndefined();
+      expect(f.http).toHaveBeenCalled();
+      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    },
+  );
+
+  it.each([
+    [
+      "jira.create-screen-tab",
+      { screenId: "11", expectedScreenName: "Review screen", name: "Additional" },
+    ],
+    [
+      "jira.rename-screen-tab",
+      {
+        screenId: "11",
+        expectedScreenName: "Review screen",
+        tabId: "21",
+        expectedName: "Fields",
+        name: "Renamed",
+      },
+    ],
+    [
+      "jira.delete-screen-tab",
+      {
+        screenId: "11",
+        expectedScreenName: "Review screen",
+        tabId: "21",
+        expectedName: "Fields",
+        expectedFieldIds: ["summary"],
+      },
+    ],
+  ] as const)(
+    "checks the exact %s snapshot before approval with GET requests only",
+    async (operation, args) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation((request) => {
+        const path = new URL(request.url).pathname;
+        const body = path.endsWith("/screens")
+          ? {
+              startAt: 0,
+              maxResults: 100,
+              total: 1,
+              isLast: true,
+              screens: [{ id: 11, name: "Review screen" }],
+            }
+          : path.endsWith("/fields")
+            ? [{ id: "summary", name: "Summary" }]
+            : [
+                { id: 21, name: "Fields" },
+                { id: 22, name: "Other" },
+              ];
+        return Promise.resolve(response(body));
+      });
+      expect(await f.run()).toBeUndefined();
+      expect(f.http).toHaveBeenCalled();
+      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+      expect(f.http.mock.calls.some(([request]) => request.url.includes("/issue/"))).toBe(false);
+    },
+  );
+
+  it.each([
+    ["jira.set-app-monitoring", { expectedEnabled: false, enabled: true }],
+    ["jira.set-ipd-monitoring", { expectedEnabled: true, enabled: false }],
+    ["jira.start-jmx-metrics", { expectedEnabled: false }],
+    ["jira.stop-jmx-metrics", { expectedEnabled: true }],
+  ] as const)(
+    "reads the reviewed %s state before approval without a POST or issue template",
+    async (operation, args) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation((request) =>
+        Promise.resolve(
+          response(
+            request.url.endsWith("/areMetricsExposed")
+              ? args.expectedEnabled
+              : { enabled: args.expectedEnabled },
+          ),
+        ),
+      );
+      expect(await f.run()).toBeUndefined();
+      expect(f.http).toHaveBeenCalledTimes(1);
+      expect(f.http.mock.calls[0]?.[0].method).toBe("GET");
+      expect(f.http.mock.calls[0]?.[0].url).toContain("/monitoring/");
+    },
+  );
+
   it("lets a conforming proposal through to the human's approval", async () => {
     const f = preflight(TEMPLATE, {
       ...CREATE,
       fields: { summary: "Add login", description: "h2. Acceptance criteria\n* works" },
     });
     expect(await f.run()).toBeUndefined();
+  });
+
+  it("admits requirement references the write will trace, and refuses them untraced (LIM27)", async () => {
+    const pod = await podFixture([{ capsuleId: "cap-preflight", text: specification(1).text }]);
+    cleanup.push(() => {
+      pod.cleanup();
+    });
+    const session = openTraceSession(pod.deps, {
+      chatId: pod.chatId,
+      userMessageId: "m-1",
+      correlationId: "preflight-trace",
+    });
+    let resolution: TraceResolution;
+    try {
+      resolution = session.resolve(["LH-001"]);
+    } finally {
+      session.close();
+    }
+    if (!resolution.ok) throw new TypeError("Expected a resolved requirement trace");
+    const traced = {
+      ...CREATE,
+      fields: { summary: "Add login", description: "h2. Acceptance criteria\n* works" },
+      requirementIds: ["LH-001"],
+    };
+    const jira = {
+      fields: [
+        {
+          ...field("labels", "array"),
+          schema: { type: "array", items: "string", system: "labels" },
+        },
+      ],
+    };
+    const admitted = preflight(TEMPLATE, traced, "jira.create", jira);
+    expect(await admitted.run(resolution.trace)).toBeUndefined();
+    expect(admitted.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(await preflight(TEMPLATE, traced, "jira.create", jira).run()).toMatchObject({
+      outcome: "rejected",
+      reason: "field-validation",
+      fieldId: "requirementIds",
+    });
   });
 
   it("does nothing without proposed arguments or a governing template", async () => {
@@ -566,13 +1199,14 @@ describe("the dry run before approval", () => {
         phase: "refused",
         refusal: "template-violation",
         violationCount: 1,
+        sectionMissingCount: 1,
       });
     });
 
     it("returns the untraced advice instead of an approval, logged once as refused (S05)", async () => {
       const sink = logs();
       const advice = { outcome: "rejected", requirementRefusal: "untraced" };
-      const untracedAdvice = vi.fn(() => advice);
+      const untracedAdvice = vi.fn(() => ({ data: advice, repeated: false }));
       const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
         untracedAdvice,
       });
@@ -582,6 +1216,46 @@ describe("the dry run before approval", () => {
       expect(drafts).toEqual([]);
     });
 
+    it.each<CodingWorkbenchMode>(["governed-assist", "supervised-coding"])(
+      "allows only the existing human review path to present the repeated untraced draft in %s (S16)",
+      async (mode) => {
+        preflightAuthority.mode = mode;
+        const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+        const untracedAdvice = vi.fn(() => ({ data: advice, repeated: true }));
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          untracedAdvice,
+        });
+        await expect(f.run()).resolves.toBeUndefined();
+        expect(untracedAdvice).toHaveBeenCalledOnce();
+        expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+      },
+    );
+
+    it.each<CodingWorkbenchMode>(["governed-assist", "supervised-coding"])(
+      "gives the model the advice first and never the review on a first untraced submission in %s",
+      async (mode) => {
+        preflightAuthority.mode = mode;
+        const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          untracedAdvice: () => ({ data: advice, repeated: false }),
+        });
+        expect(await f.run()).toBe(advice);
+      },
+    );
+
+    it.each([false, true])(
+      "keeps an untraced draft refused in allowed mode without inventing human confirmation, repeated=%s (S16)",
+      async (repeated) => {
+        const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          untracedAdvice: () => ({ data: advice, repeated }),
+        });
+        expect(await f.run()).toBe(advice);
+        expect(await f.run()).toBe(advice);
+        expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+      },
+    );
+
     it("asks for approval when there is no advice, and gives none on an invalid draft (S05)", async () => {
       const untracedAdvice = vi.fn(() => undefined);
       const valid = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
@@ -590,7 +1264,7 @@ describe("the dry run before approval", () => {
       await expect(valid.run()).resolves.toBeUndefined();
       expect(untracedAdvice).toHaveBeenCalledTimes(1);
 
-      const refused = vi.fn(() => ({ outcome: "rejected" }));
+      const refused = vi.fn(() => ({ data: { outcome: "rejected" }, repeated: false }));
       const invalid = preflight(TEMPLATE, { items: [item("story", "nothing")] }, "jira.draft", {
         untracedAdvice: refused,
       });
@@ -685,7 +1359,8 @@ describe("the dry run before approval", () => {
         const events = sink.events.filter((event) => event.op === "jira.field.admission");
         expect(events.map((event) => event.correlationId)).toEqual(["preflight-1"]);
         expect(events[0]?.extra).toMatchObject({
-          operation: "jira.draft",
+          operation: "jira-write",
+          operationDigest: createHash("sha256").update("jira.draft").digest("hex"),
           refusedCount: 2,
           validations: ["required-field"],
         });
@@ -778,17 +1453,28 @@ describe("the dry run before approval", () => {
     expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     const events = sink.events.filter((event) => event.op === "jira.field.admission");
     expect(events[0]?.extra).toMatchObject({
-      operation: "jira.create",
+      operation: "jira-write",
+      operationDigest: createHash("sha256").update("jira.create").digest("hex"),
       refusedCount: 1,
       validations: ["required-field"],
+    });
+    const fact = sink.events.find(({ op }) => op === "jira.operation.core");
+    expect(
+      expectActivityLogProof("jira.operation.core.line", formatActivityLogProofLine(fact ?? {})),
+    ).toMatchObject({
+      operation: "jira.create",
+      stage: "field-admission",
+      outcome: "refused",
+      reason: "field-validation",
     });
   });
 });
 
 describe("a violating write never reaches Jira under Full access (#4177)", () => {
-  // Full access (`autonomous-delivery`) asks no human, so the pre-approval dry run never runs and
-  // nothing claims an approval (`beforeMutation` admits): the gate in front of the Jira request is
-  // the only thing between the model's arguments and a POST. The connection is built exactly as the
+  // Full access (`autonomous-delivery`) asks no human and nothing claims an approval
+  // (`beforeMutation` admits). Chat's approval-free preflight dry-runs the write first (#4321), but
+  // the gate in front of the Jira request stays authoritative on its own: this block drives the
+  // provider directly, without that preflight, between the model's arguments and a POST. The connection is built exactly as the
   // Chat catalog builds it, with the issue templates of the markdown skill library.
   const VIOLATING = { projectId: "10000", issueTypeId: "10001", fields: { summary: "Add login" } };
   const CONFORMING = {
@@ -824,7 +1510,8 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     const http = vi.fn<AtlassianHttpBodyPort>((request) => {
       requests.push(request.method);
       const path = new URL(request.url).pathname;
-      if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+      if (path.endsWith("/project/10000"))
+        return Promise.resolve(response({ id: "10000", key: "SYN" }));
       if (path.endsWith("/issuetype/10001"))
         return Promise.resolve(response({ id: "10001", name: "Story" }));
       if (path.includes("createmeta")) {
@@ -905,6 +1592,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     const f = fullAccessWrite(VIOLATING);
     const result = await f.run();
     expect(result.data).toEqual({
+      operationBinding: jiraOperationBindingForTool("jira.create"),
       outcome: "rejected",
       reason: "field-validation",
       guidance: SECTION_GUIDANCE,

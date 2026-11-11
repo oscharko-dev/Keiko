@@ -100,14 +100,13 @@ changed. No record binds capture bytes, so the existing macOS captures from 2026
 keeps one renderer across the set; the new `generatedAt` describes the three records, not the captures. No updater behavior, baseline or numerical ceiling changed. This remains
 updater fixture evidence.
 
-The MemoriaViva chain (#4213, #4206) changes Memory strings in the core and optional English and
-German message catalogs, so the freshness gate rejected those four sources' digests. On 2026-11-07
-(UTC) the complete original nine-case producer ran in the Linux gates container with an init
-process. It passed in 2.0 minutes, including the real BFF stop and restart. The three records
-rebind only the four catalog digests. As before, the Linux renderer's captures were discarded and
-the existing macOS captures kept, so one renderer draws the whole set; no record binds capture
-bytes. No updater behavior, baseline or numerical ceiling changed. This remains updater fixture
-evidence.
+On 2026-11-10 (UTC) the production build moved its type check to `tsconfig.build.json`
+(`packages/keiko-ui/next.config.mjs`), and the optional EN/DE catalogs gained the Jira
+`invalidInput` refusal text. The complete original nine-case producer ran in the Linux gates
+container (`--init`, Node 24.18.0) and passed in 1.5 minutes, including the real BFF stop and
+restart. The three records rebind only those source digests. No record binds capture bytes, so the
+existing captures are kept to preserve one renderer across the set. No updater behavior, baseline
+or numerical ceiling changed.
 
 ## Reproduce
 
@@ -342,9 +341,123 @@ including the real-BFF outage case, and `npm run check:update-ui-evidence` passe
 records bind the new API digest. Two screenshots changed bytes, without a visible change to the update window:
 `06-update-window-forced-colors.png` and `13-reconnecting-state-mocked.png`.
 
-Merging the Jira changes of #4292 into the MemoriaViva chain combined two changes of the declared
-optional message catalogs. The original nine-case producer ran again in the local gates container
-(Linux, Chromium build 1248). All nine cases passed in 1.8 minutes, including the real-BFF outage
-case, and `npm run check:update-ui-evidence` passes. The three JSON records bind the merged catalog
-digests. Two screenshots changed bytes, without a visible change to the update window:
-`11-progress-state.png` and `13-reconnecting-state-mocked.png`.
+## Jira UI verification refresh — 2026-11-08
+
+The inherited API and translation fingerprints were refreshed with the complete original producer
+on signed UI source head `575997e6caec9f86843cab1cae7f291569043164`, in the isolated Linux arm64
+container with Node 24.18.0, Liberation fonts and a Tini subreaper for the BFF lifecycle. All nine
+unchanged Chromium cases passed in 1.6 minutes, including the real-BFF stop/restart journey. The
+producer regenerated all 17 artifacts, and the source/harness freshness gate passes. Representative
+update-window and reconnect captures were visually inspected. No updater behavior, fixture,
+assertion or threshold changed; this remains updater fixture and BFF recovery evidence.
+
+## Jira report estimate field refresh — 2026-11-08
+
+The C4 report-card translations changed the declared optional catalog digests. The complete
+original producer ran in the Linux arm64 container with Node 24.18.0, an init process and Liberation
+fonts: all nine tests passed in 2.4 minutes, including real BFF stop/restart. All source provenance
+records were regenerated; the progress and reconnect captures changed and were visually inspected.
+No updater behavior, fixture, assertion or numerical ceiling changed. This is updater presentation
+and recovery evidence; it does not qualify native installation or a live Jira instance.
+
+## Memory withholding and recovered delivery — 2026-11-08 (#4321)
+
+The additive Memory health projection and its English/German notices changed the declared API
+and optional-catalog fingerprints. The complete original producer ran on signed source head
+`e5176a23e` in the recovered Linux arm64 worktree, with Node 24.18.0, Playwright 1.64.1 and
+Chromium build 1248. All nine cases passed in 2.2 minutes, including real BFF stop/restart.
+The container had a two-CPU quota, and the producer used its existing single worker. Each heavy
+run required the machine governor's headroom admission.
+
+The producer regenerated all 17 artifacts. All 14 captures changed bytes and were visually
+inspected, including contrast modes, the narrow manual path, install progress and reconnect
+state. The three JSON records bind the current sources and harness inputs; the unchanged
+freshness gate passes. No updater fixture, assertion, behavior or numerical ceiling changed.
+The Editor release-evidence checker also passes against the actual rebuilt export. These
+records qualify updater presentation and the declared recovery fixture, not native installation
+or overall integrated-head acceptance.
+
+## Stream wire split and catalog refresh — 2026-11-09 (#4287)
+
+The stream wire split changed `packages/keiko-ui/src/lib/api.ts`, and later Jira work changed the
+German core catalog and both optional catalogs, so the freshness gate rejected their digests.
+
+The 14 committed captures are not from this run. They are the set committed before it (#4321,
+2026-11-08), and their glyphs show the DejaVu Sans fallback, not Liberation Sans. That run therefore
+did not have `fonts-liberation` installed, although this README names Liberation as the reference.
+
+On 2026-11-09 the complete original nine-case producer ran on the current sources in the Linux arm64
+gates container (`keiko-ac12ci-gates`: Node 24.18.0, Chromium build 1248, `--init`) after
+`apt-get install fonts-liberation`. All nine cases passed in 1.9 minutes, including real BFF stop
+and restart, and `npm run check:update-ui-evidence` passes. Only the four stale source digests and
+`generatedAt` in the three records were taken from this run.
+
+Its Liberation captures differed from the committed set only in font rendering, with no visible
+updater state change. No record binds capture bytes, so the committed captures are kept, as in
+#4279. The reference environment remains Linux arm64 with Liberation Sans. The next regeneration
+that replaces captures must install `fonts-liberation` first. The gates image does not ship it, so
+confirm `fc-list | grep -i liberation` before the run. No updater behavior, baseline or numerical
+ceiling changed.
+
+## Jira AC9 continuation and readable fields — 2026-11-09 (#4288)
+
+The bounded pending-approval continuation changed the API source, and readable Jira field
+labels changed the declared English/German catalogs. The complete original nine-case producer
+ran against the final sources in a private Linux arm64 gates container with Node 24.18.0,
+Playwright 1.64.1, Chromium build 1248, Liberation fonts and `--init`: **9 passed (1.6m)**.
+All 17 artifacts were regenerated by that producer, including all 14 PNG captures, which were
+visually inspected. The unchanged `check:update-ui-evidence` freshness gate passed.
+
+The preceding run without `--init` had eight passing cases and failed BFF cleanup because the
+exited server remained a zombie under PID 1. Its Activity Log confirmed completed shutdown;
+the unchanged suite passed with the documented init process. No fixture, assertion, timeout,
+updater behavior or numerical ceiling was changed. These records qualify the declared updater
+presentation and recovery fixture, not native installation or a live Jira deployment.
+
+## Review status notice — 2026-11-09 (#4288)
+
+The plain "review status unknown" notice added one message to both core catalogs
+(`i18n-messages.en.ts`, `i18n-messages.de.ts`), so the freshness gate rejected their digests. The
+complete original nine-case producer ran on source head `6be223a28` in the Linux arm64 gates
+container (`keiko-ac12ci-gates`, Node 24.18.0, `--init`): **9 passed (1.9m)**, including the real BFF
+stop and restart, and `npm run check:update-ui-evidence` passes. Only the two catalog digests and
+`generatedAt` in the three records were taken from this run.
+
+That container did not have `fonts-liberation` installed, so its captures used the DejaVu Sans
+fallback and were discarded. The 14 committed captures remain the complete Liberation set of the AC9
+run above, all from one producer run in the reference environment. No record binds capture bytes.
+No updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
+evidence.
+
+## Jira batch refusal and read-failure wording — 2026-11-09 (#4288)
+
+Readable draft-batch refusal and stop reasons and the Jira read-refusal notice added messages to both
+optional catalogs; together with earlier changes on this branch to `api.ts` and both core catalogs,
+the freshness gate rejected five source digests. The complete original nine-case producer ran in the
+Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.8m)**, including the real BFF
+stop and restart, and `npm run check:update-ui-evidence` passes. Only the five source digests and
+`generatedAt` in the three records were taken from this run. Its captures used the container's
+fallback fonts and were discarded; the 14 committed captures remain the complete Liberation set of
+the AC9 run. No record binds capture bytes. No updater behavior, fixture, assertion or numerical
+ceiling changed. This remains updater fixture evidence.
+
+## Chat History deletion wording — 2026-11-10 (#4335)
+
+The recoverable Chat History delete and its purge confirmation added messages to both optional
+catalogs, so the freshness gate rejected their two digests. The complete original nine-case
+producer ran in the Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.5m)**,
+including the real BFF stop and restart, and `npm run check:update-ui-evidence` passes. Only the
+two catalog digests and `generatedAt` in the three records were taken from this run. Its captures
+used the container's fallback fonts and were discarded; the 14 committed captures remain the
+complete Liberation set of the AC9 run. No record binds capture bytes. No updater behavior,
+fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Chat History move-failure wording — 2026-11-10 (#4335)
+
+The move-failure message in both optional catalogs changed to "Moving to Deleted failed:
+{detail}", so the two catalog digests moved again. The complete original nine-case producer ran
+in the Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.7m)**, and
+`npm run check:update-ui-evidence` passes. Only the two catalog digests and `generatedAt` in the
+three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.

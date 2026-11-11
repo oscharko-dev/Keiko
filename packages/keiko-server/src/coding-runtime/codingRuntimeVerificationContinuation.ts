@@ -6,10 +6,20 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
+import {
+  CODING_VERIFICATION_BLOCKED_REASONS,
+  type CodingVerificationBlockedReason,
+} from "./codingToolFacadePorts.js";
 
 export const VERIFICATION_CONTINUATION_MAX = 2;
-export const VERIFICATION_CONTINUATION_INTENT =
-  "Verification is not complete for the accepted task. Continue within its original scope and authority: inspect the latest governed verification result, read the relevant source and test files, repair the diagnosed cause without weakening assertions, and rerun the same smallest relevant verification. A nonempty verification must pass after the final edit before you claim completion. If authority or the test environment prevents verification, explain the blocker accurately; do not claim success.";
+/**
+ * How a check run in the model's own shell counts as verification (`openCodeNativeVerificationKind`).
+ * The runtime reports one exit status per line, so only a line whose status is the check's own
+ * counts; the #4271 lab run piped `mvn test` into `tail`, passed, and was refused as unverified.
+ */
+export const SHELL_VERIFICATION_STATUS_RULE =
+  "In your shell, run the check as its own line, or chain it with && only to cd or other checks: a pipe (such as | tail), ;, ||, & or a second line lets another command decide the exit status, and such a line does not count as verification.";
+export const VERIFICATION_CONTINUATION_INTENT = `Verification is not complete for the accepted task. Continue within its original scope and authority: inspect the latest governed verification result, read the relevant source and test files, repair the diagnosed cause without weakening assertions, and rerun the same smallest relevant verification. Where the governed verifier cannot run that check, run the repository's own test command in your shell, where its result counts. ${SHELL_VERIFICATION_STATUS_RULE} A nonempty verification must pass after the final edit before you claim completion. If authority or the test environment prevents verification, explain the blocker accurately; do not claim success.`;
 
 type ContinuationState =
   "continued" | "dispatch-refused" | "dispatch-threw" | "run-superseded" | "not-evidenced";
@@ -53,6 +63,13 @@ const VERIFICATION_CONTINUATION_OPERATION = defineActivityLogOperation({
         "not-evidenced",
       ],
     },
+    // Why no further repair continuation ran: the blocker the ledger holds for the run (#4271).
+    blockedReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...CODING_VERIFICATION_BLOCKED_REASONS],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -68,6 +85,7 @@ export function recordVerificationContinuation(
   attempt: number,
   state: ContinuationState,
   error?: unknown,
+  blockedReason?: CodingVerificationBlockedReason,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -83,6 +101,7 @@ export function recordVerificationContinuation(
         max: VERIFICATION_CONTINUATION_MAX,
         state,
         ...(error === undefined ? {} : continuationErrorFields(error)),
+        ...(blockedReason === undefined ? {} : { blockedReason }),
       },
     ),
   );

@@ -96,6 +96,7 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
         wholeCollection: { type: "boolean" },
         selectionIncomplete: { type: "boolean" },
         omittedRequirementCount: COUNT,
+        copyDocumentsSkipped: COUNT,
         failedRequirementRefs: {
           type: "array",
           maxItems: JIRA_DRAFT_BATCH_FAILED_REFS_MAX,

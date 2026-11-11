@@ -101,6 +101,7 @@ async function main() {
       assert.equal(await connection.verify(), "ok");
       await qualifyWrites(connection, key, marker);
     },
+    session,
   );
   await requireLicense(session);
   rmSync(pending);

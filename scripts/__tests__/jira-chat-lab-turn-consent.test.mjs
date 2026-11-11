@@ -65,6 +65,18 @@ function pendingTurn(current, signal) {
     });
   });
 }
+const WRITE_APPROVAL_ROUTE = "/api/atlassian-connectors/chat-write-approval/";
+const READ_CONSENT_SUFFIX = "/chat-read-consent";
+/** The approval id from the canonical write-approval template; any other route fails closed. */
+function approvalIdOf(path) {
+  const segments = path.split("/");
+  if (path.startsWith(WRITE_APPROVAL_ROUTE) && segments.length === 5) {
+    return decodeURIComponent(segments[4]);
+  }
+  // The retired read-consent route named the approval before its suffix.
+  if (path.endsWith(READ_CONSENT_SUFFIX)) return segments.at(-2);
+  throw new TypeError("Unexpected fixture approval route");
+}
 function fixtureFetch(state, options) {
   return vi.fn(async (url, init) => {
     const path = new URL(url).pathname;
@@ -78,7 +90,7 @@ function fixtureFetch(state, options) {
       state.sent = true;
       return pendingTurn(state.current, init.signal);
     }
-    const id = path.split("/").at(-2);
+    const id = approvalIdOf(path);
     if (init.method === "POST") state.posts.push(id);
     // The read-consent route is retired: no call may ever reach it.
     if (path.endsWith("/chat-read-consent")) {

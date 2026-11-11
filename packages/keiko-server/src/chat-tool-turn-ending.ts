@@ -24,6 +24,7 @@ export type ChatToolTurnEndReason =
   | "budget-exhausted"
   | "deadline"
   | "authority-invalid"
+  | "authentication-failed"
   | "tool-failure"
   | "output-exhausted"
   | "context-overflow"
@@ -32,15 +33,18 @@ const REASONS: readonly ChatToolTurnEndReason[] = [
   "budget-exhausted",
   "deadline",
   "authority-invalid",
+  "authentication-failed",
   "tool-failure",
   "output-exhausted",
   "context-overflow",
   "model-failure",
 ];
 const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
-  "budget-exhausted": "this turn used up its tool-call or prompt budget",
+  "budget-exhausted": "this turn used up its tool-call budget",
   deadline: "this turn reached its time limit",
   "authority-invalid": "the Chat's mode, sources or connection changed",
+  "authentication-failed":
+    "Jira authentication failed. Open the Knowledge Pods hub and verify the connection again",
   "tool-failure": "a tool call could not be settled",
   "output-exhausted": "the model ran out of output budget",
   "context-overflow": "the conversation no longer fits the model's context window",

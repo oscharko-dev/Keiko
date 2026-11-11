@@ -216,6 +216,30 @@ describe("resolveMemoryDir", () => {
     expect(resolveMemoryDir(runtimeDir, emptyEnv())).toBe(runtimeDir);
   });
 
+  it("rejects a workspace child whose name only begins with two dots", () => {
+    expect(() => resolveMemoryDir(join(process.cwd(), "..cache"), emptyEnv())).toThrow(
+      MemoryStorageError,
+    );
+  });
+
+  // #4068 W7: a Windows path names the same directory whatever its letter case, and
+  // process.cwd() keeps the drive letter as the shell spelled it.
+  describe.runIf(process.platform === "win32")("on Windows letter case", () => {
+    const swapCase = (path: string): string =>
+      path === path.toUpperCase() ? path.toLowerCase() : path.toUpperCase();
+
+    it("rejects a path inside the current working directory in another case", () => {
+      expect(() => resolveMemoryDir(swapCase(join(process.cwd(), "child")), emptyEnv())).toThrow(
+        MemoryStorageError,
+      );
+    });
+
+    it("still allows the .keiko runtime root in another case", () => {
+      const runtimeDir = swapCase(join(process.cwd(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME));
+      expect(resolveMemoryDir(runtimeDir, emptyEnv())).toBe(runtimeDir);
+    });
+  });
+
   it("rejects a symlinked target", () => {
     const base = freshTmp();
     const real = join(base, "real");

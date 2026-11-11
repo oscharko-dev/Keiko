@@ -130,6 +130,23 @@ export function isOpenCodeToolExecutionFailure(tool: unknown, state: unknown): b
   return tool === "shell" && isFailedShellResult(state.metadata);
 }
 
+/** The closed upstream token OpenCode reports when a permission request was rejected. */
+const OPENCODE_PERMISSION_REJECTED_ERROR_TYPE = "permission.rejected";
+
+/**
+ * True when OpenCode settled an errored tool part as a permission rejection. The token is shared by
+ * a configured rule (such as the mode-independent `external_directory` deny floor), Keiko's policy
+ * hook replying `reject`, and a person pressing Deny; it does not name which one. Only the closed
+ * upstream token `error.type` is compared, against its exact literal; the upstream `message` is
+ * untrusted and is never read. Every native tool signal of a run, live or reloaded,
+ * comes from the history projection (`opencodeV2History.ts` displayToolState), so the live card
+ * and the reloaded one show the same refusal.
+ */
+export function isOpenCodePermissionRejection(state: unknown): boolean {
+  if (!isPlainRecord(state) || state.status !== "error") return false;
+  return isPlainRecord(state.error) && state.error.type === OPENCODE_PERMISSION_REJECTED_ERROR_TYPE;
+}
+
 function isFailedShellResult(metadata: Readonly<Record<string, unknown>>): boolean {
   if (metadata.timeout === true || typeof metadata.signal === "string") return true;
   // A malformed exit status speaks for nothing, as it does for the run's evidence.

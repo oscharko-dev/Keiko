@@ -1,5 +1,9 @@
 import type { MessageCatalog } from "./i18n-messages.en";
 export const DE_MESSAGES = {
+  "chat.pendingCancellation.unconfirmed":
+    "Der Abbruch konnte nicht bestätigt werden. Versuche erneut, die Antwort zu stoppen.",
+  "chat.pendingObservation.unknown":
+    "Der Status dieser Prüfung ist unbekannt. Lade die Seite neu, um ihn erneut zu prüfen.",
   "grounded.uncertainty.memoryKind": "Gedächtniskontext",
   "grounded.files.capabilityUnattached":
     "Dieses Modell liefert selbst keine verlässlichen Quellenangaben. Dieser Antwort wurden keine Quellenangaben angehängt.",
@@ -86,6 +90,11 @@ export const DE_MESSAGES = {
   "editor.empty.opening": "Wird geöffnet…",
   "supportReport.globalFailure": "Keiko hat einen Fehler festgestellt.",
   "supportReport.readinessUnavailable": "Fehlerberichte können derzeit unvollständig sein.",
+  "memory.readiness.withheld": "Memory nicht verfügbar",
+  "memory.readiness.migrationFailed":
+    "Memory ist bis zur Reparatur des lokalen Tresors nicht verfügbar. Chat bleibt verfügbar. Behebe die Ursache und starte Keiko neu.",
+  "memory.readiness.unreadable":
+    "Der gespeicherte Memory-Tresor konnte nicht geöffnet werden. Prüfe den verfügbaren Schlüssel und starte Keiko neu. Chat bleibt verfügbar.",
   "supportReport.create": "Fehlerbericht erstellen",
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.download": "Bericht herunterladen",
@@ -519,9 +528,9 @@ export const DE_MESSAGES = {
     "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
   "chat.error.modelNotReady.title": "Modellprüfung erforderlich",
   "chat.error.modelNotReady.message":
-    "Das ausgewählte Modell hat die Bereitschaftsprüfung noch nicht bestanden.",
+    "Die Bereitschaftsprüfung für das ausgewählte Modell fehlt, ist nicht mehr gültig oder ist fehlgeschlagen.",
   "chat.error.modelNotReady.remediation":
-    "Öffne die Modelleinstellungen, starte die Bereitschaftsprüfung und sende deine Nachricht danach erneut.",
+    "Öffne Einstellungen > Modelle, führe die Bereitschaftsprüfung für das ausgewählte Modell aus und sende deine Nachricht anschließend erneut.",
   "chat.error.modelNotReady.action": "Modellprüfung öffnen",
   "chat.error.capabilityUnavailable.title": "Modellfunktion nicht verfügbar",
   "chat.error.capabilityUnavailable.message":
@@ -533,6 +542,11 @@ export const DE_MESSAGES = {
     "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
   "chat.error.scopeChanged.remediation":
     "Prüfe die aktuellen Quellen des Chats und sende deine Anfrage anschließend erneut.",
+  "chat.error.jiraAuthentication.title": "Jira-Anmeldung fehlgeschlagen",
+  "chat.error.jiraAuthentication.message":
+    "Die Jira-Verbindung konnte nicht authentifiziert werden.",
+  "chat.error.jiraAuthentication.remediation":
+    "Prüfe die Jira-Verbindung erneut im Knowledge Pods Hub. Prüfe vor einer weiteren Änderung den Stand in Jira.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",

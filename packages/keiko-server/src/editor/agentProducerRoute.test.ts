@@ -187,7 +187,6 @@ function authority(
     budget: {
       maxRuntimeMs: 300_000,
       maxToolCalls: 8,
-      maxPromptTokens: 100_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: new Date(Date.now() + 300_000).toISOString(),

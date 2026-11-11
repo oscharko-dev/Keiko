@@ -36,7 +36,7 @@ export interface JiraReportSession {
   /** Binds it to the Jira instance and credential it was started with. */
   readonly fingerprint: string;
   readonly request: JiraReportRequest;
-  readonly scope: JiraReportScope;
+  scope: JiraReportScope;
   readonly jql: string;
   readonly startedAt: number;
   phase: "new" | "reading" | "finished";
@@ -148,7 +148,9 @@ export function createJiraReportSession(input: {
       ...(request.estimateFieldId === undefined
         ? {}
         : { estimateFieldId: request.estimateFieldId }),
-      estimateUnit: request.estimateFieldId === undefined ? "seconds" : "custom-field",
+      estimateUnit: "unavailable",
+      estimateSource: "unavailable",
+      estimateUnavailableReason: "metadata-unavailable",
       asOf: request.asOf ?? new Date(input.now).toISOString().slice(0, 10),
       timeZone: "UTC",
     },

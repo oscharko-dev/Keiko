@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
+import { CatalogDispatchFault } from "./catalogToolErrors.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { CatalogHandlerContext, CatalogHandlerResult } from "./catalogToolPorts.js";
 
@@ -138,6 +139,34 @@ describe("bound catalog dispatch", () => {
       identity,
     );
     expect(result.kind === "settled" && result.result.reason).toBe("approval-rejected");
+  });
+  it("settles a consumer preflight refusal before the effect boundary when no approval is needed", async () => {
+    const fixture = catalogToolFixture();
+    fixture.preview.mockReturnValue({ ok: true });
+    const preflight = vi.fn(() =>
+      Promise.reject(new CatalogDispatchFault("denied", "effect-denied")),
+    );
+    const binder = createCatalogToolBinder(
+      { ...fixture.input, approvalPort: { ...fixture.input.approvalPort, preflight } },
+      fixture.options,
+    );
+    const offer = binder.offer();
+    const result = await binder.dispatch(
+      {
+        kind: "bound",
+        toolRef: fixture.pure.descriptor.toolRef,
+        projectionDigest: fixture.pure.projection.projectionDigest,
+        offerId: offer.offerId,
+        arguments: { path: "fixture.ts" },
+      },
+      identity,
+    );
+    expect(preflight).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: { status: "denied", reason: "effect-denied", effectStarted: false },
+      receipt: { effectStarted: false, budgetDisposition: "not-reserved" },
+    });
   });
   it("settles cancellation once and discards late content without another charge", async () => {
     const fixture = catalogToolFixture();

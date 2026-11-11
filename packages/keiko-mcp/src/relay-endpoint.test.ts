@@ -1,7 +1,11 @@
 import { afterEach, expect, it, vi, type Mock } from "vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { MANAGED_MCP_PROTOCOL_VERSION } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
   ExternalMcpConnection,
   ManagedMcpInvocationContext,
+  ManagedMcpToolResult,
+  ManagedMcpFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { ManagedMcpError, noEffectError } from "./definitions.js";
 import { connectExternalMcp } from "./external-client.js";
@@ -28,6 +32,8 @@ function fixture(
   risk: "read" | "write" = "read",
   instructions?: string,
   dispatchGate = true,
+  localProvider?: "jira",
+  localMetadataTools?: ExternalMcpConnection["localMetadataTools"],
 ): Fixture {
   let allowed = true;
   const recover = vi.fn(() => {
@@ -52,6 +58,8 @@ function fixture(
   );
   const connection: ExternalMcpConnection = {
     signal: new AbortController().signal,
+    ...(localProvider === undefined ? {} : { localProvider }),
+    ...(localMetadataTools === undefined ? {} : { localMetadataTools }),
     ...(instructions === undefined ? {} : { instructions }),
     ...(dispatchGate ? { dispatchGate: true } : {}),
     tools: [
@@ -94,7 +102,12 @@ async function legacy(
   params: unknown,
   context = f.context,
 ): Promise<{
-  result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string };
+  result?: {
+    content?: { text?: string }[];
+    isError?: boolean;
+    instructions?: string;
+    structuredContent?: unknown;
+  };
   error?: unknown;
 }> {
   const response = await f.endpoint.fetch(
@@ -117,7 +130,12 @@ async function legacy(
         .find((line) => line.startsWith("data: "))
         ?.slice(6);
   return JSON.parse(json ?? "null") as {
-    result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string };
+    result?: {
+      content?: { text?: string }[];
+      isError?: boolean;
+      instructions?: string;
+      structuredContent?: unknown;
+    };
     error?: unknown;
   };
 }
@@ -131,6 +149,100 @@ it("exposes only admitted tools to the real SDK and preserves MCP results and pr
   });
   expect(f.call).toHaveBeenCalledOnce();
   expect(f.call.mock.calls[0]?.[2].invocationId).toBe("private-invocation");
+});
+
+it.each([MANAGED_MCP_PROTOCOL_VERSION, "2025-03-26"])(
+  "delivers tools/list_changed to the SDK client after local selection on %s",
+  async (version) => {
+    const initial = [{ name: "jira.describe", inputSchema }];
+    let tools: ExternalMcpConnection["tools"] = initial;
+    let changed: (() => void) | undefined;
+    const notification = new Promise<void>((resolve) => {
+      changed = resolve;
+    });
+    const nativeCapture = vi.fn(() => {
+      throw new TypeError("Metadata is not a native Jira read");
+    });
+    const context: ManagedMcpInvocationContext = {
+      invocationId: "catalog-selection",
+      correlationId: "same-run",
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+      beginReadCapture: nativeCapture,
+    };
+    const connection: ExternalMcpConnection = {
+      signal: context.signal,
+      localProvider: "jira",
+      localMetadataTools: ["jira.describe"],
+      get tools() {
+        return tools;
+      },
+      call: () => {
+        tools = [...initial, { name: "jira.issue", inputSchema }];
+        return Promise.resolve({ content: [{ type: "text", text: "Selected" }] });
+      },
+      close: () => Promise.resolve(),
+    };
+    const endpoint = createMcpRelayEndpoint(connection, {
+      "jira.describe": "read",
+      "jira.issue": "read",
+    });
+    const client = new Client(
+      { name: "native-catalog-client", version: "1" },
+      {
+        capabilities: {},
+        supportedProtocolVersions: [version],
+        versionNegotiation: {
+          mode: version === MANAGED_MCP_PROTOCOL_VERSION ? { pin: version } : "legacy",
+          probe: { maxRetries: 0 },
+        },
+        listChanged: {
+          tools: {
+            autoRefresh: false,
+            debounceMs: 0,
+            onChanged: (): void => {
+              changed?.();
+            },
+          },
+        },
+      },
+    );
+    cleanup.push(endpoint.close, () => client.close());
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("https://relay.example.test/mcp"), {
+        fetch: (input, init): Promise<Response> =>
+          endpoint.fetch(new Request(input, init), context),
+      }),
+    );
+    expect(client.getProtocolEra()).toBe(
+      version === MANAGED_MCP_PROTOCOL_VERSION ? "modern" : "legacy",
+    );
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(["jira.describe"]);
+    await client.callTool({ name: "jira.describe", arguments: { text: "selected identity" } });
+    await notification;
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
+      "jira.describe",
+      "jira.issue",
+    ]);
+    expect(nativeCapture).not.toHaveBeenCalled();
+  },
+);
+
+it("does not exempt an unrelated read from native capture through a forged metadata list", async () => {
+  // A runtime-forged field is checked by exact closed names, independently of its compile-time type.
+  const metadata: ("jira.discover" | "jira.describe")[] = ["jira.describe"];
+  Reflect.set(metadata, 0, "echo");
+  const f = fixture("read", undefined, true, "jira", metadata);
+  const nativeCapture = vi.fn(() => undefined);
+  const reply = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "x" } },
+    { ...f.context, beginReadCapture: nativeCapture },
+  );
+  expect(nativeCapture).toHaveBeenCalledOnce();
+  expect(reply.result?.isError).toBe(true);
+  expect(f.call).not.toHaveBeenCalled();
 });
 it("announces server-owned instructions on initialize and none when the connection has none", async () => {
   const initialize = {
@@ -233,6 +345,381 @@ it("requires a recovery owner before dispatching a native write", async () => {
   expect(result.result?.isError).toBe(true);
   expect(f.call).not.toHaveBeenCalled();
   expect(f.recover).not.toHaveBeenCalled();
+});
+
+function retainingPermit(f: Fixture): {
+  readonly context: ManagedMcpInvocationContext;
+  readonly dispatch: Mock<() => boolean>;
+  readonly release: Mock<() => void>;
+  readonly acknowledge: Mock<() => void>;
+  readonly fail: Mock<() => void>;
+  readonly retained: ManagedMcpToolResult[];
+  readonly retainProviderResult: Mock<(result: ManagedMcpToolResult) => ManagedMcpToolResult>;
+} {
+  const dispatch = vi.fn(() => true);
+  const release = vi.fn();
+  const acknowledge = vi.fn();
+  const fail = vi.fn();
+  const retained: ManagedMcpToolResult[] = [];
+  const retainProviderResult = vi.fn((result: ManagedMcpToolResult) => {
+    retained.push(result);
+    return result;
+  });
+  const context: ManagedMcpInvocationContext = {
+    ...f.context,
+    beginMutation: () => ({
+      invocationId: "durable-native-call",
+      dispatch,
+      release,
+      acknowledge,
+      fail,
+      retainProviderResult,
+    }),
+  };
+  return { context, dispatch, release, acknowledge, fail, retained, retainProviderResult };
+}
+
+function retainingRead(f: Fixture): {
+  readonly context: ManagedMcpInvocationContext;
+  readonly release: Mock<() => void>;
+  readonly retainProviderResult: Mock<(result: ManagedMcpToolResult) => ManagedMcpToolResult>;
+  readonly retainLocalFailure: Mock<(reason: "connector-scope-missing") => void>;
+  readonly retainRelayFailure: Mock<(reason: ManagedMcpFailure) => void>;
+  readonly beginMutation: Mock<NonNullable<ManagedMcpInvocationContext["beginMutation"]>>;
+  readonly beginReadCapture: Mock<NonNullable<ManagedMcpInvocationContext["beginReadCapture"]>>;
+} {
+  const release = vi.fn();
+  const retainProviderResult = vi.fn((result: ManagedMcpToolResult) => result);
+  const retainLocalFailure = vi.fn<(reason: "connector-scope-missing") => void>();
+  const retainRelayFailure = vi.fn<(reason: ManagedMcpFailure) => void>();
+  const beginMutation = vi.fn(f.context.beginMutation);
+  const beginReadCapture = vi.fn<NonNullable<ManagedMcpInvocationContext["beginReadCapture"]>>(
+    () => ({
+      invocationId: "mcp-read-synthetic",
+      release,
+      retainProviderResult,
+      retainLocalFailure,
+      retainRelayFailure,
+    }),
+  );
+  const context: ManagedMcpInvocationContext = { ...f.context, beginMutation, beginReadCapture };
+  return {
+    context,
+    release,
+    retainProviderResult,
+    retainLocalFailure,
+    retainRelayFailure,
+    beginMutation,
+    beginReadCapture,
+  };
+}
+
+it.each(["connector-scope-missing", "protocol-error", "deadline-exceeded", "aborted"] as const)(
+  "retains the closed local Jira read failure %s without write admission or recovery",
+  async (reason) => {
+    const f = fixture("read", undefined, true, "jira");
+    const p = retainingRead(f);
+    f.call.mockRejectedValue(new ManagedMcpError(reason));
+    const response = await legacy(
+      f,
+      "tools/call",
+      { name: "echo", arguments: { text: "value" } },
+      p.context,
+    );
+    expect(response.result?.isError).toBe(true);
+    expect(p.retainRelayFailure).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(p.retainLocalFailure).not.toHaveBeenCalled();
+    expect(p.release).toHaveBeenCalledOnce();
+    expect(p.beginMutation).not.toHaveBeenCalled();
+    expect(f.recover).not.toHaveBeenCalled();
+    expect(f.call).toHaveBeenCalledOnce();
+  },
+);
+
+it("preserves a previously retained scope denial when the relay subsequently fails", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  f.call.mockImplementation((_name, _args, context) => {
+    context.retainLocalFailure?.("connector-scope-missing");
+    return Promise.reject(new ManagedMcpError("connector-scope-missing"));
+  });
+  const response = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "value" } },
+    p.context,
+  );
+  expect(response.result?.isError).toBe(true);
+  expect(p.retainLocalFailure).toHaveBeenCalledExactlyOnceWith("connector-scope-missing");
+  expect(p.retainRelayFailure).not.toHaveBeenCalled();
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "never overwrites validated local Jira read data with a later relay error, failed=%s",
+  async (isError) => {
+    const f = fixture("read", undefined, true, "jira");
+    const p = retainingRead(f);
+    const data = { outcome: isError ? "failed" : "succeeded", items: [] };
+    f.call.mockImplementation((_name, _args, context) => {
+      context.retainProviderResult?.({ data, isError });
+      return Promise.reject(new ManagedMcpError("protocol-error"));
+    });
+    const response = await legacy(
+      f,
+      "tools/call",
+      { name: "echo", arguments: { text: "value" } },
+      p.context,
+    );
+    expect(response.result?.isError).toBe(true);
+    expect(p.retainProviderResult).toHaveBeenCalledExactlyOnceWith({ data, isError });
+    expect(p.retainRelayFailure).not.toHaveBeenCalled();
+    expect(p.release).toHaveBeenCalledOnce();
+    expect(f.recover).not.toHaveBeenCalled();
+  },
+);
+
+it("preserves the original read timeout and releases its reservation when error persistence fails", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  p.retainRelayFailure.mockImplementation(() => {
+    throw new Error("Synthetic private store failure");
+  });
+  f.call.mockRejectedValue(new ManagedMcpError("deadline-exceeded"));
+  const response = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "value" } },
+    p.context,
+  );
+  expect(response.result).toMatchObject({
+    isError: true,
+    content: [{ type: "text", text: "The tool did not answer in time." }],
+  });
+  expect(JSON.stringify(response)).not.toContain("Synthetic private store failure");
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(p.beginMutation).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("does not capture an external read failure from a Jira-like name or protocol metadata", async () => {
+  const f = fixture("read");
+  const p = retainingRead(f);
+  f.call.mockRejectedValue(new ManagedMcpError("deadline-exceeded"));
+  await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "jira" }, _meta: { localProvider: "jira" } },
+    p.context,
+  );
+  expect(p.beginReadCapture).not.toHaveBeenCalled();
+  expect(p.retainRelayFailure).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "captures local Jira reads before delivery without a mutation permit, failed=%s",
+  async (isError) => {
+    const f = fixture("read", undefined, true, "jira");
+    const p = retainingRead(f);
+    const data = { outcome: isError ? "failed" : "succeeded", items: [] };
+    f.call.mockImplementation((_name, _args, context) => {
+      expect(context.invocationId).toBe("mcp-read-synthetic");
+      expect(context.beforeDispatch).toBeUndefined();
+      context.retainProviderResult?.({ data, isError });
+      return Promise.resolve({ content: [], structuredContent: data, isError });
+    });
+    const response = await legacy(
+      f,
+      "tools/call",
+      { name: "echo", arguments: { text: "value" } },
+      p.context,
+    );
+    expect(response.result).toMatchObject({ structuredContent: data, isError });
+    expect(p.retainProviderResult).toHaveBeenCalledOnce();
+    expect(p.release).toHaveBeenCalledOnce();
+    expect(p.beginMutation).not.toHaveBeenCalled();
+    expect(f.recover).not.toHaveBeenCalled();
+  },
+);
+
+it("never enables private read capture from an external tool's name or metadata", async () => {
+  const f = fixture("read");
+  const p = retainingRead(f);
+  f.call.mockImplementation((_name, _args, context) => {
+    expect(context.retainProviderResult).toBeUndefined();
+    return Promise.resolve({ content: [], structuredContent: { outcome: "succeeded" } });
+  });
+  await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "jira" }, _meta: { localProvider: "jira" } },
+    p.context,
+  );
+  expect(p.beginReadCapture).not.toHaveBeenCalled();
+  expect(p.retainProviderResult).not.toHaveBeenCalled();
+});
+
+it("refuses local read admission without its bound durable capture owner", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } });
+  expect(response.result?.isError).toBe(true);
+  expect(f.call).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("releases failed read captures and never enters mutation recovery on persistence failure", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  p.retainProviderResult.mockImplementation(() => {
+    throw new Error("Synthetic read store unavailable");
+  });
+  f.call.mockImplementation((_name, _args, context) => {
+    context.retainProviderResult?.({ data: { outcome: "succeeded" } });
+    return Promise.resolve({ content: [], structuredContent: { outcome: "succeeded" } });
+  });
+  const response = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "value" } },
+    p.context,
+  );
+  expect(response.result?.isError).toBe(true);
+  expect(response.result?.structuredContent).toBeUndefined();
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(p.beginMutation).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("returns retained correctable Jira data only when the actual dispatch gate never opened", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  const data = {
+    outcome: "rejected",
+    reason: "field-validation",
+    fieldErrors: [{ fieldId: "summary", message: "Synthetic required field" }],
+  };
+  f.call.mockImplementation((_name, _args, context) => {
+    context.retainProviderResult?.({ data, isError: true });
+    return Promise.resolve({
+      content: [{ type: "text", text: "not authoritative provider prose" }],
+      structuredContent: data,
+      isError: true,
+    });
+  });
+  const response = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "value" } },
+    p.context,
+  );
+  expect(response.result).toMatchObject({ isError: true, structuredContent: data });
+  expect(response.result?.content?.[0]?.text).toBe(JSON.stringify(data));
+  expect(p.retained).toHaveLength(1);
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(p.fail).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("retains an uncertain Jira receipt before recovery and never acknowledges or replays the error", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  const data = { outcome: "succeeded-unconfirmed", issueKey: "SYN-1" };
+  f.recover.mockImplementation(() => {
+    expect(p.retained).toEqual([{ data, isError: true }]);
+    f.revoke();
+  });
+  f.call.mockImplementation((_name, _args, context) => {
+    expect(context.beforeDispatch?.()).toBe(true);
+    context.retainProviderResult?.({ data, isError: true });
+    return Promise.resolve({ content: [], structuredContent: data, isError: true });
+  });
+  await writeText(f, p.context);
+  await expect(
+    legacy(f, "tools/call", { name: "echo", arguments: { text: "retry" } }, p.context),
+  ).rejects.toBeInstanceOf(Error);
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(p.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
+  expect(f.call).toHaveBeenCalledOnce();
+});
+
+it("persists valid success before acknowledging it and suppresses late data after authority loss", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  const data = { outcome: "succeeded", issueKey: "SYN-1" };
+  p.acknowledge.mockImplementation(() => {
+    expect(p.retained).toEqual([{ data }]);
+  });
+  f.call.mockImplementation((_name, _args, context) => {
+    context.beforeDispatch?.();
+    context.retainProviderResult?.({ data });
+    f.revoke();
+    return Promise.resolve({
+      content: [{ type: "text", text: "private late result" }],
+      structuredContent: data,
+    });
+  });
+  const response = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "value" } },
+    p.context,
+  );
+  expect(p.retained).toEqual([{ data }]);
+  expect(p.acknowledge).toHaveBeenCalledOnce();
+  expect(p.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
+  expect(JSON.stringify(response)).not.toContain("private late result");
+});
+
+it("does not expose returned data that differs from the private captured snapshot", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  f.call.mockImplementation((_name, _args, context) => {
+    context.retainProviderResult?.({ data: { outcome: "rejected" }, isError: true });
+    return Promise.resolve({
+      content: [],
+      structuredContent: { outcome: "succeeded", secret: "unbound-value" },
+      isError: true,
+    });
+  });
+  const response = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "value" } },
+    p.context,
+  );
+  expect(response.result?.isError).toBe(true);
+  expect(JSON.stringify(response)).not.toContain("unbound-value");
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(f.recover).toHaveBeenCalledOnce();
+});
+
+it("keeps recovery and no ACK when persistence fails after a successful upstream write", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  p.retainProviderResult.mockImplementation(() => {
+    throw new Error("Synthetic store failure");
+  });
+  f.call.mockImplementation((_name, _args, context) => {
+    context.beforeDispatch?.();
+    context.retainProviderResult?.({ data: { outcome: "succeeded", issueKey: "SYN-1" } });
+    return Promise.resolve({ content: [], structuredContent: { outcome: "succeeded" } });
+  });
+  const response = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "value" } },
+    p.context,
+  );
+  expect(response.result?.isError).toBe(true);
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(p.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
+  expect(f.call).toHaveBeenCalledOnce();
 });
 it("does not enter recovery for confirmed successful writes or failed reads", async () => {
   const write = fixture("write");
@@ -412,4 +899,30 @@ it("bounds the description the relay forwards to a model", async () => {
   const description = (/"description":"([^"]*)"/u.exec(text) ?? [])[1] ?? "";
   expect(Buffer.byteLength(description, "utf8")).toBeLessThanOrEqual(2048);
   expect(description.length).toBeGreaterThan(0);
+});
+
+it("explains a missing connector scope without claiming a changed Pod or reconnect", async () => {
+  const f = fixture("write");
+  const permit = permitFixture(f);
+  f.call.mockRejectedValue(new ManagedMcpError("connector-scope-missing", undefined, "none"));
+  const text = await writeText(f, permit.context);
+  expect(text).toContain("connector access");
+  expect(text).toContain("Full access mode alone does not grant Jira administration");
+  expect(text).toContain("Nothing was changed");
+  expect(text).not.toMatch(/reconnect|credential|Pod changed/iu);
+  expect(permit.release).toHaveBeenCalledOnce();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("keeps missing-scope guidance uncertain after a possible effect", async () => {
+  const f = fixture("write");
+  const permit = permitFixture(f);
+  f.call.mockRejectedValue(new ManagedMcpError("connector-scope-missing", undefined, "possible"));
+  const text = await writeText(f, permit.context);
+  expect(text).toContain("connector access");
+  expect(text).toContain("may or may not have been applied");
+  expect(text).not.toContain("Nothing was changed");
+  expect(permit.release).not.toHaveBeenCalled();
+  expect(permit.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
 });

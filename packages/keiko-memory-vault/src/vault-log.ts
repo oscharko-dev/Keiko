@@ -49,6 +49,7 @@ export type MemoryVaultLogCategory = "memory" | "diagnostic";
 export type MemoryVaultLogOp =
   | "sqlite.state-path.refused"
   | "memory-vault.store.opened"
+  | "memory-vault.store.open-failed"
   | "memory-vault.store.quarantined"
   | "memory-vault.store.encryption-migrated"
   | "memory-vault.store.encryption-checkpoint-degraded"
@@ -68,6 +69,8 @@ export type MemoryVaultLogKeySource = "env" | "keychain" | "keyfile";
 // (#2906 KEIKO-0713 / KEIKO-0877). Never a memory body, a tag, a scope coordinate, a vault
 // key, or a filesystem path.
 export interface MemoryVaultLogExtra {
+  readonly phase?: "open" | "migration" | "newer-schema" | undefined;
+  readonly reason?: "vault-migration-failed" | undefined;
   readonly store?: "ui" | "memory-vault" | "local-knowledge" | undefined;
   readonly keySource?: MemoryVaultLogKeySource | undefined;
   readonly reopened?: boolean | undefined;

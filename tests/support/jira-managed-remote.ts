@@ -1,4 +1,13 @@
-import type { AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
+import { expect } from "vitest";
+import type {
+  AtlassianHttpBodyRequest,
+  AtlassianHttpBodyResult,
+} from "@oscharko-dev/keiko-connectors";
+import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
+import type {
+  AtlassianWriteHttpMethod,
+  AtlassianWriteHttpOutcome,
+} from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 
 export function field(id: string, type: string, required = false): Record<string, unknown> {
   return { fieldId: id, name: id, required, operations: ["set"], schema: { type, system: id } };
@@ -7,7 +16,7 @@ export const REQUIRED_CUSTOM = {
   ...field("customfield_10000", "string", true),
   schema: { type: "string", custom: "com.atlassian.jira.plugin.system.customfieldtypes:textfield" },
 };
-const LABEL_FIELD = {
+export const LABEL_FIELD = {
   ...field("labels", "array"),
   operations: ["set", "add", "remove"],
   schema: { type: "array", items: "string", system: "labels" },
@@ -31,6 +40,62 @@ export function response(body: unknown, status = 200): AtlassianHttpBodyResult {
     bodyText,
     bodyBytes: Buffer.byteLength(bodyText),
     truncated: false,
+  };
+}
+/** A native-port outcome as the transport returns it: the observed payload, or a bare failure status. */
+export function nativeOutcomeResponse(result: AtlassianWriteHttpOutcome): AtlassianHttpBodyResult {
+  return result.ok
+    ? response(result.items ?? result.body, result.status)
+    : response({}, result.httpStatus ?? 503);
+}
+/** Asserts the serialized native write is exactly the reviewed one, then hands its known body on;
+ * a request for any other target is left unhandled. */
+export async function sendReviewedNativeWrite(
+  plan: {
+    readonly request: AtlassianHttpBodyRequest;
+    readonly root: string;
+    readonly selected: { readonly path: string; readonly method: AtlassianWriteHttpMethod };
+    readonly body: Parameters<JiraMutationRequest>[2];
+    readonly experimental: true | undefined;
+    readonly writeCount: number;
+  },
+  port: JiraMutationRequest,
+): Promise<AtlassianHttpBodyResult | undefined> {
+  const url = new URL(plan.request.url);
+  if (`${url.pathname}${url.search}` !== `${plan.root}/${plan.selected.path}`) return undefined;
+  expect(plan.request.method).toBe(plan.selected.method);
+  expect(plan.request.jiraExperimental).toBe(plan.experimental);
+  expect(plan.request.bodyJson).toBe(
+    plan.body === undefined ? undefined : JSON.stringify(plan.body),
+  );
+  expect(plan.writeCount).toBe(1);
+  return nativeOutcomeResponse(
+    await port(plan.selected.path, plan.selected.method, plan.body, "none"),
+  );
+}
+export interface ReviewedAgileTransport<Snapshot> {
+  readonly snapshot: Snapshot;
+  readonly read: (
+    request: AtlassianHttpBodyRequest,
+  ) => Promise<AtlassianHttpBodyResult | undefined>;
+  readonly write: (
+    request: AtlassianHttpBodyRequest,
+  ) => Promise<AtlassianHttpBodyResult | undefined>;
+}
+/** A transport whose single write must be the reviewed one; reads are the caller's own. */
+export function reviewedAgileTransport<Snapshot>(
+  plan: Omit<Parameters<typeof sendReviewedNativeWrite>[0], "request" | "writeCount"> & {
+    readonly snapshot: Snapshot;
+    readonly read: ReviewedAgileTransport<Snapshot>["read"];
+    readonly port: JiraMutationRequest;
+  },
+): ReviewedAgileTransport<Snapshot> {
+  let writes = 0;
+  return {
+    snapshot: plan.snapshot,
+    read: plan.read,
+    write: (request) =>
+      sendReviewedNativeWrite({ ...plan, request, writeCount: ++writes }, plan.port),
   };
 }
 export interface SyntheticJira {

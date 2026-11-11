@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "status": "decided",
+  "decisionOwner": "oscharko",
+  "decidedBy": "integrator",
+  "decidedAt": "2026-11-08",
+  "proposals": [
+    {
+      "id": "cluster-effects-require-owned-multi-node-fixture",
+      "proposedDisposition": "deferred",
+      "disposition": "deferred",
+      "identities": [
+        "PUT /rest/api/2/cluster/index-snapshot/{nodeId}",
+        "DELETE /rest/api/2/cluster/node/{nodeId}",
+        "PUT /rest/api/2/cluster/node/{nodeId}/offline",
+        "POST /rest/api/2/cluster/zdu/approve",
+        "POST /rest/api/2/cluster/zdu/cancel",
+        "POST /rest/api/2/cluster/zdu/retryUpgrade",
+        "POST /rest/api/2/cluster/zdu/start"
+      ],
+      "rationale": "The existing disposable laboratory has no second owned node and no genuine ZDU states. HTTP405 or invented nodes do not prove availability or successful cluster effects. Only the seven cluster mutations are deferred; GET cluster/nodes requires a product call and an independent native comparison on the single-node fixture.",
+      "requiredForQualification": "An owner-approved multi-node fixture within the existing laboratory, versioned node snapshots and independent observations of each requested cluster effect.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/compose.yaml",
+        "scripts/testing/jira-chat-lab/lab-services.mjs",
+        "docs/local-knowledge/jira-api-coverage/evidence/ac7-10.3.26-911041693.json",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts"
+      ]
+    },
+    {
+      "id": "upgrade-run-requires-pending-native-upgrade",
+      "proposedDisposition": "deferred",
+      "disposition": "deferred",
+      "identities": ["POST /rest/api/2/upgrade"],
+      "rationale": "A fresh version-bound Jira database does not supply a pending native upgrade. A no-work acknowledgement cannot establish execution and readback of upgrade tasks. Reusing another release's volume would violate the laboratory's release isolation.",
+      "requiredForQualification": "An owner-approved, snapshot-backed pending-upgrade fixture and independent native task/result observations, without using another operator's data or crossing the release boundary implicitly.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/README.md",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts"
+      ]
+    },
+    {
+      "id": "notification-needs-independent-delivery-observation",
+      "proposedDisposition": "deferred",
+      "disposition": "deferred",
+      "identities": ["POST /rest/api/2/issue/{issueIdOrKey}/notify"],
+      "rationale": "The normal disposable setup disables outgoing email. The native notification request has no recipient-delivery readback; neither a successful acknowledgement nor a missing SMTP configuration proves delivery or a missing Jira capability.",
+      "requiredForQualification": "An owner-approved synthetic mail sink integrated into the existing laboratory and an independent matching delivery observation. No real recipient or external mail service is selected by this proposal.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/setup.mjs",
+        "packages/keiko-server/src/atlassian/jiraIssueActionMutationDescriptors.ts"
+      ]
+    },
+    {
+      "id": "filter-delete-needs-independent-complete-absence-proof",
+      "proposedDisposition": "deferred",
+      "disposition": "qualify",
+      "identities": ["DELETE /rest/api/2/filter/{id}"],
+      "rationale": "The integrator refused deferral. Qualify a native2xx with matching settled journal and receipt, while retaining succeeded-unconfirmed and reason unavailable. Independently confirm this exact owned filter exists before dispatch and observe native GET404 for the same ID afterwards. This qualifies the execution path without claiming a confirmed deletion or changing the product outcome.",
+      "requiredForQualification": "Prior independent same-owner presence, native2xx acknowledgement, matching settled journal and receipt, then GET404 for the exact prior ID. Keep deletionConfirmed:false and succeeded-unconfirmed; do not upgrade the product result.",
+      "sourceReferences": [
+        "packages/keiko-connectors/src/jira-managed-filter-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "scripts/testing/jira-chat-lab/api-qualification-agile-cases.mjs"
+      ]
+    },
+    {
+      "id": "temporary-avatar-needs-independent-session-observation",
+      "proposedDisposition": "deferred",
+      "disposition": "deferred",
+      "identities": [
+        "POST /rest/api/2/avatar/{type}/temporary",
+        "POST /rest/api/2/avatar/{type}/temporaryCrop"
+      ],
+      "rationale": "Jira 10.3 documents no GET or resource identity for the session-held temporary avatar. The upload and crop responses are the product's own claim, a separate browser or login session cannot observe the product session's temporary state, and the actor or public avatar lists do not observe the temporary state.",
+      "requiredForQualification": "An independent native observation of the same session's temporary avatar state: actor, type, upload digest and bytes, crop, needsCropping and crop geometry.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/api-qualification-assets-cases.mjs",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts"
+      ]
+    },
+    {
+      "id": "reciprocal-link-requires-owned-peer-instance",
+      "proposedDisposition": "deferred",
+      "disposition": "deferred",
+      "identities": ["POST /rest/api/2/issue/remotelink/reciprocal"],
+      "rationale": "A reciprocal remote link needs a second owned Jira instance with its own database and licence and mutually authenticated native application links. The single disposable laboratory has no peer, and an invented peer proves nothing.",
+      "requiredForQualification": "An owner-approved second laboratory instance with mutual application links and independent credentials, with both sides observed natively.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/compose.yaml",
+        "scripts/testing/jira-chat-lab/api-qualification-link-cases.mjs"
+      ]
+    }
+  ]
+}

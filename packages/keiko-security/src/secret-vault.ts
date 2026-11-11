@@ -45,6 +45,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isSealed, openString, sealString } from "./secretbox.js";
 import { atomicPublishRename } from "./fs-atomic-rename.js";
+import { serializedSecretVault } from "./secret-vault-serialization.js";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
 // pair; import it from the sibling module (relative — we ARE keiko-security).
 import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
@@ -384,6 +385,17 @@ export interface ResolveLocalVaultKeyOptions {
 }
 
 export interface LocalSecretVault {
+  /** Atomic across all writers of this vault, including other processes. No implicit retry. */
+  readonly compareAndSet?: (
+    reference: string,
+    expected: string | undefined,
+    next: string | undefined,
+  ) => boolean;
+  /** Private asynchronous-use lease. Kernel-owned until release/process exit, no stored payload. */
+  readonly acquireLease?: (
+    reference: string,
+    scope?: "record" | "collection",
+  ) => (() => void) | undefined;
   // Returns the decrypted secret for `reference`, or undefined when no entry exists. Throws a
   // SecretboxError when an entry exists but cannot be opened (wrong key or tampered store).
   readonly get: (reference: string) => string | undefined;
@@ -1234,6 +1246,33 @@ function replaceAllShards(
  * `list` reads only filenames and never decrypts, which is what lets a caller reconcile stored
  * bodies against its own index.
  */
+
+type VaultGuard = <T>(operation: () => T) => T;
+
+function guardedSetMany(
+  guarded: VaultGuard,
+  sink: SecurityLogSink | undefined,
+  next: ReadonlyMap<string, string>,
+  merge: (entries: ReadonlyMap<string, string>) => void,
+): void {
+  setManyWithLog(sink, next, (entries) => {
+    guarded(() => {
+      merge(entries);
+    });
+  });
+}
+
+function guardedDeleteMany(
+  guarded: VaultGuard,
+  sink: SecurityLogSink | undefined,
+  references: readonly string[],
+  remove: () => void,
+): void {
+  deleteManyWithLog(sink, references, () => {
+    guarded(remove);
+  });
+}
+
 export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
   const { key, sink } = deps;
   const storeDir = resolve(deps.storeDir);
@@ -1245,8 +1284,9 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     const filePath = optionalShardPath(storeDir, reference);
     return filePath === undefined ? undefined : readShardEnvelope(filePath, sink);
   };
+  const shardPathFor = (reference: string): string => requiredShardPath(storeDir, reference);
 
-  return {
+  return serializedSecretVault(storeDir, assertNoSymlinkedPathSegments, (guarded) => ({
     get: (reference): string | undefined => {
       const envelope = envelopeFor(reference);
       return envelope === undefined ? undefined : openString(key, envelope);
@@ -1255,14 +1295,8 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
       writeShard(storeDir, requiredShardPath(storeDir, reference), sealString(key, secret), sink);
     },
     setMany: (next): void => {
-      setManyWithLog(sink, next, (entries) => {
-        mergeShardEntries(
-          storeDir,
-          (reference) => requiredShardPath(storeDir, reference),
-          key,
-          entries,
-          sink,
-        );
+      guardedSetMany(guarded, sink, next, (entries) => {
+        mergeShardEntries(storeDir, shardPathFor, key, entries, sink);
       });
     },
     replaceAll: (next): void => {
@@ -1272,20 +1306,20 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
       removeShard(storeDir, reference);
     },
     deleteMany: (references): void => {
-      deleteManyWithLog(sink, references, () => {
+      guardedDeleteMany(guarded, sink, references, () => {
         deleteShardEntries(storeDir, references);
       });
     },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
-  };
+  }));
 }
 
 export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretVault {
   const { key, sink } = deps;
   const resolvedStorePath = resolve(deps.storePath);
 
-  return {
+  return serializedSecretVault(resolvedStorePath, assertNoSymlinkedPathSegments, (guarded) => ({
     get: (reference): string | undefined => {
       const envelope = readStore(resolvedStorePath)[reference];
       if (envelope === undefined || !isSealed(envelope)) return undefined;
@@ -1295,7 +1329,7 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       mergeStoreEntries(resolvedStorePath, key, new Map([[reference, secret]]), sink);
     },
     setMany: (next): void => {
-      setManyWithLog(sink, next, (entries) => {
+      guardedSetMany(guarded, sink, next, (entries) => {
         mergeStoreEntries(resolvedStorePath, key, entries, sink);
       });
     },
@@ -1306,13 +1340,13 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       deleteStoreEntry(resolvedStorePath, reference, sink);
     },
     deleteMany: (references): void => {
-      deleteManyWithLog(sink, references, () => {
+      guardedDeleteMany(guarded, sink, references, () => {
         deleteStoreEntries(resolvedStorePath, references, sink);
       });
     },
     has: (reference): boolean => reference in readStore(resolvedStorePath),
     list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),
-  };
+  }));
 }
 
 interface RememberedKey {

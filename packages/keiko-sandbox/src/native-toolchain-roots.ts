@@ -1,6 +1,6 @@
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
-import { readdirSync, realpathSync } from "node:fs";
-import { basename, delimiter, dirname, isAbsolute, join, relative } from "node:path";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, sep } from "node:path";
 
 // The read-only support roots of the project's toolchains for the native profile (#3897). The
 // launcher's `PATH` names where `node`, `npm`, `python`, `cargo` and friends live; their install
@@ -52,9 +52,19 @@ export function nativeHomeDeniedReadRoots(home: string): readonly string[] {
   return HOME_DENIED_LOCATIONS.map((location) => join(home, location));
 }
 
+// Separator-aware (#4068): on Windows `relative` answers `..\x`, which a `../` test read as inside,
+// and a path on another drive comes back absolute.
 function insideOrEqual(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
-  return path === "" || (path !== ".." && !path.startsWith("../") && !isAbsolute(path));
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+/** The number of named components below the filesystem root (`/a/b` and `C:\a\b` are two). */
+function depthBelowRoot(path: string): number {
+  return path
+    .slice(parse(path).root.length)
+    .split(sep)
+    .filter((segment) => segment !== "").length;
 }
 
 function installPrefix(directory: string): string {
@@ -65,7 +75,7 @@ function installPrefix(directory: string): string {
 
 function admissible(root: string, home: string): boolean {
   return (
-    root.split("/").length > 2 &&
+    depthBelowRoot(root) >= 2 &&
     !/[\0\r\n]/u.test(root) &&
     !insideOrEqual(root, home) &&
     !SYSTEM_PREFIXES.some((system) => insideOrEqual(system, root)) &&
@@ -78,7 +88,7 @@ function admissible(root: string, home: string): boolean {
 /** A real install prefix: outside the home, or at least two levels below it. */
 function isInstallPrefix(prefix: string, home: string): boolean {
   if (!admissible(prefix, home)) return false;
-  return !insideOrEqual(home, prefix) || relative(home, prefix).split("/").length >= 2;
+  return !insideOrEqual(home, prefix) || relative(home, prefix).split(sep).length >= 2;
 }
 
 /** A `PATH` entry or link target that does not exist or cannot be read is simply not a root. */
@@ -413,6 +423,56 @@ export function nativeBuildToolReadRoots(
   return [...new Set(candidates.filter((root) => admissible(root, resolvedHome)))]
     .sort(compareStrings)
     .slice(0, ROOTS_MAX);
+}
+
+/** The operator-named certificate files of a native run and how many variables named one. */
+export interface NativeBuildCertificateFiles {
+  /** Exact absolute files, sorted: each at its spelled location and at its real one. */
+  readonly files: readonly string[];
+  /** The certificate variables set to a value the run inherits. */
+  readonly namedCount: number;
+  /** Of those, the variables whose value is a readable regular file. */
+  readonly admittedCount: number;
+}
+
+function certificateFileLocations(value: string, home: string): readonly string[] {
+  if (!isAbsolute(value)) return [];
+  const real = resolvedPath(value);
+  if (real === undefined || tolerated(() => statSync(real).isFile()) !== true) return [];
+  // A symbolic link is checked at its own location as well as at its target, so the profile names
+  // the variable's spelling (with its directories resolved) beside the real file.
+  const parent = resolvedPath(dirname(value));
+  const locations = [parent === undefined ? real : join(parent, basename(value)), real];
+  const denied = nativeHomeDeniedReadRoots(home);
+  return locations.some((file) => denied.some((root) => insideOrEqual(root, file)))
+    ? []
+    : locations;
+}
+
+/**
+ * The certificate bundles the operator names with NODE_EXTRA_CA_CERTS or SSL_CERT_FILE (#4271).
+ * The run inherits the variable, so every TLS client of the run reads that file, but its leaf is
+ * usually credential-shaped (`corporate-ca.pem`), which the native profile's final credential-name
+ * rule denies wherever it sits. The exact files named here are left, read-only, to the earlier
+ * rules: whether their directory is readable at all stays with the read allowlist
+ * (`nativeBuildToolReadRoots` opens a custom directory) and the denied roots. A value that is not
+ * an absolute path to a regular file, or that lies in a credential store, contributes nothing.
+ */
+export function nativeBuildCertificateFiles(
+  env: Readonly<Record<string, string | undefined>>,
+  home: string,
+): NativeBuildCertificateFiles {
+  const resolvedHome = resolvedPath(home) ?? home;
+  const named = BUILD_CERTIFICATE_ENV.flatMap((name) => {
+    const value = env[name];
+    return value !== undefined && safeBuildValue(name, value) ? [value] : [];
+  });
+  const located = named.map((value) => certificateFileLocations(value, resolvedHome));
+  return {
+    files: [...new Set(located.flat())].sort(compareStrings),
+    namedCount: named.length,
+    admittedCount: located.filter((locations) => locations.length > 0).length,
+  };
 }
 
 /**

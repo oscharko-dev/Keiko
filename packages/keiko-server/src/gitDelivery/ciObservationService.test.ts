@@ -587,7 +587,7 @@ describe("run-bound CI observations through existing draft authority", () => {
       correlationId: fixture.context.correlationId,
       remoteDigest: draft.binding.remoteDigest,
       prNumber,
-      limits: { maxRuntimeMs: 1, maxToolCalls: 10, maxPromptTokens: 10 },
+      limits: { maxRuntimeMs: 1, maxToolCalls: 10 },
       stillAuthorized: () => fixture.live,
     };
     expect(

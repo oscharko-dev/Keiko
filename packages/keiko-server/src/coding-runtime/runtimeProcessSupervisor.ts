@@ -70,6 +70,8 @@ export interface RuntimeProcessTree {
   /** Present only for duplex runtimes such as the Codex app-server transport. */
   readonly stdin?: Writable | undefined;
   onTreeExit(callback: (code: number | null) => void): void;
+  /** A closed reason the backend gave for ending the tree before it ran, when it gave one. */
+  failureReason?(): string | undefined;
 }
 
 export type RuntimeTreeSignal = "force" | "graceful";

@@ -66,6 +66,35 @@ describe("descriptionWithFooter", () => {
 
     expect(descriptionWithFooter(text, trace())).toBe(`${text}\n\n${FOOTER}`);
   });
+
+  it.each([
+    `Human explanation ${START}\nKeep this paragraph\n${END}`,
+    `${START} belongs to an example\nKeep this paragraph\n${END}`,
+    `${START}\nKeep this paragraph\nHuman explanation ${END}`,
+    `${START}\nKeep this paragraph\n${END} belongs to an example`,
+  ])("preserves embedded start or end markers as human text", (text) => {
+    const once = descriptionWithFooter(text, trace());
+    expect(once).toBe(`${text}\n\n${FOOTER}`);
+    expect(descriptionWithFooter(once, trace())).toBe(once);
+  });
+
+  it.each([
+    `${START}\nFirst block\n${END}\nHuman middle\n${START}\nSecond block\n${END}`,
+    `${START}\nOuter text\n${START}\nInner text\n${END}`,
+    `${START}\nHuman text\n${END}\nHuman middle\n${END}`,
+    `${END}\nHuman text\n${START}`,
+  ])("preserves ambiguous multiple or reversed markers without repeated growth", (text) => {
+    const once = descriptionWithFooter(text, trace());
+    expect(once).toBe(`${text}\n\n${FOOTER}`);
+    expect(descriptionWithFooter(once, trace())).toBe(once);
+  });
+
+  it("keeps embedded examples before and after a uniquely owned block", () => {
+    const before = `Human example ${START}\nNot a marker`;
+    const after = `Human example ${END}`;
+    const text = `${before}\n\n${START}\nOld source\n${END}\n\n${after}`;
+    expect(descriptionWithFooter(text, trace())).toBe(`${before}\n\n${FOOTER}\n\n${after}`);
+  });
 });
 
 describe("traceCreateFields (#4179 review, defect 9)", () => {

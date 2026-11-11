@@ -27,7 +27,12 @@ import { scanNativeLinkedFiles } from "./native-linked-files.js";
 import { nativeToolchainReadRoots } from "./native-toolchain-roots.js";
 import { currentPlatform, probeBackends } from "./probe.js";
 import {
+  CREDENTIAL_PATH_SEATBELT_RULE,
+  credentialPathSeatbeltRule,
+} from "./seatbelt-credential-paths.js";
+import {
   copyRuntimeGatewayFilesystem,
+  nativeWorkspaceSeatbeltRules,
   OWN_PROCESS_TARGETS_SEATBELT_RULE,
 } from "./seatbelt-execution-root.js";
 import type { RuntimeGatewayFilesystem } from "./types.js";
@@ -52,6 +57,62 @@ function buildRuntimeGatewaySeatbeltCommand(
 }
 
 describe("long-lived gateway network confinement", () => {
+  it("validates POSIX filesystem policy independently of the inspecting host", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    expect(copyRuntimeGatewayFilesystem(filesystem)).toEqual(filesystem);
+    for (const workspaceRoot of [
+      "C:\\accepted\\workspace",
+      "C:/accepted/workspace",
+      "\\\\server\\share\\workspace",
+      "\\\\?\\C:\\accepted\\workspace",
+      "/accepted/../workspace",
+      "/accepted//workspace",
+      "/",
+    ])
+      expect(copyRuntimeGatewayFilesystem({ ...filesystem, workspaceRoot })).toBeUndefined();
+    for (const protectedWriteRoots of [
+      ["/accepted/workspace-other"],
+      ["/accepted/workspace/../outside"],
+    ])
+      expect(copyRuntimeGatewayFilesystem({ ...filesystem, protectedWriteRoots })).toBeUndefined();
+    expect(
+      copyRuntimeGatewayFilesystem({
+        ...filesystem,
+        protectedWriteRoots: ["/accepted/workspace/.keiko"],
+      })?.protectedWriteRoots,
+    ).toEqual(["/accepted/workspace/.keiko"]);
+  });
+
+  it("keeps Windows broker vectors bound to the canonical policy producer", () => {
+    const vectors = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../native/runtime-supervisor/windows/gateway_request_vectors.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as RuntimeGatewayConfinement[];
+    expect(vectors).toHaveLength(2);
+    expect(vectors.map((vector) => vector.addressFamily)).toEqual(["ipv4", "ipv6"]);
+    for (const vector of vectors) {
+      const host = vector.addressFamily === "ipv4" ? "127.0.0.1" : "[::1]";
+      const produced = createRuntimeGatewayConfinement({
+        gatewayUrl: `http://${host}:${String(vector.port)}/`,
+        runId: vector.runId,
+        treeBindingId: vector.treeBindingId,
+        envelopeDigest: vector.envelopeDigest,
+        runtimeArtifactDigest: vector.runtimeArtifactDigest,
+        modelProfileDigest: vector.modelProfileDigest,
+      });
+      expect(produced).toEqual(vector);
+    }
+  });
   it.each(["object", "array"])("refuses a revoked %s filesystem", (kind) => {
     const revoked = Proxy.revocable(kind === "object" ? {} : [], {});
     revoked.revoke();
@@ -316,6 +377,48 @@ describe("long-lived gateway network confinement", () => {
           runtimeReadRoot: "/immutable/runtime",
           linkedFiles: [files[0] ?? ""],
         },
+      }),
+    ).toThrow("runtime-gateway-policy-invalid");
+  });
+
+  it("binds the operator-named certificate files into the policy digest and the native profile's last rule", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    const native = { ...input, profile: "keiko-native" as const };
+    const plain = createRuntimeGatewayConfinement({ ...native, filesystem });
+    const files = ["/opt/corp/ca/corporate-ca.pem"];
+    const guarded = createRuntimeGatewayConfinement({
+      ...native,
+      filesystem: { ...filesystem, certificateReadFiles: files },
+    });
+    expect(guarded.policyDigest).not.toBe(plain.policyDigest);
+    expect(guarded.filesystem?.certificateReadFiles).toEqual(files);
+    const rules = nativeWorkspaceSeatbeltRules({ ...filesystem, certificateReadFiles: files });
+    expect(rules.endsWith(credentialPathSeatbeltRule(files))).toBe(true);
+    expect(nativeWorkspaceSeatbeltRules(filesystem).endsWith(CREDENTIAL_PATH_SEATBELT_RULE)).toBe(
+      true,
+    );
+    for (const invalid of [
+      ["relative/ca.pem"],
+      ["/ca.pem"],
+      ["/opt/corp/../ca.pem"],
+      ["/opt/corp/ca.pem\n"],
+      Array.from({ length: 5 }, (_, index) => `/opt/corp/ca-${String(index)}.pem`),
+    ])
+      expect(() =>
+        createRuntimeGatewayConfinement({
+          ...native,
+          filesystem: { ...filesystem, certificateReadFiles: invalid },
+        }),
+      ).toThrow("runtime-gateway-policy-invalid");
+    expect(() =>
+      createRuntimeGatewayConfinement({
+        ...input,
+        filesystem: { ...filesystem, workspaceAccess: "read-only", certificateReadFiles: files },
       }),
     ).toThrow("runtime-gateway-policy-invalid");
   });
@@ -1185,6 +1288,89 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         });
       } finally {
         rmSync(externalPath, { force: true });
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // #4271 lab: the final `*.pem` rule denied the public trust bundle and an operator's named CA
+  // file, so no HTTPS client of a native shell (curl exit 77) verified a server. The bundles are
+  // left to the earlier rules; every other `*.pem` stays denied.
+  it.skipIf(!canProveOnThisHost || !existsSync("/private/etc/ssl/cert.pem"))(
+    "native profile: reads the public trust bundle and the named CA file, and no other *.pem",
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-trust-proof-")));
+      const workspaceRoot = join(root, "workspace");
+      const privateStateRoot = join(root, "state");
+      const corp = join(root, "corp");
+      const certifi = join(workspaceRoot, ".venv", "lib", "python3.12", "site-packages", "certifi");
+      for (const directory of [certifi, privateStateRoot, corp])
+        mkdirSync(directory, { recursive: true, mode: 0o700 });
+      writeFileSync(join(corp, "corporate-ca.pem"), "synthetic");
+      writeFileSync(join(certifi, "cacert.pem"), "synthetic");
+      writeFileSync(join(workspaceRoot, "server-key.pem"), "synthetic");
+      const probe = (name: string, statement: string): string =>
+        `begin; ${statement}; r['${name}'] = true; rescue; r['${name}'] = false; end`;
+      const script = [
+        "require 'json'",
+        "r = {}",
+        probe("systemBundleRead", "File.read('/private/etc/ssl/cert.pem', 16)"),
+        probe("namedRead", `File.read(${JSON.stringify(join(corp, "corporate-ca.pem"))})`),
+        probe("namedWrite", `File.write(${JSON.stringify(join(corp, "corporate-ca.pem"))}, 'x')`),
+        probe("certifiRead", `File.read(${JSON.stringify(join(certifi, "cacert.pem"))})`),
+        probe(
+          "otherPemRead",
+          `File.read(${JSON.stringify(join(workspaceRoot, "server-key.pem"))})`,
+        ),
+        probe(
+          "otherPemCreate",
+          `File.write(${JSON.stringify(join(workspaceRoot, "new.pem"))}, 'x')`,
+        ),
+        "print JSON.generate(r)",
+      ].join("\n");
+      const filesystem = {
+        workspaceRoot,
+        workspaceAccess: "read-write" as const,
+        privateStateRoot,
+        runtimeReadRoot: "/usr/bin",
+        toolchainReadRoots: [corp],
+      };
+      const probeWith = (certificateReadFiles?: readonly string[]): unknown => {
+        const policy = createRuntimeGatewayConfinement({
+          ...input,
+          profile: "keiko-native",
+          filesystem: {
+            ...filesystem,
+            ...(certificateReadFiles === undefined ? {} : { certificateReadFiles }),
+          },
+        });
+        const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/usr/bin/ruby", [
+          "--disable-gems",
+          "-e",
+          script,
+        ]);
+        const result = run(
+          wrapped.command,
+          wrapped.args,
+          { HOME: privateStateRoot },
+          workspaceRoot,
+        );
+        expect(result.status).toBe(0);
+        return JSON.parse(result.stdout);
+      };
+      const expected = {
+        systemBundleRead: true,
+        namedRead: true,
+        namedWrite: false,
+        certifiRead: true,
+        otherPemRead: false,
+        otherPemCreate: false,
+      };
+      try {
+        // Without the field the named file's directory is readable and the file itself is not.
+        expect(probeWith()).toEqual({ ...expected, namedRead: false });
+        expect(probeWith([join(corp, "corporate-ca.pem")])).toEqual(expected);
+      } finally {
         rmSync(root, { recursive: true, force: true });
       }
     },

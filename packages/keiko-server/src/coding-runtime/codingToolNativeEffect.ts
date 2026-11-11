@@ -55,7 +55,6 @@ interface NativeEffectContext {
 const NATIVE_CALL_USAGE: CodingWorkbenchRuntimeDelegationUsage = Object.freeze({
   toolCalls: 1,
   patchBytes: 0,
-  promptTokens: 0,
 });
 
 /**

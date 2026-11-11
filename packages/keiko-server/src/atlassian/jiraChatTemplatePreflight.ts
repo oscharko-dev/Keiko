@@ -1,18 +1,51 @@
+import { jiraChatPrivatePorts } from "./jiraChatPrivatePorts.js";
 import {
   checkJiraManagedMutation,
   firstJiraDraftTemplateRefusal,
   jiraDraftFieldRefusals,
   jiraTemplateViolationGuidance,
   parseJiraDraft,
+  isJiraAgileMutation,
+  type JiraAgileMutation,
   type JiraDraftFieldRefusal,
   type JiraDraftTemplateRefusal,
   type JiraManagedConnection,
+  type JiraTraceRequest,
 } from "@oscharko-dev/keiko-connectors";
 import {
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
+  JIRA_SAVED_CONFIGURATION_MUTATIONS,
+  JIRA_LINK_MUTATIONS,
+  JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  JIRA_AGILE_PLANNING_MUTATIONS,
+  JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  JIRA_PROJECT_CATEGORY_MUTATIONS,
+  JIRA_ROLE_MUTATIONS,
+  JIRA_PERMISSION_SCHEME_MUTATIONS,
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  JIRA_GROUP_MUTATIONS,
+  JIRA_ISSUE_ACTION_MUTATIONS,
+  JIRA_MAINTENANCE_MUTATIONS,
+  JIRA_SCHEMA_MUTATIONS,
+  JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  JIRA_AVATAR_MUTATIONS,
+  JIRA_IDENTITY_MUTATIONS,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  JIRA_MANAGED_ACTION_TYPES,
+  countJiraTemplateViolations,
   sanitizeJiraMutationFailureDetail,
   type JiraFieldValidationFailure,
   type JiraMutationOperation,
   type JiraTemplateViolation,
+  type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -27,25 +60,85 @@ import { jiraFailureDetailData, jiraMutationToolResult } from "./jiraMutationRes
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
+import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
+import { jiraChatAvatarComposition } from "./jiraAvatarComposition.js";
+import type { JiraChatAttachmentDeps } from "./jiraChatAttachment.js";
 import {
   jiraIssueTemplateSource,
   recordJiraFieldRefusal,
   recordJiraTemplateRefusal,
 } from "./jiraTemplateLog.js";
 
-/** The writes that change issue fields, which is what an issue template describes. */
-type JiraFieldOperation = "jira.create" | "jira.edit" | "jira.transition" | "jira.assign";
+/** Field and metadata writes share read-only validation; templates apply only to issue fields. */
+const FIELD_OPERATIONS = [
+  "jira.unlock-user-anonymization",
+  ...JIRA_AVATAR_MUTATIONS,
+  ...JIRA_IDENTITY_MUTATIONS,
+  ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  "jira.create-issues",
+  "jira.create-reciprocal-remote-link",
+  ...JIRA_GROUP_MUTATIONS,
+  ...JIRA_ISSUE_ACTION_MUTATIONS,
+  ...JIRA_MAINTENANCE_MUTATIONS,
+  ...JIRA_SCHEMA_MUTATIONS,
+  ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  ...JIRA_OPTION_SCHEME_MUTATIONS,
+  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  ...JIRA_INSTANCE_SETTING_MUTATIONS,
+  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  ...JIRA_ROLE_MUTATIONS,
+  ...JIRA_PERMISSION_SCHEME_MUTATIONS,
+  ...JIRA_AGILE_PLANNING_MUTATIONS,
+  ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  ...JIRA_PROJECT_CATEGORY_MUTATIONS,
+  ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  ...JIRA_LINK_MUTATIONS,
+  ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
+  ...JIRA_ENTITY_PROPERTY_MUTATIONS,
+  "jira.set-app-monitoring",
+  "jira.set-ipd-monitoring",
+  "jira.start-jmx-metrics",
+  "jira.stop-jmx-metrics",
+  "jira.create-screen-tab",
+  "jira.rename-screen-tab",
+  "jira.delete-screen-tab",
+  "jira.create",
+  "jira.edit",
+  "jira.transition",
+  "jira.assign",
+  "jira.create-project",
+  "jira.update-project",
+  "jira.create-component",
+  "jira.update-component",
+  "jira.create-version",
+  "jira.update-version",
+  "jira.update-comment",
+  "jira.delete-comment",
+  "jira.delete-attachment",
+  "jira.delete-worklog",
+  "jira.create-worklog",
+  "jira.update-worklog",
+  "jira.watch",
+  "jira.unwatch",
+  "jira.vote",
+  "jira.unvote",
+] as const;
+type JiraFieldOperation = (typeof FIELD_OPERATIONS)[number] | JiraAgileMutation;
 function fieldOperation(tool: string): JiraFieldOperation | undefined {
-  return tool === "jira.create" ||
-    tool === "jira.edit" ||
-    tool === "jira.transition" ||
-    tool === "jira.assign"
+  return isJiraAgileMutation(tool)
     ? tool
-    : undefined;
+    : FIELD_OPERATIONS.find((operation) => operation === tool);
 }
 
 type PreflightDeps = JiraChatAdmissionOptions["deps"] &
+  JiraChatAttachmentDeps &
   Pick<UiHandlerDeps, "store" | "atlassianConnectorCredentials" | "jiraDraftStore" | "activityLog">;
 
 export interface JiraChatTemplatePreflightPorts {
@@ -61,13 +154,21 @@ export interface JiraChatTemplatePreflightPorts {
         context: JiraChatCatalogContext,
       ) => { readonly data: CatalogJsonObject; readonly violationCount: number } | undefined)
     | undefined;
-  /** Asks a draft that names no requirement to name them before a human reviews it. */
+  /**
+   * Asks a draft that names no requirement to name them before a human reviews it. `repeated`
+   * says the same untraced items were already advised in this turn.
+   */
   readonly untracedAdvice?:
     | ((
         draftArguments: CatalogJsonObject,
         context: JiraChatCatalogContext,
-      ) => CatalogJsonObject | undefined)
+      ) => UntracedAdvice | undefined)
     | undefined;
+}
+
+interface UntracedAdvice {
+  readonly data: CatalogJsonObject;
+  readonly repeated: boolean;
 }
 
 type Credential = Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>;
@@ -88,18 +189,41 @@ function dryRunTarget(
   current: Credential,
 ): DryRunTarget {
   const allowed = (): boolean => !context.signal.aborted && ports.readAllowed(action);
+  const invocation = {
+    invocationId: action.actionId,
+    correlationId: context.correlationId,
+    signal: context.signal,
+    beforeEffect: allowed,
+  };
+  const privatePorts = jiraChatPrivatePorts(ports.deps, context, current.credential, invocation);
   return {
-    invocation: {
-      invocationId: action.actionId,
-      correlationId: context.correlationId,
-      signal: context.signal,
-      beforeEffect: allowed,
-    },
+    invocation,
     connection: {
       baseUrl: current.credential.baseUrl,
       deployment: current.credential.deployment,
       http: factory(current.credential, context.correlationId, { beforeDispatch: allowed }),
       issueTemplates: jiraIssueTemplateSource(ports.deps.store),
+      emailTemplates: jiraChatEmailTemplateComposition(ports.deps, {
+        chatId: context.chatId,
+        correlationId: context.correlationId,
+        signal: context.signal,
+        review: () => ({ required: true, reviewed: undefined }),
+      }),
+      privateIdentity: privatePorts?.identity,
+      avatars: {
+        ...jiraChatAvatarComposition(ports.deps, {
+          chatId: context.chatId,
+          correlationId: context.correlationId,
+          signal: context.signal,
+          review: () => ({ required: true, reviewed: undefined }),
+        }),
+        ...(privatePorts === undefined
+          ? {}
+          : {
+              withSession: privatePorts.withAvatarSession,
+              legacyTemporaryRelease: privatePorts.legacyTemporaryRelease,
+            }),
+      },
     },
   };
 }
@@ -155,6 +279,7 @@ function itemsOf(args: CatalogJsonObject): readonly Readonly<Record<string, unkn
 interface DraftItemsRefusal {
   readonly reason: "template-violation" | "invalid-fields";
   readonly violationCount: number;
+  readonly violationRuleCounts?: Partial<Readonly<Record<JiraTemplateRuleId, number>>>;
   readonly data: CatalogJsonObject;
 }
 /** The structured refusal the model corrects: the item and the exact rules it violates. */
@@ -247,6 +372,7 @@ function templateDraftRefusal(
   return {
     reason: "template-violation",
     violationCount: refusal.violations.length,
+    violationRuleCounts: countJiraTemplateViolations(refusal.violations),
     data: draftTemplateRefusalData(refusal),
   };
 }
@@ -292,22 +418,57 @@ async function draftPreflight(
   const refusal = await draftValidationRefusal(ports, action, context, draft);
   // The advice records its own refusal, so this draft is not also logged as submitted.
   const advice = untracedAdviceOf(ports, draft, refusal !== undefined, context);
-  if (advice !== undefined) return advice;
+  if (advice !== undefined) return untracedReviewRefusal(ports, action, context, advice);
   recordDraftPreflight(ports, context, {
     reason: draft.ok ? refusal?.reason : draft.reason,
     sizes: draftSizes(jiraDraftStore, context.chatId, args, draft),
     violationCount: refusal?.violationCount ?? 0,
+    violationRuleCounts: refusal?.violationRuleCounts,
     startedAt,
   });
   if (refusal !== undefined) return refusal.data;
   return draft.ok ? undefined : draftRefusalData(draft);
 }
+
+/**
+ * Only an existing required review can confirm the missing trace; this never grants the write.
+ * The model first receives the advice so it can name the requirements; only the same untraced
+ * items submitted again in this turn reach the human review, with the missing-trace warning.
+ */
+function untracedReviewRefusal(
+  ports: JiraChatTemplatePreflightPorts,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+  { data: advice, repeated }: UntracedAdvice,
+): CatalogJsonObject | undefined {
+  if (
+    advice.requirementRefusal !== "untraced" ||
+    !repeated ||
+    context.signal.aborted ||
+    !ports.readAllowed(action)
+  )
+    return advice;
+  const current = resolveCurrentJiraChatAuthority(
+    ports.deps,
+    context.chatId,
+    context.authorityReference,
+    new Date().toISOString(),
+    context.correlationId,
+  );
+  if (!current.ok) return advice;
+  const policy = decideAtlassianEnvelopeAction(
+    JIRA_MANAGED_ACTION_TYPES["jira.draft"],
+    current.envelope,
+  );
+  return policy.kind === "review-required" ? undefined : advice;
+}
+
 function untracedAdviceOf(
   ports: JiraChatTemplatePreflightPorts,
   draft: ReturnType<typeof readableChatDraft>,
   refused: boolean,
   context: JiraChatCatalogContext,
-): CatalogJsonObject | undefined {
+): UntracedAdvice | undefined {
   if (!draft.ok || refused) return undefined;
   try {
     return ports.untracedAdvice?.(draft.arguments, context);
@@ -323,6 +484,8 @@ function recordDraftPreflight(
     readonly reason: Parameters<typeof recordJiraDraftActivity>[2]["refusal"];
     readonly sizes: ReturnType<typeof draftSizes>;
     readonly violationCount: number;
+    readonly violationRuleCounts?:
+      Partial<Readonly<Record<JiraTemplateRuleId, number>>> | undefined;
     readonly startedAt: number;
   },
 ): void {
@@ -335,6 +498,9 @@ function recordDraftPreflight(
     ...sizes,
     unresolvedRefCount: 0,
     violationCount,
+    ...(outcome.violationRuleCounts === undefined
+      ? {}
+      : { violationRuleCounts: outcome.violationRuleCounts }),
     durationMs: Date.now() - startedAt,
   });
 }
@@ -359,12 +525,14 @@ async function dryRun(
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
   correlationId: string,
+  trace: JiraTraceRequest | undefined,
 ): Promise<CatalogJsonObject | undefined> {
   const result = await checkJiraManagedMutation(
     operation,
     args,
     target.invocation,
     target.connection,
+    trace,
   );
   if (result.ok) return undefined;
   recordDryRunRefusal(correlationId, operation, result.violations, result.detail?.validation);
@@ -407,7 +575,7 @@ function recordDryRunRefusal(
 export function createJiraChatTemplatePreflight(
   ports: JiraChatTemplatePreflightPorts,
 ): NonNullable<JiraChatAdmissionOptions["preflightWrite"]> {
-  return async (action, context) => {
+  return async (action, context, trace) => {
     if (action.tool === "jira.draft") return draftPreflight(ports, action, context);
     const operation = fieldOperation(action.tool);
     const args = ports.writeArguments(action);
@@ -416,7 +584,7 @@ export function createJiraChatTemplatePreflight(
     if (access === undefined) return undefined;
     try {
       const target = dryRunTarget(ports, action, context, access.factory, access.current);
-      return await dryRun(target, operation, args, context.correlationId);
+      return await dryRun(target, operation, args, context.correlationId, trace);
     } catch (error) {
       recordPreflightFailure(context.correlationId, error);
       return undefined;

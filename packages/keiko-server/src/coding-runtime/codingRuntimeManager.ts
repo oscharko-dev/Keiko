@@ -124,6 +124,9 @@ export type CodingRuntimeFailureCode =
   | "model-unavailable"
   | "repository-unavailable"
   | "workspace-unqualified"
+  // #4068: a confined Windows run outside a Keiko-managed worktree, or one on another volume.
+  | "workspace-location-unsupported"
+  | "workspace-volume-unsupported"
   | "payload-missing"
   | "platform-unsupported"
   | "protocol-schema-mismatch"
@@ -1640,7 +1643,13 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     // count-only, so without this record the numeric exit status exists nowhere: an operator sees
     // an opaque `runtime-failed` and has nothing to diagnose it with. The code is a bounded number,
     // never content, and rides the redacted channel keyed by the run's correlation id.
-    emitRuntimeExitDiagnostic(this.deps.diagnostics, active.context.runId, code, this.deps.now);
+    emitRuntimeExitDiagnostic(
+      this.deps.diagnostics,
+      active.context.runId,
+      code,
+      this.deps.now,
+      active.tree.failureReason?.(),
+    );
     // #3099 P1: publish the result-bearing crash teardown on `stopPromise` so a racing stop() /
     // takeover() / reconcile() awaits the REAL reap outcome — not a synthesized `{ok:true}` that
     // would let the orchestrator clear the active slot while the tree is still recovery-required
@@ -1927,6 +1936,8 @@ function emitRuntimeExitDiagnostic(
   runId: string,
   code: number | null,
   now: () => number,
+  // A closed supervisor refusal (#4068): without it a refused Windows launch read as "signal".
+  refusal?: string,
 ): void {
   const { frames } = describeError(new Error("runtime-exit-observed"));
   emitServerDiagnostic(diagnostics, {
@@ -1938,7 +1949,7 @@ function emitRuntimeExitDiagnostic(
     // Issue #3245: the process exit code is unbounded per-invocation data, not a fixed condition
     // label — moved to `code` (the field this data actually belongs on), `message` stays fixed.
     message: "runtime-exit-code",
-    code: code === null ? "signal" : String(code),
+    code: refusal ?? (code === null ? "signal" : String(code)),
     frames,
   });
 }
@@ -2708,9 +2719,12 @@ function preflightExecutable(
   if (managedRoot === undefined || workspaceRoot === undefined || executablePath === undefined) {
     return failure("sidecar-missing", false);
   }
-  if (pathInside(workspaceRoot, managedRoot) || !pathInside(managedRoot, executablePath)) {
-    return failure("sidecar-unmanaged", false);
-  }
+  // A workspace that contains Keiko's own managed runtime (a home folder holding a portable
+  // install, or a Keiko checkout in the dev lane) is refused: the agent could change the runtime it
+  // runs on. The person can fix this by choosing another folder, so it is named as an unqualified
+  // workspace rather than an internal failure (#4335).
+  if (pathInside(workspaceRoot, managedRoot)) return failure("workspace-unqualified", false);
+  if (!pathInside(managedRoot, executablePath)) return failure("sidecar-unmanaged", false);
   return { ok: true, executablePath, managedRoot, workspaceRoot };
 }
 

@@ -33,6 +33,7 @@ export type {
   ChatToolWriteApprovalState,
   ChatToolWriteApprovalDecision,
 } from "./chat-tool-authority.js";
+export type { isDesktopChatStreamEvent } from "./desktop-chat-stream-wire.js";
 export type { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG, isKeikoUiLaunchId } from "./ui-launch.js";
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
@@ -1385,6 +1386,8 @@ export type {
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeIntent,
+  CodingWorkbenchRuntimeStartFailureCode,
+  CodingWorkbenchRuntimeStartRefusalCode,
   CodingWorkbenchRuntimeMintConfirmation,
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateName,
@@ -1460,6 +1463,8 @@ export type {
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeProjectMemoryRequest,
   CodingWorkbenchRuntimePromptInputs,
+  CodingWorkbenchRuntimeToolProfile,
+  CodingWorkbenchExecutionLocation,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -2698,7 +2703,6 @@ export type {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
-  isDesktopChatStreamEvent,
   isDesktopChatStreamTerminalEvent,
   eventIsDesktopChatStreamTerminal,
   resolveGroundingLimits,
@@ -2720,6 +2724,7 @@ export type {
   containsAbsolutePath,
   containsBidiOrZeroWidth,
   containsPseudoRoleMarker,
+  isLocalAbsolutePath,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "./text-safety.js";

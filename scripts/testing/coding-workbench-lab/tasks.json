@@ -174,7 +174,7 @@
     "id": "T17",
     "title": "Agent creates its own branch from main, commits and pushes without an issue",
     "mode": "Full access",
-    "baseline": "head+t7",
+    "baseline": "initial",
     "textStatus": "proposed",
     "text": "Create a branch named fix/quoted-csv from main. Make parseCsv in src/csv.ts handle RFC 4180 quoted fields, including escaped double quotes inside a quoted field, add regression tests in src/csv.test.ts and run npm test. Then commit with a conventional commit message and push the branch to origin. Do not push to main.",
     "expected": "Branch fix/quoted-csv exists locally and on origin with one commit; tests pass; main unchanged; no issue binding and no operator-selected branch required"

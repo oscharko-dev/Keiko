@@ -1,9 +1,12 @@
 import type {
   JiraReportEstimateUnit,
+  JiraReportEstimateSource,
+  JiraReportEstimateUnavailableReason,
   JiraReportFailureReason,
   JiraReportIncompleteReason,
   JiraReportStatusCategory,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /**
  * One deviation from a rule. `ruleId` is a stable identifier. `subject` names the template element
@@ -66,7 +69,15 @@ export interface JiraReportIssueFacts {
  */
 export interface JiraReportComplianceChecker {
   readonly fieldIds: readonly string[];
-  readonly check: (facts: JiraReportIssueFacts) => readonly JiraReportDeviation[];
+  readonly requiresNativeEvidence?: true;
+  /** Auxiliary native evidence shares this slice's GET-only admission and deadline. */
+  readonly check: (
+    facts: JiraReportIssueFacts,
+    request?: JiraMutationRequest,
+  ) =>
+    | readonly JiraReportDeviation[]
+    | "unavailable"
+    | Promise<readonly JiraReportDeviation[] | "unavailable">;
   /**
    * Whether at least one template applies to the issue, so that `check` actually judged it (#4181).
    * A checker without it is taken to judge every issue.
@@ -78,6 +89,8 @@ export interface JiraReportComplianceChecker {
 export interface JiraReportFieldCatalogEntry {
   readonly id: string;
   readonly name: string;
+  /** The field's non-localized schema `custom` key, when the metadata states one. */
+  readonly schemaKey?: string;
 }
 
 /**
@@ -113,13 +126,18 @@ export interface JiraReportEstimate {
 export interface JiraReportProgress extends JiraReportStatusCounts {
   /** Done issues over all issues, in percent with one decimal; 0 for an empty set. */
   readonly donePercent: number;
-  readonly estimate: JiraReportEstimate;
+  /** Null when no project estimate field could be established; never an invented zero. */
+  readonly estimate: JiraReportEstimate | null;
 }
 
 export interface JiraReportTypeProgress {
   readonly typeName: string;
   readonly total: number;
   readonly done: number;
+  /** Issues of this type with an estimate; `null` when no estimate is available, like the project's. */
+  readonly estimated: number | null;
+  /** Issues of this type without one; per-type counts sum to the project's `estimate.unestimated`. */
+  readonly unestimated: number | null;
 }
 
 export interface JiraReportStatusCount {
@@ -178,6 +196,9 @@ export interface JiraReportScope {
   readonly projectKey?: string;
   readonly jql: string;
   readonly estimateFieldId?: string;
+  readonly estimateFieldName?: string;
+  readonly estimateSource?: JiraReportEstimateSource;
+  readonly estimateUnavailableReason?: JiraReportEstimateUnavailableReason;
   /** Seconds of original time estimate, or the named field's own unit. */
   readonly estimateUnit: JiraReportEstimateUnit;
   /** The date overdue is judged against, in `timeZone`. */
@@ -221,8 +242,8 @@ export interface JiraReport {
      * With `checker: "applied"`: the issues at least one template judged. An issue of a type no
      * template covers is not counted here; it is counted in `issuesWithoutTemplate`, because "no
      * deviation" is only a statement about an issue something judged (#4181). With `none` or
-     * `unavailable` no template judged anything: the number is the issues read, which only the
-     * required-field rules (`requiredFieldRules`) could have judged.
+     * `unavailable` complete template coverage is unknown: the number is the issues read.
+     * Independently measured partial deviations may remain, while missing evidence never adds one.
      */
     readonly issuesChecked: number;
     /**

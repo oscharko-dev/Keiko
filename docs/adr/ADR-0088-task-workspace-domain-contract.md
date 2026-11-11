@@ -100,7 +100,11 @@ The shared instance and binding also represent an explicitly selected Local chec
 `executionLocation: "local"`. Its active root is the registered checkout, and its branch is the
 actual selected local branch. This discriminator excludes the row from managed worktree lifecycle,
 health, reconciliation, repair, and cleanup. Local selection and activation use the shared stores
-and content-free evidence adapter; they do not create or maintain a managed worktree.
+and content-free evidence adapter; they do not create or maintain a managed worktree. A persisted
+Local checkout or folder stays selectable by its id through the ordinary activation route, which
+re-validates it as a fresh selection. When the registered root now holds another directory
+identity (a re-clone or a replaced folder), the old id is refused with `WORKSPACE_NOT_FOUND` before
+any branch switch or pointer update (#4271).
 
 **Folder workspace (owner decision, 2026-10-30).** The Coding Workbench works in any folder, as
 standalone OpenCode does. An ordinary registered folder that is not a Git repository is bound in

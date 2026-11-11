@@ -7,6 +7,7 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import {
   DEFAULT_SANDBOX_POLICY,
@@ -110,6 +111,7 @@ interface OpenCodeRuntimeAdapter {
   readonly turnInFlight: () => boolean;
   readonly cancelTurn: () => void;
   readonly waitForTerminal: (signal: AbortSignal) => Promise<boolean | "interrupted">;
+  readonly turnWaitExpired?: () => boolean;
 }
 
 interface OpenCodeRuntimeAdapterModule {
@@ -805,6 +807,60 @@ describe("OpenCode runtime adapter readiness", () => {
       correlationId: "run-handshake-1",
       phase: "sse-history-reconciliation",
     });
+  });
+
+  // #4068: a confined Windows runtime announced its server, then the first request to it failed
+  // with no Keiko-code frame and a bare `Error` cause, which named neither a refusal nor a timeout.
+  it.each([
+    [
+      "a refused socket",
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error(`connect ECONNREFUSED ${SECRET}`), {
+          code: "ECONNREFUSED",
+        }),
+      }),
+      { errorClass: "TypeError", transportCode: "ECONNREFUSED" },
+    ],
+    [
+      "a socket code outside the closed set",
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error(SECRET), { code: "EWHATEVER" }),
+      }),
+      { errorClass: "TypeError", transportCode: "other" },
+    ],
+    [
+      "an HTTP refusal",
+      new OpenCodeV2HttpStatusError(503),
+      { errorClass: "OpenCodeV2HttpStatusError", httpStatus: 503 },
+    ],
+  ])("records the error class, socket code and status of %s", async (_name, thrown, facts) => {
+    const harness = readinessPorts();
+    const events: ServerLogEvent[] = [];
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      readiness: {
+        ...harness.ports.readiness,
+        health: (): Promise<never> => Promise.reject(thrown),
+      },
+      correlationId: "run-4068-health",
+      activityLog: {
+        write: (entry): void => {
+          events.push(entry);
+        },
+      },
+    });
+    await expect(adapter.start()).resolves.toMatchObject({
+      ok: false,
+      phase: "authenticated-health",
+    });
+    const failure = events.find((event) => event.op === "coding-runtime.readiness.failed");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.readiness.failed.emitted-line",
+        formatActivityLogProofLine(failure ?? {}),
+      ),
+    ).toMatchObject({ correlationId: "run-4068-health", phase: "authenticated-health", ...facts });
+    expect(JSON.stringify(events)).not.toContain(SECRET);
   });
 
   // #3873: this wait bounds one submitted task's WHOLE agent loop (every model turn until the
@@ -2755,6 +2811,39 @@ describe("OpenCode runtime adapter native session tree and interrupted turns", (
       // the turn but its deadline.
       await harness.deliver(control("interrupted"));
       await expect(turn.result).resolves.toBe(false);
+    } finally {
+      await stop();
+    }
+  });
+
+  // W9 (#4068): a turn wait that ran out of its own time is the run's duration bound, not a runtime
+  // failure, so the composition must be able to tell it apart from a failed or abandoned turn.
+  it("reports a turn whose own wait ran out of time as expired", async () => {
+    const harness = turnHarness({ maxTurnWaitMs: 200 });
+    harness.status = (): TreeStatus => "activity";
+    const { adapter, stop } = await armed(harness);
+    try {
+      expect(adapter.turnWaitExpired?.()).toBe(false);
+      await expect(waiting(adapter).result).resolves.toBe(false);
+      expect(adapter.turnWaitExpired?.()).toBe(true);
+      // The next turn starts unexpired.
+      expect(adapter.armTurn()).toBe(true);
+      expect(adapter.turnWaitExpired?.()).toBe(false);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("does not report a turn its caller abandoned as expired", async () => {
+    const harness = turnHarness({ maxTurnWaitMs: 10_000 });
+    harness.status = (): TreeStatus => "activity";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const caller = new AbortController();
+      const result = adapter.waitForTerminal(caller.signal);
+      caller.abort();
+      await expect(result).resolves.toBe(false);
+      expect(adapter.turnWaitExpired?.()).toBe(false);
     } finally {
       await stop();
     }

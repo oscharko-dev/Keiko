@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -5,6 +6,7 @@ import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contrac
 import { useCodingTaskSession } from "./useCodingTaskSession";
 import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 
 const scopeEffects = vi.hoisted(() => ({ deferred: false }));
 vi.mock("react", async (importOriginal) => {
@@ -113,6 +115,50 @@ function activeWorkspace(): ActiveWorkspaceApi {
 beforeEach(() => {
   vi.clearAllMocks();
   read.mockResolvedValue(detail);
+});
+
+describe("restoring the run's task after a server restart (#4068 W9)", () => {
+  it("reads the task again when the browser is paired after the first read failed", async () => {
+    // The restarted server answers an unpaired caller exactly like an unknown task.
+    read.mockRejectedValueOnce(new Error("Coding task not found."));
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      notifyCodingAppSessionChanged();
+    });
+
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[1]?.[0]).toBe("chat-one");
+  });
+
+  it("does not read again without a pairing", async () => {
+    read.mockRejectedValueOnce(new Error("Coding task not found."));
+    const { result, rerender } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    rerender();
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(read).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("coding task selection", () => {
@@ -382,6 +428,159 @@ describe("coding task selection", () => {
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads));
   });
 
+  // #4271: the runtime status is the process's latest run, whatever task the window shows. A new
+  // window opened from Coding History reads it only after the pick, and that settled run of
+  // another task replaced the opened one ("opening loads the wrong session").
+  it("keeps a task opened from Coding History when a settled run of another task arrives", async () => {
+    const two = { ...detail, task: { ...detail.task, id: "chat-two", latestRunId: "run-two" } };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? two : { ...detail, task: { ...detail.task, id } }),
+    );
+    const workspace = activeWorkspace();
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace,
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: { ...snapshot("chat-latest"), runId: "run-latest" } });
+    await act(async () => Promise.resolve());
+    expect(read).not.toHaveBeenCalledWith("chat-latest", expect.any(String));
+    expect(result.current.conversationId).toBe("chat-two");
+    // The hold is recorded once per pick, body-free.
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding workbench interaction: history-run-held",
+      {
+        correlationId: expect.any(String),
+        codingWorkbenchInteraction: { interaction: "history-run-held" },
+      },
+    );
+    expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain("chat-");
+    // A run that becomes active afterwards owns the window again.
+    rerender({ run: { ...snapshot("chat-next"), runId: "run-next", state: "running" } });
+    await waitFor(() => expect(read).toHaveBeenCalledWith("chat-next", expect.any(String)));
+  });
+
+  // Review (#4271): the first status read can report the picked task's own settled run; that run
+  // is the task's, so the window keeps it visible instead of holding it as another task's.
+  it("keeps the picked task's own settled run visible when the first status read reports it", async () => {
+    const two = { ...detail, task: { ...detail.task, id: "chat-two", latestRunId: "run-two" } };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? two : { ...detail, task: { ...detail.task, id } }),
+    );
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: { ...snapshot("chat-two"), runId: "run-two" } });
+    await act(async () => Promise.resolve());
+    expect(result.current.conversationId).toBe("chat-two");
+    expect(result.current.visibleRun).toBe(true);
+    expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: history-run-held",
+      expect.anything(),
+    );
+  });
+
+  // Audit (#4271): the window's own run can settle before a status read ever sees it active; it
+  // is a run after the pick, so the window follows it like any other.
+  it("follows a run started after the pick even when it is first seen settled", async () => {
+    const two = { ...detail, task: { ...detail.task, id: "chat-two", latestRunId: "run-two" } };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? two : { ...detail, task: { ...detail.task, id } }),
+    );
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: { ...snapshot("chat-latest"), runId: "run-latest" } });
+    await act(async () => Promise.resolve());
+    expect(result.current.conversationId).toBe("chat-two");
+    rerender({ run: { ...snapshot("chat-own"), runId: "run-own" } });
+    await waitFor(() => expect(read).toHaveBeenCalledWith("chat-own", expect.any(String)));
+  });
+
+  // Audit (#4271): a status read without any run already told the window there is no other run,
+  // so its own first run is followed even when the next read sees it settled.
+  it("follows the window's first run after a status read without any run", async () => {
+    read.mockImplementation((id: string) =>
+      Promise.resolve({ ...detail, task: { ...detail.task, id } }),
+    );
+    const { runId: _none, ...idle } = { ...snapshot(), state: "idle" as const };
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: idle });
+    rerender({ run: { ...snapshot("chat-own"), runId: "run-own" } });
+    await waitFor(() => expect(read).toHaveBeenCalledWith("chat-own", expect.any(String)));
+    expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: history-run-held",
+      expect.anything(),
+    );
+  });
+
+  it("keeps New task empty when a settled run of another task arrives afterwards", async () => {
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: false,
+          root: "/repo",
+          workspace: null,
+          selection: "new:1",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    rerender({ run: { ...snapshot("chat-latest"), runId: "run-latest" } });
+    await act(async () => Promise.resolve());
+    expect(read).not.toHaveBeenCalledWith("chat-latest", expect.any(String));
+    expect(result.current.conversationId).toBeUndefined();
+    const held = vi
+      .mocked(reportClientDiagnostic)
+      .mock.calls.filter(([message]) => message.endsWith("history-run-held"));
+    expect(held).toEqual([
+      [
+        "[keiko] coding workbench interaction: history-run-held",
+        {
+          correlationId: expect.any(String),
+          codingWorkbenchInteraction: { interaction: "history-run-held" },
+        },
+      ],
+    ]);
+  });
+
   it("drops the previous conversation when reading another selected task fails", async () => {
     const workspace = activeWorkspace();
     read.mockImplementation((id: string) =>
@@ -574,6 +773,45 @@ describe("pending history activation scope", () => {
     expect(workspace.switchTo).not.toHaveBeenCalled();
     expect(result.current.detail).toBeNull();
     expect(result.current.pending).toBe(false);
+  });
+
+  // #4271: React mounts a new window twice in development (StrictMode); the remount discarded the
+  // pick's read as stale and never read it again, so the window stayed on "Loading task…".
+  it("opens a task picked from Coding History when the window mounts twice", async () => {
+    const workspace = activeWorkspace();
+    const handled = vi.fn();
+    const { result } = renderHook(
+      () =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace,
+          selection: "chat-one",
+          onSelectionHandled: handled,
+        }),
+      { wrapper: StrictMode },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-one"));
+    expect(result.current.pending).toBe(false);
+    expect(workspace.switchTo).toHaveBeenCalledWith("ws-one");
+  });
+
+  it("requests one new workspace for New task when the window mounts twice", async () => {
+    const workspace = activeWorkspace();
+    const { result } = renderHook(
+      () =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace,
+          selection: "new:1",
+        }),
+      { wrapper: StrictMode },
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(workspace.provision).toHaveBeenCalledOnce();
   });
 
   it("does not switch the global workspace after the workbench unmounts", async () => {

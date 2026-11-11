@@ -1,6 +1,10 @@
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { JiraReportActivity } from "@oscharko-dev/keiko-connectors";
 import {
+  JIRA_REPORT_ESTIMATE_SOURCES,
+  JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS,
+  type JiraReportEstimateSource,
+  type JiraReportEstimateUnavailableReason,
   type JiraReportExportFormat,
   type JiraReportFailureReason,
   type JiraReportIncompleteReason,
@@ -65,6 +69,8 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
         "invalid-jql",
         "auth",
         "permission",
+        "effect-denied",
+        "cancelled",
         "not-found",
         "rate-limited",
         "timeout",
@@ -95,6 +101,18 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       values: ["project", "jql", "project-jql", "report"],
     },
     continued: { type: "boolean", dataClass: "closed-enum", required: true },
+    estimateSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: JIRA_REPORT_ESTIMATE_SOURCES,
+    },
+    estimateUnavailableReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS,
+    },
     format: {
       type: "string",
       dataClass: "closed-enum",
@@ -180,6 +198,8 @@ interface JiraReportLine {
   readonly continued: boolean;
   readonly durationMs: number;
   readonly status?: JiraReportStatus;
+  readonly estimateSource?: JiraReportEstimateSource;
+  readonly estimateUnavailableReason?: JiraReportEstimateUnavailableReason;
   readonly reason?: JiraReportIncompleteReason;
   readonly failure?: JiraReportFailureReason;
   readonly refusal?: JiraReportRefusalKind;
@@ -232,6 +252,17 @@ function invalidArguments(input: JiraReportActivity): Pick<JiraReportLine, "inva
     : { invalidArgumentCount: input.invalidArgumentCount };
 }
 
+function estimateOf(
+  input: JiraReportActivity,
+): Pick<JiraReportLine, "estimateSource" | "estimateUnavailableReason"> {
+  return {
+    ...(input.estimateSource === undefined ? {} : { estimateSource: input.estimateSource }),
+    ...(input.estimateUnavailableReason === undefined
+      ? {}
+      : { estimateUnavailableReason: input.estimateUnavailableReason }),
+  };
+}
+
 // A section page: how many entries it returned of how many, and whether the byte fit cut it short
 // of the page size (S12 of epic #4173).
 function sectionPageOf(
@@ -274,6 +305,7 @@ function lineOf(input: JiraReportLogInput): JiraReportLine {
     deviationCount: input.deviationCount,
     requirementCount: input.requirementCount,
     ...hierarchyOf(input),
+    ...estimateOf(input),
     ...invalidArguments(input),
     ...sectionPageOf(input),
     ruleIds: input.ruleIds,

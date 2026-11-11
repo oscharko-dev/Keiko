@@ -27,6 +27,7 @@ import {
 
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { isWindowsOrdinaryPathComponent } from "../windowsHostPath.js";
 import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
 import type { OpenCodeRuntimeAdapter } from "./opencodeRuntimeAdapter.js";
 import {
@@ -327,6 +328,14 @@ function resolveReference(
     throw new PromptInputsRefused("reference-invalid");
   }
   if (isDenied(reference.path)) throw new PromptInputsRefused("reference-sensitive");
+  // A stream of a workspace file holds content no file view shows, and a device name opens the
+  // device itself: neither is a workspace file, so both are refused before any filesystem call.
+  if (
+    process.platform === "win32" &&
+    !reference.path.split("/").every(isWindowsOrdinaryPathComponent)
+  ) {
+    throw new PromptInputsRefused("reference-invalid");
+  }
   const real = canonical(resolve(root, ...reference.path.split("/")));
   const rel = containedRelative(root, real);
   if (rel === undefined) throw new PromptInputsRefused("reference-outside-workspace");

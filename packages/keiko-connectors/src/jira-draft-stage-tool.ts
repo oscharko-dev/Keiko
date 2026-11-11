@@ -2,10 +2,13 @@ import {
   JIRA_DRAFT_DIGEST_PATTERN,
   JIRA_DRAFT_ID_PATTERN,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
+  countJiraTemplateViolations,
+  type JiraTemplateRuleId,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { withJiraDraftReadMemo, type JiraDraftReadCounts } from "./jira-draft-read-memo.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpToolResult,
@@ -19,6 +22,8 @@ import {
 } from "./jira-draft.js";
 import {
   jiraDraftDigest,
+  validJiraDraftSourceBindings,
+  type JiraDraftSourceBinding,
   type JiraDraftStore,
   type StagedJiraDraft,
   type StagedJiraDraftItem,
@@ -55,6 +60,7 @@ export interface JiraDraftActivity {
   readonly byteCount: number;
   readonly unresolvedRefCount: number;
   readonly violationCount: number;
+  readonly violationRuleCounts?: Partial<Readonly<Record<JiraTemplateRuleId, number>>>;
   readonly durationMs: number;
   /** A run only: items created, reconciled or deselected so far, and items not yet started. */
   readonly settledCount?: number;
@@ -69,6 +75,9 @@ export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> 
   /** Binds a draft to the Chat that started it. */
   readonly owner: (context: Context) => string;
   readonly activity?: ((activity: JiraDraftActivity, context: Context) => void) | undefined;
+  /** Prepares the exact reviewed fields and privately binds their source revisions before staging. */
+  readonly prepareRequirements?:
+    ((items: readonly StagedJiraDraftItem[], context: Context) => JiraDraftPreparation) | undefined;
   /** Source-bound criterion checks supplied by the composing Chat before a draft digest is minted. */
   readonly checkRequirements?:
     | ((
@@ -85,6 +94,14 @@ export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> 
     | undefined;
   readonly now?: (() => number) | undefined;
 }
+
+export type JiraDraftPreparation =
+  | {
+      readonly ok: true;
+      readonly items: readonly StagedJiraDraftItem[];
+      readonly sourceBindings: readonly JiraDraftSourceBinding[];
+    }
+  | { readonly ok: false; readonly data: CatalogJsonObject; readonly violationCount: number };
 
 const DRAFT_ID = new RegExp(JIRA_DRAFT_ID_PATTERN, "u");
 const DRAFT_DIGEST = new RegExp(JIRA_DRAFT_DIGEST_PATTERN, "u");
@@ -143,18 +160,46 @@ function standInLinks(item: StagedJiraDraftItem): readonly CatalogJsonObject[] {
  */
 export function jiraDraftTemplateSource(item: StagedJiraDraftItem): CatalogJsonObject {
   const fields = (item.fields ?? {}) as Record<string, unknown>;
-  const parent = item.parent as { readonly fieldId?: unknown } | undefined;
-  const parentFieldId = typeof parent?.fieldId === "string" ? parent.fieldId : undefined;
+  const parent = draftParentOf(item);
   const links = standInLinks(item);
   return {
     projectId: item.projectId,
     issueTypeId: item.issueTypeId,
     fields: {
       ...fields,
-      ...(parentFieldId === undefined ? {} : { [parentFieldId]: JIRA_DRAFT_STAND_IN_KEY }),
+      ...(parent === undefined
+        ? {}
+        : { [parent.fieldId]: parent.issueKey ?? JIRA_DRAFT_STAND_IN_KEY }),
     },
     ...(links.length === 0 ? {} : { links }),
   } as CatalogJsonObject;
+}
+/** The field and, for an issue that already exists in Jira, the key the item's parent has. */
+function draftParentOf(
+  item: StagedJiraDraftItem,
+): { readonly fieldId: string; readonly issueKey?: string } | undefined {
+  const parent = item.parent as
+    { readonly fieldId?: unknown; readonly issueKey?: unknown } | undefined;
+  if (typeof parent?.fieldId !== "string") return undefined;
+  return typeof parent.issueKey === "string"
+    ? { fieldId: parent.fieldId, issueKey: parent.issueKey }
+    : { fieldId: parent.fieldId };
+}
+/**
+ * A parent that is another item of the draft does not exist yet, so its issue type cannot be read
+ * now. That one check stays with the create gate, which reads the created parent before the write;
+ * every other violation, and every violation of an item whose parent already exists, refuses here.
+ */
+function decidableNow(
+  item: StagedJiraDraftItem,
+  violations: readonly JiraTemplateViolation[],
+): readonly JiraTemplateViolation[] {
+  const parent = draftParentOf(item);
+  if (parent === undefined || parent.issueKey !== undefined) return violations;
+  return violations.filter(
+    (violation) =>
+      !(violation.ruleId === "template-unreadable" && violation.subject === parent.fieldId),
+  );
 }
 
 export interface JiraDraftTemplateRefusal {
@@ -180,10 +225,21 @@ export async function firstJiraDraftTemplateRefusal(
     context,
     connection,
   );
-  if (!result.ok && result.violations !== undefined)
-    return { ref: String(item.ref), violations: result.violations };
+  const violations =
+    result.ok || result.violations === undefined ? [] : decidableNow(item, result.violations);
+  if (violations.length > 0) return { ref: String(item.ref), violations };
   return firstJiraDraftTemplateRefusal(items, context, connection, index + 1);
 }
+
+/**
+ * The next step of a complete draft. A model that read "reviewable" asked the person to confirm a
+ * creation they had already requested, twice in one live rehearsal (#4287); approval belongs to
+ * jira.draft, which applies the Chat's access mode itself.
+ */
+export const JIRA_DRAFT_READY_GUIDANCE =
+  "The draft is complete. If the user asked to create these issues, call jira.draft now with only " +
+  "draftId and draftDigest. Keiko asks for any approval this Chat's access mode requires; do not ask " +
+  "the user to confirm again.";
 
 function stagedView(draft: StagedJiraDraft, newDraft: boolean): ManagedMcpToolResult {
   const unresolved = unresolvedJiraDraftRefs(draft.items);
@@ -197,6 +253,7 @@ function stagedView(draft: StagedJiraDraft, newDraft: boolean): ManagedMcpToolRe
       pageCount: draft.pageCount,
       unresolvedRefCount: unresolved.length,
       unresolvedRefs: unresolved.slice(0, UNRESOLVED_LISTED_MAX),
+      ...(unresolved.length === 0 ? { guidance: JIRA_DRAFT_READY_GUIDANCE } : {}),
     },
   };
 }
@@ -263,7 +320,15 @@ function readActivity(
 ): Pick<JiraDraftActivity, "readCount" | "readReusedCount"> {
   return { readCount: reads.made, readReusedCount: reads.reused };
 }
-function templateRefusalResult(refusal: JiraDraftTemplateRefusal): ManagedMcpToolResult {
+function templateRefusalResult<Context extends ManagedMcpInvocationContext>(
+  refusal: JiraDraftTemplateRefusal,
+  run: StageRun<Context>,
+  pageItemCount: number,
+): ManagedMcpToolResult {
+  refuseStage(run, "template-violation", pageItemCount, {
+    violationCount: refusal.violations.length,
+    violationRuleCounts: countJiraTemplateViolations(refusal.violations),
+  });
   const guidance = jiraTemplateViolationGuidance(refusal.violations);
   return {
     isError: true,
@@ -306,16 +371,29 @@ function pageFieldRefusals(
   return jiraDraftFieldRefusals(parsed, context, connection, { reconcile: false });
 }
 
-function pageRequirementRefusal<Context extends ManagedMcpInvocationContext>(
+function preparePageRequirements<Context extends ManagedMcpInvocationContext>(
   run: StageRun<Context>,
   items: readonly StagedJiraDraftItem[],
-): ManagedMcpToolResult | undefined {
+): JiraDraftPreparation {
+  if (run.deps.prepareRequirements !== undefined)
+    return run.deps.prepareRequirements(items, run.context);
   const requirements = run.deps.checkRequirements?.(items, run.context);
-  if (requirements === undefined) return undefined;
-  refuseStage(run, "invalid-fields", items.length, {
-    violationCount: requirements.violationCount,
-  });
-  return { isError: true, data: requirements.data };
+  return requirements === undefined
+    ? { ok: true, items, sourceBindings: [] }
+    : { ok: false, ...requirements };
+}
+
+function validPreparedPage(
+  original: readonly StagedJiraDraftItem[],
+  prepared: Extract<JiraDraftPreparation, { readonly ok: true }>,
+): boolean {
+  return (
+    prepared.items.length === original.length &&
+    prepared.items.every(
+      (item, index) => isJiraDraftItem(item) && item.ref === original[index]?.ref,
+    ) &&
+    validJiraDraftSourceBindings(prepared.items, prepared.sourceBindings)
+  );
 }
 
 function stagedActivity<Context extends ManagedMcpInvocationContext>(
@@ -349,6 +427,14 @@ function projectedStageArgs<Context extends ManagedMcpInvocationContext>(
   return { ...parsed, items: deps.projectItems(parsed.items, context) };
 }
 
+function invalidArgsRefusal<Context extends ManagedMcpInvocationContext>(
+  run: StageRun<Context>,
+  rawArgs: CatalogJsonObject,
+): ManagedMcpToolResult {
+  const refused = refuseStage(run, "invalid-input", 0);
+  return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
+}
+
 /** `jira.draft-stage`: append a page of validated items to a draft; it changes nothing in Jira. */
 export async function executeJiraDraftStageTool<Context extends ManagedMcpInvocationContext>(
   rawArgs: CatalogJsonObject,
@@ -361,24 +447,24 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   const parsed = parseStageArgs(rawArgs);
   const args = projectedStageArgs(parsed, deps, context);
   const run: StageRun<Context> = { deps, context, args, startedAt, reads: { made: 0, reused: 0 } };
-  if (args === undefined) {
-    const refused = refuseStage(run, "invalid-input", 0);
-    return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
-  }
+  if (args === undefined) return invalidArgsRefusal(run, rawArgs);
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
-  const requirements = pageRequirementRefusal(run, args.items);
-  if (requirements !== undefined) return requirements;
+  const prepared = preparePageRequirements(run, args.items);
+  if (!prepared.ok) {
+    refuseStage(run, "invalid-fields", args.items.length, {
+      violationCount: prepared.violationCount,
+    });
+    return { isError: true, data: prepared.data };
+  }
+  if (!validPreparedPage(args.items, prepared))
+    return refuseStage(run, "invalid-input", args.items.length);
+  const { items, sourceBindings } = deepFreeze(structuredClone(prepared));
   // The checks below read the same Jira metadata for every item of the page, and a batch stages
   // page after page in one invocation: identical reads are answered from the invocation's memo.
   const reads = withJiraDraftReadMemo(connection, context, run.reads, now);
-  const template = await firstJiraDraftTemplateRefusal(args.items, context, reads);
-  if (template !== undefined) {
-    refuseStage(run, "template-violation", args.items.length, {
-      violationCount: template.violations.length,
-    });
-    return templateRefusalResult(template);
-  }
-  const fields = await pageFieldRefusals(args.items, context, reads);
+  const template = await firstJiraDraftTemplateRefusal(items, context, reads);
+  if (template !== undefined) return templateRefusalResult(template, run, args.items.length);
+  const fields = await pageFieldRefusals(items, context, reads);
   const firstField = fields.refusals[0];
   if (firstField !== undefined) {
     refuseStage(run, "invalid-fields", args.items.length, { violationCount: fields.total });
@@ -388,7 +474,8 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
     deps.owner(context),
     args.draftId,
     connectionFingerprint(connection),
-    args.items,
+    items,
+    sourceBindings,
   );
   if (!appended.ok) return refuseStage(run, appended.refusal, args.items.length);
   stagedActivity(run, appended.draft, args, now);
@@ -431,7 +518,8 @@ export function resolveJiraDraftArguments(
   const draft = reference === undefined ? undefined : lookup(reference.draftId);
   if (reference === undefined || draft === undefined)
     return { ok: false, reason: "draft-not-found" };
-  return draft.digest === reference.draftDigest && jiraDraftDigest(draft.items) === draft.digest
+  return draft.digest === reference.draftDigest &&
+    jiraDraftDigest(draft.items, draft.sourceBindings) === draft.digest
     ? { ok: true, arguments: { items: draft.items } as CatalogJsonObject }
     : { ok: false, reason: "draft-changed" };
 }

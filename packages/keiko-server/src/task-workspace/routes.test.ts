@@ -539,6 +539,29 @@ describe("POST /api/task-workspaces/active rejected target", () => {
     expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
     expect(fixture.pointer.get()).toBeUndefined();
   });
+
+  // #4271: the switch inventory leaves Local checkouts out, and the check refused every one, so a
+  // Coding History task of another checkout could not be reopened.
+  it("reselects a persisted Local checkout that is no longer active", async () => {
+    const fixture = await localRouteFixture();
+    const selected = (await (await postLocal()).json()) as {
+      readonly active: { readonly instance: { readonly workspaceId: string } };
+    };
+    const workspaceId = selected.active.instance.workspaceId;
+    fixture.pointer.clear();
+    fixture.admitWorkspaceSelection.mockClear();
+    const response = await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ workspaceId, requestedBy: "u" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      instance: { workspaceId, executionLocation: "local", repositoryRoot: repoRoot },
+    });
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledOnce();
+    expect(fixture.pointer.get()?.workspaceId).toBe(workspaceId);
+  });
 });
 
 describe("POST /api/task-workspaces/local", () => {

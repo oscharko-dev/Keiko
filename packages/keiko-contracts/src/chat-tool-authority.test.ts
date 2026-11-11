@@ -30,7 +30,7 @@ function envelope(): ChatToolAuthorityEnvelope & {
     effectiveMode: "governed-assist",
     actionClasses: ["connector-access", "network-egress"],
     connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
-    budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 50_000, maxPatchBytes: 0 },
+    budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPatchBytes: 0 },
     expiresAt: "2026-10-27T15:00:00.000Z",
     approvalProofDigest: "b".repeat(64),
   };
@@ -100,6 +100,19 @@ describe("ordinary Chat tool authority contract (#4084)", () => {
     expect(validateChatToolAuthorityEnvelope({ ...envelope(), ...patch }).ok).toBe(false);
   });
 
+  // Keiko does not limit tokens (#4346): an envelope minted before that decision may still carry the
+  // retired `budget.maxPromptTokens`; it is accepted, never required and never enforced.
+  it("accepts an envelope that still carries the retired prompt-token allowance", () => {
+    const value = envelope();
+    expect(validateChatToolAuthorityEnvelope(value).ok).toBe(true);
+    expect(
+      validateChatToolAuthorityEnvelope({
+        ...value,
+        budget: { ...value.budget, maxPromptTokens: 50_000 },
+      }).ok,
+    ).toBe(true);
+  });
+
   it.each([
     { maxToolCalls: 0 },
     { maxToolCalls: Number.POSITIVE_INFINITY },
@@ -112,6 +125,26 @@ describe("ordinary Chat tool authority contract (#4084)", () => {
     expect(
       validateChatToolAuthorityEnvelope({ ...value, budget: { ...value.budget, ...patch } }).ok,
     ).toBe(false);
+  });
+
+  it("admits explicit administration only for Jira subjects", () => {
+    const connectorScopes = ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"];
+    expect(validateChatToolAuthorityEnvelope({ ...envelope(), connectorScopes }).ok).toBe(true);
+    for (const kind of ["configured-mcp", "knowledge-pods"]) {
+      const subject = {
+        kind,
+        actorDigest: "a".repeat(64),
+        chatId: "chat-1",
+        configurationDigest: "b".repeat(64),
+      };
+      expect(
+        validateChatToolAuthorityEnvelope({
+          ...envelope(),
+          subject,
+          connectorScopes: ["issue-tracker.admin"],
+        }).ok,
+      ).toBe(false);
+    }
   });
 
   it("accepts a narrower read-only connector scope", () => {

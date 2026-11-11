@@ -10,6 +10,11 @@ export const MANAGED_MCP_PROTOCOL_VERSION = "2026-07-28";
 
 /** Resolved by server composition; never serialized into MCP arguments or metadata. */
 export interface ManagedMcpInvocationContext {
+  /** Private local-provider result capture; never supplied through MCP arguments or metadata. */
+  readonly retainProviderResult?:
+    ((result: ManagedMcpToolResult) => ManagedMcpToolResult) | undefined;
+  /** Closed local authority refusal, never a provider-reported Jira response. */
+  readonly retainLocalFailure?: ((reason: "connector-scope-missing") => void) | undefined;
   /** Server-private credential floor for tokens materialized during this invocation; never serialized. */
   readonly observeCredential?: (value: string) => void;
   /** Private durable mutation admission, supplied by the composing consumer. */
@@ -18,7 +23,18 @@ export interface ManagedMcpInvocationContext {
         readonly sessionId: string | undefined;
         readonly toolName: string;
         readonly argumentsValue: CatalogJsonObject;
+        /** Composed by Keiko's local connection adapter, never protocol metadata. */
+        readonly localProvider?: "jira";
       }) => ManagedMcpMutationInvocation | undefined)
+    | undefined;
+  /** Local Jira read-result retention; no mutation permit or journal acknowledgement. */
+  readonly beginReadCapture?:
+    | ((input: {
+        readonly toolName: string;
+        readonly argumentsValue: CatalogJsonObject;
+        readonly signal: AbortSignal;
+        readonly localProvider: "jira";
+      }) => ManagedMcpReadCapture | undefined)
     | undefined;
   /** Server-private recovery fence; never supplied by model tool arguments. */
   readonly onUncertainMutation?: (() => void | Promise<void>) | undefined;
@@ -35,6 +51,10 @@ export interface ManagedMcpInvocationContext {
 
 export interface ManagedMcpMutationInvocation {
   readonly invocationId: string;
+  /** Persist an already validated local-provider result against this invocation's snapshot. */
+  readonly retainProviderResult?:
+    ((result: ManagedMcpToolResult) => ManagedMcpToolResult) | undefined;
+  readonly retainLocalFailure?: ((reason: "connector-scope-missing") => void) | undefined;
   /**
    * Marks the durable record dispatched. Called at the transport gate, not at admission, so a
    * failure before the frame left the process stays provably effect-free. Absent: the record was
@@ -47,6 +67,15 @@ export interface ManagedMcpMutationInvocation {
   readonly acknowledge: () => void;
   /** Conservatively retain the observed outcome if delivery cannot be confirmed. */
   readonly fail: () => void;
+}
+
+export interface ManagedMcpReadCapture {
+  readonly invocationId: string;
+  readonly retainProviderResult: (result: ManagedMcpToolResult) => ManagedMcpToolResult;
+  readonly retainLocalFailure: (reason: "connector-scope-missing") => void;
+  /** Closed relay failures remain technical read outcomes, never mutation acknowledgement. */
+  readonly retainRelayFailure: (reason: ManagedMcpFailure) => void;
+  readonly release: () => void;
 }
 
 export interface ManagedMcpToolResult {
@@ -90,6 +119,7 @@ export interface ManagedMcpLogPort {
 
 export type ManagedMcpFailure =
   | "not-admitted"
+  | "connector-scope-missing"
   | "invalid-arguments"
   | "descriptor-drift"
   | "protocol-error"
@@ -128,6 +158,10 @@ export interface ExternalMcpTool {
   readonly annotations?: CatalogJsonObject;
 }
 export interface ExternalMcpConnection {
+  /** Server-owned adapter identity; an external server named Jira cannot set this marker. */
+  readonly localProvider?: "jira";
+  /** Server-owned local catalog reads only; never populated from external MCP metadata. */
+  readonly localMetadataTools?: readonly ("jira.discover" | "jira.describe")[];
   /** Aborts on connection closure or schema drift; it never authorizes reconnect/replay. */
   readonly signal: AbortSignal;
   /** Server-owned guidance for the relayed server; an external server's own text never fills it. */

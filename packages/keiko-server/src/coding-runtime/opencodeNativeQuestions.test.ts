@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -156,7 +158,8 @@ describe("a native run's questions across its session tree", () => {
   ];
 
   it("reads the workspace and admitted moved locations instead of the service cwd", async () => {
-    const moved = `${WORKSPACE}/moved`;
+    // Stored as `admitNativeSessionLocation` stores an admitted move: resolved on the host.
+    const moved = resolve(`${WORKSPACE}/moved`);
     const run = fixture([], [session("ses_child", PRIMARY, moved), session("ses_foreign")]);
     run.state.locations.add(moved);
     run.state.formsByDirectory = new Map([

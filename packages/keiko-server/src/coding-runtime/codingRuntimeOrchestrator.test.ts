@@ -35,7 +35,7 @@ import {
   MAX_QUEUED_APPROVALS_PER_RUN,
   type CodingRuntimeDescriptionSupport,
   type CodingRuntimeIssueIntake,
-  type CodingRuntimeOrchestratorResult,
+  type CodingRuntimeStartResult,
   type CodingRuntimeLaunchResolver,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
@@ -119,7 +119,7 @@ type OptionalOrchestratorDeps = Pick<
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
 
-function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
+function successfulSnapshot(result: CodingRuntimeStartResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
   return result.snapshot;
 }
@@ -1000,7 +1000,7 @@ function issueIntake(
   };
 }
 
-function refusedStart(result: CodingRuntimeOrchestratorResult) {
+function refusedStart(result: CodingRuntimeStartResult) {
   if (result.ok) throw new Error("expected a refused start");
   return result;
 }
@@ -1030,6 +1030,21 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start({ ...start, modelId: "PRIVATE_MODEL_CANARY", agent: "plan" });
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      primaryAgent: "plan",
+      modelIdDigest: sha256Hex("PRIVATE_MODEL_CANARY"),
+    });
+    expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_MODEL_CANARY");
+  });
+
   // #4279 (lifecycle audit): a start that shutdown overtook would launch a runtime nobody stops.
   describe("a start that shutdown overtook", () => {
     it("launches nothing when it reaches the lane after shutdown began", async () => {
@@ -2630,6 +2645,45 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
   });
 
+  it("refreshes durable input history through status revision without changing run authority or state", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    const before = structuredClone(f.rows.get("run-1"));
+    if (before === undefined) throw new TypeError("Missing running snapshot");
+    f.eventHub.publish.mockClear();
+    const issued = f.manager.issueApproval.mock.calls.length;
+    await f.orchestrator.refreshHistory("run-1");
+    expect(f.rows.get("run-1")).toEqual({
+      ...before,
+      revision: before.revision + 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(f.eventHub.publish).toHaveBeenCalledExactlyOnceWith({
+      schemaVersion: "1",
+      kind: "status",
+      runId: "run-1",
+      state: "running",
+      revision: before.revision + 1,
+    });
+    expect(f.manager.issueApproval).toHaveBeenCalledTimes(issued);
+    f.eventHub.publish.mockClear();
+    await f.orchestrator.refreshHistory("unrelated-run");
+    expect(f.rows.get("run-1")?.revision).toBe(before.revision + 1);
+    expect(f.eventHub.publish).not.toHaveBeenCalled();
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      kind: "runtime-stopped",
+      runId: "run-1",
+      eventId: "history-refresh-stopped",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    });
+    const stopped = structuredClone(f.rows.get("run-1"));
+    f.eventHub.publish.mockClear();
+    await f.orchestrator.refreshHistory("run-1");
+    expect(f.rows.get("run-1")).toEqual(stopped);
+    expect(f.eventHub.publish).not.toHaveBeenCalled();
+  });
+
   // #3390: the initial turn used to dispatch while the run's own public projection still read
   // "ready", flipping to "running" only after the sidecar accepted it -- untruthful for the whole
   // window the model could already be getting its first prompt, and the same window in which
@@ -2725,6 +2779,37 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // A workspace that holds the runtime is the one managed start failure the operator can repair, so
+  // it alone leaves the internal-error code. Its precise reason stays in the diagnostic either way.
+  it.each([
+    ["workspace-unqualified", "workspace-unqualified"],
+    ["sidecar-unmanaged", "runtime-failed"],
+    ["spawn-failed", "runtime-failed"],
+  ] as const)(
+    "settles a start the manager refused with %s as %s",
+    async (managerCode, failureCode) => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+        state: "failed",
+        failureCode,
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: `stage=start:reason=${managerCode}`,
+        }),
+      );
+    },
+  );
+
   // #3565 Observation 17: a model the gateway does not admit reached the customer as
   // `authority-resolution-failed` (403) and the log named no cause. The start now answers with
   // `model-unavailable` and the diagnostic carries the sidecar's closed reason.
@@ -2777,6 +2862,29 @@ describe("CodingRuntimeOrchestrator", () => {
         operation: "coding-runtime.start",
         message: "runtime-start-failed",
         code: "stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient",
+      }),
+    );
+  });
+
+  // #4068: a Windows start the broker cannot confine is refused before any run exists, with a code
+  // the Workbench names and the diagnostic's closed reason.
+  it.each([
+    ["workspace-location-unsupported", "local-checkout"],
+    ["workspace-volume-unsupported", "non-system-volume"],
+  ] as const)("refuses a Windows start as %s and records %s", async (failureCode, reason) => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError(failureCode, false, reason);
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode, runId: "run-1" });
+    expect(f.orchestrator.getSnapshot("run-1")).toBeUndefined();
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: `stage=start:reason=launch-resolution:${failureCode}:${reason}`,
       }),
     );
   });
@@ -2882,9 +2990,11 @@ describe("CodingRuntimeOrchestrator", () => {
       const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
       const f = fixture();
 
-      await f.orchestrator.start({ ...start, jiraPodId });
+      await f.orchestrator.start({ ...start, jiraPodId, connectorScopes: ["issue-tracker.admin"] });
 
-      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId }));
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ jiraPodId, connectorScopes: ["issue-tracker.admin"] }),
+      );
       const bare = fixture();
       await bare.orchestrator.start(start);
       expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");
@@ -2908,6 +3018,62 @@ describe("CodingRuntimeOrchestrator", () => {
         }),
       );
       expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
+    });
+
+    it("states the live run's model and agent on its snapshot across follow-ups (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(
+        await f.orchestrator.start({ ...start, modelId: "gemma-4-31b-it", agent: "plan" }),
+      );
+      expect(started).toMatchObject({ modelId: "gemma-4-31b-it", agent: "plan" });
+
+      const switched = successfulSnapshot(
+        await f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-build",
+          expectedRevision: started.revision,
+          taskIntent: "now implement it",
+          agent: "build",
+        }),
+      );
+      expect(switched).toMatchObject({ modelId: "gemma-4-31b-it", agent: "build" });
+
+      const kept = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: switched.revision,
+        taskIntent: "and test it",
+      });
+      expect(successfulSnapshot(kept)).toMatchObject({ agent: "build" });
+    });
+
+    it("keeps the run's agent when its follow-up was refused (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(await f.orchestrator.start({ ...start, agent: "plan" }));
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false, reason: "agent-unsupported" });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-refused",
+        expectedRevision: started.revision,
+        taskIntent: "try another agent",
+        agent: "build",
+      });
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({ agent: "plan" });
+    });
+
+    it("states a default start's agent and no model it was not told (#4068 W12)", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const snapshot = f.orchestrator.getSnapshot("run-1");
+      expect(snapshot).toMatchObject({ agent: "build" });
+      expect(snapshot).not.toHaveProperty("modelId");
+    });
+
+    it("reports no identity for a run this process did not start (#4068 W12)", () => {
+      const f = fixture(undefined, undefined, [settledRow("run-9", "2026-07-13T12:00:00.000Z", 3)]);
+      const snapshot = f.orchestrator.getSnapshot("run-9");
+      expect(snapshot).toBeDefined();
+      expect(snapshot).not.toHaveProperty("agent");
+      expect(snapshot).not.toHaveProperty("modelId");
     });
 
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
@@ -4797,6 +4963,37 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     expect(JSON.stringify(projection.currentContent())).not.toContain("RESTART_CANARY_2479");
   });
+
+  it.each([
+    ["workspace-unqualified", "workspace-unqualified"],
+    ["runtime-state-unavailable", "runtime-failed"],
+  ] as const)(
+    "settles a manager start refusal %s as %s on the run and its settled line (#4335)",
+    async (managerCode, runCode) => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      const snapshot = successfulSnapshot(await f.orchestrator.start(start));
+
+      expect(snapshot).toMatchObject({ state: "failed", failureCode: runCode });
+      const settled = requireLoggedEvent(
+        captured.records.find((candidate) => candidate.op === "coding-runtime.run.settled"),
+        "expected coding runtime settlement log",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.settled.emitted-line",
+          formatActivityLogProofLine(settled),
+        ),
+      ).toMatchObject({ runId: "run-1", state: "failed", failureCode: runCode });
+      expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
+    },
+  );
 
   it("contains rejected host lifecycle promises as recovery-required", async () => {
     const captured = captureDiagnostics();
@@ -7413,14 +7610,10 @@ describe("terminal run cause (F9, #3873)", () => {
 
   function terminalFacts(
     lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
-    promptAllowanceExhausted = false,
     envelopeDurationExhausted = false,
     providerUnavailable = false,
   ) {
     return {
-      promptAllowanceExhausted: vi.fn(
-        (runId: string) => runId === RUN_ID && promptAllowanceExhausted,
-      ),
       envelopeDurationExhausted: vi.fn(
         (runId: string) => runId === RUN_ID && envelopeDurationExhausted,
       ),
@@ -7470,62 +7663,11 @@ describe("terminal run cause (F9, #3873)", () => {
     );
   }
 
-  it("settles a run its prompt allowance refused as prompt-allowance-exhausted, never internal", async () => {
-    const { f, records } = settledWith("failed", terminalFacts("turn-rejected", true));
-    await f.orchestrator.start(start);
-    await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      });
-    });
-
-    expect(f.eventHub.publish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "status",
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    expect(f.evidence.settle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    const settled = settledLine(records);
-    expect(settled).toMatchObject({
-      correlationId: RUN_ID,
-      errorKind: "authority-denied",
-      extra: {
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-        failureBasis: "prompt-allowance",
-        modelCallFailure: "turn-rejected",
-        taskOutcomeStatus: "failed",
-      },
-    });
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.run.settled.emitted-line",
-        formatActivityLogProofLine(settled),
-      ),
-    ).toMatchObject({
-      failureCode: "prompt-allowance-exhausted",
-      failureBasis: "prompt-allowance",
-      modelCallFailure: "turn-rejected",
-    });
-    expect(JSON.stringify(records)).not.toContain(start.taskIntent);
-  });
-
   // Run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model
   // call in flight: the gateway's outcome line said `cancelled` with `cancellationCause=run-stopped`,
   // no call had failed, and the run settled `runtime-failed`, an internal error.
   it("settles a run whose envelope ran out of time as envelope-duration-exhausted, never internal", async () => {
-    const facts = terminalFacts(undefined, false, true);
+    const facts = terminalFacts(undefined, true);
     const { f, records } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7592,10 +7734,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // provider could not serve the call. The run settles on the outage, and the line says which fact
   // named it.
   it("settles a run whose last call the gateway found the provider unable to serve as provider-unavailable", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", false, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", false, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
@@ -7627,19 +7766,16 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("keeps a bound of the run ahead of the provider outage it also read", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", true, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", true, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
         state: "failed",
-        failureCode: "prompt-allowance-exhausted",
+        failureCode: "envelope-duration-exhausted",
       });
     });
     expect(settledLine(records)).toMatchObject({
-      extra: { failureCode: "prompt-allowance-exhausted", failureBasis: "prompt-allowance" },
+      extra: { failureCode: "envelope-duration-exhausted", failureBasis: "envelope-duration" },
     });
   });
 
@@ -7661,7 +7797,7 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("reads the terminal facts before the runtime is stopped for settlement", async () => {
-    const facts = terminalFacts("provider-failed", false, false, true);
+    const facts = terminalFacts("provider-failed", false, true);
     const { f } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7672,7 +7808,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(facts.lastModelCallProviderUnavailable.mock.invocationCallOrder[0]).toBeLessThan(
       stopOrder,
     );
-    expect(facts.promptAllowanceExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
     expect(facts.envelopeDurationExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
   });
 
@@ -7694,7 +7829,7 @@ describe("terminal run cause (F9, #3873)", () => {
   it.each(["succeeded", "cancelled"] as const)(
     "never names a bound or model-call cause for a %s task outcome",
     async (outcome) => {
-      const facts = terminalFacts("stream-incomplete", true, true);
+      const facts = terminalFacts("stream-incomplete", true);
       const { f, records } = settledWith(outcome, facts);
       await f.orchestrator.start(start);
       await vi.waitFor(() => {
@@ -7704,9 +7839,8 @@ describe("terminal run cause (F9, #3873)", () => {
         expect(settledLine(records).extra).not.toHaveProperty("failureBasis");
       });
       expect(f.orchestrator.getSnapshot(RUN_ID)?.failureCode).not.toBe(
-        "prompt-allowance-exhausted",
+        "envelope-duration-exhausted",
       );
-      expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
       expect(facts.envelopeDurationExhausted).not.toHaveBeenCalled();
       expect(facts.lastModelCallFailure).not.toHaveBeenCalled();
       expect(facts.lastModelCallProviderUnavailable).not.toHaveBeenCalled();
@@ -7716,7 +7850,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // An operator stop settles `cancelled` through the stop path, before the turn's own cancelled
   // completion arrives, so the run's terminal state names the operator, not a failure.
   it("settles an operator-stopped run as cancelled with no failure cause", async () => {
-    const facts = terminalFacts("stream-incomplete", true, true);
+    const facts = terminalFacts("stream-incomplete", true);
     const log = captureActivityLog();
     const f = fixture(
       undefined,
@@ -7743,7 +7877,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(settled).toMatchObject({ errorKind: "cancelled", extra: { state: "cancelled" } });
     expect(settled.extra).not.toHaveProperty("failureCode");
     expect(settled.extra).not.toHaveProperty("failureBasis");
-    expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
   });
 });
 
@@ -8101,7 +8234,7 @@ describe("verification truth at task settlement", () => {
   });
 
   it("does not repair an impossible selected verifier", async () => {
-    const { f, finish } = await runningTask();
+    const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     const target = "a".repeat(64);
     await verification(f, "failed", undefined, target);
@@ -8111,6 +8244,21 @@ describe("verification truth at task settlement", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    // The settlement line names the blocker that stopped repair (#4271).
+    const settled = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "not-evidenced",
+      ),
+      "Expected the not-evidenced settlement line",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({ state: "not-evidenced", attempt: 0, blockedReason: "NO_RUNNABLE_STEPS" });
   });
 
   it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
@@ -8123,6 +8271,17 @@ describe("verification truth at task settlement", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  // #4271 lab (T39): a refusal for a target nobody selected is not an impossible selected verifier.
+  it("still repairs when the verifier refused a target before any target was selected", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("records an edit that applied during a script-trust decision wait", async () => {

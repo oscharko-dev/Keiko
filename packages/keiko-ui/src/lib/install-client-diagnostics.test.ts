@@ -1035,8 +1035,35 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
       correlationId: "ui_denied-read-0001",
       repairCorrelationId: "ui_session-repair-0001",
       errorKind: "unavailable",
+      documentRef: expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/u) as unknown,
     });
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 1 });
+  });
+
+  // #4068: tabs of one origin share the session cookie; each page load's reports carry its own
+  // reference, the same on a failure report and on a repair report.
+  it("stamps every report of this page load with one document reference", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] shared-event-source sse stream error", {
+      correlationId: "ui_stream-streak-0009",
+      kind: "sse-error",
+    });
+    const failure = lastPostedBody(fetchMock);
+    fanOutClientDiagnostic("[keiko] shared-event-source stream session repair", {
+      correlationId: "ui_stream-streak-0009",
+      sessionRepairReport: {
+        outcome: "repair-acknowledged",
+        repairCorrelationId: "ui_session-repair-0009",
+        stream: "shared-event-source",
+      },
+    });
+    const repair = lastPostedBody(fetchMock);
+
+    expect(failure.documentRef).toMatch(/^[A-Za-z0-9._-]{8,128}$/u);
+    expect(repair.documentRef).toBe(failure.documentRef);
   });
 
   // #3557 review: a stream repair travels under its failure streak, naming its stream.
@@ -1060,6 +1087,7 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
       correlationId: "ui_stream-streak-0001",
       repairCorrelationId: "ui_session-repair-0002",
       stream: "run-events",
+      documentRef: expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/u) as unknown,
     });
   });
 
@@ -1362,6 +1390,29 @@ describe("fanOutClientDiagnostic budgets", () => {
 
 // PR #3678 review: the catalog counts reach the wire as structured evidence and spend the routine
 // budget, like every other closed, non-failure report.
+it("posts Jira result counts on the existing wire without spending the failure budget", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const jiraResultPresentation = {
+    messageDigest: "a".repeat(64),
+    exchangeCount: 2,
+    itemCount: 7,
+    shownCount: 5,
+    returnedCount: 8,
+    unreadableCount: 1,
+    problemCount: 0,
+    ruleCount: 0,
+    failure: "none" as const,
+    restored: true,
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Jira results presented.", { jiraResultPresentation });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ jiraResultPresentation });
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+});
+
 it("posts the knowledge catalog counts on the wire and spends the routine budget", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -1741,4 +1792,20 @@ it("retains closed scope and inspection reports without spending failure capacit
   });
   expect(bodies.every(isClientDiagnosticIngestRequest)).toBe(true);
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("posts localized Jira field counts with the routine budget and no failure evidence", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const jiraFieldPresentation = { fieldCount: 5, localizedCount: 3 };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Jira built-in field labels presented.", { jiraFieldPresentation });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ jiraFieldPresentation });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(debug).toHaveBeenCalledTimes(25);
+  expect(warn).not.toHaveBeenCalled();
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
 });

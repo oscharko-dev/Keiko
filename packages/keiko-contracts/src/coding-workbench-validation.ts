@@ -37,6 +37,7 @@ import {
   type CodingWorkbenchValidationResult,
   isCodingWorkbenchModeWidening,
   isCodingWorkbenchNativeRetry,
+  isWriteCapableCodingConnectorScope,
 } from "./coding-workbench.js";
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
@@ -330,13 +331,18 @@ function validateBudget(value: unknown, path: string, errors: string[]): void {
     errors.push(`${path} must be an object`);
     return;
   }
+  // A durable run created before the cumulative prompt-token allowance was removed (#4346) may
+  // still carry `maxPromptTokens`: it is accepted while it keeps its old shape (a positive safe
+  // integer), never required and never enforced.
   validateAllowedKeys(
     value,
     ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"],
     path,
     errors,
   );
-  ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"].forEach((key) => {
+  const checked = ["maxRuntimeMs", "maxToolCalls", "maxPatchBytes"];
+  if (Object.hasOwn(value, "maxPromptTokens")) checked.push("maxPromptTokens");
+  checked.forEach((key) => {
     if (!isPositiveSafeInteger(value[key])) {
       errors.push(`${path}.${key} must be a positive safe integer`);
     }
@@ -413,10 +419,7 @@ function validateConnectorScopeActionClassConsistency(
 }
 
 function hasWriteCapableConnectorScope(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((scope) => typeof scope === "string" && scope.endsWith(".write"))
-  );
+  return Array.isArray(value) && value.some(isWriteCapableCodingConnectorScope);
 }
 
 function hasHumanApprovalRequiredActionClass(value: unknown): boolean {
@@ -509,7 +512,7 @@ function validatePermissionRequestSupervisedConnectorScopes(
     return;
   }
   value.connectorScopes.forEach((scope, index) => {
-    if (typeof scope === "string" && !scope.endsWith(".write")) {
+    if (typeof scope === "string" && !isWriteCapableCodingConnectorScope(scope)) {
       errors.push(
         `${path}.connectorScopes[${String(index)}] must be write-capable for ${String(value.actionKind)}`,
       );

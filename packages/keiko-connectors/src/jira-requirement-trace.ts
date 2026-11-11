@@ -48,35 +48,55 @@ function joinParagraphs(parts: readonly string[]): string {
   return parts.filter((part) => part.trim().length > 0).join("\n\n");
 }
 
-/** The end of the owned block: the footer's last line, whole, after the footer's start. */
-function footerBlockEnd(
-  text: string,
-  start: number,
-  trace: Pick<JiraTraceRequest, "footerStart" | "footerEnd">,
-): number | undefined {
-  const marker = `\n${trace.footerEnd}`;
-  let at = text.indexOf(marker, start + trace.footerStart.length);
+/** A marker owns whole lines, never a substring of a human paragraph or a longer heading. */
+function markerPositions(text: string, marker: string): readonly number[] {
+  if (marker.length === 0) return [];
+  const positions: number[] = [];
+  let at = text.indexOf(marker);
   while (at >= 0) {
     const end = at + marker.length;
-    if (end === text.length || text[end] === "\n") return end;
-    at = text.indexOf(marker, end);
+    const beginsLine = at === 0 || text[at - 1] === "\n";
+    const endsLine = end === text.length || text[end] === "\n";
+    if (beginsLine && endsLine) positions.push(at);
+    at = text.indexOf(marker, at + 1);
   }
-  return undefined;
+  return positions;
+}
+
+/** More than one start or end cannot establish which block belongs to this source update. */
+function ownedFooterBlock(
+  text: string,
+  trace: Pick<JiraTraceRequest, "footerStart" | "footerEnd">,
+): readonly [start: number, end: number] | undefined {
+  const starts = markerPositions(text, trace.footerStart);
+  const ends = markerPositions(text, trace.footerEnd);
+  const start = starts[0];
+  const end = ends[0];
+  if (starts.length !== 1 || ends.length !== 1 || start === undefined || end === undefined)
+    return undefined;
+  return end > start + trace.footerStart.length ? [start, end + trace.footerEnd.length] : undefined;
+}
+
+function appendFooter(text: string, footer: string): string {
+  const kept = text.trimEnd();
+  if (kept === footer || kept.endsWith(`\n${footer}`)) return kept;
+  return joinParagraphs([kept, footer]);
 }
 
 /**
  * The description with the footer block in place of an earlier one, or appended when there is none.
  * Only the earlier block itself, from its start line to its end line, is replaced: text before and
- * after it is kept. A start without an end is not an owned block, so it is left untouched.
+ * after it is kept. Missing, repeated or nested markers are ambiguous: retain that text and append
+ * the requested footer, without appending another copy on a repeat.
  */
 export function descriptionWithFooter(
   description: string | undefined,
   trace: Pick<JiraTraceRequest, "footer" | "footerStart" | "footerEnd">,
 ): string {
   const text = (description ?? "").replaceAll("\r\n", "\n");
-  const start = text.indexOf(trace.footerStart);
-  const end = start < 0 ? undefined : footerBlockEnd(text, start, trace);
-  if (start < 0 || end === undefined) return joinParagraphs([text.trimEnd(), trace.footer]);
+  const block = ownedFooterBlock(text, trace);
+  if (block === undefined) return appendFooter(text, trace.footer);
+  const [start, end] = block;
   return joinParagraphs([
     text.slice(0, start).trimEnd(),
     trace.footer,

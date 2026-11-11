@@ -39,6 +39,14 @@ export const APP_SESSION_SKILL_DRAFT_COOKIE_PATH = "/api/prompt-enhancement";
 export const APP_SESSION_CHATS_COOKIE_PATH = "/api/chats";
 /** Central MCP configuration and discovery consume the same paired browser authority. */
 export const APP_SESSION_MCP_COOKIE_PATH = "/api/mcp";
+/**
+ * Chat review observation (GET) and decision (POST) revalidate the original paired app session.
+ * The route carries the approval id as its last segment, so this prefix contains exactly those two
+ * routes (pinned by `chatWriteApprovalCookieScope.test.ts`); the generic connector approval routes
+ * live elsewhere and never receive the cookie.
+ */
+export const APP_SESSION_CHAT_APPROVAL_COOKIE_PATH =
+  "/api/atlassian-connectors/chat-write-approval";
 
 // Issuance and revocation use one list so a new consuming route cannot retain a stale bearer.
 const APP_SESSION_ACTIVE_COOKIE_PATHS = [
@@ -58,6 +66,7 @@ const APP_SESSION_ACTIVE_COOKIE_PATHS = [
   APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
   APP_SESSION_MCP_COOKIE_PATH,
+  APP_SESSION_CHAT_APPROVAL_COOKIE_PATH,
 ] as const;
 
 /** Count of live route projections; retired cookies are not successful session repairs. */
@@ -126,20 +135,35 @@ export function clearSessionCookies(secure: boolean): readonly string[] {
   ];
 }
 
-/** Read the app-session cookie value from a request, or `undefined` when it is absent. */
-export function readSessionCookie(req: IncomingMessage): string | undefined {
+function presentedSessionProofs(req: IncomingMessage): readonly string[] {
   const header = req.headers.cookie;
-  if (typeof header !== "string") return undefined;
+  if (typeof header !== "string") return [];
+  const values: string[] = [];
   for (const part of header.split(";")) {
     const trimmed = part.trim();
     const separator = trimmed.indexOf("=");
-    if (separator <= 0) continue;
-    if (trimmed.slice(0, separator) === APP_SESSION_COOKIE_NAME) {
-      const value = trimmed.slice(separator + 1);
-      return value.length > 0 ? value : undefined;
-    }
+    if (separator > 0 && trimmed.slice(0, separator) === APP_SESSION_COOKIE_NAME)
+      values.push(trimmed.slice(separator + 1));
   }
-  return undefined;
+  return values;
+}
+/** The secret is returned separately from the count-only request observation. */
+export function readSessionCookieObservation(req: IncomingMessage): {
+  readonly cookieToken: string | undefined;
+  readonly presentedProofCount: number;
+  readonly distinctProofCount: number;
+} {
+  const values = presentedSessionProofs(req);
+  const value = values[0];
+  return {
+    cookieToken: value === undefined || value.length === 0 ? undefined : value,
+    presentedProofCount: values.length,
+    distinctProofCount: new Set(values.filter((candidate) => candidate.length > 0)).size,
+  };
+}
+/** Read the app-session cookie value without exposing it to diagnostics. */
+export function readSessionCookie(req: IncomingMessage): string | undefined {
+  return readSessionCookieObservation(req).cookieToken;
 }
 
 /** Whether the request arrived over TLS, gating the `Secure` cookie attribute. */

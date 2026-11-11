@@ -72,7 +72,10 @@ describe("createCodingAppSessionChannel", () => {
   it("cannot pair without a pairing authority (fail closed)", () => {
     const channel = createCodingAppSessionChannel({ registry: createSessionRegistry() });
     expect(channel.pair(fakePairingRequestBody())).toEqual({ paired: false });
-    expect(channel.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
+    expect(channel.ensureLocalSession(undefined)).toEqual({
+      status: "unavailable",
+      reason: "proof-missing",
+    });
     expect(channel.sessionCount()).toBe(0);
   });
 
@@ -81,9 +84,13 @@ describe("createCodingAppSessionChannel", () => {
       registry: createSessionRegistry(),
       pairingPort: createFakeSessionPairingPort(),
     });
-    expect(channel.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
+    expect(channel.ensureLocalSession(undefined)).toEqual({
+      status: "unavailable",
+      reason: "proof-missing",
+    });
     expect(channel.ensureLocalSession("sess_000000000000000000000000.forged")).toEqual({
       status: "unavailable",
+      reason: "session-unregistered",
     });
     expect(channel.sessionCount()).toBe(0);
     const paired = channel.pair(fakePairingRequestBody());
@@ -91,7 +98,10 @@ describe("createCodingAppSessionChannel", () => {
     expect(channel.ensureLocalSession(paired.cookieToken)).toMatchObject({ status: "active" });
     expect(channel.sessionCount()).toBe(1);
     channel.signOut(paired.cookieToken);
-    expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({ status: "unavailable" });
+    expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({
+      status: "unavailable",
+      reason: "session-unregistered",
+    });
     expect(channel.sessionCount()).toBe(0);
   });
 

@@ -490,6 +490,52 @@ describe("template proposals", () => {
     );
   });
 
+  it("withdraws a completed proposal across Pod A to B to A and logs its original request once", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
+      { issueType: "Story", markdown: "PRIVATE_DRAFT", sampledIssueCount: 3 },
+    ]);
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "PRIVATE");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("Proposed for Story (3 issues sampled)");
+    const correlationId = vi.mocked(templates.proposeJiraTemplates).mock.calls[0]?.[2];
+    expect(correlationId).toEqual(expect.any(String));
+    const pod = screen.getByRole("combobox", { name: "Jira Pod" });
+    await user.selectOptions(pod, "pod-2");
+    expect(screen.queryByText("Proposed for Story (3 issues sampled)")).toBeNull();
+    await user.selectOptions(pod, "pod-1");
+    expect(screen.queryByText("Proposed for Story (3 issues sampled)")).toBeNull();
+    const discarded = vi
+      .mocked(reportClientDiagnostic)
+      .mock.calls.filter(([message]) => message === "Jira template proposal superseded.");
+    expect(discarded).toEqual([["Jira template proposal superseded.", { correlationId }]]);
+    expect(JSON.stringify(discarded)).not.toMatch(/PRIVATE|pod-1|pod-2|Story/u);
+    expect(onDraft).not.toHaveBeenCalled();
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
+      { issueType: "Story", markdown: "CURRENT_DRAFT", sampledIssueCount: 4 },
+    ]);
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    expect(await screen.findByText("Proposed for Story (4 issues sampled)")).toBeInTheDocument();
+  });
+
+  it("withdraws a completed proposal when a same-count stored library revision changes", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
+      { issueType: "Story", markdown: "STALE_DRAFT", sampledIssueCount: 3 },
+    ]);
+    const user = userEvent.setup();
+    const view = render(<Panel stored={libraryOf([DOCUMENT])} />);
+    await screen.findByText(ENTRY.name);
+    await user.type(screen.getByLabelText("Project key"), "SYN");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("Proposed for Story (3 issues sampled)");
+    view.rerender(<Panel stored={libraryOf([{ ...DOCUMENT, revision: 3 }])} />);
+    await waitFor(() => expect(templates.fetchJiraTemplates).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Proposed for Story (3 issues sampled)")).toBeNull();
+    expect(onDraft).not.toHaveBeenCalled();
+  });
+
   it("starts each proposal from its own Markdown, never the previous project's", async () => {
     vi.mocked(templates.proposeJiraTemplates).mockImplementation((_pod, projectKey) =>
       Promise.resolve([

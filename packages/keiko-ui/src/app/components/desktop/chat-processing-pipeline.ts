@@ -9,7 +9,15 @@ import { jiraToolLabel, jiraToolState } from "./jira-tool-presentation";
 import { batchStepCount } from "./jira-tool-progress";
 
 export type ChatProcessingState =
-  "done" | "active" | "upcoming" | "approval" | "failed" | "cancelled" | "attention" | "blocked";
+  | "done"
+  | "active"
+  | "upcoming"
+  | "approval"
+  | "input"
+  | "failed"
+  | "cancelled"
+  | "attention"
+  | "blocked";
 
 export interface ChatProcessingStep {
   readonly id: string;
@@ -26,6 +34,7 @@ export const CHAT_PROCESSING_STATE_LABELS: Readonly<Record<ChatProcessingState, 
     active: "chat.processing.active",
     upcoming: "chat.processing.upcoming",
     approval: "chat.processing.approval",
+    input: "chat.processing.input",
     failed: "chat.processing.failed",
     cancelled: "chat.processing.cancelled",
     attention: "chat.processing.attention",
@@ -79,11 +88,31 @@ function mutationState(
   return undefined;
 }
 
+const PAUSED_INPUT_STATES: ReadonlySet<string | undefined> = new Set([
+  "awaiting-input",
+  "cancelled",
+  "expired",
+]);
+function humanInputState(
+  exchange: ChatToolExchange,
+  turnState: ChatTurnState | undefined,
+): ChatProcessingState | undefined {
+  if (exchange.result !== undefined || exchange.mutationOutcome !== undefined) return undefined;
+  const state = exchange.humanInput?.state;
+  if (!PAUSED_INPUT_STATES.has(state)) return undefined;
+  if (turnState === "cancelled" || turnState === "failed") return turnState;
+  if (state === "cancelled") return "cancelled";
+  return state === "awaiting-input" && turnState === "pending" ? "input" : "blocked";
+}
+
 function exchangeState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): ChatProcessingState {
-  const governedState = approvalState(exchange, turnState) ?? mutationState(exchange, turnState);
+  const governedState =
+    humanInputState(exchange, turnState) ??
+    approvalState(exchange, turnState) ??
+    mutationState(exchange, turnState);
   if (governedState !== undefined) return governedState;
   if (exchange.result !== undefined) {
     if (exchange.result.status === "completed") return "done";
@@ -123,6 +152,20 @@ function exchangeLabel(exchange: ChatToolExchange): WidgetMessageKey {
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : jiraToolLabel(exchange);
 }
 
+function needsContinuation(
+  exchanges: readonly ChatToolExchange[],
+  steps: readonly ChatProcessingStep[],
+  turnState: ChatTurnState | undefined,
+): boolean {
+  return (
+    turnState === "pending" &&
+    !steps.some(
+      (step) => step.state === "active" || step.state === "approval" || step.state === "input",
+    ) &&
+    !exchanges.some((exchange) => humanInputState(exchange, turnState) !== undefined)
+  );
+}
+
 /** Only observed calls and the turn lifecycle become steps; a draft never implies a Jira write. */
 export function chatProcessingSteps(
   transcript: ChatToolTranscript | undefined,
@@ -146,10 +189,7 @@ export function chatProcessingSteps(
       };
     }),
   ];
-  if (
-    turnState === "pending" &&
-    !steps.some((step) => step.state === "active" || step.state === "approval")
-  )
+  if (needsContinuation(exchanges, steps, turnState))
     steps.push(
       waitingForDecision
         ? { id: "decision", label: "chat.processing.approval", state: "approval" }

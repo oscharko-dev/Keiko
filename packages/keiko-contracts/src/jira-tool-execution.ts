@@ -2,15 +2,388 @@ import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connector
 import type { JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
-/** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
-export const JIRA_MUTATION_OPERATIONS = [
+export const JIRA_AVATAR_MUTATIONS = Object.freeze([
+  "jira.upload-temporary-avatar",
+  "jira.crop-temporary-avatar",
+  "jira.upload-issue-type-avatar",
+  "jira.create-issue-type-avatar",
+  "jira.upload-project-avatar",
+  "jira.create-project-avatar",
+  "jira.set-project-avatar",
+  "jira.delete-project-avatar",
+  "jira.upload-owned-avatar",
+  "jira.create-owned-avatar",
+  "jira.delete-owned-avatar",
+  "jira.upload-user-avatar",
+  "jira.create-user-avatar",
+  "jira.set-user-avatar",
+  "jira.delete-user-avatar",
+] as const);
+export type JiraAvatarMutation = (typeof JIRA_AVATAR_MUTATIONS)[number];
+/** The existing immutable file review is needed for exactly these five raw image uploads. */
+export const JIRA_AVATAR_UPLOAD_MUTATIONS = Object.freeze([
+  "jira.upload-temporary-avatar",
+  "jira.upload-issue-type-avatar",
+  "jira.upload-project-avatar",
+  "jira.upload-owned-avatar",
+  "jira.upload-user-avatar",
+] as const satisfies readonly JiraAvatarMutation[]);
+export type JiraAvatarUploadMutation = (typeof JIRA_AVATAR_UPLOAD_MUTATIONS)[number];
+export function isJiraAvatarUploadOperation(name: string): name is JiraAvatarUploadMutation {
+  return (JIRA_AVATAR_UPLOAD_MUTATIONS as readonly string[]).includes(name);
+}
+export const JIRA_IDENTITY_MUTATIONS = Object.freeze([
+  "jira.create-user",
+  "jira.update-user",
+  "jira.delete-user",
+  "jira.invalidate-user-session",
+  "jira.schedule-user-anonymization",
+  "jira.rerun-user-anonymization",
+] as const);
+export type JiraIdentityMutation = (typeof JIRA_IDENTITY_MUTATIONS)[number];
+/** Private human-input or owned-session actions. Validation POSTs remain separate read tools. */
+export const JIRA_PRIVATE_ACCOUNT_MUTATIONS = Object.freeze([
+  "jira.update-myself",
+  "jira.update-my-password",
+  "jira.update-user-password",
+  "jira.login",
+  "jira.logout",
+  "jira.release-websudo",
+] as const);
+export type JiraPrivateAccountMutation = (typeof JIRA_PRIVATE_ACCOUNT_MUTATIONS)[number];
+export const JIRA_ISSUE_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.archive-issues",
+  "jira.delete-issue",
+  "jira.archive-issue",
+  "jira.restore-issue",
+  "jira.move-subtask",
+] as const);
+export type JiraIssueLifecycleMutation = (typeof JIRA_ISSUE_LIFECYCLE_MUTATIONS)[number];
+export const JIRA_PROJECT_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.delete-project",
+  "jira.archive-project",
+  "jira.restore-project",
+  "jira.update-project-type",
+  "jira.set-project-permission-scheme",
+  "jira.set-project-priority-scheme",
+  "jira.remove-project-priority-scheme",
+] as const);
+export type JiraProjectLifecycleMutation = (typeof JIRA_PROJECT_LIFECYCLE_MUTATIONS)[number];
+
+export const JIRA_GROUP_MUTATIONS = Object.freeze([
+  "jira.create-group",
+  "jira.delete-group",
+  "jira.add-group-user",
+  "jira.remove-group-user",
+] as const);
+export type JiraGroupMutation = (typeof JIRA_GROUP_MUTATIONS)[number];
+
+export const JIRA_ISSUE_ACTION_MUTATIONS = Object.freeze([
+  "jira.pin-comment",
+  "jira.notify-issue",
+] as const);
+export type JiraIssueActionMutation = (typeof JIRA_ISSUE_ACTION_MUTATIONS)[number];
+
+export const JIRA_MAINTENANCE_MUTATIONS = Object.freeze([
+  "jira.request-cluster-index-snapshot",
+  "jira.delete-cluster-node",
+  "jira.mark-cluster-node-offline",
+  "jira.approve-cluster-upgrade",
+  "jira.cancel-cluster-upgrade",
+  "jira.retry-cluster-upgrade",
+  "jira.start-cluster-upgrade",
+  "jira.create-index-snapshot",
+  "jira.start-reindex",
+  "jira.reindex-issues",
+  "jira.process-reindex-requests",
+  "jira.run-upgrade",
+] as const);
+export type JiraMaintenanceMutation = (typeof JIRA_MAINTENANCE_MUTATIONS)[number];
+
+export const JIRA_SCHEMA_MUTATIONS = Object.freeze([
+  "jira.create-custom-field",
+  "jira.delete-custom-fields",
+  "jira.create-issue-type",
+  "jira.update-issue-type",
+  "jira.delete-issue-type",
+  "jira.create-link-type",
+  "jira.update-link-type",
+  "jira.delete-link-type",
+  "jira.reset-link-type-order",
+  "jira.move-link-type",
+  "jira.set-terminology",
+] as const);
+export type JiraSchemaMutation = (typeof JIRA_SCHEMA_MUTATIONS)[number];
+
+export const JIRA_DIRECTORY_ACCESS_MUTATIONS = Object.freeze([
+  "jira.set-application-role",
+  "jira.set-application-roles",
+  "jira.add-user-application",
+  "jira.remove-user-application",
+  "jira.set-user-columns",
+  "jira.reset-user-columns",
+] as const);
+export type JiraDirectoryAccessMutation = (typeof JIRA_DIRECTORY_ACCESS_MUTATIONS)[number];
+
+/** One immutable identity source for the uniform entity-property mutation family. */
+export const JIRA_ENTITY_PROPERTY_MUTATIONS = Object.freeze([
+  "jira.set-board-property",
+  "jira.delete-board-property",
+  "jira.set-sprint-property",
+  "jira.delete-sprint-property",
+  "jira.set-comment-property",
+  "jira.delete-comment-property",
+  "jira.set-dashboard-item-property",
+  "jira.delete-dashboard-item-property",
+  "jira.set-issue-property",
+  "jira.delete-issue-property",
+  "jira.set-issue-type-property",
+  "jira.delete-issue-type-property",
+  "jira.set-project-property",
+  "jira.delete-project-property",
+  "jira.set-user-property",
+  "jira.delete-user-property",
+] as const);
+export type JiraEntityPropertyMutation = (typeof JIRA_ENTITY_PROPERTY_MUTATIONS)[number];
+
+/** Closed saved-filter and current-user preference operations; no arbitrary setting writes. */
+export const JIRA_SAVED_CONFIGURATION_MUTATIONS = Object.freeze([
+  "jira.create-filter",
+  "jira.update-filter",
+  "jira.delete-filter",
+  "jira.set-filter-share-scope",
+  "jira.set-filter-columns",
+  "jira.reset-filter-columns",
+  "jira.add-filter-permission",
+  "jira.delete-filter-permission",
+  "jira.set-my-preference",
+  "jira.delete-my-preference",
+] as const);
+export type JiraSavedConfigurationMutation = (typeof JIRA_SAVED_CONFIGURATION_MUTATIONS)[number];
+
+/** Exact reviewed native relationships; remote upsert is distinct from unconditional creation. */
+export const JIRA_LINK_MUTATIONS = Object.freeze([
+  "jira.create-issue-link",
+  "jira.delete-issue-link",
+  "jira.upsert-remote-link",
+  "jira.update-remote-link",
+  "jira.delete-remote-link",
+  "jira.delete-remote-link-by-global-id",
+] as const);
+export type JiraLinkMutation = (typeof JIRA_LINK_MUTATIONS)[number];
+
+/** Project-bound version/component lifecycle changes reuse the existing mutation journal. */
+export const JIRA_RELEASE_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.delete-component",
+  "jira.merge-version",
+  "jira.move-version",
+  "jira.remove-and-swap-version",
+] as const);
+export type JiraReleaseLifecycleMutation = (typeof JIRA_RELEASE_LIFECYCLE_MUTATIONS)[number];
+
+/** Fixed screen/tab/field configuration effects; no arbitrary schema mutation. */
+export const JIRA_SCREEN_CONFIGURATION_MUTATIONS = Object.freeze([
+  "jira.add-default-screen-field",
+  "jira.add-screen-tab-field",
+  "jira.remove-screen-tab-field",
+  "jira.move-screen-tab-field",
+  "jira.set-screen-field-show-when-empty",
+  "jira.move-screen-tab",
+] as const);
+export type JiraScreenConfigurationMutation = (typeof JIRA_SCREEN_CONFIGURATION_MUTATIONS)[number];
+export const JIRA_BOARD_CONFIGURATION_MUTATIONS = Object.freeze([
+  "jira.delete-board",
+  "jira.set-board-refined-velocity",
+] as const);
+export type JiraBoardConfigurationMutation = (typeof JIRA_BOARD_CONFIGURATION_MUTATIONS)[number];
+export function isJiraBoardConfigurationMutation(
+  name: string,
+): name is JiraBoardConfigurationMutation {
+  return (JIRA_BOARD_CONFIGURATION_MUTATIONS as readonly string[]).includes(name);
+}
+export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.replace-sprint",
+  "jira.delete-sprint",
+  "jira.swap-sprints",
+  "jira.unmap-sprints",
+  "jira.unmap-all-sprints",
+] as const);
+export type JiraSprintLifecycleMutation = (typeof JIRA_SPRINT_LIFECYCLE_MUTATIONS)[number];
+
+export const JIRA_OPTION_SCHEME_MUTATIONS = Object.freeze([
+  "jira.create-issue-type-scheme",
+  "jira.update-issue-type-scheme",
+  "jira.delete-issue-type-scheme",
+  "jira.add-issue-type-scheme-projects",
+  "jira.set-issue-type-scheme-projects",
+  "jira.clear-issue-type-scheme-projects",
+  "jira.remove-issue-type-scheme-project",
+  "jira.create-priority-scheme",
+  "jira.update-priority-scheme",
+  "jira.delete-priority-scheme",
+] as const);
+export type JiraOptionSchemeMutation = (typeof JIRA_OPTION_SCHEME_MUTATIONS)[number];
+export const JIRA_WORKFLOW_SCHEME_MUTATIONS = Object.freeze([
+  "jira.create-workflow-scheme",
+  "jira.update-workflow-scheme",
+  "jira.delete-workflow-scheme",
+  "jira.create-workflow-scheme-draft",
+  "jira.update-workflow-scheme-draft",
+  "jira.delete-workflow-scheme-draft",
+  "jira.set-workflow-scheme-default",
+  "jira.delete-workflow-scheme-default",
+  "jira.set-workflow-scheme-draft-default",
+  "jira.delete-workflow-scheme-draft-default",
+  "jira.set-workflow-scheme-issue-type",
+  "jira.delete-workflow-scheme-issue-type",
+  "jira.set-workflow-scheme-draft-issue-type",
+  "jira.delete-workflow-scheme-draft-issue-type",
+  "jira.set-workflow-scheme-workflow",
+  "jira.delete-workflow-scheme-workflow",
+  "jira.set-workflow-scheme-draft-workflow",
+  "jira.delete-workflow-scheme-draft-workflow",
+] as const);
+export type JiraWorkflowSchemeMutation = (typeof JIRA_WORKFLOW_SCHEME_MUTATIONS)[number];
+export const JIRA_INSTANCE_SETTING_MUTATIONS = Object.freeze([
+  "jira.set-application-property",
+  "jira.set-system-columns",
+  "jira.set-instance-base-url",
+  "jira.set-read-only-mode",
+] as const);
+export type JiraInstanceSettingMutation = (typeof JIRA_INSTANCE_SETTING_MUTATIONS)[number];
+export const JIRA_EMAIL_TEMPLATE_MUTATIONS = Object.freeze([
+  "jira.upload-email-template-pack",
+  "jira.apply-email-template-pack",
+  "jira.revert-email-template-pack",
+] as const);
+export type JiraEmailTemplateMutation = (typeof JIRA_EMAIL_TEMPLATE_MUTATIONS)[number];
+
+export const JIRA_PERMISSION_SCHEME_MUTATIONS = Object.freeze([
+  "jira.create-permission-scheme",
+  "jira.update-permission-scheme",
+  "jira.delete-permission-scheme",
+  "jira.add-permission-grant",
+  "jira.delete-permission-grant",
+  "jira.set-permission-scheme-attribute",
+] as const);
+export type JiraPermissionSchemeMutation = (typeof JIRA_PERMISSION_SCHEME_MUTATIONS)[number];
+export const JIRA_ROLE_MUTATIONS = Object.freeze([
+  "jira.create-role",
+  "jira.update-role",
+  "jira.replace-role",
+  "jira.delete-role",
+  "jira.add-role-default-actors",
+  "jira.delete-role-default-actor",
+  "jira.add-project-role-actors",
+  "jira.set-project-role-actors",
+  "jira.delete-project-role-actor",
+] as const);
+export type JiraRoleMutation = (typeof JIRA_ROLE_MUTATIONS)[number];
+
+export const JIRA_AGILE_PLANNING_MUTATIONS = Object.freeze([
+  "jira.epic-remove-issues",
+  "jira.rank-epic",
+  "jira.rank-issues",
+  "jira.set-issue-estimation",
+] as const);
+export type JiraAgilePlanningMutation = (typeof JIRA_AGILE_PLANNING_MUTATIONS)[number];
+export const JIRA_VERSION_REMOTE_LINK_MUTATIONS = Object.freeze([
+  "jira.upsert-version-remote-link",
+  "jira.upsert-version-remote-link-by-global-id",
+  "jira.delete-version-remote-link",
+  "jira.delete-version-remote-links",
+] as const);
+export type JiraVersionRemoteLinkMutation = (typeof JIRA_VERSION_REMOTE_LINK_MUTATIONS)[number];
+export const JIRA_PROJECT_CATEGORY_MUTATIONS = Object.freeze([
+  "jira.create-project-category",
+  "jira.update-project-category",
+  "jira.delete-project-category",
+] as const);
+export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATIONS)[number];
+export function isJiraProjectCategoryMutation(name: string): name is JiraProjectCategoryMutation {
+  return (JIRA_PROJECT_CATEGORY_MUTATIONS as readonly string[]).includes(name);
+}
+
+export const JIRA_ANONYMIZATION_UNLOCK_MUTATIONS = Object.freeze([
+  "jira.unlock-user-anonymization",
+] as const);
+export const JIRA_EXTENDED_ISSUE_CREATION_MUTATIONS = Object.freeze([
+  "jira.create-issues",
+  "jira.create-reciprocal-remote-link",
+] as const);
+
+/** The original shared mutation executor's closed operations, in their retained catalog order. */
+export const JIRA_CORE_MUTATIONS = Object.freeze([
+  "jira.set-app-monitoring",
+  "jira.set-ipd-monitoring",
+  "jira.start-jmx-metrics",
+  "jira.stop-jmx-metrics",
+  "jira.create-screen-tab",
+  "jira.rename-screen-tab",
+  "jira.delete-screen-tab",
   "jira.create",
+  "jira.create-project",
+  "jira.update-project",
+  "jira.create-component",
+  "jira.update-component",
+  "jira.create-version",
+  "jira.update-version",
+  "jira.board-create",
+  "jira.sprint-create",
+  "jira.sprint-update",
+  "jira.sprint-move-issues",
+  "jira.backlog-move-issues",
+  "jira.epic-update",
+  "jira.epic-move-issues",
   "jira.edit",
   "jira.assign",
   "jira.comment",
+  "jira.update-comment",
+  "jira.delete-comment",
+  "jira.delete-attachment",
+  "jira.delete-worklog",
+  "jira.create-worklog",
+  "jira.update-worklog",
+  "jira.watch",
+  "jira.unwatch",
+  "jira.vote",
+  "jira.unvote",
   "jira.transition",
   "jira.draft",
   "jira.attach",
+] as const);
+
+/** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
+export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_ANONYMIZATION_UNLOCK_MUTATIONS,
+  ...JIRA_AVATAR_MUTATIONS,
+  ...JIRA_IDENTITY_MUTATIONS,
+  ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  ...JIRA_EXTENDED_ISSUE_CREATION_MUTATIONS,
+  ...JIRA_GROUP_MUTATIONS,
+  ...JIRA_ISSUE_ACTION_MUTATIONS,
+  ...JIRA_MAINTENANCE_MUTATIONS,
+  ...JIRA_SCHEMA_MUTATIONS,
+  ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  ...JIRA_OPTION_SCHEME_MUTATIONS,
+  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  ...JIRA_INSTANCE_SETTING_MUTATIONS,
+  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  ...JIRA_PERMISSION_SCHEME_MUTATIONS,
+  ...JIRA_ROLE_MUTATIONS,
+  ...JIRA_AGILE_PLANNING_MUTATIONS,
+  ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  ...JIRA_PROJECT_CATEGORY_MUTATIONS,
+  ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  ...JIRA_LINK_MUTATIONS,
+  ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
+  ...JIRA_ENTITY_PROPERTY_MUTATIONS,
+  ...JIRA_CORE_MUTATIONS,
 ] as const;
 export type JiraMutationOperation = (typeof JIRA_MUTATION_OPERATIONS)[number];
 
@@ -127,13 +500,176 @@ export type JiraMutationOutcome = (typeof JIRA_MUTATION_OUTCOMES)[number];
 export const JIRA_MUTATION_RESULT_STATES = [...JIRA_MUTATION_OUTCOMES, "pending"] as const;
 export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[number];
 
-/** Validated Jira identities only; remote bodies and headers never become a mutation receipt. */
-export interface JiraMutationReceipt {
-  readonly issueKey?: string;
-  readonly issueId?: string;
-  readonly commentId?: string;
-  readonly transitionId?: string;
-  readonly attachmentId?: string;
+/** Validated Jira identities and closed state facts; never remote bodies or headers.
+ * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
+export interface JiraMutationReceipt extends Readonly<
+  Partial<
+    Record<
+      // Native resource identities are optional until their own operation has independently bound them.
+      | "propertyKey"
+      | "dashboardId"
+      | "selectedItemId"
+      | "issueTypeId"
+      | "userKey"
+      | "username"
+      | "screenId"
+      | "tabId"
+      | "projectId"
+      | "projectKey"
+      | "projectName"
+      | "componentId"
+      | "versionId"
+      | "browseUrl"
+      | "boardId"
+      | "sprintId"
+      | "epicKey"
+      | "issueKey"
+      | "issueId"
+      | "commentId"
+      | "worklogId"
+      | "originBoardId"
+      | "boardBrowseUrl"
+      | "transitionId"
+      | "attachmentId",
+      string
+    >
+  >
+> {
+  readonly avatarType?: "user" | "project" | "issuetype";
+  readonly avatarId?: string;
+  readonly avatarPresent?: boolean;
+  readonly avatarSelected?: boolean;
+  readonly temporaryAvatar?: true;
+  /** Native acknowledgement metadata, not image persistence or independent content evidence. */
+  readonly temporaryCrop?: {
+    readonly cropperOffsetX: number;
+    readonly cropperOffsetY: number;
+    readonly cropperWidth: number;
+  };
+  readonly temporaryNeedsCropping?: boolean;
+  readonly userPresent?: boolean;
+  readonly userActive?: boolean;
+  readonly userSessionInvalidationRequested?: true;
+  /** Present only after the private custody owner proves the same cookie-session actor. */
+  readonly sessionEstablished?: true;
+  readonly executingNode?: string;
+  readonly anonymizationSubmittedTime?: string;
+  readonly anonymizationRequested?: true;
+  readonly anonymizationRerunRequested?: true;
+  readonly newOwnerUserKey?: string;
+  readonly issueArchivedRequested?: boolean;
+  readonly issuePresent?: false;
+  readonly subtaskIds?: readonly string[];
+  readonly originalPosition?: number;
+  readonly currentPosition?: number;
+  readonly requestedIssueCount?: number;
+  readonly bulkFailedElementNumbers?: readonly number[];
+  readonly bulkFailureStatuses?: readonly number[];
+  readonly applicationLinkId?: string;
+  readonly applicationLinkDestinationDigest?: string;
+  readonly selectedRemoteIssueId?: string;
+  readonly delegatedEffectRequested?: true;
+  readonly projectPresent?: false;
+  readonly projectArchivedRequested?: boolean;
+  readonly projectTypeKey?: string;
+  readonly previousSchemeId?: string;
+  readonly projectSchemeAssigned?: boolean;
+  readonly actorUserKey?: string;
+  readonly applicationRoleKeys?: readonly string[];
+  readonly applicationAccessRequested?: boolean;
+  readonly columnsResetRequested?: true;
+  readonly replacementIssueTypeId?: string;
+  readonly issueTypePresent?: boolean;
+  readonly fieldIds?: readonly string[];
+  readonly linkTypeIds?: readonly string[];
+  readonly linkTypePresent?: boolean;
+  readonly terminologyNames?: readonly ("epic" | "sprint")[];
+  readonly groupName?: string;
+  readonly groupPresent?: boolean;
+  readonly targetUserKey?: string;
+  readonly requestedDirectMembership?: boolean;
+  readonly swapGroupName?: string;
+  readonly commentPinned?: true;
+  readonly notificationDigest?: string;
+  readonly recipientUserKeys?: readonly string[];
+  readonly nodeId?: string;
+  readonly reindexRequestIds?: readonly string[];
+  readonly projectIds?: readonly string[];
+  readonly projectKeys?: readonly string[];
+  readonly associationChange?: "add" | "replace" | "clear" | "remove";
+  readonly draftSchemeId?: string;
+  readonly workflowSchemeScope?: "scheme" | "draft";
+  /** Base-update input included default/mapping configuration; never deployment evidence. */
+  readonly workflowMappingChanged?: boolean;
+  readonly workflowName?: string;
+  readonly mappingPresent?: boolean;
+  readonly valueDigest?: string;
+  readonly columnIds?: readonly string[];
+  readonly baseUrlDigest?: string;
+  readonly readOnlyEnabled?: boolean;
+  readonly emailTemplateAction?: "upload" | "apply" | "revert";
+  readonly uploadSha256?: string;
+  readonly uploadBytes?: number;
+  readonly priorManifestSha256?: string;
+  readonly observedManifestSha256?: string;
+  readonly roleId?: string;
+  readonly rolePresent?: boolean;
+  readonly swapRoleId?: string;
+  readonly roleActorsScope?: "role-defaults" | "project-membership";
+  readonly actorChange?: "add" | "replace" | "remove";
+  readonly actorUserKeys?: readonly string[];
+  readonly actorGroupNames?: readonly string[];
+  readonly schemeId?: string;
+  readonly schemePresent?: boolean;
+  readonly grantPresent?: boolean;
+  readonly attributeKey?: string;
+  readonly attributeEnabled?: boolean;
+  readonly categoryId?: string;
+  readonly categoryPresent?: boolean;
+  readonly globalId?: string;
+  readonly globalIds?: readonly string[];
+  readonly issueIds?: readonly string[];
+  readonly anchorIssueId?: string;
+  readonly anchorIssueKey?: string;
+  readonly rankDirection?: "before" | "after";
+  readonly estimationValue?: number;
+  readonly estimationUnit?: "seconds" | "board-number";
+  readonly epicPresent?: boolean;
+  readonly fieldId?: string;
+  /** Requested presence until independent native layout readback succeeds. */
+  readonly fieldPresent?: boolean;
+  readonly showWhenEmpty?: boolean;
+  readonly boardPresent?: boolean;
+  readonly refinedVelocityEnabled?: boolean;
+  readonly sprintIds?: readonly string[];
+  readonly swapSprintId?: string;
+  readonly sprintSynced?: boolean;
+  readonly sprintPresent?: boolean;
+  readonly allSprints?: true;
+  readonly linkId?: string;
+  readonly linkTypeId?: string;
+  readonly linkedIssueId?: string;
+  readonly linkedIssueKey?: string;
+  /** Requested presence until the complete independently bound relation is confirmed. */
+  readonly linkPresent?: boolean;
+  readonly replacementComponentId?: string;
+  readonly targetVersionId?: string;
+  readonly replacementVersionIds?: readonly string[];
+  readonly filterId?: string;
+  readonly permissionId?: string;
+  readonly preferenceKey?: string;
+  /** Requested target only until an independent native read confirms it. */
+  readonly preferencePresent?: boolean;
+  /** The native filter-create API never atomically binds its default-sharing observation. */
+  readonly defaultSharingAtomic?: false;
+  readonly observedShareScope?: "PRIVATE" | "AUTHENTICATED" | "GLOBAL";
+  /** Requested target on unknown/unconfirmed writes; success requires independent readback. */
+  readonly propertyPresent?: boolean;
+  readonly monitoringEnabled?: boolean;
+  readonly jmxMetricsExposed?: boolean;
+  readonly issueKeys?: readonly string[];
+  readonly isWatching?: boolean;
+  readonly hasVoted?: boolean;
 }
 /** Why Keiko's own metadata validation refused a field before dispatch (#4176). */
 export const JIRA_FIELD_VALIDATION_FAILURES = [
@@ -162,6 +698,8 @@ export interface JiraMutationFieldError {
  * Jira's own bounded field errors and messages. Returned to the model only, never logged (#4176).
  */
 export interface JiraMutationFailureDetail {
+  /** The adapter independently observed the requested state before any effect. */
+  readonly unchanged?: true;
   readonly fieldId?: string;
   readonly validation?: JiraFieldValidationFailure;
   readonly fieldErrors?: readonly JiraMutationFieldError[];
@@ -194,6 +732,7 @@ export type JiraMutationAttempt =
       readonly links?: JiraMutationLinkAccount;
       /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     }
   | {
       readonly ok: false;
@@ -206,6 +745,7 @@ export type JiraMutationAttempt =
       readonly violations?: readonly JiraTemplateViolation[];
       /** A prepared description is evidence even when the provider refuses the subsequent write. */
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.
@@ -270,6 +810,7 @@ export function sanitizeJiraMutationFailureDetail(
   const fieldErrors = detailFieldErrors(Reflect.get(value, "fieldErrors"));
   const messages = detailMessages(Reflect.get(value, "messages"));
   const detail: JiraMutationFailureDetail = {
+    ...(Reflect.get(value, "unchanged") === true ? { unchanged: true } : {}),
     ...(detailFieldId(fieldId) ? { fieldId } : {}),
     ...(VALIDATION_FAILURES.has(validation)
       ? { validation: validation as JiraFieldValidationFailure }

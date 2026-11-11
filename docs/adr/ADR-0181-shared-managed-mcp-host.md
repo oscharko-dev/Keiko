@@ -29,15 +29,36 @@ for each protocol exchange. That is request isolation, not a server/process/list
 configuration per Pod. The injected fetch invokes the handler directly and refuses any
 other address or method. The internal `.invalid` URL is never dialed.
 
-The server dependency graph now owns one lazy managed Jira catalog. Concurrent callers
-share its initialization and admitted descriptors. Disposal closes that same host before
-closing the graph's remaining services; closure before/during initialization refuses
-late consumers. Independently assembled application graphs remain isolated. Connection
+The server dependency graph owns the lazy managed Jira discovery catalog. Concurrent callers
+share its initialization and admitted descriptors. Ordinary Chat can select a narrowed operation
+catalog through the same managed-host implementation; the turn closes each replaced selection
+after its in-flight round settles, and graph disposal also closes outstanding selections.
+Closure before/during initialization refuses late consumers. Independently assembled application graphs remain isolated. Connection
 selection uses the private invocation context and current Chat authority, then obtains
 the existing generation-bound custody HTTP port with its final dispatch guard. Catalog
 discovery itself performs no credential resolution or Jira HTTP. Ordinary Chat turn
 orchestration uses the shared bounded loop with provider-specific admission adapters;
 complete acceptance remains tracked separately from this architectural decision.
+
+**On-demand Jira schemas (#4287, #4290).** A Chat initially offers `jira.discover`,
+`jira.describe` and the existing Knowledge tools. Discovery pages the closed registry of
+implemented operations; it does not advertise the unimplemented API inventory as executable.
+Describe accepts only exact registry identities and prepares the selected typed tools for the
+next model round. A describe replaces the previous additional selection; its result names
+every previously selected operation it drops (`deselected`), so a model never loses a tool
+without being told. Each published selection, in Chat and Coding, records
+`jira.catalog.selection` on the Activity Log with selected, retained and dropped counts only.
+The selection activates only after that describe invocation completes;
+failed or timed-out candidates are closed. Neither metadata operation performs Jira HTTP.
+Each round still uses the normal authority-filtered binder offer and the same accepted-turn
+invocation registry, so selection cannot grant authority or replay earlier effects. Other
+connected tool sources remain present when the Jira subset changes.
+
+Schema admission counts the actual offered definitions with the gateway's prompt-token
+accounting, including the retained conversation, output reservation and safety margin, against
+both the selected model's context and remaining turn budget. A subset that cannot fit is refused
+without truncating its schemas. Discovery returns an explicit next-page position when only a
+prefix fits. The existing MCP and catalog admission limits remain unchanged.
 
 ### D2 — Explicit modern protocol and bounded capabilities
 
@@ -148,9 +169,38 @@ factory, never a raw token resolver. Every metadata and confirmation read rechec
 authority and the Chat read grant. The exact action approval is claimed atomically inside
 the durable journal's dispatch boundary, immediately before the first mutating HTTP request;
 metadata reads and duplicate deliveries cannot consume or reapply that claim. Full access
-uses the same boundary with its currently validated allowed disposition.
+uses the same boundary with its currently validated allowed disposition. The one hundred thirty-seven source-defined
+administration writes additionally require the explicitly selected `issue-tracker.admin` scope
+defined in ADR-0128 D4. A Chat scope change advances the existing binding generation and revokes
+earlier approvals; neither schema selection nor Full access supplies administration authority.
+
+Five administration observations retain read effects: three anonymization diagnostics and
+metadata-only email-template export have low risk; protected license validation has high risk.
+The fixed ZIP byte port uses the existing request lifecycle
+and never exposes template bytes to the model or log. File snapshots follow the existing mode-derived
+authority: private immutable snapshots in allowed mode and reviewed snapshots where approval is
+required. Global template replacement, base-URL consequences and scheme-wide effects cannot be
+confirmed from partial configuration readbacks. Exact draft configuration never means publication;
+no alternative transport, approval store or replay owner is introduced.
+
+The next native directory/schema/maintenance/issue actions retain the same owners and append
+forward-only V76. Native role CAS, fixed named-user forms and scoped experimental requests are
+private transport choices, never model headers or alternate dispatch. Known actor and target
+identities are distinct. Existing formal rules judge actual schema/type/link impact; group and
+maintenance observations do not invent direct membership, complete populations or deployment.
+Only seven of the35 actions can confirm bounded configuration; twenty-eight remain unconfirmed.
+The existing identity-observation owner handles only exact documented permission/WebSudo401
+methods/paths after a current positive identity probe, preserving actual denial and no retry.
 
 HTTP acknowledgement is recorded before parsing a response or evaluating late cancellation.
+The fixed Jira request owners share one private admission wrapper over the existing bounded HTTP
+executor. Each actual HTTP attempt, including a GET retry, requires synchronous current admission.
+Local authority refusal, caller cancellation and the separately bounded phase deadline retain
+`effect-denied`, `cancelled` and `timeout`. Actual native acknowledgements and HTTP failures retain
+precedence over late cancellation; unexpected implementation errors propagate to existing diagnostics.
+The durable journal continues to decide effect uncertainty and replay refusal. Model guidance for a
+local refusal follows the recorded outcome, with uncertain effects taking precedence. Report readers
+use the same admission owner and retain unknown totals in both exports and result cards.
 A cancelled or denied catalog result retains its original closed envelope and null data;
 its separately validated, canonical journal observation is retained as `mutationOutcome`
 on the existing Chat exchange. The same projection reaches the live model continuation,
@@ -227,11 +277,14 @@ citations and conversation budgets remain owned by their existing paths.
 **A Jira Pod for a Coding run (owner decision 2026-10-30, #3907).** A Coding run can reach Jira
 through the same managed provider, host and relay, with no second host, policy layer or connector.
 The human picks one Pod explicitly in the Workbench composer (`jiraPodId` on the start request;
-none keeps today's behaviour). The pick is the run's Jira read grant: the nine read tools are
-allowed in all three modes. The five write tools (`create`, `edit`, `assign`, `comment`,
-`transition`) keep following the mode: Ask for approval and Supervised workspace ask through the
+none keeps today's behaviour). The pick is the run's Jira read grant: every read tool in
+[`JIRA_MANAGED_READ_TOOLS`](../../packages/keiko-contracts/src/jira-tool-fields.ts) is allowed in all
+three modes. Ordinary admitted write tools keep following the mode: Ask for approval and Supervised workspace ask through the
 existing approval channel, Full access is allowed inside the validated Authority Envelope. Hard
-denials stay mode-independent and fail closed with zero HTTP.
+denials stay mode-independent and fail closed with zero HTTP. Administration is a separate
+explicit composer opt-in, transmitted as `connectorScopes: ["issue-tracker.admin"]` and bound by
+the existing start confirmation. Absent opt-in grants no administration in any mode; legacy
+requests and selecting a Pod alone preserve that absence.
 
 The start resolves the Pod before the one-use start confirmation is consumed: it must be the
 caller's own (server principal) and ready, on a native `keiko-sidecar` run with the managed relay;
@@ -244,9 +297,10 @@ configuration digest. A registry server named `jira` is not admitted into such a
 definition is never written to the operator registry and carries no credential.
 
 `ConfiguredMcpConnections` is wrapped per run: every other server is served by the shared
-connections, `jira` by one managed host per Pod credential identity (descriptor drift, result
+connections, `jira` by a run-bound managed host under its current scope authority (descriptor drift, result
 validation, deadlines and `mcp.managed.lifecycle` are the host's), reached through
-`createMcpRelayEndpoint`. Every request and every effect re-checks that the Pod is still exactly
+`createMcpRelayEndpoint`. Discovery and every effect use the registered run envelope and the canonical tool-to-scope
+mapping. Every request also re-checks that the Pod is still exactly
 the credential the human chose; a replaced token, re-verification, deletion, unfinished custody
 work or another owner ends the binding (the relay capability is revoked, later calls perform no
 request). Writes pass the relay's existing durable mutation permit before dispatch; a write that
@@ -501,6 +555,24 @@ Catalog transport wrappers have a separate fixed depth allowance; each descripto
 all model arguments retain their original bounds and closed validation. Historical
 completed tool results retain their validated descriptor/projection snapshot privately
 in the existing Chat row; the public serializer omits that qualification metadata.
+Jira write calls likewise capture their immutable operation identity and contract digest before
+dispatch, privately beside the existing transcript. Exact approvals and late journal observations
+validate against that snapshot, including Full access calls without an approval view, so later
+registry revisions do not erase earlier receipts. Legacy rows without a snapshot retain
+their original digest validation. Neither form grants execution: the write owner requires the
+current registry binding and current authority before dispatch. Replacing a call's snapshot
+or digest is refused. Older builds do not understand the new private snapshot; reverting code
+requires a compatible forward repair or restoring the pre-update database backup, never dropping
+approval history to make an old reader accept it.
+
+Requirement-derived Jira writes also persist a private full source digest in a `write-prepared`
+transition before approval or effects. The exact action hash binds that digest beside the operation
+contract and original arguments; public tool-call arguments and transcript wire data remain unchanged.
+Source preparation belongs to the accepted turn and survives catalog selection within that turn.
+It cannot be replaced after preparation, and execution refuses a changed or unavailable source.
+Historical approvals and late receipts validate with their captured source digest, including Full
+access without an approval card. Missing historical source digests retain the earlier hash formula;
+they do not authorize a new traced execution.
 
 ## Centrally configured external MCP servers (#4081)
 
@@ -526,6 +598,86 @@ configured MCP tool's exact arguments privately; the relay joins only one matchi
 and rechecks the current native authority immediately before dispatch. The relay records an
 observed MCP success before forwarding it. A lost response, restart or new model call cannot
 create a second effect while that outcome remains unconfirmed.
+
+The local Coding Jira adapter also retains validated mutation results before relay delivery or
+recovery. A private permit callback captures the admitted descriptor, operation binding and the
+existing catalog compiler's projection once before dispatch. Successful and error results are
+written atomically as one started/settled exchange in the existing Coding History user message's
+tool transcript. No receipt table, journal phase or separate history format is added. The stored
+descriptor snapshot validates later reads without resolving the installed Jira registry. The
+original argument digest remains private beside that snapshot, so credential-floor redaction of
+the displayed arguments cannot detach the result from its native journal identity. Historical
+lookup selects only the exact invocation IDs in the bounded, owned transcript. The ordinary Jira
+result cards consume these exchanges on reload. Their mutation state is projected
+from the same native journal: a stored successful payload alone never confirms delivery or clears
+an uncertainty barrier.
+Before issuing that permit, the native owner reserves the existing transcript owner's worst-case
+exchange bytes and one slot against actual stored occupancy plus concurrent outstanding captures.
+Occupancy and capture pass through the Coding History owner's private run-and-expected-turn-bound
+port; the generic Chat APIs remain unable to read or modify Coding messages. Both operations
+recheck the same stored user-message ownership, and unreadable non-null transcripts refuse.
+It uses the same transcript limits and reservation calculation as Chat. Capture or terminal permit
+settlement releases the reservation. Known lack of storage capacity therefore refuses before any
+native write; an unpredictable storage failure after a response retains the existing unknown-effect
+recovery semantics.
+
+Validated local Jira reads use the same immutable descriptor snapshot, capacity reservation and
+run-and-turn-bound transcript port. A private per-call read capture writes success, provider failure
+or the closed local scope refusal atomically before delivery. It creates no mutation journal row,
+acknowledgement or mutation outcome, and records `effectStarted: false`. Read capture failure
+refuses delivery without creating a write recovery barrier. The reservation is released when the
+result is durable or the read finishes; cancellation, a changed accepted turn or an already released
+capture cannot append a late result. Read history retains the admitted schema without consulting
+the current registry, including result paging and unknown totals. Chat and Coding share the existing
+Jira result-to-catalog page projection. The existing body-free transcript event records capture;
+provider bodies and report content are never added to the Activity Log. Technical relay failures use a separate private read callback and the existing closed failure vocabulary: scope refusal remains denied, technical failure is failed, and deadline/cancellation retain their native catalog classes. A validated provider result or already persisted scope refusal takes precedence over a later relay error. Failed persistence preserves the primary closed failure and both internal causes, releases the reservation and creates no mutation recovery barrier.
+
+Protected Jira input reuses that same invocation and History ownership. The
+[Coding input owner](../../packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts) retains
+only bounded pending metadata for the actual run/call lifetime. After schema admission and the
+existing mutation check-only path where applicable, it persists a public HumanInput view through the existing
+[transcript owner](../../packages/keiko-server/src/store/chatToolTranscript.ts), bound to the real
+stored user message and turn. This is pending history, not a completed tool result, mutation ACK
+or recovery settlement. No-op or refused calls do not request protected input. No synthetic Chat,
+separate question store or OpenCode question carries secret values.
+
+At submission and consumption, the existing current-input callback checks the active task/run,
+call identity, canonical original arguments, Pod generation and current Authority Envelope. A
+replaced/stopped invocation or changed authority cannot consume a prior selection. The existing
+vault/custody owner holds protected values privately and consumes the current one-use claim at
+actual dispatch. Public input revision and pending status may survive reload; passwords, licenses,
+cookies and human input values do not enter History, catalog results, receipts or Activity Log.
+The input supplies a missing secret or factual attestation; it never supplies connector authority
+or replaces the existing action approval. Allowed mode remains allowed within its validated
+envelope, without a new mandatory approval.
+
+Native password-policy and license-validation POSTs remain reads; license validation additionally
+requires explicit administration and high-risk admission. They produce bounded acceptance/count
+facts without mutation journal rows. Private account/session writes retain the existing journal:
+login can confirm only same-actor cookie proof, profile updates only exact independent metadata,
+and password/logout/websudo ACKs remain unconfirmed. Human-attested anonymization unlock retains
+the exact task/owner review but no native CAS, and therefore never claims independently confirmed
+shutdown or global unlock completion. Forward-only V77 adds the closed writes without changing
+historical journal phases or turning these POST observations into writes.
+
+The private session path is a credential capability, not a connected-file grant. Avatar upload
+still needs an actual authorized immutable image source and content admission. A Coding task or
+workspace path alone does not supply that source, and an uncomposed source refuses before effect.
+The 439 mapped native identities remain constrained source coverage; all runtime availability and
+AC1–AC9 qualification remain open. Pending-input/history source regressions have not been executed
+and this ADR does not claim end-to-end consumer or current-head acceptance.
+
+Only the server-owned local Jira connection can supply this callback; an external server's name,
+arguments or metadata cannot enable it. An error result never acknowledges a mutation. A validated
+preflight error can remain readable without revoking the run only when the actual native dispatch
+gate never opened. After dispatch, the existing failure/recovery path remains authoritative; the
+receipt is already durable even if revocation prevents its response reaching the runtime.
+For an admitted known Jira write, a local connector-scope refusal is retained under the same
+snapshot as `denied/effect-denied` with no provider data. It is not a native Jira permission
+response; the journal still distinguishes an unopened gate from a possibly dispatched change.
+If scope loss also carries a validated provider receipt, that receipt takes precedence over the
+data-free local refusal. Known resource identities remain durable while the same scope error
+still prevents delivery, acknowledgement or replay.
 
 Confirmation comes from the existing committed producer-history tool settlement, after content
 normalization and the containing Code Mode program finish. The earlier `execute.after` hook is
@@ -590,7 +742,8 @@ points; they refine D5 and the section above, they do not widen any authority.
   permit without `dispatch` keeps the old behaviour: its record was already dispatched, so the relay
   never claims "no effect" for it. Deferral needs a connection that owns such a gate and says so
   (`ExternalMcpConnection.dispatchGate`, set by `ExternalClient` and forwarded by the configured
-  connection wrapper). For any other connection, such as the Coding Jira Pod host connection, the
+  connection wrapper). The local Coding Jira connection owns the gate immediately before its first
+  native write request; metadata and preflight reads do not dispatch a mutation. For any other connection, the
   relay dispatches the record before the call starts and refuses the call when dispatch is refused,
   so an effect can never exist without a dispatched record behind it. The price is precision, not
   safety: such a connection's later effect-free refusal settles the already dispatched record as

@@ -44,6 +44,8 @@ const FINDING_MESSAGES = {
 type Work = "idle" | "loading" | "proposing";
 /** Each proposal run is a generation, so a new proposal never inherits an earlier draft's edits. */
 interface Proposals {
+  readonly scope: RequestScope;
+  readonly correlationId: string;
   readonly generation: number;
   readonly items: readonly JiraTemplateProposal[];
 }
@@ -126,14 +128,28 @@ function useTemplateRequest(scope: RequestScope): Pick<Tools, "work" | "failed">
 /** A proposal needs a Pod; each result is recorded against the run that made it. */
 function useTemplateProposals(run: Run, scope: RequestScope): Pick<Tools, "propose" | "proposals"> {
   const [proposals, setProposals] = useState<Proposals>();
+  const retired = useRef<Proposals | undefined>(undefined);
+  useEffect(() => {
+    if (proposals === undefined || proposals.scope === scope || retired.current === proposals)
+      return;
+    retired.current = proposals;
+    reportClientDiagnostic("Jira template proposal superseded.", {
+      correlationId: proposals.correlationId,
+    });
+  }, [proposals, scope]);
   return {
-    proposals,
+    proposals: proposals?.scope === scope ? proposals : undefined,
     propose: (projectKey) =>
       run("proposing", async (isCurrent, correlationId) => {
         if (scope.podId === undefined) return;
         const items = await proposeJiraTemplates(scope.podId, projectKey, correlationId);
         if (!isCurrent()) return;
-        setProposals((current) => ({ generation: (current?.generation ?? 0) + 1, items }));
+        setProposals((current) => ({
+          scope,
+          correlationId,
+          generation: (current?.generation ?? 0) + 1,
+          items,
+        }));
       }),
   };
 }

@@ -5,7 +5,7 @@ import {
   reserveCurrentKnowledgeChatAuthority,
 } from "./knowledge-chat-authority.js";
 import type { KnowledgeChatTurnOptions } from "./knowledge-chat-turn.js";
-import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
+import { admitChatToolModelCall } from "./chat-tool-approvals.js";
 import { jiraTurnGuidance } from "./atlassian/jiraOpenDraft.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -15,8 +15,9 @@ import type { ChatMessage } from "./store/index.js";
 import {
   bindChatToolCatalog,
   ChatToolTurn,
-  chatModelSupportsTools,
+  chatModelToolReadiness,
   type ChatToolTurnPort,
+  type ChatToolTurnOptions,
 } from "./chat-tool-turn.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -31,6 +32,7 @@ import { prepareAcceptedMcpChatAuthority } from "./mcp/mcpChatAuthority.js";
 import {
   createJiraChatTurnReviewPorts,
   observeJiraChatMutation,
+  jiraSourcePreparationForTurn,
   type JiraChatTurnOptions,
 } from "./atlassian/jiraChatToolTurn.js";
 import { openTraceSession } from "./requirement-trace.js";
@@ -40,11 +42,18 @@ import {
   type McpChatTurnOptions,
 } from "./mcp/mcpChatToolTurn.js";
 import type { McpChatCatalog } from "./mcp/mcpChatCatalogRuntime.js";
-import type { JiraChatCatalogContext } from "./atlassian/jiraChatCatalogConsumer.js";
+import {
+  createJiraChatCatalogConsumerPort,
+  type JiraChatCatalogContext,
+} from "./atlassian/jiraChatCatalogConsumer.js";
+import type { JiraChatSourcePreparation } from "./atlassian/jiraChatRequirementBinding.js";
+import { createJiraChatHumanInput } from "./atlassian/jiraChatHumanInput.js";
+import { createJiraPrivateLifetime } from "./atlassian/httpPrivateIdentity.js";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   combineChatCatalogs,
   chatSourcesAuthorityDigest,
-  chatSourcesConsumerPort,
+  createChatSourcesConsumerPort,
   createChatSourcesAdmission,
   currentChatSources,
   type ChatSourcesConsumer,
@@ -96,62 +105,190 @@ function sourceContext(options: Options): ChatSourcesContext {
   };
 }
 
+function selectedSourceCatalog(
+  deps: UiHandlerDeps,
+  chatId: string,
+  mcp: McpChatCatalog,
+  bind: (
+    managed: ReturnType<typeof combineChatCatalogs>,
+  ) => ChatToolTurnOptions<ChatSourcesContext>["bind"],
+): NonNullable<ChatToolTurnOptions<ChatSourcesContext>["selectTools"]> {
+  return async (identities) => {
+    requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
+    const selected = await deps.jiraChatCatalog.select(identities, {
+      knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(chatId)).length > 0,
+    });
+    try {
+      const combined = combineChatCatalogs(selected, mcp);
+      return { managed: combined, bind: bind(combined), close: selected.close };
+    } catch (error) {
+      await selected.close();
+      throw error;
+    }
+  };
+}
+
+function sourcePreparationFor(options: Options): {
+  readonly initialContext: ChatSourcesContext;
+  readonly sourcePreparation: JiraChatSourcePreparation | undefined;
+  readonly humanInput: ReturnType<typeof createJiraChatHumanInput> | undefined;
+  readonly consumerPort: ReturnType<typeof createChatSourcesConsumerPort>;
+} {
+  const baseContext = sourceContext(options);
+  const humanInput =
+    options.primary.kind === "jira"
+      ? createJiraChatHumanInput(options.primary.options, baseContext.jira)
+      : undefined;
+  const initialContext: ChatSourcesContext =
+    humanInput === undefined
+      ? baseContext
+      : {
+          ...baseContext,
+          jira: {
+            ...baseContext.jira,
+            privateLifetime: createJiraPrivateLifetime(
+              baseContext.jira.signal,
+              options.correlationId,
+            ),
+            humanInputFor: (operation, digest) => humanInput.selectionFor(operation, digest),
+            activeHumanInput: () => humanInput.currentSelection(),
+          },
+        };
+  const sourcePreparation =
+    options.primary.kind === "jira"
+      ? jiraSourcePreparationForTurn(options.primary.options, initialContext.jira)
+      : undefined;
+  return {
+    initialContext,
+    sourcePreparation,
+    humanInput,
+    consumerPort: createChatSourcesConsumerPort(
+      createJiraChatCatalogConsumerPort(
+        sourcePreparation?.sourceDigestFor,
+        humanInput === undefined
+          ? undefined
+          : (actionId, digest): string | undefined => humanInput.revisionFor(actionId, digest),
+      ),
+    ),
+  };
+}
+
+function sourceInvocationPorts(
+  source: JiraChatSourcePreparation | undefined,
+  humanInput: ReturnType<typeof createJiraChatHumanInput> | undefined,
+  context: ChatSourcesContext,
+): Pick<
+  ChatToolTurnOptions<ChatSourcesContext>,
+  "prepareInvocation" | "finalizeInvocation" | "finalizeTurn"
+> {
+  if (source === undefined) return {};
+  return {
+    prepareInvocation: async (
+      call,
+      actionId,
+      ports,
+    ): Promise<{ readonly sourceDigest?: string } | undefined> => {
+      const prepared = await source.prepareInvocation(call, actionId);
+      await humanInput?.prepare(call, actionId, ports);
+      return prepared;
+    },
+    finalizeInvocation: (actionId): void => {
+      humanInput?.finalize(actionId);
+    },
+    finalizeTurn: async (): Promise<void> => {
+      humanInput?.finish();
+      await context.jira.privateLifetime?.finish();
+    },
+  };
+}
+
+function sourceReviewPorts(
+  primary: Primary,
+  sourcePreparation: JiraChatSourcePreparation | undefined,
+  access: Parameters<typeof createJiraChatTurnReviewPorts>[1],
+): Pick<Parameters<typeof createChatSourcesAdmission>[0], "jiraReview"> {
+  return primary.kind === "jira"
+    ? {
+        jiraReview: {
+          ...createJiraChatTurnReviewPorts(primary.options, access),
+          ...(sourcePreparation === undefined ? {} : { sourcePreparation }),
+        },
+      }
+    : {};
+}
+
+function sourceSelectionPorts(
+  options: Options,
+  bind: (
+    selected: ReturnType<typeof combineChatCatalogs>,
+  ) => ChatToolTurnOptions<ChatSourcesContext>["bind"],
+): Pick<ChatToolTurnOptions<ChatSourcesContext>, "guidance" | "selectTools"> {
+  if (options.primary.kind !== "jira") return {};
+  const { deps, message, correlationId, mcp } = options;
+  return {
+    guidance: jiraTurnGuidance(
+      deps.jiraDraftStore,
+      message.chatId,
+      deps.activityLog,
+      correlationId,
+    ),
+    selectTools: selectedSourceCatalog(deps, message.chatId, mcp.managed, bind),
+  };
+}
+
 /** One binder, harness and model loop; source adapters keep their existing consent and effect owners. */
 class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
+  private readonly sourcePreparation: JiraChatSourcePreparation | undefined;
+  private readonly humanInput: ReturnType<typeof createJiraChatHumanInput> | undefined;
   constructor(private readonly sourceOptions: Options) {
     const { deps, message, correlationId, primary, mcp } = sourceOptions;
     const managed = combineChatCatalogs(primary.options.managed, mcp.managed);
-    super({
-      deps,
-      message,
-      correlationId,
-      managed,
-      context: sourceContext(sourceOptions),
-      budget: primary.options.authority.envelope.budget,
-      ...(primary.kind === "jira"
-        ? {
-            guidance: jiraTurnGuidance(
-              deps.jiraDraftStore,
-              message.chatId,
-              deps.activityLog,
-              correlationId,
-            ),
-          }
-        : {}),
-      bind: (context, budgetPort) =>
+    const { initialContext, sourcePreparation, humanInput, consumerPort } =
+      sourcePreparationFor(sourceOptions);
+    const bind =
+      (selected: typeof managed): ChatToolTurnOptions<ChatSourcesContext>["bind"] =>
+      (context, budgetPort, invocationRegistry) =>
         bindChatToolCatalog<ChatSourcesConsumer>({
           deps,
-          managed,
+          managed: selected,
           context: context,
           budgetPort,
-          consumerPort: chatSourcesConsumerPort,
+          invocationRegistry,
+          consumerPort,
           admission: createChatSourcesAdmission({
             deps,
             context: () => context,
             tools: mcp.managed.tools,
             ...this.consentPorts(),
-            ...(primary.kind === "jira"
-              ? {
-                  jiraReview: createJiraChatTurnReviewPorts(primary.options, {
-                    writeExchange: (actionId) => this.writeExchange(actionId),
-                    reviewableWrite: (action) => this.reviewableWrite(action),
-                    readAllowed: () => !context.signal.aborted && currentChatSources(deps, context),
-                  }),
-                }
-              : {}),
+            ...sourceReviewPorts(primary, sourcePreparation, {
+              writeExchange: (actionId) => this.writeExchange(actionId),
+              reviewableWrite: (action) => this.reviewableWrite(action),
+              readAllowed: () => !context.signal.aborted && currentChatSources(deps, context),
+            }),
           }),
-        }),
+        });
+    super({
+      deps,
+      message,
+      correlationId,
+      managed,
+      context: initialContext,
+      budget: primary.options.authority.envelope.budget,
+      ...sourceInvocationPorts(sourcePreparation, humanInput, initialContext),
+      ...sourceSelectionPorts(sourceOptions, bind),
+      bind: bind(managed),
     });
+    this.sourcePreparation = sourcePreparation;
+    this.humanInput = humanInput;
   }
-  protected override reserveAuthorityPrompt(promptTokens: number): boolean {
+  protected override admitAuthorityModelCall(): boolean {
     return (
       currentChatSources(this.sourceOptions.deps, this.context) &&
-      reserveChatToolPrompt(
+      admitChatToolModelCall(
         this.sourceOptions.primary.options,
         this.sourceOptions.primary.kind === "knowledge"
           ? reserveCurrentKnowledgeChatAuthority
           : reserveCurrentJiraChatAuthority,
-        promptTokens,
       )
     );
   }
@@ -160,9 +297,17 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
     identity: string,
     result: ToolResultEnvelope,
   ): ChatToolExchange["mutationOutcome"] {
+    const argumentsDigest = sha256Hex(canonicalise(call.arguments));
     return (
       (this.sourceOptions.primary.kind === "jira"
-        ? observeJiraChatMutation(this.sourceOptions.primary.options, call, identity, result)
+        ? observeJiraChatMutation(
+            this.sourceOptions.primary.options,
+            call,
+            identity,
+            result,
+            this.sourcePreparation?.sourceDigestFor(identity, argumentsDigest),
+            this.humanInput?.revisionFor(identity, argumentsDigest),
+          )
         : undefined) ?? observeMcpChatMutation(this.sourceOptions.mcp, call, identity, result)
     );
   }
@@ -227,10 +372,17 @@ export async function createChatSourcesToolTurn(
   primaryKind: "jira" | "knowledge" = "jira",
 ): Promise<ChatToolTurnPort> {
   const correlation = correlationIdOrUnknown(correlationId);
-  if (!chatModelSupportsTools(deps, modelId)) {
+  const readinessFailure = chatModelToolReadiness(deps, modelId);
+  if (readinessFailure !== undefined) {
     const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlation, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
+    logConversationAdmission(
+      "observation-unavailable",
+      correlation,
+      generation,
+      generation,
+      readinessFailure,
+    );
+    throw new ConversationModelNotReadyError("tool-calling", readinessFailure);
   }
   const jira = await (primaryKind === "knowledge"
     ? deps.knowledgeChatCatalog?.get()

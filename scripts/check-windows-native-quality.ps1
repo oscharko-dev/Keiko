@@ -377,11 +377,73 @@ process.exit(41);
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
-  $supervisorObject = Join-Path $scratch "keiko-runtime-supervisor.obj"
-  & cl.exe @c11Flags $productionMTFlag "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor /link @productionLinkFlags
+  $gatewaySources = @("gateway_environment", "gateway_firewall", "gateway_grants", "gateway_inbound", "gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
-  # The default invocation validates policy inputs only; it never opens WFP or changes filters.
+  # #4068 W1/W11: install rules that need no administrator rights. The installed lifecycle itself
+  # runs on the disposable runner in scripts/testing/test-windows-gateway-scm.ps1.
+  $installTest = Join-Path (Split-Path $supervisor) "gateway_install.test.c"
+  $installTestOut = Join-Path $scratch "gateway-install-test.exe"
+  $installScratch = Join-Path $scratch "install-test"
+  New-Item -ItemType Directory -Force -Path $installScratch | Out-Null
+  $installSources = @("gateway_install", "gateway_installed", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$installScratch\" "/Fe:$installTestOut" @installSources $installTest /link advapi32.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway install test analysis failed" }
+  & $installTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway install rules failed" }
+
+  # #4068: the confined tree's filesystem grants (frame rules, then tree and worktree-capability
+  # grants on directories this test owns). Needs no administrator rights.
+  $grantsTest = Join-Path (Split-Path $supervisor) "gateway_grants.test.c"
+  $grantsTestOut = Join-Path $scratch "gateway-grants-test.exe"
+  $grantsScratch = Join-Path $scratch "grants-test"
+  New-Item -ItemType Directory -Force -Path $grantsScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$grantsScratch\" "/Fe:$grantsTestOut" (Join-Path (Split-Path $supervisor) "gateway_grants.c") $grantsTest /link advapi32.lib userenv.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway grants test analysis failed" }
+  & $grantsTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway grants rules failed" }
+
+  # #4068 W1 (proposal C): the user environment key is closed while a confined run lives and
+  # restored by the last one, on fixture keys this test owns. Needs no administrator rights.
+  $environmentTest = Join-Path (Split-Path $supervisor) "gateway_environment.test.c"
+  $environmentTestOut = Join-Path $scratch "gateway-environment-test.exe"
+  $environmentScratch = Join-Path $scratch "environment-test"
+  New-Item -ItemType Directory -Force -Path $environmentScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$environmentScratch\" "/Fe:$environmentTestOut" (Join-Path (Split-Path $supervisor) "gateway_environment.c") $environmentTest /link advapi32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway environment test analysis failed" }
+  & $environmentTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway environment rules failed" }
+
+  # #4068 W1/W11: the loopback-exemption list rules (keep foreign entries, never duplicate, remove
+  # only the run's SID, no rewrite of an unchanged list) against an in-memory configuration list.
+  $loopbackTest = Join-Path (Split-Path $supervisor) "gateway_loopback.test.c"
+  $loopbackTestOut = Join-Path $scratch "gateway-loopback-test.exe"
+  $loopbackScratch = Join-Path $scratch "loopback-test"
+  New-Item -ItemType Directory -Force -Path $loopbackScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$loopbackScratch\" "/Fe:$loopbackTestOut" (Join-Path (Split-Path $supervisor) "gateway_loopback.c") $loopbackTest /link advapi32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway loopback-exemption test analysis failed" }
+  & $loopbackTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway loopback-exemption rules failed" }
+
+  # #4068 W1: what a per-tree AppContainer root is denied, against an unconfined control.
+  $boundaryTest = Join-Path (Split-Path $supervisor) "runtime_boundary.test.c"
+  $boundaryTestOut = Join-Path $scratch "runtime-boundary-test.exe"
+  $boundaryScratch = Join-Path $scratch "boundary-test"
+  New-Item -ItemType Directory -Force -Path $boundaryScratch | Out-Null
+  # The B1 section applies the production grants from a real `KGG1` frame, and the confined probe
+  # runs with the production environment guard, so it links both modules.
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$boundaryScratch\" "/Fe:$boundaryTestOut" (Join-Path (Split-Path $supervisor) "gateway_environment.c") (Join-Path (Split-Path $supervisor) "gateway_grants.c") $boundaryTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC runtime boundary test analysis failed" }
+  & $boundaryTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows runtime boundary proof failed" }
+
+  # #4068 W2/W5: compiling a Job Object supervisor does not prove descendant cleanup. Exercise
+  # the exact helper built above, including detached children and loss of the owning control pipe.
+  node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs") --helper $supervisorOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows runtime-supervisor process-tree qualification failed" }
+
+  # Default mode validates job/policy inputs and authenticates real local pipe clients without opening WFP.
   node (Join-Path $root "scripts/testing/test-windows-gateway-filters.mjs")
   if ($LASTEXITCODE -ne 0) { throw "Windows gateway policy validation failed" }
 
@@ -412,6 +474,9 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
 
   node (Join-Path $root "native/secure-workspace-read/test-protocol.mjs")
   if ($LASTEXITCODE -ne 0) { throw "secure-workspace-read boundary qualification failed" }
+
+  node (Join-Path $root "scripts/testing/test-secure-read-windows-paths.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "secure-workspace-read Windows path qualification failed" }
 
   node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs")
   if ($LASTEXITCODE -ne 0) { throw "runtime-supervisor Job Object qualification failed" }

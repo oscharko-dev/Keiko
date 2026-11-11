@@ -218,6 +218,7 @@ describe("Chat memory with the standing profile (#4228)", () => {
       registry: createRunRegistry(),
       store: createInMemoryUiStore(),
       memoryVault: store,
+      modelPortFactory: (): undefined => undefined,
     };
   }
 

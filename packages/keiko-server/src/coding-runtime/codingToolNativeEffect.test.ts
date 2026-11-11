@@ -276,7 +276,7 @@ describe("native edits charge the run's patch budget before the runtime writes (
       nowIso: context.nowIso,
       delegationId: "independent-probe",
       idempotencyKey: "independent-probe",
-      usage: { toolCalls: 0, patchBytes, promptTokens: 0 },
+      usage: { toolCalls: 0, patchBytes },
     }).ok;
   };
 

@@ -1164,6 +1164,7 @@ function ChatBubbleImpl({
         />
         <JiraChatTools
           transcript={message.toolTranscript}
+          messageId={message.id}
           turnState={message.turnState}
           chatId={message.chatId}
           showPending={isUser && message.turnState === "pending"}
@@ -3715,6 +3716,14 @@ function ComposerCoreImpl({
     },
     [activeChat, draft, replaceChat, repositoryMention, setDraft, t, taRef],
   );
+  const pickRepositoryResult = useCallback(
+    (result: FilesSearchResult): void => {
+      insertRepositoryFileReference(result).catch((error: unknown) => {
+        setRepositoryPickError(formatRepositoryFocusError(error, t));
+      });
+    },
+    [insertRepositoryFileReference, t],
+  );
 
   const removeRepositoryReference = useCallback(
     (id: string): void => {
@@ -3756,9 +3765,7 @@ function ComposerCoreImpl({
           highlightedIndex: repositoryHighlightedIndex,
           setHighlightedIndex: setRepositoryHighlightedIndex,
           closeMention: () => setRepositoryMention(null),
-          pickResult: (picked) => {
-            void insertRepositoryFileReference(picked);
-          },
+          pickResult: pickRepositoryResult,
         });
         if (handled) return;
       }
@@ -3767,7 +3774,7 @@ function ComposerCoreImpl({
       }
     },
     [
-      insertRepositoryFileReference,
+      pickRepositoryResult,
       repositoryHighlightedIndex,
       repositoryPickerOpen,
       repositorySearch.results,
@@ -3859,9 +3866,7 @@ function ComposerCoreImpl({
                   pickingPath={repositoryPickingPath}
                   highlightedIndex={repositoryHighlightedIndex}
                   pickError={repositoryPickError}
-                  onPick={(result) => {
-                    void insertRepositoryFileReference(result);
-                  }}
+                  onPick={pickRepositoryResult}
                   onClose={() => setRepositoryMention(null)}
                 />
               ) : null}
@@ -5018,7 +5023,7 @@ function MemoryActionCard({
       if (busy) return;
       setBusy(true);
       setError(undefined);
-      void actionCallback()
+      actionCallback()
         .then(() => {
           onActionSettled(successMessage);
         })

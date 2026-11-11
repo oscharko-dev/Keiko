@@ -6,6 +6,18 @@ import { clearTimeout, setTimeout } from "node:timers";
 const DEFAULT_PORT = 42186;
 const VECTOR_DIMENSIONS = 8;
 const MAX_BODY_BYTES = 1_000_000;
+// G4 (#4321): keep the real local indexing job observable in the overview. Ordinary
+// qualification retains its immediate deterministic embedding response.
+const rawEmbeddingDelay = process.env.KEIKO_LK_E2E_EMBEDDING_DELAY_MS;
+const EMBEDDING_DELAY_MS = Number(rawEmbeddingDelay ?? "0");
+if (
+  (rawEmbeddingDelay !== undefined && !/^(?:0|[1-9]\d*)$/u.test(rawEmbeddingDelay)) ||
+  !Number.isSafeInteger(EMBEDDING_DELAY_MS) ||
+  EMBEDDING_DELAY_MS < 0 ||
+  EMBEDDING_DELAY_MS > 5_000
+) {
+  throw new TypeError("KEIKO_LK_E2E_EMBEDDING_DELAY_MS must be an integer from 0 to 5000");
+}
 
 function jsonResponse(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -48,6 +60,9 @@ async function handleEmbeddings(req, res) {
   const body = await readJsonBody(req);
   const rawInput = body.input;
   const inputs = Array.isArray(rawInput) ? rawInput : [rawInput];
+  if (EMBEDDING_DELAY_MS > 0) {
+    await new Promise((resolve) => setTimeout(resolve, EMBEDDING_DELAY_MS));
+  }
   jsonResponse(res, 200, {
     object: "list",
     model: typeof body.model === "string" ? body.model : "e2e-embedding-model",

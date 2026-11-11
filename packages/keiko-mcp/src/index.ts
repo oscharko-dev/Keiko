@@ -1,5 +1,5 @@
 export { createManagedMcpHost } from "./host.js";
-export { ManagedMcpError, noEffectError } from "./definitions.js";
+export { ManagedMcpError, MANAGED_MCP_TOOLS_MAX, noEffectError } from "./definitions.js";
 export { connectExternalMcp } from "./external-client.js";
 export { supportsOwnedMcpStdio, assertMcpNativeStdioOwner } from "./owned-stdio.js";
 export type { McpNativeStdioOwner } from "./owned-stdio.js";

@@ -1,4 +1,130 @@
 import {
+  jiraAnonymizationUnlockDeclarationForTool,
+  type JIRA_ANONYMIZATION_UNLOCK_DEFINITIONS,
+} from "./jiraAnonymizationUnlockDescriptors.js";
+import {
+  jiraAvatarMutationDeclarationForTool,
+  type JIRA_AVATAR_WRITE_DEFINITIONS,
+} from "./jiraAvatarMutationDescriptors.js";
+import {
+  jiraIdentityMutationDeclarationForTool,
+  type JIRA_IDENTITY_WRITE_DEFINITIONS,
+} from "./jiraIdentityMutationDescriptors.js";
+import {
+  jiraIssueLifecycleMutationDeclarationForTool,
+  type JIRA_ISSUE_LIFECYCLE_WRITE_DEFINITIONS,
+} from "./jiraIssueLifecycleMutationDescriptors.js";
+import {
+  jiraProjectLifecycleMutationDeclarationForTool,
+  type JIRA_PROJECT_LIFECYCLE_WRITE_DEFINITIONS,
+} from "./jiraProjectLifecycleMutationDescriptors.js";
+import {
+  jiraPrivateAccountDeclarationForTool,
+  type JIRA_PRIVATE_ACCOUNT_WRITE_DEFINITIONS,
+} from "./jiraPrivateAccountDescriptors.js";
+import { jiraReciprocalLinkDeclarationForTool } from "./jiraReciprocalLinkDescriptors.js";
+import { jiraBulkCreateDeclarationForTool } from "./jiraBulkCreateDescriptors.js";
+import {
+  jiraDirectoryAccessMutationDeclarationForTool,
+  type JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS,
+} from "./jiraDirectoryAccessMutationDescriptors.js";
+import {
+  jiraMaintenanceMutationDeclarationForTool,
+  type JIRA_MAINTENANCE_WRITE_DEFINITIONS,
+} from "./jiraMaintenanceMutationDescriptors.js";
+import {
+  jiraSchemaMutationDeclarationForTool,
+  type JIRA_SCHEMA_WRITE_DEFINITIONS,
+} from "./jiraSchemaMutationDescriptors.js";
+import {
+  jiraGroupMutationDeclarationForTool,
+  type JIRA_GROUP_WRITE_DEFINITIONS,
+} from "./jiraGroupMutationDescriptors.js";
+import {
+  jiraIssueActionMutationDeclarationForTool,
+  type JIRA_ISSUE_ACTION_WRITE_DEFINITIONS,
+} from "./jiraIssueActionMutationDescriptors.js";
+import {
+  jiraOptionSchemeMutationDeclarationForTool,
+  type JIRA_OPTION_SCHEME_WRITE_DEFINITIONS,
+} from "./jiraOptionSchemeMutationDescriptors.js";
+import {
+  jiraWorkflowSchemeMutationDeclarationForTool,
+  type JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS,
+} from "./jiraWorkflowSchemeMutationDescriptors.js";
+import {
+  jiraInstanceSettingMutationDeclarationForTool,
+  type JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS,
+} from "./jiraInstanceSettingMutationDescriptors.js";
+import {
+  jiraEmailTemplateDeclarationForTool,
+  type JIRA_EMAIL_TEMPLATE_DEFINITIONS,
+} from "./jiraEmailTemplateDescriptors.js";
+import {
+  jiraPermissionSchemeMutationDeclarationForTool,
+  type JIRA_PERMISSION_SCHEME_WRITE_DEFINITIONS,
+} from "./jiraPermissionSchemeMutationDescriptors.js";
+import {
+  jiraRoleMutationDeclarationForTool,
+  type JIRA_ROLE_WRITE_DEFINITIONS,
+} from "./jiraRoleMutationDescriptors.js";
+import {
+  jiraVersionLinkMutationDeclarationForTool,
+  type JIRA_VERSION_LINK_WRITE_DEFINITIONS,
+} from "./jiraVersionLinkMutationDescriptors.js";
+import {
+  jiraProjectCategoryMutationDeclarationForTool,
+  type JIRA_PROJECT_CATEGORY_WRITE_DEFINITIONS,
+} from "./jiraProjectCategoryMutationDescriptors.js";
+import {
+  jiraAgilePlanningDeclarationForTool,
+  type JIRA_AGILE_PLANNING_WRITE_DEFINITIONS,
+} from "./jiraAgilePlanningDescriptors.js";
+import {
+  jiraSprintLifecycleDeclarationForTool,
+  type JIRA_SPRINT_LIFECYCLE_WRITE_DEFINITIONS,
+} from "./jiraSprintLifecycleDescriptors.js";
+import {
+  jiraScreenConfigurationDeclarationForTool,
+  type JIRA_SCREEN_CONFIGURATION_WRITE_DEFINITIONS,
+} from "./jiraScreenConfigurationDescriptors.js";
+import {
+  jiraBoardConfigurationMutationDeclarationForTool,
+  type JIRA_BOARD_CONFIGURATION_WRITE_DEFINITIONS,
+} from "./jiraBoardConfigurationMutationDescriptors.js";
+import {
+  jiraReleaseLifecycleDeclarationForTool,
+  type JIRA_RELEASE_LIFECYCLE_WRITE_DEFINITIONS,
+} from "./jiraReleaseLifecycleDescriptors.js";
+import {
+  jiraLinkMutationDeclarationForTool,
+  type JIRA_LINK_WRITE_DEFINITIONS,
+} from "./jiraLinkMutationDescriptors.js";
+import {
+  jiraSavedConfigurationMutationDeclarationForTool,
+  type JIRA_SAVED_CONFIGURATION_WRITE_DEFINITIONS,
+} from "./jiraSavedConfigurationMutationDescriptors.js";
+import {
+  jiraEntityPropertyMutationDeclarationForTool,
+  type JIRA_ENTITY_PROPERTY_WRITE_DEFINITIONS,
+} from "./jiraEntityPropertyMutationDescriptors.js";
+import {
+  jiraMonitoringDeclarationForTool,
+  type JIRA_MONITORING_WRITE_DEFINITIONS,
+} from "./jiraMonitoringDescriptors.js";
+import {
+  jiraScreenTabDeclarationForTool,
+  type JIRA_SCREEN_TAB_WRITE_DEFINITIONS,
+} from "./jiraScreenTabDescriptors.js";
+import {
+  jiraParticipationDeclarationForTool,
+  type JIRA_PARTICIPATION_WRITE_DEFINITIONS,
+} from "./jiraParticipationDescriptors.js";
+import {
+  jiraDeletionDeclarationForTool,
+  type JIRA_DELETION_DEFINITIONS,
+} from "./jiraDeletionDescriptors.js";
+import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,
   JIRA_ATTACHMENT_SOURCE_KINDS,
@@ -24,14 +150,28 @@ import {
   createToolDescriptor,
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { object, text } from "./jiraManagedSchemas.js";
+import { identifier, moduleKey, object, text } from "./jiraManagedSchemas.js";
 import {
   JIRA_ISSUE_LINKS_MAX,
   JIRA_METADATA_MAX_UPDATES,
   JIRA_REQUIREMENT_IDS_MAX,
+  JIRA_PROJECT_LEAD_MAX_CHARS,
+  JIRA_PROJECT_URL_MAX_CHARS,
 } from "@oscharko-dev/keiko-connectors";
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
+import {
+  jiraAgileDeclarationForTool,
+  type JIRA_AGILE_WRITE_DEFINITIONS,
+} from "./jiraAgileDescriptors.js";
+import {
+  jiraIssueCollaborationDeclarationForTool,
+  type JIRA_ISSUE_COLLABORATION_WRITE_DEFINITIONS,
+} from "./jiraIssueCollaborationDescriptors.js";
+import {
+  jiraProjectStructureDeclarationForTool,
+  type JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS,
+} from "./jiraProjectStructureDescriptors.js";
 
 /** Conjunction preserves the native lowercase UUID grammar within the safe schema dialect. */
 export const JIRA_DRAFT_ID_SCHEMA = { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" };
@@ -41,6 +181,8 @@ const REQUIREMENT_IDS = {
   type: "array",
   maxItems: JIRA_REQUIREMENT_IDS_MAX,
   items: text(JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
+  description:
+    "IDs of the Knowledge requirements this issue implements, as knowledge.requirements returns them. Required while the Chat holds requirements; Keiko adds their source trace and acceptance criteria.",
 };
 const TRACE_RESULT = object({
   labelsApplied: { type: "boolean" },
@@ -65,7 +207,7 @@ export const REQUIREMENT_PROBLEMS = {
 };
 export const REQUIREMENT_REFUSAL = {
   type: "string",
-  enum: ["no-knowledge-pod", "unavailable", "references", "untraced"],
+  enum: ["no-knowledge-pod", "unavailable", "references", "untraced", "source-changed"],
 };
 const NUMERIC_ID = { ...text(32), pattern: "^[0-9]{1,32}$" };
 export const PROJECT_ID = { ...NUMERIC_ID, description: "Numeric id from the project read." };
@@ -294,6 +436,7 @@ const DRAFT_RESULT_SCHEMA = object(
           validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
           fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
           messages: JIRA_FAILURE_MESSAGES_SCHEMA,
+          unchanged: { type: "boolean" },
           ...LINK_RESULT,
           violations: JIRA_VIOLATIONS_SCHEMA,
           replayed: { type: "boolean" },
@@ -334,6 +477,7 @@ const DRAFT_RESULT_SCHEMA = object(
   ["outcome"],
 );
 const RESULT_FIELDS = {
+  unchanged: { type: "boolean" },
   outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
   reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
   replayed: { type: "boolean" },
@@ -344,6 +488,9 @@ const RESULT_FIELDS = {
   commentId: text(128),
   transitionId: text(128),
   attachmentId: text(128),
+  projectId: text(64),
+  projectKey: text(64),
+  projectName: text(255),
   fieldId: text(64),
   validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
   fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
@@ -362,9 +509,51 @@ const TRACED_RESULT_SCHEMA = object(
   },
   ["outcome"],
 );
+type CoreMutationToolName = Exclude<
+  JiraMutationOperation,
+  Extract<
+    JiraMutationOperation,
+    | keyof typeof JIRA_ANONYMIZATION_UNLOCK_DEFINITIONS
+    | keyof typeof JIRA_AVATAR_WRITE_DEFINITIONS
+    | keyof typeof JIRA_IDENTITY_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ISSUE_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PROJECT_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PRIVATE_ACCOUNT_WRITE_DEFINITIONS
+    | "jira.create-issues"
+    | "jira.create-reciprocal-remote-link"
+    | keyof typeof JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS
+    | keyof typeof JIRA_MAINTENANCE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_SCHEMA_WRITE_DEFINITIONS
+    | keyof typeof JIRA_GROUP_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ISSUE_ACTION_WRITE_DEFINITIONS
+    | keyof typeof JIRA_OPTION_SCHEME_WRITE_DEFINITIONS
+    | keyof typeof JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS
+    | keyof typeof JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS
+    | keyof typeof JIRA_EMAIL_TEMPLATE_DEFINITIONS
+    | keyof typeof JIRA_PERMISSION_SCHEME_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ROLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_SPRINT_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_VERSION_LINK_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PROJECT_CATEGORY_WRITE_DEFINITIONS
+    | keyof typeof JIRA_AGILE_PLANNING_WRITE_DEFINITIONS
+    | keyof typeof JIRA_SCREEN_CONFIGURATION_WRITE_DEFINITIONS
+    | keyof typeof JIRA_BOARD_CONFIGURATION_WRITE_DEFINITIONS
+    | keyof typeof JIRA_RELEASE_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_LINK_WRITE_DEFINITIONS
+    | keyof typeof JIRA_SAVED_CONFIGURATION_WRITE_DEFINITIONS
+    | keyof typeof JIRA_AGILE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ISSUE_COLLABORATION_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PARTICIPATION_WRITE_DEFINITIONS
+    | keyof typeof JIRA_DELETION_DEFINITIONS
+    | keyof typeof JIRA_SCREEN_TAB_WRITE_DEFINITIONS
+    | keyof typeof JIRA_MONITORING_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ENTITY_PROPERTY_WRITE_DEFINITIONS
+  >
+>;
 const DEFINITIONS: Readonly<
   Record<
-    JiraMutationOperation,
+    CoreMutationToolName,
     {
       readonly description: string;
       readonly input: CatalogJsonObject;
@@ -377,6 +566,42 @@ const DEFINITIONS: Readonly<
     }
   >
 > = {
+  "jira.create-project": {
+    description:
+      "Create a Jira project using native supported options. Validate its key and accessible project type first; Jira administration permission is required. Return independently verified project identity. A partial or uncertain creation must never be repeated automatically.",
+    input: object(
+      {
+        key: identifier(64),
+        name: identifier(255),
+        lead: {
+          ...identifier(JIRA_PROJECT_LEAD_MAX_CHARS),
+          description:
+            "Jira user name of the project lead. Omit it to make the connected Jira user the lead.",
+        },
+        projectTypeKey: identifier(64),
+        projectTemplateKey: moduleKey(255),
+        description: text(32768),
+        url: text(JIRA_PROJECT_URL_MAX_CHARS),
+        assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
+      },
+      ["key", "name", "projectTypeKey"],
+    ),
+  },
+  "jira.update-project": {
+    description:
+      "Update ordinary Jira project metadata and independently read back the requested fields. Supply at least one change. Project key, project type and scheme changes are not supported by this operation.",
+    input: object(
+      {
+        projectIdOrKey: identifier(64),
+        name: identifier(255),
+        lead: identifier(JIRA_PROJECT_LEAD_MAX_CHARS),
+        description: text(32768),
+        url: text(JIRA_PROJECT_URL_MAX_CHARS),
+        assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
+      },
+      ["projectIdOrKey"],
+    ),
+  },
   "jira.create": {
     description:
       "Create one issue (for more, use jira.draft) with numeric project and issue-type IDs and current required fields. Fields cannot override routing identities. A child of an existing issue sets the relation field its create metadata names to that key; a parent that does not exist yet needs jira.draft.",
@@ -459,7 +684,7 @@ const DEFINITIONS: Readonly<
       " items inline. For a saved draft, pass only its draftId and draftDigest from jira.draft-stage. jira.draft-stage saves drafts of any supported size in Keiko without Jira writes. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
     // The existing explicit JSON Schema dialect expresses the handler's two closed forms;
     // optional sibling properties would also advertise empty, partial and mixed arguments.
-    input: compileExternalCatalogSchema({
+    input: {
       type: "object",
       oneOf: [
         object(
@@ -481,7 +706,7 @@ const DEFINITIONS: Readonly<
           ["draftId", "draftDigest"],
         ),
       ],
-    }),
+    },
     result: DRAFT_RESULT_SCHEMA,
     // Up to one result row per item, within the catalog's result ceilings; a larger result is
     // reported by counts and key ranges, never cut (#4178).
@@ -492,7 +717,55 @@ const DEFINITIONS: Readonly<
     },
   },
 };
-function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
+export function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationToolName {
+  return Object.hasOwn(DEFINITIONS, name);
+}
+export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
+  for (const producer of [
+    jiraAnonymizationUnlockDeclarationForTool,
+    jiraAvatarMutationDeclarationForTool,
+    jiraIdentityMutationDeclarationForTool,
+    jiraIssueLifecycleMutationDeclarationForTool,
+    jiraProjectLifecycleMutationDeclarationForTool,
+    jiraPrivateAccountDeclarationForTool,
+    jiraReciprocalLinkDeclarationForTool,
+    jiraBulkCreateDeclarationForTool,
+    jiraDirectoryAccessMutationDeclarationForTool,
+    jiraMaintenanceMutationDeclarationForTool,
+    jiraSchemaMutationDeclarationForTool,
+    jiraGroupMutationDeclarationForTool,
+    jiraIssueActionMutationDeclarationForTool,
+    jiraOptionSchemeMutationDeclarationForTool,
+    jiraWorkflowSchemeMutationDeclarationForTool,
+    jiraInstanceSettingMutationDeclarationForTool,
+    jiraEmailTemplateDeclarationForTool,
+    jiraPermissionSchemeMutationDeclarationForTool,
+    jiraRoleMutationDeclarationForTool,
+    jiraVersionLinkMutationDeclarationForTool,
+    jiraProjectCategoryMutationDeclarationForTool,
+    jiraAgilePlanningDeclarationForTool,
+    jiraSprintLifecycleDeclarationForTool,
+    jiraScreenConfigurationDeclarationForTool,
+    jiraBoardConfigurationMutationDeclarationForTool,
+    jiraReleaseLifecycleDeclarationForTool,
+    jiraLinkMutationDeclarationForTool,
+    jiraSavedConfigurationMutationDeclarationForTool,
+    jiraEntityPropertyMutationDeclarationForTool,
+    jiraMonitoringDeclarationForTool,
+    jiraScreenTabDeclarationForTool,
+    jiraAgileDeclarationForTool,
+    jiraProjectStructureDeclarationForTool,
+    jiraParticipationDeclarationForTool,
+    jiraDeletionDeclarationForTool,
+    jiraIssueCollaborationDeclarationForTool,
+  ]) {
+    const selected = producer(name);
+    if (selected !== undefined) return selected;
+  }
+  if (!isCoreMutationTool(name)) throw new TypeError("Unsupported Jira mutation tool");
+  return coreDeclaration(name);
+}
+function coreDeclaration(name: CoreMutationToolName): ManagedMcpToolDeclaration {
   const definition = DEFINITIONS[name];
   return Object.freeze({
     name,
@@ -500,7 +773,8 @@ function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
     descriptor: createToolDescriptor({
       toolRef: createToolRef(jiraMutationToolId(name), 3),
       description: definition.description,
-      inputSchema: definition.input,
+      inputSchema:
+        name === "jira.draft" ? compileExternalCatalogSchema(definition.input) : definition.input,
       resultSchema: definition.result ?? RESULT_SCHEMA,
       effects: ["connector-access"],
       actionMapping: [{ action: name, effects: ["connector-access"] }],
@@ -517,4 +791,7 @@ function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
     }),
   });
 }
-export const JIRA_MUTATION_DECLARATIONS = Object.freeze(JIRA_MUTATION_OPERATIONS.map(declaration));
+/** Explicit complete mutation inventory; module import itself compiles no declarations. */
+export function jiraMutationDeclarations(): readonly ManagedMcpToolDeclaration[] {
+  return Object.freeze(JIRA_MUTATION_OPERATIONS.map(jiraMutationDeclaration));
+}

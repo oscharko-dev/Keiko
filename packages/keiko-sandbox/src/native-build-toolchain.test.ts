@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  nativeBuildCacheReadRoots,
+  nativeBuildCertificateFiles,
   nativeBuildInheritedEnvNames,
   nativeBuildToolReadRoots,
   nativeBuildWrapperReadRoots,
@@ -61,8 +63,25 @@ describe("native build-tool environment and roots (#4271)", () => {
     rmSync(dists, { recursive: true });
     const outside = join(home, "Documents");
     mkdirSync(outside, { recursive: true });
-    symlinkSync(outside, dists);
+    // A junction needs no privilege on Windows; other platforms ignore the type.
+    symlinkSync(outside, dists, "junction");
     expect(nativeBuildWrapperReadRoots(home)).toEqual([]);
+  });
+
+  // #4068: on Windows `relative` answers `..\x`, which the containment test read as inside, and the
+  // depth test counted `/` segments, so a real `~/.m2/repository` was never admitted there.
+  it("admits the Maven repository cache below ~/.m2, and no link that leaves it", () => {
+    const root = tree();
+    const home = join(root, "home");
+    expect(nativeBuildCacheReadRoots(home)).toEqual([]);
+    const repository = join(home, ".m2", "repository");
+    mkdirSync(join(repository, "org", "example"), { recursive: true });
+    expect(nativeBuildCacheReadRoots(home)).toEqual([repository]);
+    rmSync(repository, { recursive: true });
+    const outside = join(root, "elsewhere", "shared", "cache");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, repository, "junction");
+    expect(nativeBuildCacheReadRoots(home)).toEqual([]);
   });
 
   it("admits the directory of an explicit certificate bundle", () => {
@@ -75,6 +94,68 @@ describe("native build-tool environment and roots (#4271)", () => {
         join(root, "home"),
       ),
     ).toEqual([join(root, "certs")]);
+  });
+
+  // The directory alone opens nothing: the bundle's own `*.pem` name is denied by the final
+  // credential-name rule unless the profile names the exact file (#4271 lab).
+  it("names the exact certificate files the operator points the run's TLS clients at", () => {
+    const root = tree();
+    const home = join(root, "home");
+    const certs = join(root, "certs");
+    mkdirSync(certs, { recursive: true });
+    writeFileSync(join(certs, "corporate-ca.pem"), "");
+    symlinkSync(join(certs, "corporate-ca.pem"), join(certs, "current.pem"));
+    expect(nativeBuildCertificateFiles({}, home)).toEqual({
+      files: [],
+      namedCount: 0,
+      admittedCount: 0,
+    });
+    expect(
+      nativeBuildCertificateFiles(
+        {
+          SSL_CERT_FILE: join(certs, "corporate-ca.pem"),
+          NODE_EXTRA_CA_CERTS: join(certs, "current.pem"),
+        },
+        home,
+      ),
+    ).toEqual({
+      // A link is checked at its own location as well as at its target.
+      files: [join(certs, "corporate-ca.pem"), join(certs, "current.pem")],
+      namedCount: 2,
+      admittedCount: 2,
+    });
+    // Both variables naming the same bundle name it once.
+    expect(
+      nativeBuildCertificateFiles(
+        {
+          SSL_CERT_FILE: join(certs, "corporate-ca.pem"),
+          NODE_EXTRA_CA_CERTS: join(certs, "corporate-ca.pem"),
+        },
+        home,
+      ),
+    ).toEqual({ files: [join(certs, "corporate-ca.pem")], namedCount: 2, admittedCount: 2 });
+  });
+
+  it("names no certificate file for a value that is not an absolute regular file outside a credential store", () => {
+    const root = tree();
+    const home = join(root, "home");
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    writeFileSync(join(home, ".ssh", "ca.pem"), "");
+    mkdirSync(join(root, "certs"), { recursive: true });
+    symlinkSync(join(home, ".ssh", "ca.pem"), join(root, "certs", "into-ssh.pem"));
+    for (const value of [
+      "relative/ca.pem",
+      join(root, "missing.pem"),
+      join(root, "certs"),
+      join(home, ".ssh", "ca.pem"),
+      join(root, "certs", "into-ssh.pem"),
+      "",
+    ])
+      expect(nativeBuildCertificateFiles({ SSL_CERT_FILE: value }, home)).toEqual({
+        files: [],
+        namedCount: value === "" ? 0 : 1,
+        admittedCount: 0,
+      });
   });
 
   it("passes the build names but withholds a value that carries a credential", () => {

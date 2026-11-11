@@ -64,6 +64,7 @@ async function pairSession(server: AppSessionTestServer): Promise<string> {
   return cookie;
 }
 
+// ADR-0141: a refused local-session repair is the content-free acknowledgement with no cookie.
 async function ensureLocalSession(
   server: AppSessionTestServer,
   cookie?: string,

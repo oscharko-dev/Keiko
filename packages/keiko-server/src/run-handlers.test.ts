@@ -999,7 +999,6 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
         usage: {
           toolCalls: 0,
           patchBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
-          promptTokens: 0,
         },
         nowIso: new Date().toISOString(),
       }),

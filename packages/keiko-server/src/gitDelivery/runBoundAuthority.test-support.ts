@@ -46,7 +46,7 @@ const TEST_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
     connectorScopes: ["source-control.read", "source-control.write"],
   },
   gates: [],
-  budget: { maxRuntimeMs: 1_000, maxToolCalls: 1, maxPromptTokens: 1, maxPatchBytes: 1 },
+  budget: { maxRuntimeMs: 1_000, maxToolCalls: 1, maxPatchBytes: 1 },
   expiresAt: "2999-01-01T00:00:00.000Z",
   approvalProofDigest: "b".repeat(64),
 };
