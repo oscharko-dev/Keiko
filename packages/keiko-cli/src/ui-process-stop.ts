@@ -405,7 +405,7 @@ function emitStopEscalationFailed(input: TerminateUiProcessInput, errorKind: str
   );
 }
 
-function errorCode(error: unknown): string | undefined {
+export function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
   const code = error.code;
   return typeof code === "string" ? code : undefined;

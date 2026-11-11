@@ -79,6 +79,7 @@ const ZERO_FINDING_SCOPES = {
     "workflows",
   ]),
   "anti-slop/no-reflect-get": zeroFindingScopes([
+    "cli",
     "connectors",
     "editor",
     "evaluations",
@@ -97,6 +98,7 @@ const ZERO_FINDING_SCOPES = {
     "sandbox",
     "sdk",
     "tool-catalog",
+    "tools",
     "verification",
     "workflows",
     "workspace",

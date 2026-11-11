@@ -161,10 +161,10 @@ async function runWorkflow(
       buildUnitTestInput(fixture, workspaceRoot, modelId),
       common,
     );
-    return report as unknown as Record<string, unknown>;
+    return { ...report };
   }
   const report = await investigateBug(buildBugInput(fixture, workspaceRoot, modelId), common);
-  return report as unknown as Record<string, unknown>;
+  return { ...report };
 }
 
 interface PersistAndCheckOptions {

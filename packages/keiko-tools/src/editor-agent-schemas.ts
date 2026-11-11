@@ -9,8 +9,9 @@ function objectSchema(
 
 function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const key of Object.getOwnPropertyNames(value)) {
-    deepFreeze(Reflect.get(value, key));
+  const children: readonly unknown[] = Object.values(value);
+  for (const child of children) {
+    deepFreeze(child);
   }
   return Object.freeze(value);
 }
