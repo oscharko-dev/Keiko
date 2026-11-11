@@ -93,7 +93,7 @@ async function qualify(valid, unavailable = false) {
       assert.equal(output.length, 0, "child ran before policy submission");
       child.stdio[3].write(frame(valid));
     }
-    const launched = await response(responses);
+    const launched = await response(responses, { confinedLaunch: true });
     assert.equal(launched.kind, valid ? 1 : 3);
     if (valid) {
       // A confined launch reports its stale-grant sweep; an empty grants frame touches nothing.
