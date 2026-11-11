@@ -367,9 +367,9 @@ describe("complete Firefox smoke shards", () => {
 });
 
 describe("complete Node 26 qualification shards", () => {
-  it("retains both mandatory shards, limits and every qualification step", () => {
+  it("retains all four mandatory shards, limits and every qualification step", () => {
     const job = jobs["node-26-compatibility"];
-    expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2] } });
+    expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2, 3, 4] } });
     expect(job["timeout-minutes"]).toBe(60);
     expect(job["continue-on-error"]).toBeUndefined();
     const runs = job.steps.filter((step) => typeof step.run === "string").map((step) => step.run);
@@ -379,7 +379,7 @@ describe("complete Node 26 qualification shards", () => {
       "npm ci --ignore-scripts",
       "npm run provision:usearch",
       "npm run typecheck",
-      "npm test -- --shard=${{ matrix.shard }}/2",
+      "npm test -- --shard=${{ matrix.shard }}/4",
       "npm run prepare:bin",
       "npm run build:ui",
       expect.stringContaining("npm run provision:smoke"),
@@ -401,8 +401,10 @@ describe("complete Node 26 qualification shards", () => {
       .test;
     expect(testScript).toMatch(/&& vitest run$/u);
     expect(gatedDisplayNames("node-26-compatibility")).toEqual([
-      "Node 26 compatibility (shard 1/2)",
-      "Node 26 compatibility (shard 2/2)",
+      "Node 26 compatibility (shard 1/4)",
+      "Node 26 compatibility (shard 2/4)",
+      "Node 26 compatibility (shard 3/4)",
+      "Node 26 compatibility (shard 4/4)",
     ]);
   });
 
@@ -415,9 +417,9 @@ describe("complete Node 26 qualification shards", () => {
         const Sequencer = ctx.config.sequence.sequencer;
         const shards = [];
         for (const index of ${JSON.stringify(jobs["node-26-compatibility"].strategy.matrix.shard)}) {
-          const cli = parseCLI("vitest run --shard=" + index + "/2");
-          if (cli.options.shard !== index + "/2") throw new Error("Shard forwarding failed");
-          ctx.config.shard = { index, count: 2 };
+          const cli = parseCLI("vitest run --shard=" + index + "/4");
+          if (cli.options.shard !== index + "/4") throw new Error("Shard forwarding failed");
+          ctx.config.shard = { index, count: 4 };
           shards.push((await new Sequencer(ctx).shard(Array.from(specs))).map(s => s.moduleId));
         }
         process.stdout.write(JSON.stringify({ full: specs.map(s => s.moduleId), shards }));
@@ -427,7 +429,7 @@ describe("complete Node 26 qualification shards", () => {
       execFileSync(process.execPath, ["--input-type=module", "-e", code], {
         cwd: repoRoot,
         encoding: "utf8",
-        // Every spec path is listed three times (full inventory plus both shards), so the output
+        // Every spec path is listed three times (full inventory plus all four shards), so the output
         // grows with the checkout path: a deep worktree path exceeds the 1 MiB default.
         maxBuffer: 64 * 1024 * 1024,
         timeout: 10_000,

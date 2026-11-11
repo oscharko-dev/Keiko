@@ -49,7 +49,7 @@ The remaining legacy instance uses the callable CommonJS API required by the lat
 their rules. The 3.1.5 source lacks the `optimizationLevel` and `firstPhasePreProcess`
 amplification described in [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249),
 although the advisory's version range matches it. The applicability triage in
-`osv-scanner.toml` expires on 2026-11-07. `check:osv-waiver-scope` now additionally
+`osv-scanner.toml` expires on 2026-11-30. `check:osv-waiver-scope` now additionally
 requires that exact dev-only legacy path/version and patched 11.0.3 everywhere else,
 and requires removing the triage when the legacy copy disappears. The existing
 independent npm/OSV check still refuses any suppression affecting shipped packages.
@@ -71,7 +71,7 @@ test asserts both the bounded archive inventory and the actual staged 11.0.3 dep
 The patch versions are aligned with PR #4168 (minimatch 11.0.3 and glob 14.0.3).
 The exact-flat runtime override and the earlier legacy exception are retained because
 the staging projector does not support #4168's major-qualified modern override.
-The narrower 2026-11-07 legacy triage expiry and exact inventory guard are retained.
+The narrower 2026-11-30 legacy triage expiry and exact inventory guard are retained.
 Each branch must regenerate its own source-bound design and catalog evidence; evidence
 from #4168 cannot be copied across differing package manifests.
 

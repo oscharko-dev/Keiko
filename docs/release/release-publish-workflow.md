@@ -393,8 +393,9 @@ holds it reports `payload-unapproved` until it updates, while 1.1.4 stays approv
 entry until packages built from the current pin are selected. The final fresh npm/Yarn installation validation against the next
 product release remains pending (#3898 AC9). The existing Yarn qualification uses the `node-modules`
 linker and does not prove Plug'n'Play support. Linux npm runtime availability is unchanged; its
-coding engine remains on the packaged lane described by ADR-0140. The Windows package is approved
-and qualified locally (#4068) but not yet published.
+coding engine remains on the packaged lane described by ADR-0140. The Windows package is built and
+smoke-tested locally (#4068) but not qualified (see
+[the Windows qualification record](../qa/opencode-windows-qualification.md)) and not yet published.
 
 Release notes are generated from the current version's approved catalog entries by
 `scripts/release-impact-notes.mjs` and published in GitHub Releases. Preview them with
