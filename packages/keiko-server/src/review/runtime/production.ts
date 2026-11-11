@@ -155,5 +155,6 @@ export function createProductionReviewRuntimeService(
     runner: input.runner,
     rulesSettings: input.rulesSettings,
     activityLog: input.activityLog,
+    diagnostics: input.diagnostics,
   });
 }
