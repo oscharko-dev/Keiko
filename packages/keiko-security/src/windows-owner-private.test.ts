@@ -219,10 +219,9 @@ describe("protecting a file Keiko writes", () => {
     expect(calls.map((call) => call.command)).toEqual([
       binaries("whoami.exe"),
       binaries("icacls.exe"),
-      binaries("icacls.exe"),
     ]);
-    expect(calls[1]?.args).toEqual([FILE, "/reset"]);
-    expect(calls[2]?.args).toEqual([
+    expect(calls.some((call) => call.args.includes("/reset"))).toBe(false);
+    expect(calls[1]?.args).toEqual([
       FILE,
       "/inheritance:r",
       "/grant:r",
@@ -230,7 +229,7 @@ describe("protecting a file Keiko writes", () => {
       "*S-1-5-18:(F)",
       "*S-1-5-32-544:(F)",
     ]);
-    expect(calls[2]?.env).toEqual({
+    expect(calls[1]?.env).toEqual({
       SystemRoot: String.raw`C:\Windows`,
       WINDIR: String.raw`C:\Windows`,
       SystemDrive: "C:",
@@ -252,7 +251,7 @@ describe("protecting a file Keiko writes", () => {
       inheritToChildren: true,
     });
 
-    expect(calls[2]?.args).toEqual([
+    expect(calls[1]?.args).toEqual([
       FILE,
       "/inheritance:r",
       "/grant:r",
@@ -310,6 +309,23 @@ describe("protecting a file Keiko writes", () => {
     }).toThrow("windows-owner-private-protect-failed");
     expect(lines).toHaveLength(2);
     expect(lines.join("\n")).not.toMatch(/mcp-servers|Zugriff|S-1-5-21/u);
+  });
+
+  it("refuses a path with an icacls wildcard or invalid character before running anything", () => {
+    for (const bad of [
+      String.raw`C:\data\*.json`,
+      String.raw`C:\data\a?.json`,
+      String.raw`C:\d\a|b`,
+    ]) {
+      const { run, calls } = runner("");
+      expect(() => {
+        protectWindowsOwnerPrivateFile(bad, { runner: run, resolveSystemBinary: binaries });
+      }).toThrow("windows-owner-private-input-invalid");
+      expect(() => inspectWindowsOwnerPrivateFiles([bad], { runner: run })).toThrow(
+        "windows-owner-private-input-invalid",
+      );
+      expect(calls).toEqual([]);
+    }
   });
 
   it("refuses a path it cannot protect before running anything", () => {

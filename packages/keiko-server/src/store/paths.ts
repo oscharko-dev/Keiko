@@ -3,7 +3,7 @@
 
 import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { assertSqliteStatePath } from "@oscharko-dev/keiko-security/fs-hardening";
 import type { ServerLogSink } from "../observability/index.js";
@@ -19,8 +19,18 @@ function isInsideCurrentWorkingDirectory(path: string): boolean {
   return containsPath(resolve(process.cwd()), resolve(path));
 }
 
+// The runtime-state exception is the one place a looser comparison would admit a path, so it fails
+// closed: the workspace prefix follows the platform's identity, but the `.keiko` segment itself
+// must be spelled exactly on darwin (a case-sensitive APFS volume holds `.KEIKO` as another
+// directory), and only win32, whose volumes are always case-insensitive, accepts any case.
 function isInsideRuntimeStateRoot(path: string, workspaceRoot: string): boolean {
-  return containsPath(resolve(workspaceRoot, UI_DB_DIRNAME), resolve(path));
+  const root = resolve(workspaceRoot);
+  const target = resolve(path);
+  if (!containsPath(resolve(root, UI_DB_DIRNAME), target)) return false;
+  if (process.platform !== "darwin") return true;
+  const rest = target.slice(root.length);
+  const stateRoot = `${sep}${UI_DB_DIRNAME}`;
+  return rest === stateRoot || rest.startsWith(`${stateRoot}${sep}`);
 }
 
 function resolveConfiguredPath(path: string, label: string): string {

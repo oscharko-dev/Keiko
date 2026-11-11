@@ -1823,12 +1823,41 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
       return startRun(input, deps, target, cwd, immediate);
     }
     return acquireWindowsSlot(input, deps, capacity)
-      .then((reservation) => startRun(input, deps, target, cwd, reservation))
+      .then((reservation) => startRunAfterWait(input, deps, target, cwd, reservation))
       .catch((error: unknown) => {
         throw asError(error, "command execution failed");
       });
   } catch (error) {
     return Promise.reject(asError(error, "command execution failed"));
+  }
+}
+
+// A queued run may wait up to the slot allowance, so the host executable, cwd and spawn target
+// resolved before the wait are stale at spawn: the binary may have been replaced or the workspace
+// directory removed meanwhile. They are resolved and validated again with the slot in hand; a
+// refusal then releases the slot and what the first target held.
+function startRunAfterWait(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  staleTarget: SpawnTarget,
+  staleCwd: string,
+  reservation: WindowsTerminationReservation,
+): Promise<CommandResult> {
+  releaseExecutionHome(deps, staleCwd, staleTarget.executionHome);
+  try {
+    if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
+    const executable = hostExecutable(input, deps);
+    const cwd = resolveCwd(deps, input.cwd);
+    return startRun(
+      input,
+      deps,
+      resolveSpawnTarget(input, deps, executable, cwd),
+      cwd,
+      reservation,
+    );
+  } catch (error) {
+    reservation.release();
+    throw error;
   }
 }
 

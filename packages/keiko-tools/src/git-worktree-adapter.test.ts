@@ -3,7 +3,7 @@
 // the pure operand guards + argv builders + porcelain parser, and exercises the real spawn boundary
 // against a disposable git repository (add / list / remove a managed worktree).
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
@@ -31,6 +31,7 @@ import {
   isSafeWorktreePathOperand,
   parseWorktreeListPorcelain,
   type NodeGitWorktreeAdapterDeps,
+  withCheckoutConfig,
 } from "./git-worktree-adapter.js";
 
 describe("GIT_WORKTREE_COMMAND_RULES allowlist (AC5)", () => {
@@ -390,5 +391,44 @@ describe("real git worktree lifecycle (EV2)", () => {
     const status = await adapter.worktreeStatus();
     expect(status.ok).toBe(false);
     expect(status.dirty).toBe(false);
+  });
+});
+
+describe("withCheckoutConfig (#4068)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("pins the checkout settings on a policy that pins none", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    expect(withCheckoutConfig(DEFAULT_SANDBOX_POLICY).pinnedEnv).toMatchObject({
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "core.autocrlf",
+      GIT_CONFIG_VALUE_0: "false",
+      GIT_CONFIG_KEY_1: "core.longpaths",
+      GIT_CONFIG_VALUE_1: "true",
+    });
+  });
+
+  it("appends to a policy that already pins GIT_CONFIG_COUNT instead of dropping them", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const policy = {
+      ...DEFAULT_SANDBOX_POLICY,
+      pinnedEnv: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "gc.auto", GIT_CONFIG_VALUE_0: "0" },
+    };
+    expect(withCheckoutConfig(policy).pinnedEnv).toEqual({
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_0: "gc.auto",
+      GIT_CONFIG_VALUE_0: "0",
+      GIT_CONFIG_KEY_1: "core.autocrlf",
+      GIT_CONFIG_VALUE_1: "false",
+      GIT_CONFIG_KEY_2: "core.longpaths",
+      GIT_CONFIG_VALUE_2: "true",
+    });
+  });
+
+  it("leaves an unreadable count alone", () => {
+    const policy = { ...DEFAULT_SANDBOX_POLICY, pinnedEnv: { GIT_CONFIG_COUNT: "many" } };
+    expect(withCheckoutConfig(policy)).toBe(policy);
   });
 });

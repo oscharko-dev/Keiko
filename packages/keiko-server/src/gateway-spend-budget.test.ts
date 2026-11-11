@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ModelSpendStore } from "./store/model-spend.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Gateway,
@@ -9,6 +10,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  acquireGatewaySpendBudgetForEnv,
   closeGatewaySpendBudget,
   createGatewaySpendBudget,
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
@@ -168,6 +170,47 @@ describe("shared persistent model spend admission", () => {
     }).not.toThrow();
     closeGatewaySpendBudget(spend);
     closeGatewaySpendBudget(undefined);
+  });
+
+  // #4068: a graph's disposal closed the ledger cached per environment object, under another graph
+  // that shared it, and one it had not opened.
+  it("closes a shared ledger only with its last holder and drops it from the cache", () => {
+    const env = {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "150",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(directory, "shared.db"),
+    };
+    const close = vi.spyOn(ModelSpendStore.prototype, "close");
+    const first = acquireGatewaySpendBudgetForEnv(env);
+    const second = acquireGatewaySpendBudgetForEnv(env);
+    expect(second.budget).toBe(first.budget);
+    first.budget?.reserve(capability, request, "shared").settle(response.usage);
+
+    first.release();
+    first.release();
+    expect(close).not.toHaveBeenCalled();
+    const third = acquireGatewaySpendBudgetForEnv(env);
+    expect(third.budget).toBe(first.budget);
+
+    // The first holder released twice counted once; the ledger stays open until the last release.
+    second.release();
+    expect(close).not.toHaveBeenCalled();
+    third.release();
+    expect(close).toHaveBeenCalledTimes(1);
+    const fresh = acquireGatewaySpendBudgetForEnv(env);
+    expect(fresh.budget).not.toBe(first.budget);
+    fresh.release();
+    close.mockRestore();
+  });
+
+  it("never closes a ledger it did not acquire, and holds nothing without a budget", () => {
+    const close = vi.spyOn(ModelSpendStore.prototype, "close");
+    const injected = budget();
+    injected.reserve(capability, request, "injected").settle(response.usage);
+    const none = acquireGatewaySpendBudgetForEnv({});
+    none.release();
+    expect(none.budget).toBeUndefined();
+    expect(close).not.toHaveBeenCalled();
+    close.mockRestore();
   });
 
   it("records reconstructable diagnostics for caught and locally-constructed rejections", () => {

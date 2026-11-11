@@ -1259,6 +1259,53 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     await expect(waiting).resolves.toMatchObject({ exitCode: 0 });
   });
 
+  // #4068: the host executable and cwd were validated before the slot wait of up to 30 s.
+  it("resolves the host executable again after the slot wait, and frees the slot on refusal", async () => {
+    const spawn = recordingSpawn();
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const windowsEnv: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH ?? "",
+      SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows`,
+    };
+    const held = capacity.reserve(windowsEnv);
+    let resolutions = 0;
+    let replaced = false;
+    const resolveExecutable: RunCommandDeps["resolveExecutable"] = (command) => {
+      resolutions += 1;
+      if (replaced) throw new CommandDeniedError("executable replaced during the wait", command);
+      return `/abs/${command}`;
+    };
+    const waiting = runCommand(
+      {
+        command: "node",
+        args: ["-e", "ok"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      {
+        ...fakeDeps(spawn.fn, windowsEnv),
+        platform: "win32",
+        resolveExecutable,
+        windowsTerminationCapacity: capacity,
+        windowsSlotWaitMs: 60_000,
+      },
+    );
+    const refused = expect(waiting).rejects.toBeInstanceOf(CommandDeniedError);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(resolutions).toBe(1);
+    replaced = true;
+
+    held?.release();
+    await refused;
+    expect(resolutions).toBe(2);
+    expect(spawn.calls()).toEqual([]);
+    // The slot the refused run held was released: the capacity admits again.
+    const again = capacity.reserve(windowsEnv);
+    expect(again).toBeDefined();
+    again?.release();
+  });
+
   it("admits waiters in arrival order and never lets reserve overtake them", async () => {
     const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
     const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };

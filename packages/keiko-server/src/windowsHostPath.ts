@@ -5,23 +5,24 @@
  * shows. Callers refuse these before any filesystem call.
  */
 
-// The DOS device names Windows resolves in any directory, also with an extension or trailing dots.
-const WINDOWS_DEVICE_NAME =
-  /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/iu;
+// The DOS device names Windows resolves in any directory. Applied to the base name only: the part
+// before the first dot, without trailing spaces, so `CON .txt` and `CON.txt` are both `CON`.
+const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])$/iu;
 
-// Windows ignores trailing dots and spaces when it resolves a name, so `CON. ` is still `CON`.
-// A linear scan, not a regular expression, so a long run of dots cannot backtrack.
-function withoutTrailingDotsAndSpaces(component: string): string {
-  let end = component.length;
-  while (end > 0 && (component[end - 1] === "." || component[end - 1] === " ")) end -= 1;
-  return component.slice(0, end);
+// Windows ignores trailing dots and spaces when it resolves a name, and spaces before the extension
+// dot, so `CON. ` and `CON .txt` are still `CON`. A linear scan, not a regular expression, so a long
+// run of dots or spaces cannot backtrack.
+function deviceBaseName(component: string): string {
+  const dot = component.indexOf(".");
+  const base = dot === -1 ? component : component.slice(0, dot);
+  let end = base.length;
+  while (end > 0 && base[end - 1] === " ") end -= 1;
+  return base.slice(0, end);
 }
 
 /** Whether one path component names neither a DOS device nor an alternate data stream. */
 export function isWindowsOrdinaryPathComponent(component: string): boolean {
-  return (
-    !component.includes(":") && !WINDOWS_DEVICE_NAME.test(withoutTrailingDotsAndSpaces(component))
-  );
+  return !component.includes(":") && !WINDOWS_DEVICE_NAME.test(deviceBaseName(component));
 }
 
 /**

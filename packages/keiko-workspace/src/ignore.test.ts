@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CREDENTIAL_PATH_DENY_PATTERNS,
   TOOL_STATE_PATH_DENY_PATTERNS,
@@ -215,6 +215,32 @@ describe("isDenied (always-on security)", () => {
   it("still allows .env.example regardless of case", () => {
     expect(isDenied(".env.example")).toBe(false);
     expect(isDenied(".ENV.EXAMPLE")).toBe(false);
+  });
+});
+
+describe("isDenied 8.3 short names (Windows only, #4068)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function onPlatform(platform: NodeJS.Platform): void {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  }
+
+  it("denies a component with the 8.3 short-name shape on Windows", () => {
+    onPlatform("win32");
+    expect(isDenied("GIT~1/config")).toBe(true);
+    expect(isDenied("src/ENV~1")).toBe(true);
+    expect(isDenied("src/PROGRA~1.TXT")).toBe(true);
+    expect(isDenied("src/plain.ts")).toBe(false);
+    expect(isDenied("src/a.b~1")).toBe(false);
+  });
+
+  it("leaves the same spelling alone on POSIX", () => {
+    onPlatform("linux");
+    expect(isDenied("short-name-check/GIT~2/config")).toBe(false);
+    onPlatform("darwin");
+    expect(isDenied("short-name-check/GIT~3/config")).toBe(false);
   });
 });
 

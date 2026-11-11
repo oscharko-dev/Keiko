@@ -376,14 +376,18 @@ function structuredCommandEnvironment(
 // #4068 (W7): a task workspace adds its own long base path, so a checkout whose files fit where the
 // user keeps it crosses MAX_PATH there, and Git for Windows then fails `worktree add` with "Filename
 // too long" unless core.longpaths is set.
-function withCheckoutConfig(policy: SandboxPolicy): SandboxPolicy {
-  if (policy.pinnedEnv?.GIT_CONFIG_COUNT !== undefined) return policy;
+export function withCheckoutConfig(policy: SandboxPolicy): SandboxPolicy {
   const entries: [string, string][] = [["core.autocrlf", "false"]];
   if (process.platform === "win32") entries.push(["core.longpaths", "true"]);
-  const pinned: Record<string, string> = { GIT_CONFIG_COUNT: String(entries.length) };
+  // A policy that already pins GIT_CONFIG_* keeps its entries; ours are appended after them, so the
+  // checkout settings are never dropped. An unreadable count is left alone rather than guessed.
+  const existing = policy.pinnedEnv?.GIT_CONFIG_COUNT;
+  if (existing !== undefined && !/^\d{1,3}$/u.test(existing)) return policy;
+  const base = existing === undefined ? 0 : Number(existing);
+  const pinned: Record<string, string> = { GIT_CONFIG_COUNT: String(base + entries.length) };
   entries.forEach(([key, value], index) => {
-    pinned[`GIT_CONFIG_KEY_${String(index)}`] = key;
-    pinned[`GIT_CONFIG_VALUE_${String(index)}`] = value;
+    pinned[`GIT_CONFIG_KEY_${String(base + index)}`] = key;
+    pinned[`GIT_CONFIG_VALUE_${String(base + index)}`] = value;
   });
   return { ...policy, pinnedEnv: { ...policy.pinnedEnv, ...pinned } };
 }

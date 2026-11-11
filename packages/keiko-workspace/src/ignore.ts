@@ -64,6 +64,9 @@ function isDeniedUncached(relPath: string): boolean {
     if (lower === EXAMPLE_ENV) {
       continue;
     }
+    if (process.platform === "win32" && isWindowsShortNameSegment(lower)) {
+      return true;
+    }
     const spellings = windowsAliasSpelling(lower);
     for (const matcher of PRECOMPILED_DENY_MATCHERS) {
       if (matcher.regex.test(lower) || (spellings !== lower && matcher.regex.test(spellings))) {
@@ -78,6 +81,16 @@ function isDeniedUncached(relPath: string): boolean {
 // (`name:stream`), to the plain name. The alias is checked IN ADDITION to the literal segment, so
 // the check only ever denies more; the `.env.example` exception stays an exact, literal match.
 const WINDOWS_TRAILING_ALIAS: ReadonlySet<string> = new Set([".", " "]);
+
+// NTFS may also resolve a sensitive entry through its 8.3 short name (`.git` is `GIT~1`, `.env` is
+// `ENV~1`), which no deny pattern names. On Windows every component of that shape is denied as an
+// alias, the same fail-closed stance as the trailing-dot alias; POSIX names are unaffected.
+const WINDOWS_SHORT_NAME = /^[^.~]{1,6}~[0-9]+(?:\.[^.]{0,3})?$/u;
+
+/** Whether one lower-cased component has the Windows 8.3 short-name shape. */
+export function isWindowsShortNameSegment(segment: string): boolean {
+  return WINDOWS_SHORT_NAME.test(segment);
+}
 
 function windowsAliasSpelling(segment: string): string {
   const stream = segment.indexOf(":");

@@ -20,7 +20,9 @@ const safeName: Generator<string> = (random) => {
 const deviceSpelling: Generator<string> = (random) => {
   const extension = random.chance(0.5) ? `.${safeName(random).replaceAll(".", "")}` : "";
   const trailing = random.pick(["", ".", " ", ". ", "..", "  "]);
-  return `${random.pick(DEVICES)}${extension}${trailing}`;
+  // Win32 also ignores spaces between the device name and the extension dot (`CON .txt`).
+  const gap = extension === "" ? "" : random.pick(["", "", " ", "  "]);
+  return `${random.pick(DEVICES)}${gap}${extension}${trailing}`;
 };
 
 describe("Windows host path forms (#4068 W7)", () => {
@@ -43,6 +45,7 @@ describe("Windows host path forms (#4068 W7)", () => {
       String.raw`C:\Users\someone\AGENTS.md::$DATA`,
       String.raw`C:\Users\CON\AGENTS.md`,
       String.raw`C:\Users\someone\nul.md`,
+      String.raw`C:\Users\someone\NUL  .md`,
       "C:\\Users\\someone\\a\u0000b",
       "/home/someone/AGENTS.md",
     ]) {

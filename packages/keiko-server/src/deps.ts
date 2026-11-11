@@ -183,7 +183,10 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
-import { closeGatewaySpendBudget, gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
+import {
+  acquireGatewaySpendBudgetForEnv,
+  gatewaySpendBudgetForEnv,
+} from "./gateway-spend-budget.js";
 import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,
@@ -638,6 +641,11 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 export interface RuntimeGatewayConfig {
   readonly subscribe?: (listener: (correlationId?: string) => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  /**
+   * Set only by the graph that acquired `spendBudget` from the environment's shared cache; its
+   * disposal calls it. An injected budget has none and is never closed by a graph that did not open it.
+   */
+  readonly releaseSpendBudget?: (() => void) | undefined;
   /** Provider-stated context windows observed by this source's gateways. Never throws. */
   readonly onContextWindowReported?: ((report: ContextWindowReport) => void) | undefined;
   /** Binds the host's adoption path (gateway-context-window.ts) once the handler deps exist. */
@@ -1868,10 +1876,12 @@ function createRuntimeGatewayConfig(
     observations: new Map(),
     listeners: gatewayConfigListeners(),
   };
+  const spend = acquireGatewaySpendBudgetForEnv(env);
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
-    spendBudget: gatewaySpendBudgetForEnv(env),
+    spendBudget: spend.budget,
+    releaseSpendBudget: spend.release,
     ...contextWindowReporterSlot(),
     current: (): GatewayConfig | undefined => state.config,
     ...runtimeCatalogFacets(state),
@@ -6045,7 +6055,7 @@ function graphStoreTeardownSteps(
     },
     // #4068: the qualification spend ledger opens lazily on the first budgeted model call.
     (): void => {
-      closeGatewaySpendBudget(args.runtimeConfig.spendBudget);
+      args.runtimeConfig.releaseSpendBudget?.();
     },
     (): void => {
       args.bundle.dispose?.();

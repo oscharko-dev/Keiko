@@ -157,6 +157,10 @@ function systemBinaryEnvironment(executable: string): NodeJS.ProcessEnv {
   return { SystemRoot: root, WINDIR: root, SystemDrive: root.slice(0, 2) };
 }
 
+// icacls expands `*` and `?` as wildcards, so a path holding one could change the DACL of siblings;
+// the others are invalid in a Windows file name and never name a file Keiko wrote.
+const ICACLS_WILDCARD_OR_INVALID = /[*?"<>|]/u;
+
 // Only local drive paths are inspected; UNC shares and device namespaces stay refused here, as in
 // the shared isLocalAbsolutePath contract.
 function assertInspectablePaths(paths: readonly string[]): void {
@@ -165,6 +169,7 @@ function assertInspectablePaths(paths: readonly string[]): void {
       path.length > 0 &&
       path.length <= MAX_PATH_CHARS &&
       !/[\0\r\n]/u.test(path) &&
+      !ICACLS_WILDCARD_OR_INVALID.test(path) &&
       /^[A-Za-z]:[\\/]/u.test(path),
   );
   if (!usable || paths.length > WINDOWS_OWNER_PRIVATE_MAX_FILES) {
@@ -326,8 +331,9 @@ export function protectWindowsOwnerPrivateFile(
     const sid = currentUserSid(runner, binary("whoami.exe"));
     const icacls = binary("icacls.exe");
     const access = options.inheritToChildren === true ? "(OI)(CI)(F)" : "(F)";
-    // /reset first drops explicit entries, which /grant:r alone would keep for other principals.
-    runSystemBinary(runner, icacls, [path, "/reset"]);
+    // One call: /inheritance:r runs before the grant, so no step ever leaves the path inheriting a
+    // broader parent DACL. A /reset first would re-enable inheritance for that window; an explicit
+    // entry of another principal a file already held is refused by the owner-private read check.
     runSystemBinary(runner, icacls, [
       path,
       "/inheritance:r",

@@ -442,6 +442,10 @@ export function closeGatewaySpendBudget(budget: GatewaySpendBudget | undefined):
 }
 
 const budgetsByEnvironment = new WeakMap<object, GatewaySpendBudget | undefined>();
+// How many dependency graphs hold the cached budget of one environment, and which environment it
+// is cached under. Only a graph that acquired a budget may release it, and the ledger closes with
+// its last holder: a budget another graph still uses, or one injected from outside, is never closed.
+const leasesByBudget = new WeakMap<GatewaySpendBudget, { holders: number; env: object }>();
 
 export function gatewaySpendBudgetForEnv(
   env: Readonly<Record<string, string | undefined>> | undefined,
@@ -449,6 +453,34 @@ export function gatewaySpendBudgetForEnv(
   if (env === undefined) return undefined;
   if (!budgetsByEnvironment.has(env)) budgetsByEnvironment.set(env, createGatewaySpendBudget(env));
   return budgetsByEnvironment.get(env);
+}
+
+/**
+ * The environment's shared budget, held by the caller until the returned `release` runs (#4068).
+ * `release` is idempotent; the ledger is closed and dropped from the cache once every holder has
+ * released, so a later graph over the same environment opens a fresh ledger.
+ */
+export function acquireGatewaySpendBudgetForEnv(
+  env: Readonly<Record<string, string | undefined>> | undefined,
+): { readonly budget: GatewaySpendBudget | undefined; readonly release: () => void } {
+  const budget = gatewaySpendBudgetForEnv(env);
+  if (budget === undefined || env === undefined) return { budget, release: () => undefined };
+  const lease = leasesByBudget.get(budget) ?? { holders: 0, env };
+  lease.holders += 1;
+  leasesByBudget.set(budget, lease);
+  let released = false;
+  return {
+    budget,
+    release: (): void => {
+      if (released) return;
+      released = true;
+      lease.holders -= 1;
+      if (lease.holders > 0) return;
+      leasesByBudget.delete(budget);
+      if (budgetsByEnvironment.get(lease.env) === budget) budgetsByEnvironment.delete(lease.env);
+      closeGatewaySpendBudget(budget);
+    },
+  };
 }
 
 export function reserveGatewaySpendForAttempt(

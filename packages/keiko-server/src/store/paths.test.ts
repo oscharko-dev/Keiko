@@ -1,6 +1,6 @@
 // ADR-0013 D4 — resolveUiDbPath precedence: explicit → KEIKO_UI_DATA_DIR/keiko-ui.db → ~/.keiko/keiko-ui.db.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { assertUiDbOutsideProject, resolveUiDbPath, UiStoreError } from "./index.js";
 import { homedir, tmpdir } from "node:os";
@@ -186,5 +186,38 @@ describe.runIf(process.platform === "win32")("UI DB containment on Windows lette
     expect(() => {
       assertUiDbOutsideProject(swapCase(join(project, ".keiko", "ui", "keiko-ui.db")), project);
     }).not.toThrow();
+  });
+});
+
+// The runtime-state exception must match the exact `.keiko` spelling on darwin, where a volume may
+// be case-sensitive; the workspace test stays case-insensitive.
+describe("UI DB runtime-state exception on darwin", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("admits <project>/.keiko and rejects <project>/.KEIKO", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const project = makeTempDir();
+    expect(() => {
+      assertUiDbOutsideProject(join(project, ".keiko", "x.db"), project);
+    }).not.toThrow();
+    expectCode(() => {
+      assertUiDbOutsideProject(join(project, ".KEIKO", "x.db"), project);
+    }, "INVALID_REQUEST");
+    expectCode(() => {
+      assertUiDbOutsideProject(join(project, ".keikoX", "x.db"), project);
+    }, "INVALID_REQUEST");
+  });
+
+  it("keeps linux unchanged: only the exact spelling is the state root", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const project = makeTempDir();
+    expect(() => {
+      assertUiDbOutsideProject(join(project, ".keiko", "x.db"), project);
+    }).not.toThrow();
+    expectCode(() => {
+      assertUiDbOutsideProject(join(project, ".KEIKO", "x.db"), project);
+    }, "INVALID_REQUEST");
   });
 });
