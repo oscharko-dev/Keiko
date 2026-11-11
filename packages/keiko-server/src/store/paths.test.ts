@@ -210,7 +210,10 @@ describe("UI DB runtime-state exception on darwin", () => {
     }, "INVALID_REQUEST");
   });
 
-  it("keeps linux unchanged: only the exact spelling is the state root", () => {
+  it("keeps linux unchanged: only the exact spelling is the state root", (ctx) => {
+    // A win32 host's path.relative compares letter case insensitively whatever process.platform
+    // reports, so the case-sensitive Linux comparison cannot be reproduced there.
+    if (process.platform === "win32") ctx.skip();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const project = makeTempDir();
     expect(() => {
