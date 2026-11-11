@@ -34671,6 +34671,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      counterCheckPhaseWallTimeMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

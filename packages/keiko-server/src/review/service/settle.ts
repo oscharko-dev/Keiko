@@ -190,6 +190,7 @@ export async function settleRunRecord(
     reviewer: state.reviewer,
     counterChecks: state.counterCheckEffects,
     uncheckedCandidates: state.uncheckedCandidates,
+    uncheckedReason: state.uncheckedReason,
   });
   const rows = findingRows(presentationCandidates(state), ctx, deps.excluded, computed);
   const persisted = persist(deps, ctx, state, rows, computed);

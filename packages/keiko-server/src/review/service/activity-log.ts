@@ -81,6 +81,7 @@ const RUN_OPERATION_BASE = {
 const COUNT = { type: "integer", dataClass: "count", required: true } as const;
 const OPTIONAL_COUNT = { type: "integer", dataClass: "count", required: false } as const;
 const DURATION = { type: "integer", dataClass: "duration", required: true } as const;
+const OPTIONAL_DURATION = { type: "integer", dataClass: "duration", required: false } as const;
 const DIGEST = { type: "string", dataClass: "digest", required: true, maxLength: 64 } as const;
 
 const REVIEW_RUN_STARTED = defineActivityLogOperation({
@@ -99,6 +100,8 @@ const REVIEW_RUN_STARTED = defineActivityLogOperation({
     reviewerModelDigest: DIGEST,
     counterCheckerModelDigest: DIGEST,
     reviewerPromptBudget: COUNT,
+    // The configured allowance for one diff package part; the `counter-checking` line of
+    // `review.run.phase` records the run's allowance and phase limit once the part count is known.
     counterCheckRunPromptBudget: COUNT,
     counterCheckMaxToolCalls: COUNT,
     counterCheckWallTimeMs: DURATION,
@@ -137,6 +140,9 @@ const REVIEW_RUN_PHASE = defineActivityLogOperation({
     // #4130: the prompt tokens all counter-checks of the run may spend, the configured allowance
     // once per diff package part; only on the `counter-checking` line.
     counterCheckRunPromptAllowance: OPTIONAL_COUNT,
+    // #4130: the wall time after which the phase starts no further counter-check, the configured
+    // limit once per diff package part; only on the `counter-checking` line.
+    counterCheckPhaseWallTimeMs: OPTIONAL_DURATION,
   },
   lifecycle: "state",
   analyzerProjection: "timeline",
@@ -308,6 +314,7 @@ export function logReviewRunPhase(
     readonly packageCounts?: ReviewRunPackageCounts | undefined;
     readonly candidateCount?: number | undefined;
     readonly counterCheckRunPromptAllowance?: number | undefined;
+    readonly counterCheckPhaseWallTimeMs?: number | undefined;
   },
 ): void {
   log.write(
@@ -323,6 +330,9 @@ export function logReviewRunPhase(
         ...(line.counterCheckRunPromptAllowance === undefined
           ? {}
           : { counterCheckRunPromptAllowance: line.counterCheckRunPromptAllowance }),
+        ...(line.counterCheckPhaseWallTimeMs === undefined
+          ? {}
+          : { counterCheckPhaseWallTimeMs: Math.round(line.counterCheckPhaseWallTimeMs) }),
       },
     ),
   );
