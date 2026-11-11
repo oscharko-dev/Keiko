@@ -3665,11 +3665,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
-      promptTokens: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
       affectedCount: {
         type: "integer",
         dataClass: "count",
@@ -9575,14 +9570,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["deny-all", "governed-egress", "connector-scoped-egress"],
       },
-      maxPromptTokens: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
-      },
       maxRuntimeMs: {
         type: "integer",
         dataClass: "duration",
+        required: false,
+      },
+      maxToolCalls: {
+        type: "integer",
+        dataClass: "count",
         required: false,
       },
     },
@@ -15495,7 +15490,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: [
-          "prompt-allowance",
           "envelope-duration",
           "model-call-failure",
           "no-model-call-failure",
@@ -18012,7 +18006,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "tool-contract-missing",
           "tool-contract-empty",
           "origin-not-allowed",
-          "runtime-prompt-budget-denied",
+          "runtime-model-call-denied",
           "capability-authenticator-unavailable",
           "capability-missing",
           "capability-invalid",
@@ -26428,7 +26422,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "clock-drift",
           "deadline-exhausted",
           "tool-budget-exhausted",
-          "prompt-budget-exhausted",
           "attempt-budget-exhausted",
           "storage-capacity",
           "attempt-active",
@@ -26524,16 +26517,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
-      promptTokenCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      requestedPromptTokenCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
       deadlineMs: {
         type: "integer",
         dataClass: "count",
@@ -26545,11 +26528,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       maxToolCalls: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      maxPromptTokens: {
         type: "integer",
         dataClass: "count",
         required: false,

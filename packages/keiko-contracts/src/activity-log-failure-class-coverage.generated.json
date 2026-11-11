@@ -4767,12 +4767,6 @@
               "required": false
             },
             {
-              "name": "promptTokens",
-              "type": "integer",
-              "dataClass": "count",
-              "required": false
-            },
-            {
               "name": "readiness",
               "type": "string",
               "dataClass": "closed-enum",
@@ -11343,15 +11337,15 @@
               "required": true
             },
             {
-              "name": "maxPromptTokens",
-              "type": "integer",
-              "dataClass": "count",
-              "required": true
-            },
-            {
               "name": "maxRuntimeMs",
               "type": "integer",
               "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "maxToolCalls",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -32300,12 +32294,6 @@
               "required": false
             },
             {
-              "name": "maxPromptTokens",
-              "type": "integer",
-              "dataClass": "count",
-              "required": false
-            },
-            {
               "name": "maxRuntimeMs",
               "type": "integer",
               "dataClass": "duration",
@@ -32330,12 +32318,6 @@
               "required": false
             },
             {
-              "name": "promptTokenCount",
-              "type": "integer",
-              "dataClass": "count",
-              "required": false
-            },
-            {
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",
@@ -32345,12 +32327,6 @@
               "name": "remoteDigest",
               "type": "string",
               "dataClass": "digest",
-              "required": false
-            },
-            {
-              "name": "requestedPromptTokenCount",
-              "type": "integer",
-              "dataClass": "count",
               "required": false
             },
             {
