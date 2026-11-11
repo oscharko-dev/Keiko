@@ -18,6 +18,7 @@ import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js"
 import { buildCspHeader } from "../csp.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UI_HOST } from "../server.js";
+import { createInMemoryUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createCodingRuntimeControlPlane } from "./codingRuntimeControlPlane.js";
@@ -46,11 +47,13 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+// The routes under test need only the runtime ports; the server itself starts the memory learning
+// runtime when it listens (#4213), which reads the environment and the store every server has.
 async function startServer(staticRoot: string, handlerDeps: UiHandlerDeps): Promise<number> {
   const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    handlerDeps,
+    handlerDeps: { env: {}, store: createInMemoryUiStore(), ...handlerDeps },
   });
   servers.push(started.server);
   return started.port;
