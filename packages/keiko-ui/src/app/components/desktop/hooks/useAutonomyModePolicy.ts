@@ -100,7 +100,7 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<AutonomyModePolicyError>(null);
   const [deploymentCeiling, setDeploymentCeiling] = useState<CodingWorkbenchMode | null>(null);
-  const [routineFactsHeldForReview, setRoutineFactsHeld] = useState(false);
+  const [routineFactsHeldForReview, setRoutineFactsHeldForReview] = useState(false);
   const sequence = useRef(0);
   const mounted = useRef(true);
 
@@ -123,7 +123,7 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
           setMemoryMode(policy.requestedMode);
         }
         setDeploymentCeiling(policy.deploymentCeiling);
-        setRoutineFactsHeld(policy.routineFactsHeldForReview === true);
+        setRoutineFactsHeldForReview(policy.routineFactsHeldForReview === true);
         setError(null);
       })
       .catch((): void => {
@@ -174,7 +174,7 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
             return;
           }
           setDeploymentCeiling(policy.deploymentCeiling);
-          setRoutineFactsHeld(policy.routineFactsHeldForReview === true);
+          setRoutineFactsHeldForReview(policy.routineFactsHeldForReview === true);
         })
         .finally((): void => {
           if (mounted.current && request === sequence.current) setPending(false);

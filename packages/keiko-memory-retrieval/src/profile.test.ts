@@ -165,7 +165,9 @@ describe("selectStandingProfile", () => {
       );
       const profile = selectStandingProfile(candidates, NOW);
       expect(profile.entries.length).toBeLessThanOrEqual(DEFAULT_STANDING_PROFILE_CAPS.maxEntries);
-      expect(profile.entries.length).toBe(Math.min(size, DEFAULT_STANDING_PROFILE_CAPS.maxEntries));
+      expect(profile.entries).toHaveLength(
+        Math.min(size, DEFAULT_STANDING_PROFILE_CAPS.maxEntries),
+      );
       expect(profile.tokens).toBeLessThanOrEqual(DEFAULT_STANDING_PROFILE_CAPS.maxTokens);
     }
   });

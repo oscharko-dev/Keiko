@@ -379,6 +379,39 @@ function journalRecapRefusal(
   );
 }
 
+interface RecapPersistRun {
+  readonly deps: UiHandlerDeps;
+  readonly vault: MemoryVaultStore;
+  readonly outcomes: readonly CaptureOutcome[];
+  readonly decision: RecapDecision;
+  readonly autoAcceptEligible: boolean;
+  readonly scopes: readonly MemoryScope[];
+  readonly proposed: { id: MemoryId; scope: MemoryScope }[];
+  readonly accepted: { id: MemoryId; scope: MemoryScope }[];
+  rejected: number;
+}
+
+// Persists one outcome after another, in order: each write may supersede the one before.
+async function persistRecapOutcomeAt(run: RecapPersistRun, index: number): Promise<void> {
+  const outcome = run.outcomes[index];
+  if (outcome === undefined) return;
+  const persisted = await persistRecapOutcome(
+    run.deps,
+    run.vault,
+    outcome,
+    run.decision,
+    run.autoAcceptEligible,
+  );
+  if (persisted === null) {
+    run.rejected += 1;
+    journalRecapRefusal(run.deps, run.decision, run.scopes, outcome);
+  } else {
+    const memory = { id: persisted.id, scope: persisted.scope };
+    (persisted.accepted ? run.accepted : run.proposed).push(memory);
+  }
+  await persistRecapOutcomeAt(run, index + 1);
+}
+
 async function persistRecapOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -387,24 +420,20 @@ async function persistRecapOutcomes(
   scopes: readonly MemoryScope[],
   correlationId: string,
 ): Promise<RecapPersistResult> {
-  const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
-  const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
   const decision: RecapDecision = { mode: resolvePersistedMemoryAutonomyMode(deps), correlationId };
-  let rejected = 0;
-  for (const outcome of outcomes) {
-    const persisted = await persistRecapOutcome(deps, vault, outcome, decision, autoAcceptEligible);
-    if (persisted === null) {
-      rejected += 1;
-      journalRecapRefusal(deps, decision, scopes, outcome);
-      continue;
-    }
-    const memory = { id: persisted.id, scope: persisted.scope };
-    if (persisted.accepted) {
-      accepted.push(memory);
-    } else {
-      proposed.push(memory);
-    }
-  }
+  const run: RecapPersistRun = {
+    deps,
+    vault,
+    outcomes,
+    decision,
+    autoAcceptEligible,
+    scopes,
+    proposed: [],
+    accepted: [],
+    rejected: 0,
+  };
+  await persistRecapOutcomeAt(run, 0);
+  const { proposed, accepted, rejected } = run;
   return { proposed, accepted, extracted: outcomes.length, rejected };
 }
 
