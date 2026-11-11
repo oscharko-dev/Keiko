@@ -28,9 +28,20 @@ export interface ReviewSettlementFacts {
   readonly coverage?: ReviewDiffSettlementInput | undefined;
   readonly reviewer?: ReviewerSettlementFact | undefined;
   readonly counterChecks: readonly CounterCheckEffect[];
-  /** Candidates no counter-check settled because the run's allowance ran out first. */
+  /**
+   * Candidates no counter-check settled because the run's prompt allowance or the counter-check
+   * phase's wall-time limit ran out first.
+   */
   readonly uncheckedCandidates: number;
+  /** Which of the two left them unchecked; absent reads as the prompt allowance. */
+  readonly uncheckedReason?: UncheckedCandidatesReason | undefined;
 }
+
+/** Why the counter-check phase stopped before every candidate was checked (#4130). */
+export type UncheckedCandidatesReason = Extract<
+  ReviewIncompleteReason,
+  "budget-exhausted" | "deadline-exceeded"
+>;
 
 /** When several incomplete reasons apply, the most consequential one names the run. */
 const INCOMPLETE_PRIORITY: readonly ReviewIncompleteReason[] = [
@@ -58,6 +69,14 @@ export function combineReviewerFacts(
     : { outcome: "failed", reason: "model-failed" };
 }
 
+/** The reason unchecked candidates add, or `undefined` when every candidate was checked. */
+function uncheckedCandidatesReason(
+  facts: ReviewSettlementFacts,
+): UncheckedCandidatesReason | undefined {
+  if (facts.uncheckedCandidates <= 0) return undefined;
+  return facts.uncheckedReason ?? "budget-exhausted";
+}
+
 function incompleteReasons(facts: ReviewSettlementFacts): Set<ReviewIncompleteReason> {
   const reasons = new Set<ReviewIncompleteReason>();
   if (facts.reviewer?.outcome === "failed") reasons.add(facts.reviewer.reason);
@@ -70,7 +89,8 @@ function incompleteReasons(facts: ReviewSettlementFacts): Set<ReviewIncompleteRe
       reasons.add(effect);
     }
   }
-  if (facts.uncheckedCandidates > 0) reasons.add("budget-exhausted");
+  const unchecked = uncheckedCandidatesReason(facts);
+  if (unchecked !== undefined) reasons.add(unchecked);
   if (facts.coverage?.kind === "incomplete") reasons.add(facts.coverage.reason);
   return reasons;
 }

@@ -111,6 +111,25 @@ describe("review run Activity Log proofs", () => {
     });
   });
 
+  it("proves the counter-checking line with the run allowance and the phase limit (#4130)", () => {
+    const line = onlyLine((sink) => {
+      logReviewRunPhase(sink, CORRELATION, {
+        runId: "review-run-1",
+        phase: "counter-checking",
+        elapsedMs: 90_000,
+        candidateCount: 9,
+        counterCheckRunPromptAllowance: 2_400_000,
+        counterCheckPhaseWallTimeMs: 7_200_000,
+      });
+    });
+    expect(expectActivityLogProof("review.run.phase.line", line)).toMatchObject({
+      phase: "counter-checking",
+      candidateCount: 9,
+      counterCheckRunPromptAllowance: 2_400_000,
+      counterCheckPhaseWallTimeMs: 7_200_000,
+    });
+  });
+
   it("proves review.run.part for each way a part's session ends (Issue #4130)", () => {
     expect(REVIEW_RUN_LOG_PART_OUTCOMES).toEqual(["completed", "failed", "cancelled", "refused"]);
     const part = {

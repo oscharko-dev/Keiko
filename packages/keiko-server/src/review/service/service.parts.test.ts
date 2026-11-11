@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
+  REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
   REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
   type ReviewRunView,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
@@ -193,6 +194,7 @@ describe("a review in several parts (Issue #4130)", () => {
     expect(counterCheckingLine(h)).toMatchObject({
       candidateCount: 2,
       counterCheckRunPromptAllowance: 2 * REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
+      counterCheckPhaseWallTimeMs: 2 * REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
     });
   });
 
@@ -206,6 +208,30 @@ describe("a review in several parts (Issue #4130)", () => {
     expect(view.presentedFindings).toHaveLength(1);
     expect(counterCheckingLine(h)).toMatchObject({
       counterCheckRunPromptAllowance: REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
+      counterCheckPhaseWallTimeMs: REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
+    });
+  });
+
+  it("settles on the deadline when the counter-check phase's limit leaves candidates unchecked", async () => {
+    // A limit of zero has passed before the first check: no counter-check starts.
+    const { h, view } = await review({
+      runtime: perPart(
+        reviewerFiling([reportAt(3, "high")]),
+        reviewerFiling([reportAt(10, "medium")]),
+      ),
+      counterCheck: counterCheckBy({ 3: "confirmed", 10: "confirmed" }),
+      counterCheckPhaseWallTimeMs: 0,
+    });
+    expect(h.counterInputs).toHaveLength(0);
+    expect(view.settlement).toEqual({ kind: "incomplete", reason: "deadline-exceeded" });
+    expect(counterCheckingLine(h)).toMatchObject({
+      candidateCount: 2,
+      counterCheckPhaseWallTimeMs: 0,
+    });
+    const [settledLine] = h.log.withOp("review.run.settled");
+    expect(settledLine?.extra).toMatchObject({
+      settlement: "incomplete",
+      reason: "deadline-exceeded",
     });
   });
 

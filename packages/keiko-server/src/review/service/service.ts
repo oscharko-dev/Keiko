@@ -21,6 +21,7 @@ import type {
   ReviewRunEstimate,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import {
+  REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
   REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
   REVIEW_RUN_DEFAULT_PROMPT_TOKENS,
   REVIEW_RUN_HISTORY_MAX,
@@ -70,6 +71,8 @@ export interface ReviewRunServiceDeps {
   /** The Reviewer's prompt budget as the review runtime is configured (logged at start). */
   readonly reviewerPromptBudget?: number | undefined;
   readonly counterCheckRunPromptTokens?: number | undefined;
+  /** Wall time the counter-check phase may take for each diff package part (default 60 minutes). */
+  readonly counterCheckPhaseWallTimeMs?: number | undefined;
   readonly counterCheckLimits?: Partial<CounterCheckLimits> | undefined;
   /** Issue #4141's exclusion (a fingerprint already dismissed on the pull request); default none. */
   readonly excludedFingerprint?: ((run: ReviewRunRow, fingerprint: string) => boolean) | undefined;
@@ -344,6 +347,8 @@ class ReviewRunServiceImpl implements ReviewRunService {
       events: this.events,
       now: this.now,
       counterCheckRunPromptTokens: this.counterCheckRunPromptTokens(),
+      counterCheckPhaseWallTimeMs:
+        this.deps.counterCheckPhaseWallTimeMs ?? REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
     };
   }
 
