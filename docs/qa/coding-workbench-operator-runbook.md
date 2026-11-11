@@ -87,53 +87,47 @@ Evidence must not contain:
   bodies, PR bodies, provider endpoints, credentials, private URLs, token-bearing strings, or private
   filesystem paths.
 
-## Context and cumulative prompt allowance
+## Context, run duration and cost
 
 The selected model's context allowance limits one model request. OpenCode compaction reduces
-conversation history for subsequent requests; it does not erase the prompt tokens already consumed
-by a run. The run's Authority Envelope independently accounts for cumulative prompt usage and for
-elapsed time. Every turn re-sends the whole conversation, so cumulative usage grows with the square
-of the turn count: in the live Gemma qualification (#3873) an ordinary six-file ESLint repair on a
-slow self-hosted model reached 200,000 cumulative tokens in 17 turns and 27.5 minutes with no
-refused edit.
+conversation history for subsequent requests. Keiko does not cap a run's cumulative prompt tokens
+(owner decision 2026-11-11, ADR-0137 D2): every turn re-sends the whole conversation, so cumulative
+usage grows with the square of the turn count, and any fixed sum ended healthy long runs (the former
+`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` allowance is removed and no longer read). Cost control is the
+operator-configured Model Gateway spend ceiling; configure one where a paid provider must be metered.
 
-Two operator settings bound every newly minted envelope. Set them before starting the server; both
-are read once when the coding runtime is composed, before it activates, so a running Keiko keeps its
-old value until it is restarted (the Workbench's limit messages say so, and name the maximum below).
-An invalid value, or one above the maximum, stops that composition with a `RangeError` instead of
+One operator setting bounds every newly minted envelope. Set it before starting the server; it is
+read once when the coding runtime is composed, before it activates, so a running Keiko keeps its old
+value until it is restarted (the Workbench's limit message says so, and names the maximum below). An
+invalid value, or one above the maximum, stops that composition with a `RangeError` instead of
 minting a silently defaulted envelope (fail closed):
 
-| Setting                                     | Meaning                                            | Default   | Accepted values                       |
-| ------------------------------------------- | -------------------------------------------------- | --------- | ------------------------------------- |
-| `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`    | Cumulative prompt-token allowance of one run       | 2,000,000 | decimal integer 1 through 20,000,000  |
-| `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` | Envelope duration (`maxRuntimeMs` and `expiresAt`) | 120       | decimal integer 1 through 480 minutes |
+| Setting                                     | Meaning                                            | Default | Accepted values                       |
+| ------------------------------------------- | -------------------------------------------------- | ------- | ------------------------------------- |
+| `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` | Envelope duration (`maxRuntimeMs` and `expiresAt`) | 120     | decimal integer 1 through 480 minutes |
 
-Both are copied into each newly minted envelope and reported body-free as `maxPromptTokens` and
-`maxRuntimeMs` on the existing `coding-runtime.authority.minted` activity event. Neither changes a
-live or exhausted envelope, the tool/patch ceilings, or a configured Model Gateway spend limit. The
-safe-activity feed is retained for the configured duration plus a margin, and one submitted task's
-whole agent loop is bounded by the same duration; per-request provider deadlines are unchanged. A
-run that exhausts either bound fails closed at its next delegation
-(`coding-sidecar.gateway.rejected` with `runtime-prompt-budget-denied`, or an expired authority); it
-requires a fresh accepted run and preserves its workspace through normal recovery. Lower a bound
-deliberately for a constrained deployment; the former 200,000-token / 30-minute defaults ended
-ordinary multi-file work on a slow self-hosted model.
+It is copied into each newly minted envelope and reported body-free as `maxRuntimeMs` on the
+existing `coding-runtime.authority.minted` activity event. It does not change a live or exhausted
+envelope, the tool/patch ceilings, or a configured Model Gateway spend limit. The safe-activity feed
+is retained for the configured duration plus a margin, and one submitted task's whole agent loop is
+bounded by the same duration; per-request provider deadlines are unchanged. A run that exhausts it
+fails closed at its next delegation (an expired authority); it requires a fresh accepted run and
+preserves its workspace through normal recovery. The former 30-minute default ended ordinary
+multi-file work on a slow self-hosted model.
 
-A run that ends on one of its bounds settles `failed` with a cause of its own instead of an internal
-error (#3873, ADR-0137 D3): `prompt-allowance-exhausted` when the allowance refused its last model
-call, `envelope-duration-exhausted` when its envelope ran out of time (`coding-runtime.run.settled`
-with `failureBasis` `prompt-allowance` or `envelope-duration`), and the Workbench names the bound and
-the next step. The same settled line carries the run's effort roll-up (`wallDurationMs`,
-`modelTurnCount`, `promptTokensTotal`, `toolInvocationCount`, `editRefusedCount`, `operatorWaitMs`
-and the other counts and durations of ADR-0137 D3), so a bound a run used up can be read against the
-model turns and tool calls that used it.
+A run that ends on its duration settles `failed` with a cause of its own instead of an internal error
+(#3873, ADR-0137 D3): `envelope-duration-exhausted` (`coding-runtime.run.settled` with `failureBasis`
+`envelope-duration`), and the Workbench names the bound and the next step. The same settled line
+carries the run's effort roll-up (`wallDurationMs`, `modelTurnCount`, `promptTokensTotal`,
+`toolInvocationCount`, `editRefusedCount`, `operatorWaitMs` and the other counts and durations of
+ADR-0137 D3), so an operator can read a run's token use against its model turns and tool calls.
 
 The output allowance of one model request (`maxOutputTokens` on
 `coding-sidecar.gateway.request-validated`, and OpenCode's `limit.output`) is not an operator
 setting; it is derived by this rule (#3873, F17): a coding turn reserves at least 16,384 output
 tokens unless the provider-declared `max_output_tokens` (LiteLLM's `/model/info`, or the operator's
-model configuration) or the prompt-admission arithmetic (`maxPromptTokens` minus the estimated
-prompt minus the safety margin) is smaller, and never more than a quarter of the model's window.
+model configuration) or the per-request prompt-admission arithmetic (the request's `maxPromptTokens` minus the
+estimated prompt minus the safety margin) is smaller, and never more than a quarter of the model's window.
 Before this rule a coding turn was sent the shared chat profile's reserve (one sixteenth of the
 window, 8,192 of 131,072 tokens), which a reasoning model spent before its first tool call; chat and
 every other surface keep that chat reserve. A reasoning model that spends the whole

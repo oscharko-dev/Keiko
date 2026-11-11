@@ -717,8 +717,7 @@ would restore the false green it replaced.
 **Symptom**
 
 A run ends as failed, and the Workbench names why instead of "The coding run ended with an internal
-error": the prompt allowance is used up (`prompt-allowance-exhausted`), the run's time limit is used
-up (`envelope-duration-exhausted`), the model used its whole output budget again after a repair
+error": the run's time limit is used up (`envelope-duration-exhausted`), the model used its whole output budget again after a repair
 attempt (`output-exhausted-repeated`), the model provider could not be reached or stopped answering
 (`provider-unavailable`), or the last model step failed for the reason the failed step above it
 names (`model-turn-failed`). The run's `coding-runtime.run.settled` line carries the same
@@ -734,13 +733,6 @@ The failed turn ended on one of the run's bounds or on a model call, not on a Ke
 F9; runs `run-65084062444586162471229658028402064666` and
 `run-272120967981827964065820685403290179367`). `failureBasis` names the fact the cause came from:
 
-- `prompt-allowance` — the run's cumulative prompt allowance (`maxPromptTokens` of the Authority
-  Envelope) refused its most recent model call. The gateway answered that call with
-  `coding-sidecar.gateway.rejected reason=runtime-prompt-budget-denied` and a `turn-rejected` turn
-  failure. The same cause names a call the run's CI-repair budget refused for its own
-  `prompt-budget-exhausted`, which counts the same `maxPromptTokens` over the repair; no other
-  reason of that budget does (see the last bullet). Failed model calls keep their reserved prompt
-  estimate, so a long provider outage spends the allowance too.
 - `envelope-duration` — the run's Authority Envelope ran out of time (`maxRuntimeMs` after minting,
   or its `expiresAt`). A model call in flight at that moment ends with
   `coding-sidecar.gateway.outcome outcome=cancelled cancellationCause=run-stopped`; a call started
@@ -761,13 +753,15 @@ F9; runs `run-65084062444586162471229658028402064666` and
 - `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
   settles `runtime-failed`: the runtime crashed or failed internally.
 
+Keiko does not cap a run's prompt tokens (owner decision 2026-11-11, ADR-0137 D2); a run stored
+before that decision may still read `prompt-allowance-exhausted`, which no current run produces.
+
 A CI repair's budget refuses a model call before the authority is asked, and a refusal names no limit
-of the run unless it is the repair's own prompt allowance or runtime limit (#3873 review): a repair
+of the run unless it is the repair's own runtime limit (#3873 review): a repair
 out of failed attempts (`attempt-budget-exhausted`), a withdrawn authority (`authority-denied`), a
 failed or full store (`storage-unavailable`, `storage-capacity`), a binding or clock fault
 (`invalid-binding`, `clock-drift`) and the rest settle `model-turn-failed` with
-`modelCallFailure: turn-rejected`, never `prompt-allowance-exhausted`, because no allowance setting
-can lift them. The closed reason is on the `git.ci-repair.budget` line of the refused call.
+`modelCallFailure: turn-rejected`, because no run setting can lift them. The closed reason is on the `git.ci-repair.budget` line of the refused call.
 
 A run that settles `provider-unavailable` on a `provider-failed` call still shows "The model provider
 rejected this turn" on its last failed step: the per-turn wording names the gateway's answer, while
@@ -782,20 +776,16 @@ the run's own cause names the outage.
    keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
    ```
 
-2. For `prompt-allowance`, `coding-runtime.authority.minted` names the run's `maxPromptTokens`, and the
-   `coding-sidecar.gateway.usage-settled` lines under the run sum what each model call spent
-   (`promptSource` tells a provider-reported count from a kept estimate).
-3. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
+2. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
    (`maxRuntimeMs` on `coding-runtime.authority.minted`, where the composition reports it).
    A CI repair whose own limit ran out while the envelope still had time settles the same cause;
    the `git.ci-repair.budget` line of the next step then carries `reason: deadline-exhausted`.
-4. For a call the run's CI-repair budget refused, read the `git.ci-repair.budget` line with
+3. For a call the run's CI-repair budget refused, read the `git.ci-repair.budget` line with
    `phase: prompt-admission` and `status: blocked` under the run's correlation: its `reason` is the
-   closed reason the budget refused with (`prompt-budget-exhausted`, `deadline-exhausted`,
-   `attempt-budget-exhausted`, `authority-denied`, `storage-unavailable`, ...) and
-   `requestedPromptTokenCount` the estimate it was asked about. A check that refused the call and a
+   closed reason the budget refused with (`deadline-exhausted`, `attempt-budget-exhausted`,
+   `authority-denied`, `storage-unavailable`, ...). A check that refused the call and a
    charge that refused it after the authority admitted it write the same line.
-5. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
+4. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
    names the cause (`failureCode`), whether the provider could not serve the call
    (`providerUnavailable`) and whether the runtime could retry it (`runtimeRetry`); a
    `gateway.retry.exhausted` or `gateway.circuit.wait outcome=budget-refused` under the same chat
@@ -803,11 +793,6 @@ the run's own cause names the outage.
 
 **Resolution**
 
-- `prompt-allowance-exhausted`: start the task again as a new run, which gets a fresh allowance and the
-  changes already in the task workspace, or split the task. Where tasks of this size are routine, an
-  operator raises `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` before starting the server; see the
-  operator runbook. A run that spends its allowance on a loop of refused edits is a defect to report,
-  not a reason to raise it.
 - `envelope-duration-exhausted`: start the task again as a new run, which gets a fresh time limit and
   the changes already in the task workspace, or split the task. Where slow models make tasks of this
   size routine, an operator lengthens the envelope duration before starting the server (see the
@@ -1089,4 +1074,4 @@ settles `failed` (ADR-0137 D3):
   choose another model.
 
 The bounds are fixed and deliberately small: each refused attempt resends the run's growing context to
-the model, so a run that loops on a refusal spends its prompt allowance on nothing (ADR-0137).
+the model, so a run that loops on a refusal spends tokens and time on nothing (ADR-0137).

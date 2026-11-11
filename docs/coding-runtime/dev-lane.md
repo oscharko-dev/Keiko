@@ -174,7 +174,7 @@ turn carries no block.
 
 - The loader is on by default. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables it
   before the server starts; `true` is the default. Any other explicit value fails composition
-  closed, like `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`.
+  closed, like `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`.
 - Each run records one body-free `coding-runtime.repository-instructions.context` line under the
   run's correlation id: `attached`, `truncated`, `absent`, `disabled` or `refused`, with the attached
   byte and line counts, the file's total counts when it was cut, and the whole-file SHA-256 that

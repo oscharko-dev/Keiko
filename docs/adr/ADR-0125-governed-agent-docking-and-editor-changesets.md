@@ -445,8 +445,8 @@ tool call and its patch body or inserted text-edit bytes when applicable. Reserv
 cumulative per server-owned authority record; exceeding `maxToolCalls`, `maxPatchBytes`, or elapsed
 `maxRuntimeMs` fails as
 `authority-budget-exceeded`. Idempotent replay returns the retained result before reservation and
-therefore does not double-charge. Editor actions carry no prompt body, so this route consumes zero
-of `maxPromptTokens`.
+therefore does not double-charge. The envelope carries no prompt-token allowance (owner decision
+2026-11-11, ADR-0137 D2); a legacy `maxPromptTokens` key validates and is ignored.
 
 Audit and evidence remain redacted and body-free: ids, digests, modes, effects, reason codes, the
 bounded `agent | chat` action origin, contained file labels, counts, byte counts, statuses, and

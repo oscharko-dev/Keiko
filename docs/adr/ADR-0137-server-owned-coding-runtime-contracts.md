@@ -134,8 +134,8 @@ file the guided `init` command creates and a removal reach the next model call a
 own instruction update. The initial turn then attaches no block, so the text reaches the model
 once; the mapped profiles keep the first-message block. The copy carries the whole
 credential-masked file, as a standalone run loads its AGENTS.md (2026-10-29): the 16 KiB/800-line cut
-belongs to the first-message block alone. It is bounded by the helper's 1 MiB ceiling and by the
-run's prompt budget, half the model's input window at three bytes per token
+belongs to the first-message block alone. It is bounded by the helper's 1 MiB ceiling and by a
+per-request copy budget, half the model's input window at three bytes per token
 (`repositoryInstructionsCopyBudget`, from the geometry the run launches with; about 168 KiB on a
 131,072-token window). A file beyond that budget arrives cut at a line boundary with the explicit
 truncation line instead of failing every turn on a window it cannot fit, and the context line then
@@ -190,14 +190,13 @@ opaque run id and envelope digest cross into the adapter seam.
 
 Minting requires a server-issued, action-bound, one-use human confirmation. The Authority Envelope
 itself is retained for the complete run so the existing registry remains the sole source of
-cumulative runtime/tool/patch budgets. Two of those bounds are operator settings, read once at
-composition and copied into every newly minted envelope: the cumulative prompt-token allowance
-`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` (default 2,000,000; positive decimal integers up to
-20,000,000) and the envelope duration `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 120;
-positive decimal integers from 1 to 480), from which both `budget.maxRuntimeMs` and `expiresAt`
-derive. An invalid value fails the composition closed; neither setting can alter an existing
-envelope or reset its usage, and a run that exhausts either bound still fails closed at its next
-delegation. The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
+cumulative runtime/tool/patch budgets. One of those bounds is an operator setting, read once at
+composition and copied into every newly minted envelope: the envelope duration
+`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 120; positive decimal integers from 1 to 480),
+from which both `budget.maxRuntimeMs` and `expiresAt` derive. An invalid value fails the composition
+closed; the setting cannot alter an existing envelope or reset its usage, and a run that exhausts it
+still fails closed at its next delegation. The envelope carries no prompt-token bound (owner
+decision 2026-11-11, below). The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
 envelope is minted with `CODING_RUNTIME_PATCH_BUDGET_BYTES` (64 MiB, owner decision 2026-10-28;
 previously 256 KiB), eight changesets of the per-changeset cap of ADR-0125 D3, charged by the size of
 the diff each edit renders. Native context compaction changes subsequent request size, not
@@ -217,21 +216,30 @@ completion, so an answer or summary cannot bypass pending tools or verification 
 compaction configuration and execution ordering remain native-runtime concerns; the historical
 post-answer delay remains open until a reproducible native qualification identifies the cause.
 
-The allowance is the only default per-run token bound: a Model Gateway spend ceiling is enforced
-only where an operator configures one. It therefore counts every prompt the provider processed for
-a turn: the turn's own prompt and, when the gateway discarded attempts on the way to its answer (a
-steered repair's first answer, a catalog-rejected tool call, a stream that failed after its usage
-arrived), their provider-reported prompt tokens (`discardedAttemptUsage`, ADR-0003; #3873 review). The former defaults (200,000 tokens and a fixed 30 minutes)
-rested on the premise that only a refused-edit loop exhausts them; the live Gemma qualification
-(#3873, run `run-65084062444586162471229658028402064666`, Supervised workspace, Gemma 4 31B behind
-LiteLLM) disproved it. An ordinary task — fix 13 ESLint findings across six files, then run
-`npm run check` — ran 17 model turns in 27.5 minutes with all three replacement edits applied first
-time and no refused edit, yet every turn re-sends the whole conversation, so the prompt grew from
-4,128 to 18,520 tokens per turn, the cumulative sum reached 200,000, the gateway rejected turn 18
-(`coding-sidecar.gateway.rejected`, `runtime-prompt-budget-denied`) and the run settled `failed`.
+**Keiko does not cap prompt tokens — owner decision (2026-11-11, #4346).** The envelope formerly
+carried a cumulative prompt-token allowance (`budget.maxPromptTokens`, operator setting
+`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`, last default 2,000,000) that summed every prompt the
+provider processed for the run. Every agent step re-sends the whole conversation, so that sum grows
+quadratically with ordinary progress and any fixed allowance ends healthy long runs: the live Gemma
+qualification (#3873, run `run-65084062444586162471229658028402064666`) hit the earlier 200,000 after
+17 normal turns, and a customer run on a real repository failed "prompt allowance used up" at
+2,000,000 while still progressing. The owner removed the allowance rather than raising it: Keiko does
+not meter tokens on the operator's behalf, and cost control belongs to the operator-configured Model Gateway spend ceiling,
+enforced only where an operator configures one. The removal covers every cumulative prompt quota in
+the product: this envelope, the Chat tool turn (ADR-0129), governed agent runs (ADR-0125) and the CI
+repair budget. A model call is still admitted only while the run's authority is live, unexpired and
+unrevoked and, for a CI repair, its deadline remains (`admitModelCall`); the admission books no
+tokens. Per-request context-window fitting, output limits, duration, tool-call and patch budgets are
+unchanged. `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` is no longer read; a legacy envelope or durable
+record that still carries a well-formed `maxPromptTokens` validates and is ignored, a malformed one
+is still refused. The closed failure code `prompt-allowance-exhausted` stays decodable for runs
+stored before the removal and is never produced. Provider-reported usage, including discarded
+attempts (`discardedAttemptUsage`, ADR-0003), is still recorded for the run's effort roll-up. A
+better guard against a model that loops unnoticed is tracked in #4346; the refused-edit escalation
+below already ends the known loop.
 A slow self-hosted model (about 24 tokens/s, 1,600 to 4,400 mostly-reasoning completion tokens per
-turn) likewise turns a fixed 30-minute duration into a wall that ordinary multi-file tasks hit. The
-minted allowance and duration are reported body-free as `maxPromptTokens` and `maxRuntimeMs` on
+turn) turns a fixed 30-minute duration into a wall that ordinary multi-file tasks hit, so the
+duration default is 120 minutes. The minted duration is reported body-free as `maxRuntimeMs` on
 `coding-runtime.authority.minted`. Every other bound that must not be shorter than the run follows
 the configured duration: the safe-activity projection retains a run's feed for the duration plus a
 margin, and the OpenCode adapter bounds one submitted task's whole agent loop by the run's
@@ -243,18 +251,13 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
-**Default envelope widened — owner decision (2026-10-07, PR #3876).** Raising the two defaults
-widens the default Authority Envelope of every installation: ten times the prompt-token allowance,
-four times the duration, and with `expiresAt` a minted run capability that lives up to 120 minutes
-instead of 30. The owner decided to ship these defaults (2,000,000 tokens, 120 minutes) for every
-installation, with the two variables as the operator's opt-down, rather than a tighter compromise:
-the measured need of ordinary multi-file tasks on self-hosted reasoning models exceeds the former
-defaults (above), and a run still fails closed at either bound. Operators who meter a paid provider
-set `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` before
-the server starts, and configure a Model Gateway spend ceiling where they need a per-provider cost
-bound. Release note: "Coding Workbench runs now allow up to 2,000,000 prompt tokens and 120 minutes
-by default (previously 200,000 tokens and 30 minutes); lower them with
-`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`."
+**Default envelope widened — owner decision (2026-10-07, PR #3876).** Raising the duration
+default widens the default Authority Envelope of every installation: four times the duration, and
+with `expiresAt` a minted run capability that lives up to 120 minutes instead of 30. The owner
+decided to ship 120 minutes for every installation, with `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`
+as the operator's opt-down, and a run still fails closed at that bound. (The same decision raised the
+prompt-token allowance tenfold; the allowance itself was removed on 2026-11-11, above.) Operators who
+need a per-provider cost bound configure a Model Gateway spend ceiling.
 
 The same aggregate answers a budget question without spending: `delegationFits` says whether one
 more delegation of a given usage would still fit the run's budget, for the same capability, run and
@@ -293,7 +296,7 @@ received it, to the orchestrator, which counts the run's refusals since its last
 whatever their closed reason codes. (The first version counted refusals with the same code and
 restarted on any other; a model that alternated two refusals — an edit that does not match, a stale
 re-read, an edit that does not match again — repeated no code, was never bounded and spent the whole
-prompt allowance: PR #3876 review.) Other tool calls between two refused edits do not interrupt the
+prompt allowance of that time: PR #3876 review.) Other tool calls between two refused edits do not interrupt the
 streak — re-reading the file is exactly what the refusal guidance asks for — while an applied edit
 ends it. A human's rejection of a change in its review is a decision, never a refusal (ADR-0124 D6),
 and an edit whose preparation was cancelled says nothing about the edit: neither counts. Refusals
@@ -324,7 +327,7 @@ latest refusal's closed words when it had them. The run then settles through the
 failed turn, its runtime stopped and its changes kept in the task workspace, and
 `coding-runtime.run.settled` carries the cause with `failureBasis: "refusal-escalation"` and
 `refusalReasonCode`. The bounds are fixed: every refused attempt resends the run's growing context,
-so a loop spends the prompt allowance on nothing.
+so a loop spends tokens and time on nothing.
 
 **A paused run says what it is waiting for.** `paused` covers two different situations and the
 operator has to be able to tell them apart, so the snapshot carries an optional `pauseReason` from a
@@ -448,24 +451,17 @@ discarded with the run.
 **A failed run names the bound or model-call cause that ended it** (F9 of the live Gemma
 qualification, #3873). A failed task outcome carries no cause of its own, and settling every one as
 `runtime-failed` told an operator "internal error" for runs that had only reached a bound: run
-`run-65084062444586162471229658028402064666` used up its prompt allowance, and run
+`run-65084062444586162471229658028402064666` used up the prompt allowance of that time (removed
+2026-11-11, D2), and run
 `run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model call in
 flight (`coding-sidecar.gateway.outcome` `cancelled`, `cancellationCause=run-stopped`). At
 settlement the orchestrator reads, before it stops the runtime, the facts the owning layers hold:
-the runtime authority answers whether the run's most recent model-call admission was refused by the
-cumulative prompt allowance itself (not by the runtime's time budget, expiry, revocation, or a run
-state that admits no model call; a refusal by the run's CI-repair budget answers before the
-authority is asked and is recorded in the same place with the closed reason the budget refused with,
-and only its own `prompt-budget-exhausted`, which counts the same `maxPromptTokens` over the repair,
-is the allowance: every other reason names no allowance, so a repair that spent its failed attempts
-or lost its authority never settles as an exhausted prompt allowance, which no setting could fix;
-#3873 review) and whether the run's time limit ran out (`maxRuntimeMs` after minting or `expiresAt`,
+the runtime authority answers whether the run's time limit ran out (`maxRuntimeMs` after minting or `expiresAt`,
 whichever comes first, or the CI repair's own `deadline-exhausted`, which counts the same
 `maxRuntimeMs` over the repair), and the control plane's event
 hub keeps the closed cause the coding sidecar gateway reported for the run's most recent failed
 model call until a later call of the run is answered, with the gateway's own fact that the provider
-could not serve that call. In that order, the run settles `prompt-allowance-exhausted`,
-`envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
+could not serve that call. In that order, the run settles `envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
 ends a run only after the gateway's one steered repair or the runtime's retries exhausted the budget
 again), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
 failed turn's own frame names), and `runtime-failed` (the runtime crashed or failed internally) only
@@ -494,7 +490,7 @@ the same stop path, so the settled snapshot and its terminal status event are id
 `coding-runtime.run.shutdown` in the server's Activity Log names a shutdown. An earlier text claimed
 "You stopped this run" for every `cancelled` run, which blamed the operator for a restart (#3873
 review). Nothing is read from OpenCode's error text. `coding-runtime.run.settled` records the cause
-with `failureBasis` (`prompt-allowance`, `envelope-duration`, `model-call-failure`,
+with `failureBasis` (`envelope-duration`, `model-call-failure`,
 `no-model-call-failure`, or `refusal-escalation` for an escalated run) and `modelCallFailure` (a
 `provider-unavailable` run that ended on a retryable status names `provider-failed` there), and an
 error class that matches it instead of `internal`.

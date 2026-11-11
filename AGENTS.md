@@ -99,6 +99,12 @@ This shapes the product _and_ how you work on it:
   safety state; that state must never make the Editor discoverable or executable as an agent
   session. Chat repository search and the separate Coding Workbench are outside this retirement.
   Shared runtime contracts remain only where active consumers need them (ADR-0061).
+- **Keiko does not cap prompt tokens (owner decision, 2026-11-11):** no Coding run, Chat tool turn,
+  agent run or CI repair carries a cumulative prompt-token allowance; every agent step resends the
+  whole conversation, so any fixed sum ends healthy long runs. Cost control is the operator-configured
+  Model Gateway spend ceiling. Per-request context-window fitting, output limits, duration, tool-call
+  and patch budgets remain. Never reintroduce a token-count quota; a better guard against a model
+  that loops unnoticed is tracked in #4346 (ADR-0137).
 - **Knowledge Pod scope (owner decision, 2026-11-04):** Knowledge Pods use local storage and have
   no sharing roadmap or sharing placeholders. The ordinary Create Knowledge Pod dialog asks only
   for a name; the existing server-side `standard` default supplies model-use policy. Model routing
