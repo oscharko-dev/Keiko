@@ -94,4 +94,19 @@ describe("an npm plugin package the operator installed (#3903 AC2)", () => {
       "export const x = 1;\n",
     );
   });
+
+  it.each([
+    "\\\\attacker\\share\\pkg",
+    "\\\\?\\C:\\pkg",
+    "\\\\.\\pipe\\pkg",
+    "C:\\pkg\\NUL",
+    "relative",
+  ])("refuses the non-local-drive Windows root %s before any filesystem call", (root) => {
+    // A UNC or device root would contact a host on its first listing; on this host the same call
+    // would throw ENOENT, so a plain refusal proves the guard ran before the filesystem.
+    expect(readPluginPackage(root, "entry.js", "win32")).toEqual({
+      ok: false,
+      reason: "unreadable",
+    });
+  });
 });

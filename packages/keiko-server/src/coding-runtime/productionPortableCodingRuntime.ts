@@ -47,6 +47,10 @@ import {
   macosReleaseTeamIdentifier,
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
+import {
+  verifiedHelperExecutionCopy,
+  type VerifiedHelperExecutionCopy,
+} from "./nativeRuntimeProcessBackend.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import { declaredPortableRuntimeLane, type PortableRuntimeLane } from "./portableRuntimeLane.js";
 import { verifyLinuxQualificationBundle } from "./linuxPortableSigstore.js";
@@ -197,18 +201,29 @@ export function readWindowsGatewayServiceStatus(
   helperSha256: string,
 ): Promise<number | null> {
   return new Promise((resolve) => {
-    const child = spawn(helperPath, ["--gateway-service-status", helperSha256], {
+    // The same digest check a launch applies: bytes that do not match the pin never execute, and the
+    // helper that runs is a private copy of the verified bytes, not the path that could be swapped.
+    let copy: VerifiedHelperExecutionCopy;
+    try {
+      copy = verifiedHelperExecutionCopy(helperPath, helperSha256);
+    } catch {
+      resolve(null);
+      return;
+    }
+    const finish = (code: number | null): void => {
+      copy.cleanup();
+      resolve(code);
+    };
+    const child = spawn(copy.path, ["--gateway-service-status", helperSha256], {
       stdio: "ignore",
       windowsHide: true,
       shell: false,
       timeout: 2_000,
     });
     child.once("error", () => {
-      resolve(null);
+      finish(null);
     });
-    child.once("close", (code: number | null) => {
-      resolve(code);
-    });
+    child.once("close", finish);
   });
 }
 

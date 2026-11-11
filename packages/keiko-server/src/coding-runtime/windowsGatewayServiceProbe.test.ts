@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createActivityLogSink } from "@oscharko-dev/keiko-server";
 import {
   expectActivityLogProof,
@@ -142,6 +142,40 @@ describe("Windows gateway service probe", () => {
       ).toMatchObject({ level: "info", state: "ready" });
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A sink that throws must neither reject the refresh (an unhandled rejection) nor keep the state
+  // from being cached: before, the helper was spawned again on every readiness read.
+  it("caches the state and survives a sink that throws, reporting the loss on the stderr channel", async () => {
+    let spawns = 0;
+    let clock = 0;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const probe = createWindowsGatewayServiceProbe({
+        helperPath: HELPER,
+        helperSha256: PIN,
+        activityLog: {
+          write: (): void => {
+            throw new Error("sink unavailable");
+          },
+        },
+        runStatus: () => {
+          spawns += 1;
+          return Promise.resolve(0);
+        },
+        now: () => clock,
+      });
+      await settled(probe);
+      clock = 1;
+      expect(probe.unavailableReason()).toBeUndefined();
+      await settled(probe);
+      expect(spawns).toBe(1);
+      const notice = stderr.mock.calls.map((call) => String(call[0])).join("");
+      expect(notice).toContain("coding-runtime.windows-gateway-service");
+      expect(notice).not.toContain(HELPER);
+    } finally {
+      stderr.mockRestore();
     }
   });
 });

@@ -126,12 +126,21 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     request: RuntimeSupervisorLaunchRequest,
     sandbox?: PreparedRuntimeSandboxLaunch,
   ): RuntimeProcessTree {
+    // Every refusal of the confined launch, whichever guard raises it, leaves one body-free
+    // `runtime.confinement.failed` line under the run's correlation id (AGENTS section 8).
     try {
-      assertNativeGatewaySupported(this.options.gatewayConfinement, request, this.options);
+      return this.spawnConfined(request, sandbox);
     } catch (error) {
       recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
       throw error;
     }
+  }
+
+  private spawnConfined(
+    request: RuntimeSupervisorLaunchRequest,
+    sandbox?: PreparedRuntimeSandboxLaunch,
+  ): RuntimeProcessTree {
+    assertNativeGatewaySupported(this.options.gatewayConfinement, request, this.options);
     if (sandbox === undefined && this.options.gatewayConfinement === undefined) {
       recordNativeConfinementUnavailable(this.options.activityLog, request.runId, this.identity);
     }
@@ -433,7 +442,7 @@ function validExpectedHelperSha256(value: string | undefined): string | undefine
   return value;
 }
 
-interface VerifiedHelperExecutionCopy {
+export interface VerifiedHelperExecutionCopy {
   readonly path: string;
   cleanup(): void;
 }
@@ -504,7 +513,8 @@ function verifiedHelperContent(helperPath: string, expectedHelperSha256: string)
   return bytes;
 }
 
-function verifiedHelperExecutionCopy(
+/** A private copy of the helper written from bytes whose SHA-256 matches `expectedHelperSha256`. */
+export function verifiedHelperExecutionCopy(
   helperPath: string,
   expectedHelperSha256: string,
 ): VerifiedHelperExecutionCopy {

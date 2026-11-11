@@ -7,6 +7,7 @@ import {
   ownerPrivateReaderFor,
   type OwnerPrivateReader,
 } from "../ownerPrivateStateFile.js";
+import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 
 /**
  * An npm plugin package the operator installed locally (#3903 AC2): the runtime's own `plugin add`
@@ -42,7 +43,17 @@ interface Walk {
   bytes: number;
 }
 
-export function readPluginPackage(root: string, entry: string): PluginPackageRead {
+/**
+ * Reads and hashes a package tree. On Windows a root that is not a local drive path (a UNC or device
+ * path) is refused before any filesystem call: the first listing would contact the host (#4068 W7).
+ */
+export function readPluginPackage(
+  root: string,
+  entry: string,
+  platform: NodeJS.Platform = process.platform,
+): PluginPackageRead {
+  if (platform === "win32" && !isWindowsLocalDriveFilePath(root))
+    return { ok: false, reason: "unreadable" };
   const walk: Walk = { paths: [], files: [], bytes: 0 };
   const listed = walkDirectory(root, "", 0, walk);
   const refusal = readListedFiles(root, walk) ?? listed;

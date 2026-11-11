@@ -782,6 +782,28 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
+  // #4068: the developer override may name any directory; a grant would expose all of it to the
+  // AppContainer, so only the Keiko-owned layouts are granted.
+  it("does not grant the directory of a ripgrep override outside the runtime root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-ripgrep-override-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const ripgrep: OpenCodeRipgrepResolution = {
+        ...verifiedRipgrep(join(root, "users-bin")),
+        layout: "override",
+      };
+      const grants = windowsFilesystemGrants(
+        portable,
+        { ...backendInput(root, portable), ripgrep },
+        runInput(root),
+      );
+      expect(grants.map((grant) => grant.path)).not.toContain(join(root, "users-bin"));
+      expect(grants).toHaveLength(2);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("asks the installed broker for a release-qualified Windows runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-windows-released-lane-"));
     try {

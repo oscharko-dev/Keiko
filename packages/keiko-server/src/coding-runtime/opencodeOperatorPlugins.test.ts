@@ -198,6 +198,18 @@ describe("the operator plugin registry (#3903 AC2)", () => {
     expect(parseOperatorPluginRegistry(value)).toEqual({ ok: false, reason });
   });
 
+  it("refuses a package root that is not a local drive path on Windows", () => {
+    const registry = {
+      schemaVersion: 1,
+      plugins: [{ name: "lint", path: "/srv/lint", entry: "index.js", sha256: DIGEST }],
+    };
+    expect(parseOperatorPluginRegistry(registry, "win32")).toEqual({
+      ok: false,
+      reason: "plugin-invalid",
+    });
+    expect(parseOperatorPluginRegistry(registry, "linux").ok).toBe(true);
+  });
+
   it("accepts a locally installed package with its entry module, and refuses an unsafe entry", () => {
     const entry = {
       name: "lint",

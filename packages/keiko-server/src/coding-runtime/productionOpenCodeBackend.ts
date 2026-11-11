@@ -1637,8 +1637,13 @@ export function windowsFilesystemGrants(
   ];
   // The verified ripgrep directory is the only entry on the runtime's PATH. A checkout keeps it
   // in its own `.ripgrep`, outside the runtime root, where the tree could not run it (#4068).
+  // The developer override may name any directory whose `rg` verifies; granting the AppContainer a
+  // read of that whole directory (say a user's bin folder) would expose it, so only the Keiko-owned
+  // layouts are granted. The override still verifies and leads the PATH, and the existing
+  // `coding-runtime.ripgrep.resolved` line records `layout=override` (#4068).
   if (
     input.ripgrep.outcome === "verified" &&
+    input.ripgrep.layout !== "override" &&
     !pathIsContained(runtimeRoot, input.ripgrep.directory)
   )
     grants.push({ path: input.ripgrep.directory, access: "read", principal: "tree" });

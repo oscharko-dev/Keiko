@@ -13,6 +13,7 @@ import {
   readOwnerPrivateFile,
 } from "../ownerPrivateStateFile.js";
 import { onlyKeys, plainRecord } from "../operatorRegistryJson.js";
+import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 import { CODING_RUNTIME_FAILURE_TRACE_FIELDS } from "./codingRuntimeActivityOperations.js";
 import {
   readPluginPackage,
@@ -96,6 +97,7 @@ export function loadOperatorPluginRegistry(stateDir: string): OperatorPluginRegi
 /** The closed registry grammar: `{ "schemaVersion": 1, "plugins": [{ name, workspacePath | path, sha256 }] }`. */
 export function parseOperatorPluginRegistry(
   value: unknown,
+  platform: NodeJS.Platform = process.platform,
 ):
   | { readonly ok: true; readonly plugins: readonly OperatorPluginDefinition[] }
   | { readonly ok: false; readonly reason: RegistryReason } {
@@ -108,7 +110,7 @@ export function parseOperatorPluginRegistry(
   if (entries.length > MAX_PLUGINS) return { ok: false, reason: "too-many-plugins" };
   const plugins: OperatorPluginDefinition[] = [];
   for (const entry of entries as readonly unknown[]) {
-    const plugin = pluginDefinition(entry);
+    const plugin = pluginDefinition(entry, platform);
     if (plugin === undefined) return { ok: false, reason: "plugin-invalid" };
     if (plugins.some((known) => known.name === plugin.name))
       return { ok: false, reason: "duplicate-plugin" };
@@ -117,7 +119,10 @@ export function parseOperatorPluginRegistry(
   return { ok: true, plugins };
 }
 
-function pluginDefinition(value: unknown): OperatorPluginDefinition | undefined {
+function pluginDefinition(
+  value: unknown,
+  platform: NodeJS.Platform,
+): OperatorPluginDefinition | undefined {
   const entry = plainRecord(value);
   if (entry === undefined || !onlyKeys(entry, ["name", "workspacePath", "path", "entry", "sha256"]))
     return undefined;
@@ -128,7 +133,7 @@ function pluginDefinition(value: unknown): OperatorPluginDefinition | undefined 
   const source =
     entry.entry === undefined
       ? pluginSource(workspacePath, path)
-      : packageSource(workspacePath, path, entry.entry);
+      : packageSource(workspacePath, path, entry.entry, platform);
   return source === undefined ? undefined : { name, source, sha256 };
 }
 
@@ -151,9 +156,12 @@ function packageSource(
   workspacePath: unknown,
   path: unknown,
   entry: unknown,
+  platform: NodeJS.Platform,
 ): OperatorPluginSource | undefined {
   if (workspacePath !== undefined || typeof path !== "string" || typeof entry !== "string")
     return undefined;
+  // A UNC or device root would reach a remote host on the first listing (#4068 W7).
+  if (platform === "win32" && !isWindowsLocalDriveFilePath(path)) return undefined;
   if (!isAbsolute(path) || resolve(path) !== path) return undefined;
   return registryRelative(entry) && moduleFile(entry)
     ? { kind: "package", path, entry }

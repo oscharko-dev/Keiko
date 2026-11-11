@@ -32,6 +32,7 @@ import {
 } from "./nativeRuntimeProcessProtocol.js";
 import {
   createRuntimeProcessSupervisor,
+  type PreparedRuntimeSandboxLaunch,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 
@@ -312,4 +313,53 @@ describe("a confined Windows launch", () => {
       }),
     ).toThrow("native-runtime-config-invalid");
   });
+
+  // A refusal raised after the first guard (attestation, drift, helper pin, unresolved grant) left
+  // no Activity Log line before; each now records one runtime.confinement.failed line.
+  it.each(["attestation", "pin", "grant-path"] as const)(
+    "records runtime.confinement.failed for the %s refusal of a confined launch",
+    (refusal) => {
+      const paths = fixture();
+      const activityLog = createBufferedServerLogSink();
+      const request = launch(paths.runtime, paths.workspace);
+      const backend = createNativeRuntimeProcessBackend({
+        helperPath: paths.helper,
+        useInstalledWindowsGateway: true,
+        ...(refusal === "pin"
+          ? {}
+          : { expectedHelperSha256: createHash("sha256").update("helper").digest("hex") }),
+        runtimeRoots: [join(paths.runtime, "..")],
+        workspaceRoot: paths.workspace,
+        gatewayConfinement: createRuntimeGatewayConfinement({
+          gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+          runId: "run-4068",
+          treeBindingId: "a".repeat(64),
+          envelopeDigest: "b".repeat(64),
+          runtimeArtifactDigest: "c".repeat(64),
+          modelProfileDigest: "d".repeat(64),
+        }),
+        windowsFilesystemGrants:
+          refusal === "grant-path"
+            ? [{ path: join(paths.root, "missing", "state"), access: "modify", principal: "tree" }]
+            : [],
+        activityLog,
+        spawnHelper: () => new FakeHelper(),
+      });
+      const sandbox =
+        refusal === "attestation"
+          ? undefined
+          : ({
+              command: request.executable,
+              args: request.args,
+              attestation: { backend: "windows-wfp" },
+            } as unknown as PreparedRuntimeSandboxLaunch);
+      expect(() => backend.spawnOwnedTree(request, sandbox)).toThrow();
+      const failures = activityLog.events.filter(
+        (record) => record.op === "runtime.confinement.failed",
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ correlationId: "run-4068", level: "error" });
+      expect(JSON.stringify(activityLog.events)).not.toContain(paths.root);
+    },
+  );
 });

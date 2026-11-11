@@ -5,7 +5,7 @@ import {
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
-import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { reportServerLogFailure, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 // Tells the Workbench why a released Windows runtime cannot start, and what the human can do about
 // it (ADR-0043 D19, #4068). The answer comes from the native helper, refreshed in the background
@@ -85,6 +85,27 @@ interface CachedState {
   readonly at: number;
 }
 
+// One line per state change. A sink that throws reports the loss on the existing body-free stderr
+// channel instead of failing the refresh.
+function writeStateChange(sink: ServerLogSink, state: WindowsGatewayServiceState): void {
+  const correlationId = randomUUID();
+  try {
+    sink.write(
+      activityLogEvent(
+        WINDOWS_GATEWAY_SERVICE_OPERATION,
+        { level: state === "ready" ? "info" : "warn", correlationId },
+        { state },
+      ),
+    );
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: WINDOWS_GATEWAY_SERVICE_OPERATION.op,
+      correlationId,
+      loss: "event-dropped",
+    });
+  }
+}
+
 // #4068: a read never waits for the helper. It answers from the last settled state and starts a
 // background refresh once that state is older than the TTL, so a slow service query cannot hold
 // the server's event loop. Before the first result the state is unknown, which keeps the Workbench
@@ -98,16 +119,11 @@ export function createWindowsGatewayServiceProbe(
 
   const settle = (state: WindowsGatewayServiceState): void => {
     // A status poll must not write a line per read: only a change is evidence.
-    if (cached?.state !== state) {
-      input.activityLog.write(
-        activityLogEvent(
-          WINDOWS_GATEWAY_SERVICE_OPERATION,
-          { level: state === "ready" ? "info" : "warn", correlationId: randomUUID() },
-          { state },
-        ),
-      );
-    }
+    const changed = cached?.state !== state;
+    // The state is cached first: a sink that throws must neither crash the process nor make the
+    // next read spawn the helper again.
     cached = { state, at: now() };
+    if (changed) writeStateChange(input.activityLog, state);
   };
 
   const refresh = (): void => {
