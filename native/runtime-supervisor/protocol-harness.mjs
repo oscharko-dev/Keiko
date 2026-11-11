@@ -59,6 +59,16 @@ export function launchPacket(
 }
 
 /**
+ * Build an empty KGG1 grants frame: `(u16 count = 0)` behind the shared header. A confined
+ * (`--gateway-supervised`) launch reads this frame after the broker named the tree's SID and before
+ * the suspended root exists, so a harness that omits it leaves the supervisor waiting on fd 3. The
+ * product encoder is `encodeWindowsGatewayGrants` in nativeRuntimeProcessProtocol.ts.
+ */
+export function emptyGatewayGrants() {
+  return Buffer.concat([header("KGG1", 1, 2), Buffer.alloc(2)]);
+}
+
+/**
  * Wrap a Node stream into a bounded-read queue. Chunks accumulate until `readBytes` consumes the
  * requested prefix. `wake` is invoked once per data/end/close/error event; a stream that ends or
  * errors before the requested bytes arrive rejects the pending read rather than deadlocking.

@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
+  emptyGatewayGrants,
   launchPacket,
   response,
   streamReader,
@@ -85,6 +86,8 @@ async function qualify(valid, unavailable = false) {
   try {
     child.stdio[3].write(launchPacket(probe, root, [["SystemRoot", process.env.SystemRoot]], []));
     if (!unavailable) {
+      // The supervisor reads the tree's grants after the broker connect, before the suspended root.
+      child.stdio[3].write(emptyGatewayGrants());
       await observe(probe, ["--observe"], { timeout: 6000, windowsHide: true });
       await delay(150);
       assert.equal(output.length, 0, "child ran before policy submission");
