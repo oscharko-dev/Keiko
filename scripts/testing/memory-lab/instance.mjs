@@ -37,7 +37,7 @@ const POLL_MS = 100;
 // A subject that learns in background passes (#4213) learns after the person paused. The lab's
 // person pauses for this long after each turn; the product's default pause is longer only to stay
 // out of a person's way, and a pass learns the same turns whatever pause preceded it.
-export const LAB_LEARNING_IDLE_MS = 2000;
+const LAB_LEARNING_IDLE_MS = 2000;
 // How long after the pause a pass may take to be seen starting before the lab concludes that the
 // turn left nothing to learn (a refused turn, or one the product handled without its learner).
 const PASS_START_SLACK_MS = 3000;

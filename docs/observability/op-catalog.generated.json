@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3362460af9992840eed74fc6444c524c84ba1fec3cf3076ef37c4b79b179df1e",
+    "catalogDigest": "07c5b02edee465d16d4577d215dd7054ac2c8a85f4d63fbe97b765b3527bc64e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38217,8 +38217,8 @@
           }
         },
         "proofIds": ["memory.learn.pass.settled.line"],
-        "registrationSite": "packages/keiko-server/src/memory-learning-log.ts:60",
-        "emitterSites": ["packages/keiko-server/src/memory-learning-log.ts:148"]
+        "registrationSite": "packages/keiko-server/src/memory-learning-log.ts:62",
+        "emitterSites": ["packages/keiko-server/src/memory-learning-log.ts:150"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38256,8 +38256,8 @@
           }
         },
         "proofIds": ["memory.learn.pass.started.line"],
-        "registrationSite": "packages/keiko-server/src/memory-learning-log.ts:48",
-        "emitterSites": ["packages/keiko-server/src/memory-learning-log.ts:108"]
+        "registrationSite": "packages/keiko-server/src/memory-learning-log.ts:50",
+        "emitterSites": ["packages/keiko-server/src/memory-learning-log.ts:110"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -121841,13 +121841,13 @@
     {
       "op": "memory.learn.pass.settled",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-learning-log.ts:62",
+      "site": "packages/keiko-server/src/memory-learning-log.ts:64",
       "package": "keiko-server"
     },
     {
       "op": "memory.learn.pass.started",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-learning-log.ts:50",
+      "site": "packages/keiko-server/src/memory-learning-log.ts:52",
       "package": "keiko-server"
     },
     {

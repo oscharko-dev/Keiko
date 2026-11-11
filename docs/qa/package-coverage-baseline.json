@@ -138,7 +138,7 @@
       }
     },
     "keiko-memory-capture": {
-      "files": 21,
+      "files": 20,
       "uncoveredFiles": 0,
       "uncoveredLines": 23,
       "totalLines": 592,
@@ -174,7 +174,7 @@
       }
     },
     "keiko-memory-retrieval": {
-      "files": 14,
+      "files": 15,
       "uncoveredFiles": 0,
       "uncoveredLines": 10,
       "totalLines": 476,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1189,
+      "files": 1195,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,
@@ -294,7 +294,7 @@
       }
     },
     "keiko-ui": {
-      "files": 732,
+      "files": 733,
       "uncoveredFiles": 3,
       "uncoveredLines": 2947,
       "totalLines": 41689,

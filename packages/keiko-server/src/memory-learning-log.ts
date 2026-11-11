@@ -38,6 +38,8 @@ const MEMORY_LEARN_PASS_BASE = {
   failureClasses: ["memory-learning-pass"],
 } as const;
 
+const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+
 const TRIGGER_FIELD = {
   type: "string",
   dataClass: "closed-enum",
@@ -52,7 +54,7 @@ const MEMORY_LEARN_PASS_STARTED_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   fields: {
     trigger: TRIGGER_FIELD,
-    chatCount: { type: "integer", dataClass: "count", required: true },
+    chatCount: COUNT_FIELD,
   },
   proofIds: ["memory.learn.pass.started.line"],
 });
@@ -70,15 +72,15 @@ const MEMORY_LEARN_PASS_SETTLED_OPERATION = defineActivityLogOperation({
       required: true,
       values: MEMORY_LEARNING_PASS_OUTCOMES,
     },
-    chatCount: { type: "integer", dataClass: "count", required: true },
-    turnCount: { type: "integer", dataClass: "count", required: true },
-    learnedTurnCount: { type: "integer", dataClass: "count", required: true },
-    skippedTurnCount: { type: "integer", dataClass: "count", required: true },
-    memoryOffTurnCount: { type: "integer", dataClass: "count", required: true },
-    forgottenPendingCount: { type: "integer", dataClass: "count", required: true },
-    actionCount: { type: "integer", dataClass: "count", required: true },
-    failedTurnCount: { type: "integer", dataClass: "count", required: true },
-    pendingChatCount: { type: "integer", dataClass: "count", required: true },
+    chatCount: COUNT_FIELD,
+    turnCount: COUNT_FIELD,
+    learnedTurnCount: COUNT_FIELD,
+    skippedTurnCount: COUNT_FIELD,
+    memoryOffTurnCount: COUNT_FIELD,
+    forgottenPendingCount: COUNT_FIELD,
+    actionCount: COUNT_FIELD,
+    failedTurnCount: COUNT_FIELD,
+    pendingChatCount: COUNT_FIELD,
     durationMs: { type: "integer", dataClass: "duration", required: true },
     cancelLatencyMs: { type: "integer", dataClass: "duration", required: false },
   },

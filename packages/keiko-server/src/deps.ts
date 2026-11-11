@@ -1025,9 +1025,6 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Memory retains its explicitly configured ceiling or the `governed-assist` baseline for its
   // modes and standing maintenance. Coding's all-mode availability does not widen either.
   readonly memoryDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  // Whether an operator configured that ceiling. Only a configured `governed-assist` ceiling keeps
-  // routine facts for review; the absent baseline accepts them in every mode (#4206).
-  readonly memoryDeploymentCeilingConfigured?: boolean | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
   // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
@@ -1053,6 +1050,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly mcpChatCatalog?: McpChatCatalogRuntime;
   /** Projection of the existing Memory admission for the productive grounded phase only. */
   readonly groundedMemoryContextAvailable?: boolean;
+  // Whether an operator configured the memory deployment ceiling. Only a configured `governed-assist` ceiling keeps
+  // routine facts for review; the absent baseline accepts them in every mode (#4206).
+  readonly memoryDeploymentCeilingConfigured?: boolean | undefined;
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
