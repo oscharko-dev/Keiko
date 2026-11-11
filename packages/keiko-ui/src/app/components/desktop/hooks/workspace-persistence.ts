@@ -193,7 +193,7 @@ function sanitizeCodingRoot(value: unknown): AppWindow["cfg"][string] {
 
 // A restored branch keeps a git ref-name shape: no control character, space, `..`, leading `-`,
 // or ref-forbidden character.
-const GIT_REF_FORBIDDEN = /[\s~^:?*[\\]|\.\.|@\{|\/\/|\.lock(?:\/|$)|[./]$/u;
+const GIT_REF_FORBIDDEN = /(?:[\s~^:?*[\\]|\.\.|@\{|\/\/|\.lock(?:\/|$)|[./]$)/u;
 
 function sanitizeCodingBranch(value: unknown): AppWindow["cfg"][string] {
   const text = boundedSecretFreeText(value, MAX_CODING_BRANCH_LENGTH);

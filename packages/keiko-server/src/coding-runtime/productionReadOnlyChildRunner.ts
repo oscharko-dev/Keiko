@@ -220,14 +220,20 @@ function admittedChildModel(model: ModelPort, admitModelCall: () => boolean): Mo
   };
 }
 
-async function* admittedChildStream(
+// Admission runs when the stream is iterated, as before the call is dispatched; the provider
+// stream is returned as it is.
+function admittedChildStream(
   stream: NonNullable<ModelPort["callStream"]>,
   request: GatewayRequest,
   signal: AbortSignal,
   admitModelCall: () => boolean,
 ): AsyncIterable<GatewayStreamChunk> {
-  admitChildCall(admitModelCall);
-  yield* stream(request, signal);
+  return {
+    [Symbol.asyncIterator]: (): AsyncIterator<GatewayStreamChunk> => {
+      admitChildCall(admitModelCall);
+      return stream(request, signal)[Symbol.asyncIterator]();
+    },
+  };
 }
 
 function admitChildCall(admitModelCall: () => boolean): void {

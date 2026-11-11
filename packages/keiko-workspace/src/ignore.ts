@@ -85,7 +85,7 @@ const WINDOWS_TRAILING_ALIAS: ReadonlySet<string> = new Set([".", " "]);
 // NTFS may also resolve a sensitive entry through its 8.3 short name (`.git` is `GIT~1`, `.env` is
 // `ENV~1`), which no deny pattern names. On Windows every component of that shape is denied as an
 // alias, the same fail-closed stance as the trailing-dot alias; POSIX names are unaffected.
-const WINDOWS_SHORT_NAME = /^[^.~]{1,6}~[0-9]+(?:\.[^.]{0,3})?$/u;
+const WINDOWS_SHORT_NAME = /^[^.~]{1,6}~\d+(?:\.[^.]{0,3})?$/u;
 
 /** Whether one lower-cased component has the Windows 8.3 short-name shape. */
 export function isWindowsShortNameSegment(segment: string): boolean {
