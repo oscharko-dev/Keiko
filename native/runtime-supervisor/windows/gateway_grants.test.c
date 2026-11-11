@@ -71,7 +71,8 @@ static int frame_rules(void) {
     return 0;
   {
     static const char *refused_paths[] = {"run\\state", "C:/run",     "C:\\run\\..\\x",
-                                          "C:\\run\\.", "\\\\?\\C:\\x", "C:\\x:stream"};
+                                          "C:\\run\\.", "\\\\?\\C:\\x", "C:\\x:stream",
+                                          "C:\\", "d:\\", "C:\\\\x"};
     for (size_t index = 0; index < sizeof(refused_paths) / sizeof(*refused_paths); index++)
       if (parses(frame, frame_of(frame, 1, KEIKO_GRANT_READ, KEIKO_GRANT_TREE,
                                  refused_paths[index], NULL)))

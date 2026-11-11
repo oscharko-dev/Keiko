@@ -99,8 +99,11 @@ static DWORD start_in_job(wchar_t *powershell, wchar_t *command, HANDLE null_io,
                       EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL,
                       NULL, &startup.StartupInfo, process) ||
       !AssignProcessToJobObject(job, process->hProcess) ||
-      ResumeThread(process->hThread) == (DWORD)-1)
+      ResumeThread(process->hThread) == (DWORD)-1) {
     result = GetLastError();
+    /* A suspended child that never joined the job, or never ran, must not outlive the call. */
+    if (process->hProcess != NULL) (void)TerminateProcess(process->hProcess, 1);
+  }
   DeleteProcThreadAttributeList(startup.lpAttributeList);
   free(startup.lpAttributeList);
   return result;

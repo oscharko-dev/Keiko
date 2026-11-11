@@ -279,6 +279,21 @@ DWORD keiko_gateway_filters_open(PSID package_sid, UINT16 family, UINT16 port,
   return result;
 }
 
+DWORD keiko_gateway_filters_close_after_revoke(struct keiko_gateway_filters *filters,
+                                               DWORD revoke_result) {
+  DWORD result = ERROR_SUCCESS;
+  if (filters == NULL) return ERROR_INVALID_PARAMETER;
+  /* The durable deny guard is the only breadcrumb the next broker start uses to find and revoke
+   * this tree's loopback exemption. Deleting it after a failed revoke would orphan the exemption. */
+  if (revoke_result != ERROR_SUCCESS) return revoke_result;
+  for (unsigned attempt = 0; attempt < 100; attempt++) {
+    result = keiko_gateway_filters_close(filters);
+    if (result != ERROR_BUSY) break;
+    Sleep(20);
+  }
+  return result;
+}
+
 static DWORD duplicate_owned_job(HANDLE job, HANDLE *owned) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
   if (job == NULL || job == INVALID_HANDLE_VALUE) return ERROR_INVALID_PARAMETER;

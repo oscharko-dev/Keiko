@@ -16,7 +16,7 @@ int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_server(int family);
 int gateway_journal_tests(void);
 int gateway_peer_tests(void);
-int gateway_peer_client(const char *pipe_name, int anonymous);
+int gateway_peer_client(const char *pipe_name, int mode);
 int gateway_identity_tests(void);
 int gateway_identity_child(const char *expected);
 int gateway_identity_leaf(const char *expected);
@@ -90,6 +90,19 @@ static int validation_tests(void) {
   ok = ok && rejects_unsafe_job(package, 0) &&
        rejects_unsafe_job(package, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK) &&
        rejects_unsafe_job(package, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK);
+  /* #4242: a failed loopback revoke keeps the durable guard (the sweep's only breadcrumb). */
+  {
+    struct keiko_gateway_filters held = {0}, before;
+    held.guard_engine = (HANDLE)(ULONG_PTR)1;
+    held.guard_installed = 1;
+    held.job = (HANDLE)(ULONG_PTR)2;
+    before = held;
+    ok = ok && keiko_gateway_filters_close_after_revoke(&held, ERROR_ACCESS_DENIED) ==
+                   ERROR_ACCESS_DENIED && memcmp(&held, &before, sizeof(held)) == 0 &&
+         keiko_gateway_filters_close_after_revoke(NULL, ERROR_SUCCESS) == ERROR_INVALID_PARAMETER;
+    memset(&held, 0, sizeof(held));
+    ok = ok && keiko_gateway_filters_close_after_revoke(&held, ERROR_SUCCESS) == ERROR_SUCCESS;
+  }
   LocalFree(broad);
   LocalFree(package);
   LocalFree(capability);
@@ -265,7 +278,7 @@ int main(int argc, char **argv) {
     return gateway_peer_tests() == 0 ? gateway_identity_tests() : 1;
   }
   if (argc == 4 && strcmp(argv[1], "--peer-client") == 0)
-    return gateway_peer_client(argv[2], strcmp(argv[3], "1") == 0);
+    return gateway_peer_client(argv[2], atoi(argv[3]));
   if (argc == 3 && strcmp(argv[1], "--identity-child") == 0) return gateway_identity_child(argv[2]);
   if (argc == 3 && strcmp(argv[1], "--identity-leaf") == 0) return gateway_identity_leaf(argv[2]);
   if (argc == 3 && strcmp(argv[1], "--socket-server") == 0) return gateway_socket_server(atoi(argv[2]));

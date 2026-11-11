@@ -15,7 +15,7 @@
 #define KEIKO_ENVIRONMENT_PRINCIPALS 3u
 
 /* `key` is the guarded key as a security object name (`CURRENT_USER\...`); `record` is a path
- * below `root`; `lock` names the per-session mutex. */
+ * below `root`; `lock` is the leaf name of the per-user cross-session lock file (gateway_user_lock.h). */
 struct keiko_environment_target {
   HKEY root;
   const wchar_t *key;
@@ -30,7 +30,7 @@ struct keiko_environment_holder {
   FILETIME created;
 };
 
-/* The user's own key, the supervisor's record and its per-session lock. */
+/* The user's own key, the supervisor's record and its per-user lock. */
 extern const struct keiko_environment_target KEIKO_ENVIRONMENT_USER;
 
 /* This process as a holder. */

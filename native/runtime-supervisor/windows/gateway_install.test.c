@@ -63,7 +63,17 @@ static int command_image_rules(void) {
           L"\"C:\\P\\keiko-runtime-supervisor.exe\" --gateway-service", small, 8);
 }
 
+/* #4242: a squatted pipe or repeated crash must never leave the broker permanently stopped. */
+static int recovery_rules(void) {
+  SC_ACTION actions[KEIKO_GATEWAY_RECOVERY_ACTIONS];
+  keiko_gateway_recovery_actions(actions);
+  for (int i = 0; i < KEIKO_GATEWAY_RECOVERY_ACTIONS; i++)
+    if (actions[i].Type != SC_ACTION_RESTART || actions[i].Delay == 0) return 0;
+  return 1;
+}
+
 int main(void) {
+  if (!recovery_rules()) { puts("gateway-install-recovery: failed"); return 1; }
   if (!pin_rules()) { puts("gateway-install-pin: failed"); return 1; }
   if (!path_rules()) { puts("gateway-install-paths: failed"); return 1; }
   if (!command_image_rules()) { puts("gateway-install-command-image: failed"); return 1; }

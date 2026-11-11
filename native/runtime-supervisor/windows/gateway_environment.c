@@ -2,6 +2,7 @@
  * gateway_environment.h and ADR-0043 D18. The record holds no value of the key, only process ids,
  * creation times and the removed entries' access masks and flags. */
 #include "gateway_environment.h"
+#include "gateway_user_lock.h"
 
 #include <aclapi.h>
 #include <sddl.h>
@@ -20,7 +21,7 @@
 const struct keiko_environment_target KEIKO_ENVIRONMENT_USER = {
     HKEY_CURRENT_USER, L"CURRENT_USER\\Environment",
     L"Software\\Keiko\\RuntimeSupervisor\\EnvironmentGuard",
-    L"Local\\KeikoRuntimeSupervisorEnvironmentGuard"};
+    L"KeikoRuntimeSupervisorEnvironmentGuard.lock"};
 
 /* ALL APPLICATION PACKAGES, ALL RESTRICTED APPLICATION PACKAGES and the registryRead capability. */
 static const wchar_t *const PRINCIPALS[KEIKO_ENVIRONMENT_PRINCIPALS] = {
@@ -414,24 +415,14 @@ static DWORD reopen_locked(const struct keiko_environment_target *target,
   return result != ERROR_SUCCESS ? result : written;
 }
 
-static HANDLE lock_take(const wchar_t *name, DWORD *result) {
-  HANDLE lock = CreateMutexW(NULL, FALSE, name);
-  DWORD wait;
-  if (lock == NULL) {
-    *result = GetLastError();
-    return NULL;
-  }
-  wait = WaitForSingleObject(lock, LOCK_WAIT_MS);
-  /* An abandoned lock belonged to a supervisor that died holding it; the record states its work. */
-  if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) return lock;
-  *result = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
-  CloseHandle(lock);
-  return NULL;
+/* The record is per-user state shared by every logon session of the user, so its lock is the
+ * cross-session per-user file lock; a holder that died releases it with its handle (#4242). */
+static HANDLE lock_take(const wchar_t *leaf, DWORD *result) {
+  return keiko_user_lock_take(leaf, LOCK_WAIT_MS, result);
 }
 
 static void lock_drop(HANDLE lock) {
-  (void)ReleaseMutex(lock);
-  CloseHandle(lock);
+  keiko_user_lock_drop(lock);
 }
 
 static int valid_holder(const struct keiko_environment_holder *holder) {

@@ -205,11 +205,24 @@ static BOOL place_image(const wchar_t *stage, const wchar_t *image) {
 
 /* A broker that stops on a failed request must come back, because a standard user cannot start it
  * and ordinary launches must not prompt. Every run still needs a fresh verified admission. */
+/* Every failure restarts the broker. A stopped broker leaves no gateway for any confined run, so a
+ * squatted pipe or a repeated crash must never leave the service permanently stopped; the last
+ * action repeats for every further failure within the reset period. */
+void keiko_gateway_recovery_actions(SC_ACTION actions[KEIKO_GATEWAY_RECOVERY_ACTIONS]) {
+  actions[0].Type = SC_ACTION_RESTART;
+  actions[0].Delay = 5000;
+  actions[1].Type = SC_ACTION_RESTART;
+  actions[1].Delay = 5000;
+  actions[2].Type = SC_ACTION_RESTART;
+  actions[2].Delay = 60000;
+}
+
 static BOOL configure_recovery(SC_HANDLE service) {
   SERVICE_DELAYED_AUTO_START_INFO delayed = {TRUE};
-  SC_ACTION actions[3] = {{SC_ACTION_RESTART, 5000}, {SC_ACTION_RESTART, 5000}, {SC_ACTION_NONE, 0}};
-  SERVICE_FAILURE_ACTIONSW failure = {86400, NULL, NULL, 3, actions};
+  SC_ACTION actions[KEIKO_GATEWAY_RECOVERY_ACTIONS];
+  SERVICE_FAILURE_ACTIONSW failure = {3600, NULL, NULL, KEIKO_GATEWAY_RECOVERY_ACTIONS, actions};
   SERVICE_FAILURE_ACTIONS_FLAG on_stop = {TRUE};
+  keiko_gateway_recovery_actions(actions);
   return ChangeServiceConfig2W(service, SERVICE_CONFIG_DELAYED_AUTO_START_INFO, &delayed) &&
       ChangeServiceConfig2W(service, SERVICE_CONFIG_FAILURE_ACTIONS, &failure) &&
       ChangeServiceConfig2W(service, SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, &on_stop);

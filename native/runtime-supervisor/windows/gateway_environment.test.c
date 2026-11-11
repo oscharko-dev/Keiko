@@ -2,6 +2,7 @@
  * rights and never touches the real HKCU\Environment: every key, record and lock is a fresh fixture
  * of this test under HKCU\Software\Keiko\Test, deleted at the end. */
 #include "gateway_environment.h"
+#include "gateway_user_lock.h"
 
 #include <aclapi.h>
 #include <sddl.h>
@@ -336,9 +337,53 @@ static int fixture_names(void) {
          _snwprintf_s(child_object, NAME_CHARS, _TRUNCATE, L"CURRENT_USER\\%ls", child_path) >= 0 &&
          _snwprintf_s(missing_object, NAME_CHARS, _TRUNCATE, L"CURRENT_USER\\%ls\\Missing", base) >=
              0 &&
-         _snwprintf_s(lock_name, NAME_CHARS, _TRUNCATE, L"Local\\KeikoEnvironmentGuardTest-%lu",
+         _snwprintf_s(lock_name, NAME_CHARS, _TRUNCATE, L"KeikoEnvironmentGuardTest-%lu.lock",
                       pid) >= 0 &&
          current_user_sid();
+}
+
+/* #4242: the user-wide lock must exclude across handles and sessions (a kernel byte-range lock, not
+ * a `Local\\` mutex), accept only a plain leaf, and live in a protected, owner-only file. */
+static int user_lock_rules(void) {
+  wchar_t path[KEIKO_USER_LOCK_PATH_CHARS], text[KEIKO_USER_LOCK_PATH_CHARS];
+  DWORD error = ERROR_SUCCESS, second = ERROR_SUCCESS, path_error;
+  HANDLE first, other, again;
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  SECURITY_DESCRIPTOR_CONTROL control = 0;
+  DWORD revision = 0;
+  LPWSTR sddl = NULL;
+  int ok;
+  static const wchar_t *const refused[] = {L"", L".hidden", L"a\\b", L"a/b", L"a:b", L"Local\\x",
+                                          L"a*b", NULL};
+  if (_snwprintf_s(text, KEIKO_USER_LOCK_PATH_CHARS, _TRUNCATE, L"KeikoUserLockTest-%lu.lock",
+                   GetCurrentProcessId()) < 0)
+    return 1;
+  ok = keiko_user_lock_path(text, path) == ERROR_SUCCESS && wcsstr(path, L"\\Keiko\\") != NULL;
+  for (size_t i = 0; refused[i] != NULL; i++) ok = ok && !keiko_user_lock_leaf_valid(refused[i]);
+  ok = ok && keiko_user_lock_take(L"a\\b", 10, &path_error) == NULL &&
+       path_error == ERROR_INVALID_NAME;
+  first = ok ? keiko_user_lock_take(text, 1000, &error) : NULL;
+  other = first != NULL ? keiko_user_lock_take(text, 150, &second) : NULL;
+  ok = first != NULL && other == NULL && second == ERROR_TIMEOUT;
+  if (first != NULL) keiko_user_lock_drop(first);
+  again = ok ? keiko_user_lock_take(text, 1000, &error) : NULL;
+  ok = ok && again != NULL;
+  /* The lock file's DACL is protected and names no broader principal than its owner and SYSTEM. */
+  if (ok && (GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL,
+                                   NULL, NULL, &descriptor) != ERROR_SUCCESS ||
+             !GetSecurityDescriptorControl(descriptor, &control, &revision) ||
+             (control & SE_DACL_PROTECTED) == 0 ||
+             !ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                 descriptor, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &sddl, NULL) ||
+             wcsstr(sddl, L";WD)") != NULL || wcsstr(sddl, L";AU)") != NULL ||
+             wcsstr(sddl, L";BU)") != NULL))
+    ok = 0;
+  if (sddl != NULL) LocalFree(sddl);
+  if (descriptor != NULL) LocalFree(descriptor);
+  if (again != NULL) keiko_user_lock_drop(again);
+  (void)DeleteFileW(path);
+  puts(ok ? "gateway-user-lock: passed" : "gateway-user-lock: failed");
+  return ok ? 0 : 1;
 }
 
 int main(void) {
@@ -348,6 +393,7 @@ int main(void) {
     puts("gateway-environment: fixture failed");
     return 1;
   }
+  failures += user_lock_rules();
   failures += single_holder(&self);
   failures += two_holders(&self);
   failures += crashed_holder(&self);
@@ -356,6 +402,10 @@ int main(void) {
   failures += inherited_entry(&self);
   failures += absent_key(&self);
   (void)RegDeleteTreeW(HKEY_CURRENT_USER, base);
+  {
+    wchar_t lock_file[KEIKO_USER_LOCK_PATH_CHARS];
+    if (keiko_user_lock_path(lock_name, lock_file) == ERROR_SUCCESS) (void)DeleteFileW(lock_file);
+  }
   puts(failures == 0 ? "gateway-environment-rules: passed" : "gateway-environment-rules: failed");
   return failures == 0 ? 0 : 1;
 }

@@ -41,6 +41,10 @@ BOOL keiko_gateway_running_image(wchar_t *path, DWORD length);
 /* The image of the command line install writes, `"<image>" --gateway-service`, and nothing else. */
 BOOL keiko_gateway_service_command_image(const wchar_t *command, wchar_t *path, DWORD length);
 
+#define KEIKO_GATEWAY_RECOVERY_ACTIONS 3
+/* The SCM failure actions install configures: all restart. */
+void keiko_gateway_recovery_actions(SC_ACTION actions[KEIKO_GATEWAY_RECOVERY_ACTIONS]);
+
 /* Read-only; needs no administrator rights. */
 int keiko_gateway_service_status(const wchar_t *pin);
 /* Install and repair are one idempotent operation. Both commands relaunch through UAC when the

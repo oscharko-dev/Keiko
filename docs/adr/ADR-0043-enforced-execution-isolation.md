@@ -49,7 +49,7 @@ elevate (2026-11-02); and D20: governed repository verification on Windows stays
 1.9 — #4068 amends D18 with the confined Windows tree's filesystem grants and the host's inbound
 control connection into it, and D19 with the broker lookups a standard user can make (2026-11-06).
 D18 also gains the sweep of stale tree entries a crashed supervisor left (2026-11-07) and the
-per-session lock that serializes concurrent runs' grant edits (2026-11-09). D19 also pins the
+per-user lock that serializes concurrent runs' grant edits (2026-11-09). D19 also pins the
 Windows npm runtime package's own supervisor (owner decision, 2026-11-09).
 
 ## Context
@@ -864,7 +864,7 @@ packet and before the broker open (`native/runtime-supervisor/windows/gateway_gr
   two sessions are not serialized against each other.
 - **Concurrent edits (2026-11-09).** Concurrent runs share granted directories such as the runtime
   root, and a DACL edit is a read, a merge and a write. Every grant, revoke and sweep edit therefore
-  runs under one per-session lock (`Local\Keiko.RuntimeGrants`, 30 s); without it, one run's write
+  runs under one per-user lock (an exclusive byte-range lock on `%LOCALAPPDATA%\Keiko\RuntimeSupervisor\Keiko.RuntimeGrants.lock`, 30 s, shared by every logon session of the user, #4242); without it, one run's write
   can drop another run's fresh entry. A grant that cannot take the lock refuses the launch as a
   grants ACL failure. A revoke that cannot take it leaves the tree's own entry for a later sweep
   rather than racing another run's write.
@@ -935,7 +935,7 @@ of the user to end puts them back (`native/runtime-supervisor/windows/gateway_en
 
 - **Holders.** A record under `HKCU\Software\Keiko\RuntimeSupervisor\EnvironmentGuard` names each
   live supervisor by process id and creation time, and the removed entries by access mask and
-  flags. It never holds a value of the key. A per-session mutex serializes every change. A holder
+  flags. It never holds a value of the key. A per-user lock file under `%LOCALAPPDATA%\Keiko\RuntimeSupervisor`, held by byte-range lock and so shared by every logon session of the user and released when its holder dies, serializes every change (a `Local\` mutex would not span an RDP and a console session; a `Global\` mutex needs a privilege a standard user lacks). A holder
   whose process is gone is pruned by the next close or reopen, so a crashed run's closure ends with
   the next run.
 - **Fail closed.** The record is durable before the key changes. A close that cannot record, edit
@@ -983,8 +983,12 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   Administrators and closed to inherited or user write access. The copy is verified again there,
   before the running service is stopped, so a failed copy leaves the old broker serving.
 - **Start.** The service is `SERVICE_AUTO_START` with delayed start, depends on BFE and runs as
-  LocalSystem with its default service permissions. It restarts after a failed stop, because a
-  standard user cannot start it and a launch must not prompt.
+  LocalSystem with its default service permissions. It restarts after every failed stop (three
+  restart actions, the last repeating, reset after an hour), because a standard user cannot start it,
+  a launch must not prompt, and a squatted pipe or a repeated crash must never leave it permanently
+  stopped (#4242). The client opens the broker pipe at identification level only and waits a bounded
+  time while the single instance serves another tree; the SCM check of the server PID follows, so a
+  squatted pipe learns the caller's identity and can never act as the caller.
 - **Updates.** A helper that changes between releases leaves the installed digest stale, and the
   launch refuses until `repair` runs, at one UAC prompt per change. There is no self-update: that
   would need a verified signature chain the Windows releases do not have yet.

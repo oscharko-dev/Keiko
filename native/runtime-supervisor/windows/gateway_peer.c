@@ -21,6 +21,30 @@ HANDLE keiko_gateway_service_pipe(const wchar_t *name) {
   return pipe;
 }
 
+/* The client's end of the broker pipe. The broker's identity is not known until the SCM check that
+ * follows, so a squatted pipe must learn nothing but the caller's identity: SECURITY_IDENTIFICATION
+ * lets the server query the token and never act as the caller. ERROR_PIPE_BUSY (the broker serves
+ * one tree at a time) is retried within wait_ms, then reported unchanged. */
+HANDLE keiko_gateway_client_pipe(const wchar_t *name, DWORD wait_ms) {
+  ULONGLONG deadline = GetTickCount64() + wait_ms;
+  for (;;) {
+    HANDLE pipe = CreateFileW(name, GENERIC_READ | FILE_WRITE_DATA, 0, NULL, OPEN_EXISTING,
+                              FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                              NULL);
+    DWORD error, slice;
+    ULONGLONG now;
+    if (pipe != INVALID_HANDLE_VALUE) return pipe;
+    error = GetLastError();
+    now = GetTickCount64();
+    if (error != ERROR_PIPE_BUSY || now >= deadline) {
+      SetLastError(error);
+      return INVALID_HANDLE_VALUE;
+    }
+    slice = (deadline - now) > 1000 ? 1000 : (DWORD)(deadline - now);
+    if (!WaitNamedPipeW(name, slice) && GetLastError() != ERROR_SEM_TIMEOUT) return INVALID_HANDLE_VALUE;
+  }
+}
+
 static DWORD token_identity(HANDLE token, TOKEN_STATISTICS *statistics, DWORD *session,
                             BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]) {
   BYTE integrity[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];

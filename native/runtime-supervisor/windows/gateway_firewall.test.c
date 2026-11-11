@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* The production file is compiled into this proof so its file-local process start is exercised
+ * directly; no other translation unit of this build defines these names. */
+#include "gateway_firewall.c"
 
 struct gateway_firewall_fixture {
   INetFwPolicy2 *policy;
@@ -143,6 +146,37 @@ done:
 }
 
 /* Pure readback regression: no engine session and no host firewall mutation. */
+/* #4242: a child started suspended that cannot join its job must not run on or outlive the call.
+ * An invalid job handle makes AssignProcessToJobObject fail after CreateProcessW succeeded. */
+static int failed_start_terminates_child(void) {
+  SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+  PROCESS_INFORMATION process = {0};
+  wchar_t shell[MAX_PATH], command[MAX_PATH + 64];
+  HANDLE null_io = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0,
+                               NULL);
+  UINT length = GetSystemDirectoryW(shell, MAX_PATH);
+  DWORD result = ERROR_INVALID_DATA;
+  int ok = 0;
+  if (null_io == INVALID_HANDLE_VALUE || length == 0 || length >= MAX_PATH ||
+      wcscat_s(shell, MAX_PATH, L"\\cmd.exe") != 0 ||
+      _snwprintf_s(command, MAX_PATH + 64, _TRUNCATE, L"\"%ls\" /c ping -n 60 127.0.0.1", shell) < 0)
+    goto done;
+  result = start_in_job(shell, command, null_io, INVALID_HANDLE_VALUE, &process);
+  ok = result != ERROR_SUCCESS && process.hProcess != NULL &&
+       WaitForSingleObject(process.hProcess, 10000) == WAIT_OBJECT_0;
+done:
+  if (!ok) printf("gateway-firewall-start-failure: result=%lu\n", result);
+  if (process.hProcess != NULL) {
+    if (WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0)
+      (void)TerminateProcess(process.hProcess, 1);
+    CloseHandle(process.hProcess);
+  }
+  if (process.hThread != NULL) CloseHandle(process.hThread);
+  if (null_io != INVALID_HANDLE_VALUE) CloseHandle(null_io);
+  return ok;
+}
+
 int gateway_firewall_spec_tests(void) {
   PSID sid = NULL;
   GUID key = {1, 0, 0, {0}};
@@ -173,7 +207,7 @@ int gateway_firewall_spec_tests(void) {
   }
   LocalFree(sid);
   puts(ok ? "gateway-firewall-exact-readback: passed" : "gateway-firewall-exact-readback: failed");
-  return ok && firewall_app_id_tests() ? 0 : 1;
+  return ok && firewall_app_id_tests() && failed_start_terminates_child() ? 0 : 1;
 }
 
 static DWORD firewall_user_descriptor(PSID user, PSID package, PSECURITY_DESCRIPTOR *sd) {

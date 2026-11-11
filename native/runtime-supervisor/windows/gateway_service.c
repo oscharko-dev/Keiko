@@ -16,6 +16,7 @@
 /* The broker acknowledges only after it installed the tree's filters, exemption and inbound rule;
  * the rule runs the system PowerShell, bounded at 60 s in gateway_firewall.c (#4068). */
 #define ACK_TIMEOUT_MS 90000
+#define CONNECT_WAIT_MS 30000
 #define CHALLENGE_SIZE KEIKO_GATEWAY_CHALLENGE_BYTES
 
 static HANDLE stopping;
@@ -92,8 +93,7 @@ static int scm_peer(HANDLE pipe, DWORD *server_pid) {
 
 int keiko_gateway_connect(struct keiko_gateway_connection *c) {
   BYTE hello[4] = {'K','G','H','1'};
-  c->pipe = CreateFileW(PIPE_NAME, GENERIC_READ | FILE_WRITE_DATA, 0, NULL, OPEN_EXISTING,
-      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION, NULL);
+  c->pipe = keiko_gateway_client_pipe(PIPE_NAME, CONNECT_WAIT_MS);
   if (c->pipe == INVALID_HANDLE_VALUE) {
     fprintf(stderr, "gateway pipe unavailable: %lu\n", GetLastError());
     return 0;
@@ -221,7 +221,7 @@ static DWORD serve(HANDLE pipe, HANDLE image) {
   PSID sid = NULL;
   wchar_t name[48];
   BOOL owned = FALSE, exempted = FALSE;
-  DWORD cleanup = ERROR_SUCCESS;
+  DWORD cleanup = ERROR_SUCCESS, revoked = ERROR_SUCCESS;
   if (!transfer(pipe, hello, sizeof(hello), FALSE, stopping) || memcmp(hello, "KGH1", 4) ||
       keiko_gateway_peer_authenticate(pipe, image, &peer) != ERROR_SUCCESS ||
       keiko_gateway_challenge_issue(&challenge) != ERROR_SUCCESS) goto done;
@@ -262,13 +262,11 @@ done:
      * verified termination; a failed revoke leaves an entry for a per-tree SID that the durable
      * deny guard still blocks and that no later process can obtain. */
     (void)keiko_gateway_firewall_revoke(&rule);
-    if (exempted) (void)keiko_gateway_loopback_revoke(sid);
+    /* #4242: the guard is the breadcrumb prune_stale_exemptions follows, so it stays when the
+     * revoke failed; the failure ends this serve and the next broker start retries the revoke. */
+    if (exempted) revoked = keiko_gateway_loopback_revoke(sid);
     /* Retain durable denies if termination cannot be verified within the shutdown budget. */
-    for (unsigned i = 0; i < 100; i++) {
-      cleanup = keiko_gateway_filters_close(&filters);
-      if (cleanup != ERROR_BUSY) break;
-      Sleep(20);
-    }
+    cleanup = keiko_gateway_filters_close_after_revoke(&filters, revoked);
   }
   if (job) CloseHandle(job);
   if (source) CloseHandle(source);

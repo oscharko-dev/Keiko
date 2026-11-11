@@ -5,6 +5,7 @@
  * its identity; only runs of that worktree carry the capability, and no run walks the repository
  * again. */
 #include "gateway_grants.h"
+#include "gateway_user_lock.h"
 
 #include <aclapi.h>
 #include <io.h>
@@ -54,17 +55,18 @@ static int take_text(const unsigned char **cursor, size_t *remaining, uint32_t m
 }
 
 /* The real path the host resolved: `X:\` and plain components, with no relative component, forward
- * slash, stream, device or extended-length syntax. */
+ * slash, stream, device or extended-length syntax, and not a bare drive root. */
 static int canonical_drive_path(const wchar_t *path) {
   size_t length = wcslen(path);
   wchar_t drive;
-  if (length < 3 || path[1] != L':' || path[2] != L'\\') return 0;
+  /* A drive root (`X:\`) is never a grant: an inheritable entry there would cover the whole volume. */
+  if (length < 4 || path[1] != L':' || path[2] != L'\\' || path[3] == L'\\') return 0;
   drive = path[0];
   if (!((drive >= L'A' && drive <= L'Z') || (drive >= L'a' && drive <= L'z'))) return 0;
   if (wcschr(path + 2, L':') != NULL || wcschr(path, L'/') != NULL) return 0;
   if (wcsstr(path, L"\\.\\") != NULL || wcsstr(path, L"\\..\\") != NULL) return 0;
   if (wcscmp(path + length - 2, L"\\.") == 0) return 0;
-  return length < 4 || wcscmp(path + length - 3, L"\\..") != 0;
+  return wcscmp(path + length - 3, L"\\..") != 0;
 }
 
 static int valid_capability(const wchar_t *name) {
@@ -177,25 +179,21 @@ static DWORD grant_mask(int access) {
 }
 
 /* Concurrent runs share granted directories such as the runtime root, and a DACL edit is a read, a
- * merge and a write. Without one per-session lock, one run's write could drop another run's fresh
+ * merge and a write. Without one per-user lock, one run's write could drop another run's fresh
  * entry (#4068, ADR-0043 D18). An abandoned lock is still consistent: each DACL write is complete or
  * absent. */
-static const wchar_t GRANTS_LOCK[] = L"Local\\Keiko.RuntimeGrants";
+static const wchar_t GRANTS_LOCK[] = L"Keiko.RuntimeGrants.lock";
 #define GRANTS_LOCK_TIMEOUT_MS 30000u
 
+/* The granted directories belong to the user, not to one logon session, so the lock spans every
+ * session of the user (gateway_user_lock.h, #4242). */
 static HANDLE grants_lock(void) {
-  HANDLE lock = CreateMutexW(NULL, FALSE, GRANTS_LOCK);
-  DWORD waited;
-  if (lock == NULL) return NULL;
-  waited = WaitForSingleObject(lock, GRANTS_LOCK_TIMEOUT_MS);
-  if (waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED) return lock;
-  CloseHandle(lock);
-  return NULL;
+  DWORD error;
+  return keiko_user_lock_take(GRANTS_LOCK, GRANTS_LOCK_TIMEOUT_MS, &error);
 }
 
 static void grants_unlock(HANDLE lock) {
-  ReleaseMutex(lock);
-  CloseHandle(lock);
+  keiko_user_lock_drop(lock);
 }
 
 static DWORD change_entry_locked(wchar_t *path, PSID sid, ACCESS_MODE mode, DWORD mask) {

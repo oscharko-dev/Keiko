@@ -5,12 +5,14 @@
 #include <stdlib.h>
 #include <wchar.h>
 
-int gateway_peer_client(const char *pipe_name, int anonymous) {
+/* mode 1 connects anonymously, mode 2 at identification level (what the product client uses),
+ * any other value at impersonation level. */
+int gateway_peer_client(const char *pipe_name, int mode) {
   HANDLE pipe;
   DWORD count = 0;
   char byte = 'K';
   pipe = CreateFileA(pipe_name, GENERIC_READ | FILE_WRITE_DATA, 0, NULL, OPEN_EXISTING,
-                     SECURITY_SQOS_PRESENT | (anonymous ? SECURITY_ANONYMOUS : SECURITY_IMPERSONATION), NULL);
+                     SECURITY_SQOS_PRESENT | (mode == 1 ? SECURITY_ANONYMOUS : mode == 2 ? SECURITY_IDENTIFICATION : SECURITY_IMPERSONATION), NULL);
   if (pipe == INVALID_HANDLE_VALUE) {
     return (int)GetLastError();
   }
@@ -33,7 +35,7 @@ static int finish_io(HANDLE pipe, OVERLAPPED *operation, BOOL started, DWORD exp
   return GetOverlappedResult(pipe, operation, &transferred, FALSE) && transferred == expected;
 }
 
-static int peer_case(const wchar_t *executable, HANDLE approved_image, int anonymous, int accepted) {
+static int peer_case(const wchar_t *executable, HANDLE approved_image, int mode, int accepted) {
   wchar_t name[128];
   wchar_t *command = calloc(33000, sizeof(wchar_t));
   RPC_WSTR id_text = NULL;
@@ -57,7 +59,7 @@ static int peer_case(const wchar_t *executable, HANDLE approved_image, int anony
   operation.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
   if (pipe == INVALID_HANDLE_VALUE || operation.hEvent == NULL ||
       _snwprintf_s(command, 33000, _TRUNCATE, L"\"%ls\" --peer-client %ls %d",
-                    executable, name, anonymous) < 0) goto done;
+                    executable, name, mode) < 0) goto done;
   startup.cb = sizeof(startup);
   if (!CreateProcessW(executable, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
                        NULL, NULL, &startup, &child)) goto done;
@@ -84,8 +86,8 @@ static int peer_case(const wchar_t *executable, HANDLE approved_image, int anony
       !GetExitCodeProcess(child.hProcess, &code) || code != 0) ok = 0;
 done:
   if (!ok && child.hProcess != NULL) (void)GetExitCodeProcess(child.hProcess, &code);
-  if (!ok) printf("gateway-peer-case: stage=%d expected=%d anonymous=%d authentication=%lu child=%lu\n",
-                   stage, accepted, anonymous, authenticated, code);
+  if (!ok) printf("gateway-peer-case: stage=%d expected=%d mode=%d authentication=%lu child=%lu\n",
+                   stage, accepted, mode, authenticated, code);
   keiko_gateway_peer_close(&peer);
   if (child.hProcess != NULL) {
     if (WaitForSingleObject(child.hProcess, 0) != WAIT_OBJECT_0) {
@@ -99,6 +101,52 @@ done:
   if (pipe != INVALID_HANDLE_VALUE && pipe != NULL) CloseHandle(pipe);
   if (id_text != NULL) RpcStringFreeW(&id_text);
   free(command);
+  return ok;
+}
+
+typedef struct { const wchar_t *name; DWORD wait_ms; HANDLE pipe; DWORD error; } waiting_client;
+
+static DWORD WINAPI wait_for_pipe(LPVOID context) {
+  waiting_client *client = (waiting_client *)context;
+  client->pipe = keiko_gateway_client_pipe(client->name, client->wait_ms);
+  client->error = client->pipe == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  return 0;
+}
+
+/* #4242: the product client waits for the single broker instance instead of failing on
+ * ERROR_PIPE_BUSY, stays bounded, and holds identification level only. */
+static int client_pipe_tests(void) {
+  static const wchar_t name[] = L"\\\\.\\pipe\\KeikoGatewayFixture-ClientWait";
+  HANDLE server = keiko_gateway_service_pipe(name), first = INVALID_HANDLE_VALUE;
+  OVERLAPPED connect = {0};
+  waiting_client quick = {name, 200, INVALID_HANDLE_VALUE, 0};
+  waiting_client patient = {name, 10000, INVALID_HANDLE_VALUE, 0};
+  HANDLE worker = NULL;
+  int ok = 0;
+  connect.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (server == INVALID_HANDLE_VALUE || connect.hEvent == NULL) goto done;
+  if (!ConnectNamedPipe(server, &connect) && GetLastError() != ERROR_IO_PENDING) goto done;
+  first = keiko_gateway_client_pipe(name, 0);
+  if (first == INVALID_HANDLE_VALUE) goto done;
+  (void)wait_for_pipe(&quick);
+  if (quick.pipe != INVALID_HANDLE_VALUE || quick.error != ERROR_PIPE_BUSY) goto done;
+  worker = CreateThread(NULL, 0, wait_for_pipe, &patient, 0, NULL);
+  if (worker == NULL) goto done;
+  Sleep(300);
+  CloseHandle(first);
+  first = INVALID_HANDLE_VALUE;
+  if (!DisconnectNamedPipe(server)) goto done;
+  ResetEvent(connect.hEvent);
+  if (!ConnectNamedPipe(server, &connect) && GetLastError() != ERROR_IO_PENDING &&
+      GetLastError() != ERROR_PIPE_CONNECTED) goto done;
+  ok = WaitForSingleObject(worker, 12000) == WAIT_OBJECT_0 && patient.pipe != INVALID_HANDLE_VALUE;
+done:
+  if (!ok) printf("gateway-client-pipe: quick=%lu patient=%lu\n", quick.error, patient.error);
+  if (worker != NULL) { (void)WaitForSingleObject(worker, 12000); CloseHandle(worker); }
+  if (patient.pipe != INVALID_HANDLE_VALUE) CloseHandle(patient.pipe);
+  if (first != INVALID_HANDLE_VALUE) CloseHandle(first);
+  if (connect.hEvent != NULL) CloseHandle(connect.hEvent);
+  if (server != INVALID_HANDLE_VALUE) CloseHandle(server);
   return ok;
 }
 
@@ -117,7 +165,8 @@ int gateway_peer_tests(void) {
   if (approved == INVALID_HANDLE_VALUE || other == INVALID_HANDLE_VALUE) goto done;
   ok = peer_case(executable, approved, 0, 1) && peer_case(short_path, approved, 0, 1) &&
        peer_case(executable, other, 0, 0) &&
-       peer_case(executable, approved, 1, 0);
+       peer_case(executable, approved, 1, 0) && peer_case(executable, approved, 2, 1) &&
+       client_pipe_tests();
 done:
   if (approved != INVALID_HANDLE_VALUE) CloseHandle(approved);
   if (other != INVALID_HANDLE_VALUE) CloseHandle(other);

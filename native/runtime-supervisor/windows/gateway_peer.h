@@ -26,4 +26,7 @@ DWORD keiko_gateway_peer_authenticate(HANDLE pipe, HANDLE approved_image,
                                       struct keiko_gateway_peer *peer);
 void keiko_gateway_peer_close(struct keiko_gateway_peer *peer);
 
+/* Opens the broker pipe at identification level only, waiting up to wait_ms while it is busy. */
+HANDLE keiko_gateway_client_pipe(const wchar_t *name, DWORD wait_ms);
+
 #endif

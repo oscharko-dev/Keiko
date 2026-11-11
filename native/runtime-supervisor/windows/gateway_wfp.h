@@ -40,6 +40,13 @@ DWORD keiko_gateway_filters_open(PSID package_sid, UINT16 family, UINT16 port,
                                 struct keiko_gateway_filters *filters);
 DWORD keiko_gateway_filters_close(struct keiko_gateway_filters *filters);
 
+/* Releases a tree's filters once its loopback exemption was revoked (revoke_result). A failed
+ * revoke keeps the durable deny guard untouched and returns that failure, so a later broker start
+ * still finds the guard and retries the revoke. After a successful revoke, retries close while the
+ * tree is still reaping (ERROR_BUSY), at most about two seconds. */
+DWORD keiko_gateway_filters_close_after_revoke(struct keiko_gateway_filters *filters,
+                                               DWORD revoke_result);
+
 /* job must have KILL_ON_JOB_CLOSE and neither breakaway flag. The caller must not resume a
  * process until this succeeds. Closing with a live tree revokes the permit but retains both
  * durable denies and returns ERROR_BUSY. After reaping, retry close to remove the guard.
