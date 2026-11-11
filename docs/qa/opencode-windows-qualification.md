@@ -1595,7 +1595,9 @@ dev-pinned broker reads it as stale until `gateway-service repair --dev-lane` ru
 Concurrent runs share the runtime root, and each grant, revoke or sweep edit reads the DACL,
 merges one entry and writes it back. Two unserialized edits can drop each other's fresh entry, and
 the run that lost its entry then cannot read its own runtime. ADR-0043 D18 now serializes every
-edit under the per-session lock `Local\Keiko.RuntimeGrants` (30 s). A grant that cannot take it
+edit under one lock (30 s), now a user-wide file lock
+`%LOCALAPPDATA%\Keiko\RuntimeSupervisor\Keiko.RuntimeGrants.lock` instead of the former per-session
+`Local\Keiko.RuntimeGrants`, so runs of the same user in different sessions serialize too. A grant that cannot take it
 refuses the launch; a revoke that cannot take it leaves the tree's own entry for a later sweep.
 
 | Evidence on this host (MSVC 2022 `/W4 /WX /analyze /MT`)                            | Result     |

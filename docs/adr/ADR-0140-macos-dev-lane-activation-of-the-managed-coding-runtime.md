@@ -96,7 +96,7 @@ the outcome with its own D4 reason and never falls through to another lane. The 
 posture as the dev lane (`functional-not-platform-qualified`) and the same forgone guarantees, and
 both dev-lane log operations carry `lane: "npm-runtime-package"`. Linux stays on its packaged
 lane, because it needs the sandbox isolation this lane does not ship. Windows joins the lane
-(#4068, owner decision 2026-11-09): its package also carries the native Job Object supervisor,
+(#4068, proposed 2026-11-09, pending repository-owner approval): its package also carries the native Job Object supervisor,
 admitted only at the digest compiled into the server, and its runs are confined by the D18 broker
 pinned to that digest (ADR-0043 D19).
 

@@ -541,7 +541,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.folderModeHint":
     "Kein Git-Repository: Der Agent bearbeitet, führt aus und prüft hier, ohne Commits oder Pushes.",
   "codingWorkbench.repository.folderModeUnsupported":
-    "Hier führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
+    "Auf dieser Installation führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":

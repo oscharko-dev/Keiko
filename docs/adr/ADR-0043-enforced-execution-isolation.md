@@ -50,7 +50,7 @@ elevate (2026-11-02); and D20: governed repository verification on Windows stays
 control connection into it, and D19 with the broker lookups a standard user can make (2026-11-06).
 D18 also gains the sweep of stale tree entries a crashed supervisor left (2026-11-07) and the
 per-user lock that serializes concurrent runs' grant edits (2026-11-09). D19 also pins the
-Windows npm runtime package's own supervisor (owner decision, 2026-11-09).
+Windows npm runtime package's own supervisor (proposed 2026-11-09, pending repository-owner approval).
 
 ## Context
 
@@ -811,7 +811,7 @@ application-isolation sublayer drops loopback traffic from an AppContainer at th
 (`ALE_AUTH_RECV_ACCEPT`) unless the AppContainer is loopback-exempt, and filters at the connect
 layer cannot lift that. Only a test fixture that installed a temporary exemption passed.
 
-Owner decision (2026-11-01): the broker adds the per-tree SID to the machine's loopback exemption
+Proposed decision (2026-11-01, pending repository-owner approval): the broker adds the per-tree SID to the machine's loopback exemption
 list through the documented `NetworkIsolationSetAppContainerConfig` API
 (`gateway_loopback.c`), with these constraints:
 
@@ -831,8 +831,8 @@ list through the documented `NetworkIsolationSetAppContainerConfig` API
   the broker revokes the exemption of every SID that still carries a persistent durable deny
   guard; the guards themselves stay, and their recovery remains open work.
 
-Filesystem grants (amended 2026-11-06, #4068; decided 2026-11-07 by the Windows owner under the
-owner's scope transfer of 2026-10-24). A fresh per-tree SID can open nothing it was not granted. On
+Filesystem grants (amended 2026-11-06, #4068; proposed 2026-11-07 by the #4068 assignee under the
+scope transfer of 2026-10-24, pending repository-owner approval). A fresh per-tree SID can open nothing it was not granted. On
 2026-11-06 the first confined run on a standard user's machine could not load its own runtime. The
 host now sends the tree's grants to the supervisor as one closed `KGG1` frame, after the launch
 packet and before the broker open (`native/runtime-supervisor/windows/gateway_grants.c`):
@@ -897,8 +897,8 @@ packet and before the broker open (`native/runtime-supervisor/windows/gateway_gr
   `executionLocations: ["worktree"]`, so the Workbench preselects a new worktree and offers no
   other location. Other hosts omit the field and keep both locations.
 
-Inbound control (amended 2026-11-06, #4068; decided 2026-11-07 by the Windows owner under the
-owner's scope transfer of 2026-10-24). The host drives OpenCode through the server the runtime opens
+Inbound control (amended 2026-11-06, #4068; proposed 2026-11-07 by the #4068 assignee under the
+scope transfer of 2026-10-24, pending repository-owner approval). The host drives OpenCode through the server the runtime opens
 on `127.0.0.1` inside the tree. Windows drops that inbound loopback connection twice, silently: its
 application isolation blocks loopback into any AppContainer, and Windows Firewall blocks inbound to
 a package without a rule. The D18 exemption lifts only the outbound direction. The broker now admits
@@ -924,8 +924,8 @@ These are the same three admissions that passed the disposable-runner compositio
 The port is not pinned: OpenCode chooses it inside the tree, and the per-run server password stays
 its authentication.
 
-User environment key (amended 2026-11-07, #4068; decided 2026-11-07 by the Windows owner under the
-owner's scope transfer of 2026-10-24). An AppContainer root reads `HKCU\Environment` through the
+User environment key (amended 2026-11-07, #4068; proposed 2026-11-07 by the #4068 assignee under the
+scope transfer of 2026-10-24, pending repository-owner approval). An AppContainer root reads `HKCU\Environment` through the
 key's own read entries for `ALL APPLICATION PACKAGES` and the `registryRead` capability, so a value
 stored with `setx` was readable beside the launch environment allowlist. On Windows 11 a deny entry
 for the tree's SID, a Less Privileged AppContainer and a medium no-read-up label each failed to
@@ -959,7 +959,7 @@ timed out (10060) before the exemption.
 ### D19 — An administrator installs the Windows broker once; ordinary launches never elevate
 
 Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
-<status|install|repair|uninstall>` owns that lifecycle (owner decisions, 2026-11-02):
+<status|install|repair|uninstall>` owns that lifecycle (proposed 2026-11-02, pending repository-owner approval):
 
 - **Elevation.** Windows asks through UAC. Only the native supervisor runs elevated
   (`native/runtime-supervisor/windows/gateway_install.c`); Node and package scripts do not. The
@@ -967,15 +967,15 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   accept. Until releases carry a verified Authenticode signature, UAC names an unknown publisher.
 - **Pins.** A release-qualified Windows package yields its attested helper's digest. A Windows dev
   checkout yields the digest of the runtime supervisor it built, as its dev-lane manifest records
-  and discovery re-verifies against the source tree (amended 2026-11-06, #4068; decided 2026-11-07
-  by the Windows owner under the owner's scope transfer of 2026-10-24). The checkout path needs the
+  and discovery re-verifies against the source tree (amended 2026-11-06, #4068; proposed 2026-11-07
+  by the #4068 assignee under the scope transfer of 2026-10-24, pending repository-owner approval). The checkout path needs the
   explicit `--dev-lane` flag, so an administrator installs a locally built broker only by choosing
   it. Its runs take the same broker, filters and loopback exemption as a release's. Their evidence
   stays `functional-not-platform-qualified`, so no checkout run counts as platform qualification. A
   release launch reads a broker with a checkout pin as stale, and `repair` replaces it. The Windows
   npm runtime package (`@oscharko-dev/keiko-coding-runtime-win32-x64`) carries its own supervisor
   and yields that supervisor's digest, which the server compiles in beside the package's other
-  approved digests, so a package cannot vouch for itself (owner decision, 2026-11-09). Without
+  approved digests, so a package cannot vouch for itself (proposed 2026-11-09, pending repository-owner approval). Without
   `--dev-lane`, the command uses a release-qualified helper and, only where none exists, that
   package's supervisor; the outcome line names the `npm-runtime-package` lane. Its evidence stays
   `functional-not-platform-qualified`. A Windows evaluation package yields no pin.
@@ -1026,8 +1026,7 @@ product path instead of `New-Service`.
 
 ### D20 — No Windows-native execution-root boundary for repository verification
 
-Decided on 2026-11-03 by the #4068 assignee, @HendrikD2005; integration into `dev` remains the
-repository owner's approval. Repository verification always requests the execution-root boundary (D9).
+Proposed on 2026-11-03 by the #4068 assignee; pending repository-owner approval. Repository verification always requests the execution-root boundary (D9).
 Windows has no native unprivileged backend for it, so the verifier keeps its present behaviour there:
 its steps run in a container when a runtime is available and are refused when none is. Keiko does not
 build a Windows-native execution-root boundary for verification, and it does not run these steps

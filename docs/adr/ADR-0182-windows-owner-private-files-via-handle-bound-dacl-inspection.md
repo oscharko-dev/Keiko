@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-11-01, Issue #4068, Parent Epic #3897). Product-owner decisions recorded below.
+Proposed (2026-11-01, Issue #4068, Parent Epic #3897). The decisions below were made by the #4068 assignee
+under the scope transfer of 2026-10-24 and are pending repository-owner approval.
 
 ## Context
 
@@ -80,7 +81,7 @@ failure path, the previous entry stays and no staging or copy remains.
 
 A run's own state directory is made owner-private with inheritable entries when the run is prepared,
 before anything is written below it (`opencodeRuntimeComposition.ts`, amended 2026-11-06, #4068;
-decided 2026-11-07 by the Windows owner under the owner's scope transfer of 2026-10-24).
+proposed 2026-11-07 by the #4068 assignee under the scope transfer of 2026-10-24, pending repository-owner approval).
 Every file the runtime or Keiko later writes there inherits that protection, a fresh run's database
 included; before, those files inherited whatever the state directory's parents granted. A resumed
 run's checked-out copy, protected owner-only by the store, is then handed back to that directory's
