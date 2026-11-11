@@ -3,8 +3,8 @@
 // failed. Run `run-272120967981827964065820685403290179367` reached its 30-minute envelope duration
 // with a model call in flight (`coding-sidecar.gateway.outcome outcome=cancelled
 // cancellationCause=run-stopped`) and settled `runtime-failed`. Keiko does not limit tokens
-// (#4346), so no prompt allowance ends a run any more. A failed task outcome carries no cause, so settlement reads the
-// cause from the layers that own the facts, never from OpenCode's error text:
+// (#4346), so no prompt allowance ends a run any more. A failed task outcome carries no cause, so
+// settlement reads the cause from the layers that own the facts, never from OpenCode's error text:
 //
 // - the runtime authority knows whether the run's Authority Envelope ran out of time
 //   (`envelopeDurationExhausted`);

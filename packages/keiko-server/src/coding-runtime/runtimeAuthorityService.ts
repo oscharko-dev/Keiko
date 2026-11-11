@@ -100,7 +100,7 @@ const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
 // reservation could be replayed into from anywhere else, so it is safe to admit alongside
 // "ready" and "running". Every other admitModelCall clause (audience, runId, envelopeDigest
 // match, paused-state refusal) stays exactly as strict; only the running-only state gate widens.
-const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+const MODEL_CALL_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "starting",
   "ready",
   "running",
@@ -1215,7 +1215,7 @@ export class CodingRuntimeAuthorityService {
     if (
       binding.audience !== "model-gateway" ||
       reference === undefined ||
-      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
+      !MODEL_CALL_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
       this.runtimeState.runId !== binding.runId ||
       reference.runId !== binding.runId ||
       reference.envelopeDigest !== binding.envelopeDigest

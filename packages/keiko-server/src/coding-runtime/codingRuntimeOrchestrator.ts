@@ -4445,8 +4445,8 @@ export class CodingRuntimeOrchestrator {
     // #3390: this orchestrator-local snapshot is a separate object from runtimeAuthorityService's
     // runtimeState (synced independently by productionCodingRuntimePorts.ts's
     // startProductionRuntime, well before this method runs) -- moving this transition earlier
-    // does NOT itself admit the reservePromptTokens race; that race is closed in
-    // runtimeAuthorityService.ts (PROMPT_RESERVATION_ADMISSIBLE_STATES, which now also admits
+    // does NOT itself admit the model-call admission race; that race is closed in
+    // runtimeAuthorityService.ts (MODEL_CALL_ADMISSIBLE_STATES, which now also admits
     // "starting", the actual runtimeState during the managed runtime's own start()). What this
     // move does fix is the run's own public projection: settling into "running" BEFORE dispatch,
     // instead of only after the sidecar accepts, means an operator never observes "ready" while

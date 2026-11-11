@@ -84,6 +84,7 @@ import {
 } from "./deps.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
@@ -3357,6 +3358,31 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
       RangeError,
     );
     expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).not.toThrow();
+  });
+
+  it("records once, body-free, that the retired prompt-token setting is ignored (#4346)", () => {
+    const record = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation(() => undefined);
+    try {
+      depsWithEnv({});
+      expect(
+        record.mock.calls.filter(([entry]) => entry.message === "retired-setting-ignored"),
+      ).toEqual([]);
+      depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "200000" });
+      const retired = record.mock.calls
+        .map(([entry]) => entry)
+        .filter((entry) => entry.message === "retired-setting-ignored");
+      expect(retired).toHaveLength(1);
+      expect(retired[0]).toMatchObject({
+        operation: "coding-runtime.composition.retired-setting",
+        diagnosticOutcome: "routine",
+        code: "setting=prompt-token-allowance",
+      });
+      expect(JSON.stringify(retired[0])).not.toContain("200000");
+    } finally {
+      record.mockRestore();
+    }
   });
 
   it("intersects explicit option and environment ceilings before defaulting to all-mode availability", () => {

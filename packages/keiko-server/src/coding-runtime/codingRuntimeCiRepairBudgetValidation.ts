@@ -149,8 +149,9 @@ function mapItems(value: unknown, project: (item: unknown) => unknown): unknown 
 /**
  * A record persisted before Keiko stopped limiting tokens (#4346) still carries the retired
  * prompt-token allowance: `limits.maxPromptTokens` and the `promptTokens` counters of the record,
- * its attempts and their charges. They are ignored, never enforced and never written back, and
- * their presence never fails a record closed. A charge that only spent prompt tokens keeps its
+ * its attempts and their charges. They are ignored whatever their value, never enforced and never
+ * written back, and their presence never fails a record closed: a value nothing reads cannot be
+ * malformed in a way that matters. A charge that only spent prompt tokens keeps its
  * identity with zero tool calls, so the retained receipts and totals stay consistent.
  */
 function withoutLegacyPromptAllowance(value: unknown): unknown {

@@ -6400,7 +6400,7 @@ function unqualifiedComposition(
 }
 
 /**
- * ADR-0137 D2 (#3873): the two Authority Envelope bounds are operator settings. Both are parsed
+ * ADR-0137 D2 (#3873): the Authority Envelope duration is an operator setting. It is parsed
  * ONCE here, before runtime activation, so an invalid value fails the composition closed at
  * startup, and the same numbers reach every newly minted envelope and the safe-activity
  * retention that must outlive it.
@@ -6410,11 +6410,29 @@ interface RuntimeEnvelopeBounds {
 }
 
 function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
+  recordRetiredPromptTokenSetting(env);
   return {
     maxDurationMinutes: configuredRuntimeMaxDurationMinutes(
       env.KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES,
     ),
   };
+}
+
+// Keiko does not cap prompt tokens (#4346): an operator who still sets the retired
+// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` gets no cap, so composition records once, body-free,
+// that the setting is ignored instead of leaving the operator to believe it applies.
+function recordRetiredPromptTokenSetting(env: EnvSource): void {
+  if (env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS === undefined) return;
+  emitServerDiagnostic(undefined, {
+    correlationId: "coding-runtime-composition",
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.composition.retired-setting",
+    source: "coding-runtime.composition",
+    errorClass: "RetiredSettingIgnored",
+    message: "retired-setting-ignored",
+    diagnosticOutcome: "routine",
+    code: "setting=prompt-token-allowance",
+  });
 }
 
 // #3903 AC4: an approved Code Mode `worktree_create` becomes a managed task workspace through the
