@@ -1365,7 +1365,6 @@ it.each([false, true])(
 const TEN_CALL_BUDGET = {
   maxRuntimeMs: 300_000,
   maxToolCalls: 10,
-  maxPromptTokens: 100_000,
   maxPatchBytes: 0,
 } as const;
 it.each([false, true])(
@@ -1390,7 +1389,7 @@ it.each([false, true])(
       user?.toolTranscript?.exchanges.every((exchange) => exchange.result?.status === "completed"),
     ).toBe(true);
     expect(f.calls.at(-1)?.messages.filter((message) => message.role === "tool")).toHaveLength(9);
-    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(assistant?.content).toContain("this turn used up its tool-call budget");
     expect(assistant?.content).toContain("Reads completed: 10.");
     if (stream) expect(response.body()).toContain("event: done");
     else expect(result).toMatchObject({ status: 200 });
@@ -1441,13 +1440,12 @@ describe.each([false, true])("a turn past the former fixed tool-call cap (stream
     const { f } = await runReads({
       maxRuntimeMs: 300_000,
       maxToolCalls: FORMER_FIXED_CAP,
-      maxPromptTokens: 100_000,
       maxPatchBytes: 0,
     });
 
     expect(f.requests()).toBe(FORMER_FIXED_CAP);
     const [, assistant] = f.deps.store.listMessages(f.chatId);
-    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(assistant?.content).toContain("this turn used up its tool-call budget");
   });
 });
 

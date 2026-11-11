@@ -104,8 +104,9 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "workspace-unqualified"
   // F9 (#3873, live Gemma qualification): a run whose last turn ended on one of its own bounds or on
   // a failed model call names that cause instead of `runtime-failed`, which the Workbench renders as
-  // an internal error. `prompt-allowance-exhausted`: the run's cumulative prompt allowance (the
-  // Authority Envelope's `maxPromptTokens`) refused its most recent model call.
+  // an internal error. `prompt-allowance-exhausted` is LEGACY and never produced any more (#4346,
+  // Keiko does not limit tokens): the literal stays only so a run settled by an older Keiko still
+  // decodes from the durable snapshot store, whose CHECK constraint admits it.
   // `envelope-duration-exhausted`: the run's Authority Envelope ran out of time (its `expiresAt`, or
   // `maxRuntimeMs` since minting). `output-exhausted-repeated`: the most recent model call spent the
   // whole output budget again without a tool call or an answer, after the gateway's steered repair

@@ -15,16 +15,13 @@ import { plantDirectoryRedirect } from "../../../../tests/support/symlink-fixtur
 
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
-  DEFAULT_RUNTIME_PROMPT_TOKENS,
   MAX_RUNTIME_MAX_DURATION_MINUTES,
-  MAX_RUNTIME_PROMPT_TOKENS,
   productionGitDeliveryModeGrants,
   productionRuntimeAuthorityFacts,
   productionWorkspaceMatches,
   type ProductionWorkspaceAuthorityInput,
   resolveProductionRuntimeContext,
   configuredRuntimeMaxDurationMinutes,
-  configuredRuntimePromptTokenBudget,
   runtimeMaxDurationMs,
 } from "./productionRuntimeWorkspaceAuthority.js";
 import {
@@ -63,8 +60,9 @@ function expectLaunchResolutionFailure(
 }
 
 describe("production runtime workspace authority", () => {
-  // #3873: the cumulative prompt allowance and the envelope duration are operator settings whose
-  // defaults the live Gemma qualification re-sized (ADR-0137 D2). Every expectation below derives
+  // #3873: the envelope duration is an operator setting whose default the live Gemma qualification
+  // re-sized (ADR-0137 D2). Keiko does not limit tokens (#4346): the envelope carries no prompt
+  // allowance. Every expectation below derives
   // from the exported bounds or the parser that owns them, never from a restated literal
   // (AGENTS.md §7), so a future re-sizing cannot leave a stale number green here.
   // ADR-0171 owner amendment 2026-11-05: observation age is diagnostic only. The old
@@ -159,19 +157,16 @@ describe("production runtime workspace authority", () => {
     expect(resolveModel).toHaveBeenCalledTimes(4);
   });
 
-  it("binds an explicit deployment prompt budget only into newly resolved authority", () => {
+  // Keiko does not limit tokens (#4346): a newly minted envelope carries no cumulative prompt
+  // allowance, and no deployment setting can add one back.
+  it("mints an envelope budget without any prompt-token allowance", () => {
     const fixture = liveFixture();
-    const prior = resolveProductionRuntimeContext(fixture.input, fixture.request);
-    const next = resolveProductionRuntimeContext(
-      { ...fixture.input, promptTokenBudget: MAX_RUNTIME_PROMPT_TOKENS },
-      { ...fixture.request, runId: "run-next" },
-    );
-    expect(MAX_RUNTIME_PROMPT_TOKENS).toBeGreaterThan(DEFAULT_RUNTIME_PROMPT_TOKENS);
-    expect(prior.budget.maxPromptTokens).toBe(DEFAULT_RUNTIME_PROMPT_TOKENS);
-    expect(next.budget.maxPromptTokens).toBe(MAX_RUNTIME_PROMPT_TOKENS);
-    expect(next.budget.maxToolCalls).toBe(prior.budget.maxToolCalls);
-    expect(next.budget.maxRuntimeMs).toBe(prior.budget.maxRuntimeMs);
-    expect(next.budget.maxPatchBytes).toBe(prior.budget.maxPatchBytes);
+    const resolved = resolveProductionRuntimeContext(fixture.input, fixture.request);
+    expect(Object.keys(resolved.budget).sort()).toEqual([
+      "maxPatchBytes",
+      "maxRuntimeMs",
+      "maxToolCalls",
+    ]);
   });
 
   // Owner decision 2026-10-28: a run may apply 64 MiB of patches, so normal work (a 66 KB data
@@ -182,28 +177,6 @@ describe("production runtime workspace authority", () => {
     const context = resolveProductionRuntimeContext(fixture.input, fixture.request);
     expect(context.budget.maxPatchBytes).toBe(64 * 1_048_576);
     expect(context.budget.maxPatchBytes).toBe(CODING_RUNTIME_PATCH_BUDGET_BYTES);
-  });
-
-  it("validates the deployment prompt budget without an invalid-value fallback", () => {
-    expect(configuredRuntimePromptTokenBudget(undefined)).toBe(DEFAULT_RUNTIME_PROMPT_TOKENS);
-    expect(configuredRuntimePromptTokenBudget("1")).toBe(1);
-    expect(configuredRuntimePromptTokenBudget(String(MAX_RUNTIME_PROMPT_TOKENS))).toBe(
-      MAX_RUNTIME_PROMPT_TOKENS,
-    );
-    for (const invalid of [
-      "",
-      "0",
-      "-1",
-      "1.5",
-      "NaN",
-      "Infinity",
-      String(MAX_RUNTIME_PROMPT_TOKENS + 1),
-      "1e6",
-      " 1",
-      "+1",
-    ]) {
-      expect(() => configuredRuntimePromptTokenBudget(invalid)).toThrow(RangeError);
-    }
   });
 
   it("validates the deployment maximum duration without an invalid-value fallback", () => {
@@ -254,7 +227,6 @@ describe("production runtime workspace authority", () => {
       defaultMs * 7,
     );
     expect(Date.parse(configured.expiresAt) - now.getTime()).toBe(configured.budget.maxRuntimeMs);
-    expect(configured.budget.maxPromptTokens).toBe(defaulted.budget.maxPromptTokens);
 
     for (const invalid of [0, -1, 1.5, Number.NaN, MAX_RUNTIME_MAX_DURATION_MINUTES + 1]) {
       expect(() =>

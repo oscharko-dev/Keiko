@@ -158,7 +158,7 @@ export interface CodingRuntimeOrchestratorDeps {
    */
   readonly pendingResearchApprovals?: PendingResearchApprovals | undefined;
   /**
-   * F9 (#3873): the facts that name why a run's failed turn ended — an exhausted prompt allowance,
+   * F9 (#3873): the facts that name why a run's failed turn ended — an exhausted time limit,
    * an unreachable provider, a failed model call. Read at settlement so a failed task outcome
    * settles under its closed cause; absent, a failed outcome settles `runtime-failed` as before.
    */

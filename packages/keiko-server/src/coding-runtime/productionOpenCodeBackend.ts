@@ -629,7 +629,6 @@ function boundJira(
           result,
           geometry,
           usage: run.contextUsage?.read(run.request.runId),
-          promptFits: authority.promptFits,
         }),
     },
   };

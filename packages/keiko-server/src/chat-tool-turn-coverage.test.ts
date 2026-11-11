@@ -76,7 +76,7 @@ class CoverageTurn extends ChatToolTurn<JiraChatCatalogContext> {
   static create(options: ChatToolTurnOptions<JiraChatCatalogContext>): CoverageTurn {
     return new CoverageTurn(options);
   }
-  protected override reserveAuthorityPrompt(): boolean {
+  protected override admitAuthorityModelCall(): boolean {
     return true;
   }
   protected override observedMutation(
@@ -224,7 +224,7 @@ async function fixture(): Promise<{
     context: contextFor(pod.chatId, message.id),
     managed,
     correlationId: CORRELATION,
-    budget: { maxRuntimeMs: 59000, maxToolCalls: 6, maxPromptTokens: 100000, maxPatchBytes: 0 },
+    budget: { maxRuntimeMs: 59000, maxToolCalls: 6, maxPatchBytes: 0 },
     bind: (context, budgetPort, invocationRegistry) =>
       createCatalogToolBinder<JiraChatCatalogConsumer>(
         {

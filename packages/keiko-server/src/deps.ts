@@ -62,7 +62,6 @@ import {
 
 import {
   configuredRuntimeMaxDurationMinutes,
-  configuredRuntimePromptTokenBudget,
   runtimeMaxDurationMs,
 } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
@@ -883,12 +882,13 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
           capability: string,
           audience: "model-gateway" | "tool-facade",
         ) => unknown;
-        readonly reservePromptTokens?:
-          ((capability: string, promptTokens: number) => unknown) | undefined;
-        // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
-        // provider's real reported usage once known, mirroring `reservePromptTokens`. An admitted
-        // reservation may answer an opaque `modelCallId` (#3873 run effort roll-up); the settlement
-        // of that call names it, so the call is timed from its own reservation.
+        // Admits one model call of the run before provider dispatch; books no tokens (#4346).
+        readonly admitModelCall?:
+          ((capability: string, estimatedPromptTokens: number) => unknown) | undefined;
+        // #3384 wave-3 W3-3 "needs": records the provider's real reported usage of an admitted
+        // call once known. An admitted call may answer an opaque `modelCallId` (#3873 run effort
+        // roll-up); the settlement of that call names it, so the call is timed from its own
+        // admission.
         readonly settlePromptTokens?:
           | ((
               capability: string,
@@ -5360,7 +5360,7 @@ function createUiCodingRuntimeProjectMemory(
 // The task workspace's own AGENTS.md as bounded untrusted initial context (ADR-0137 D1). Default
 // on; the explicit `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` opt-out is read once here,
 // and any other explicit value fails composition closed exactly like the neighbouring
-// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`. The loader reads through the runtime host's own secure
+// `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`. The loader reads through the runtime host's own secure
 // workspace read helper, never a second filesystem path; an unqualified host leaves it no source.
 function createUiCodingRuntimeRepositoryInstructions(
   args: UiHandlerDepsAssemblyArgs,
@@ -6406,15 +6406,11 @@ function unqualifiedComposition(
  * retention that must outlive it.
  */
 interface RuntimeEnvelopeBounds {
-  readonly promptTokenBudget: number;
   readonly maxDurationMinutes: number;
 }
 
 function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
   return {
-    promptTokenBudget: configuredRuntimePromptTokenBudget(
-      env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
-    ),
     maxDurationMinutes: configuredRuntimeMaxDurationMinutes(
       env.KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES,
     ),
@@ -6585,7 +6581,6 @@ function runtimeWorkspaceAuthority(
     workspaceLifecycle,
     managedTaskWorkspaceRoot,
     deploymentCeiling,
-    promptTokenBudget: envelopeBounds.promptTokenBudget,
     maxDurationMinutes: envelopeBounds.maxDurationMinutes,
     readWorkspaceHead: readProductionWorkspaceHead,
     verifiedCommitResult: (runId) =>

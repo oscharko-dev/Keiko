@@ -961,7 +961,6 @@ function reserveAgentRunApplyBudget(
     usage: {
       toolCalls: 0,
       patchBytes: agentRunApplyPatchBudget(snapshot),
-      promptTokens: 0,
     },
     nowIso: new Date().toISOString(),
   });

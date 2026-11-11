@@ -70,7 +70,7 @@ const ciRepairNotifierCapture = vi.hoisted(() => ({
 }));
 
 // #3873: a fixture without delivery storage composes the unavailable CI-repair budget, which refuses
-// every prompt charge. The one test that drives a run's model calls through the composed prompt
+// every model call. The one test that drives a run's model calls through the composed admission
 // ledger replaces it with a budget that admits them; every other test composes the original.
 const ciRepairBudgetOverride = vi.hoisted(() => ({
   current: undefined as CiRepairExecutionBudget | undefined,
@@ -1453,54 +1453,6 @@ describe("production coding runtime resolver", () => {
       },
     );
 
-    it("checks catalog expansion against the existing live cumulative prompt ledger without charging it", async () => {
-      const chargePrompt = vi.fn<CiRepairExecutionBudget["chargePrompt"]>(() => ({
-        accepted: true,
-      }));
-      ciRepairBudgetOverride.current = {
-        admitTool: () => undefined,
-        canChargePrompt: () => ({ accepted: true }),
-        chargePrompt,
-        observed: () => undefined,
-      };
-      // Capability custody captures Date.now during host composition, so install this clock first.
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(WORKSPACE_NOW);
-      const { host, createRun, confirmations, fixture, request } = jiraHost();
-      confirmations.issue(
-        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
-          ...request,
-          jiraPod: BOUND,
-        }),
-      );
-      const launch = host.launchResolver.resolve({ ...request, jiraPodId: POD });
-      const manager = host.createManager(vi.fn());
-      const backend = createRun.mock.calls[0]?.[0];
-      const ledger = host.runtimeCapabilityAuthenticator;
-      const fits = backend?.jiraAuthority?.promptFits;
-      if (backend === undefined || ledger === undefined || fits === undefined)
-        throw new TypeError("Missing composed Jira budget owner");
-      expect(fits(1)).toBe(false);
-      await manager.start({
-        ...launch,
-        runId: request.runId,
-        workspaceRoot: fixture.workspace,
-        requestedMode: request.requestedMode,
-      });
-      expect(fits(1000)).toBe(true);
-      expect(fits(1000)).toBe(true);
-      expect(chargePrompt).not.toHaveBeenCalled();
-      const charged = backend.context.budget.maxPromptTokens - 500;
-      expect(
-        ledger.reservePromptTokens?.(backend.minted.modelGatewayCapability, charged),
-      ).toMatchObject({ ok: true });
-      expect(fits(500)).toBe(true);
-      expect(fits(501)).toBe(false);
-      expect(chargePrompt).toHaveBeenCalledOnce();
-      await manager.stop(request.runId);
-      expect(fits(1)).toBe(false);
-    });
-
     it("refuses an administrative launch under a confirmation that approved ordinary Jira access", () => {
       const { host, createRun, confirmations, fixture, request } = jiraHost();
       confirmations.issue(
@@ -1714,7 +1666,7 @@ describe("production coding runtime resolver", () => {
   });
 
   // #3873: the composed host counts a run's model calls where the sidecar gateway admits and settles
-  // them — the model-gateway capability's prompt reservation — and its tool calls where the run's
+  // them — the model-gateway capability's admission and settlement — and its tool calls where the run's
   // facade answers them, and answers both through `runEffort` for the run's settled line.
   it("counts the run's admitted model calls and answered tool calls for its effort roll-up", async () => {
     const fixture = workspaceFixture();
@@ -1724,8 +1676,7 @@ describe("production coding runtime resolver", () => {
     vi.setSystemTime(fixture.nowMs());
     ciRepairBudgetOverride.current = {
       admitTool: () => undefined,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
+      admitModelCall: () => ({ accepted: true }),
       observed: () => undefined,
     };
     const confirmations = confirmationFixture();
@@ -1742,22 +1693,23 @@ describe("production coding runtime resolver", () => {
     const backend = createRun.mock.calls[0]?.[0];
     const ledger = host.runtimeCapabilityAuthenticator;
     if (backend === undefined || ledger === undefined || !hasPromptSettlement(ledger)) {
-      throw new Error("expected a composed run and its prompt ledger");
+      throw new Error("expected a composed run and its admission ledger");
     }
     const capability = backend.minted.modelGatewayCapability;
 
     // One model call the gateway admitted and, 4 s later, settled with the provider's own count. The
     // admitted reservation answers the call's identity and the settlement names it, as the gateway
     // does, so the call is timed from its own reservation.
-    const reserved = ledger.reservePromptTokens?.(capability, 1_000);
+    const reserved = ledger.admitModelCall?.(capability, 1_000);
     expect(reserved).toMatchObject({ ok: true, modelCallId: expect.any(Number) as unknown });
     fixture.advanceNow(4_000);
     vi.setSystemTime(fixture.nowMs());
     expect(
       ledger.settlePromptTokens(capability, 1_000, 1_240, modelCallIdOf(reserved)),
     ).toMatchObject({ ok: true });
-    // A reservation the run's allowance refused is no model call: nothing was dispatched.
-    expect(ledger.reservePromptTokens?.(capability, 10_000_000)).toMatchObject({ ok: false });
+    // Keiko does not limit tokens (#4346): a call estimated at ten million prompt tokens is admitted
+    // like any other. It was never settled, so it is no completed model call of the effort roll-up.
+    expect(ledger.admitModelCall?.(capability, 10_000_000)).toMatchObject({ ok: true });
     // A malformed edit the run's facade refused is still a refused edit.
     await expect(
       backend.toolFacade.execute({
@@ -1792,8 +1744,7 @@ describe("production coding runtime resolver", () => {
     vi.setSystemTime(fixture.nowMs());
     ciRepairBudgetOverride.current = {
       admitTool: () => undefined,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
+      admitModelCall: () => ({ accepted: true }),
       observed: () => undefined,
     };
     const confirmations = confirmationFixture();

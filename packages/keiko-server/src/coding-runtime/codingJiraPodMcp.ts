@@ -122,8 +122,6 @@ export interface CodingJiraRunAuthority {
     phase: "discovery" | "effect",
   ) => readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly currentInputAuthority?: () => CodingJiraInputAuthority | undefined;
-  /** Existing cumulative run budget, rechecked without reserving another model request. */
-  readonly promptFits?: ((promptTokens: number) => boolean) | undefined;
   /** Composed with the actual model geometry and provider-reported context usage. */
   readonly catalogFits?: Parameters<typeof createCodingJiraCatalog>[0]["fits"] | undefined;
 }

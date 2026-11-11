@@ -634,7 +634,6 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       readonly limits: {
         readonly maxRuntimeMs: number;
         readonly maxToolCalls: number;
-        readonly maxPromptTokens: number;
       };
       readonly stillAuthorized: () => boolean;
     } => ({
@@ -642,7 +641,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       remoteDigest: DIGEST,
       prNumber: 17,
       correlationId: "scripted-ci-repair-3388",
-      limits: { maxRuntimeMs: 600_000, maxToolCalls: 100, maxPromptTokens: 100_000 },
+      limits: { maxRuntimeMs: 600_000, maxToolCalls: 100 },
       stillAuthorized: (): boolean => true,
     });
     const repairController = new CodingRuntimeCiRepairController({
@@ -1053,7 +1052,7 @@ function liveNegativeGatewayDeps(diagnostics: ServerDiagnosticRecord[]): UiHandl
               binding: { runId: LIVE_GATEWAY_RUN_ID, adapterKind: "model-gateway-sidecar" },
             }
           : { ok: false },
-      reservePromptTokens: () => ({ ok: true, runId: LIVE_GATEWAY_RUN_ID }),
+      admitModelCall: () => ({ ok: true, runId: LIVE_GATEWAY_RUN_ID }),
     },
   };
 }

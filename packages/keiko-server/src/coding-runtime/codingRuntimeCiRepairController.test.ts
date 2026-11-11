@@ -19,7 +19,7 @@ import type {
 import { CodingRuntimeCiRepairController } from "./codingRuntimeCiRepairController.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
-import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
+import { admitModelCallWithCiRepair } from "./ciRepairModelCallAdmission.js";
 import type { RuntimeCapabilityResolution } from "./runtimeCapabilityStore.js";
 
 const databases: DatabaseSync[] = [];
@@ -61,7 +61,7 @@ function fixture(
     prNumber: 17,
     correlationId: "correlation-1",
     stillAuthorized: () => clock.live,
-    limits: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1000, ...limits },
+    limits: { maxRuntimeMs: 60_000, maxToolCalls: 20, ...limits },
   };
   const store = createCodingRuntimeCiRepairBudgetStore({
     db,
@@ -162,18 +162,15 @@ describe("CI repair accounting around admitted model work", () => {
     expect(test.readiness.invalidate("run-1")).toBe(true);
     expect(test.controller.admitTool(verify("verify-1"))).toBeUndefined();
   });
-  it("allows a child using the last tool credit to reserve its bounded model prompt", () => {
-    const test = fixture({ maxToolCalls: 1, maxPromptTokens: 10 });
+  it("allows a child using the last tool credit to admit its model call", () => {
+    const test = fixture({ maxToolCalls: 1 });
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
-    expect(test.controller.chargePrompt(8)).toEqual({ accepted: true });
-    expect(test.controller.chargePrompt(3)).toEqual({
-      accepted: false,
-      reason: "prompt-budget-exhausted",
-    });
+    expect(test.controller.admitModelCall()).toEqual({ accepted: true });
+    expect(test.controller.admitModelCall()).toEqual({ accepted: true });
     expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(false);
   });
   it("#3417: answers whether a delegated read fits without charging the repair ledger", () => {
-    const test = fixture({ maxToolCalls: 2, maxPromptTokens: 10 });
+    const test = fixture({ maxToolCalls: 2 });
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
     expect(test.controller.canChargeDelegatedRead()).toBe(true);
     expect(test.controller.canChargeDelegatedRead()).toBe(true);
@@ -232,15 +229,17 @@ describe("CI repair accounting around admitted model work", () => {
     test.clock.live = false;
     expect(lease?.check()).toBe(false);
   });
-  it("charges accepted gateway prompt reservations exactly and forbids overflow before dispatch", () => {
-    const test = fixture({ maxPromptTokens: 10 });
+  // Keiko does not limit tokens (#4346): a model call is admitted against the repair's time and
+  // authority limits only, and nothing about its prompt is charged to the repair ledger.
+  it("admits every model call of a live repair and charges nothing to the ledger", () => {
+    const test = fixture({});
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
-    expect(test.controller.chargePrompt(10)).toEqual({ accepted: true });
-    expect(test.controller.chargePrompt(1)).toEqual({
-      accepted: false,
-      reason: "prompt-budget-exhausted",
-    });
-    expect(test.store.read(test.context).record?.promptTokens).toBe(10);
+    for (let call = 0; call < 50; call += 1) {
+      expect(test.controller.admitModelCall()).toEqual({ accepted: true });
+    }
+    const record = test.store.read(test.context).record;
+    expect(record).toMatchObject({ toolCalls: 1 });
+    expect(JSON.stringify(record)).not.toMatch(/[Pp]romptTokens/u);
   });
   it("counts three failed attempts cumulatively without counting repeated observations", () => {
     const test = fixture();
@@ -329,15 +328,15 @@ describe("CI repair accounting around admitted model work", () => {
       expect(test.controller.ciObservationRequired()).toBe(false);
     });
   });
-  it("also counts child reads and gateway reservations through the existing parent owners", () => {
-    const test = fixture({ maxToolCalls: 2, maxPromptTokens: 10 });
+  it("also counts child reads through the existing parent owners and admits gateway calls freely", () => {
+    const test = fixture({ maxToolCalls: 2 });
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
-    const reservePromptTokens = (): { readonly ok: true; readonly runId: string } => ({
+    const admitModelCall = (): { readonly ok: true; readonly runId: string } => ({
       ok: true,
       runId: "run-1",
     });
-    // b2-3: `reservePromptWithCiRepair` now resolves the run identity through the side-effect-free
-    // `authenticateCapability` before ever calling `reservePromptTokens`, so the fake authority here
+    // b2-3: `admitModelCallWithCiRepair` resolves the run identity through the side-effect-free
+    // `authenticateCapability` before ever calling `admitModelCall`, so the fake authority here
     // needs both.
     const authenticateCapability = (): RuntimeCapabilityResolution => ({
       ok: true,
@@ -351,20 +350,18 @@ describe("CI repair accounting around admitted model work", () => {
         expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
       },
     });
-    const authority = { reservePromptTokens, authenticateCapability };
-    expect(reservePromptWithCiRepair(authority, () => test.controller, "capability", 9).ok).toBe(
-      true,
-    );
-    expect(reservePromptWithCiRepair(authority, () => test.controller, "capability", 2)).toEqual({
-      ok: false,
-      reason: "authority-budget-exceeded",
-    });
+    const authority = { admitModelCall, authenticateCapability };
+    for (let call = 0; call < 20; call += 1) {
+      expect(admitModelCallWithCiRepair(authority, () => test.controller, "capability").ok).toBe(
+        true,
+      );
+    }
     expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(true);
     expect(test.controller.chargeDelegatedRead("child-2", "read-2")).toBe(false);
-    expect(test.store.read(test.context).record).toMatchObject({ toolCalls: 2, promptTokens: 9 });
+    expect(test.store.read(test.context).record).toMatchObject({ toolCalls: 2 });
   });
-  it("does not charge durable repair tokens when the authority reservation rejects (b2-3 residual)", () => {
-    const test = fixture({ maxPromptTokens: 10 });
+  it("leaves the repair ledger untouched when the authority rejects the call (b2-3 residual)", () => {
+    const test = fixture({});
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
     const authority = {
       authenticateCapability: (): RuntimeCapabilityResolution => ({
@@ -379,25 +376,22 @@ describe("CI repair accounting around admitted model work", () => {
           expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
         },
       }),
-      reservePromptTokens: (): {
+      admitModelCall: (): {
         readonly ok: false;
         readonly reason: "authority-expired";
       } => ({ ok: false, reason: "authority-expired" }),
     };
 
-    const result = reservePromptWithCiRepair(authority, () => test.controller, "capability", 9);
+    const result = admitModelCallWithCiRepair(authority, () => test.controller, "capability");
 
     expect(result).toEqual({ ok: false, reason: "authority-expired" });
-    expect(test.store.read(test.context).record?.promptTokens).toBe(0);
+    expect(test.store.read(test.context).record).toMatchObject({ toolCalls: 1 });
   });
-  // #3873 review (PR #3876): every refusal of a model prompt by the CI-repair budget was recorded as
-  // the run's prompt allowance, so a repair that ran past its runtime limit settled "prompt allowance
-  // exhausted" and sent the operator to a setting that cannot help. The record names the closed reason
-  // the budget itself refused with, through the real controller and a clock that moves.
-  describe("the closed reason a refused model prompt is recorded with", () => {
+  // #3873 review (PR #3876): the record names the closed reason the budget itself refused a model
+  // call with, through the real controller and a clock that moves.
+  describe("the closed reason a refused model call is recorded with", () => {
     function recordedRefusals(
       test: Pick<ReturnType<typeof fixture>, "controller">,
-      promptTokens: number,
     ): readonly (readonly [string, CiRepairBudgetBlockReason])[] {
       const recorded: (readonly [string, CiRepairBudgetBlockReason])[] = [];
       const authority = {
@@ -413,33 +407,30 @@ describe("CI repair accounting around admitted model work", () => {
             expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
           },
         }),
-        reservePromptTokens: (): { readonly ok: true; readonly runId: string } => ({
+        admitModelCall: (): { readonly ok: true; readonly runId: string } => ({
           ok: true,
           runId: "run-1",
         }),
-        recordCiRepairPromptRefusal: (runId: string, reason: CiRepairBudgetBlockReason): void => {
+        recordCiRepairModelCallRefusal: (
+          runId: string,
+          reason: CiRepairBudgetBlockReason,
+        ): void => {
           recorded.push([runId, reason]);
         },
       };
-      expect(
-        reservePromptWithCiRepair(authority, () => test.controller, "capability", promptTokens),
-      ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+      expect(admitModelCallWithCiRepair(authority, () => test.controller, "capability")).toEqual({
+        ok: false,
+        reason: "authority-budget-exceeded",
+      });
       return recorded;
     }
 
-    it("names a repair that ran past its own runtime limit deadline-exhausted, not the allowance", () => {
-      const test = fixture({ maxRuntimeMs: 100, maxPromptTokens: 1000 });
+    it("names a repair that ran past its own runtime limit deadline-exhausted", () => {
+      const test = fixture({ maxRuntimeMs: 100 });
       expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
       test.clock.now += 100;
 
-      expect(recordedRefusals(test, 1)).toEqual([["run-1", "deadline-exhausted"]]);
-    });
-
-    it("names a prompt the repair's allowance cannot fit prompt-budget-exhausted", () => {
-      const test = fixture({ maxPromptTokens: 10 });
-      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
-
-      expect(recordedRefusals(test, 11)).toEqual([["run-1", "prompt-budget-exhausted"]]);
+      expect(recordedRefusals(test)).toEqual([["run-1", "deadline-exhausted"]]);
     });
 
     it("names a repair that spent its failed attempts attempt-budget-exhausted", () => {
@@ -450,7 +441,7 @@ describe("CI repair accounting around admitted model work", () => {
         test.controller.admitTool(verify(`verify-${String(index)}`))?.settle({ status: "failed" });
       }
 
-      expect(recordedRefusals(test, 1)).toEqual([["run-1", "attempt-budget-exhausted"]]);
+      expect(recordedRefusals(test)).toEqual([["run-1", "attempt-budget-exhausted"]]);
     });
 
     it("names a run whose authority was withdrawn authority-denied", () => {
@@ -458,32 +449,15 @@ describe("CI repair accounting around admitted model work", () => {
       expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
       test.clock.live = false;
 
-      expect(recordedRefusals(test, 1)).toEqual([["run-1", "authority-denied"]]);
+      expect(recordedRefusals(test)).toEqual([["run-1", "authority-denied"]]);
     });
 
     it("answers the closed reason itself, never a bare no", () => {
-      const test = fixture({ maxRuntimeMs: 100, maxPromptTokens: 10 });
+      const test = fixture({ maxRuntimeMs: 100 });
       expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
-      expect(test.controller.canChargePrompt(10)).toEqual({ accepted: true });
-      expect(test.controller.canChargePrompt(11)).toEqual({
-        accepted: false,
-        reason: "prompt-budget-exhausted",
-      });
-      expect(test.controller.chargePrompt(11)).toEqual({
-        accepted: false,
-        reason: "prompt-budget-exhausted",
-      });
-      // A malformed estimate is no allowance either.
-      expect(test.controller.canChargePrompt(-1)).toEqual({
-        accepted: false,
-        reason: "invalid-input",
-      });
+      expect(test.controller.admitModelCall()).toEqual({ accepted: true });
       test.clock.now += 100;
-      expect(test.controller.canChargePrompt(1)).toEqual({
-        accepted: false,
-        reason: "deadline-exhausted",
-      });
-      expect(test.controller.chargePrompt(1)).toEqual({
+      expect(test.controller.admitModelCall()).toEqual({
         accepted: false,
         reason: "deadline-exhausted",
       });

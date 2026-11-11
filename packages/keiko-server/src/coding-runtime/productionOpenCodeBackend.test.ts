@@ -930,7 +930,6 @@ describe("production OpenCode backend composition", () => {
       };
       const input = runInput(root);
       const contextUsage = createCodingRuntimeContextUsageRegistry();
-      const promptFits = vi.fn<(tokens: number) => boolean>(() => true);
       const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
       const run = createProductionOpenCodeBackend({
         ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
@@ -944,7 +943,6 @@ describe("production OpenCode backend composition", () => {
         jiraAuthority: {
           runId: input.request.runId,
           currentScopes: () => ["issue-tracker.read"],
-          promptFits,
         },
       });
       const fits = connections.mock.calls[0]?.[2]?.catalogFits;
@@ -967,9 +965,6 @@ describe("production OpenCode backend composition", () => {
       expect(fits(tools, result)).toBeUndefined();
       contextUsage.recordProviderSample(input.request.runId, sample);
       expect(fits(tools, result)).toBe(true);
-      promptFits.mockReturnValue(false);
-      expect(fits(tools, result)).toBe(false);
-      expect(promptFits.mock.calls.at(-1)?.[0]).toBeGreaterThan(sample.inputTokens);
       await run.dispose?.();
     } finally {
       rmSync(root, { force: true, recursive: true });
@@ -1461,7 +1456,6 @@ function trustedContext(workspaceRoot: string): CodingRuntimeTrustedContext {
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 10,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2026-09-03T00:00:00.000Z",

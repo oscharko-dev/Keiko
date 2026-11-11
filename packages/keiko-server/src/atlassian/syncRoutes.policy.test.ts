@@ -210,7 +210,6 @@ function envelope(
     budget: {
       maxRuntimeMs: 3_600_000,
       maxToolCalls: 50,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2099-01-01T00:00:00.000Z",

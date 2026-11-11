@@ -724,7 +724,6 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [
-        "prompt-allowance",
         "envelope-duration",
         "model-call-failure",
         "no-model-call-failure",
@@ -3631,8 +3630,8 @@ export class CodingRuntimeOrchestrator {
   }
 
   /**
-   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted prompt
-   * allowance, an unreachable provider, a failed model call, or `runtime-failed` when none is on
+   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted time
+   * limit, an unreachable provider, a failed model call, or `runtime-failed` when none is on
    * record. A success or a cancellation is never explained by an earlier model-call failure.
    */
   private terminalFailure(

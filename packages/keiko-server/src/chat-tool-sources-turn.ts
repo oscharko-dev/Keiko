@@ -5,7 +5,7 @@ import {
   reserveCurrentKnowledgeChatAuthority,
 } from "./knowledge-chat-authority.js";
 import type { KnowledgeChatTurnOptions } from "./knowledge-chat-turn.js";
-import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
+import { admitChatToolModelCall } from "./chat-tool-approvals.js";
 import { jiraTurnGuidance } from "./atlassian/jiraOpenDraft.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -281,15 +281,14 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
     this.sourcePreparation = sourcePreparation;
     this.humanInput = humanInput;
   }
-  protected override reserveAuthorityPrompt(promptTokens: number): boolean {
+  protected override admitAuthorityModelCall(): boolean {
     return (
       currentChatSources(this.sourceOptions.deps, this.context) &&
-      reserveChatToolPrompt(
+      admitChatToolModelCall(
         this.sourceOptions.primary.options,
         this.sourceOptions.primary.kind === "knowledge"
           ? reserveCurrentKnowledgeChatAuthority
           : reserveCurrentJiraChatAuthority,
-        promptTokens,
       )
     );
   }

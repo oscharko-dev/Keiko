@@ -92,7 +92,6 @@ interface AuthorityRecord extends RetainedAuthorityRecord<CodingWorkbenchAuthori
 interface AuthorityUsage {
   toolCalls: number;
   patchBytes: number;
-  promptTokens: number;
 }
 
 interface RuntimeDelegationReservation {
@@ -344,7 +343,6 @@ export class EditorAgentAuthorityRegistry {
         subject,
         authorityDigest: reference.envelopeDigest,
         toolCalls: usage.toolCalls,
-        promptTokens: usage.promptTokens,
       },
       correlationId,
     );
@@ -357,7 +355,7 @@ export class EditorAgentAuthorityRegistry {
     usage: CodingWorkbenchRuntimeDelegationUsage,
     nowIso: string,
   ): ChatToolAuthorityResolution {
-    if (usage.patchBytes !== 0 || ![usage.toolCalls, usage.promptTokens].every(validUsageCount)) {
+    if (usage.patchBytes !== 0 || !validUsageCount(usage.toolCalls)) {
       return { ok: false, reason: "invalid" };
     }
     const resolved = this.resolveChatRecord(reference, subject, deploymentCeiling, nowIso);
@@ -507,73 +505,19 @@ export class EditorAgentAuthorityRegistry {
     return resolved.ok && usageFits(resolved.record, usage);
   }
 
-  /** Atomically charges one model request against the retained runtime prompt budget. */
-  public reserveRuntimePromptTokens(
+  /**
+   * Admits one model request of a retained runtime: the authority must still be live (not revoked,
+   * expired or past its runtime budget). It books nothing — Keiko does not limit tokens (#4346),
+   * so there is no cumulative prompt allowance to charge against.
+   */
+  public admitRuntimeModelCall(
     reference: EditorAgentGovernedAuthorityReference,
-    promptTokens: number,
     nowIso: string,
   ):
     | { readonly ok: true }
     | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
-    if (!validUsageCount(promptTokens)) {
-      return { ok: false, reason: "authority-resolution-failed" };
-    }
     const resolved = this.resolveRetainedRuntime(reference, nowIso);
-    if (!resolved.ok) return resolved;
-    return reserveUsage(resolved.record, { toolCalls: 0, patchBytes: 0, promptTokens })
-      ? { ok: true }
-      : { ok: false, reason: "authority-budget-exceeded" };
-  }
-
-  /**
-   * Whether the retained runtime's cumulative prompt allowance alone cannot hold `promptTokens`
-   * more: the record is otherwise live (not revoked, expired or past its runtime budget) and only
-   * `maxPromptTokens` refuses. {@link reserveRuntimePromptTokens} answers `authority-budget-exceeded`
-   * for both an exhausted allowance and a spent runtime, so a run's terminal cause asks this to tell
-   * them apart (F9, #3873). A pure read: it books nothing.
-   */
-  public runtimePromptAllowanceExhausted(
-    reference: EditorAgentGovernedAuthorityReference,
-    promptTokens: number,
-    nowIso: string,
-  ): boolean {
-    if (!validUsageCount(promptTokens)) return false;
-    const resolved = this.resolveRetainedRuntime(reference, nowIso);
-    if (!resolved.ok) return false;
-    const { usage, envelope } = resolved.record;
-    return usage.promptTokens + promptTokens > envelope.budget.maxPromptTokens;
-  }
-
-  /**
-   * Reconciles a prompt-token reservation already booked by {@link reserveRuntimePromptTokens}
-   * against the provider's actual reported usage for that same call, once known. A tool-calling
-   * client resends its whole growing history on every turn, so charging the full pre-call
-   * estimate on every call and never correcting it exhausts the budget in a fraction of the calls
-   * a real run needs (live-journey-readiness-2). Settlement never re-runs budget admission — the
-   * call already dispatched — and never fails on its own account: a run that already spent real
-   * tokens must not be retroactively rejected by this post-hoc correction. The estimate is
-   * subtracted and the actual value added in one combined update, never two separate mutations, so
-   * a reservation from a concurrent call on the same run cannot observe an intermediate negative
-   * or doubled value; the floor at zero guards the same case if a settlement ever raced ahead of
-   * its matching reservation.
-   */
-  public settleRuntimePromptTokens(
-    reference: EditorAgentGovernedAuthorityReference,
-    reservedPromptTokens: number,
-    actualPromptTokens: number,
-    nowIso: string,
-  ):
-    | { readonly ok: true }
-    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
-    if (!validUsageCount(reservedPromptTokens) || !validUsageCount(actualPromptTokens)) {
-      return { ok: false, reason: "authority-resolution-failed" };
-    }
-    const resolved = this.resolveRetainedRuntime(reference, nowIso);
-    if (!resolved.ok) return resolved;
-    if (!settlePromptTokens(resolved.record, reservedPromptTokens, actualPromptTokens)) {
-      return { ok: false, reason: "authority-resolution-failed" };
-    }
-    return { ok: true };
+    return resolved.ok ? { ok: true } : resolved;
   }
 
   /** Revalidates retained authority at a pause/resume boundary without consuming budget. */
@@ -676,7 +620,7 @@ export class EditorAgentAuthorityRegistry {
     usage: CodingWorkbenchRuntimeDelegationUsage,
     nowIso: string,
   ): EditorAgentAuthorityResolution {
-    if (![usage.toolCalls, usage.patchBytes, usage.promptTokens].every(validUsageCount)) {
+    if (![usage.toolCalls, usage.patchBytes].every(validUsageCount)) {
       return { ok: false, reason: "invalid" };
     }
     const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
@@ -709,7 +653,7 @@ export class EditorAgentAuthorityRegistry {
     if (!resolved.ok) return resolved;
     const record = this.codingRecord(recordKey(reference));
     if (record === undefined) return { ok: false, reason: "invalid" };
-    if (!reserveUsage(record, { toolCalls: 1, patchBytes, promptTokens: 0 })) {
+    if (!reserveUsage(record, { toolCalls: 1, patchBytes })) {
       return { ok: false, reason: "budget-exceeded" };
     }
     return resolved;
@@ -821,7 +765,7 @@ function initialRecord<T extends AuthorityEnvelope>(
     envelope,
     digest: sha256Hex(canonicalise(envelope)),
     registeredAtMs: Date.parse(nowIso),
-    usage: { toolCalls: 0, patchBytes: 0, promptTokens: 0 },
+    usage: { toolCalls: 0, patchBytes: 0 },
     revoked: false,
   };
 }
@@ -920,10 +864,9 @@ function usageFits(
   usage: CodingWorkbenchRuntimeDelegationUsage,
 ): boolean {
   return (
-    [usage.toolCalls, usage.patchBytes, usage.promptTokens].every(validUsageCount) &&
+    [usage.toolCalls, usage.patchBytes].every(validUsageCount) &&
     record.usage.toolCalls + usage.toolCalls <= record.envelope.budget.maxToolCalls &&
-    record.usage.patchBytes + usage.patchBytes <= record.envelope.budget.maxPatchBytes &&
-    record.usage.promptTokens + usage.promptTokens <= record.envelope.budget.maxPromptTokens
+    record.usage.patchBytes + usage.patchBytes <= record.envelope.budget.maxPatchBytes
   );
 }
 
@@ -935,30 +878,7 @@ function reserveUsage(
   Object.assign(record.usage, {
     toolCalls: record.usage.toolCalls + usage.toolCalls,
     patchBytes: record.usage.patchBytes + usage.patchBytes,
-    promptTokens: record.usage.promptTokens + usage.promptTokens,
   });
-  return true;
-}
-
-/**
- * See {@link EditorAgentAuthorityRegistry.settleRuntimePromptTokens} for the reconciliation.
- * Returns false — and books nothing — when `reservedPromptTokens` exceeds what is currently
- * booked on the record. There is no per-call reservation identity to bind to (the ledger holds
- * only one running total per run), so this is the strongest check available: a settlement can
- * never claim to refund more than the record actually has outstanding, which also rejects a
- * replayed settlement once its first application has already reduced the booked total below the
- * replayed `reservedPromptTokens` (reviewer 3941836283).
- */
-function settlePromptTokens(
-  record: AuthorityRecord,
-  reservedPromptTokens: number,
-  actualPromptTokens: number,
-): boolean {
-  if (reservedPromptTokens > record.usage.promptTokens) return false;
-  record.usage.promptTokens = Math.max(
-    0,
-    record.usage.promptTokens - reservedPromptTokens + actualPromptTokens,
-  );
   return true;
 }
 

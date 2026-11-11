@@ -927,7 +927,7 @@ export interface NormalizedResponse {
    * Set by the gateway, never by a provider (#3873 review): the provider-reported usage of earlier
    * attempts of this call that the gateway discarded — the first answer of a steered repair, a tool
    * call the catalog rejected, a stream that failed after its usage arrived — so a caller that
-   * meters every token the provider processed (the coding run's prompt allowance) can count them.
+   * meters every token the provider processed (the run's recorded usage) can count them.
    * `usage` keeps describing the answer itself. Counts only; absent when no discarded attempt
    * reported usage.
    */

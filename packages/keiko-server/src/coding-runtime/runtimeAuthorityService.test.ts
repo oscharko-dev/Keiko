@@ -207,7 +207,6 @@ function context(): CodingRuntimeTrustedContext {
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 10,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2026-07-11T13:00:00.000Z",
@@ -276,7 +275,7 @@ function mintFailureService(
   );
 }
 
-function promptBudgetService(): CodingRuntimeAuthorityService {
+function runService(): CodingRuntimeAuthorityService {
   return new CodingRuntimeAuthorityService(
     new EditorAgentAuthorityRegistry(),
     () => "run-1",
@@ -309,7 +308,7 @@ function resolve(
   reference: { readonly runId: string; readonly envelopeDigest: string },
   live = facts(),
   delegationId = "delegation-1",
-  usage = { toolCalls: 1, patchBytes: 1, promptTokens: 1 },
+  usage = { toolCalls: 1, patchBytes: 1 },
   idempotencyKey = `key-${delegationId}`,
 ): CodingRuntimeResolution {
   return authority.resolveForDelegation(reference, {
@@ -400,10 +399,10 @@ describe("CodingRuntimeAuthorityService", () => {
         actionClasses: trusted.actionClasses,
         connectorScopes: trusted.connectorScopes,
         networkPolicyMode: "deny-all",
-        maxPromptTokens: trusted.budget.maxPromptTokens,
-        // #3873: the minted duration is reported beside the allowance, so a run that later fails
-        // closed on expiry can be reconstructed from this one line without the envelope body.
+        // #3873: the minted duration is reported so a run that later fails closed on expiry can be
+        // reconstructed from this one line without the envelope body.
         maxRuntimeMs: trusted.budget.maxRuntimeMs,
+        maxToolCalls: trusted.budget.maxToolCalls,
       },
     });
     const mintedEvent = activity.find((event) => event.op === "coding-runtime.authority.minted");
@@ -433,8 +432,11 @@ describe("CodingRuntimeAuthorityService", () => {
     ).not.toHaveProperty("maxRuntimeMs");
   });
 
-  it("atomically charges the exact prompt budget and fails closed after exhaustion", async () => {
-    const authority = promptBudgetService();
+  // Keiko does not limit tokens (#4346): the former cumulative prompt allowance (10,000 tokens in
+  // this fixture, 2,000,000 by default) refused the call that crossed it. A live run's model calls
+  // are now all admitted, one after another and concurrently, and book nothing.
+  it("admits every model call of a live run and never refuses one for its prompt size", async () => {
+    const authority = runService();
     const minted = mint(authority);
     if (!minted.ok) throw new Error("expected mint");
     expect(authority.state()).toMatchObject({ state: "running", runId: "run-1" });
@@ -446,33 +448,26 @@ describe("CodingRuntimeAuthorityService", () => {
       ),
     ).toMatchObject({ ok: true, binding: { runId: "run-1" } });
 
-    expect(
-      authority.reservePromptTokens(minted.modelGatewayCapability, 10_000, Date.parse(NOW)),
-    ).toEqual({ ok: true, runId: "run-1" });
-    expect(
-      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
-    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+    for (let call = 0; call < 25; call += 1) {
+      expect(authority.admitModelCall(minted.modelGatewayCapability, Date.parse(NOW))).toEqual({
+        ok: true,
+        runId: "run-1",
+      });
+    }
 
-    const concurrent = promptBudgetService();
+    const concurrent = runService();
     const concurrentMint = mint(concurrent);
     if (!concurrentMint.ok) throw new Error("expected mint");
-    const reservations = await Promise.all(
-      Array.from({ length: 2 }, async () => {
+    const admissions = await Promise.all(
+      Array.from({ length: 8 }, async () => {
         await Promise.resolve();
-        return concurrent.reservePromptTokens(
-          concurrentMint.modelGatewayCapability,
-          6_000,
-          Date.parse(NOW),
-        );
+        return concurrent.admitModelCall(concurrentMint.modelGatewayCapability, Date.parse(NOW));
       }),
     );
-    expect(reservations.filter((result) => result.ok)).toHaveLength(1);
-    expect(reservations.filter((result) => !result.ok)).toEqual([
-      { ok: false, reason: "authority-budget-exceeded" },
-    ]);
+    expect(admissions.filter((result) => result.ok)).toHaveLength(8);
   });
 
-  it("admits a prompt reservation as soon as the run reaches ready, ahead of its own running transition (#3390), while a paused run or a mismatched run id are still refused", () => {
+  it("admits a model call as soon as the run reaches ready, ahead of its own running transition (#3390), while a paused run or a mismatched run id are still refused", () => {
     // #3390: reproduces the real #3390 race -- the sidecar's first model call can reach the
     // gateway while the orchestrator's own initial-turn dispatch is still between its "ready" and
     // "running" transitions. A reservation issued in exactly that window must be admitted, not
@@ -490,9 +485,10 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.transition(minted.authorityRef.runId, "ready", NOW)).toBe(true);
     expect(authority.state()).toMatchObject({ state: "ready", runId: "run-1" });
 
-    expect(
-      authority.reservePromptTokens(minted.modelGatewayCapability, 100, Date.parse(NOW)),
-    ).toEqual({ ok: true, runId: "run-1" });
+    expect(authority.admitModelCall(minted.modelGatewayCapability, Date.parse(NOW))).toEqual({
+      ok: true,
+      runId: "run-1",
+    });
 
     // A wrong run id must still be refused: the widened state gate never substitutes for the
     // per-run identity checks.
@@ -505,7 +501,7 @@ describe("CodingRuntimeAuthorityService", () => {
       expiresAtMs: Date.parse(NOW) + 60_000,
     });
     if (!wrongRun.ok) throw new Error("expected wrong-run capability issue");
-    expect(authority.reservePromptTokens(wrongRun.capability, 1, Date.parse(NOW))).toEqual({
+    expect(authority.admitModelCall(wrongRun.capability, Date.parse(NOW))).toEqual({
       ok: false,
       reason: "authority-resolution-failed",
     });
@@ -514,12 +510,13 @@ describe("CodingRuntimeAuthorityService", () => {
     // window, never the sticky-pause hold.
     expect(authority.transition("run-1", "running", NOW)).toBe(true);
     expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
-    expect(
-      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
-    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+    expect(authority.admitModelCall(minted.modelGatewayCapability, Date.parse(NOW))).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
   });
 
-  it('admits a prompt reservation issued from inside the managed runtime\'s own start() -- while runtimeState is still "starting", ahead of any "ready"/"running" transition (#3390 real window), while a paused run or a mismatched run id are still refused', () => {
+  it('admits a model call issued from inside the managed runtime\'s own start() -- while runtimeState is still "starting", ahead of any "ready"/"running" transition (#3390 real window), while a paused run or a mismatched run id are still refused', () => {
     // #3390 (review repair): production wiring (productionCodingRuntimePorts.ts's
     // startProductionRuntime) only transitions runtimeState to "ready" then "running" AFTER the
     // managed runtime's own start() promise resolves. If the sidecar becomes reachable and issues
@@ -539,9 +536,10 @@ describe("CodingRuntimeAuthorityService", () => {
     if (!minted.ok) throw new Error("expected mint");
     expect(authority.state()).toMatchObject({ state: "starting", runId: "run-1" });
 
-    expect(
-      authority.reservePromptTokens(minted.modelGatewayCapability, 100, Date.parse(NOW)),
-    ).toEqual({ ok: true, runId: "run-1" });
+    expect(authority.admitModelCall(minted.modelGatewayCapability, Date.parse(NOW))).toEqual({
+      ok: true,
+      runId: "run-1",
+    });
 
     // A wrong run id must still be refused even while "starting": the widened state gate never
     // substitutes for the per-run identity checks.
@@ -554,7 +552,7 @@ describe("CodingRuntimeAuthorityService", () => {
       expiresAtMs: Date.parse(NOW) + 60_000,
     });
     if (!wrongRun.ok) throw new Error("expected wrong-run capability issue");
-    expect(authority.reservePromptTokens(wrongRun.capability, 1, Date.parse(NOW))).toEqual({
+    expect(authority.admitModelCall(wrongRun.capability, Date.parse(NOW))).toEqual({
       ok: false,
       reason: "authority-resolution-failed",
     });
@@ -564,21 +562,21 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.transition("run-1", "ready", NOW)).toBe(true);
     expect(authority.transition("run-1", "running", NOW)).toBe(true);
     expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
-    expect(
-      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
-    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+    expect(authority.admitModelCall(minted.modelGatewayCapability, Date.parse(NOW))).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
   });
 
-  it("fails retained prompt and pause or resume operations closed after runtime exhaustion", () => {
+  it("fails retained model-call and pause or resume operations closed after runtime exhaustion", () => {
     const afterRuntimeBudget = "2026-07-11T12:01:00.001Z";
-    const promptAuthority = promptBudgetService();
-    const promptMint = mint(promptAuthority);
-    if (!promptMint.ok) throw new Error("expected prompt-authority mint");
+    const modelAuthority = runService();
+    const modelMint = mint(modelAuthority);
+    if (!modelMint.ok) throw new Error("expected model-authority mint");
 
     expect(
-      promptAuthority.reservePromptTokens(
-        promptMint.modelGatewayCapability,
-        1,
+      modelAuthority.admitModelCall(
+        modelMint.modelGatewayCapability,
         Date.parse(afterRuntimeBudget),
       ),
     ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
@@ -599,109 +597,46 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
-  // F9 (#3873): the run's terminal cause asks whether its most recent model call was refused by
-  // the cumulative prompt allowance. Only a refusal by the allowance itself answers yes; a later
-  // admitted call, the runtime's spent time budget and a refused run state all answer no.
-  it("reports an exhausted prompt allowance only for the run's latest allowance refusal", () => {
-    const authority = promptBudgetService();
-    const minted = mint(authority);
-    if (!minted.ok) throw new Error("expected mint");
-    const capability = minted.modelGatewayCapability;
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
-
-    expect(authority.reservePromptTokens(capability, 10_000, Date.parse(NOW))).toMatchObject({
-      ok: true,
-    });
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
-    expect(authority.reservePromptTokens(capability, 1, Date.parse(NOW))).toEqual({
-      ok: false,
-      reason: "authority-budget-exceeded",
-    });
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
-    expect(authority.promptAllowanceExhausted("run-other")).toBe(false);
-
-    // The provider reported far less than the estimate: the refund admits the next call, which
-    // supersedes the earlier refusal.
-    expect(authority.settlePromptTokens(capability, 10_000, 10, Date.parse(NOW))).toMatchObject({
-      ok: true,
-    });
-    expect(authority.reservePromptTokens(capability, 5, Date.parse(NOW))).toMatchObject({
-      ok: true,
-    });
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
-  });
-
-  // #3873 review (PR #3876): a CI-repair run's own prompt budget refuses a call before the authority
-  // is asked, so the authority never recorded the refusal and the run settled `model-turn-failed`,
-  // naming no limit. The refusal is recorded where the authority's own is, so the run's settlement
-  // names its prompt allowance — with the same rules: the active run's, superseded by the next
-  // admission.
-  it("reports the prompt allowance a CI-repair budget refused, as it reports its own refusal", () => {
-    const authority = promptBudgetService();
-    const minted = mint(authority);
-    if (!minted.ok) throw new Error("expected mint");
-    const capability = minted.modelGatewayCapability;
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
-
-    authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
-    // Only the active run's refusals count: a stray run id never rewrites what ended this run.
-    authority.recordCiRepairPromptRefusal("run-other", "prompt-budget-exhausted");
-    expect(authority.promptAllowanceExhausted("run-other")).toBe(false);
-
-    // The next admission of the run describes the call that ended its turn instead.
-    expect(authority.reservePromptTokens(capability, 5, Date.parse(NOW))).toMatchObject({
-      ok: true,
-    });
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
-  });
-
-  // #3873 review (PR #3876): every CI-repair refusal was recorded as the prompt allowance, whatever
-  // refused, so a repair that ran past its runtime limit settled "prompt allowance exhausted" and sent
-  // the operator to a setting that cannot help. Only the budget's own prompt allowance is the
-  // allowance; its runtime limit, which counts the same `maxRuntimeMs` over the repair, is the time
-  // limit; every other closed reason names neither and still supersedes the run's earlier answer.
-  it("reports a CI-repair refusal for the repair's runtime limit as the time limit, not the allowance", () => {
-    const authority = promptBudgetService();
+  // #3873 review (PR #3876): a CI-repair refusal for the repair's runtime limit, which counts the
+  // same `maxRuntimeMs` over the repair, is the time limit; every other closed reason names no limit
+  // and still supersedes the run's earlier answer.
+  it("reports a CI-repair refusal for the repair's runtime limit as the time limit", () => {
+    const authority = runService();
     const minted = mint(authority);
     if (!minted.ok) throw new Error("expected mint");
     // Well inside the envelope: nothing but the repair's own limit can make the time limit true.
     const insideEnvelope = Date.parse(NOW) + 1_000;
     expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
 
-    authority.recordCiRepairPromptRefusal("run-1", "deadline-exhausted");
+    authority.recordCiRepairModelCallRefusal("run-1", "deadline-exhausted");
 
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
     expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(true);
     // Only the active run's refusals count, and the next admission describes the call that ended
     // the turn instead.
-    authority.recordCiRepairPromptRefusal("run-other", "deadline-exhausted");
+    authority.recordCiRepairModelCallRefusal("run-other", "deadline-exhausted");
     expect(authority.envelopeDurationExhausted("run-other", insideEnvelope)).toBe(false);
-    expect(
-      authority.reservePromptTokens(minted.modelGatewayCapability, 5, Date.parse(NOW)),
-    ).toMatchObject({ ok: true });
+    expect(authority.admitModelCall(minted.modelGatewayCapability, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
     expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
   });
 
   it("replaces a refusal of one kind with the next, so a run names only its last one", () => {
-    const authority = promptBudgetService();
+    const authority = runService();
     expect(mint(authority).ok).toBe(true);
     const insideEnvelope = Date.parse(NOW) + 1_000;
 
-    authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
-    authority.recordCiRepairPromptRefusal("run-1", "deadline-exhausted");
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+    authority.recordCiRepairModelCallRefusal("run-1", "deadline-exhausted");
     expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(true);
 
-    authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
-    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+    authority.recordCiRepairModelCallRefusal("run-1", "authority-denied");
     expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
   });
 
-  // Every closed reason but the two above, as a record that the compiler keeps complete: a reason
+  // Every closed reason but the runtime limit, as a record that the compiler keeps complete: a reason
   // added to the budget's vocabulary must be classified here before this file compiles.
   const REASONS_NAMING_NO_LIMIT: Record<
-    Exclude<CiRepairBudgetBlockReason, "prompt-budget-exhausted" | "deadline-exhausted">,
+    Exclude<CiRepairBudgetBlockReason, "deadline-exhausted">,
     true
   > = {
     "authority-denied": true,
@@ -720,51 +655,26 @@ describe("CodingRuntimeAuthorityService", () => {
   };
 
   it.each(Object.keys(REASONS_NAMING_NO_LIMIT))(
-    "names no limit for a CI-repair refusal for %s, and clears an earlier allowance refusal",
+    "names no limit for a CI-repair refusal for %s, and clears an earlier time-limit refusal",
     (reason) => {
-      const authority = promptBudgetService();
+      const authority = runService();
       expect(mint(authority).ok).toBe(true);
       const insideEnvelope = Date.parse(NOW) + 1_000;
-      authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
-      expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+      authority.recordCiRepairModelCallRefusal("run-1", "deadline-exhausted");
+      expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(true);
 
-      authority.recordCiRepairPromptRefusal("run-1", reason as CiRepairBudgetBlockReason);
+      authority.recordCiRepairModelCallRefusal("run-1", reason as CiRepairBudgetBlockReason);
 
-      expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
       expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
     },
   );
-
-  it("does not report the prompt allowance for a spent runtime or a refused run state", () => {
-    const afterRuntimeBudget = Date.parse("2026-07-11T12:01:00.001Z");
-    const spent = promptBudgetService();
-    const spentMint = mint(spent);
-    if (!spentMint.ok) throw new Error("expected mint");
-    expect(
-      spent.reservePromptTokens(spentMint.modelGatewayCapability, 20_000, afterRuntimeBudget),
-    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
-    expect(spent.promptAllowanceExhausted("run-1")).toBe(false);
-
-    const paused = promptBudgetService();
-    const pausedMint = mint(paused);
-    if (!pausedMint.ok) throw new Error("expected mint");
-    expect(
-      paused.reservePromptTokens(pausedMint.modelGatewayCapability, 20_000, Date.parse(NOW)),
-    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
-    expect(paused.promptAllowanceExhausted("run-1")).toBe(true);
-    expect(paused.pause("run-1", NOW)).toMatchObject({ ok: true });
-    expect(
-      paused.reservePromptTokens(pausedMint.modelGatewayCapability, 1, Date.parse(NOW)),
-    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
-    expect(paused.promptAllowanceExhausted("run-1")).toBe(false);
-  });
 
   // F9 (#3873): run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with
   // a model call in flight and settled `runtime-failed`, an internal error. The authority answers
   // whether a run's envelope ran out of time: `maxRuntimeMs` after minting or its `expiresAt`,
   // whichever comes first — and keeps answering after the end, when the failed turn settles.
   it("reports an envelope that ran out of time from its earlier bound", () => {
-    const authority = promptBudgetService();
+    const authority = runService();
     const minted = mint(authority);
     if (!minted.ok) throw new Error("expected mint");
     // The context's budget allows 60 s from minting at NOW; its expiry is an hour later.
@@ -775,7 +685,7 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.envelopeDurationExhausted("run-other", budgetEnd)).toBe(false);
     expect(authority.envelopeDurationExhausted("run-1", Number.NaN)).toBe(false);
 
-    const early = promptBudgetService();
+    const early = runService();
     const trusted = { ...context(), expiresAt: "2026-07-11T12:00:30.000Z" };
     const confirmation = early.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
     expect(early.mintStart(intent, trusted, confirmation, NOW)).toMatchObject({ ok: true });
@@ -788,9 +698,7 @@ describe("CodingRuntimeAuthorityService", () => {
   });
 
   it("reports no envelope end for a run no envelope was minted for", () => {
-    expect(promptBudgetService().envelopeDurationExhausted("run-1", Date.parse(NOW) + 1e9)).toBe(
-      false,
-    );
+    expect(runService().envelopeDurationExhausted("run-1", Date.parse(NOW) + 1e9)).toBe(false);
   });
 
   it("revalidates expiry and permits only idempotent or monotonically narrower resume", () => {
@@ -1286,7 +1194,7 @@ describe("CodingRuntimeAuthorityService", () => {
       capability: minted.toolFacadeCapability,
       adapterKind: "model-gateway-sidecar" as const,
       liveFacts: facts(),
-      usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+      usage: { toolCalls: 1, patchBytes: 0 },
       workspaceRoot: ROOT,
       deploymentCeiling: "autonomous-delivery" as const,
       nowIso: NOW,
@@ -1306,14 +1214,14 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(
       authority.delegationFits({
         ...probe,
-        usage: { toolCalls: 9, patchBytes: 0, promptTokens: 0 },
+        usage: { toolCalls: 9, patchBytes: 0 },
       }),
     ).toBe(true);
     // Ten tool calls on top of the one just charged exceed the envelope's ten.
     expect(
       authority.delegationFits({
         ...probe,
-        usage: { toolCalls: 10, patchBytes: 0, promptTokens: 0 },
+        usage: { toolCalls: 10, patchBytes: 0 },
       }),
     ).toBe(false);
     expect(
@@ -1337,7 +1245,7 @@ describe("CodingRuntimeAuthorityService", () => {
       liveFacts: facts(),
       delegationId: "capability-action-1",
       idempotencyKey: "capability-key-1",
-      usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+      usage: { toolCalls: 1, patchBytes: 0 },
       workspaceRoot: ROOT,
       deploymentCeiling: "autonomous-delivery" as const,
       nowIso: NOW,
@@ -1426,7 +1334,7 @@ describe("CodingRuntimeAuthorityService", () => {
         minted.authorityRef,
         facts(),
         "d-1",
-        { toolCalls: 1, patchBytes: 2, promptTokens: 3 },
+        { toolCalls: 1, patchBytes: 2 },
         "key-1",
       ),
     ).toMatchObject({ ok: true });
@@ -1436,7 +1344,7 @@ describe("CodingRuntimeAuthorityService", () => {
         minted.authorityRef,
         facts(),
         "d-1",
-        { toolCalls: 9, patchBytes: 9, promptTokens: 9 },
+        { toolCalls: 9, patchBytes: 9 },
         "key-2",
       ),
     ).toEqual({ ok: false, reason: "authority-replayed" });
@@ -1446,7 +1354,7 @@ describe("CodingRuntimeAuthorityService", () => {
         minted.authorityRef,
         facts(),
         "d-2",
-        { toolCalls: 1, patchBytes: 2, promptTokens: 3 },
+        { toolCalls: 1, patchBytes: 2 },
         "key-1",
       ),
     ).toEqual({ ok: false, reason: "authority-replayed" });
@@ -1512,7 +1420,7 @@ describe("CodingRuntimeAuthorityService", () => {
     const authority = service();
     const minted = mint(authority);
     if (!minted.ok) throw new Error("mint");
-    const usage = { toolCalls: 10, patchBytes: 65_536, promptTokens: 10_000 };
+    const usage = { toolCalls: 10, patchBytes: 65_536 };
     expect(validateCodingWorkbenchRuntimeAuthorityFacts(facts())).toMatchObject({ ok: true });
     expect(resolve(authority, minted.authorityRef, facts(), "budgeted", usage)).toMatchObject({
       ok: true,
@@ -1525,7 +1433,6 @@ describe("CodingRuntimeAuthorityService", () => {
       resolve(authority, minted.authorityRef, facts(), "fresh", {
         toolCalls: 1,
         patchBytes: 0,
-        promptTokens: 0,
       }),
     ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
   });

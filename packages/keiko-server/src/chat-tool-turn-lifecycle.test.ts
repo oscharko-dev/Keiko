@@ -59,7 +59,7 @@ class LifecycleTurn extends ChatToolTurn<LifecycleContext> {
   static create(options: LifecycleOptions): LifecycleTurn {
     return new LifecycleTurn(options);
   }
-  protected override reserveAuthorityPrompt(): boolean {
+  protected override admitAuthorityModelCall(): boolean {
     return true;
   }
   protected override observedMutation(): undefined {
@@ -163,7 +163,7 @@ function fixture(
     context: f.context,
     managed: f.pure,
     correlationId: "turn-lifecycle",
-    budget: { maxRuntimeMs: 59000, maxToolCalls: 5, maxPromptTokens: 100000, maxPatchBytes: 0 },
+    budget: { maxRuntimeMs: 59000, maxToolCalls: 5, maxPatchBytes: 0 },
     bind,
     finalizeTurn,
     ...(selectionClose === undefined

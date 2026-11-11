@@ -461,7 +461,6 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /** The marker namespace of the evidence pack the turn's current synthesis actually sent. */
   private evidenceSources: ReadonlyMap<number, string> | undefined;
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
-  private uncertainBudget = false;
   /** The turn's own envelope refused a model attempt; the caller's caps are not this turn's. */
   private envelopeRefusedAttempt = false;
   /** The transcript-built answer of a turn that ended early; it may outlive the turn's signal. */
@@ -640,7 +639,6 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       },
       tools,
       deriveContextProfileFromCapability(capability),
-      this.options.budget.maxPromptTokens - this.promptTokens,
       config?.providers.find((provider) => provider.modelId === request.modelId)
         ?.reasoningHistoryField,
     );
@@ -709,7 +707,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.jiraSelection = prepared.identities;
     await previous?.close();
   }
-  protected abstract reserveAuthorityPrompt(promptTokens: number): boolean;
+  /** The turn's retained authority must still be live; Keiko does not limit tokens (#4346). */
+  protected abstract admitAuthorityModelCall(): boolean;
   protected abstract observedMutation(
     call: NormalizedResponse["toolCalls"][number],
     identity: string,
@@ -780,12 +779,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
     );
   }
-  private reservePrompt(promptTokens: number): boolean {
-    return (
-      !this.uncertainBudget &&
-      !this.context.signal.aborted &&
-      this.reserveAuthorityPrompt(promptTokens)
-    );
+  private admitModelCall(): boolean {
+    return !this.context.signal.aborted && this.admitAuthorityModelCall();
   }
   public onTranscript(listener: (message: ChatMessage) => void | Promise<void>): void {
     this.notify = listener;
@@ -807,29 +802,17 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           invocationId,
       );
   }
-  private readonly admitAttempt: ModelAttempt = ({ promptTokens }) => {
+  private readonly admitAttempt: ModelAttempt = () => {
     if (
       this.endedEarly ||
       this.counters.modelCalls >= this.limits.maxModelCalls ||
-      !this.reservePrompt(promptTokens)
+      !this.admitModelCall()
     ) {
       this.envelopeRefusedAttempt = true;
       return undefined;
     }
     this.counters.modelCalls++;
-    let settled = false;
-    return {
-      settle: (usage): void => {
-        if (settled) return;
-        settled = true;
-        if (
-          usage !== undefined &&
-          usage.promptTokens > promptTokens &&
-          !this.reservePrompt(usage.promptTokens - promptTokens)
-        )
-          this.uncertainBudget = true;
-      },
-    };
+    return { settle: (): void => undefined };
   };
   // A tool turn is a multi-round task with settled work behind it: a model that ends a round after
   // reasoning without a tool call or an answer gets the gateway's ONE steered repair instead of
@@ -877,11 +860,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.requestForAttempt(request),
       AbortSignal.any([signal, this.context.signal]),
     )) {
-      requireDispatch(
-        this.counters.modelCalls > before && !this.uncertainBudget,
-        "denied",
-        "budget-exhausted",
-      );
+      requireDispatch(this.counters.modelCalls > before, "denied", "budget-exhausted");
       yield chunk;
     }
   }
@@ -895,11 +874,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           this.requestForAttempt(request),
           AbortSignal.any([signal, this.context.signal]),
         );
-        requireDispatch(
-          this.counters.modelCalls > before && !this.uncertainBudget,
-          "denied",
-          "budget-exhausted",
-        );
+        requireDispatch(this.counters.modelCalls > before, "denied", "budget-exhausted");
         return response;
       },
       ...(model.callStream === undefined
@@ -1150,10 +1125,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       "budget-exhausted",
     );
     requireDispatch(
-      !signal.aborted &&
-        !this.context.signal.aborted &&
-        !this.uncertainBudget &&
-        Date.now() < this.deadlineAtMs,
+      !signal.aborted && !this.context.signal.aborted && Date.now() < this.deadlineAtMs,
       "denied",
       "budget-exhausted",
     );
@@ -1261,7 +1233,6 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private retryKeepsTurnOpen(signal: AbortSignal): boolean {
     return (
       this.endedAnswer === undefined &&
-      !this.uncertainBudget &&
       this.counters.modelCalls < this.limits.maxModelCalls &&
       this.counters.iterations < this.limits.maxIterations &&
       !signal.aborted &&
@@ -1880,7 +1851,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * with nothing at all (S07 and S19: Gemma, after a settled read). The next round carries a body-free
    * correction, once per streak: a round that dispatches a tool call restores the allowance, and a
    * second such round without progress ends the turn as before. Every round stays inside the
-   * Authority Envelope's model-call and prompt budget; nothing was executed for the unusable round.
+   * Authority Envelope's model-call budget; nothing was executed for the unusable round.
    */
   private async callRound(
     model: ModelPort,

@@ -30,7 +30,7 @@ function envelope(): ChatToolAuthorityEnvelope & {
     effectiveMode: "governed-assist",
     actionClasses: ["connector-access", "network-egress"],
     connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
-    budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 50_000, maxPatchBytes: 0 },
+    budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPatchBytes: 0 },
     expiresAt: "2026-10-27T15:00:00.000Z",
     approvalProofDigest: "b".repeat(64),
   };
@@ -98,6 +98,19 @@ describe("ordinary Chat tool authority contract (#4084)", () => {
     { authRef: "credential-1" },
   ])("rejects invalid policy or extra authority fields %j", (patch) => {
     expect(validateChatToolAuthorityEnvelope({ ...envelope(), ...patch }).ok).toBe(false);
+  });
+
+  // Keiko does not limit tokens (#4346): an envelope minted before that decision may still carry the
+  // retired `budget.maxPromptTokens`; it is accepted, never required and never enforced.
+  it("accepts an envelope that still carries the retired prompt-token allowance", () => {
+    const value = envelope();
+    expect(validateChatToolAuthorityEnvelope(value).ok).toBe(true);
+    expect(
+      validateChatToolAuthorityEnvelope({
+        ...value,
+        budget: { ...value.budget, maxPromptTokens: 50_000 },
+      }).ok,
+    ).toBe(true);
   });
 
   it.each([

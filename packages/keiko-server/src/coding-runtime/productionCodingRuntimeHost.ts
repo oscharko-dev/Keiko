@@ -240,7 +240,6 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "contextUsage",
   "secureWorkspaceTextRead",
   "runEffort",
-  "promptAllowanceExhausted",
   "envelopeDurationExhausted",
   "sweepOrphanedRunState",
 ] as const;

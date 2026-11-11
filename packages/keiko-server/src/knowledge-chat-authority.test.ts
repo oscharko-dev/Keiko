@@ -62,7 +62,6 @@ function fixture(): Fixture {
     chatToolTurnBudget: {
       maxToolCalls: 2,
       maxRuntimeMs: 60_000,
-      maxPromptTokens: 1000,
       maxPatchBytes: 0,
     },
   };
@@ -147,27 +146,23 @@ describe("Knowledge-only Chat authority", () => {
       f.resolve(f.now, { ...f.deps, autonomousDeliveryDeploymentCeiling: "governed-assist" }).ok,
     ).toBe(false);
   });
-  it("reserves one cumulative call/token budget and refuses fabricated acceptance", () => {
+  it("reserves one cumulative call budget and refuses fabricated acceptance", () => {
     const f = fixture();
     expect(
       mintAcceptedKnowledgeChatAuthority(f.deps, { ...f.turn, userMessageId: "unaccepted" }).ok,
     ).toBe(false);
-    const reserve = (
-      toolCalls: number,
-      promptTokens = 0,
-    ): ReturnType<typeof reserveCurrentKnowledgeChatAuthority> =>
+    const reserve = (toolCalls: number): ReturnType<typeof reserveCurrentKnowledgeChatAuthority> =>
       reserveCurrentKnowledgeChatAuthority(
         f.deps,
         f.chat.id,
         f.accepted.reference,
-        { toolCalls, promptTokens, patchBytes: 0 },
+        { toolCalls, patchBytes: 0 },
         new Date(f.now).toISOString(),
         CORRELATION,
       );
-    expect(reserve(1, 900).ok).toBe(true);
-    expect(reserve(1, 100).ok).toBe(true);
+    expect(reserve(1).ok).toBe(true);
+    expect(reserve(1).ok).toBe(true);
     expect(reserve(1).ok).toBe(false);
-    expect(reserve(0, 1).ok).toBe(false);
   });
   it("denies every modifying or external tool and rechecks cancellation before effects", () => {
     const f = fixture();

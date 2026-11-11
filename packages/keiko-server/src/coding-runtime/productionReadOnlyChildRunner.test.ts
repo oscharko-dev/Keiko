@@ -79,7 +79,7 @@ interface RunInput {
   readonly call?: ((request: GatewayCallRequest) => Promise<NormalizedResponse>) | undefined;
   readonly gate?: (() => ReadOnlyChildGateDecision) | undefined;
   readonly signal?: AbortSignal | undefined;
-  readonly reservePromptTokens?: ((promptTokens: number) => boolean) | undefined;
+  readonly admitModelCall?: (() => boolean) | undefined;
 }
 
 function runChild(
@@ -93,7 +93,7 @@ function runChild(
       readText: (): ReturnType<SecureWorkspaceTextReadPort["readText"]> =>
         Promise.resolve({ ok: true as const, text: "file text" }),
     },
-    reservePromptTokens: input.reservePromptTokens ?? ((): boolean => true),
+    admitModelCall: input.admitModelCall ?? ((): boolean => true),
   });
   return runner.run({
     envelope: {
@@ -163,8 +163,8 @@ describe("createProductionReadOnlyChildRunner", () => {
     });
   });
 
-  it("reserves every child prompt immediately before dispatch and never calls the provider after exhaustion", async () => {
-    const reservations: number[] = [];
+  it("admits every child model call immediately before dispatch and never calls the provider after a refusal", async () => {
+    let admissions = 0;
     let providerCalls = 0;
 
     const scripted = toolThenFinish(CHILD_WORKSPACE_READ_ALIAS, { relativePath: "src/index.ts" });
@@ -174,15 +174,14 @@ describe("createProductionReadOnlyChildRunner", () => {
           providerCalls += 1;
           return scripted(request);
         },
-        reservePromptTokens: (promptTokens): boolean => {
-          reservations.push(promptTokens);
-          return reservations.length === 1;
+        admitModelCall: (): boolean => {
+          admissions += 1;
+          return admissions === 1;
         },
       }),
     ).rejects.toThrow("child-session-failed");
 
-    expect(reservations).toHaveLength(2);
-    expect(reservations.every((tokens) => tokens > 0)).toBe(true);
+    expect(admissions).toBe(2);
     expect(providerCalls).toBe(1);
   });
 
@@ -292,7 +291,7 @@ describe("createProductionReadOnlyChildRunner", () => {
   it("fails closed when no model port resolves for the child model id", async () => {
     const runner = createProductionReadOnlyChildRunner({
       modelPortFactory: () => undefined,
-      reservePromptTokens: () => true,
+      admitModelCall: () => true,
       secureWorkspaceTextRead: {
         readText: () => Promise.resolve({ ok: true as const, text: "text" }),
       },

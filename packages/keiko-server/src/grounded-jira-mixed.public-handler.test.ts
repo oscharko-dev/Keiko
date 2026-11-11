@@ -78,7 +78,6 @@ const RETRY_CONTEXT_WINDOW = 16384;
 const THIRTY_CALL_BUDGET = {
   maxRuntimeMs: 300_000,
   maxToolCalls: 30,
-  maxPromptTokens: 100_000,
   maxPatchBytes: 0,
 } as const;
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -1132,24 +1131,6 @@ it.each(["input", "output"] as const)(
   },
 );
 
-it("answers from the transcript when tool rounds spend the envelope's prompt budget", async () => {
-  const f = runtime();
-  const budget = modelWindowAwareBudget(f.deps, MODEL);
-  Object.assign(f.deps, {
-    chatToolTurnBudget: { ...THIRTY_CALL_BUDGET, maxPromptTokens: budget.modelInputTokensMax + 10 },
-  });
-  const requests = fullWindowToolRound(f, "input");
-  const result = await askFeatureAndProjects(f);
-  // The envelope refuses the next model round itself; no further provider or Jira work happens.
-  expect(requests).toHaveLength(1);
-  expect(f.jiraRequests).toEqual(["GET"]);
-  expect(result.status).toBe(200);
-  expect(JSON.stringify(result.body)).toContain("used up its tool-call or prompt budget");
-  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
-    { result: { status: "completed" } },
-  ]);
-});
-
 it("retains the thirty-call envelope Jira allowance across mixed model rounds and rejects the next batch", async () => {
   const f = runtime();
   Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
@@ -1176,7 +1157,7 @@ it("retains the thirty-call envelope Jira allowance across mixed model rounds an
   expect(f.jiraRequests).toHaveLength(30);
   expect(f.jiraRequests.every((method) => method === "GET")).toBe(true);
   expect(result.status).toBe(200);
-  expect(JSON.stringify(result.body)).toContain("used up its tool-call or prompt budget");
+  expect(JSON.stringify(result.body)).toContain("used up its tool-call budget");
   const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
   expect(exchanges).toHaveLength(30);
   expect(exchanges?.every((exchange) => exchange.result?.status === "completed")).toBe(true);

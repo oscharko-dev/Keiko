@@ -133,7 +133,6 @@ describe("production CI observation service repair-budget wiring (#3384 wave-3 W
         budget: {
           maxRuntimeMs: 60_000,
           maxToolCalls: 1,
-          maxPromptTokens: 1000,
           maxPatchBytes: 1024,
         },
         expiresAt: "2099-01-01T00:00:00.000Z",
@@ -224,8 +223,7 @@ describe("production CI observation service repair-budget wiring (#3384 wave-3 W
     const test = fixture(() => Promise.resolve(failingFacts()));
     const repairBudget: CiRepairExecutionBudget = {
       admitTool: () => undefined,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
+      admitModelCall: () => ({ accepted: true }),
       observed: () => undefined,
       repairBudgetExhausted: () => true,
     };

@@ -28,16 +28,11 @@ export interface CiRepairExecutionBudget {
   /** Called only after the existing authority owner admits the concrete tool action. */
   readonly admitTool: (request: CodingToolActionRequest) => CiRepairExecutionLease | undefined;
   /**
-   * Checks whether a prompt charge fits without consuming the repair ledger. A refusal names the
-   * closed reason the budget refused with, never a bare no: only `prompt-budget-exhausted` is the
-   * run's prompt allowance, and every other limit must not be read as one (#3873 review).
+   * Admits one model call against the repair's time and authority limits. Keiko does not limit
+   * tokens (#4346), so nothing is charged: a refusal prevents provider dispatch and names the
+   * closed reason the repair refused with, never a bare no (#3873 review).
    */
-  readonly canChargePrompt: (promptTokens: number) => CiRepairPromptAdmission;
-  /**
-   * The existing gateway has accepted this prompt reservation; a refusal prevents provider dispatch
-   * and names its closed reason as `canChargePrompt` does.
-   */
-  readonly chargePrompt: (promptTokens: number) => CiRepairPromptAdmission;
+  readonly admitModelCall: () => CiRepairPromptAdmission;
   readonly chargeDelegatedRead?: (delegationId: string, idempotencyKey: string) => boolean;
   /** Checks whether one delegated read fits without consuming the repair ledger (#3417). */
   readonly canChargeDelegatedRead?: () => boolean;
@@ -46,7 +41,7 @@ export interface CiRepairExecutionBudget {
   readonly ciObservationRequired?: () => boolean;
   /**
    * The raw exhaustion fact behind this run's repair ledger (#3384 B5-1): true when the store
-   * reports the deadline, tool-call, prompt-token, or attempt-count budget spent. A read-only
+   * reports the deadline, tool-call, or attempt-count budget spent. A read-only
    * check -- it neither begins, charges, nor settles an attempt. Optional so an existing
    * `CiRepairExecutionBudget` implementer keeps compiling; a caller that omits it treats the
    * budget as never exhausted.
@@ -135,15 +130,10 @@ function noChargeLease(context: CiRepairBudgetContext | undefined): CiRepairExec
 const TIGHTENABLE_EXHAUSTION = new Set([
   "deadline-exhausted",
   "tool-budget-exhausted",
-  "prompt-budget-exhausted",
   "attempt-budget-exhausted",
 ]);
 function admittedCredit(result: CiRepairBudgetResult): boolean {
-  return (
-    result.status !== "blocked" ||
-    result.reason === "tool-budget-exhausted" ||
-    result.reason === "prompt-budget-exhausted"
-  );
+  return result.status !== "blocked" || result.reason === "tool-budget-exhausted";
 }
 
 function chargeFits(record: CiRepairBudgetRecord, charge: CiRepairCharge): boolean {
@@ -154,12 +144,9 @@ function chargeLimitFailure(
   record: CiRepairBudgetRecord,
   charge: CiRepairCharge,
 ): CiRepairBudgetBlockReason | undefined {
-  if (!Number.isSafeInteger(charge.promptTokens) || charge.promptTokens < 0) return "invalid-input";
-  if (record.toolCalls + charge.toolCalls > record.limits.maxToolCalls)
-    return "tool-budget-exhausted";
-  if (record.promptTokens + charge.promptTokens > record.limits.maxPromptTokens)
-    return "prompt-budget-exhausted";
-  return undefined;
+  return record.toolCalls + charge.toolCalls > record.limits.maxToolCalls
+    ? "tool-budget-exhausted"
+    : undefined;
 }
 
 /** Accounting around the existing tool loop; observation never starts or consumes a repair attempt. */
@@ -180,7 +167,6 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     const charge = {
       chargeId: `tool-${sha256Hex(canonicalise([request.actionId, request.idempotencyKey]))}`,
       toolCalls: 1,
-      promptTokens: 0,
     };
     const record = this.charge(context, result.record, charge);
     if (record === undefined) return undefined;
@@ -191,31 +177,11 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
       },
     };
   }
-  public chargePrompt(promptTokens: number): CiRepairPromptAdmission {
+  public admitModelCall(): CiRepairPromptAdmission {
     const context = this.deps.context();
     if (context === undefined) return { accepted: true };
-    const gate = this.promptGate(context);
-    if ("refusal" in gate) return { accepted: false, reason: gate.refusal };
-    if (gate.record === undefined) return { accepted: true };
-    const outcome = this.chargeOutcome(context, gate.record, {
-      chargeId: `prompt-${randomUUID()}`,
-      toolCalls: 0,
-      promptTokens,
-    });
-    return "reason" in outcome ? { accepted: false, reason: outcome.reason } : { accepted: true };
-  }
-  public canChargePrompt(promptTokens: number): CiRepairPromptAdmission {
-    const context = this.deps.context();
-    if (context === undefined) return { accepted: true };
-    const gate = this.promptGate(context);
-    if ("refusal" in gate) return { accepted: false, reason: gate.refusal };
-    if (gate.record === undefined) return { accepted: true };
-    const failure = chargeLimitFailure(gate.record, {
-      chargeId: "prompt-admission",
-      toolCalls: 0,
-      promptTokens,
-    });
-    return failure === undefined ? { accepted: true } : { accepted: false, reason: failure };
+    const gate = this.modelCallGate(context);
+    return "refusal" in gate ? { accepted: false, reason: gate.refusal } : { accepted: true };
   }
   public chargeDelegatedRead(delegationId: string, idempotencyKey: string): boolean {
     const context = this.deps.context();
@@ -228,7 +194,6 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
       this.charge(context, result.record, {
         chargeId: `child-${sha256Hex(canonicalise([delegationId, idempotencyKey]))}`,
         toolCalls: 1,
-        promptTokens: 0,
       }) !== undefined
     );
   }
@@ -241,11 +206,7 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     return (
       result.status !== "blocked" &&
       result.record !== undefined &&
-      chargeFits(result.record, {
-        chargeId: "delegated-read-admission",
-        toolCalls: 1,
-        promptTokens: 0,
-      })
+      chargeFits(result.record, { chargeId: "delegated-read-admission", toolCalls: 1 })
     );
   }
   public ciObservationRequired(): boolean {
@@ -277,12 +238,10 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     const outcome = observedOutcome(attempt, snapshot);
     if (outcome !== undefined) this.settle(context, attempt.attemptId, outcome);
   }
-  // What a model prompt may be charged against, shared by the check and the charge so both refuse for
-  // the same closed reason: the budget's own refusal, or the record an active attempt's charge lands
-  // on (`undefined` when no repair attempt is active and there is nothing to charge). An exhausted
-  // tool budget alone does not refuse a prompt while an attempt is active: a child using the last
-  // tool credit still prompts.
-  private promptGate(
+  // What refuses a model call: the budget's own refusal, or the record an active attempt runs on
+  // (`undefined` when no repair attempt is active). An exhausted tool budget alone does not refuse a
+  // model call while an attempt is active: a child using the last tool credit still prompts.
+  private modelCallGate(
     context: CiRepairBudgetContext,
   ):
     | { readonly refusal: CiRepairBudgetBlockReason }
@@ -410,12 +369,8 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
       now >= record.updatedAtMs &&
       now < record.deadlineMs &&
       record.toolCalls <= record.limits.maxToolCalls &&
-      record.promptTokens <= record.limits.maxPromptTokens &&
       attempt.charges.some(
-        (item) =>
-          item.chargeId === charge.chargeId &&
-          item.toolCalls === charge.toolCalls &&
-          item.promptTokens === charge.promptTokens,
+        (item) => item.chargeId === charge.chargeId && item.toolCalls === charge.toolCalls,
       )
     );
   }

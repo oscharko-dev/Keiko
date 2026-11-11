@@ -24,7 +24,7 @@ import { createProductionTaskBranchPort } from "./productionTaskBranchPort.js";
 import type { GitDeliveryDescriptionAuthorityMintRequest } from "../gitDelivery/runBoundAuthority.js";
 import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
 import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
-import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
+import { admitModelCallWithCiRepair } from "./ciRepairModelCallAdmission.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
 import {
@@ -537,13 +537,9 @@ function runBoundFacts(
   authority: CodingRuntimeAuthorityService,
   input: ProductionCodingRuntimeResolverInput,
   { runEffort }: Pick<RunComposition, "runEffort">,
-): Pick<
-  QualifiedProductionCodingRuntime,
-  "runEffort" | "promptAllowanceExhausted" | "envelopeDurationExhausted"
-> {
+): Pick<QualifiedProductionCodingRuntime, "runEffort" | "envelopeDurationExhausted"> {
   return {
     runEffort: { read: runEffort.read },
-    promptAllowanceExhausted: (runId) => authority.promptAllowanceExhausted(runId),
     envelopeDurationExhausted: (runId) =>
       authority.envelopeDurationExhausted(runId, runtimeNow(input).getTime()),
   };
@@ -574,19 +570,18 @@ function composedMintLaunch(
   );
 }
 
-// #3384 wave-3 W3-3 "needs": `settlePromptTokens` (agentAuthorityRegistry.ts) had zero production
-// callers -- this is the wiring. `CodingRuntimeHost["runtimeCapabilityAuthenticator"]` (the
-// interface the return type below is checked against) does not itself declare `settlePromptTokens`
-// yet, so the return type is widened with an explicit intersection instead of touching that shared
-// interface: the object literal below satisfies both the narrower contract every existing consumer
-// still reads and the wider one `coding-sidecar-gateway.ts`'s settlement call site expects.
-// #3873: the sidecar gateway is the one caller of this reservation pair, and it reserves a call's
-// prompt estimate immediately before dispatching it and settles it once the provider answered or
-// failed, so an admitted reservation and its settlement are the run's model call as `runEffort`
-// counts and times it. The admitted reservation answers the call's identity (`modelCallId`) and the
-// gateway hands it back with the settlement, so a call is timed from its own reservation and never
-// from another call's of the same size (#3873 review).
-type PromptReservation = ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]> & {
+// #3384 wave-3 W3-3 "needs": `settlePromptTokens` records a call's real reported usage; it is
+// wired here because `CodingRuntimeHost["runtimeCapabilityAuthenticator"]` (the interface the
+// return type below is checked against) does not itself declare it yet, so the return type is
+// widened with an explicit intersection instead of touching that shared interface.
+// #3873: the sidecar gateway is the one caller of this admission pair, and it admits a call
+// immediately before dispatching it and settles it once the provider answered or failed, so an
+// admitted call and its settlement are the run's model call as `runEffort` counts and times it.
+// Keiko does not limit tokens (#4346): the estimate only feeds that roll-up and is charged against
+// no allowance. The admitted call answers its identity (`modelCallId`) and the gateway hands it
+// back with the settlement, so a call is timed from its own admission and never from another
+// call's of the same size (#3873 review).
+type ModelCallAdmission = ReturnType<CodingRuntimeAuthorityService["admitModelCall"]> & {
   readonly modelCallId?: number;
 };
 
@@ -611,30 +606,26 @@ function runtimeCapabilityAuthenticatorFor(
 } {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
-    reservePromptTokens: (capability, promptTokens): PromptReservation => {
-      const reserved = reservePromptWithCiRepair(
+    admitModelCall: (capability, estimatedPromptTokens): ModelCallAdmission => {
+      const admitted = admitModelCallWithCiRepair(
         authority,
         (runId) => runs.get(runId)?.ciRepairBudget,
         capability,
-        promptTokens,
       );
-      if (!reserved.ok) return reserved;
-      const modelCallId = runEffort.modelCallReserved(reserved.runId, promptTokens);
-      return modelCallId === undefined ? reserved : { ...reserved, modelCallId };
+      if (!admitted.ok) return admitted;
+      const modelCallId = runEffort.modelCallReserved(admitted.runId, estimatedPromptTokens);
+      return modelCallId === undefined ? admitted : { ...admitted, modelCallId };
     },
     settlePromptTokens: (
       capability,
-      reservedPromptTokens,
+      _reservedPromptTokens,
       actualPromptTokens,
       modelCallId,
-    ): ReturnType<CodingRuntimeAuthorityService["settlePromptTokens"]> => {
-      const settled = authority.settlePromptTokens(
-        capability,
-        reservedPromptTokens,
-        actualPromptTokens,
-      );
-      if (settled.ok) runEffort.modelCallSettled(settled.runId, modelCallId, actualPromptTokens);
-      return settled;
+    ): { readonly ok: boolean } => {
+      const authenticated = authority.authenticateCapability(capability, "model-gateway");
+      if (!authenticated.ok) return { ok: false };
+      runEffort.modelCallSettled(authenticated.binding.runId, modelCallId, actualPromptTokens);
+      return { ok: true };
     },
     unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools(),
   };
@@ -1547,17 +1538,6 @@ function backendJiraAuthority({
     signal: controller.signal,
     currentScopes: (phase) => runtimeJiraScopes(input, context, minted, authority, phase),
     currentInputAuthority: () => runtimeJiraInputAuthority(input, context, minted, authority),
-    promptFits: (promptTokens) =>
-      !controller.signal.aborted &&
-      authority.delegationFits({
-        capability: minted.toolFacadeCapability,
-        adapterKind: adapterKind(context),
-        liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
-        workspaceRoot: context.workspaceRoot,
-        deploymentCeiling: context.deploymentCeiling,
-        nowIso: runtimeNow(input).toISOString(),
-        usage: { toolCalls: 0, patchBytes: 0, promptTokens },
-      }),
   };
 }
 
@@ -1747,7 +1727,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,
     effectiveModeNow: () => authority.effectiveMode(),
-    reservePromptTokens: managedPromptReservation(options),
+    admitModelCall: managedModelCallAdmission(options),
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
@@ -1920,15 +1900,12 @@ export function operatorDecisionRequester(
   };
 }
 
-function managedPromptReservation(
-  options: ManagedToolFacadeInput,
-): (promptTokens: number) => boolean {
-  return (promptTokens): boolean =>
-    reservePromptWithCiRepair(
+function managedModelCallAdmission(options: ManagedToolFacadeInput): () => boolean {
+  return (): boolean =>
+    admitModelCallWithCiRepair(
       options.authority,
       () => options.ciRepairBudget,
       options.minted.modelGatewayCapability,
-      promptTokens,
     ).ok;
 }
 

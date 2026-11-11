@@ -1,7 +1,8 @@
 // F9 (#3873) end to end through the real coding sidecar gateway route: the route's own refusal or
 // failure of a model call feeds the facts a failed run's settlement names its cause from — the
-// runtime authority's prompt allowance and the event hub's last failed-call cause — composed exactly
-// as production composes them. No OpenCode error text is read anywhere on this path.
+// runtime authority's time limit and the event hub's last failed-call cause — composed exactly
+// as production composes them. Keiko does not limit tokens (#4346): no cumulative prompt allowance
+// refuses a call any more. No OpenCode error text is read anywhere on this path.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
@@ -39,7 +40,7 @@ import type { RouteContext } from "../routes.js";
 import { createRunRegistry } from "../runs.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { AT, createDraftRun, readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
-import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
+import { admitModelCallWithCiRepair } from "./ciRepairModelCallAdmission.js";
 import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
 import type {
@@ -101,7 +102,7 @@ function realRepairBudget(maxRuntimeMs: number): {
     prNumber: 17,
     correlationId: "correlation-1",
     stillAuthorized: () => true,
-    limits: { maxRuntimeMs, maxToolCalls: 20, maxPromptTokens: 1_000_000 },
+    limits: { maxRuntimeMs, maxToolCalls: 20 },
   };
   const controller = new CodingRuntimeCiRepairController({
     store: createCodingRuntimeCiRepairBudgetStore({
@@ -128,7 +129,7 @@ function realRepairBudget(maxRuntimeMs: number): {
   return { controller, clock };
 }
 
-function trustedContext(maxPromptTokens: number): CodingRuntimeTrustedContext {
+function trustedContext(): CodingRuntimeTrustedContext {
   return {
     operatorId: "operator-1",
     taskId: "task-f9",
@@ -163,13 +164,13 @@ function trustedContext(maxPromptTokens: number): CodingRuntimeTrustedContext {
     },
     networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
     gates: ["human-approval"],
-    budget: { maxRuntimeMs: 600_000, maxToolCalls: 10, maxPromptTokens, maxPatchBytes: 65_536 },
+    budget: { maxRuntimeMs: 600_000, maxToolCalls: 10, maxPatchBytes: 65_536 },
     expiresAt: new Date(NOW.getTime() + 600_000).toISOString(),
   };
 }
 
-/** A real runtime authority with one minted run whose cumulative allowance is `maxPromptTokens`. */
-function mintedAuthority(maxPromptTokens: number): {
+/** A real runtime authority with one minted run. */
+function mintedAuthority(): {
   readonly authority: CodingRuntimeAuthorityService;
   readonly capability: string;
 } {
@@ -180,7 +181,7 @@ function mintedAuthority(maxPromptTokens: number): {
     undefined,
     createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.now() }),
   );
-  const context = trustedContext(maxPromptTokens);
+  const context = trustedContext();
   const intent = {
     schemaVersion: "1",
     requestId: "request-1",
@@ -268,11 +269,11 @@ function failingStream(error: Error): () => AsyncIterable<GatewayStreamChunk> {
   return () => ({ [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }) });
 }
 
-type PromptReservation = (capability: string, promptTokens: number) => unknown;
+type ModelCallAdmission = (capability: string, estimatedPromptTokens: number) => unknown;
 
 /**
- * The sidecar route's dependencies around one minted run: the real authority books its prompt
- * tokens, the real hub receives its failed-call causes, and the evidence recorder production
+ * The sidecar route's dependencies around one minted run: the real authority admits its model
+ * calls, the real hub receives its failed-call causes, and the evidence recorder production
  * composes clears a recovered failure. Each model call answers with the next scripted outcome.
  */
 function gatewayDeps(
@@ -280,7 +281,9 @@ function gatewayDeps(
   hub: CodingRuntimeEventHub,
   outcomes: readonly ChatOutcome[],
   options: {
-    readonly reserve?: PromptReservation | undefined;
+    readonly reserve?: ModelCallAdmission | undefined;
+    /** Receives the provider-reported prompt tokens of every settled call. */
+    readonly settled?: number[] | undefined;
     readonly stream?: (() => AsyncIterable<GatewayStreamChunk>) | undefined;
   } = {},
 ): UiHandlerDeps {
@@ -315,12 +318,22 @@ function gatewayDeps(
         value === minted.capability && audience === "model-gateway"
           ? { ok: true, binding: { runId: RUN_ID } }
           : { ok: false },
-      reservePromptTokens: (value: string, promptTokens: number) =>
+      admitModelCall: (value: string, estimatedPromptTokens: number) =>
         options.reserve === undefined
-          ? minted.authority.reservePromptTokens(value, promptTokens)
-          : options.reserve(value, promptTokens),
-      settlePromptTokens: (value: string, reserved: number, actual: number) =>
-        minted.authority.settlePromptTokens(value, reserved, actual),
+          ? minted.authority.admitModelCall(value)
+          : options.reserve(value, estimatedPromptTokens),
+      ...(options.settled === undefined
+        ? {}
+        : {
+            settlePromptTokens: (
+              _value: string,
+              _reserved: number,
+              actual: number,
+            ): { readonly ok: true } => {
+              options.settled?.push(actual);
+              return { ok: true };
+            },
+          }),
     },
     codingRuntimeOrchestrator: {
       getSnapshot: () => ({ state: "running", revision: 5 }),
@@ -357,7 +370,7 @@ async function callGateway(
   hub: CodingRuntimeEventHub,
   outcomes: readonly ChatOutcome[],
   content = "synthetic",
-  reserve?: PromptReservation,
+  reserve?: ModelCallAdmission,
 ): Promise<unknown> {
   return handleCodingSidecarGatewayChatCompletions(
     chatRequest(minted.capability, content),
@@ -383,29 +396,42 @@ function terminalFailure(
   hub: CodingRuntimeEventHub,
 ): ReturnType<typeof classifyTerminalFailure> {
   const facts = codingRuntimeTerminalFacts(hub, {
-    promptAllowanceExhausted: (runId) => minted.authority.promptAllowanceExhausted(runId),
     envelopeDurationExhausted: (runId) => minted.authority.envelopeDurationExhausted(runId),
   });
   return classifyTerminalFailure(facts, RUN_ID);
 }
 
 describe("terminal model-call cause through the coding sidecar gateway route (F9)", () => {
-  it("names the prompt allowance the route refused the call with, not an internal error", async () => {
-    const minted = mintedAuthority(1);
+  // Keiko does not limit tokens (#4346). The run's cumulative prompt allowance (2,000,000 tokens by
+  // default) used to refuse the call that crossed it with a 403; the route now answers every call of
+  // a live run, however many prompt tokens the provider reports for the run as a whole.
+  it("never refuses a call because the run's cumulative prompt tokens exceed 2,000,000", async () => {
+    const minted = mintedAuthority();
     const hub = new CodingRuntimeEventHub();
+    const settled: number[] = [];
+    const heavy = (): Promise<NormalizedResponse> =>
+      Promise.resolve({ ...answer(), usage: { ...answer().usage, promptTokens: 200_000 } });
 
-    await expect(callGateway(minted, hub, [answered()])).resolves.toMatchObject({ status: 403 });
+    for (let call = 0; call < 12; call += 1) {
+      await expect(
+        handleCodingSidecarGatewayChatCompletions(
+          chatRequest(minted.capability, "synthetic"),
+          gatewayDeps(minted, hub, [heavy], { settled }),
+        ),
+      ).resolves.toMatchObject({ status: 200 });
+    }
 
-    expect(hub.lastModelCallFailure(RUN_ID)).toBe("turn-rejected");
+    expect(settled).toHaveLength(12);
+    expect(settled.reduce((sum, tokens) => sum + tokens, 0)).toBeGreaterThan(2_000_000);
+    expect(hub.lastModelCallFailure(RUN_ID)).toBeUndefined();
     expect(terminalFailure(minted, hub)).toEqual({
-      failureCode: "prompt-allowance-exhausted",
-      basis: "prompt-allowance",
-      modelCallFailure: "turn-rejected",
+      failureCode: "runtime-failed",
+      basis: "no-model-call-failure",
     });
   });
 
   it("names a provider the route could not reach as unavailable", async () => {
-    const minted = mintedAuthority(200_000);
+    const minted = mintedAuthority();
     const hub = new CodingRuntimeEventHub();
 
     await expect(
@@ -420,7 +446,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
   });
 
   it("forgets a failed call once a later call of the run is answered", async () => {
-    const minted = mintedAuthority(200_000);
+    const minted = mintedAuthority();
     const hub = new CodingRuntimeEventHub();
 
     await callGateway(minted, hub, [failing(new TransportError("synthetic reset"))]);
@@ -448,7 +474,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
     ["a rate limit", new RateLimitError("synthetic rate limit")],
     ["an open breaker", new CircuitOpenError("synthetic circuit open")],
   ])("names %s as the provider being unavailable, not as a rejection", async (_label, error) => {
-    const minted = mintedAuthority(200_000);
+    const minted = mintedAuthority();
     const hub = new CodingRuntimeEventHub();
 
     await callGateway(minted, hub, [failing(error)]);
@@ -468,7 +494,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
     ["a conflict", new ProviderError("synthetic conflict", 409)],
     ["a configuration error", new ConfigInvalidError("synthetic invalid configuration")],
   ])("defers %s to the cause the failed turn names", async (_label, error) => {
-    const minted = mintedAuthority(200_000);
+    const minted = mintedAuthority();
     const hub = new CodingRuntimeEventHub();
 
     await callGateway(minted, hub, [failing(error)]);
@@ -482,7 +508,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
   });
 
   it("lets a later rejection replace an earlier outage, and a recovered call forget both", async () => {
-    const minted = mintedAuthority(200_000);
+    const minted = mintedAuthority();
     const hub = new CodingRuntimeEventHub();
 
     await callGateway(minted, hub, [failing(new ProviderError("synthetic unavailable", 503))]);
@@ -513,7 +539,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
       ],
       ["a refused credential", new AuthenticationError("synthetic credential refused")],
     ])("never names %s the provider being unavailable", async (_label, error) => {
-      const minted = mintedAuthority(200_000);
+      const minted = mintedAuthority();
       const hub = new CodingRuntimeEventHub();
 
       await callGatewayStreamed(minted, hub, failingStream(error));
@@ -533,7 +559,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
       ["a stream that ended without its answer", new ProviderError("synthetic empty stream", 200)],
       ["a fault inside the stream", new Error("synthetic decoder fault")],
     ])("still names %s the provider being unavailable", async (_label, error) => {
-      const minted = mintedAuthority(200_000);
+      const minted = mintedAuthority();
       const hub = new CodingRuntimeEventHub();
 
       await callGatewayStreamed(minted, hub, failingStream(error));
@@ -551,7 +577,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
       ["a rate limit", new RateLimitError("synthetic rate limit")],
       ["an open breaker", new CircuitOpenError("synthetic circuit open")],
     ])("names %s the provider being unavailable too", async (_label, error) => {
-      const minted = mintedAuthority(200_000);
+      const minted = mintedAuthority();
       const hub = new CodingRuntimeEventHub();
 
       await callGatewayStreamed(minted, hub, failingStream(error));
@@ -566,51 +592,33 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
 
   // The CI-repair run's own budget refused the call before the authority was asked, so the authority
   // never recorded a refusal and the run named no limit (F9's own cause). The budget's closed reason
-  // then decides which limit it names (#3873 review): every refusal was once recorded as the prompt
-  // allowance, so a repair that ran past its runtime limit sent the operator to a setting that cannot
-  // help.
+  // then decides which limit it names (#3873 review): only a repair that ran past its runtime limit
+  // names the time limit, and every other refusal names no limit of the run.
   describe("a call the run's CI-repair budget refused", () => {
     async function refusedBy(reason: CiRepairBudgetBlockReason): Promise<{
       readonly minted: ReturnType<typeof mintedAuthority>;
       readonly hub: CodingRuntimeEventHub;
     }> {
-      const minted = mintedAuthority(200_000);
+      const minted = mintedAuthority();
       const hub = new CodingRuntimeEventHub();
       const refusingBudget: CiRepairExecutionBudget = {
         admitTool: () => undefined,
-        canChargePrompt: () => ({ accepted: false, reason }),
-        chargePrompt: () => ({ accepted: false, reason }),
+        admitModelCall: () => ({ accepted: false, reason }),
         observed: () => undefined,
       };
 
       await expect(
-        callGateway(minted, hub, [answered()], "synthetic", (capability, promptTokens) =>
-          reservePromptWithCiRepair(
-            minted.authority,
-            () => refusingBudget,
-            capability,
-            promptTokens,
-          ),
+        callGateway(minted, hub, [answered()], "synthetic", (capability) =>
+          admitModelCallWithCiRepair(minted.authority, () => refusingBudget, capability),
         ),
       ).resolves.toMatchObject({ status: 403 });
       expect(hub.lastModelCallFailure(RUN_ID)).toBe("turn-rejected");
       return { minted, hub };
     }
 
-    it("names the prompt allowance the budget's own allowance refused the call with, not a failed model step", async () => {
-      const { minted, hub } = await refusedBy("prompt-budget-exhausted");
-
-      expect(terminalFailure(minted, hub)).toEqual({
-        failureCode: "prompt-allowance-exhausted",
-        basis: "prompt-allowance",
-        modelCallFailure: "turn-rejected",
-      });
-    });
-
-    it("names the time limit a repair that ran past its runtime limit refused the call with, never the prompt allowance", async () => {
+    it("names the time limit a repair that ran past its runtime limit refused the call with", async () => {
       const { minted, hub } = await refusedBy("deadline-exhausted");
 
-      expect(minted.authority.promptAllowanceExhausted(RUN_ID)).toBe(false);
       expect(terminalFailure(minted, hub)).toEqual({
         failureCode: "envelope-duration-exhausted",
         basis: "envelope-duration",
@@ -621,25 +629,24 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
     // The reviewer's failure scenario, with no scripted answer anywhere on the path: a CI repair that
     // runs past its runtime limit has its next model call refused by the real controller, through the
     // real reservation and the real authority, and the run settles on what that limit is.
-    it("settles the time limit for a repair that really ran past its runtime limit, never the prompt allowance", async () => {
-      const minted = mintedAuthority(200_000);
+    it("settles the time limit for a repair that really ran past its runtime limit", async () => {
+      const minted = mintedAuthority();
       const hub = new CodingRuntimeEventHub();
       const { controller, clock } = realRepairBudget(100);
 
       // Inside its limit the repair admits the call, so the route answers it.
       await expect(
-        callGateway(minted, hub, [answered()], "synthetic", (capability, promptTokens) =>
-          reservePromptWithCiRepair(minted.authority, () => controller, capability, promptTokens),
+        callGateway(minted, hub, [answered()], "synthetic", (capability) =>
+          admitModelCallWithCiRepair(minted.authority, () => controller, capability),
         ),
       ).resolves.toMatchObject({ status: 200 });
       clock.now += 100;
       await expect(
-        callGateway(minted, hub, [answered()], "synthetic", (capability, promptTokens) =>
-          reservePromptWithCiRepair(minted.authority, () => controller, capability, promptTokens),
+        callGateway(minted, hub, [answered()], "synthetic", (capability) =>
+          admitModelCallWithCiRepair(minted.authority, () => controller, capability),
         ),
       ).resolves.toMatchObject({ status: 403 });
 
-      expect(minted.authority.promptAllowanceExhausted(RUN_ID)).toBe(false);
       expect(terminalFailure(minted, hub)).toEqual({
         failureCode: "envelope-duration-exhausted",
         basis: "envelope-duration",
@@ -658,7 +665,6 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
       async (reason) => {
         const { minted, hub } = await refusedBy(reason);
 
-        expect(minted.authority.promptAllowanceExhausted(RUN_ID)).toBe(false);
         expect(terminalFailure(minted, hub)).toEqual({
           failureCode: "model-turn-failed",
           basis: "model-call-failure",

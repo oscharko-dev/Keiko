@@ -98,7 +98,7 @@ const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
 // admission fact (audience, runId, envelopeDigest) already matches. "starting" is a legal
 // interior state (LEGAL_TRANSITIONS.idle -> "starting" -> "ready" -> ...) and not a state a
 // reservation could be replayed into from anywhere else, so it is safe to admit alongside
-// "ready" and "running". Every other reservePromptTokens clause (audience, runId, envelopeDigest
+// "ready" and "running". Every other admitModelCall clause (audience, runId, envelopeDigest
 // match, paused-state refusal) stays exactly as strict; only the running-only state gate widens.
 const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "starting",
@@ -106,18 +106,16 @@ const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeSt
   "running",
 ]);
 
-// What refused a run's most recent prompt-token admission, by the limit it names (F9, #3873):
-// `prompt-allowance`, the cumulative prompt allowance; `repair-runtime-limit`, the runtime limit a CI
-// repair counts over its own work. `none` names no limit: the admission was granted, or something
-// refused it that is not a bound of the run (a run state that admits no model call, or a CI-repair
-// reason with no cause of its own).
-type PromptAdmissionRefusal = "none" | "prompt-allowance" | "repair-runtime-limit";
+// What refused a run's most recent model-call admission, by the limit it names (F9, #3873):
+// `repair-runtime-limit`, the runtime limit a CI repair counts over its own work. `none` names no
+// limit: the admission was granted, or something refused it that is not a bound of the run (a run
+// state that admits no model call, or a CI-repair reason with no cause of its own).
+type ModelCallRefusal = "none" | "repair-runtime-limit";
 
-// The CI-repair budget counts the run's own `maxPromptTokens` and `maxRuntimeMs` over the repair, so
-// those two refusals are the run's limits and nothing else is: a repair out of failed attempts, a
-// withdrawn authority, a failed store or a drifting clock must not read as a prompt allowance.
-function ciRepairRefusal(reason: CiRepairBudgetBlockReason): PromptAdmissionRefusal {
-  if (reason === "prompt-budget-exhausted") return "prompt-allowance";
+// The CI-repair budget counts the run's own `maxRuntimeMs` over the repair, so that refusal is the
+// run's limit and nothing else is: a repair out of failed attempts, a withdrawn authority, a failed
+// store or a drifting clock must not read as a time limit.
+function ciRepairRefusal(reason: CiRepairBudgetBlockReason): ModelCallRefusal {
   return reason === "deadline-exhausted" ? "repair-runtime-limit" : "none";
 }
 
@@ -265,13 +263,14 @@ const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["deny-all", "governed-egress", "connector-scoped-egress"],
     },
-    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
-    // #3873: the minted envelope duration beside the allowance, so a run that later fails closed on
-    // expiry is reconstructable from this one line (both are operator settings, ADR-0137 D2).
-    // `required: false` only because a record written before this field existed (1.2.0) lacks it,
-    // and a missing REQUIRED field would read as an incomplete record; every line written since
-    // carries it.
+    // #3873: the minted envelope duration, so a run that later fails closed on expiry is
+    // reconstructable from this one line (an operator setting, ADR-0137 D2). `required: false` only
+    // because a record written before this field existed (1.2.0) lacks it, and a missing REQUIRED
+    // field would read as an incomplete record; every line written since carries it.
     maxRuntimeMs: { type: "integer", dataClass: "duration", required: false },
+    // The minted tool-call budget (#4346): Keiko does not limit tokens, so the envelope's remaining
+    // count bound is the tool-call budget. Optional for the same reason as `maxRuntimeMs`.
+    maxToolCalls: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -728,10 +727,10 @@ export class CodingRuntimeAuthorityService {
   private activeTreeBindingId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
-  // The outcome of the most recent prompt-token admission (F9, #3873): a single slot, because one
+  // The outcome of the most recent model-call admission (F9, #3873): a single slot, because one
   // run is active at a time and only its latest model call can have ended its turn.
-  private lastPromptAdmission:
-    { readonly runId: string; readonly refusal: PromptAdmissionRefusal } | undefined;
+  private lastModelCallAdmission:
+    { readonly runId: string; readonly refusal: ModelCallRefusal } | undefined;
   // The instant the most recently minted run's Authority Envelope runs out of time (F9, #3873): its
   // `expiresAt`, or its `maxRuntimeMs` after minting, whichever comes first.
   private mintedRuntimeDeadline:
@@ -920,8 +919,8 @@ export class CodingRuntimeAuthorityService {
           actionClasses: envelope.authority.actionClasses,
           connectorScopes: envelope.authority.connectorScopes,
           networkPolicyMode: envelope.authority.networkPolicy.mode,
-          maxPromptTokens: envelope.authority.budget.maxPromptTokens,
           maxRuntimeMs: envelope.authority.budget.maxRuntimeMs,
+          maxToolCalls: envelope.authority.budget.maxToolCalls,
         },
       ),
     );
@@ -1135,39 +1134,27 @@ export class CodingRuntimeAuthorityService {
     return evictedCount;
   }
 
-  /** Authenticates and atomically reserves estimated prompt tokens before provider dispatch. */
-  public reservePromptTokens(
+  /**
+   * Authenticates and admits one model call before provider dispatch. Keiko does not limit tokens
+   * (#4346): the run's authority must be live and in a state that admits model calls, and nothing
+   * is booked.
+   */
+  public admitModelCall(
     capability: string,
-    promptTokens: number,
     nowMs = Date.now(),
   ):
     | { readonly ok: true; readonly runId: string }
     | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
     const authenticated = this.capabilities.authenticate(capability, nowMs);
     if (!authenticated.ok) return capabilityFailure(authenticated.reason);
-    const reference = this.promptLedgerReference(authenticated.binding);
+    const reference = this.modelCallReference(authenticated.binding);
     if (reference === undefined) {
-      this.recordPromptAdmission(authenticated.binding.runId, "none");
+      this.recordModelCallAdmission(authenticated.binding.runId, "none");
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    const nowIso = new Date(nowMs).toISOString();
-    const reserved = this.registry.reserveRuntimePromptTokens(reference, promptTokens, nowIso);
-    const allowanceRefused =
-      !reserved.ok &&
-      reserved.reason === "authority-budget-exceeded" &&
-      this.registry.runtimePromptAllowanceExhausted(reference, promptTokens, nowIso);
-    this.recordPromptAdmission(reference.runId, allowanceRefused ? "prompt-allowance" : "none");
-    return reserved.ok ? { ok: true, runId: reference.runId } : reserved;
-  }
-
-  /**
-   * F9 (#3873): whether the run's most recent model-call admission was refused by its cumulative
-   * prompt allowance (`maxPromptTokens`) itself — not by the runtime's time budget, an expired or
-   * revoked authority, or a run state that admits no model call. Any later admission attempt for
-   * the run replaces the answer, so it describes the call that ended a failed turn.
-   */
-  public promptAllowanceExhausted(runId: string): boolean {
-    return this.lastPromptRefusal(runId) === "prompt-allowance";
+    const admitted = this.registry.admitRuntimeModelCall(reference, new Date(nowMs).toISOString());
+    this.recordModelCallAdmission(reference.runId, "none");
+    return admitted.ok ? { ok: true, runId: reference.runId } : admitted;
   }
 
   /** Server-private lifetime boundary already accepted at minting; never a new grant or TTL. */
@@ -1187,40 +1174,41 @@ export class CodingRuntimeAuthorityService {
    * repair can run out of time while the run's own envelope has not.
    */
   public envelopeDurationExhausted(runId: string, nowMs = Date.now()): boolean {
-    if (this.lastPromptRefusal(runId) === "repair-runtime-limit") return true;
+    if (this.lastModelCallRefusal(runId) === "repair-runtime-limit") return true;
     const deadline = this.mintedRuntimeDeadline;
     return deadline?.runId === runId && Number.isFinite(nowMs) && nowMs >= deadline.deadlineMs;
   }
 
   /**
-   * A prompt-token reservation the run's CI-repair budget refused before it reached this authority
-   * (`ciRepairPromptReservation.ts`; #3873 review), with the closed reason the budget refused with.
-   * That budget counts the run's own `maxPromptTokens` and `maxRuntimeMs` over the repair, so its
-   * refusal for either is recorded as this authority's own refusal is, and the run's failed turn
-   * settles `prompt-allowance-exhausted` or `envelope-duration-exhausted` instead of naming no limit
-   * at all. Every other reason (a repair out of failed attempts, a withdrawn authority, a failed
-   * store, a drifting clock) names no limit of the run and is recorded as such, so it can never read
-   * as the prompt allowance and still replaces the run's earlier answer. Like every admission record,
-   * only the active run's counts.
+   * A model call the run's CI-repair budget refused before it reached this authority
+   * (`ciRepairModelCallAdmission.ts`; #3873 review), with the closed reason the budget refused with.
+   * That budget counts the run's own `maxRuntimeMs` over the repair, so its refusal for that limit
+   * is recorded as this authority's own refusal is, and the run's failed turn settles
+   * `envelope-duration-exhausted` instead of naming no limit at all. Every other reason (a repair out
+   * of failed attempts, a withdrawn authority, a failed store, a drifting clock) names no limit of
+   * the run and is recorded as such, so it can never read as a time limit and still replaces the
+   * run's earlier answer. Like every admission record, only the active run's counts.
    */
-  public recordCiRepairPromptRefusal(runId: string, reason: CiRepairBudgetBlockReason): void {
-    this.recordPromptAdmission(runId, ciRepairRefusal(reason));
+  public recordCiRepairModelCallRefusal(runId: string, reason: CiRepairBudgetBlockReason): void {
+    this.recordModelCallAdmission(runId, ciRepairRefusal(reason));
   }
 
-  private lastPromptRefusal(runId: string): PromptAdmissionRefusal {
-    return this.lastPromptAdmission?.runId === runId ? this.lastPromptAdmission.refusal : "none";
+  private lastModelCallRefusal(runId: string): ModelCallRefusal {
+    return this.lastModelCallAdmission?.runId === runId
+      ? this.lastModelCallAdmission.refusal
+      : "none";
   }
 
   // Only the active run's own admissions count: a stray capability of another run never rewrites
   // what ended the active run's turn.
-  private recordPromptAdmission(runId: string, refusal: PromptAdmissionRefusal): void {
+  private recordModelCallAdmission(runId: string, refusal: ModelCallRefusal): void {
     if (runId !== this.activeAuthorityRef?.runId) return;
-    this.lastPromptAdmission = { runId, refusal };
+    this.lastModelCallAdmission = { runId, refusal };
   }
 
-  // The live authority a model-gateway capability may book prompt tokens against: the capability's
+  // The live authority a model-gateway capability may admit a model call against: the capability's
   // run must be the active one, in a state that admits model calls, under the same envelope.
-  private promptLedgerReference(
+  private modelCallReference(
     binding: RuntimeCapabilityBinding,
   ): CodingRuntimeAuthorityRef | undefined {
     const reference = this.activeAuthorityRef;
@@ -1235,32 +1223,6 @@ export class CodingRuntimeAuthorityService {
       return undefined;
     }
     return reference;
-  }
-
-  /**
-   * Authenticates and reconciles a prompt-token reservation against the provider's real reported
-   * usage for the same call, mirroring {@link reservePromptTokens}'s authentication and binding
-   * checks so a settlement can only ever land against the same run whose capability reserved it.
-   */
-  public settlePromptTokens(
-    capability: string,
-    reservedPromptTokens: number,
-    actualPromptTokens: number,
-    nowMs = Date.now(),
-  ):
-    | { readonly ok: true; readonly runId: string }
-    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
-    const authenticated = this.capabilities.authenticate(capability, nowMs);
-    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
-    const reference = this.promptLedgerReference(authenticated.binding);
-    if (reference === undefined) return { ok: false, reason: "authority-resolution-failed" };
-    const settled = this.registry.settleRuntimePromptTokens(
-      reference,
-      reservedPromptTokens,
-      actualPromptTokens,
-      new Date(nowMs).toISOString(),
-    );
-    return settled.ok ? { ok: true, runId: reference.runId } : settled;
   }
 
   public pause(runId: string, nowIso: string): CodingRuntimeAuthorityBoundaryResult {

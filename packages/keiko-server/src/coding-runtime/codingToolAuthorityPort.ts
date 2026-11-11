@@ -554,7 +554,7 @@ function chargeMaterializedPatch(
     liveFacts: trusted.liveFacts,
     delegationId: materializedPatchIdentity(request.actionId),
     idempotencyKey: materializedPatchIdentity(request.idempotencyKey),
-    usage: { toolCalls: 0, patchBytes, promptTokens: 0 },
+    usage: { toolCalls: 0, patchBytes },
     workspaceRoot: trusted.workspaceRoot,
     deploymentCeiling: trusted.deploymentCeiling,
     nowIso: trusted.nowIso,
@@ -783,7 +783,7 @@ function chargeDelegatedRead(
     liveFacts: trusted.liveFacts,
     delegationId,
     idempotencyKey,
-    usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+    usage: { toolCalls: 1, patchBytes: 0 },
     workspaceRoot: trusted.workspaceRoot,
     deploymentCeiling: trusted.deploymentCeiling,
     nowIso: trusted.nowIso,
@@ -803,7 +803,7 @@ function canChargeDelegatedRead(
       capability,
       adapterKind: trusted.adapterKind,
       liveFacts: trusted.liveFacts,
-      usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+      usage: { toolCalls: 1, patchBytes: 0 },
       workspaceRoot: trusted.workspaceRoot,
       deploymentCeiling: trusted.deploymentCeiling,
       nowIso: trusted.nowIso,
@@ -1187,7 +1187,6 @@ function delegationUsage(request: CodingToolActionRequest): CodingWorkbenchRunti
   return {
     toolCalls: 1,
     patchBytes: request.action === "edit" ? changesetPayloadBytes(request.changeset) : 0,
-    promptTokens: 0,
   };
 }
 

@@ -350,7 +350,7 @@ export function reserveChatToolInvocation<Deps>(
     options.deps,
     context.chatId,
     context.authorityReference,
-    { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+    { toolCalls: 1, patchBytes: 0 },
     new Date(options.now()).toISOString(),
     context.correlationId,
   ).ok;
@@ -500,7 +500,11 @@ export function createChatWriteApprovalOwner<
   };
 }
 
-export function reserveChatToolPrompt<Deps>(
+/**
+ * Admits one model call of a Chat tool turn: the turn's retained authority must still be live.
+ * Keiko does not limit tokens (#4346), so nothing is charged — the reservation books no usage.
+ */
+export function admitChatToolModelCall<Deps>(
   options: {
     readonly deps: Deps;
     readonly message: { readonly chatId: string };
@@ -515,13 +519,12 @@ export function reserveChatToolPrompt<Deps>(
     nowIso: string,
     correlationId: string,
   ) => { readonly ok: boolean },
-  promptTokens: number,
 ): boolean {
   return reserve(
     options.deps,
     options.message.chatId,
     options.authority.reference,
-    { toolCalls: 0, promptTokens, patchBytes: 0 },
+    { toolCalls: 0, patchBytes: 0 },
     new Date().toISOString(),
     options.correlationId,
   ).ok;

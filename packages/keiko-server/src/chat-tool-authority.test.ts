@@ -18,7 +18,6 @@ const TURN = {
 const BUDGET = {
   maxRuntimeMs: 60_000,
   maxToolCalls: 2,
-  maxPromptTokens: 1000,
   maxPatchBytes: 0,
 } satisfies ChatToolAuthorityEnvelope["budget"];
 const SUBJECT_BASE = { actorDigest: "a".repeat(64), chatId: TURN.chatId };
@@ -103,7 +102,7 @@ it.each(CASES)("refuses a lowered current reserve ceiling for $subject", ({ subj
       { agentAuthorityRegistry: registry },
       { ok: true, envelope },
       accepted.authorityRef,
-      { toolCalls: 1, promptTokens: 0, patchBytes: 0 },
+      { toolCalls: 1, patchBytes: 0 },
       now,
       TURN.correlationId,
       "governed-assist",

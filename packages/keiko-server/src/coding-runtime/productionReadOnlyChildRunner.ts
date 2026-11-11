@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 
-import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   createLegacyPortCatalogFactory,
   createSession,
@@ -33,7 +32,8 @@ import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 export interface ProductionReadOnlyChildRunnerDeps {
   readonly modelPortFactory: (modelId: string) => ModelPort | undefined;
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
-  readonly reservePromptTokens: (promptTokens: number) => boolean;
+  /** Admits one child model call (the run's authority and repair limits); books no tokens. */
+  readonly admitModelCall: () => boolean;
 }
 
 // #3407: `keiko.child.workspace.read@1` is the reserved canonical identity (ADR-0175 D2) for the
@@ -151,7 +151,7 @@ function buildChildSession(
       limits: childLimits(input.maxToolCalls),
     },
     {
-      model: budgetedChildModel(model, deps.reservePromptTokens),
+      model: admittedChildModel(model, deps.admitModelCall),
       tools,
       // #3407: dispatch through the mandatory catalog path again, bound to the reserved
       // `child` profile. Every call still runs through readOnlyTools(...).execute() below --
@@ -204,67 +204,34 @@ async function runChildSession(
   }
 }
 
-function budgetedChildModel(
-  model: ModelPort,
-  reservePromptTokens: (promptTokens: number) => boolean,
-): ModelPort {
+function admittedChildModel(model: ModelPort, admitModelCall: () => boolean): ModelPort {
   const stream = model.callStream;
   return {
     call: (request, signal): Promise<Awaited<ReturnType<ModelPort["call"]>>> => {
-      reserveChildPrompt(request, reservePromptTokens);
+      admitChildCall(admitModelCall);
       return model.call(request, signal);
     },
     ...(stream === undefined
       ? {}
       : {
           callStream: (request: GatewayRequest, signal: AbortSignal) =>
-            budgetedChildStream(stream, request, signal, reservePromptTokens),
+            admittedChildStream(stream, request, signal, admitModelCall),
         }),
   };
 }
 
-async function* budgetedChildStream(
+async function* admittedChildStream(
   stream: NonNullable<ModelPort["callStream"]>,
   request: GatewayRequest,
   signal: AbortSignal,
-  reservePromptTokens: (promptTokens: number) => boolean,
+  admitModelCall: () => boolean,
 ): AsyncIterable<GatewayStreamChunk> {
-  reserveChildPrompt(request, reservePromptTokens);
+  admitChildCall(admitModelCall);
   yield* stream(request, signal);
 }
 
-function reserveChildPrompt(
-  request: GatewayRequest,
-  reservePromptTokens: (promptTokens: number) => boolean,
-): void {
-  if (!reservePromptTokens(childPromptTokenEstimate(request))) {
-    throw new Error("child-prompt-budget-exhausted");
-  }
-}
-
-function childPromptTokenEstimate(request: GatewayRequest): number {
-  const messages = request.messages.map((message) =>
-    JSON.stringify({
-      role: message.role,
-      content: message.content,
-      contentParts: message.contentParts,
-      toolCallId: message.toolCallId,
-      toolCalls: message.toolCalls,
-    }),
-  );
-  const tools =
-    request.toolCatalog === undefined
-      ? []
-      : [
-          JSON.stringify(
-            request.toolCatalog.kind === "native"
-              ? request.toolCatalog.tools
-              : request.toolCatalog.projection.tools,
-          ),
-        ];
-  const responseFormat =
-    request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
-  return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));
+function admitChildCall(admitModelCall: () => boolean): void {
+  if (!admitModelCall()) throw new Error("child-model-call-denied");
 }
 
 function readOnlyTools(

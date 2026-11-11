@@ -339,7 +339,6 @@ export interface CodingWorkbenchRuntimeAuthorityFacts {
 export interface CodingWorkbenchRuntimeDelegationUsage {
   readonly toolCalls: number;
   readonly patchBytes: number;
-  readonly promptTokens: number;
 }
 
 export interface CodingWorkbenchRuntimeAdapterStartRequest {

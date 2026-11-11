@@ -7610,14 +7610,10 @@ describe("terminal run cause (F9, #3873)", () => {
 
   function terminalFacts(
     lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
-    promptAllowanceExhausted = false,
     envelopeDurationExhausted = false,
     providerUnavailable = false,
   ) {
     return {
-      promptAllowanceExhausted: vi.fn(
-        (runId: string) => runId === RUN_ID && promptAllowanceExhausted,
-      ),
       envelopeDurationExhausted: vi.fn(
         (runId: string) => runId === RUN_ID && envelopeDurationExhausted,
       ),
@@ -7667,62 +7663,11 @@ describe("terminal run cause (F9, #3873)", () => {
     );
   }
 
-  it("settles a run its prompt allowance refused as prompt-allowance-exhausted, never internal", async () => {
-    const { f, records } = settledWith("failed", terminalFacts("turn-rejected", true));
-    await f.orchestrator.start(start);
-    await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      });
-    });
-
-    expect(f.eventHub.publish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "status",
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    expect(f.evidence.settle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    const settled = settledLine(records);
-    expect(settled).toMatchObject({
-      correlationId: RUN_ID,
-      errorKind: "authority-denied",
-      extra: {
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-        failureBasis: "prompt-allowance",
-        modelCallFailure: "turn-rejected",
-        taskOutcomeStatus: "failed",
-      },
-    });
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.run.settled.emitted-line",
-        formatActivityLogProofLine(settled),
-      ),
-    ).toMatchObject({
-      failureCode: "prompt-allowance-exhausted",
-      failureBasis: "prompt-allowance",
-      modelCallFailure: "turn-rejected",
-    });
-    expect(JSON.stringify(records)).not.toContain(start.taskIntent);
-  });
-
   // Run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model
   // call in flight: the gateway's outcome line said `cancelled` with `cancellationCause=run-stopped`,
   // no call had failed, and the run settled `runtime-failed`, an internal error.
   it("settles a run whose envelope ran out of time as envelope-duration-exhausted, never internal", async () => {
-    const facts = terminalFacts(undefined, false, true);
+    const facts = terminalFacts(undefined, true);
     const { f, records } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7789,10 +7734,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // provider could not serve the call. The run settles on the outage, and the line says which fact
   // named it.
   it("settles a run whose last call the gateway found the provider unable to serve as provider-unavailable", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", false, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", false, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
@@ -7824,19 +7766,16 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("keeps a bound of the run ahead of the provider outage it also read", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", true, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", true, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
         state: "failed",
-        failureCode: "prompt-allowance-exhausted",
+        failureCode: "envelope-duration-exhausted",
       });
     });
     expect(settledLine(records)).toMatchObject({
-      extra: { failureCode: "prompt-allowance-exhausted", failureBasis: "prompt-allowance" },
+      extra: { failureCode: "envelope-duration-exhausted", failureBasis: "envelope-duration" },
     });
   });
 
@@ -7858,7 +7797,7 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("reads the terminal facts before the runtime is stopped for settlement", async () => {
-    const facts = terminalFacts("provider-failed", false, false, true);
+    const facts = terminalFacts("provider-failed", false, true);
     const { f } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7869,7 +7808,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(facts.lastModelCallProviderUnavailable.mock.invocationCallOrder[0]).toBeLessThan(
       stopOrder,
     );
-    expect(facts.promptAllowanceExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
     expect(facts.envelopeDurationExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
   });
 
@@ -7891,7 +7829,7 @@ describe("terminal run cause (F9, #3873)", () => {
   it.each(["succeeded", "cancelled"] as const)(
     "never names a bound or model-call cause for a %s task outcome",
     async (outcome) => {
-      const facts = terminalFacts("stream-incomplete", true, true);
+      const facts = terminalFacts("stream-incomplete", true);
       const { f, records } = settledWith(outcome, facts);
       await f.orchestrator.start(start);
       await vi.waitFor(() => {
@@ -7901,9 +7839,8 @@ describe("terminal run cause (F9, #3873)", () => {
         expect(settledLine(records).extra).not.toHaveProperty("failureBasis");
       });
       expect(f.orchestrator.getSnapshot(RUN_ID)?.failureCode).not.toBe(
-        "prompt-allowance-exhausted",
+        "envelope-duration-exhausted",
       );
-      expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
       expect(facts.envelopeDurationExhausted).not.toHaveBeenCalled();
       expect(facts.lastModelCallFailure).not.toHaveBeenCalled();
       expect(facts.lastModelCallProviderUnavailable).not.toHaveBeenCalled();
@@ -7913,7 +7850,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // An operator stop settles `cancelled` through the stop path, before the turn's own cancelled
   // completion arrives, so the run's terminal state names the operator, not a failure.
   it("settles an operator-stopped run as cancelled with no failure cause", async () => {
-    const facts = terminalFacts("stream-incomplete", true, true);
+    const facts = terminalFacts("stream-incomplete", true);
     const log = captureActivityLog();
     const f = fixture(
       undefined,
@@ -7940,7 +7877,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(settled).toMatchObject({ errorKind: "cancelled", extra: { state: "cancelled" } });
     expect(settled.extra).not.toHaveProperty("failureCode");
     expect(settled.extra).not.toHaveProperty("failureBasis");
-    expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
   });
 });
 

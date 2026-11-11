@@ -243,7 +243,6 @@ function authorityEnvelope(
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 20,
-      maxPromptTokens: 10_000,
       // The figure a Coding Workbench run is minted with; the human-reviewed bridge path charges
       // the same envelope, so a full-size changeset must fit it.
       maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,

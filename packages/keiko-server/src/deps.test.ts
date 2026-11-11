@@ -3347,16 +3347,16 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     });
   }
 
-  // #3873: both Authority Envelope bounds are operator settings parsed once at composition, before
+  // #3873: the Authority Envelope duration is an operator setting parsed once at composition, before
   // runtime activation; an invalid value fails the composition closed instead of minting a silently
-  // defaulted envelope later, whether or not the runtime activates on this host.
+  // defaulted envelope later, whether or not the runtime activates on this host. Keiko does not limit
+  // tokens (#4346): the former `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` setting is no longer read, so
+  // even an invalid value of it no longer fails the composition.
   it("fails closed at composition on an invalid envelope bound setting", () => {
     expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES: "0" })).toThrow(
       RangeError,
     );
-    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).toThrow(
-      RangeError,
-    );
+    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).not.toThrow();
   });
 
   it("intersects explicit option and environment ceilings before defaulting to all-mode availability", () => {

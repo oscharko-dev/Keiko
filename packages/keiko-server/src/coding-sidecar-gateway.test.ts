@@ -253,7 +253,7 @@ function depsValue(
         capability === "gateway-capability-material-0000000001" && audience === "model-gateway"
           ? { ok: true, binding: { runId: "run-gateway-test" } }
           : { ok: false },
-      reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test" }),
+      admitModelCall: () => ({ ok: true, runId: "run-gateway-test" }),
     },
   };
 }
@@ -305,7 +305,7 @@ function runtimeGatewayDeps(
     ...depsValue(configValue(provider(), capability()), chatFactory),
     runtimeCapabilityAuthenticator: {
       authenticate: authenticateAndRemember,
-      reservePromptTokens: () => ({ ok: true, runId: authenticatedRunId }),
+      admitModelCall: () => ({ ok: true, runId: authenticatedRunId }),
     },
     openCodeGatewayReadinessRegistry: readiness,
     ...(streamFactory === undefined
@@ -802,7 +802,7 @@ describe("coding-sidecar gateway", () => {
       ...depsValue(configValue(provider(), capability())),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-native" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-native" }),
+        admitModelCall: () => ({ ok: true, runId: "run-native" }),
         unavailableOptionalTools: () => new Set(["keiko_research_fetch"]),
       },
       openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry("native"),
@@ -872,7 +872,7 @@ describe("coding-sidecar gateway", () => {
       ...depsValue(configValue(provider(), capability())),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-real" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-real" }),
+        admitModelCall: () => ({ ok: true, runId: "run-real" }),
         unavailableOptionalTools: (runId: string) =>
           runId === "run-real" ? unavailable : undefined,
       },
@@ -1138,7 +1138,7 @@ describe("coding-sidecar gateway", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: (): unknown => ({ ok: true, binding: { runId: "run-1" } }),
-        reservePromptTokens: (): unknown => ({
+        admitModelCall: (): unknown => ({
           ok: false,
           reason: "authority-budget-exceeded",
         }),
@@ -2425,7 +2425,7 @@ describe("coding-sidecar gateway", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-undeliverable" }),
+        admitModelCall: () => ({ ok: true, runId: "run-undeliverable" }),
         settlePromptTokens,
       },
     });
@@ -2589,7 +2589,7 @@ describe("coding-sidecar gateway", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-stream-undeliverable" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-stream-undeliverable" }),
+        admitModelCall: () => ({ ok: true, runId: "run-stream-undeliverable" }),
         settlePromptTokens,
       },
     };
@@ -4889,7 +4889,7 @@ describe("coding-sidecar gateway", () => {
     const providerCall = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
     );
-    const reservePromptTokens = vi.fn(() => ({ ok: true, runId: "run-tool-context" }));
+    const admitModelCall = vi.fn(() => ({ ok: true, runId: "run-tool-context" }));
     const base = runtimeGatewayDeps(
       () => ({ ok: true, binding: { runId: "run-tool-context" } }),
       () => providerCall,
@@ -4898,7 +4898,7 @@ describe("coding-sidecar gateway", () => {
       ...base,
       runtimeCapabilityAuthenticator: {
         ...base.runtimeCapabilityAuthenticator,
-        reservePromptTokens,
+        admitModelCall,
       },
     } as UiHandlerDeps;
     const privateArguments = { patch: "x".repeat(600_000) };
@@ -4941,7 +4941,7 @@ describe("coding-sidecar gateway", () => {
       },
     });
     expect(providerCall).not.toHaveBeenCalled();
-    expect(reservePromptTokens).not.toHaveBeenCalled();
+    expect(admitModelCall).not.toHaveBeenCalled();
   });
 
   it("retains a hard transport cap and body-free rejection before model dispatch", async () => {
@@ -5783,7 +5783,7 @@ describe("coding sidecar gateway turn failure projection", () => {
         capabilityValue === "gateway-capability-material-0000000001" && audience === "model-gateway"
           ? { ok: true, binding: { runId: "run-gateway-test" } }
           : { ok: false },
-      reservePromptTokens: () => ({ ok: false }),
+      admitModelCall: () => ({ ok: false }),
     } as unknown as UiHandlerDeps["runtimeCapabilityAuthenticator"];
     it.each([
       [
@@ -6797,7 +6797,7 @@ describe("coding sidecar gateway rejection activity log", () => {
           capability === "gateway-capability-material-0000000001" && audience === "model-gateway"
             ? { ok: true, binding: { runId: "run-gateway-test" } }
             : { ok: false },
-        reservePromptTokens: () => ({ ok: false }),
+        admitModelCall: () => ({ ok: false }),
       },
     };
 
@@ -6821,7 +6821,7 @@ describe("coding sidecar gateway rejection activity log", () => {
         status: 403,
         errorKind: "authority-denied",
         extra: {
-          reason: "runtime-prompt-budget-denied",
+          reason: "runtime-model-call-denied",
           runId: "run-gateway-test",
           completeness: "complete",
           loss: "none",
@@ -7030,7 +7030,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
             audience === "model-gateway"
               ? { ok: true, binding: { runId: "run-gateway-test" } }
               : { ok: false },
-          reservePromptTokens: (_authCapability: string, promptTokens: number): unknown => {
+          admitModelCall: (_authCapability: string, promptTokens: number): unknown => {
             reservedEstimates.push(promptTokens);
             return { ok: true, runId: "run-gateway-test" };
           },
@@ -7092,7 +7092,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       ...depsValue(configValue(provider(), capability()), () => chat),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test" }),
+        admitModelCall: () => ({ ok: true, runId: "run-gateway-test" }),
         settlePromptTokens: (
           _authCapability: string,
           reservedPromptTokens: number,
@@ -7125,7 +7125,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       ...depsValue(configValue(provider(), capability()), () => chat),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test" }),
+        admitModelCall: () => ({ ok: true, runId: "run-gateway-test" }),
         settlePromptTokens,
       },
     };
@@ -7158,7 +7158,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test", modelCallId: 41 }),
+        admitModelCall: () => ({ ok: true, runId: "run-gateway-test", modelCallId: 41 }),
         settlePromptTokens,
       },
     };
@@ -7195,7 +7195,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-released-identity" } }),
-        reservePromptTokens: () => ({
+        admitModelCall: () => ({
           ok: true,
           runId: "run-released-identity",
           modelCallId: 7,
@@ -7224,7 +7224,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
-        reservePromptTokens: () => reserved,
+        admitModelCall: () => reserved,
         settlePromptTokens,
       },
     };
@@ -7246,7 +7246,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
-        reservePromptTokens: (_capability: string, count: number) => {
+        admitModelCall: (_capability: string, count: number) => {
           reservedEstimates.push(count);
           return { ok: true, runId: "run-gateway-test" };
         },
@@ -7914,7 +7914,7 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
         ),
         runtimeCapabilityAuthenticator: {
           authenticate: () => ({ ok: true, binding: { runId: "run-discarded" } }),
-          reservePromptTokens: () => ({ ok: true, runId: "run-discarded" }),
+          admitModelCall: () => ({ ok: true, runId: "run-discarded" }),
           settlePromptTokens,
         },
       },
@@ -10661,7 +10661,7 @@ describe("coding-sidecar gateway native image input", () => {
       ),
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-native-image" } }),
-        reservePromptTokens: () => ({ ok: true, runId: "run-native-image" }),
+        admitModelCall: () => ({ ok: true, runId: "run-native-image" }),
       },
       openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry(
         options.toolProfile ?? "native",

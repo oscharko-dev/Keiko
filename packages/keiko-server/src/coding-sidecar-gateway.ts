@@ -167,12 +167,11 @@ export function _resetActiveCodingGatewayRequestsForTests(): void {
 }
 
 /**
- * One outstanding runtime prompt-token reservation (#3384 wave-3 W3-3 "needs"). Mirrors
- * The exactly-once settlement guard: `reserveGatewayPromptBudget` books the
- * pre-call ESTIMATE against the run's real authority-level prompt budget
- * (`agentAuthorityRegistry.ts`'s ledger, via `runtimeAuthorityService.ts`), and this reservation
- * must be settled exactly once against the provider's REAL reported usage once known, so the
- * envelope reflects N calls' worth of real usage instead of N estimates.
+ * One admitted model call of a run (#3384 wave-3 W3-3 "needs"). Keiko does not limit tokens
+ * (#4346): `admitGatewayModelCall` only asks the run's authority whether the call may be
+ * dispatched, and the call's pre-call ESTIMATE is not charged against anything. The exactly-once
+ * settlement guard remains so the run's effort roll-up and the usage line record the provider's
+ * REAL reported usage once known, instead of the estimate.
  */
 interface PromptTokenReservation {
   readonly capability: string;
@@ -205,9 +204,9 @@ function observedPromptSettlement(
 }
 
 /**
- * Settles a runtime prompt-token reservation. `actualPromptTokens` is the provider's real reported
+ * Settles an admitted model call. `actualPromptTokens` is the provider's real reported
  * usage when known; when the outcome is uncertain (dispatched but no usage was ever observed — a
- * mid-flight failure or cancellation) the full reserved estimate is kept as spent, matching
+ * mid-flight failure or cancellation) the estimate is recorded as spent, matching
  * the shared Model Gateway spend ledger's conservative-accounting rule. A no-op past the first call, so callers
  * may settle defensively from more than one exit path. Absent `settlePromptTokens` on the injected
  * authenticator (not every deployment wires it) is a silent no-op, never a failure.
@@ -230,19 +229,18 @@ function settlePromptTokenReservation(
 /**
  * The prompt tokens of the attempts the gateway discarded on its way to this answer (#3873 review):
  * a steered repair's first answer, a catalog-rejected tool call, a stream that failed after its
- * usage arrived. The provider processed them, so the run's prompt allowance (ADR-0137 D2, the only
- * default per-run token bound) counts them beside the answer's own prompt.
+ * usage arrived. The provider processed them, so the run's recorded usage counts them beside the
+ * answer's own prompt.
  */
 function discardedPromptTokens(response: NormalizedResponse): number {
   return response.discardedAttemptUsage?.promptTokens ?? 0;
 }
 
 /**
- * Releases a reservation whose provider call never ran — the client would not take the opening
+ * Releases an admission whose provider call never ran — the client would not take the opening
  * SSE frame, so the buffered path never called the chat factory and the streamed path never pulled
- * the gateway's generator. The conservative rule above keeps the estimate only for a call that WAS
- * dispatched; here nothing was spent, so the whole reservation goes back to the run's budget
- * (#3602 review). Same idempotence and same not-wired fallback as a settlement.
+ * the gateway's generator. The conservative rule above records the estimate only for a call that
+ * WAS dispatched; here nothing was spent, so the call records no usage (#3602 review). Same idempotence and same not-wired fallback as a settlement.
  */
 function releasePromptTokenReservation(
   deps: UiHandlerDeps,
@@ -500,7 +498,7 @@ type CodingSidecarGatewayRejectionReason =
   | "tool-contract-missing"
   | "tool-contract-empty"
   | "origin-not-allowed"
-  | "runtime-prompt-budget-denied"
+  | "runtime-model-call-denied"
   | "capability-authenticator-unavailable"
   | "capability-missing"
   | "capability-invalid"
@@ -550,7 +548,7 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
         "tool-contract-missing",
         "tool-contract-empty",
         "origin-not-allowed",
-        "runtime-prompt-budget-denied",
+        "runtime-model-call-denied",
         "capability-authenticator-unavailable",
         "capability-missing",
         "capability-invalid",
@@ -922,7 +920,7 @@ function gatewayRejectionErrorKind(
   }
   if (
     reason === "origin-not-allowed" ||
-    reason === "runtime-prompt-budget-denied" ||
+    reason === "runtime-model-call-denied" ||
     reason === "spend-budget-exceeded" ||
     reason.startsWith("tool-contract-")
   ) {
@@ -1784,7 +1782,7 @@ const OPENCODE_OPTIONAL_TOOL_NAMES: ReadonlySet<string> = new Set<OpenCodeOption
  * only -- every tool always "ready" regardless of whether its handler is actually bound for this run
  * (#3413-AC1/#3414-AC4/AC9). `runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools` is the
  * real per-run fact (`productionManagedWorktreeTools.ts`'s `deriveOptionalToolAvailability`, wired
- * through `productionCodingRuntimeResolver.ts` the same way `reservePromptTokens`/
+ * through `productionCodingRuntimeResolver.ts` the same way `admitModelCall`/
  * `settlePromptTokens` already are). The catalog's thirteen mandatory tools are never gated by this
  * check -- only the three optional tools (`keiko_research_fetch`/`keiko_skill`/`keiko_child_agent`)
  * can ever be reported unavailable -- so a structural (no-coverage) first pass is used only to learn
@@ -2984,8 +2982,9 @@ function emitGatewayStreamFailureDiagnostic(
 
 interface RuntimeCapabilityAuthenticator {
   readonly authenticate: (capability: string, audience: "model-gateway" | "tool-facade") => unknown;
-  readonly reservePromptTokens?:
-    ((capability: string, promptTokens: number) => unknown) | undefined;
+  /** Admits one model call of the run (liveness and limits other than tokens); books nothing. */
+  readonly admitModelCall?:
+    ((capability: string, estimatedPromptTokens: number) => unknown) | undefined;
   readonly settlePromptTokens?:
     | ((
         capability: string,
@@ -3340,13 +3339,13 @@ function isRuntimeTransportProfileId(modelProfileId: string | undefined): boolea
   );
 }
 
-function reserveGatewayPromptBudget(
+function admitGatewayModelCall(
   deps: UiHandlerDeps,
   capability: string,
   runId: string,
   reservedPromptTokens: number,
 ): PromptTokenReservation | undefined {
-  const reserved = runtimeCapabilityAuthenticator(deps)?.reservePromptTokens?.(
+  const reserved = runtimeCapabilityAuthenticator(deps)?.admitModelCall?.(
     capability,
     reservedPromptTokens,
   );
@@ -3705,9 +3704,9 @@ function settleUndeliverableBufferedStream(
   return STREAMING;
 }
 
-// A handshake the client would not take leaves no provider call behind, so the reservation is
-// released rather than kept as spent, and the usage line records the release (zero prompt tokens,
-// `released-unspent`) so the ledger movement is reconstructible from the log.
+// A handshake the client would not take leaves no provider call behind, so the admission is
+// released rather than recorded as spent, and the usage line records the release (zero prompt
+// tokens, `released-unspent`) so the movement is reconstructible from the log.
 function releaseUndispatchedPromptBudget(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -4008,7 +4007,7 @@ async function streamGatewayChat(
       await pumpGatewayStreamWithCancellation(deps, session);
     } else {
       // The gateway's stream is an async generator: nothing was sent before the first pull, and
-      // the handshake failed before it, so the reservation is released, not kept as spent.
+      // the handshake failed before it, so the admission is released, not recorded as spent.
       releaseUndispatchedPromptBudget(ctx, deps, runId, promptTokenReservation);
     }
     return STREAMING;
@@ -5359,7 +5358,7 @@ interface ValidatedChatRequest {
 /**
  * A native run's agent may name another model the gateway serves (#3903 AC1, owner decision
  * 2026-10-25): the request then runs on that model's own profile -- its bounds, accounting and
- * provider -- under the run's capability and prompt budget. A model the gateway does not serve keeps
+ * provider -- under the run's capability. A model the gateway does not serve keeps
  * the run's profile, whose alias check then refuses the request.
  */
 function agentModelProfile(
@@ -5899,7 +5898,7 @@ function executeBudgetedGatewayChat(
     readonly protectRequest?: GatewayChatDelivery["protectRequest"];
   },
 ): Promise<RouteResult | typeof STREAMING> {
-  const promptTokenReservation = reserveGatewayPromptBudget(
+  const promptTokenReservation = admitGatewayModelCall(
     deps,
     authentication.capability,
     authentication.runId,
@@ -5907,7 +5906,7 @@ function executeBudgetedGatewayChat(
   );
   if (promptTokenReservation === undefined) {
     const answer = forbiddenGatewayRequest();
-    logGatewayRejection(ctx, authentication.runId, answer.status, "runtime-prompt-budget-denied");
+    logGatewayRejection(ctx, authentication.runId, answer.status, "runtime-model-call-denied");
     reportGatewayTurnRejection(ctx, deps, authentication.runId, answer);
     return Promise.resolve(answer);
   }

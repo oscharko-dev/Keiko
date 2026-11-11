@@ -10,13 +10,11 @@ import {
 function facts(
   lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
   bounds: {
-    readonly allowance?: boolean;
     readonly duration?: boolean;
     readonly providerUnavailable?: boolean;
   } = {},
 ): CodingRuntimeTerminalFacts {
   return {
-    promptAllowanceExhausted: (runId) => runId === "run-1" && bounds.allowance === true,
     envelopeDurationExhausted: (runId) => runId === "run-1" && bounds.duration === true,
     lastModelCallFailure: (runId) => (runId === "run-1" ? lastModelCallFailure : undefined),
     lastModelCallProviderUnavailable: (runId) =>
@@ -24,24 +22,12 @@ function facts(
   };
 }
 
-// F9 (#3873, live Gemma qualification): run `run-65084062444586162471229658028402064666` exhausted
-// its prompt allowance and run `run-272120967981827964065820685403290179367` reached its 30-minute
-// envelope; both were shown as "The coding run ended with an internal error". The terminal cause is
+// F9 (#3873, live Gemma qualification): run `run-272120967981827964065820685403290179367` reached
+// its 30-minute envelope and was shown as "The coding run ended with an internal error". Keiko does
+// not limit tokens (#4346), so no prompt allowance ends a run any more. The terminal cause is
 // read from the layers that own the facts, and `runtime-failed` remains only for a run with no
 // bound or model-call cause on record.
 describe("classifyTerminalFailure", () => {
-  it("names the exhausted prompt allowance ahead of the turn rejection it caused", () => {
-    expect(classifyTerminalFailure(facts("turn-rejected", { allowance: true }), "run-1")).toEqual({
-      failureCode: "prompt-allowance-exhausted",
-      basis: "prompt-allowance",
-      modelCallFailure: "turn-rejected",
-    });
-    expect(classifyTerminalFailure(facts(undefined, { allowance: true }), "run-1")).toEqual({
-      failureCode: "prompt-allowance-exhausted",
-      basis: "prompt-allowance",
-    });
-  });
-
   it("names an envelope that ran out of time, with or without a failed call on record", () => {
     // The evidence run: the envelope's end cancelled the call in flight, so no call failed.
     expect(classifyTerminalFailure(facts(undefined, { duration: true }), "run-1")).toEqual({
@@ -54,12 +40,6 @@ describe("classifyTerminalFailure", () => {
       basis: "envelope-duration",
       modelCallFailure: "turn-rejected",
     });
-  });
-
-  it("names the allowance that refused the run's last call ahead of a later envelope end", () => {
-    expect(
-      classifyTerminalFailure(facts(undefined, { allowance: true, duration: true }), "run-1"),
-    ).toMatchObject({ failureCode: "prompt-allowance-exhausted", basis: "prompt-allowance" });
   });
 
   it("names an unreachable or stalled provider as unavailable, never as a rejection", () => {
@@ -92,7 +72,6 @@ describe("classifyTerminalFailure", () => {
     });
     // A facts source that predates the outage fact names no outage either.
     const withoutOutageFact: CodingRuntimeTerminalFacts = {
-      promptAllowanceExhausted: () => false,
       envelopeDurationExhausted: () => false,
       lastModelCallFailure: () => "provider-failed",
     };
@@ -119,10 +98,10 @@ describe("classifyTerminalFailure", () => {
   it("lets a bound of the run come before the outage it read", () => {
     expect(
       classifyTerminalFailure(
-        facts("provider-failed", { allowance: true, providerUnavailable: true }),
+        facts("provider-failed", { duration: true, providerUnavailable: true }),
         "run-1",
       ),
-    ).toMatchObject({ failureCode: "prompt-allowance-exhausted", basis: "prompt-allowance" });
+    ).toMatchObject({ failureCode: "envelope-duration-exhausted", basis: "envelope-duration" });
     expect(
       classifyTerminalFailure(
         facts("provider-failed", { duration: true, providerUnavailable: true }),
@@ -162,10 +141,7 @@ describe("classifyTerminalFailure", () => {
       basis: "no-model-call-failure",
     });
     expect(
-      classifyTerminalFailure(
-        facts("stream-incomplete", { allowance: true, duration: true }),
-        "run-other",
-      ),
+      classifyTerminalFailure(facts("stream-incomplete", { duration: true }), "run-other"),
     ).toEqual({ failureCode: "runtime-failed", basis: "no-model-call-failure" });
   });
 });
@@ -175,12 +151,11 @@ describe("terminalFailureErrorKind", () => {
     const kind = (
       failure: CodingWorkbenchTurnFailureCode | undefined,
       bounds: {
-        readonly allowance?: boolean;
         readonly duration?: boolean;
         readonly providerUnavailable?: boolean;
       } = {},
     ): string => terminalFailureErrorKind(classifyTerminalFailure(facts(failure, bounds), "run-1"));
-    expect(kind(undefined, { allowance: true })).toBe("authority-denied");
+    expect(kind(undefined, { duration: true })).toBe("timeout");
     expect(kind("turn-rejected", { duration: true })).toBe("timeout");
     expect(kind("stream-incomplete")).toBe("unavailable");
     expect(kind("provider-failed", { providerUnavailable: true })).toBe("unavailable");

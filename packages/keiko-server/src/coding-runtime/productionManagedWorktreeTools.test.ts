@@ -561,8 +561,7 @@ describe("production managed worktree tools", () => {
       verifiedCommitService: service,
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => repairLive, settle }),
-        canChargePrompt: () => ({ accepted: true }),
-        chargePrompt: () => ({ accepted: true }),
+        admitModelCall: () => ({ accepted: true }),
         observed: vi.fn(),
       },
       runToReport: async () => {
@@ -5791,7 +5790,7 @@ describe("inactive private native text snapshot admission", () => {
       liveFacts: f.liveFacts(),
       delegationId: "consume-authorized-budget",
       idempotencyKey: "consume-authorized-budget",
-      usage: { toolCalls: f.runtime.trusted.budget.maxToolCalls, patchBytes: 0, promptTokens: 0 },
+      usage: { toolCalls: f.runtime.trusted.budget.maxToolCalls, patchBytes: 0 },
       workspaceRoot: f.runtime.root,
       deploymentCeiling: "autonomous-delivery",
       nowIso: RUNTIME_NOW,
@@ -5811,8 +5810,7 @@ describe("inactive private native text snapshot admission", () => {
     const f = fixture("safe source\n", {
       ciRepairBudget: {
         admitTool,
-        canChargePrompt: () => ({ accepted: true }),
-        chargePrompt: () => ({ accepted: true }),
+        admitModelCall: () => ({ accepted: true }),
         observed: vi.fn(),
       },
     });
@@ -5859,8 +5857,7 @@ describe("inactive private native text snapshot admission", () => {
     const f = fixture("PRIVATE_NATIVE_TEXT_SENTINEL", {
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => leaseLive, settle }),
-        canChargePrompt: () => ({ accepted: true }),
-        chargePrompt: () => ({ accepted: true }),
+        admitModelCall: () => ({ accepted: true }),
         observed: vi.fn(),
       },
     });
@@ -6312,7 +6309,7 @@ describe("accepted initial instruction acquisition", () => {
         f.runtime.minted.authorityRef,
         f.runtime.root,
         "autonomous-delivery",
-        { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        { toolCalls: 1, patchBytes: 0 },
         RUNTIME_NOW,
       );
     const result = await f.facade.acceptedInitialization?.run(async (io) => {

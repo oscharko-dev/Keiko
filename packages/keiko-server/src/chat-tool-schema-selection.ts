@@ -28,7 +28,6 @@ export function chatToolSelectionFits(
   request: GatewayCallRequest,
   tools: readonly ToolDefinition[],
   profile: ContextProfile,
-  remainingPromptTokens: number,
   reasoningHistoryField?: "reasoning_content" | "reasoning",
 ): boolean {
   const promptTokens = countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting, {
@@ -40,7 +39,6 @@ export function chatToolSelectionFits(
       (request.maxOutputTokens ?? profile.reservedOutputTokens) +
       profile.safetyMarginTokens <=
       profile.maxInputTokens &&
-    promptTokens <= (profile.inputTokenLimit ?? Number.POSITIVE_INFINITY) &&
-    promptTokens <= remainingPromptTokens
+    promptTokens <= (profile.inputTokenLimit ?? Number.POSITIVE_INFINITY)
   );
 }

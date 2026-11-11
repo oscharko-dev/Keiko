@@ -23,10 +23,9 @@ function keys(value: Record<string, unknown>, allowed: readonly string[]): boole
 function charge(value: unknown): value is CiRepairCharge {
   return (
     object(value) &&
-    keys(value, ["chargeId", "toolCalls", "promptTokens"]) &&
+    keys(value, ["chargeId", "toolCalls"]) &&
     ciRepairId(value.chargeId) &&
-    ciRepairCount(value.toolCalls) &&
-    ciRepairCount(value.promptTokens)
+    ciRepairCount(value.toolCalls)
   );
 }
 function charges(value: unknown): value is readonly CiRepairCharge[] {
@@ -46,17 +45,11 @@ function attemptIdentity(value: Record<string, unknown>): boolean {
   ].every(Boolean);
 }
 function attemptUsage(value: CiRepairAttempt): boolean {
-  if (
-    !ciRepairCount(value.startedAtMs) ||
-    !ciRepairCount(value.toolCalls) ||
-    !ciRepairCount(value.promptTokens)
-  )
-    return false;
+  if (!ciRepairCount(value.startedAtMs) || !ciRepairCount(value.toolCalls)) return false;
   if (value.status === "active")
     return (
       value.finishedAtMs === null &&
-      value.toolCalls === value.charges.reduce((sum, item) => sum + item.toolCalls, 0) &&
-      value.promptTokens === value.charges.reduce((sum, item) => sum + item.promptTokens, 0)
+      value.toolCalls === value.charges.reduce((sum, item) => sum + item.toolCalls, 0)
     );
   return (
     new Set(["succeeded", "failed", "interrupted"]).has(value.status) &&
@@ -79,7 +72,6 @@ function attempt(value: unknown): value is CiRepairAttempt {
       "startedAtMs",
       "finishedAtMs",
       "toolCalls",
-      "promptTokens",
       "charges",
     ])
   )
@@ -104,7 +96,6 @@ function recordShape(value: Record<string, unknown>): boolean {
       "deadlineMs",
       "limits",
       "toolCalls",
-      "promptTokens",
       "failedAttempts",
       "attempts",
     ]) &&
@@ -123,7 +114,6 @@ function recordCounts(value: CiRepairBudgetRecord): boolean {
       value.updatedAtMs,
       value.deadlineMs,
       value.toolCalls,
-      value.promptTokens,
       value.failedAttempts,
     ].every(ciRepairCount) &&
     value.prNumber > 0 &&
@@ -140,7 +130,6 @@ function attemptTotals(value: CiRepairBudgetRecord): boolean {
     active.length === 0 || active[0] === attempts.at(-1),
     new Set(attempts.map((item) => item.attemptId)).size === attempts.length,
     value.toolCalls === attempts.reduce((sum, item) => sum + item.toolCalls, 0),
-    value.promptTokens === attempts.reduce((sum, item) => sum + item.promptTokens, 0),
     value.failedAttempts ===
       attempts.filter((item) => item.status === "failed" || item.status === "interrupted").length,
     attempts.every(
@@ -149,6 +138,37 @@ function attemptTotals(value: CiRepairBudgetRecord): boolean {
         (item.finishedAtMs ?? item.startedAtMs) <= value.updatedAtMs,
     ),
   ].every(Boolean);
+}
+function withoutKeys(value: unknown, dropped: readonly string[]): unknown {
+  if (!object(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !dropped.includes(key)));
+}
+function mapItems(value: unknown, project: (item: unknown) => unknown): unknown {
+  return Array.isArray(value) ? (value as unknown[]).map(project) : value;
+}
+/**
+ * A record persisted before Keiko stopped limiting tokens (#4346) still carries the retired
+ * prompt-token allowance: `limits.maxPromptTokens` and the `promptTokens` counters of the record,
+ * its attempts and their charges. They are ignored, never enforced and never written back, and
+ * their presence never fails a record closed. A charge that only spent prompt tokens keeps its
+ * identity with zero tool calls, so the retained receipts and totals stay consistent.
+ */
+function withoutLegacyPromptAllowance(value: unknown): unknown {
+  if (!object(value)) return value;
+  const record = withoutKeys(value, ["promptTokens"]) as Record<string, unknown>;
+  return {
+    ...record,
+    limits: withoutKeys(record.limits, ["maxPromptTokens"]),
+    attempts: mapItems(record.attempts, (attemptValue) => {
+      const stripped = withoutKeys(attemptValue, ["promptTokens"]);
+      return object(stripped)
+        ? {
+            ...stripped,
+            charges: mapItems(stripped.charges, (item) => withoutKeys(item, ["promptTokens"])),
+          }
+        : stripped;
+    }),
+  };
 }
 export function isCiRepairBudgetRecord(value: unknown): value is CiRepairBudgetRecord {
   if (!object(value) || !recordShape(value) || !object(value.limits)) return false;
@@ -167,7 +187,7 @@ export function isCiRepairBudgetRecord(value: unknown): value is CiRepairBudgetR
 export function parseCiRepairBudgetRecord(value: string): CiRepairBudgetRecord {
   if (Buffer.byteLength(value, "utf8") > CI_REPAIR_MAX_RECORD_BYTES)
     throw new TypeError("Oversized CI repair budget");
-  const parsed: unknown = JSON.parse(value);
+  const parsed = withoutLegacyPromptAllowance(JSON.parse(value));
   if (!isCiRepairBudgetRecord(parsed)) throw new TypeError("Invalid persisted CI repair budget");
   return parsed;
 }
