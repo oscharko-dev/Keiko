@@ -412,14 +412,18 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
     const heavy = (): Promise<NormalizedResponse> =>
       Promise.resolve({ ...answer(), usage: { ...answer().usage, promptTokens: 200_000 } });
 
-    for (let call = 0; call < 12; call += 1) {
+    // The calls run one after another, as a run's model turns do, so each sees the earlier usage.
+    const callInTurn = async (remaining: number): Promise<void> => {
+      if (remaining === 0) return;
       await expect(
         handleCodingSidecarGatewayChatCompletions(
           chatRequest(minted.capability, "synthetic"),
           gatewayDeps(minted, hub, [heavy], { settled }),
         ),
       ).resolves.toMatchObject({ status: 200 });
-    }
+      await callInTurn(remaining - 1);
+    };
+    await callInTurn(12);
 
     expect(settled).toHaveLength(12);
     expect(settled.reduce((sum, tokens) => sum + tokens, 0)).toBeGreaterThan(2_000_000);

@@ -144,7 +144,7 @@ function withoutKeys(value: unknown, dropped: readonly string[]): unknown {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !dropped.includes(key)));
 }
 function mapItems(value: unknown, project: (item: unknown) => unknown): unknown {
-  return Array.isArray(value) ? (value as unknown[]).map(project) : value;
+  return Array.isArray(value) ? (value as unknown[]).map((item) => project(item)) : value;
 }
 /**
  * A record persisted before Keiko stopped limiting tokens (#4346) still carries the retired

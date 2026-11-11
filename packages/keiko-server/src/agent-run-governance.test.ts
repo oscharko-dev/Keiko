@@ -197,12 +197,15 @@ describe("agent-run governance", () => {
     const signal = new AbortController().signal;
 
     const hugePrompt = "x".repeat(2_000_000);
-    for (let call = 0; call < 3; call += 1) {
+    const callInTurn = async (remaining: number): Promise<void> => {
+      if (remaining === 0) return;
       await guarded.call(
         { modelId: "model-1", messages: [{ role: "user", content: hugePrompt }] },
         signal,
       );
-    }
+      await callInTurn(remaining - 1);
+    };
+    await callInTurn(3);
     expect(modelCalls).toBe(3);
 
     revokeAgentRunGovernance(binding);
