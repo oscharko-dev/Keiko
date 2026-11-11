@@ -227,13 +227,31 @@ describe("isDenied 8.3 short names (Windows only, #4068)", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   }
 
-  it("denies a component with the 8.3 short-name shape on Windows", () => {
+  it("denies an 8.3 short name that can alias a denied entry on Windows", () => {
     onPlatform("win32");
     expect(isDenied("GIT~1/config")).toBe(true);
     expect(isDenied("src/ENV~1")).toBe(true);
-    expect(isDenied("src/PROGRA~1.TXT")).toBe(true);
+    expect(isDenied("src/ENV~2.LOC")).toBe(true);
+    expect(isDenied("NPMRC~1")).toBe(true);
+    expect(isDenied("GIT-CR~1")).toBe(true);
+    expect(isDenied("certs/SERVER~1.PEM")).toBe(true);
+    expect(isDenied("SERVIC~1.JSO")).toBe(true);
+    expect(isDenied("WP-CON~1.PHP")).toBe(true);
+    expect(isDenied("TERRAF~1.D")).toBe(true);
+    expect(isDenied("NODE_M~1/pkg/index.js")).toBe(true);
+    // Hash form: two basis characters, four hex digits.
+    expect(isDenied("GI1A2B~1")).toBe(true);
+  });
+
+  it("admits an ordinary 8.3 short name on Windows, such as a runner profile in a temp path", () => {
+    onPlatform("win32");
+    expect(isDenied("C:/Users/RUNNER~1/AppData/Local/Temp/keiko-smoke/Keiko")).toBe(false);
+    expect(isDenied("C:/PROGRA~1/app/readme.md")).toBe(false);
+    expect(isDenied("src/PROGRA~1.TXT")).toBe(false);
     expect(isDenied("src/plain.ts")).toBe(false);
     expect(isDenied("src/a.b~1")).toBe(false);
+    // A short name whose extension cannot be `.pem` does not alias `*.pem`.
+    expect(isDenied("certs/SERVER~1.TXT")).toBe(false);
   });
 
   it("leaves the same spelling alone on POSIX", () => {
