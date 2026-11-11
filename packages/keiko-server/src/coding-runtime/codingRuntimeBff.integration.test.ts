@@ -49,7 +49,10 @@ afterEach(async () => {
 
 // The routes under test need only the runtime ports; the server itself starts the memory learning
 // runtime when it listens (#4213), which reads the environment and the store every server has.
-async function startServer(staticRoot: string, handlerDeps: UiHandlerDeps): Promise<number> {
+async function startServer(
+  staticRoot: string,
+  handlerDeps: Omit<UiHandlerDeps, "env" | "store">,
+): Promise<number> {
   const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
