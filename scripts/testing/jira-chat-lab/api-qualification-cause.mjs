@@ -117,6 +117,35 @@ export function localRefusal(dispatch, snapshot) {
   return succeededOutcome(data?.outcome) ? undefined : productRefusalDetail(data);
 }
 
+/**
+ * Closed refusal codes of the dispatch that describe the lab's own configuration (a held
+ * capability, a missing approval, a license, a credential), never a product defect. Matched on the
+ * code only, never on message text.
+ */
+const LAB_CONFIGURATION_REFUSALS = new Set([
+  "capability-held",
+  "approval-required",
+  "license-required",
+  "license-invalid",
+  "license-expired",
+  "auth-failed",
+  "effect-denied",
+]);
+const refusalCause = (row) =>
+  LAB_CONFIGURATION_REFUSALS.has(row.product?.reason) ? "lab" : "product";
+/** A write the product reported as done and Jira answered 2xx: a failing oracle may be a wrong target. */
+const writeSucceeded = (row, jira) =>
+  row.mutation === true &&
+  jira.class === "2xx" &&
+  succeededOutcome(row.dispatch?.result?.data?.outcome);
+const preparedCause = (row) => {
+  if (row.detail?.origin === "product") return "product";
+  return infrastructureDetail(row.detail) ? "infrastructure" : "lab";
+};
+const oracleCause = (row, jira) => {
+  if (infrastructureDetail(row.detail)) return "infrastructure";
+  return writeSucceeded(row, jira) ? "undetermined" : "lab";
+};
 function byJira(row, jira, labHealthFailed) {
   if (jira.class === "retryable") return "infrastructure";
   // A 5xx may answer a request Keiko built badly; only a failing lab health read blames the host.
@@ -136,20 +165,30 @@ function dispatchCause(row, jira) {
 /** Failures decided by the failure word alone; the rest fall through to what Jira answered. */
 const FAILURE_CAUSES = new Map([
   ["not-attempted", () => "not-attempted"],
-  ["prepare-precondition", (row) => (infrastructureDetail(row.detail) ? "infrastructure" : "lab")],
-  ["prepare-failed", (row) => (infrastructureDetail(row.detail) ? "infrastructure" : "lab")],
-  ["oracle-read-refused", (row) => (infrastructureDetail(row.detail) ? "infrastructure" : "lab")],
+  ["prepare-precondition", preparedCause],
+  ["prepare-failed", preparedCause],
+  ["oracle-read-refused", oracleCause],
   ["readback-failed", dispatchCause],
-  ["product-refused", () => "product"],
+  ["product-refused", refusalCause],
   ["dispatch-failed", dispatchCause],
 ]);
 const byFailure = (row, jira, health) =>
   (FAILURE_CAUSES.get(row.failure) ?? byJira)(row, jira, health);
-/** After a native 2xx, a product that succeeded but disagreed with the oracle is only suspect. */
+/**
+ * Undetermined rows that still point at the product: it succeeded after a native 2xx but the oracle
+ * disagreed or could not find the object, or Jira rejected the request Keiko built as invalid.
+ */
 const suspectProduct = (row, jira) =>
-  jira.class === "2xx" &&
-  row.failure === "readback-mismatch" &&
-  succeededOutcome(row.dispatch?.result?.data?.outcome);
+  (jira.class === "2xx" &&
+    (row.failure === "readback-mismatch" || row.failure === "oracle-read-refused") &&
+    succeededOutcome(row.dispatch?.result?.data?.outcome)) ||
+  (jira.class === "4xx-validation" && row.failure !== "dispatch-failed");
+/**
+ * A cascade needs a visible root: the blocking row must itself be non-executable with its own cause
+ * in the run (`blockedBy.rootCause`). A root that left no such trace is no explanation.
+ */
+const cascadeCause = (blockedBy) =>
+  blockedBy.rootCause === undefined ? "undetermined" : "cascade";
 /**
  * Adds `cause` (and `blockedBy`, `jira`, never a changed disposition) to a row that is not graded.
  * `blockedBy` names the auxiliary fixture or earlier case whose failure caused this one.
@@ -157,14 +196,13 @@ const suspectProduct = (row, jira) =>
 export function annotateCause(row, { blockedBy, snapshot, labHealthFailed } = {}) {
   if (row.runtimeAvailability !== "unknown") return row;
   const jira = jiraSummary(snapshot ?? row.witness);
-  const cause = blockedBy === undefined ? byFailure(row, jira, labHealthFailed) : "cascade";
+  const cause =
+    blockedBy === undefined ? byFailure(row, jira, labHealthFailed) : cascadeCause(blockedBy);
   return {
     ...row,
     cause,
     ...(blockedBy === undefined ? {} : { blockedBy }),
-    ...(blockedBy === undefined && cause === "undetermined" && suspectProduct(row, jira)
-      ? { suspect: "product" }
-      : {}),
+    ...(cause === "undetermined" && suspectProduct(row, jira) ? { suspect: "product" } : {}),
     ...(jira.statuses.length > 0 ? { jira } : {}),
   };
 }
