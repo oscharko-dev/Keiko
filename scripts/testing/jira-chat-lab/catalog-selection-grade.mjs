@@ -115,8 +115,7 @@ function missingTarget(effect, otherCalls) {
   return { status: "wrong-tool", detail };
 }
 
-function writeVerdict(target, effect, otherCalls) {
-  if (target === undefined) return missingTarget(effect, otherCalls);
+function writeVerdict(target, effect) {
   if ((effect.stray ?? 0) > 0)
     return { status: "wrong-result", detail: `${effect.stray} writes the request did not ask for` };
   if (!succeeded(target))
@@ -213,7 +212,7 @@ function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   const target = targetCall(calls, entry.tool, entry.effect === "write" ? [] : tokens);
   if (target !== undefined)
     return entry.effect === "write"
-      ? { ...writeVerdict(target, effect, calls.length), path }
+      ? { ...writeVerdict(target, effect), path }
       : { ...readVerdict(target, tokens), path };
   const verdict = untargetedVerdict(entry, calls, { tokens, effect });
   return { ...refusedVerdict(entry, turn, verdict, effect), path };
