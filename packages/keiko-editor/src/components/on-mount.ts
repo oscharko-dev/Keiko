@@ -161,7 +161,6 @@ import {
 } from "./selection-reporting.js";
 import type { EditorLanguageIntelligenceReporter } from "./language-intelligence.js";
 
-/** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
 // Every provider registration except completion is optional on the mount view, so a Monaco build
 // without one degrades cleanly: each install checks with `offers` before it registers.
 type OptionalLanguageRegistrars = MonacoInlineCompletionsRegistrar &
@@ -186,6 +185,7 @@ function offers<K extends keyof OptionalLanguageRegistrars>(
   return members.every((member) => languages[member] !== undefined);
 }
 
+/** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
 export interface MountMonaco {
   readonly editor: MonacoThemeRegistrar & {
     readonly MouseTargetType?: { readonly GUTTER_GLYPH_MARGIN: number } | undefined;
