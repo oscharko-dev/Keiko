@@ -860,6 +860,28 @@ describe("SafeMarkdown — streaming trailing content", () => {
     expect(within(emphasis as HTMLElement).getByTestId("stream-cursor")).toBeDefined();
   });
 
+  it("keeps trailing content out of table structure while a table streams", (): void => {
+    // A streamed table ends in an empty body before its first row arrives; the cursor used to
+    // become a child of <tbody>, which React reports as invalid HTML and a hydration error.
+    const cursor = <span className="ai-stream-cursor" data-testid="stream-cursor" />;
+    const { unmount } = render(
+      <SafeMarkdown source={"| Stadt | Einwohner |\n| --- | --- |\n"} trailing={cursor} />,
+    );
+    const misplaced = document.querySelectorAll(":is(table, thead, tbody, tr) > .ai-stream-cursor");
+    expect(misplaced).toHaveLength(0);
+    expect(document.querySelector(".sm-table-wrapper > .ai-stream-cursor")).not.toBeNull();
+    unmount();
+
+    render(
+      <SafeMarkdown
+        source={"| Stadt | Einwohner |\n| --- | --- |\n| Köln | 1,1 Mio. |"}
+        trailing={cursor}
+      />,
+    );
+    expect(document.querySelector("tbody td:last-child .ai-stream-cursor")).not.toBeNull();
+    expect(screen.getAllByTestId("stream-cursor")).toHaveLength(1);
+  });
+
   it("renders trailing content for an empty markdown tree", (): void => {
     render(
       <SafeMarkdown

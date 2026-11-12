@@ -44,7 +44,7 @@ export {
 } from "./suppression.js";
 
 // ─── Ranking primitives + orchestration ──────────────────────────────────────
-export { tokenize, lexicalRelevance } from "./relevance.js";
+export { tokenize, lexicalRelevance, sharedInformativeWordCount } from "./relevance.js";
 export { recencyScore, RECENCY_HALF_LIFE_MS } from "./recency.js";
 export {
   reinforcementStrength,
@@ -75,3 +75,20 @@ export {
 
 // ─── Top-level retrieval ─────────────────────────────────────────────────────
 export { retrieveMemoryContext } from "./retrieve.js";
+
+// ─── Standing profile (#4228) ────────────────────────────────────────────────
+export {
+  DEFAULT_STANDING_PROFILE_CAPS,
+  STANDING_PROFILE_TYPES,
+  compareStandingProfileOrder,
+  isStandingFact,
+  standingProfileSuccession,
+  standingProfileWithout,
+  selectStandingProfile,
+  type StandingProfile,
+  type StandingProfileCandidate,
+  type StandingProfileCaps,
+  type StandingProfileDropReason,
+  type StandingProfileEntry,
+  type StandingProfileOrderKey,
+} from "./profile.js";

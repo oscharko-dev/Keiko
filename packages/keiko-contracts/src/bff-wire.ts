@@ -974,6 +974,9 @@ export interface MemoryAutonomyPolicyWire {
   readonly effectiveMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly revision: number;
+  // True when an operator-configured ceiling holds new routine facts for review instead of using
+  // them right away (#4206). Absent from older servers, which never held them.
+  readonly routineFactsHeldForReview?: boolean | undefined;
 }
 
 export interface UpdateMemoryAutonomyPolicyWire {
@@ -1075,14 +1078,34 @@ export interface ConversationMemoryContextEntryWire {
   readonly capturedAt: number;
 }
 
+/** One fact of the standing profile (#4228): supplied with every answer, not marked per answer. */
+export interface ConversationStandingProfileEntryWire {
+  readonly memoryId: string;
+  readonly text: string;
+}
+
+export interface ConversationStandingProfileWire {
+  readonly entries: readonly ConversationStandingProfileEntryWire[];
+  readonly tokens: number;
+  /** Eligible facts the profile's entry or token cap left out. */
+  readonly droppedCount?: number;
+}
+
 export interface ConversationMemoryContextWire {
   readonly enabled: boolean;
   readonly text: string;
+  /** Memories retrieved for this question; the answer marker shows exactly these. */
   readonly memories: readonly ConversationMemoryContextEntryWire[];
   readonly budget: {
     readonly tokens: number;
     readonly used: number;
   };
+  /** The person's standing profile, supplied with the system prompt of every answer. */
+  readonly profile?: ConversationStandingProfileWire;
+  /** How many candidate memories the relevance floor held back for this question. */
+  readonly belowFloorCount?: number;
+  /** Standing profile facts this question is about: sent once, with the retrieved memories. */
+  readonly profileRetrievedCount?: number;
 }
 
 export type ConversationMemoryActionWire =

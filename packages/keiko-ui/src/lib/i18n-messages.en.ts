@@ -633,7 +633,7 @@ export const EN_MESSAGES = {
   "memoria.settings.useInChatLabel": "Use MemoriaViva in chat requests",
 
   "memoria.settings.mode.hydrateError":
-    "The memory autonomy mode could not be loaded. Ask for approval remains active.",
+    "The memory autonomy mode could not be loaded. Waiting memories stay proposals.",
   "memoria.settings.mode.persistError":
     "The memory autonomy mode could not be saved. The previous mode remains active.",
 

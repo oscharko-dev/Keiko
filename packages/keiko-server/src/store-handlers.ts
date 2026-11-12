@@ -1,4 +1,5 @@
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { memoryLearningRuntime } from "./memory-learning.js";
 import { browserChatMessages, type ChatLifecycleRefresh } from "./chat-message-projection.js";
 import {
   revokeChangedJiraChatAuthority,
@@ -1546,6 +1547,8 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
     if (!chatBelongsToProject(deps, projectPath, chatId)) {
       return notFoundResult("Chat not found.");
     }
+    // #4213: opening another Chat is a moment to learn what was said in the one before.
+    memoryLearningRuntime(deps).noteChatOpened(chatId, ctx.correlationId);
     const messages = deps.store
       .listMessages(chatId, limit)
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));

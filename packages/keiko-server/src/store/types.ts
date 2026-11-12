@@ -15,6 +15,7 @@ import type { ChatReadGrantStore } from "../atlassian/chatReadGrantState.js";
 import type { CodingHistoryStore } from "./codingHistory.js";
 import type { MarkdownSkillStore } from "./markdownSkills.js";
 import type { BrowserApprovalStore } from "./browserApprovals.js";
+import type { ChatMemoryLearningStore } from "./chatMemoryLearning.js";
 import type {
   Project,
   Chat,
@@ -155,6 +156,8 @@ export type GatewayHistoryVisitor = (
 
 export interface UiStore {
   readonly chatToolReadGrants?: ChatReadGrantStore;
+  /** #4213: whether memory was on for a message, and how far each Chat has been learned. */
+  readonly memoryLearning?: ChatMemoryLearningStore;
   readonly chatToolMutations?: ChatToolMutationStore;
   readonly markdownSkills: MarkdownSkillStore;
   readonly browserApprovals?: BrowserApprovalStore | undefined;

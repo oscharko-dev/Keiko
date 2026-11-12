@@ -2355,9 +2355,32 @@ export async function runGatewayReadiness(
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
-  recordReadinessVerdict(deps, report, observedGeneration, correlationId);
+  recordReadinessVerdict(
+    deps,
+    report,
+    providerConclusionGeneration(deps, selection.provider, report, observedGeneration),
+    correlationId,
+  );
   logReadinessRunCompleted(deps, run, report);
   return report;
+}
+
+// The connection a run probed is the provider it selected when it started. Only a basic-chat check
+// describes that connection alone; a feature proof also rests on the configured capability, which a
+// replacement may have changed, so it keeps the generation it started in.
+function providerConclusionGeneration(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+): number | undefined {
+  if (report.probes.some((probe) => probe.name !== "chat")) return observedGeneration;
+  return conclusionGeneration(
+    deps.gatewayConfig,
+    provider.modelId,
+    observedGeneration,
+    JSON.stringify(provider),
+  );
 }
 
 function reconcileContextWindowReadiness(
@@ -2931,6 +2954,25 @@ interface OnDemandReadinessProbe {
   readonly correlationId: string;
 }
 
+// The connection each running basic-chat check answers for, keyed like its in-flight entry, from
+// the moment it starts to run until it ends. A queued check a replacement skipped never runs, so it
+// never appears here.
+const runningConnectionsByConfig = new WeakMap<
+  NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  Map<string, string>
+>();
+
+function runningConnectionsFor(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+): Map<string, string> {
+  let running = runningConnectionsByConfig.get(holder);
+  if (running === undefined) {
+    running = new Map();
+    runningConnectionsByConfig.set(holder, running);
+  }
+  return running;
+}
+
 const readinessProbesByConfig = new WeakMap<
   NonNullable<UiHandlerDeps["gatewayConfig"]>,
   Map<string, OnDemandReadinessProbe>
@@ -3160,8 +3202,71 @@ function initializeConversationModel(
   const answer = answerThisGeneration(holder, modelId);
   if (recheck ? answer === true : answer !== undefined) return;
   const checked = conversationQueue(holder).startupChecked.get(modelId);
+  if (!recheck && joinUnchangedConnectionCheck(deps, holder, config, modelId, correlationId))
+    return;
   if (!recheck && checked === conversationConnectionKey(config, modelId)) return;
   checkConversationModelOnce(deps, modelId, generation, correlationId);
+}
+
+/**
+ * A replacement that kept this model's connection (startup discovery adding another model) leaves
+ * its running check valid: it answers for this exact connection, and its conclusion lands in the
+ * current generation (`conclusionGeneration`). The current generation joins that check instead of
+ * seeing none, so a first turn waits for it rather than being refused, and no second probe starts.
+ */
+function joinUnchangedConnectionCheck(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  config: GatewayConfig,
+  modelId: string,
+  correlationId: string | undefined,
+): boolean {
+  const generation = holder.generation();
+  const probes = readinessProbesFor(holder);
+  const connection = conversationConnectionKey(config, modelId);
+  const connections = runningConnectionsFor(holder);
+  const running = [...probes].find(
+    ([key]) =>
+      key.slice(key.indexOf(":") + 1) === modelId &&
+      key !== `${String(generation)}:${modelId}` &&
+      connections.get(key) === connection,
+  )?.[1];
+  if (running === undefined) return false;
+  const key = `${String(generation)}:${modelId}`;
+  const joined: OnDemandReadinessProbe = { ...running };
+  probes.set(key, joined);
+  // The owner of the check reports its failure; this only ends the join either way.
+  const release = (): void => {
+    if (probes.get(key) === joined) probes.delete(key);
+  };
+  void running.promise.then(release, release);
+  const joining = correlationId ?? newCorrelationId();
+  logAutomaticReadinessJoined(deps, modelId, joining, running.correlationId, generation);
+  return true;
+}
+
+/**
+ * The generation a check's conclusion belongs to: the current one when the check started in it, or
+ * when the connection it checked is still the current connection and the current generation holds
+ * no basic-chat answer yet (a carried-over feature proof alone is none); that is the rule a replacement applies to an observation already recorded
+ * (deps.ts `replaceRuntimeCatalog`). Otherwise the generation it started in, whose conclusion the
+ * holder discards, so a late answer never overwrites a newer one (an explicit verification).
+ */
+function conclusionGeneration(
+  holder: UiHandlerDeps["gatewayConfig"],
+  modelId: string,
+  observedGeneration: number | undefined,
+  checkedConnection: string,
+): number | undefined {
+  if (holder === undefined || observedGeneration === undefined) return observedGeneration;
+  const current = holder.generation();
+  if (current === observedGeneration) return observedGeneration;
+  const config = holder.current();
+  const unchanged =
+    config !== undefined && conversationConnectionKey(config, modelId) === checkedConnection;
+  return unchanged && answerThisGeneration(holder, modelId) === undefined
+    ? current
+    : observedGeneration;
 }
 
 // Everything a chat check depends on: the provider's connection, credential included. Measured
@@ -3380,25 +3485,34 @@ async function runOnDemandReadinessProbe(
   const generation = holder.generation();
   const probeCorrelationId = correlationId ?? newCorrelationId();
   const config = holder.current();
-  if (config !== undefined)
-    conversationQueue(holder).startupChecked.set(
-      modelId,
-      conversationConnectionKey(config, modelId),
-    );
+  const connection = config === undefined ? undefined : conversationConnectionKey(config, modelId);
+  const runningKey = `${String(generation)}:${modelId}`;
+  if (connection !== undefined) {
+    conversationQueue(holder).startupChecked.set(modelId, connection);
+    runningConnectionsFor(holder).set(runningKey, connection);
+  }
   logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
-  await observeOnDemandProbe(deps, modelId, probeCorrelationId);
-  // A failed startup report may clear the capability entry. Persist an explicit current-generation
-  // not-ready observation so later admission remains an honest refusal without a request-time
-  // retry; explicit Settings verification can replace it.
+  try {
+    await observeOnDemandProbe(deps, modelId, probeCorrelationId);
+  } finally {
+    runningConnectionsFor(holder).delete(runningKey);
+  }
+  // A failed startup report may clear the capability entry. Persist an explicit not-ready
+  // observation in the generation the conclusion belongs to, so later admission remains an honest
+  // refusal without a request-time retry; explicit Settings verification can replace it.
+  const concluded =
+    connection === undefined
+      ? generation
+      : conclusionGeneration(holder, modelId, generation, connection);
   if (
-    holder.generation() === generation &&
-    holder.verifiedCapability(modelId)?.generation !== generation
+    holder.generation() === concluded &&
+    holder.verifiedCapability(modelId)?.generation !== concluded
   ) {
     holder.recordVerifiedCapability(
       modelId,
       { conversationReady: false },
       new Date().toISOString(),
-      generation,
+      concluded,
     );
   }
 }

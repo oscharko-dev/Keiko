@@ -137,6 +137,27 @@ describe("decideFactRelation", () => {
     expect(decide("Bevorzugt Listen", evidence, "update", old, false)).toEqual({ kind: "new" });
   });
 
+  it("replaces what the person is when they state they became something else (#4228)", () => {
+    // UI walk: the new role came back labelled "update" and was stored beside the old one, because
+    // the two self-descriptions share no word and "seit diesem Monat" read as no change.
+    const old = "Ich bin Kreditanalystin bei einer Sparkasse";
+    const evidence = "Seit diesem Monat bin ich Teamleiterin Kreditrisiko";
+    expect(decide(evidence, evidence, "update", old)).toEqual({
+      kind: "supersede",
+      factId: "old",
+      basis: "stated-change",
+    });
+    expect(
+      decide("I'm a team lead now", "I'm a team lead now", "update", "I am an analyst"),
+    ).toEqual({ kind: "supersede", factId: "old", basis: "stated-change" });
+    // Without a stated change, without the model's label, or beside another kind of fact, it is new.
+    const unchanged = "Ich bin Teamleiterin Kreditrisiko";
+    expect(decide(unchanged, unchanged, "update", old)).toEqual({ kind: "new" });
+    expect(decide(evidence, evidence, "new", old)).toEqual({ kind: "new" });
+    expect(decide(evidence, evidence, "update", "Bevorzugt Tabellen")).toEqual({ kind: "new" });
+    expect(decide(evidence, evidence, "update", old, false)).toEqual({ kind: "new" });
+  });
+
   it("does not replace on a label alone", () => {
     expect(
       decide("Wohnt in Bonn", "Ich wohne in Bonn", "contradiction", "Bevorzugt Tabellen"),

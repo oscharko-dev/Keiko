@@ -3,7 +3,7 @@
 // These handlers wire the /api/memory/* routes to the three memory packages:
 //   - @oscharko-dev/keiko-memory-vault   → persistence (list / get / update / delete)
 //   - @oscharko-dev/keiko-memory-governance → pure operation builders (pin, archive, forget, correct)
-//   - @oscharko-dev/keiko-memory-retrieval → not called here (retrieval is for model context)
+//   - @oscharko-dev/keiko-memory-retrieval → only the standing-profile succession rule (#4228)
 //
 // ADR-0019 direction rule 6a: keiko-server may import memory-vault, memory-governance, and
 // memory-retrieval. Rule 8: the browser tier (keiko-ui) imports only keiko-contracts types
@@ -39,6 +39,7 @@ import {
   supersededValidity,
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
+import { standingProfileSuccession } from "@oscharko-dev/keiko-memory-retrieval";
 import type {
   AcceptMemoryProposalOptions,
   MemoryConversationId,
@@ -67,7 +68,9 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
+  PROFILE_EXCLUDED_MEMORY_TAG,
   isMemoryRecord,
+  personMemoryTags,
   validateMemoryScope,
   validateMemoryAcceptance,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
@@ -368,7 +371,7 @@ function memoryMatchesQuery(record: MemoryRecord, query: string | undefined): bo
   if (query === undefined) return true;
   const haystack = [
     record.body,
-    ...record.tags,
+    ...personMemoryTags(record.tags),
     record.type,
     record.status,
     record.scope.kind,
@@ -914,7 +917,11 @@ function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string
   const bodyEdited = typeof newBody === "string" && newBody.trim().length > 0;
   if (bodyEdited) patch.body = newBody.trim();
   if (Array.isArray(tags)) {
-    patch.tags = tags.filter((t): t is string => typeof t === "string");
+    // The person edits their own tags; Keiko's profile exclusion stays as it was (#4228).
+    const own = personMemoryTags(tags.filter((t): t is string => typeof t === "string"));
+    patch.tags = existing.tags.includes(PROFILE_EXCLUDED_MEMORY_TAG)
+      ? [...own, PROFILE_EXCLUDED_MEMORY_TAG]
+      : own;
   }
   const provenance = isMemorySensitivity(sensitivity)
     ? { ...existing.provenance, sensitivity }
@@ -1031,7 +1038,12 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now());
+    // Pinning also lifts an earlier removal from the standing profile (#4228).
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { pinned: true, tags: personMemoryTags(record.tags) },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1074,7 +1086,12 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now());
+    // Unpinning takes the fact out of the standing profile until it is pinned again (#4228).
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { pinned: false, tags: [...personMemoryTags(record.tags), PROFILE_EXCLUDED_MEMORY_TAG] },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -2191,19 +2208,35 @@ function resolveCorrectionOrigins(
   return isRouteResult(resolved) ? resolved : [resolved];
 }
 
+// An accepted correction takes its origins' place in the standing profile, or their removal from it.
+function correctionProfileSuccession(
+  proposal: MemoryRecord,
+  origins: readonly CorrectionSupersessionOrigin[],
+): Pick<MemoryBatchUpdate["patch"], "tags" | "retentionHint"> {
+  let successor: Pick<MemoryRecord, "tags" | "retentionHint"> = proposal;
+  for (const { original } of origins) {
+    successor = { ...successor, ...standingProfileSuccession(original, successor) };
+  }
+  const { tags, retentionHint } = successor;
+  return {
+    ...(tags === proposal.tags ? {} : { tags }),
+    ...(retentionHint === undefined || retentionHint === proposal.retentionHint
+      ? {}
+      : { retentionHint }),
+  };
+}
+
 function buildAcceptProposalPatch(
+  proposal: MemoryRecord,
   origins: readonly CorrectionSupersessionOrigin[],
   bodyOverride?: string,
-): {
-  readonly status: "accepted";
-  readonly type?: MemoryType;
-  readonly body?: string;
-} {
+): MemoryBatchUpdate["patch"] {
   const correctionType = acceptedCorrectionType(origins);
   return {
     status: "accepted",
     ...(correctionType === undefined ? {} : { type: correctionType }),
     ...(bodyOverride === undefined ? {} : { body: bodyOverride }),
+    ...correctionProfileSuccession(proposal, origins),
   };
 }
 
@@ -2304,7 +2337,7 @@ function commitCorrectionAcceptance(
   bodyOverride: string | undefined,
 ): CommittedCorrectionAcceptance | RouteResult {
   const nowMs = Date.now();
-  const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
+  const acceptPatch = buildAcceptProposalPatch(proposal, origins, bodyOverride);
   const updates = buildCorrectionAcceptanceUpdates(proposal, acceptPatch, origins, nowMs);
   try {
     const mutation = vault.applyGraphMutation({

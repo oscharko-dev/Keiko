@@ -158,6 +158,21 @@ export interface MemoryRetrievalRequest {
   // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (byte-identical legacy ranking);
   // "rrf" opts into rank-based Reciprocal Rank Fusion.
   readonly fusion?: RankingFusionMode;
+  // Opt-in strict relevance floor for Chat (#4228). A memory is retrieved only when the question
+  // shares an informative word with it or its semantic score clears semanticMinScore; a turn
+  // without a query signal retrieves nothing, and pinned, correction and graph signals grant no
+  // exemption, because standing facts reach every answer through the standing profile instead.
+  // Without it, the long-standing permissive floor applies (workflows, the memory context route).
+  readonly strictRelevanceFloor?: boolean;
+  /** Informative words a memory must share with the question under the strict floor; default 1. */
+  readonly lexicalMinSharedWords?: number;
+  /**
+   * Memories the standing profile supplies to the answer anyway. Under the strict floor one is
+   * retrieved only when the question shares an informative word with it or with a fact it
+   * superseded, never on semantic similarity alone: retrieval adds nothing to such a fact but the
+   * claim that this question is about it. Only these memories inherit superseded facts' words.
+   */
+  readonly standingProfileIds?: ReadonlySet<MemoryId>;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────

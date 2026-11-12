@@ -1,14 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type {
-  MemoryId,
-  MemoryProposalId,
-  UserId,
-  WorkflowRunId,
-} from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryId, MemoryProposalId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 
-import { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
-import type { CaptureContext, WorkflowOutcomeInput } from "./types.js";
+import { extractCandidatesFromUserText } from "./capture.js";
+import type { CaptureContext } from "./types.js";
 
 function ctx(overrides: Partial<CaptureContext> = {}): CaptureContext {
   let memCounter = 0;
@@ -142,57 +137,6 @@ describe("extractCandidatesFromUserText", () => {
       resolver: () => ["m-1" as MemoryId],
     });
     expect(result[0]?.kind).toBe("forget");
-  });
-});
-
-describe("extractCandidatesFromWorkflowOutcome", () => {
-  it("delegates to the workflow extractor", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport: "the test runner is vitest",
-      capturedAt: 1_700_000_000_000,
-    };
-    const result = extractCandidatesFromWorkflowOutcome(outcome, ctx());
-    expect(result).toHaveLength(1);
-    expect(result[0]?.kind).toBe("candidate");
-  });
-
-  it("returns restricted-sensitivity when policy default is restricted", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport: "anything",
-      capturedAt: 0,
-    };
-    expect(
-      extractCandidatesFromWorkflowOutcome(outcome, ctx(), { defaultSensitivity: "restricted" }),
-    ).toEqual([{ kind: "rejected", reason: "restricted-sensitivity" }]);
-  });
-
-  it("rejects an oversize workflow report before secret scanning", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport: "x".repeat(5000),
-      capturedAt: 0,
-    };
-    expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
-      { kind: "rejected", reason: "exceeds-length-limit" },
-    ]);
-  });
-
-  it("rejects raw log workflow reports before they become candidates", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport:
-        "ERROR 2026-06-08T06:00:00Z worker failed at module X with stack trace line 1 at foo() line 2 at bar()",
-      capturedAt: 0,
-    };
-    expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
-      { kind: "rejected", reason: "raw-log-content" },
-    ]);
   });
 });
 

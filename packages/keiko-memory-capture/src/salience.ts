@@ -15,9 +15,11 @@ import { buildProposal } from "./_envelopes.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
 import { admitProposedFact, namesOtherPerson, reasonNamesOtherPerson } from "./fact-admission.js";
 import {
+  compareFacts,
   decideFactRelation,
   FACT_RELATION_LABELS,
   mostSimilarFacts,
+  statesPreference,
   statesSameFact,
   type FactRelationLabel,
   type KnownFact,
@@ -36,10 +38,12 @@ import type {
   SalienceModelMessage,
   SalienceOutcome,
 } from "./types.js";
-import type {
-  MemoryId,
-  MemoryStructuredPayload,
-  MemoryType,
+import {
+  STANDING_FACT_RETENTION_POLICY_KEY,
+  type MemoryId,
+  type MemoryProposal,
+  type MemoryStructuredPayload,
+  type MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 
 // Few durable facts per message: the bar is high by owner decision.
@@ -65,7 +69,7 @@ interface RawSalienceItem {
 // ─── Extraction prompt ───────────────────────────────────────────────────────
 export const SALIENCE_SYSTEM_PROMPT = `You extract few durable facts about the person from their chat message.
 
-Return only JSON: {"items":[{"body":string,"evidence":string,"about":"self"|"team"|"other"|"unclear","type":"preference"|"fact"|"decision"|"procedural","relation":"new"|"same"|"update"|"contradiction","related":number|null}]}
+Return only JSON: {"items":[{"body":string,"evidence":string,"about":"self"|"team"|"other"|"unclear","type":"identity"|"preference"|"constraint"|"fact"|"decision"|"procedural","relation":"new"|"same"|"update"|"contradiction","related":number|null}]}
 
 evidence: the person's exact words for this one fact, copied character for character, one clause only.
 body: one short statement of that fact in the person's language, using their words, without filler; name what a leading pronoun stands for.
@@ -298,6 +302,16 @@ function mapType(loose: string): MemoryType | null {
   return TYPE_MAP[loose.trim().toLowerCase()] ?? null;
 }
 
+// Labels of a standing fact about the person: who they are and what always holds for them. Such a
+// fact is stored as a semantic fact but belongs to the standing profile (#4228).
+const STANDING_LABELS: ReadonlySet<string> = new Set(["identity", "constraint"]);
+
+function standingRetentionHint(fact: AdmittedFact): MemoryProposal["retentionHint"] {
+  return fact.subject === "self" && STANDING_LABELS.has(fact.item.type.trim().toLowerCase())
+    ? { policyKey: STANDING_FACT_RETENTION_POLICY_KEY }
+    : undefined;
+}
+
 // ─── Candidate construction ──────────────────────────────────────────────────
 // Effective context overlays deps-supplied clock/id factories onto the caller context so the
 // scripted test (and the audit ledger) deterministically controls time and ids (decision 3).
@@ -464,9 +478,14 @@ function learnedCandidate(
     },
     fact.confidence,
   );
+  const retentionHint = standingRetentionHint(fact);
   return {
     kind: "candidate",
-    proposal: payload === undefined ? proposal : { ...proposal, payload },
+    proposal: {
+      ...proposal,
+      ...(payload === undefined ? {} : { payload }),
+      ...(retentionHint === undefined ? {} : { retentionHint }),
+    },
     requiresApproval: decision.requiresApproval,
     relation,
     relationLabel: fact.item.relation,
@@ -577,6 +596,132 @@ function emitExtractionDiagnostics(
   }
 }
 
+// A clear preference the person states about themself ("Ich bevorzuge Tabellen …", "I prefer …")
+// is their own words even when the model returned nothing usable for the message (#4228). Such a
+// sentence passes the same admission, relation and safety checks as a model item; it is consulted
+// only when the model's items yielded no fact, so it never replaces or duplicates one. The
+// vocabulary is deliberately narrow: only these explicit first-person preference openings.
+const STATED_PREFERENCE_RE =
+  /^(?:ich\s+bevorzuge|i\s+prefer|i\s+would\s+prefer|i['’]d\s+prefer)\s/iu;
+// A sentence ends at a line break or at a stop before a capital letter, as in admission. A stop
+// before a lower-case word ("z.B. bei Zahlen") does not end it, nor does an abbreviation's stop.
+const LINE_BREAK_RE = /\n+/u;
+const STOP_BEFORE_CAPITAL_RE = /(?<=[.!?])\s+(?=\p{Lu})/gu;
+
+function withoutClosingStop(sentence: string): string {
+  let end = sentence.length;
+  while (end > 0 && (sentence.charAt(end - 1) === "." || sentence.charAt(end - 1) === "!")) {
+    end -= 1;
+  }
+  return sentence.slice(0, end).trimEnd();
+}
+
+// German nouns are capitalised, so "Ich bevorzuge z.B. Tabellen" or "I prefer Python vs. Java" has
+// a stop before a capital that ends no sentence. Such a stop ends an abbreviation: a token with an
+// inner stop, a single letter ("z. B.") or a common short form.
+const ABBREVIATIONS: ReadonlySet<string> = new Set([
+  "bspw",
+  "bzw",
+  "ca",
+  "co",
+  "dr",
+  "etc",
+  "evtl",
+  "fig",
+  "fr",
+  "ggf",
+  "hr",
+  "inc",
+  "inkl",
+  "jr",
+  "mr",
+  "mrs",
+  "ms",
+  "nr",
+  "prof",
+  "sr",
+  "st",
+  "usw",
+  "vgl",
+  "vs",
+]);
+
+const OPENING_MARKS_RE = /^[("'„“‚‘«[]+/u;
+
+function endsInAbbreviation(text: string): boolean {
+  const token = text.split(/\s/u).at(-1) ?? "";
+  const stem = withoutClosingStop(token);
+  if (stem.length === token.length) return false;
+  const word = stem.replace(OPENING_MARKS_RE, "");
+  return word.includes(".") || /^\p{L}$/u.test(word) || ABBREVIATIONS.has(word.toLowerCase());
+}
+
+// The person's sentences, verbatim: a line break or a stop before a capital ends one, unless the
+// stop ends an abbreviation.
+function sentencesOf(userText: string): readonly string[] {
+  const sentences: string[] = [];
+  for (const line of userText.split(LINE_BREAK_RE)) {
+    let start = 0;
+    for (const match of line.matchAll(STOP_BEFORE_CAPITAL_RE)) {
+      if (endsInAbbreviation(line.slice(start, match.index))) continue;
+      sentences.push(line.slice(start, match.index).trim());
+      start = match.index + match[0].length;
+    }
+    sentences.push(line.slice(start).trim());
+  }
+  return sentences;
+}
+
+// No model said how the sentence stands to a stored preference. Whether "I prefer spaces" replaces
+// "I prefer tabs" or adds to it only the model can judge, so beside a stored preference the
+// sentence is left to it rather than stored as a second, possibly contradicting one. A repeat
+// still confirms, and a reversed or negated preference still replaces the stored one.
+const SETTLED_BY_WORDS: ReadonlySet<string> = new Set(["same", "reversed", "polarity-changed"]);
+
+function beside(sentence: string, known: readonly KnownFact[]): boolean {
+  return known.some(
+    (fact) =>
+      statesPreference(fact.body) && !SETTLED_BY_WORDS.has(compareFacts(sentence, fact.body)),
+  );
+}
+
+function occurrences(text: string, marks: string): number {
+  let count = 0;
+  for (const char of text) if (marks.includes(char)) count += 1;
+  return count;
+}
+
+// A sentence split inside brackets or quotes is a fragment, whatever ended it.
+function balanced(sentence: string): boolean {
+  return (
+    occurrences(sentence, "(") === occurrences(sentence, ")") &&
+    occurrences(sentence, "[") === occurrences(sentence, "]") &&
+    occurrences(sentence, '"') % 2 === 0 &&
+    occurrences(sentence, "„“”«»") % 2 === 0
+  );
+}
+
+function statedPreferenceItems(
+  userText: string,
+  known: readonly KnownFact[],
+): readonly RawSalienceItem[] {
+  const stated = sentencesOf(userText)
+    .map((sentence) => withoutClosingStop(sentence))
+    .filter((sentence) => STATED_PREFERENCE_RE.test(sentence));
+  // Two stated preferences in one message may contradict each other; only the model can tell.
+  if (stated.length !== 1) return [];
+  return stated
+    .filter((sentence) => balanced(sentence) && !beside(sentence, known))
+    .map((sentence) => ({
+      body: sentence,
+      evidence: sentence,
+      about: "self",
+      type: "preference",
+      relation: "new",
+      related: null,
+    }));
+}
+
 // ─── Public entry point ──────────────────────────────────────────────────────
 export async function extractSalientMemories(
   input: SalienceInput,
@@ -589,7 +734,7 @@ export async function extractSalientMemories(
   const raw = await callSalienceModel(input, shown, deps);
   const items = parseSalienceItems(raw);
   const droppedByReason = new Map<SalienceDropReason, number>();
-  const outcomes = collectOutcomes(items, {
+  const turn: LearningTurn = {
     input,
     context: effectiveContext(input, deps),
     policy: input.policy ?? {},
@@ -598,13 +743,23 @@ export async function extractSalientMemories(
     drop: (reason) => {
       droppedByReason.set(reason, (droppedByReason.get(reason) ?? 0) + 1);
     },
-  });
+  };
+  const outcomes = collectOutcomes(items, turn);
+  // Drops of the person's own sentences are not dropped model items, so they are not counted as such.
+  const stated =
+    outcomes.length === 0
+      ? collectOutcomes(statedPreferenceItems(input.userText, input.knownFacts), {
+          ...turn,
+          drop: () => undefined,
+        })
+      : [];
   emitExtractionDiagnostics(deps, items, outcomes.length, droppedByReason);
   deps.onDiagnostic?.({
     kind: "extraction-summary",
     rawItemCount: items.length,
     acceptedCount: outcomes.length,
     knownFactCount: input.knownFacts.length,
+    ...(stated.length === 0 ? {} : { statedPreferenceCount: stated.length }),
   });
-  return outcomes;
+  return outcomes.length === 0 ? stated : outcomes;
 }

@@ -178,19 +178,90 @@ function serializerForStore(store: UiStore): ChatTurnSerializer {
   return created;
 }
 
-export function runSerializedChatTurn<T>(
+// #4213: background learning never competes with the person's work. Every serialized Chat
+// mutation (a send, a stream, a deletion) is foreground work from the moment it waits for its turn
+// until its operation settles; a learning pass yields to it.
+type ChatForegroundListener = (active: boolean) => void;
+
+interface ChatForegroundActivity {
+  count: number;
+  readonly listeners: Set<ChatForegroundListener>;
+}
+
+const foregroundByStore = new WeakMap<UiStore, ChatForegroundActivity>();
+
+function foregroundOf(store: UiStore): ChatForegroundActivity {
+  const existing = foregroundByStore.get(store);
+  if (existing !== undefined) return existing;
+  const created: ChatForegroundActivity = { count: 0, listeners: new Set() };
+  foregroundByStore.set(store, created);
+  return created;
+}
+
+function notifyForeground(activity: ChatForegroundActivity, active: boolean): void {
+  // A Set skips a listener removed during the loop, so no copy is needed to unsubscribe here.
+  for (const listener of activity.listeners) listener(active);
+}
+
+function beginChatForeground(store: UiStore): () => void {
+  const activity = foregroundOf(store);
+  activity.count += 1;
+  if (activity.count === 1) notifyForeground(activity, true);
+  let released = false;
+  return (): void => {
+    if (released) return;
+    released = true;
+    activity.count -= 1;
+    if (activity.count === 0) notifyForeground(activity, false);
+  };
+}
+
+/** True while any Chat mutation of this store waits or runs. */
+export function chatForegroundActive(deps: Pick<ChatTurnSerializationDeps, "store">): boolean {
+  return foregroundOf(deps.store).count > 0;
+}
+
+/** Calls the listener when foreground Chat work starts (true) and when all of it settled (false). */
+export function onChatForegroundChange(
+  deps: Pick<ChatTurnSerializationDeps, "store">,
+  listener: ChatForegroundListener,
+): () => void {
+  const activity = foregroundOf(deps.store);
+  activity.listeners.add(listener);
+  return (): void => {
+    activity.listeners.delete(listener);
+  };
+}
+
+export async function runSerializedChatTurn<T>(
   deps: ChatTurnSerializationDeps,
   chatId: string,
   signal: AbortSignal,
   operation: () => T | Promise<T>,
   generation?: AbortController,
 ): Promise<T | typeof CHAT_TURN_WAIT_CANCELLED> {
-  return (deps.chatTurnSerializer ?? serializerForStore(deps.store)).runExclusive(
-    chatId,
-    signal,
-    operation,
-    generation,
-  );
+  const release = beginChatForeground(deps.store);
+  const turn = { started: false };
+  const tracked = async (): Promise<T> => {
+    turn.started = true;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
+  try {
+    return await (deps.chatTurnSerializer ?? serializerForStore(deps.store)).runExclusive(
+      chatId,
+      signal,
+      tracked,
+      generation,
+    );
+  } finally {
+    // A turn that never ran (its wait was cancelled) holds no foreground; one that runs releases
+    // when its operation settles, which can be after a cancelled caller stopped waiting.
+    if (!turn.started) release();
+  }
 }
 
 export function interruptChatGenerations(deps: ChatTurnSerializationDeps, chatId: string): number {

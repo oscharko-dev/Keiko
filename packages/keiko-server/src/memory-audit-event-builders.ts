@@ -276,6 +276,7 @@ export function buildTombstonedEvent(
     memoryId: tombstone.memoryId,
     scope: scopeFromTombstone(tombstone),
     tombstoned: true,
+    forgetterSurface: tombstone.forgetterSurface,
   };
 }
 

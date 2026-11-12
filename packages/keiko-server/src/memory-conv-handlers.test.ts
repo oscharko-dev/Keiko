@@ -632,36 +632,49 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(listAllMemories(vault, { status: ["accepted"] })).toHaveLength(0);
   });
 
-  // eslint-disable-next-line complexity
-  it("captures an ambient identity statement as a reviewable user-scoped candidate", async () => {
-    const vault = makeVault();
-    const deps = makeDeps({ memoryVault: vault });
-    const chat = registerChat(deps, "capture-ambient-identity");
-    const result = await handleMemoryCaptureFromConversation(
-      makeCtx({
-        text: "Hallo Keiko, ich bin Paul.",
-        context: { projectPath: chat.projectPath, chatId: chat.chatId },
-      }),
-      deps,
-    );
-    expect(result.status).toBe(200);
-    const outcomes = asJson(result).outcomes as readonly {
-      kind: string;
-      proposal?: { proposalId: string; body: string; scope?: { kind: string; userId?: string } };
-    }[];
-    expect(outcomes).toHaveLength(1);
-    expect(outcomes[0]?.kind).toBe("candidate");
-    expect(outcomes[0]?.proposal?.body).toBe("The user's name is Paul.");
-    expect(outcomes[0]?.proposal?.scope).toEqual({ kind: "user", userId: "local-operator" });
-    const proposalId = outcomes[0]?.proposal?.proposalId;
-    expect(typeof proposalId).toBe("string");
-    if (proposalId !== undefined) {
-      const stored = vault.getMemory(proposalId as unknown as MemoryId);
-      expect(stored?.status).toBe("proposed");
-      expect(stored?.scope).toEqual({ kind: "user", userId: "local-operator" });
-      expect(stored?.body).toBe("The user's name is Paul.");
-    }
-  });
+  // #4206: a routine private fact is accepted at once; only an operator restriction holds it.
+  const OPERATOR_RESTRICTION = {
+    memoryDeploymentCeiling: "governed-assist",
+    memoryDeploymentCeilingConfigured: true,
+  } as const;
+  it.each([
+    ["accepts", {}, "accepted"],
+    ["holds for review under an operator restriction", OPERATOR_RESTRICTION, "proposed"],
+  ] as const)(
+    "%s an ambient identity statement as a user-scoped candidate",
+    // eslint-disable-next-line complexity
+    async (_name, ceiling, status) => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault, ...ceiling });
+      const chat = registerChat(deps, "capture-ambient-identity");
+      const result = await handleMemoryCaptureFromConversation(
+        makeCtx({
+          text: "Hallo Keiko, ich bin Paul.",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const outcomes = asJson(result).outcomes as readonly {
+        kind: string;
+        status?: string;
+        proposal?: { proposalId: string; body: string; scope?: { kind: string; userId?: string } };
+      }[];
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]?.kind).toBe("candidate");
+      expect(outcomes[0]?.status).toBe(status);
+      expect(outcomes[0]?.proposal?.body).toBe("The user's name is Paul.");
+      expect(outcomes[0]?.proposal?.scope).toEqual({ kind: "user", userId: "local-operator" });
+      const proposalId = outcomes[0]?.proposal?.proposalId;
+      expect(typeof proposalId).toBe("string");
+      if (proposalId !== undefined) {
+        const stored = vault.getMemory(proposalId as unknown as MemoryId);
+        expect(stored?.status).toBe(status);
+        expect(stored?.scope).toEqual({ kind: "user", userId: "local-operator" });
+        expect(stored?.body).toBe("The user's name is Paul.");
+      }
+    },
+  );
 
   it("rejects provider base URLs at the capture boundary and persists nothing", async () => {
     const vault = makeVault();
@@ -699,7 +712,8 @@ describe("handleMemoryCaptureFromConversation", () => {
     ).toEqual([]);
   });
 
-  it("persists confidential candidates as masked reviewable proposals", async () => {
+  // #4206: nobody reviews a memory any more, so confidential content is refused, not parked.
+  it("refuses confidential candidates and persists nothing", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
     const chat = registerChat(deps, "capture-confidential");
@@ -711,25 +725,10 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    const outcomes = asJson(result).outcomes as readonly {
-      kind: string;
-      requiresApproval?: boolean;
-      proposal?: { proposalId: string; body: string };
-    }[];
-    expect(outcomes).toHaveLength(1);
-    expect(outcomes[0]).toMatchObject({
-      kind: "candidate",
-      requiresApproval: true,
-      proposal: { body: "Sensitive memory pending review." },
-    });
-    const proposalId = outcomes[0]?.proposal?.proposalId;
-    expect(typeof proposalId).toBe("string");
-    if (proposalId !== undefined) {
-      const stored = vault.getMemory(proposalId as unknown as MemoryId);
-      expect(stored?.status).toBe("proposed");
-      expect(stored?.provenance.sensitivity).toBe("confidential");
-      expect(stored?.body).toBe("my private support email is developer@example.com");
-    }
+    expect(asJson(result).outcomes).toEqual([
+      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
+    ]);
+    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
   });
 
   it("still rejects credential-shaped candidates and persists nothing", async () => {
@@ -899,6 +898,55 @@ describe("handleMemoryCaptureFromConversation", () => {
     const body = asJson(result);
     const outcomes = body.outcomes as readonly [{ kind: string; reason?: string }];
     expect(outcomes[0]).toEqual({ kind: "rejected", reason: "ambiguous-forget" });
+  });
+
+  it("stores the embedding of a captured memory so a paraphrased question can find it", async () => {
+    const vault = makeVault();
+    const embedded: string[] = [];
+    const deps = makeDeps({
+      memoryVault: vault,
+      config: {
+        providers: [
+          {
+            modelId: "text-embedding-3-large",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "test-config-secret-value-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+      configPresent: true,
+      localKnowledgeEmbeddingRequest: (request) => {
+        embedded.push(request.input);
+        const vector = new Float32Array(8);
+        vector[0] = 1;
+        return Promise.resolve({
+          ok: true as const,
+          value: { vector, modelId: "text-embedding-3-large" },
+        });
+      },
+    });
+    const chat = registerChat(deps, "capture-embedded");
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that we release only on Tuesdays",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const outcomes = asJson(result).outcomes as readonly {
+      readonly proposal?: { readonly proposalId: string };
+    }[];
+    const id = outcomes[0]?.proposal?.proposalId as unknown as MemoryId;
+    expect(vault.getMemory(id)).toBeDefined();
+    expect(vault.getEmbeddings([id]).has(id)).toBe(true);
+    expect(embedded).toHaveLength(1);
   });
 
   it("rejects oversize bodies with 413", async () => {

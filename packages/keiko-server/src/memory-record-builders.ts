@@ -22,6 +22,7 @@ export function buildMemoryRecordFromProposal(
     type: proposal.type,
     body: proposal.body,
     ...(proposal.payload === undefined ? {} : { payload: proposal.payload }),
+    ...(proposal.retentionHint === undefined ? {} : { retentionHint: proposal.retentionHint }),
     tags: proposal.tags,
     provenance: proposal.provenance,
     validity: proposal.validity,

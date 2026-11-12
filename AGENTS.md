@@ -68,12 +68,13 @@ three modes without extra configuration; its Coding ceiling defaults to `autonom
 The selected mode defaults to **Ask for approval**, and a saved human mode selection remains a
 selection, not an installation side effect. Explicitly configured narrower ceilings still apply;
 invalid explicit values fail closed. This availability default is scoped to Coding: Memory retains
-its explicit deployment ceiling or `governed-assist`, including legacy requests and standing
-maintenance. See ADR-0124 D2 and ADR-0163 D7. A person's own clear "Merke dir" or "Vergiss das" in a Chat is
+its explicit deployment ceiling or `governed-assist` for its mode and standing maintenance; only an
+explicitly configured `governed-assist` ceiling holds routine facts for review (#4206). See ADR-0124 D2 and ADR-0163 D7. A person's own clear "Merke dir" or "Vergiss das" in a Chat is
 their decision, not unattended learning: it acts at once in every mode, after the hard denials
-(ADR-0146 D4b). Records learned from natural conversation stay under the Memory ceiling and mode;
-deterministic checks on the person's own words admit them, and they never replace a clear statement
-(ADR-0146 D4c).
+(ADR-0146 D4b). Routine private facts learned from natural conversation are used without approval in every mode
+(team and project facts keep the mode rule until project memory), and a correction replaces the old
+fact; confidential content is refused. Deterministic checks on the
+person's own words admit them, and they never replace a clear statement (ADR-0146 D2, D4c).
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
@@ -1229,7 +1230,12 @@ streaming and regenerated turns. Its request correlation joins the compacted/ret
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
 effective input budget and image reserve. This evidence survives generation timeout or
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
-not provider-measured usage, and no conversation or image content is recorded.
+not provider-measured usage, and no conversation or image content is recorded. With memory on it and
+the grounded `chat.response.message` also count the standing profile and recall (#4228):
+`profileEntryCount`, `profileTokens`, `profileDroppedCount`, `profileRetrievedCount` (profile
+facts the question was about, sent once with recall), `retrievedMemoryCount` and
+`belowFloorMemoryCount`, never a fact
+([MemoriaViva standing profile](docs/memory/memoria-viva-standing-profile.md)).
 
 Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
 `imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,

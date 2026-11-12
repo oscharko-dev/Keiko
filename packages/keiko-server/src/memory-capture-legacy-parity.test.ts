@@ -1,7 +1,8 @@
-// Legacy fail-closed parity for mode-aware capture (issue #2546). With deps that carry NO
-// codingRuntimeDeploymentCeiling the effective mode resolves to governed-assist, so capture must be
-// byte-identical to the pre-#2546 behaviour: every candidate lands as "proposed", the wire-action
-// vector is unchanged, and a disabled/absent memory request writes nothing.
+// Legacy parity for mode-aware capture (issue #2546, amended by #4206). With deps that carry NO
+// codingRuntimeDeploymentCeiling the effective mode still resolves to governed-assist, but a routine
+// private fact needs no approval any more: it is accepted at once. A deployment that configured a
+// governed-assist ceiling (an operator restriction) keeps the pre-#2546 wire-action vector, every
+// candidate "proposed", and a disabled/absent memory request writes nothing in either case.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
@@ -99,8 +100,12 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
-// Legacy deps: NO codingRuntimeDeploymentCeiling field at all.
-function legacyDeps(vault: MemoryVaultStore): UiHandlerDeps {
+// Legacy deps: NO codingRuntimeDeploymentCeiling field at all, unless the test names an operator
+// restriction.
+function legacyDeps(
+  vault: MemoryVaultStore,
+  restriction: Partial<UiHandlerDeps> = {},
+): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -111,8 +116,15 @@ function legacyDeps(vault: MemoryVaultStore): UiHandlerDeps {
     modelPortFactory: () => fakeModel(TWO_PUBLIC_FACTS),
     store: createInMemoryUiStore(),
     memoryVault: vault,
+    ...restriction,
   };
 }
+
+// #4206: only a configured governed-assist ceiling still holds a private fact for review.
+const OPERATOR_RESTRICTION: Partial<UiHandlerDeps> = {
+  memoryDeploymentCeiling: "governed-assist",
+  memoryDeploymentCeilingConfigured: true,
+};
 
 function context(): ConversationMemoryRuntimeContext {
   const path = mkdtempSync(join(realpathSync(tmpdir()), "keiko-parity-proj-"));
@@ -145,40 +157,46 @@ function readMemories(
 }
 
 describe("legacy fail-closed parity for mode-aware capture", () => {
-  it("persists two public facts as proposed with an unchanged wire-action vector", async () => {
-    const vault = makeVault();
-    const ctx = context();
-    const actions = await captureSalientFromTurn(
-      legacyDeps(vault),
-      { content: USER_TEXT, memory: { enabled: true } },
-      ctx,
-      "gpt-test",
-      "ok",
-    );
-    expect(actions.map(normalizeAction)).toEqual([
-      {
-        kind: "candidate",
-        proposalId: "<uuid>",
-        body: "I ship releases on a fortnightly cadence.",
-        scopeLabel: "User memory",
-        requiresApproval: false,
-        status: "proposed",
-      },
-      {
-        kind: "candidate",
-        proposalId: "<uuid>",
-        body: "I run the build pipeline on self-hosted runners.",
-        scopeLabel: "User memory",
-        requiresApproval: false,
-        status: "proposed",
-      },
-    ]);
-    const records = readMemories(vault, ctx);
-    expect(records).toHaveLength(2);
-    expect(records.every((r) => r.status === "proposed")).toBe(true);
-    expect(records.every((r) => r.provenance.sensitivity === "public")).toBe(true);
-    expect(records.map((r) => r.scope.kind)).toEqual(["user", "user"]);
-  });
+  it.each([
+    ["accepts", {}, "accepted"],
+    ["keeps proposed under an operator restriction", OPERATOR_RESTRICTION, "proposed"],
+  ] as const)(
+    "%s two public facts with the pinned wire-action vector",
+    async (_name, deps, status) => {
+      const vault = makeVault();
+      const ctx = context();
+      const actions = await captureSalientFromTurn(
+        legacyDeps(vault, deps),
+        { content: USER_TEXT, memory: { enabled: true } },
+        ctx,
+        "gpt-test",
+        "ok",
+      );
+      expect(actions.map((action) => normalizeAction(action))).toEqual([
+        {
+          kind: "candidate",
+          proposalId: "<uuid>",
+          body: "I ship releases on a fortnightly cadence.",
+          scopeLabel: "User memory",
+          requiresApproval: false,
+          status,
+        },
+        {
+          kind: "candidate",
+          proposalId: "<uuid>",
+          body: "I run the build pipeline on self-hosted runners.",
+          scopeLabel: "User memory",
+          requiresApproval: false,
+          status,
+        },
+      ]);
+      const records = readMemories(vault, ctx);
+      expect(records).toHaveLength(2);
+      expect(records.every((r) => r.status === status)).toBe(true);
+      expect(records.every((r) => r.provenance.sensitivity === "public")).toBe(true);
+      expect(records.map((r) => r.scope.kind)).toEqual(["user", "user"]);
+    },
+  );
 
   it("writes nothing when memory is disabled", async () => {
     const vault = makeVault();

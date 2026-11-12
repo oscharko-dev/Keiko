@@ -108,6 +108,15 @@ restart. The three records rebind only those source digests. No record binds cap
 existing captures are kept to preserve one renderer across the set. No updater behavior, baseline
 or numerical ceiling changed.
 
+The MemoriaViva chain (#4213, #4206, #4228) changes Memory strings in the core and optional English
+and German message catalogs, so the four catalog digests moved. On 2026-11-11 (UTC) the complete
+original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0, `--init`) on the
+chain merged with current `dev`: **9 passed (1.6m)**, and `npm run check:update-ui-evidence`
+passes. Only the four catalog digests and `generatedAt` in the three records were taken from this
+run; its fallback-font captures were discarded and the 14 committed captures are unchanged. No
+updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
+evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

@@ -16,17 +16,22 @@ const OK_ANSWER = "OK.";
 const NO_MEMORY_ANSWER = "Ich weiss es nicht.";
 const ECHO_PREFIX = "Erinnerungen: ";
 
-/** Memory bodies the product placed inside its untrusted fence, in prompt order. */
-export function memoryBodiesInPrompt(messages) {
-  const text = messages
-    .filter((message) => message.role === "user")
+const PROFILE_FENCE_START = "===UNTRUSTED_PERSON_PROFILE_START===";
+const PROFILE_FENCE_END = "===UNTRUSTED_PERSON_PROFILE_END===";
+
+function messageText(messages, roles) {
+  return messages
+    .filter((message) => roles.includes(message.role))
     .map((message) => (typeof message.content === "string" ? message.content : ""))
     .join("\n");
-  const start = text.indexOf(MEMORY_FENCE_START);
-  const end = text.indexOf(MEMORY_FENCE_END);
+}
+
+function fencedLines(text, startMarker, endMarker) {
+  const start = text.indexOf(startMarker);
+  const end = text.indexOf(endMarker);
   if (start < 0 || end < start) return [];
   return text
-    .slice(start + MEMORY_FENCE_START.length, end)
+    .slice(start + startMarker.length, end)
     .split("\n")
     .filter((line) => line.startsWith("- "))
     .map((line) =>
@@ -36,6 +41,21 @@ export function memoryBodiesInPrompt(messages) {
         .trim(),
     )
     .filter((line) => line.length > 0);
+}
+
+/**
+ * Memory bodies the product placed inside its untrusted fences, in prompt order: the standing
+ * profile (#4228), which travels with the system prompt, then the memories retrieved for the turn.
+ */
+export function memoryBodiesInPrompt(messages) {
+  return [
+    ...fencedLines(
+      messageText(messages, ["system", "user"]),
+      PROFILE_FENCE_START,
+      PROFILE_FENCE_END,
+    ),
+    ...fencedLines(messageText(messages, ["user"]), MEMORY_FENCE_START, MEMORY_FENCE_END),
+  ];
 }
 
 function tokenEstimate(text) {

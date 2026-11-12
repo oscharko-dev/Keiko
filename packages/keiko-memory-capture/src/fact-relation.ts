@@ -103,6 +103,11 @@ const STATED_CHANGE_RE = anyWordPattern([
   "kuenftig",
   "inzwischen",
   "mittlerweile",
+  "neuerdings",
+  "seit kurzem",
+  "seit heute",
+  "seit diesem",
+  "seit dieser",
   "nicht mehr",
   "stattdessen",
   "lieber",
@@ -119,7 +124,12 @@ const STATED_CHANGE_RE = anyWordPattern([
   "now",
   "these days",
   "nowadays",
+  "recently",
+  "since this",
 ]);
+// What the person is: "Ich bin Kreditanalystin" and "Seit diesem Monat bin ich Teamleiterin" share no
+// word and describe one thing all the same. Only a stated change with a model label gets this far.
+const SELF_DESCRIPTION_RE = anyWordPattern(["ich bin", "bin ich", "i am", "i['’]m"]);
 
 function unmatched(words: readonly string[], other: readonly string[]): readonly string[] {
   return words.filter((word) => !hasWord(other, word));
@@ -362,6 +372,11 @@ export function compareFacts(a: string, b: string): FactComparison {
     : "different";
 }
 
+// Whether a stored body states a preference ("Bevorzugt Tabellen", "Likes dark mode").
+export function statesPreference(body: string): boolean {
+  return PREFERENCE_RE.test(body);
+}
+
 // Whether two bodies state one fact. A changed value or a reversed preference is never the same
 // fact, however alike the two read.
 export function statesSameFact(a: string, b: string): boolean {
@@ -426,6 +441,15 @@ function replacesByComparison(
   return comparison === "number-changed" && !adds;
 }
 
+// Whether a stated change can be about the known fact: they share a word, or both are preferences or
+// both say what the person is.
+function statesSameKind(body: string, evidence: string, knownBody: string): boolean {
+  if (sharesWord(body, knownBody)) return true;
+  return [PREFERENCE_RE, SELF_DESCRIPTION_RE].some(
+    (kind) => kind.test(evidence) && kind.test(knownBody),
+  );
+}
+
 function labelledChange(
   body: string,
   evidence: string,
@@ -439,12 +463,9 @@ function labelledChange(
   ) {
     return { kind: "supersede", factId: related.id, basis: "slot-changed" };
   }
-  const sameKind =
-    sharesWord(body, related.body) ||
-    (PREFERENCE_RE.test(evidence) && PREFERENCE_RE.test(related.body));
   if (
     STATED_CHANGE_RE.test(evidence) &&
-    sameKind &&
+    statesSameKind(body, evidence, related.body) &&
     !bringsOwnPreferenceContext(body, related.body)
   ) {
     return { kind: "supersede", factId: related.id, basis: "stated-change" };

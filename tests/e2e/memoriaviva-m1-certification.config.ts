@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
+import { devServerEnv } from "./support/dev-server-env.js";
 import { e2eStateDir } from "./support/e2e-state-dir.js";
 
 const root = process.cwd();
@@ -59,19 +60,7 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: {
-        KEIKO_OS_KEYCHAIN: "off",
-        NODE_ENV: "test",
-        KEIKO_DEV_UI_PORT: String(publicPort),
-        KEIKO_DEV_BFF_PORT: String(bffPort),
-        KEIKO_DEV_NEXT_PORT: String(nextPort),
-        KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
-        KEIKO_DEV_TEST_SKIP_BFF_WATCH: "1",
-        KEIKO_DEV_MAX_RESTARTS: "0",
-        KEIKO_DEV_NEXT_BUNDLER: "webpack",
-        KEIKO_STATE_DIR: stateDir,
-        KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
-        KEIKO_MEMORY_DIR: join(stateDir, "memory"),
-        KEIKO_CONFIG_FILE: runtimeConfigPath,
+        ...devServerEnv({ publicPort, bffPort, nextPort, stateDir, runtimeConfigPath }),
         KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
       },
     },

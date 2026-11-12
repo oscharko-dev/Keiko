@@ -311,7 +311,6 @@ async function persistStreamedTurn(
     deps,
     { ...request, sourceMessageId: userMessage.id },
     memoryContext,
-    modelId,
     memory,
     redactedContent,
     assistantMessage.id,

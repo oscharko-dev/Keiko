@@ -34,6 +34,7 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import type { ConversationMemoryResultWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildMemoryResult,
   collectMemoryActions,
@@ -134,6 +135,13 @@ function scriptedModel(items: readonly ScriptedItem[]): ModelPort {
   };
 }
 
+// What an answer receives from memory: the memories retrieved for the question and the standing
+// profile, which carries the person's preferences to every answer (#4228).
+function suppliedMemoryText(result: ConversationMemoryResultWire): string {
+  const profile = result.context.profile?.entries.map((entry) => entry.text) ?? [];
+  return [result.context.text, ...profile].join("\n");
+}
+
 function makeDeps(
   vault: MemoryVaultStore,
   items: readonly ScriptedItem[],
@@ -224,8 +232,8 @@ describe("a changed fact replaces the older one", () => {
       memory: { enabled: true, budgetTokens: 900, context: {} },
     } as unknown as SendDesktopChatRequest;
     const retrieved = await buildMemoryResult(request, makeDeps(vault, []), ctx);
-    expect(retrieved.context.text).toContain(newer);
-    expect(retrieved.context.text).not.toContain(older);
+    expect(suppliedMemoryText(retrieved)).toContain(newer);
+    expect(suppliedMemoryText(retrieved)).not.toContain(older);
   });
 
   it.each([
@@ -268,7 +276,9 @@ describe("a changed fact replaces the older one", () => {
     expect(liveBodies(vault, ctx)).toHaveLength(2);
   });
 
-  it("waits for the person's approval in Ask mode and then replaces through the correction path", async () => {
+  // #4206: the governed-assist ceiling given to `say` is an operator restriction, the only thing that
+  // still holds a private fact for review.
+  it("waits for the person's approval under an operator restriction and then replaces through the correction path", async () => {
     const vault = makeVault();
     const ctx = context();
     await say(
@@ -579,7 +589,7 @@ describe("what a fact keeps from the person's words", () => {
         memory: { enabled: true, budgetTokens: 900, context: {} },
       } as unknown as SendDesktopChatRequest;
       const retrieved = await buildMemoryResult(request, makeDeps(vault, []), ctx);
-      expect(retrieved.context.text).toContain(evidence);
+      expect(suppliedMemoryText(retrieved)).toContain(evidence);
     },
   );
 
@@ -927,6 +937,31 @@ describe("learning leaves body-free evidence", () => {
     ).toMatchObject({ sourceMessageCount: 1 });
     const [record] = recordsWith(vault, ctx, "accepted");
     expect(record?.provenance.sourceMessageIds).toEqual(["message-7"]);
+  });
+
+  it("counts a preference learned from the person's own words when the model returned none", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const vault = makeVault();
+    const ctx = context();
+    await captureSalientFromTurn(
+      makeDeps(vault, []),
+      { content: "Thanks! Ich bevorzuge Tabellen.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+
+    const extraction = sink.events.find((event) => event.op === "memory.learn.extraction");
+    if (extraction === undefined) throw new Error("expected an extraction line");
+    const line = formatActivityLogProofLine(extraction);
+    expect(expectActivityLogProof("memory.learn.extraction.line", line)).toMatchObject({
+      rawItemCount: 0,
+      admittedCount: 0,
+      statedPreferenceCount: 1,
+    });
+    expect(line).not.toContain("Tabellen");
+    expect([...liveBodies(vault, ctx)]).toEqual(["Ich bevorzuge Tabellen"]);
   });
 
   it("logs every reason capture can report", () => {

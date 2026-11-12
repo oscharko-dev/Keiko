@@ -872,27 +872,30 @@ async function persistedVoiceTurnCounts(
   };
 }
 
+// Counts the persisted captures of one fact. Learning runs in a pass after the turn settles, so a
+// previous test's capture can land inside this test's `since` window; only the fact names the turn.
 async function persistedMemoryCaptureCount(
   request: APIRequestContext,
   since: number,
-  scope?: "user" | "project",
+  fact: string,
 ): Promise<number | string> {
-  const params = new URLSearchParams({
-    order: "desc",
-    since: String(since),
-    ...(scope === undefined ? {} : { scope }),
-  });
+  const params = new URLSearchParams({ order: "desc", since: String(since) });
   const response = await request.get(`/api/memory?${params.toString()}`);
   if (!response.ok()) return `HTTP ${String(response.status())}`;
   const body = (await response.json()) as {
     readonly captures?: readonly {
       readonly memoryId?: unknown;
       readonly outcome?: unknown;
+      readonly bodyExcerpt?: unknown;
     }[];
   };
   const captures = body.captures ?? [];
   return captures.filter(
-    (capture) => capture.outcome !== "rejected" && typeof capture.memoryId === "string",
+    (capture) =>
+      capture.outcome !== "rejected" &&
+      typeof capture.memoryId === "string" &&
+      typeof capture.bodyExcerpt === "string" &&
+      capture.bodyExcerpt.includes(fact),
   ).length;
 }
 
@@ -1048,7 +1051,9 @@ async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): P
   const conversation = page.getByRole("log", { name: "Conversation" });
   await expect(conversation.getByText(MEMORY_CAPTURE_TRANSCRIPT, { exact: true })).toHaveCount(1);
   await expect(conversation.getByText(/KEIKO_E2E_STREAM_OK/u)).toHaveCount(1);
-  await expect.poll(() => persistedMemoryCaptureCount(request, since)).toBe(1);
+  await expect
+    .poll(() => persistedMemoryCaptureCount(request, since, MEMORY_CAPTURE_TRANSCRIPT))
+    .toBe(1);
   expectCanonicalVoiceSend(chatSends, MEMORY_CAPTURE_TRANSCRIPT);
 
   await dialogSwitch.click();

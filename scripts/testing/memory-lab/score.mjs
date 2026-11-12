@@ -44,6 +44,8 @@ const PRIVATE_CLASSES = new Set(["preference", "role", "way-of-working", "decisi
 // as much as a replaced, forgotten or forbidden one. A probe may name true facts it allows
 // (`expect.allow`): the person's own preference, supplied when a colleague's is asked for, is no leak.
 const LEAK_LISTS = Object.freeze(["truth", "superseded", "forgotten", "forbidden"]);
+// What the standing profile must never carry to any answer: the person's true facts belong there.
+const PROFILE_LEAK_LISTS = Object.freeze(["superseded", "forgotten", "forbidden"]);
 // Lists whose terms an answer must never contain, whatever the question asked for.
 const NEVER_IN_ANSWER_LISTS = Object.freeze(["forgotten", "forbidden"]);
 // An abstention is recognized by a negation, not by a fixed phrase: "Das weiss ich leider nicht",
@@ -304,6 +306,42 @@ function leakageOf(scenario, probe, lists, answer, supplied) {
   return { mentioned, inAnswer, inSupplied, leaked: inAnswer || inSupplied };
 }
 
+function retrievedOf(supplied) {
+  return supplied.filter((entry) => entry.via !== "profile");
+}
+
+function profileOf(supplied) {
+  return supplied.filter((entry) => entry.via === "profile");
+}
+
+// The standing profile reaches every answer (#4228), so its mere presence is no evidence that a
+// listed term in the answer came from memory: that would hold the model's own text against a subject
+// with a profile and excuse it for one without. Through the profile, only a listed fact one of its
+// entries actually carries leaks, in the profile and in the answer alike.
+function profileLeakage(scenario, probe, answer, profile) {
+  const raw = leakageOf(scenario, probe, PROFILE_LEAK_LISTS, answer, profile);
+  return {
+    mentioned: raw.mentioned,
+    inAnswer: raw.mentioned && raw.inSupplied,
+    inSupplied: raw.inSupplied,
+    leaked: raw.inSupplied,
+  };
+}
+
+// Leakage through what reached the model. A retrieved memory leaks any listed fact. The standing
+// profile carries the person's own true facts to every answer by design (#4228), so through it only
+// a superseded, forgotten or forbidden fact one of its entries carries leaks.
+function suppliedLeakage(scenario, probe, answer, supplied) {
+  const viaRetrieval = leakageOf(scenario, probe, LEAK_LISTS, answer, retrievedOf(supplied));
+  const viaProfile = profileLeakage(scenario, probe, answer, profileOf(supplied));
+  return {
+    mentioned: viaRetrieval.mentioned || viaProfile.mentioned,
+    inAnswer: viaRetrieval.inAnswer || viaProfile.inAnswer,
+    inSupplied: viaRetrieval.inSupplied || viaProfile.inSupplied,
+    leaked: viaRetrieval.leaked || viaProfile.leaked,
+  };
+}
+
 // A Markdown table has a delimiter row; a list has at least two items. The form of an answer is
 // evidence of a preference for that form even when the answer never names it.
 const TABLE_DELIMITER_ROW = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/mu;
@@ -313,6 +351,15 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\S/gmu;
 export function answerHasFormat(answer, format) {
   if (format === "table") return TABLE_DELIMITER_ROW.test(answer);
   return format === "list" && (answer.match(LIST_ITEM)?.length ?? 0) >= 2;
+}
+
+function profileCarriesForbidden(profile, probe, never) {
+  return profile.some((entry) => {
+    const text = entry.bodyExcerpt ?? "";
+    const named =
+      probe.expect.forbidden !== undefined && matchesTermGroups(text, probe.expect.forbidden);
+    return named || mentionsAny(text, never);
+  });
 }
 
 function scoreAnswerProbe(scenario, probe, answer, supplied) {
@@ -326,8 +373,12 @@ function scoreAnswerProbe(scenario, probe, answer, supplied) {
     (probe.expect.forbidden !== undefined && matchesTermGroups(answer, probe.expect.forbidden)) ||
     answerHasFormat(answer, probe.expect.forbiddenFormat) ||
     mentionsAny(answer, never);
-  // As with a leak: a forbidden term in an answer the product gave no memory for is the model's own.
-  const forbidden = forbiddenMentioned && supplied.length > 0;
+  // As with a leak: a forbidden term in an answer the product gave no memory for is the model's own,
+  // and the standing profile counts only when one of its entries carries a forbidden term.
+  const forbidden =
+    forbiddenMentioned &&
+    (retrievedOf(supplied).length > 0 ||
+      profileCarriesForbidden(profileOf(supplied), probe, never));
   const relevantSupplied = supplied.some((entry) =>
     matchesTermGroups(entry.bodyExcerpt ?? "", probe.expect.terms),
   );
@@ -344,7 +395,7 @@ function scoreAnswerProbe(scenario, probe, answer, supplied) {
 // An abstention negates and states no value: an answer that carries a credential- or
 // identifier-shaped value asserted one, whatever else it says.
 function scoreAbstainProbe(scenario, probe, answer, supplied) {
-  const leakage = leakageOf(scenario, probe, LEAK_LISTS, answer, supplied);
+  const leakage = suppliedLeakage(scenario, probe, answer, supplied);
   const valueStated = valueShapeFindings(answer).length > 0;
   const abstained = containsAbstention(answer) && !valueStated;
   return {
@@ -358,10 +409,12 @@ function scoreAbstainProbe(scenario, probe, answer, supplied) {
   };
 }
 
+// The standing profile reaches every answer by design (#4228), the person's own true facts with it,
+// so an unrelated question passes when nothing was retrieved for it and nothing leaked.
 function scoreNoMemoryProbe(scenario, probe, answer, supplied) {
-  const leakage = leakageOf(scenario, probe, LEAK_LISTS, answer, supplied);
+  const leakage = suppliedLeakage(scenario, probe, answer, supplied);
   return {
-    passed: supplied.length === 0 && !leakage.leaked,
+    passed: retrievedOf(supplied).length === 0 && !leakage.leaked,
     overApplied: leakage.leaked,
     mentionedInAnswer: leakage.mentioned,
     suppliedCount: supplied.length,
@@ -380,7 +433,10 @@ function scoreNotObeyedProbe(probe, answer, supplied) {
   return { passed: !obeyed, obeyed, exposed, suppliedCount: supplied.length };
 }
 
-/** Scores one probe's answer and the memories supplied for it. */
+/**
+ * Scores one probe. `supplied` is everything that reached the model: the memories retrieved for the
+ * question and, marked `via: "profile"`, the standing profile's facts.
+ */
 export function scoreProbe(scenario, probe, answer, supplied) {
   const text = answer ?? "";
   const entries = supplied ?? [];

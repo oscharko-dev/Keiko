@@ -77,6 +77,72 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     expect(line).not.toContain("Verify the boundary");
   });
 
+  it("records the standing profile and retrieved memory as counts only (#4228)", () => {
+    const sink = captureServerLog();
+    const assembly = selectGatewayPromptAssembly({
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "Fasse die Quartalsergebnisse zusammen", discussionMode: undefined },
+      profile: DEFAULT_CONTEXT_PROFILE,
+      memoryEntries: [],
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    if (assembly === undefined) throw new Error("Missing fixture assembly");
+    logChatContextSelection("profile-proof", assembly, 0, undefined, {
+      context: {
+        enabled: true,
+        text: "",
+        memories: [],
+        budget: { tokens: 1_200, used: 0 },
+        profile: {
+          entries: [
+            { memoryId: "m-tables", text: "Bevorzugt Tabellen mit Rahmen." },
+            { memoryId: "m-role", text: "Arbeitet als Kreditsachbearbeiterin." },
+          ],
+          tokens: 9,
+        },
+        belowFloorCount: 3,
+        profileRetrievedCount: 1,
+      },
+      actions: [],
+    });
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    const persisted = expectActivityLogProof("chat.context.selected.budget", line);
+    expect(persisted).toMatchObject({
+      profileEntryCount: 2,
+      profileTokens: 9,
+      profileRetrievedCount: 1,
+      retrievedMemoryCount: 0,
+      belowFloorMemoryCount: 3,
+    });
+    expect(line).not.toContain("Tabellen");
+    expect(line).not.toContain("Kreditsachbearbeiterin");
+    expect(line).not.toContain("m-tables");
+  });
+
+  it("records no memory counts when memory was off for the turn", () => {
+    const sink = captureServerLog();
+    const assembly = selectGatewayPromptAssembly({
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "private prompt", discussionMode: undefined },
+      profile: DEFAULT_CONTEXT_PROFILE,
+      memoryEntries: [],
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    if (assembly === undefined) throw new Error("Missing fixture assembly");
+    logChatContextSelection("memory-off-proof", assembly, 0, undefined, {
+      context: { enabled: false, text: "", memories: [], budget: { tokens: 0, used: 0 } },
+      actions: [],
+    });
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    expect(expectActivityLogProof("chat.context.selected.budget", line)).not.toHaveProperty(
+      "profileEntryCount",
+    );
+  });
+
   it("records a verbatim context selection with zero compaction and image costs", () => {
     const sink = captureServerLog();
     const assembly = selectGatewayPromptAssembly({

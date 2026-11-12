@@ -19,6 +19,7 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createRunRegistry } from "./runs.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
+import { disposeMemoryLearningRuntime, memoryLearningRuntime } from "./memory-learning.js";
 import type { RouteContext } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -87,7 +88,9 @@ function seedMemory(vault: MemoryVaultStore, id: string, body: string): void {
     id: id as MemoryId,
     schemaVersion: "1",
     scope: { kind: "user", userId: "local-operator" as MemoryUserId },
-    type: "preference",
+    // A fact, not a preference: preferences reach every answer through the standing profile
+    // (#4228), and this fixture proves retrieval by the question.
+    type: "semantic-fact",
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -115,6 +118,7 @@ function fixture(calls: GatewayCallRequest[]): {
   mkdirSync(memoryDir);
   const vault = createMemoryVault({ memoryDir, redactString: (text) => text });
   cleanups.push(() => {
+    disposeMemoryLearningRuntime({ store });
     vault.close();
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -189,9 +193,11 @@ it("learns from the person's own words when a long grounded prompt was compacted
   const result = await handleGroundedAsk(groundedRoute(root, chatId, CONTENT), deps);
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   expect(calls.some((request) => systemOf(request) === PROMPT_COMPACTION_SYSTEM)).toBe(true);
-  await vi.waitFor(() => {
-    expect(calls.some((call) => isSalienceCall(call))).toBe(true);
-  });
+  // Learning runs in a background pass after the turn, not in the turn's tail (#4213).
+  await expect(memoryLearningRuntime(deps).runPass("inactivity", undefined)).resolves.toBe(
+    "completed",
+  );
+  expect(calls.some((call) => isSalienceCall(call))).toBe(true);
   const learner = texts(
     calls.filter((call) => isSalienceCall(call)),
     "user",

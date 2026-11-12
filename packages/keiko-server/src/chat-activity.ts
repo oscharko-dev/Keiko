@@ -1,3 +1,4 @@
+import type { ConversationMemoryResultWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { ContextProfile, ModelKind } from "@oscharko-dev/keiko-contracts";
 import type { SentGroundedPrompt } from "./grounded-prompt-context.js";
@@ -22,7 +23,26 @@ export type ChatRejectionReason = "readiness" | "generation" | "grounding-scope"
 // `not-ready` when a check ran and failed.
 export type ChatReadinessObservation = "unobserved" | "not-ready";
 
-export interface ChatResponseMemoryActivity {
+// #4228: the standing profile and the memories retrieved for an answer, as counts only.
+interface MemorySelectionLogFields {
+  readonly profileEntryCount?: number;
+  readonly profileTokens?: number;
+  readonly profileDroppedCount?: number;
+  readonly profileRetrievedCount?: number;
+  readonly retrievedMemoryCount?: number;
+  readonly belowFloorMemoryCount?: number;
+}
+
+const MEMORY_SELECTION_LOG_FIELDS = {
+  profileEntryCount: { type: "integer", dataClass: "count", required: false },
+  profileTokens: { type: "integer", dataClass: "count", required: false },
+  profileDroppedCount: { type: "integer", dataClass: "count", required: false },
+  profileRetrievedCount: { type: "integer", dataClass: "count", required: false },
+  retrievedMemoryCount: { type: "integer", dataClass: "count", required: false },
+  belowFloorMemoryCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
+export interface ChatResponseMemoryActivity extends MemorySelectionLogFields {
   readonly uncitedMemoryContextMarkerCount: number;
   readonly memoryContextDisposition: "included" | "excluded" | "not-requested";
 }
@@ -164,6 +184,7 @@ const CHAT_RESPONSE_MESSAGE_OPERATION = defineActivityLogOperation({
   emitter: "chat-activity.logChatResponseMessage",
   fields: {
     uncitedMemoryContextMarkerCount: { type: "integer", dataClass: "count", required: false },
+    ...MEMORY_SELECTION_LOG_FIELDS,
     memoryContextDisposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -200,6 +221,7 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
     compactedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     retainedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     historyDocumentCandidates: { type: "integer", dataClass: "count", required: false },
+    ...MEMORY_SELECTION_LOG_FIELDS,
     tokensBefore: { type: "integer", dataClass: "count", required: true },
     tokensAfter: { type: "integer", dataClass: "count", required: true },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
@@ -432,11 +454,35 @@ function selectedSkillLogFields(
 }
 
 /** Record the selection before dispatch so failed or cancelled turns retain their budget evidence. */
+/** Counts of the memory an answer received; nothing when memory was off for the turn. */
+export function memorySelectionLogFields(
+  memory: ConversationMemoryResultWire | undefined,
+): MemorySelectionLogFields {
+  if (memory?.context.enabled !== true) return {};
+  return {
+    ...profileLogFields(memory.context.profile),
+    profileRetrievedCount: memory.context.profileRetrievedCount ?? 0,
+    retrievedMemoryCount: memory.context.memories.length,
+    belowFloorMemoryCount: memory.context.belowFloorCount ?? 0,
+  };
+}
+
+function profileLogFields(
+  profile: ConversationMemoryResultWire["context"]["profile"],
+): Pick<MemorySelectionLogFields, "profileEntryCount" | "profileTokens" | "profileDroppedCount"> {
+  return {
+    profileEntryCount: profile?.entries.length ?? 0,
+    profileTokens: profile?.tokens ?? 0,
+    profileDroppedCount: profile?.droppedCount ?? 0,
+  };
+}
+
 export function logChatContextSelection(
   correlationId: string | undefined,
   assembly: GatewayPromptAssembly,
   imageCount: number,
   historyDocumentCandidates?: number,
+  memory?: ConversationMemoryResultWire,
 ): void {
   const { compaction, diagnostics } = assembly;
   const compacted = compaction !== undefined;
@@ -455,6 +501,7 @@ export function logChatContextSelection(
         state: compacted ? "compacted" : "verbatim",
         ...historyMetrics,
         ...(historyDocumentCandidates === undefined ? {} : { historyDocumentCandidates }),
+        ...memorySelectionLogFields(memory),
         ...selectedSkillLogFields(assembly),
         tokensSaved: Math.max(0, tokensBefore - tokensAfter),
         promptTokens: diagnostics.totalEstimatedTokens,

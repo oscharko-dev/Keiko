@@ -66,6 +66,7 @@ export function failedUnitResult({ scenario, name, arm, repetition, error, inclu
     requests: [],
     foldedKeys: [],
     instanceStartMs: 0,
+    startupRereads: 0,
     error: describeUnitError(error, includeMessage),
   };
 }
