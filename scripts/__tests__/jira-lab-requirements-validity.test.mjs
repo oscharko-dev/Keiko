@@ -16,7 +16,9 @@ import {
   classifyJourney,
   invalidCheck,
   gradeException,
+  isDeadlineAbort,
   isTransportFailure,
+  showsOutage,
   redCheck,
   readGatewayFailures,
 } from "../testing/jira-chat-lab/requirements/validity.mjs";
@@ -46,10 +48,28 @@ describe("journey validity", () => {
     expect(graded.covers).toEqual([]);
   });
 
-  it("grades any non-green journey during an open circuit invalid", () => {
-    expect(classifyJourney(journey("unverified"), { ...NONE, circuit: 1 }).reason).toBe(
-      "gateway-circuit-open",
+  it("keeps a red journey red when the circuit only cycled and no call failed through it", () => {
+    const check = journey("red");
+    expect(classifyJourney(check, { ...NONE, circuit: 3 })).toBe(check);
+    expect(showsOutage({ ...NONE, circuit: 3 })).toBe(false);
+  });
+
+  it("grades a correlated outage invalid even without a circuit event", () => {
+    expect(showsOutage({ ...NONE, outages: 1 })).toBe(true);
+    expect(classifyJourney(journey("unverified"), { ...NONE, outages: 1 }).reason).toBe(
+      "gateway-failure",
     );
+  });
+
+  it("does not grade a journey-turn timeout invalid", () => {
+    const check = journey("red", { turnFailure: "The operation was aborted due to timeout" });
+    expect(classifyJourney(check, NONE)).toBe(check);
+  });
+
+  it("recognizes a deadline abort by error name only", () => {
+    expect(isDeadlineAbort(Object.assign(new Error("x"), { name: "TimeoutError" }))).toBe(true);
+    expect(isDeadlineAbort(Object.assign(new Error("x"), { name: "AbortError" }))).toBe(true);
+    expect(isDeadlineAbort(new Error("aborted due to timeout"))).toBe(false);
   });
 
   it("recognizes a gateway failure from the turn itself without log evidence", () => {

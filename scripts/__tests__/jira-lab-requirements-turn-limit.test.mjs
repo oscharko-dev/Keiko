@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => ({
   observations: 0,
   sends: 0,
   aborts: 0,
+  readinessError: undefined,
 }));
 
 vi.mock("node:timers/promises", () => ({
@@ -53,6 +54,7 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
     prepareChat: async () => ({ id: "chat", groundingScopeIdentity: "scope" }),
     withLiveChat: async ({ run }) => run(fixture.live),
     jsonRequest: async (_origin, _cookie, name, _path, _body, _method, signal) => {
+      if (name === "readiness" && fixture.readinessError) throw fixture.readinessError;
       if (Object.hasOwn(responses, name)) return responses[name];
       switch (name) {
         case "observe": {
@@ -86,7 +88,7 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
   };
 });
 
-import { runJourneys } from "../testing/jira-chat-lab/requirements/journeys.mjs";
+import { modelUnavailable, runJourneys } from "../testing/jira-chat-lab/requirements/journeys.mjs";
 
 let directory;
 beforeEach(() => {
@@ -97,6 +99,7 @@ beforeEach(() => {
     observations: 0,
     sends: 0,
     aborts: 0,
+    readinessError: undefined,
     live: {
       projectPath: directory,
       origin: "http://127.0.0.1:19999",
@@ -175,5 +178,27 @@ describe("requirements lab turn-limit provenance", () => {
     expect(turn.runs).toHaveLength(3);
     expect(turn.validRuns).toBe(3);
     expect(turn.status).toBe("unverified");
+  });
+
+  describe("readiness turn", () => {
+    const check = () =>
+      modelUnavailable({ origin: "o", cookie: "c", projectPath: directory }, { directory }, "m");
+
+    it("treats its own deadline abort as an unavailable model, by error name", async () => {
+      fixture.readinessError = Object.assign(
+        new Error("The operation was aborted due to timeout"),
+        {
+          name: "TimeoutError",
+        },
+      );
+      expect(await check()).toMatchObject({ unavailable: true });
+    });
+
+    it("keeps a plain route failure the product's and an answered turn undefined", async () => {
+      fixture.readinessError = new TypeError("Live Chat HTTP stage failed");
+      expect(await check()).toMatchObject({ unavailable: false });
+      fixture.readinessError = undefined;
+      expect(await check()).toBeUndefined();
+    });
   });
 });
