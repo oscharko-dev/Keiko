@@ -141,7 +141,9 @@ export async function recoverScope(session, run, entry, turnFor, before) {
   await removeNative(session, strayWrites(before, after, [], wide).remove);
   await cleanBefore(session, fixture, entry, marker, tag);
   const final = await scopeSnapshot(session, fixture, fixture.selection);
-  if (strayWrites(before, final, [], wide).remove.length > 0)
+  // A changed or removed baseline object cannot be undone by the lane; only an unchanged scope lets
+  // the run continue, otherwise it stops and keeps its pending marker for reconciliation.
+  if (strayWrites(before, final, [], wide).count > 0)
     throw new TypeError(`Owned scope of ${entry.id} is not clean after recovery`);
 }
 

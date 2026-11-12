@@ -181,12 +181,17 @@ const suspectProduct = (row, jira) =>
     (row.failure === "readback-mismatch" || row.failure === "oracle-read-refused") &&
     succeededOutcome(row.dispatch?.result?.data?.outcome)) ||
   (jira.class === "4xx-validation" && row.failure !== "dispatch-failed");
+/** Graded dispositions that explain themselves: Jira's verified refusal or absent capability. */
+const GRADED_ROOT_DISPOSITIONS = new Set(["denied", "unavailable"]);
 /**
  * A cascade needs a visible root: the blocking row must itself be non-executable with its own cause
- * in the run (`blockedBy.rootCause`). A root that left no such trace is no explanation.
+ * in the run (`blockedBy.rootCause`), or graded denied or unavailable on independent native
+ * evidence (`blockedBy.rootDisposition`). A root that left no such trace is no explanation.
  */
 const cascadeCause = (blockedBy) =>
-  blockedBy.rootCause === undefined ? "undetermined" : "cascade";
+  blockedBy.rootCause !== undefined || GRADED_ROOT_DISPOSITIONS.has(blockedBy.rootDisposition)
+    ? "cascade"
+    : "undetermined";
 /**
  * Adds `cause` (and `blockedBy`, `jira`, never a changed disposition) to a row that is not graded.
  * `blockedBy` names the auxiliary fixture or earlier case whose failure caused this one.

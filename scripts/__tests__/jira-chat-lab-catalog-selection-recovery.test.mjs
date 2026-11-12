@@ -83,6 +83,17 @@ describe("recoverScope", () => {
     );
   });
 
+  it("throws when a baseline object changed, although nothing is left to remove", async () => {
+    filters = [...filters, { id: 11, name: "Existing" }];
+    const before = await scopeSnapshot({}, fixture, fixture.selection);
+    // The failed settlement renamed an existing filter: no removal can undo it.
+    filters = [filters[0], { id: 11, name: "Renamed by the turn" }];
+    await expect(recoverScope({}, run, entry, turnFor, before)).rejects.toThrow(
+      "not clean after recovery",
+    );
+    expect(deletions).toEqual([]);
+  });
+
   it("throws when the scope still holds an extra object after a removal that reported success", async () => {
     const before = await scopeSnapshot({}, fixture, fixture.selection);
     filters = [...filters, { id: 11, name: "Extra" }];

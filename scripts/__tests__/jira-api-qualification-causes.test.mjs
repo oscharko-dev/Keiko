@@ -492,6 +492,13 @@ describe("cause table", () => {
         "cascade",
       );
       expect(annotateCause(row({}), { blockedBy: blocker }).cause).toBe("undetermined");
+      for (const rootDisposition of ["denied", "unavailable"])
+        expect(annotateCause(row({}), { blockedBy: { ...blocker, rootDisposition } }).cause).toBe(
+          "cascade",
+        );
+      expect(
+        annotateCause(row({}), { blockedBy: { ...blocker, rootDisposition: "unknown" } }).cause,
+      ).toBe("undetermined");
     });
   });
   it("classifies Jira answers into closed categories", () => {
@@ -582,11 +589,21 @@ describe("repaired review findings", () => {
   it("blocks the dependents of every root that did not qualify", () => {
     const roots = new Map();
     const root = { tool: "jira.root", identity: "POST /root" };
-    for (const runtimeAvailability of ["denied", "unavailable", "unknown"]) {
+    for (const runtimeAvailability of ["denied", "unavailable"]) {
       roots.clear();
-      recordFailedRoot(roots, root, { runtimeAvailability, cause: "lab" });
-      expect(roots.get("jira.root")).toEqual({ identity: "POST /root", cause: "lab" });
+      recordFailedRoot(roots, root, { runtimeAvailability });
+      expect(roots.get("jira.root")).toEqual({
+        identity: "POST /root",
+        disposition: runtimeAvailability,
+      });
     }
+    roots.clear();
+    recordFailedRoot(roots, root, { runtimeAvailability: "unknown", cause: "lab" });
+    expect(roots.get("jira.root")).toEqual({
+      identity: "POST /root",
+      disposition: "unknown",
+      cause: "lab",
+    });
     roots.clear();
     recordFailedRoot(roots, root, { runtimeAvailability: "executable" });
     expect(roots.size).toBe(0);

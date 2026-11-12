@@ -496,14 +496,24 @@ function attachFixtureDispatcher(
 /** A root that did not qualify (anything but executable) blocks its declared dependents. */
 export function recordFailedRoot(failedRoots, specification, evidence) {
   if (evidence.runtimeAvailability === "executable") return;
-  failedRoots.set(specification.tool, { identity: specification.identity, cause: evidence.cause });
+  failedRoots.set(specification.tool, {
+    identity: specification.identity,
+    disposition: evidence.runtimeAvailability,
+    ...(evidence.cause === undefined ? {} : { cause: evidence.cause }),
+  });
 }
 /** The first declared root cause of this case that already failed earlier in the run. */
 function failedRoot(specification, failedRoots) {
   const tool = (specification.dependsOn ?? []).find((root) => failedRoots.has(root));
   if (tool === undefined) return undefined;
   const root = failedRoots.get(tool);
-  return { kind: "case", tool, identity: root.identity, rootCause: root.cause };
+  return {
+    kind: "case",
+    tool,
+    identity: root.identity,
+    rootDisposition: root.disposition,
+    ...(root.cause === undefined ? {} : { rootCause: root.cause }),
+  };
 }
 /**
  * Root-cause cases run before their declared dependents; every other case keeps its position, so the
