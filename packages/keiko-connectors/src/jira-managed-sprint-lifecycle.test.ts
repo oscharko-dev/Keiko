@@ -217,9 +217,9 @@ describe("fixed sprint lifecycle effects", () => {
     };
     const args = {
       ...CASES[0].args,
-      expectedSprint: { ...current },
+      expectedSprint: { ...current } as CatalogJsonObject,
       replacement,
-      expectedDestination: { ...second },
+      expectedDestination: { ...second } as CatalogJsonObject,
     };
     const result = await executeJiraSprintLifecycleMutation(CASES[0].name, args, f.ports);
     // A closing replacement is admitted and sent, but Jira's implicit issue-membership effects are
