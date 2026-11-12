@@ -7,6 +7,8 @@ import { draftIdentity } from "./oracles.mjs";
 export const result = (status, turn, detail, covers) => ({
   status,
   covers,
+  // The gateway or transport error of the turn, so validity can tell it from a product failure.
+  ...(turn.failure ? { turnFailure: turn.failure } : {}),
   detail: `${detail}; ${Math.round(turn.durationMs / 1000)} s, ${turn.toolCalls} tool calls${turn.requirementReads ? ` (${turn.requirementReads} requirement reads)` : ""}${turn.failure ? `, failed: ${turn.failure}` : ""}`,
 });
 

@@ -46,6 +46,7 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
     "skill-import": { skill: { id: "skill", revision: 1, digest: "synthetic" } },
     "skill-read": { selection: { revision: 1 } },
     "skill-select": {},
+    readiness: {},
   };
   return {
     chatReadLogDirectory: () => "/unused-synthetic-log-directory",
@@ -111,8 +112,9 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-async function observedTurn() {
+async function observedTurn(extra = {}) {
   const result = await runJourneys({
+    ...extra,
     session: { directory },
     directory,
     modelId: "synthetic-model",
@@ -146,4 +148,23 @@ describe("requirements lab turn-limit provenance", () => {
       else expect(turn.failure).toContain("Synthetic product failure");
     },
   );
+
+  it("grades a journey invalid, not red, when the model fails its readiness check", async () => {
+    const turn = await observedTurn({
+      readiness: async () => "connect ECONNREFUSED 127.0.0.1:4000",
+    });
+    expect(turn.status).toBe("invalid");
+    expect(turn.reason).toBe("model-unavailable");
+    expect(turn.covers).toEqual([]);
+    expect(fixture.sends).toBe(0);
+  });
+
+  it("runs a journey --repeat times in fresh Chats and aggregates the runs", async () => {
+    fixture.mode = "completed";
+    const turn = await observedTurn({ repeat: 3 });
+    expect(fixture.sends).toBe(3);
+    expect(turn.runs).toHaveLength(3);
+    expect(turn.validRuns).toBe(3);
+    expect(turn.status).toBe("unverified");
+  });
 });

@@ -28,8 +28,12 @@ import { FORMATS } from "./formats.mjs";
 import { startDuring } from "./mid-turn.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
+import { aggregateRuns } from "./repeat.mjs";
+import { classifyJourney, invalidCheck, labError, readGatewayFailures } from "./validity.mjs";
+import { sequentially } from "./journey-support.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
+const READINESS_LIMIT_MS = 120_000;
 
 const api = (ctx, name, path, body, method = "POST", signal = undefined) =>
   jsonRequest(ctx.origin, ctx.cookie, name, path, body, method, signal);
@@ -462,11 +466,12 @@ function journeyContext(live, session, truth) {
  * A journey that is not green names why at once, so a lane in progress can be diagnosed against
  * the Activity Log window it ran in before the scorecard is written.
  */
-function reportJourney(id, { status, detail }, started) {
+function reportJourney(id, { status, detail }, started, run) {
   console.log(
     JSON.stringify({
       operation: "requirements-journey",
       id,
+      run,
       status,
       startedAt: new Date(started).toISOString(),
       ...(status === "green" || detail === undefined ? {} : { detail }),
@@ -474,7 +479,7 @@ function reportJourney(id, { status, detail }, started) {
   );
 }
 
-/** One journey in its own fresh bound Chat; a lab error is a red check, never a lost scenario. */
+/** One journey in its own fresh bound Chat; a lab error is an invalid check, never a product failure. */
 async function runJourney({ ctx, session, modelId, capsuleId, id }) {
   let check;
   try {
@@ -496,7 +501,7 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
       },
     );
   } catch (error) {
-    check = { status: "red", detail: `lab error: ${error.message}` };
+    check = labError(error);
   }
   if (id === "S14") {
     await ctx.replaceSpecification(1).catch((error) => {
@@ -508,7 +513,69 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
   return check;
 }
 
-export async function runJourneys({ session, directory, modelId, embeddingModelId, truth, ids }) {
+/**
+ * A cheap model readiness check through the ordinary Chat route before a journey: one short turn
+ * in a fresh unbound Chat. Returns the reason the model is unavailable, or undefined when it
+ * answered. A dead model server then marks the journey invalid instead of grading it red.
+ */
+async function modelUnavailable(ctx, session, modelId) {
+  try {
+    const base = await prepareChat(ctx.origin, ctx.cookie, session, ctx.projectPath, modelId);
+    await api(
+      ctx,
+      "readiness",
+      "/api/desktop/chat",
+      {
+        chatId: base.id,
+        projectPath: ctx.projectPath,
+        modelId,
+        clientTurnId: randomUUID(),
+        expectedGroundingScopeIdentity: base.groundingScopeIdentity,
+        content: "Reply with the single word OK.",
+        memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
+      },
+      "POST",
+      globalThis.AbortSignal.timeout(READINESS_LIMIT_MS),
+    );
+    return undefined;
+  } catch (error) {
+    return String(error?.message ?? error).slice(0, 200);
+  }
+}
+
+/** One graded run: readiness first, then the journey re-graded against its gateway evidence. */
+async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
+  const unavailable = await readiness(ctx, session, modelId);
+  if (unavailable !== undefined) {
+    return invalidCheck("model-unavailable", `model unavailable: ${unavailable}`);
+  }
+  const fromMs = Date.now();
+  const check = await runJourney({ ctx, session, modelId, capsuleId, id });
+  const failures = readGatewayFailures(chatReadLogDirectory(session), {
+    fromMs,
+    toMs: Date.now(),
+    pid: process.pid,
+  });
+  return classifyJourney(check, failures);
+}
+
+/**
+ * Runs every selected journey `repeat` times, each in a fresh Chat, and returns the checks keyed
+ * by scenario: the single run itself for `repeat` 1, otherwise the aggregate over the runs.
+ */
+export async function runJourneys({
+  session,
+  directory,
+  modelId,
+  embeddingModelId,
+  truth,
+  ids,
+  repeat = 1,
+  readiness = modelUnavailable,
+}) {
+  if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 20) {
+    throw new TypeError("Invalid journey repeat count");
+  }
   const checks = {};
   await withLiveChat({
     session,
@@ -536,13 +603,22 @@ export async function runJourneys({ session, directory, modelId, embeddingModelI
         ordered,
         (minimumSeconds) => ensureLicenseWindow(session, directory, minimumSeconds),
         async (id) => {
-          const started = Date.now();
-          checks[id] = await runJourney({ ctx, session, modelId, capsuleId, id });
-          checks[id].durationMs = Date.now() - started;
-          reportJourney(id, checks[id], started);
+          const runs = await sequentially(
+            Array.from({ length: repeat }, (_, i) => i + 1),
+            (run) => timedRun({ ctx, session, modelId, capsuleId, id, readiness }, run),
+          );
+          checks[id] = repeat === 1 ? runs[0] : aggregateRuns(runs);
         },
       );
     },
   });
   return checks;
+}
+
+async function timedRun(args, run) {
+  const started = Date.now();
+  const check = await gradedRun(args);
+  check.durationMs = Date.now() - started;
+  reportJourney(args.id, check, started, run);
+  return check;
 }
