@@ -166,6 +166,7 @@ import {
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
+import { LocationBindingNotices } from "./CodingWorkbenchLocationNotices";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
@@ -1589,34 +1590,6 @@ function canStartAtLocation(
   locationState: WorkbenchExecutionLocationState,
 ): boolean {
   return state.canStart && locationState.ready;
-}
-
-function LocationBindingNotices({
-  locationState,
-}: {
-  readonly locationState: WorkbenchExecutionLocationState;
-}): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  return (
-    <>
-      {locationState.pending ? (
-        <output className={styles.cmpRepositorySelectorNotice}>
-          {t("codingWorkbench.repository.locationBinding")}
-        </output>
-      ) : null}
-      {locationState.error ? (
-        <RetryMessage
-          text={t("codingWorkbench.repository.locationError")}
-          className={styles.cmpRepositorySelectorNotice}
-          role="alert"
-          retry={{
-            label: t("codingWorkbench.repository.retryLoad"),
-            onRetry: locationState.retry,
-          }}
-        />
-      ) : null}
-    </>
-  );
 }
 
 function WorkbenchColumns({
