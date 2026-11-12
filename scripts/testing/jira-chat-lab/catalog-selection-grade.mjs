@@ -75,6 +75,9 @@ function readVerdict(target, tokens) {
 }
 
 /**
+ * Consulted only when the target was never called: a failed target call followed by a successful
+ * alternative stays a wrong result of the target.
+ *
  * A reviewed equivalent operation that answers the request just as well: it is on the case's
  * `alternatives` list and its successful result carries every native token. Any other operation
  * is a wrong tool, because a result can carry a single token by coincidence (a username as a

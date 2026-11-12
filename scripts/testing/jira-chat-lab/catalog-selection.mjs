@@ -18,6 +18,7 @@ import { gradeSelection, summarizeSelection } from "./catalog-selection-grade.mj
 import {
   createSelectionObjects,
   removeNative,
+  orphanedIssues,
   removeSelectionObjects,
   scopeSnapshot,
   selectionNames,
@@ -121,7 +122,16 @@ async function writeAttempt(context, run, entry, turnFor) {
   const { fixture, marker, tag } = turnFor;
   privateJson(run.pendingPath, { id: entry.id, marker, tag }, true);
   await cleanBefore(session, fixture, entry, marker, tag);
-  const before = await scopeSnapshot(session, fixture, fixture.selection);
+  let before;
+  try {
+    before = await scopeSnapshot(session, fixture, fixture.selection);
+  } catch (error) {
+    // Nothing was sent yet, so this attempt is invalid and the owned scope is still clean.
+    stage("verify-unavailable", { id: entry.id, errorType: errorName(error) });
+    rmSync(run.pendingPath);
+    const turn = { exchanges: [], gateway: { unrecovered: 0, circuit: 0 } };
+    return { turn, proof: { truthUnavailable: true } };
+  }
   const turn = await withGateway(session, await turnFor.send());
   let settled;
   try {
@@ -263,6 +273,11 @@ function finishReport(session, modelId, run, startedAt, complete) {
 async function measure(session, modelId, run, cases) {
   const startedAt = new Date().toISOString();
   await createSelectionObjects(session, run.fixture, run.tag, run.created);
+  // Refuse before any model turn: a project beyond the snapshot bound, or orphans of a killed run.
+  const preflight = await scopeSnapshot(session, run.fixture, run.created);
+  const orphans = orphanedIssues(preflight, run.created);
+  if (orphans > 0)
+    throw new TypeError(`${orphans} owned issues of an earlier run remain; remove them first`);
   let complete = false;
   try {
     await withLiveChat({
@@ -305,8 +320,8 @@ async function main() {
   // A signal stops the run between steps: the turn in flight is aborted, its effect is still
   // verified and removed, and the owned objects are cleaned up before the process exits.
   const EXIT_CODES = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
-  // A second signal exits at once, for a native request that hangs; owned objects then remain
-  // for the next run's reconciliation.
+  // A second signal exits at once, for a native request that hangs; owned objects then remain and
+  // the next run refuses to start until they are removed by hand.
   const interrupted = (signal) => {
     const repeated = run.stop.signal.aborted;
     stage("stop-requested", { signal, repeated });

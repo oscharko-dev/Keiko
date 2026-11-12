@@ -64,6 +64,20 @@ async function issueObjects(session, created, tag) {
   );
 }
 
+const VISIBILITY_ATTEMPTS = 3;
+const VISIBILITY_PAUSE_MS = 500;
+
+/** The api actor reads the object; a share can take a moment to apply, so it is retried briefly. */
+async function requireApiVisible(session, path) {
+  for (let attempt = 1; attempt <= VISIBILITY_ATTEMPTS; attempt += 1) {
+    const response = await labRequest(session, "GET", path, basicAuth(session, "api"));
+    if (response.status === 200) return;
+    if (attempt < VISIBILITY_ATTEMPTS)
+      await new Promise((resolve) => globalThis.setTimeout(resolve, VISIBILITY_PAUSE_MS));
+  }
+  throw new TypeError("An owned agile object is not visible to the api actor");
+}
+
 async function agileObjects(session, fixture, created) {
   const project = await write(session, "admin", "GET", `/rest/api/2/project/${fixture.project}`);
   const shared = await write(session, "admin", "POST", "/rest/api/2/filter", {
@@ -87,19 +101,13 @@ async function agileObjects(session, fixture, created) {
     filterId: Number(shared.id),
   });
   created.boardId = String(board.id);
-  const visible = await labRequest(
-    session,
-    "GET",
-    `/rest/agile/1.0/board/${created.boardId}`,
-    basicAuth(session, "api"),
-  );
-  if (visible.status !== 200)
-    throw new TypeError("The owned board is not visible to the api actor");
+  await requireApiVisible(session, `/rest/agile/1.0/board/${created.boardId}`);
   const sprint = await write(session, "admin", "POST", "/rest/agile/1.0/sprint", {
     name: created.sprintName,
     originBoardId: Number(board.id),
   });
   created.sprintId = String(sprint.id);
+  await requireApiVisible(session, `/rest/agile/1.0/sprint/${created.sprintId}`);
   const favourite = await write(session, "api", "POST", "/rest/api/2/filter", {
     name: created.filterName,
     jql: `project = ${fixture.project}`,
@@ -292,7 +300,7 @@ async function projectScope(session, fixture, created) {
   ]);
   // The comparison assumes the lane runs alone on a small project; a larger one is refused rather
   // than half compared, because an issue beyond the page would look removed or added.
-  if (issues.total > issues.issues.length)
+  if (!Number.isInteger(issues.total) || issues.total > issues.issues.length)
     throw new TypeError("The selection project exceeds the scope snapshot bound of 100 issues");
   const owned = new Set([created.issueKey, created.linkTargetKey]);
   const projectRow = (label, stamp = "") => ({ owned: false, label: String(label ?? ""), stamp });
@@ -307,7 +315,19 @@ async function projectScope(session, fixture, created) {
 }
 
 /**
- * The run's own board, sprint and filters by content; one that disappeared is absent, so its
+ * Issues a killed run left behind: owned-issue summaries with another run's tag. They are reported
+ * by count, never removed, because their run may still be reconciling; the lane refuses to start.
+ */
+export function orphanedIssues(snapshot, created) {
+  const own = new Set([created.issueSummary, created.linkTargetSummary]);
+  return [...snapshot.objects.values()].filter(
+    (row) => /^Auswahl (Vorgang|Ziel) /u.test(row.label) && !own.has(row.label),
+  ).length;
+}
+
+/**
+ * The run's own board, sprint and filters by content; agile objects or filters a model created by
+ * mistake are not enumerated, so such a stray write escapes this snapshot. one that disappeared is absent, so its
  * removal counts. The favourite filter is private to the api actor, so it is read as that actor.
  */
 async function agileScope(session, created) {
