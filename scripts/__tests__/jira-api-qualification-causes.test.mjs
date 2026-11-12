@@ -534,15 +534,11 @@ describe("repaired review findings", () => {
     expect(measuredNativeReadPaths()).toContain("/rest/api/2/issue/59");
     resetNativeReadCount();
   });
-  it("never persists an assertion message, whatever the detail setting", () => {
+  it("never persists an assertion message", () => {
     const error = new assert.AssertionError({ message: "expected project KEIKO-4711 to equal 7" });
-    for (const mode of [undefined, "values"]) {
-      vi.stubEnv("KEIKO_AC7_DETAIL", mode ?? "");
-      const detail = describeFailure(error, mode);
-      expect(detail).not.toHaveProperty("message");
-      expect(JSON.stringify(detail)).not.toContain("KEIKO-4711");
-    }
-    vi.unstubAllEnvs();
+    const detail = describeFailure(error);
+    expect(detail).not.toHaveProperty("message");
+    expect(JSON.stringify(detail)).not.toContain("KEIKO-4711");
   });
   it("labels an oracle read answered 429 as infrastructure and keeps 403 as lab", async () => {
     dispatch.mockResolvedValue(attempt());

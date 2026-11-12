@@ -799,7 +799,7 @@ describe("dev quality workflows", () => {
     expect(crossPlatform).toBeDefined();
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain(
-      "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
+      "actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73",
     );
     expect(crossPlatform).toContain("npm run check:native:macos");
     expect(crossPlatform).toContain("npm run check:native:windows");

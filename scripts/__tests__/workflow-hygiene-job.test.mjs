@@ -105,7 +105,7 @@ const TOOL_INVOCATIONS = [
   {
     tool: "zizmor",
     fingerprints: [
-      "zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e",
+      "zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd",
       'version: "1.26.1"',
       "config: .github/zizmor.yml",
       "advanced-security: false",
