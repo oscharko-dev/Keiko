@@ -2677,7 +2677,8 @@ it("keeps Memory capture governed when an empty-pack Jira turn has Full access",
   const result = await handleGroundedAsk(
     context({
       chatId: f.chatId,
-      // Learned from natural conversation, so the Memory ceiling holds it. A clear "remember" would
+      // Learned from natural conversation, so the operator's configured Memory ceiling holds it (#4206:
+      // only that restriction holds a private fact). A clear "remember" would
       // be the person's own decision and act at once (ADR-0146 D4b).
       content: "My name is Ada Lovelace",
       modelId: MODEL,
@@ -2693,7 +2694,11 @@ it("keeps Memory capture governed when an empty-pack Jira turn has Full access",
         },
       },
     }),
-    { ...f.deps, memoryDeploymentCeiling: "governed-assist" },
+    {
+      ...f.deps,
+      memoryDeploymentCeiling: "governed-assist",
+      memoryDeploymentCeilingConfigured: true,
+    },
   );
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);

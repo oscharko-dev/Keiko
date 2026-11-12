@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { parseGatewayConfig, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
@@ -585,3 +585,121 @@ it("does not repeat a startup check when only the generation advanced", async ()
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+// Lab run 2026-11-08: startup discovery added a model the endpoint served while the configured
+// model's startup check was still answering. The late answer belonged to the replaced generation
+// and was dropped, and the unchanged connection was never checked again, so every Chat turn was
+// refused as not ready until someone verified the model by hand. The check answers for that same
+// connection, so its answer counts in the new generation, without a second provider call.
+it("keeps an unchanged model's startup check when discovery replaces the generation during it", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  const deps = composition();
+  const holder = deps.gatewayConfig;
+  if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+  let release: ((response: Response) => void) | undefined;
+  const fetch = vi.fn((_url: unknown, init?: { body?: unknown }) => {
+    const first = release === undefined && String(init?.body).includes('"chat-model"');
+    if (!first) return Promise.resolve(chatProbeAnswer());
+    return new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-startup-race");
+  await vi.waitFor(() => {
+    expect(release).toBeDefined();
+  });
+  const current = holder.current();
+  if (current === undefined) throw new TypeError("Expected a configuration.");
+  const replaced = holder.replaceCatalog(
+    withDiscoveredModel(current),
+    holder.generation(),
+    "corr-discovery",
+  );
+  expect(replaced).toBe(true);
+  const generation = holder.generation();
+  try {
+    // The replaced generation joins the running check instead of seeing none: a first turn waits.
+    await vi.waitFor(() => {
+      const joined = sink.events.filter(
+        (event) =>
+          event.op === "gateway.readiness.automatic.joined" &&
+          event.extra?.generation === generation,
+      );
+      expect(joined).toHaveLength(1);
+    });
+    const turn = awaitInitializedConversationReadiness(deps, "chat-model", "corr-first-turn");
+    release?.(chatProbeAnswer());
+    await turn;
+  } finally {
+    release?.(chatProbeAnswer());
+  }
+  expect(currentConversationReady(deps, "chat-model")).toBe(true);
+  expect(runningChatProbes(fetch)).toBe(1);
+});
+
+// The late answer counts only while the new generation has none: it never overwrites a newer one,
+// such as an explicit verification recorded meanwhile.
+it("never lets a late startup answer overwrite a newer observation of the replaced generation", async () => {
+  const deps = composition();
+  const holder = deps.gatewayConfig;
+  if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+  let release: ((response: Response) => void) | undefined;
+  const fetch = vi.fn((_url: unknown, init?: { body?: unknown }) => {
+    const first = release === undefined && String(init?.body).includes('"chat-model"');
+    if (!first) return Promise.resolve(chatProbeAnswer());
+    return new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-startup-overtaken");
+  await vi.waitFor(() => {
+    expect(release).toBeDefined();
+  });
+  const current = holder.current();
+  if (current === undefined) throw new TypeError("Expected a configuration.");
+  expect(holder.replaceCatalog(withDiscoveredModel(current), holder.generation())).toBe(true);
+  const generation = holder.generation();
+  const newer = new Date().toISOString();
+  holder.recordVerifiedCapability("chat-model", { conversationReady: false }, newer, generation);
+  release?.(chatProbeAnswer());
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  await vi.waitFor(() => {
+    expect(runningChatProbes(fetch)).toBe(1);
+  });
+  expect(holder.verifiedCapability("chat-model")).toMatchObject({
+    generation,
+    checkedAt: newer,
+    fields: { conversationReady: false },
+  });
+});
+
+function runningChatProbes(fetch: ReturnType<typeof vi.fn>): number {
+  return fetch.mock.calls.filter(([, init]) =>
+    String((init as { body?: unknown } | undefined)?.body).includes('"chat-model"'),
+  ).length;
+}
+
+// What startup discovery does when the endpoint serves one more model: the configured connection
+// stays byte-identical and the generation advances.
+function withDiscoveredModel(current: GatewayConfig): GatewayConfig {
+  const added = parseGatewayConfig({
+    providers: [
+      {
+        modelId: "added-model",
+        baseUrl: "https://provider.example.invalid/v1",
+        apiKey: "throwaway-key",
+        timeoutMs: 1000,
+        maxRetries: 0,
+        retryBaseDelayMs: 1,
+      },
+    ],
+  });
+  return {
+    ...current,
+    providers: [...current.providers, ...added.providers],
+    capabilities: [...(current.capabilities ?? []), ...(added.capabilities ?? [])],
+  };
+}

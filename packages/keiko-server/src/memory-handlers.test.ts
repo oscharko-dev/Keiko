@@ -16,7 +16,11 @@ import {
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
-import { MEMORY_STATUS_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import {
+  MEMORY_STATUS_TRANSITIONS,
+  PROFILE_EXCLUDED_MEMORY_TAG,
+  STANDING_FACT_RETENTION_POLICY_KEY,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   MemoryAuditEvent,
   MemoryConversationId,
@@ -51,6 +55,7 @@ import {
   handleResolveMemoryConflict,
   handleUnpinMemory,
 } from "./memory-handlers.js";
+import { standingProfileForUser } from "./memory-profile.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
@@ -831,6 +836,47 @@ describe("memory handlers", () => {
     expect(errorField.message).not.toContain(idValue);
   });
 
+  it("takes an unpinned fact out of the standing profile until it is pinned again (#4228)", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const person = userId("local-operator");
+    vault.insertMemory(
+      makeMemory("memory-profile-pin", "Bevorzugt Tabellen.", {
+        scope: { kind: "user", userId: person },
+        pinned: true,
+        tags: ["format"],
+      }),
+    );
+    const id = memoryId("memory-profile-pin");
+    const inProfile = (): boolean =>
+      standingProfileForUser(vault, person, Date.now()).entries.some((entry) => entry.id === id);
+    const route = (action: string): RouteContext =>
+      makeCtx(`/api/memory/${id}/${action}`, {}, { id });
+    expect(inProfile()).toBe(true);
+
+    expect(handleUnpinMemory(route("unpin"), deps).status).toBe(200);
+    expect(inProfile()).toBe(false);
+    // The person edits their own tags; the removal from the profile survives the edit.
+    const edited = await handleEditMemory(
+      makeCtx(`/api/memory/${id}`, { tags: ["format", PROFILE_EXCLUDED_MEMORY_TAG] }, { id }),
+      deps,
+    );
+    expect(edited.status).toBe(200);
+    expect(vault.getMemory(id)?.tags).toEqual(["format", PROFILE_EXCLUDED_MEMORY_TAG]);
+    expect(inProfile()).toBe(false);
+
+    expect(handlePinMemory(route("pin"), deps).status).toBe(200);
+    expect(vault.getMemory(id)?.tags).toEqual(["format"]);
+    expect(inProfile()).toBe(true);
+    // A person cannot set Keiko's own tag through an edit.
+    await handleEditMemory(
+      makeCtx(`/api/memory/${id}`, { tags: [PROFILE_EXCLUDED_MEMORY_TAG] }, { id }),
+      deps,
+    );
+    expect(vault.getMemory(id)?.tags).toEqual([]);
+    expect(inProfile()).toBe(true);
+  });
+
   it("re-embeds a memory when editing its body", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("memory-edit-1", "Old body"));
@@ -1051,6 +1097,51 @@ describe("memory handlers", () => {
     const persistedAudit = JSON.stringify(events);
     expect(persistedAudit).not.toContain("Prefer yarn");
     expect(persistedAudit).not.toContain("Prefer npm ci");
+  });
+
+  it("lets an accepted correction take the corrected fact's place in the profile (#4228)", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const person = { kind: "user", userId: userId("local-operator") } as const;
+    vault.insertMemory(
+      makeMemory("memory-profile-pinned", "Arbeitet vormittags.", {
+        scope: person,
+        type: "episodic",
+        pinned: true,
+      }),
+    );
+    vault.insertMemory(
+      makeMemory("memory-profile-removed", "Bevorzugt Tabellen.", {
+        scope: person,
+        tags: [PROFILE_EXCLUDED_MEMORY_TAG],
+      }),
+    );
+    const correctAndAccept = async (id: string, body: string): Promise<MemoryRecord> => {
+      const proposed = await handleCorrectMemory(
+        makeCtx(`/api/memory/${id}/correct`, { body }, { id }),
+        deps,
+      );
+      const correction = asJson(proposed).correction as MemoryRecord;
+      const accepted = await handleAcceptMemoryProposal(
+        makeCtx(`/api/memory/proposals/${String(correction.id)}/accept`, {}, { id: correction.id }),
+        deps,
+      );
+      expect(accepted.status).toBe(200);
+      const stored = vault.getMemory(correction.id);
+      if (stored === undefined) throw new Error("correction missing");
+      return stored;
+    };
+    const inProfile = (id: MemoryId): boolean =>
+      standingProfileForUser(vault, person.userId, Date.now()).entries.some(
+        (entry) => entry.id === id,
+      );
+
+    const afternoon = await correctAndAccept("memory-profile-pinned", "Arbeitet nachmittags.");
+    expect(afternoon.retentionHint?.policyKey).toBe(STANDING_FACT_RETENTION_POLICY_KEY);
+    expect(inProfile(afternoon.id)).toBe(true);
+    const lists = await correctAndAccept("memory-profile-removed", "Bevorzugt Listen.");
+    expect(lists.tags).toContain(PROFILE_EXCLUDED_MEMORY_TAG);
+    expect(inProfile(lists.id)).toBe(false);
   });
 
   it("returns the bound predecessor to the authorized review surface", () => {

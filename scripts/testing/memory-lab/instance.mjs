@@ -34,6 +34,16 @@ const DEFAULT_QUIET_MS = 1500;
 const DEFAULT_MAX_WAIT_MS = 60000;
 const DEFAULT_GRACE_MS = 3000;
 const POLL_MS = 100;
+// A subject that learns in background passes (#4213) learns after the person paused. The lab's
+// person pauses for this long after each turn; the product's default pause is longer only to stay
+// out of a person's way, and a pass learns the same turns whatever pause preceded it.
+const LAB_LEARNING_IDLE_MS = 2000;
+// How long after the pause a pass may take to be seen starting before the lab concludes that the
+// turn left nothing to learn (a refused turn, or one the product handled without its learner).
+const PASS_START_SLACK_MS = 3000;
+export const LEARNING_PASS_STARTED_OP = "memory.learn.pass.started";
+export const LEARNING_PASS_SETTLED_OP = "memory.learn.pass.settled";
+const UNSETTLED_RETRY_OUTCOMES = new Set(["unavailable", "failed"]);
 
 function offlineCapability() {
   return {
@@ -103,6 +113,7 @@ async function labEnvironment(dir, options, source = process.env) {
     KEIKO_INITIAL_PROJECT_PATH: project,
     KEIKO_MEMORY_KEY: randomBytes(32).toString("base64"),
     KEIKO_MEMORY_SALIENCE_MODEL_ID: options.learnModelId,
+    KEIKO_MEMORY_LEARNING_IDLE_MS: String(LAB_LEARNING_IDLE_MS),
     KEIKO_CODING_DEPLOYMENT_CEILING: options.ceiling,
     KEIKO_LOG_LEVEL: "info",
     [apiKeyEnvName(options.answerModelId)]: source[apiKeyEnvName(options.answerModelId)] ?? "lab",
@@ -118,6 +129,42 @@ async function labEnvironment(dir, options, source = process.env) {
     .filter((key) => env[key] === undefined)
     .toSorted();
   return { project, env, foldedKeys };
+}
+
+// The product checks every configured chat model once at start and refuses a turn until that check
+// has passed. A person waits for the start; the lab does too, through the product's own settling
+// read, so a first turn never races the check. A model whose check failed ends the instance here
+// with a reason instead of failing every turn of the run.
+//
+// A model that reports no readiness yet is still being checked: a subject without the startup fix
+// of ADR-0171 D2 answers the settling read while catalog discovery's renewed check runs (seen on
+// dev 4e1f07ea0, ready two seconds later). A person sees the model become ready a moment later, so
+// the lab reads again for a bounded time; an answer of not ready still ends the instance at once.
+const STARTUP_SETTLE_MS = 60_000;
+const STARTUP_POLL_MS = 1000;
+
+async function startupModel(bff, modelId, path) {
+  const result = await bff.request("GET", path);
+  if (result.status !== 200)
+    throw new Error(`startup model read failed with HTTP ${String(result.status)}`);
+  return result.json?.models?.find((entry) => entry.id === modelId);
+}
+
+export async function awaitStartupReadiness(bff, modelId, timing = {}) {
+  const { settleMs = STARTUP_SETTLE_MS, pollMs = STARTUP_POLL_MS } = timing;
+  const deadline = Date.now() + settleMs;
+  let model = await startupModel(bff, modelId, "/api/models?settleStartup=1");
+  let rereads = 0;
+  while (model !== undefined && model.conversationReady === undefined && Date.now() < deadline) {
+    await delay(pollMs);
+    model = await startupModel(bff, modelId, "/api/models");
+    rereads += 1;
+  }
+  if (model?.conversationReady !== true)
+    throw new LabConfigurationError(
+      `the answer model did not pass the product's startup readiness check (${model === undefined ? "not configured" : `conversationReady=${String(model.conversationReady)}`})`,
+    );
+  return rereads;
 }
 
 function stubProxy() {
@@ -149,6 +196,18 @@ function assertNoFoldedEnvironment(foldedKeys, allowed) {
   );
 }
 
+function writePrivateGatewayConfig(options, offline) {
+  const configPath = join(options.dir, "gateway.json");
+  writeFileSync(
+    configPath,
+    offline
+      ? JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl))
+      : readFileSync(options.configPath),
+    { mode: 0o600 },
+  );
+  return configPath;
+}
+
 /**
  * Starts an instance. Offline mode needs a scripted model server (`fixture`); live mode needs an
  * existing gateway configuration file whose models the caller names. An instance whose environment
@@ -162,14 +221,7 @@ export async function startLabInstance(options) {
   // The product writes its configuration file back (credentials it persists at start, a context
   // window it adopts), so every instance gets a private copy and the operator's file is never
   // written; the runner checks that file's digest before each unit. Paths inside it must be absolute.
-  const configPath = join(options.dir, "gateway.json");
-  writeFileSync(
-    configPath,
-    offline
-      ? JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl))
-      : readFileSync(options.configPath),
-    { mode: 0o600 },
-  );
+  const configPath = writePrivateGatewayConfig(options, offline);
   const answerModelId = offline ? ANSWERER_MODEL_ID : options.answerModelId;
   const learnModelId = offline ? LEARNER_MODEL_ID : options.learnModelId;
   const prepared = await labEnvironment(options.dir, {
@@ -188,9 +240,18 @@ export async function startLabInstance(options) {
     OFFLINE_CONTEXT_WINDOW,
     async () => ({ project: prepared.project, env: prepared.env }),
   );
+  let startupRereads;
+  try {
+    startupRereads = await awaitStartupReadiness(started.bff, answerModelId);
+  } catch (error) {
+    await started.close();
+    throw error;
+  }
   return {
     dir: options.dir,
     logDirectory: join(prepared.env.KEIKO_STATE_DIR, "logs"),
+    startupRereads,
+    ...(learnsInPasses(options.subjectRoot) ? { learningIdleMs: LAB_LEARNING_IDLE_MS } : {}),
     project: prepared.project,
     foldedKeys: prepared.foldedKeys,
     answerModelId,
@@ -200,6 +261,16 @@ export async function startLabInstance(options) {
       started.bff.request(method, path, body, requestOptions),
     close: () => started.close(),
   };
+}
+
+// Whether the measured subject learns in background passes: its own operation catalog registers
+// the pass settlement. A subject that learns inline (before #4213) keeps the earlier wait.
+function learnsInPasses(subjectRoot) {
+  const catalog = readFileSync(
+    join(subjectRoot ?? REPO_ROOT, "docs", "observability", "op-catalog.generated.json"),
+    "utf8",
+  );
+  return catalog.includes(`"${LEARNING_PASS_SETTLED_OP}"`);
 }
 
 function expectOk(result, what) {
@@ -377,12 +448,66 @@ function observeActivity(state, count, openCalls) {
 }
 
 /**
+ * The learning passes the instance's Activity Log shows since `sinceMs`: how many are still open
+ * (started, not settled, at any time), how many settled since then, and the last settlement.
+ */
+export function learningPassProgress(events, sinceMs) {
+  const open = new Set();
+  let started = 0;
+  let last;
+  let settled = 0;
+  for (const event of events) {
+    const since = Date.parse(event.ts) >= sinceMs;
+    if (event.op === LEARNING_PASS_STARTED_OP) {
+      open.add(event.correlationId);
+      if (since) started += 1;
+    } else if (event.op === LEARNING_PASS_SETTLED_OP) {
+      open.delete(event.correlationId);
+      if (since) {
+        settled += 1;
+        last = event;
+      }
+    }
+  }
+  return { open: open.size, started, settled, last };
+}
+
+// Background passes are done when none is open and either one settled since the wait began without
+// leaving a Chat for a continuation, or none started even after the pause and its slack had passed.
+// A pass that settled as unavailable or failed ends the unit as failed: the product retries it only
+// after a minute, and until then no later turn of the unit is learned, so what the unit measured
+// would look like a subject that does not learn.
+function passesDone(progress, startedAt, idleMs) {
+  if (progress.open > 0) return false;
+  if (progress.settled > 0) {
+    const { last } = progress;
+    if (UNSETTLED_RETRY_OUTCOMES.has(last.outcome))
+      throw new Error(`a learning pass settled as ${String(last.outcome)}`);
+    return last.pendingChatCount === 0;
+  }
+  return progress.started === 0 && Date.now() - startedAt >= idleMs + PASS_START_SLACK_MS;
+}
+
+async function learningSettled(options, startedAt, state) {
+  return (
+    (await learnerDone(options, startedAt, state)) && (await passesSettled(options, startedAt))
+  );
+}
+
+async function passesSettled(options, startedAt) {
+  if (options.passes === undefined) return true;
+  const progress = learningPassProgress(await options.passes.events(), startedAt);
+  return passesDone(progress, startedAt, options.passes.idleMs);
+}
+
+/**
  * Waits until learning has settled: for `quietMs` the capture ledger stayed unchanged and no model
  * call the product started was open (`openCalls`, read from the instance's own Activity Log by
  * `pendingGatewayCalls`; the product's own evidence, never cut short), and every scripted reply the
  * lab queued was served or the grace period passed (`pendingLearner`); without that signal, a call
- * was seen to start and end, or the grace period passed. Fails after `maxMs`, naming the `phase` of
- * the unit when the caller gives one.
+ * was seen to start and end, or the grace period passed. A subject that learns in background passes
+ * (`passes`: its pause and its Activity Log events) has also settled its passes. Fails after
+ * `maxMs`, naming the `phase` of the unit when the caller gives one.
  */
 export async function awaitLearning(instance, options = {}) {
   const quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
@@ -394,7 +519,7 @@ export async function awaitLearning(instance, options = {}) {
     const open = options.openCalls === undefined ? 0 : await options.openCalls();
     observeActivity(state, count, open);
     const quiet = Date.now() - state.quietSince >= quietMs;
-    if (quiet && (await learnerDone(options, startedAt, state))) return { captures: count };
+    if (quiet && (await learningSettled(options, startedAt, state))) return { captures: count };
     if (Date.now() - startedAt > maxMs)
       throw new Error(
         `learning did not settle in time${options.phase === undefined ? "" : ` (${options.phase})`}`,

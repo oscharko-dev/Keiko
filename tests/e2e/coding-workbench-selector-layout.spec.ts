@@ -12,6 +12,8 @@ const MODES = [
     attention: "Workbench is not paired.",
     skillsUnavailable: "The approved skills could not be read.",
     mcpUnavailable: "The MCP servers could not be read.",
+    checkoutUnavailable: "The selected checkout could not be opened.",
+    gitStatusUnavailable: "This folder's Git status could not be read",
   },
   {
     locale: "de",
@@ -22,6 +24,8 @@ const MODES = [
     attention: "Workbench nicht gekoppelt.",
     skillsUnavailable: "Die freigegebenen Skills konnten nicht gelesen werden.",
     mcpUnavailable: "Die MCP-Server konnten nicht gelesen werden.",
+    checkoutUnavailable: "Der gewählte Checkout konnte nicht geöffnet werden.",
+    gitStatusUnavailable: "Der Git-Status dieses Ordners konnte nicht gelesen werden",
   },
 ] as const;
 
@@ -148,6 +152,16 @@ for (const mode of MODES) {
         const trigger = region.getByRole("combobox", { name: mode.choose });
         await expect(trigger).toBeVisible();
         await expect(trigger).toBeEnabled();
+        // #4349: the catalog's fixture folder has no checkout and no Git status, so both reads
+        // fail and each adds a notice to the bottom-anchored composer, lifting the selector row.
+        // Those notices arrive on their own schedule (Firefox CI answered the Git read during the
+        // press); settle them first so the measurement isolates the readiness reflow.
+        await expect(
+          region.getByRole("alert").filter({ hasText: mode.checkoutUnavailable }),
+        ).toBeVisible();
+        await expect(
+          region.getByRole("alert").filter({ hasText: mode.gitStatusUnavailable }),
+        ).toBeVisible();
         await pairing.held;
         const announcement = region.getByTestId("coding-runtime-announcement");
         if (timing === "settled-control") {

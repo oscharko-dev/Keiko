@@ -34,6 +34,7 @@ const MEMORY_LEARN_EXTRACTION_OPERATION = defineActivityLogOperation({
     admittedCount: { type: "integer", dataClass: "count", required: true },
     knownFactCount: { type: "integer", dataClass: "count", required: true },
     sourceMessageCount: { type: "integer", dataClass: "count", required: true },
+    statedPreferenceCount: { type: "integer", dataClass: "count", required: false },
   },
   proofIds: ["memory.learn.extraction.line"],
 });
@@ -44,6 +45,7 @@ export function logLearnedExtraction(
     readonly admittedCount: number;
     readonly knownFactCount: number;
     readonly sourceMessageCount: number;
+    readonly statedPreferenceCount?: number;
   },
   correlationId: string,
 ): void {

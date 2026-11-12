@@ -560,6 +560,14 @@ function renderListNode(
   }
 }
 
+// Only a cell holds inline content. A table that is still streaming can end in an empty body or
+// row, so trailing content follows its last cell, or the table itself when it has none.
+function tableEndsInCell(node: SafeMarkdownNode): boolean {
+  if (node.kind === "td" || node.kind === "th") return true;
+  const last = node.children?.at(-1);
+  return last !== undefined && tableEndsInCell(last);
+}
+
 function renderTableNode(
   node: SafeMarkdownNode,
   key: string,
@@ -569,12 +577,17 @@ function renderTableNode(
   const alignStyle = node.align !== undefined ? { textAlign: node.align } : undefined;
 
   switch (node.kind) {
-    case "table":
+    case "table": {
+      const inCell = tableEndsInCell(node);
       return (
         <div key={key} className="sm-table-wrapper">
-          <table className="sm-table">{renderChildren(node, key, options, trailing)}</table>
+          <table className="sm-table">
+            {renderChildren(node, key, options, inCell ? trailing : undefined)}
+          </table>
+          {inCell ? null : trailing}
         </div>
       );
+    }
 
     case "thead":
       return <thead key={key}>{renderChildren(node, key, options, trailing)}</thead>;

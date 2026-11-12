@@ -4,13 +4,14 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
-import { Readable } from "node:stream";
+import { type Duplex, Readable } from "node:stream";
 import { createGzip } from "node:zlib";
 import {
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogEventFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { disposeMemoryLearningRuntime, memoryLearningRuntime } from "./memory-learning.js";
 import { applySecurityHeaders } from "./headers.js";
 import { isAllowedHost } from "./host-check.js";
 import { requestAlreadyClosed } from "./request-cancellation.js";
@@ -626,6 +627,28 @@ function reportTopLevelFailure(
   }
 }
 
+interface UpgradePlane {
+  readonly handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
+}
+
+function routeUpgrade(
+  deps: UiServerDeps,
+  planes: readonly UpgradePlane[],
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+): void {
+  if (deps.readiness?.() === false) {
+    socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  if (planes.some((plane) => plane.handleUpgrade(req, socket, head))) return;
+  // Default: every non-voice-control or ungated upgrade is hard-rejected, as before.
+  socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+  socket.destroy();
+}
+
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
   const { voiceControl, liveDictation } = createVoicePlanes(
@@ -647,27 +670,17 @@ export function createUiServer(deps: UiServerDeps): Server {
     );
   });
   server.on("upgrade", (req, socket, head) => {
-    if (deps.readiness?.() === false) {
-      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    if (voiceControl.handleUpgrade(req, socket, head)) {
-      return;
-    }
-    if (liveDictation.handleUpgrade(req, socket, head)) {
-      return;
-    }
-    // Default: every non-voice-control or ungated upgrade is hard-rejected, as before.
-    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-    socket.destroy();
+    routeUpgrade(deps, [voiceControl, liveDictation], req, socket, head);
   });
   server.on("close", () => {
+    disposeMemoryLearningRuntime(handlerDeps);
     unregisterAtlassianListener?.();
     voiceControl.closeAll();
     liveDictation.closeAll();
   });
   server.on("listening", () => {
+    // #4213: what was left unlearned before the last stop is learned once this server is idle.
+    memoryLearningRuntime(handlerDeps).start();
     const address = server.address();
     if (address !== null && typeof address !== "string") {
       unregisterAtlassianListener = handlerDeps.atlassianConnectorCredentials?.registerListener?.(

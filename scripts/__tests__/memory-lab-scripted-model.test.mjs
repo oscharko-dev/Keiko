@@ -33,6 +33,19 @@ describe("memory lab scripted model", () => {
     expect(memoryBodiesInPrompt([{ role: "user", content: "no fence" }])).toEqual([]);
   });
 
+  it("reads the standing profile from the system prompt before the retrieved memories", () => {
+    // #4228 supplies standing facts in the system prompt; an echo that read only the user message
+    // answered as if nothing reached the model.
+    const system =
+      "Rules.\n===UNTRUSTED_PERSON_PROFILE_START===\n- Ich heisse Mara.\n===UNTRUSTED_PERSON_PROFILE_END===";
+    expect(
+      memoryBodiesInPrompt([
+        { role: "system", content: system },
+        { role: "user", content: FENCED },
+      ]),
+    ).toEqual(["Ich heisse Mara.", "Ich bevorzuge Tabellen.", "Zweiter Eintrag."]);
+  });
+
   it("answers OK during learning and echoes supplied memories during probes", async () => {
     fixture = await startScriptedModelServer();
     const first = await complete(fixture, {

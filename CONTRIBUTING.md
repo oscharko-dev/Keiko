@@ -584,7 +584,12 @@ streaming and regenerated turns. Its request correlation joins the compacted/ret
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
 effective input budget and image reserve. This evidence survives generation timeout or
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
-not provider-measured usage, and no conversation or image content is recorded.
+not provider-measured usage, and no conversation or image content is recorded. With memory on it and
+the grounded `chat.response.message` also count the standing profile and recall (#4228):
+`profileEntryCount`, `profileTokens`, `profileDroppedCount`, `profileRetrievedCount` (profile
+facts the question was about, sent once with recall), `retrievedMemoryCount` and
+`belowFloorMemoryCount`, never a fact
+([MemoriaViva standing profile](docs/memory/memoria-viva-standing-profile.md)).
 
 Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
 `imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
@@ -885,7 +890,8 @@ The owner decision of 2026-09-27 exposes all three Coding Workbench modes on a n
 without extra configuration (ADR-0124 D2, ADR-0163 D7). The default selected mode remains Ask for
 approval. Explicit narrower deployment ceilings and every mode-independent denial remain enforced.
 Do not propagate Coding's availability default to Memory: its absent-configuration ceiling stays
-`governed-assist` for capture, policy projection and maintenance. Regression coverage must exercise
+`governed-assist` for policy projection and standing maintenance; since #4206 it holds routine
+facts for review only when an operator configured it explicitly (ADR-0146 D2). Regression coverage must exercise
 both production composition and these consumers when changing this wiring.
 
 ## Support reports

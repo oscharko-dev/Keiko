@@ -8042,12 +8042,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-workflows/src/bug-investigation/memory.ts",
-      "owner": "emitMemoryWriteCandidate",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-workflows/src/bug-investigation/workflow.ts",
       "owner": "investigateBug",
       "kind": "unregistered-catch",

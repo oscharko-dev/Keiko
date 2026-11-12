@@ -41,6 +41,7 @@ describe("recordAutoAcceptedMemoryCaptureDecision", () => {
       "autonomous-delivery",
       "desktop",
       promotedMemory(),
+      "capture-audit-correlation",
     );
 
     const evidence = evidenceStore

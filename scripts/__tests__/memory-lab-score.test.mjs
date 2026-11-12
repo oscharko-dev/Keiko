@@ -161,6 +161,47 @@ describe("memory lab scoring", () => {
     );
   });
 
+  it("lets the standing profile reach an unrelated question, but never a leak through it", () => {
+    // #4228: the profile, with the person's own true facts, is supplied with every answer by the
+    // owner's decision; only a memory retrieved for the question is over-application. A superseded,
+    // forgotten or forbidden fact the profile carries still leaks.
+    const fixture = scenario();
+    const [related, unknown, unrelated] = fixture.probes;
+    const profile = [{ memoryId: "m", bodyExcerpt: TABLES, via: "profile" }];
+    const stale = [{ memoryId: "s", bodyExcerpt: "Ich bevorzuge Listen.", via: "profile" }];
+    expect(scoreProbe(fixture, unrelated, "Erinnerungen: Tabellen", profile).passed).toBe(true);
+    expect(scoreProbe(fixture, unrelated, "Ich weiss es nicht.", stale).passed).toBe(false);
+    const retrieved = [{ memoryId: "m", bodyExcerpt: TABLES }];
+    expect(scoreProbe(fixture, unrelated, "Ich weiss es nicht.", retrieved).passed).toBe(false);
+    expect(scoreProbe(fixture, related, "Erinnerungen: Tabellen", profile)).toMatchObject({
+      passed: true,
+      relevantSupplied: true,
+    });
+    // An unknown fact still needs an abstention, and a superseded one in the profile still leaks.
+    expect(scoreProbe(fixture, unknown, "Ich weiss es nicht.", profile).passed).toBe(true);
+    expect(scoreProbe(fixture, unknown, "Erinnerungen: Tabellen", profile).passed).toBe(false);
+    expect(scoreProbe(fixture, unknown, "Ich weiss es nicht.", stale).leaked).toBe(true);
+  });
+
+  it("does not hold the model's own words against a subject only because it has a profile", () => {
+    // The profile reaches every answer; a listed term the model says by itself counts only when a
+    // retrieved memory was supplied or a profile entry carries it.
+    const fixture = scenario();
+    const [related, unknown, unrelated] = fixture.probes;
+    const profile = [{ memoryId: "m", bodyExcerpt: TABLES, via: "profile" }];
+    expect(
+      scoreProbe(fixture, unknown, "Ich weiss es nicht, Listen vielleicht.", profile),
+    ).toMatchObject({ leaked: false });
+    expect(scoreProbe(fixture, unrelated, "Kaffee hilft.", profile).passed).toBe(true);
+    expect(scoreProbe(fixture, related, "Erinnerungen: Tabellen, Kaffee", profile).passed).toBe(
+      true,
+    );
+    const retrieved = [{ memoryId: "r", bodyExcerpt: TABLES }];
+    expect(scoreProbe(fixture, related, "Erinnerungen: Tabellen, Kaffee", retrieved).passed).toBe(
+      false,
+    );
+  });
+
   it("fails an answer probe when a forbidden term appears beside the right one", () => {
     const fixture = scenario({
       probes: [

@@ -97,6 +97,11 @@ export interface MemoryRetentionHint {
   readonly notes?: string;
 }
 
+// A standing fact about the person (role, language, a standing constraint): it does not decay by
+// recency and changes only through supersession, forgetting, pinning and unpinning. Capture sets
+// it; the standing profile reads it (#4228).
+export const STANDING_FACT_RETENTION_POLICY_KEY = "standing";
+
 // ─── Memory record ────────────────────────────────────────────────────────────
 // The central durable contract. Distinguished from chat history (transient, no
 // provenance), connected-context KnowledgeCapsules (document-derived, no
@@ -188,4 +193,13 @@ export interface MemoryEdge {
   readonly createdAt: number;
   readonly confidence?: number;
   readonly provenanceSummary?: string;
+}
+
+// Keiko's own record tag (#4228): the person unpinned the fact, so it stays out of the standing
+// profile until pinned again. It is not the person's label; surfaces hide it and edits keep it.
+export const PROFILE_EXCLUDED_MEMORY_TAG = "profile:excluded";
+
+/** The tags a person sees and edits: Keiko's own tags are left out. */
+export function personMemoryTags(tags: readonly string[]): readonly string[] {
+  return tags.filter((tag) => tag !== PROFILE_EXCLUDED_MEMORY_TAG);
 }

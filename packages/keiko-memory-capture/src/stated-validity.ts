@@ -52,14 +52,15 @@ const GERMAN_DATE_RE = /(?:^|[^\p{L}])bis(?:\s+zum)?\s+(\d{1,2})\.(\d{1,2})\.(\d
 const ISO_DATE_RE = /(?:^|[^\p{L}])(?:bis|until|till|through)\s+(\d{4})-(\d{2})-(\d{2})(?!\d)/iu;
 const REASON_RE = /(?:^|[^\p{L}])(?:weil|denn|da|because|since)\s+([^.!?…\n]{3,300})/iu;
 
+// A stated day ends at midnight where the person lives. Keiko runs on their own machine, so its local
+// time zone is theirs; a UTC day would end hours early west of UTC and run into the next day east.
 function endOfDay(year: number, month: number, day: number): number | null {
-  const end = Date.UTC(year, month, day, 23, 59, 59, 999);
-  const check = new Date(end);
-  return check.getUTCMonth() === month && check.getUTCDate() === day ? end : null;
+  const end = new Date(year, month, day, 23, 59, 59, 999);
+  return end.getMonth() === month && end.getDate() === day ? end.getTime() : null;
 }
 
 function endOfMonth(year: number, month: number): number {
-  return Date.UTC(year, month + 1, 0, 23, 59, 59, 999);
+  return new Date(year, month + 1, 0, 23, 59, 59, 999).getTime();
 }
 
 function monthEnd(sentence: string, nowMs: number): number | null {
@@ -67,7 +68,7 @@ function monthEnd(sentence: string, nowMs: number): number | null {
   const month = match?.[1] === undefined ? undefined : MONTHS[match[1].toLocaleLowerCase("und")];
   if (month === undefined) return null;
   if (match?.[2] !== undefined) return endOfMonth(Number(match[2]), month);
-  const thisYear = new Date(nowMs).getUTCFullYear();
+  const thisYear = new Date(nowMs).getFullYear();
   const end = endOfMonth(thisYear, month);
   return end > nowMs ? end : endOfMonth(thisYear + 1, month);
 }
@@ -78,7 +79,7 @@ function germanDateEnd(sentence: string, nowMs: number): number | null {
   const month = Number(match[2]) - 1;
   const day = Number(match[1]);
   if (match[3] !== undefined) return endOfDay(Number(match[3]), month, day);
-  const thisYear = new Date(nowMs).getUTCFullYear();
+  const thisYear = new Date(nowMs).getFullYear();
   const end = endOfDay(thisYear, month, day);
   if (end === null) return null;
   return end > nowMs ? end : endOfDay(thisYear + 1, month, day);

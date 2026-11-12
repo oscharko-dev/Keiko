@@ -1,19 +1,34 @@
 import { describe, expect, it } from "vitest";
+import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts";
-import type { UserId } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  MEMORY_SCOPE_KINDS,
+  MEMORY_SOURCE_KINDS,
+  type UserId,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { createAuditRedactor, createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  MEMORY_CAPTURE_DECISION_LOG_MODES,
+  MEMORY_CAPTURE_DECISION_LOG_OUTCOMES,
+  MEMORY_CAPTURE_DECISION_LOG_REASONS,
+  MEMORY_CAPTURE_DECISION_LOG_SCOPE_KINDS,
+  MEMORY_CAPTURE_DECISION_LOG_SOURCE_KINDS,
+} from "./memory-capture-decision-log.js";
+import {
   buildMemoryCaptureDecisionAuditEvent,
+  CAPTURE_DECISION_OUTCOMES,
+  CAPTURE_DECISION_REASONS,
   MemoryCaptureProjectionReadError,
   projectMemoryCaptureDecisions,
   replayMemoryCaptureAuditLedger,
 } from "./memory-capture-projection.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { sanitizeMemoryScope } from "./memory-scope-sanitizer.js";
 
 function userId(value: string): UserId {
   return value as UserId;
@@ -69,17 +84,27 @@ function captureEvent(
   });
 }
 
-function forgottenEvent(id: string, occurredAt: number): MemoryAuditEvent {
+type ForgottenAuditEvent = Extract<MemoryAuditEvent, { readonly kind: "memory:forgotten" }>;
+
+// Mirrors buildTombstonedEvent: the vault derives every tombstone event, so its initiator surface
+// is "system" and only the tombstone's forgetter surface says who asked for the forget. `null` is an
+// event written before #4206, which carries no forgetter surface.
+function forgottenEvent(
+  id: string,
+  occurredAt: number,
+  forgetterSurface: string | null = "memory-center",
+): ForgottenAuditEvent {
   return {
     schemaVersion: "1",
     kind: "memory:forgotten",
     eventId: `forgot-${id}-${String(occurredAt)}`,
     occurredAt,
-    initiatorSurface: "memory-center",
-    summary: "memory forgotten",
+    initiatorSurface: "system",
+    summary: `memory forgotten (surface=${forgetterSurface ?? "unknown"})`,
     memoryId: memoryId(id),
     scope: OWN_SCOPE,
     tombstoned: true,
+    ...(forgetterSurface === null ? {} : { forgetterSurface }),
   };
 }
 
@@ -94,6 +119,18 @@ function permutations<T>(values: readonly T[]): readonly (readonly T[])[] {
 }
 
 describe("memory capture projection", () => {
+  // The decision line names exactly what a capture decision can carry (#4206): the catalog generator
+  // reads its closed values from the log module, so they are written out there and pinned here.
+  it("logs every value a capture decision can carry, and nothing else", () => {
+    expect(MEMORY_CAPTURE_DECISION_LOG_OUTCOMES).toEqual(CAPTURE_DECISION_OUTCOMES);
+    expect(MEMORY_CAPTURE_DECISION_LOG_REASONS).toEqual(
+      CAPTURE_DECISION_REASONS.filter((reason) => reason !== "forgotten-by-person"),
+    );
+    expect(MEMORY_CAPTURE_DECISION_LOG_MODES).toEqual(CODING_WORKBENCH_MODES);
+    expect(MEMORY_CAPTURE_DECISION_LOG_SCOPE_KINDS).toEqual(MEMORY_SCOPE_KINDS);
+    expect(MEMORY_CAPTURE_DECISION_LOG_SOURCE_KINDS).toEqual(MEMORY_SOURCE_KINDS);
+  });
+
   it("replays capture decisions with deterministic newest-first ordering and stable ties", () => {
     const events = [
       captureEvent("older", 100),
@@ -145,8 +182,60 @@ describe("memory capture projection", () => {
         authorizedScopes: [OWN_SCOPE],
         liveRecords,
       });
-      expect(projected.map((decision) => decision.memoryId)).toEqual(["kept"]);
+      // The forgotten record is never named again: its capture decision is gone, and the forget
+      // itself is a record-free Journal entry (#4206).
+      const captures = projected.filter((decision) => decision.outcome !== "forgotten");
+      expect(captures.map((decision) => decision.memoryId)).toEqual(["kept"]);
+      const forgets = projected.filter((decision) => decision.outcome === "forgotten");
+      expect(forgets).toHaveLength(1);
+      expect(forgets[0]).not.toHaveProperty("memoryId");
     }
+  });
+
+  it("shows a person's forget as a content-free Journal entry and leaves housekeeping out", () => {
+    const deletedWithoutTombstone: ForgottenAuditEvent = {
+      ...forgottenEvent("replaced", 260),
+      tombstoned: false,
+    };
+    const otherScope: MemoryScope = { kind: "user", userId: userId("operator-b") };
+    const elsewhere: ForgottenAuditEvent = {
+      ...forgottenEvent("elsewhere", 270),
+      scope: otherScope,
+    };
+    const projected = projectMemoryCaptureDecisions(
+      [
+        forgottenEvent("forgotten", 250),
+        forgottenEvent("said-in-chat", 240, "chat-statement"),
+        forgottenEvent("expired", 230, "retention"),
+        forgottenEvent("swept", 220, "memory-maintenance"),
+        forgottenEvent("before-4206", 210, null),
+        deletedWithoutTombstone,
+        elsewhere,
+        { ...forgottenEvent("early", 10) },
+      ],
+      { since: 100, order: "desc", authorizedScopes: [OWN_SCOPE], liveRecords: [] },
+    );
+    // The Journal shows the scope the projection publishes, never the raw user id.
+    const shownScope = sanitizeMemoryScope(OWN_SCOPE, (value) => value);
+    expect(projected).toEqual([
+      {
+        eventId: "forgot-forgotten-250",
+        outcome: "forgotten",
+        scope: shownScope,
+        provenance: { initiatorSurface: "system", sourceKind: "explicit-user-instruction" },
+        occurredAt: 250,
+        reason: "forgotten-by-person",
+      },
+      {
+        eventId: "forgot-said-in-chat-240",
+        outcome: "forgotten",
+        scope: shownScope,
+        provenance: { initiatorSurface: "system", sourceKind: "explicit-user-instruction" },
+        occurredAt: 240,
+        reason: "forgotten-by-person",
+      },
+    ]);
+    expect(JSON.stringify(projected)).not.toContain("operator-a");
   });
 
   it("drops absent persisted records but keeps record-free rejections content-free", () => {

@@ -2,6 +2,8 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
+import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
+
 import {
   anyWordPattern,
   factWords,
@@ -1467,10 +1469,83 @@ function derivedConfidence(body: string, evidence: string, subjectless: boolean)
   return 0.4 + subjectBonus + coverageBonus;
 }
 
+// The model's answer reaches the learner through the strict projection, which masks an identifier
+// such as an IBAN (under KEIKO_CONTENT_REDACTION=on the model's input is masked too). The quote then
+// holds the placeholder where the person wrote the identifier and is not verbatim, though what the
+// person said was an identifier Keiko never keeps (#4206). The quote's other parts are found in
+// order in the person's words; a masked span between them that is an identifier names the real
+// reason. A span stays inside its own sentence and is short, so a quote the model made up cannot
+// borrow an identifier from elsewhere in the message. No pattern is built from the quote.
+//
+// The projection reads a JSON answer by its values and masks a value holding an identifier whole,
+// so the quote can also be the bare placeholder. Nothing of it can be located then; the identifier
+// in the person's own message is the reason the value was masked. This only names the reason of a
+// quote that is dropped anyway; it never admits one.
+const MASKED_SPAN_MAX_CHARS = 64;
+const MASK_SENTENCE_END_RE = /[.!?](?=\s|$)/u;
+const MASK_SENTENCE_ENDS_RE = /[.!?](?=\s|$)/gu;
+
+function sentenceHead(text: string, to: number): string {
+  const head = text.slice(0, to);
+  let from = 0;
+  for (const end of head.matchAll(MASK_SENTENCE_ENDS_RE)) from = end.index + 1;
+  return head.slice(from).trimStart();
+}
+
+function sentenceTail(text: string, from: number): string {
+  const tail = text.slice(from);
+  const end = MASK_SENTENCE_END_RE.exec(tail);
+  return end === null ? tail : tail.slice(0, end.index);
+}
+
+function middleSpans(parts: readonly string[], text: string, end: number): string[] | null {
+  const spans: string[] = [];
+  let cursor = end;
+  for (const [index, part] of parts.entries()) {
+    if (part.length === 0) {
+      if (index !== parts.length - 1) return null;
+      spans.push(sentenceTail(text, cursor));
+      continue;
+    }
+    const start = text.indexOf(part, cursor + 1);
+    if (start === -1) return null;
+    spans.push(text.slice(cursor, start));
+    cursor = start + part.length;
+  }
+  return spans;
+}
+
+function maskedSpans(evidence: string, text: string): readonly string[] {
+  const [first = "", second = "", ...rest] = evidence.split(REDACTION_PLACEHOLDER);
+  const anchor = first.length > 0 ? first : second;
+  const at = text.indexOf(anchor);
+  if (anchor.length === 0 || at === -1) return [];
+  const head = first.length > 0 ? [] : [sentenceHead(text, at)];
+  const tail = first.length > 0 ? [second, ...rest] : rest;
+  const spans = middleSpans(tail, text, at + anchor.length);
+  if (spans === null) return [];
+  const all = [...head, ...spans];
+  const bounded = all.every(
+    (span) =>
+      span.trim().length > 0 &&
+      span.length <= MASKED_SPAN_MAX_CHARS &&
+      !MASK_SENTENCE_END_RE.test(span),
+  );
+  return bounded ? all : [];
+}
+
+function quotesMaskedIdentifier(evidence: string, text: string): boolean {
+  if (!evidence.includes(REDACTION_PLACEHOLDER)) return false;
+  if (evidence === REDACTION_PLACEHOLDER) return looksLikePersonalIdentifier(text);
+  return maskedSpans(evidence, text).some((span) => looksLikePersonalIdentifier(span));
+}
+
 function spanDropReason(evidence: string, text: string): FactDropReason | null {
   if (evidence.length === 0) return "no-evidence";
   if (evidence.length > EVIDENCE_MAX_CHARS) return "evidence-too-long";
-  if (!text.includes(evidence)) return "evidence-not-verbatim";
+  if (!text.includes(evidence)) {
+    return quotesMaskedIdentifier(evidence, text) ? "personal-identifier" : "evidence-not-verbatim";
+  }
   return INNER_SENTENCE_RE.test(evidence) ? "not-clause-boundary" : null;
 }
 

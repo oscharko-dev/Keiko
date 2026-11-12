@@ -26,19 +26,43 @@ const METRIC_CORPUS_LABELS = [
   "capture:voice:correct",
   "capture:correction-repeat:correct",
   "capture:correction-first:correct",
-  "proposal:governed:accepted",
+  // #4206 corpus revision: no routine fact waits for approval, so the governed capture is accepted
+  // like the others, and confidential content and personal identifiers are refused in every mode.
+  "acceptance:governed:without-approval",
   "denial:health:expected",
   "denial:third-party:expected",
   "denial:secret:expected",
+  "denial:confidential:expected",
+  "denial:iban:expected",
+  "denial:customer-identifier:expected",
+  "forget:journal:shown",
   "disabled:no-capture",
 ] as const;
 
+// Every refusal is the learner's or the turn guard's, recorded in the Journal under its own reason.
+// The scripted model proposes each marked sentence as a fact; the product must refuse it.
 const DENIED_INPUTS = [
-  { reason: "denied-category", text: "The fixture medical record changed this week." },
-  { reason: "denied-category", text: "My colleague is moving to another fixture team." },
+  // A protected topic and another person are refused before any model call (#2601).
+  { reason: "denied-category", text: "M1_DENIED_HEALTH: I take my fixture medication every day." },
+  {
+    reason: "denied-category",
+    text: "M1_DENIED_THIRD_PARTY: My colleague prefers fixture tables.",
+  },
   {
     reason: "credential-shape",
     text: `Use password=${["FAKE", "M1", "SECRET", "PLACEHOLDER"].join("-")} for the fixture.`,
+  },
+  {
+    reason: "sensitive-memory-requires-approval",
+    text: "M1_DENIED_CONFIDENTIAL: I am reachable at m1.fixture@example.com.",
+  },
+  {
+    reason: "personal-identifier",
+    text: "M1_DENIED_IBAN: I pay from DE89 3704 0044 0532 0130 00.",
+  },
+  {
+    reason: "personal-identifier",
+    text: "M1_DENIED_CUSTOMER: I am customer Kundennummer 4711-0815.",
   },
 ] as const;
 
@@ -50,7 +74,7 @@ interface ChatFixture {
 
 interface RecentCapture {
   readonly eventId: string;
-  readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected";
+  readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected" | "forgotten";
   readonly mode?: CodingWorkbenchMode;
   readonly provenance: { readonly initiatorSurface: string };
   readonly reason: string;
@@ -74,8 +98,7 @@ interface CertificationContext {
 interface MetricCounters {
   correctCaptures: number;
   totalCaptures: number;
-  acceptedProposals: number;
-  totalProposals: number;
+  acceptedWithoutApproval: number;
   repeatedCorrectionTurns: number;
   totalCorrectiveTurns: number;
 }
@@ -136,11 +159,14 @@ async function setupContext(page: Page, request: APIRequestContext): Promise<Cer
   await page.goto("/");
   const chatWindow = page.getByRole("region", { name: `Chat — ${chat.title}` });
   await expect(chatWindow).toBeVisible();
+  // A new Chat starts with MemoriaViva off (#3140); the person turns it on for this Chat.
+  await expect(chatMemoryControl(chatWindow)).toHaveAttribute("aria-pressed", "false");
+  await setMemoryEnabled(chatWindow, true);
   return { page, request, chat, chatWindow, since };
 }
 
 async function openMemoryWindow(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "MemoriaViva" }).click();
+  await page.getByRole("button", { name: "MemoriaViva", exact: true }).click();
   const window = page.getByRole("region", { name: "MemoriaViva" });
   await expect(window.getByRole("heading", { name: "MemoriaViva" })).toBeVisible();
   return window;
@@ -161,13 +187,19 @@ async function setMode(page: Page, mode: CodingWorkbenchMode): Promise<void> {
   await closeMemoryWindow(page);
 }
 
-async function setMemoryEnabled(page: Page, enabled: boolean): Promise<void> {
-  const window = await openMemoryWindow(page);
-  const control = window.getByRole("switch", { name: "Use MemoriaViva in chat requests" });
-  const current = (await control.getAttribute("aria-checked")) === "true";
+function chatMemoryControl(chatWindow: Locator): Locator {
+  return chatWindow.locator(".chat-memory-activation-toggle");
+}
+
+// MemoriaViva is switched per Chat in the Chat's own composer, the only control a person has.
+async function setMemoryEnabled(chatWindow: Locator, enabled: boolean): Promise<void> {
+  const control = chatMemoryControl(chatWindow);
+  const current = (await control.getAttribute("aria-pressed")) === "true";
   if (current !== enabled) await control.click();
-  await expect(control).toHaveAttribute("aria-checked", String(enabled));
-  await closeMemoryWindow(page);
+  await expect(control).toHaveAttribute("aria-pressed", String(enabled));
+  await expect(control).toHaveAccessibleName(
+    enabled ? "Disable MemoriaViva for this chat" : "Enable MemoriaViva for this chat",
+  );
 }
 
 async function sendTurn(chatWindow: Locator, text: string): Promise<void> {
@@ -196,7 +228,6 @@ async function waitForCapture(
   context: CertificationContext,
   marker: string,
   mode: CodingWorkbenchMode,
-  outcome: "proposed" | "auto-accepted",
 ): Promise<RecentCapture> {
   await expect
     .poll(async () => {
@@ -204,7 +235,7 @@ async function waitForCapture(
       return captures.some(
         (capture) =>
           capture.mode === mode &&
-          capture.outcome === outcome &&
+          capture.outcome === "auto-accepted" &&
           capture.bodyExcerpt?.includes(marker) === true,
       );
     })
@@ -229,7 +260,9 @@ function recordObservedCaptures(
   metrics.correctCaptures += emitted.filter(
     (capture) => capture.bodyExcerpt?.includes(correctMarker) === true,
   ).length;
-  metrics.totalProposals += emitted.filter(({ outcome }) => outcome === "proposed").length;
+  metrics.acceptedWithoutApproval += emitted.filter(
+    ({ outcome }) => outcome === "auto-accepted",
+  ).length;
 }
 
 async function sendMeasuredTurn(
@@ -237,34 +270,40 @@ async function sendMeasuredTurn(
   text: string,
   marker: string,
   mode: CodingWorkbenchMode,
-  outcome: "proposed" | "auto-accepted",
   metrics: MetricCounters,
 ): Promise<RecentCapture> {
   const before = (await recent(context.request, context.since)).captures;
   await sendTurn(context.chatWindow, text);
-  const capture = await waitForCapture(context, marker, mode, outcome);
+  const capture = await waitForCapture(context, marker, mode);
   const after = (await recent(context.request, context.since)).captures;
   recordObservedCaptures(metrics, before, after, marker);
   return capture;
 }
 
+// In Ask for approval the fact is in use without a click (#4206); forgetting it from the Journal
+// deletes it and leaves a content-free Forgotten entry in its place.
 async function certifyGovernedJournal(
   context: CertificationContext,
   memoryId: string,
-  metrics: MetricCounters,
 ): Promise<void> {
   const window = await openMemoryWindow(context.page);
   await window.getByRole("button", { name: "Journal", exact: true }).click();
   const row = window.locator(`[data-memory-id="${memoryId}"]`);
-  await expect(row.getByText("Ask for approval")).toBeVisible();
-  await expect(row.getByText("Awaiting review")).toBeVisible();
-  await row.getByRole("button", { name: "Keep" }).click();
-  await expect(row.getByText("Kept")).toBeVisible();
-  metrics.acceptedProposals += 1;
+  // Nothing waits for review, so the row names no mode: no approval was asked for.
+  await expect(row.getByText("Auto-captured")).toBeVisible();
+  await expect(row.getByText("Awaiting review")).toHaveCount(0);
+  await expect(row.getByText("Ask for approval")).toHaveCount(0);
   await row.getByRole("button", { name: "Forget" }).click();
   await expect
     .poll(async () => (await storedMemoryIds(context.request)).includes(memoryId))
     .toBe(false);
+  await expect
+    .poll(async () =>
+      (await recent(context.request, context.since)).captures.some(
+        (capture) => capture.outcome === "forgotten" && capture.memoryId === undefined,
+      ),
+    )
+    .toBe(true);
   await closeMemoryWindow(context.page);
 }
 
@@ -278,11 +317,10 @@ async function certifyModeCaptures(
     "M1_GOVERNED_CAPTURE: I use a governed release cadence.",
     "M1_GOVERNED_CAPTURE",
     "governed-assist",
-    "proposed",
     metrics,
   );
   expect(governed.memoryId).toBeDefined();
-  await certifyGovernedJournal(context, governed.memoryId ?? "", metrics);
+  await certifyGovernedJournal(context, governed.memoryId ?? "");
 
   await setMode(context.page, "supervised-coding");
   const supervised = await sendMeasuredTurn(
@@ -290,7 +328,6 @@ async function certifyModeCaptures(
     "M1_SUPERVISED_CAPTURE: I keep the certified-supervised detail in a weekly cadence.",
     "M1_SUPERVISED_CAPTURE",
     "supervised-coding",
-    "auto-accepted",
     metrics,
   );
   expect(supervised.memoryId).toBeDefined();
@@ -301,7 +338,6 @@ async function certifyModeCaptures(
     "M1_AUTONOMOUS_CAPTURE: I prefer autonomous release notes.",
     "M1_AUTONOMOUS_CAPTURE",
     "autonomous-delivery",
-    "auto-accepted",
     metrics,
   );
   return supervised.memoryId ?? "";
@@ -349,12 +385,7 @@ async function certifyVoicePath(
   };
   expect(body.memory?.context.memories.map(({ memoryId }) => memoryId)).toContain(recalledMemoryId);
   expect(body.messages.find(({ role }) => role === "assistant")?.content).toBe(REPLY_TEXT);
-  const voiceCapture = await waitForCapture(
-    context,
-    "M1_VOICE_CAPTURE",
-    "autonomous-delivery",
-    "auto-accepted",
-  );
+  const voiceCapture = await waitForCapture(context, "M1_VOICE_CAPTURE", "autonomous-delivery");
   // The decisive assertion: the spoken turn is attributed to Voice, so the Journal can show what was
   // learned during voice and offer one-click forget on exactly those rows.
   expect(voiceCapture.provenance.initiatorSurface).toBe("voice");
@@ -383,8 +414,11 @@ function assertTypedTurnsUnchangedAndDesktopAttributed(
   for (const marker of typedMarkers) {
     expect(countMarker(after, marker)).toBe(countMarker(before, marker));
   }
+  // A person's forget (#4206) is a record-free Journal entry derived by the vault, not a turn
+  // capture, so it carries no turn surface.
   const desktop = after.filter(
-    (capture) => capture.bodyExcerpt?.includes("M1_VOICE_CAPTURE") !== true,
+    (capture) =>
+      capture.outcome !== "forgotten" && capture.bodyExcerpt?.includes("M1_VOICE_CAPTURE") !== true,
   );
   expect(desktop.length).toBeGreaterThan(0);
   expect(desktop.map((capture) => capture.provenance.initiatorSurface)).toEqual(
@@ -409,14 +443,7 @@ async function certifyCorrectionMetrics(
     },
   ] as const;
   for (const sample of samples) {
-    await sendMeasuredTurn(
-      context,
-      sample.text,
-      sample.marker,
-      "autonomous-delivery",
-      "auto-accepted",
-      metrics,
-    );
+    await sendMeasuredTurn(context, sample.text, sample.marker, "autonomous-delivery", metrics);
     metrics.totalCorrectiveTurns += 1;
     if (sample.repeated) metrics.repeatedCorrectionTurns += 1;
   }
@@ -458,13 +485,13 @@ async function certifyModeIndependentDenials(context: CertificationContext): Pro
 }
 
 async function certifyDisabledPath(context: CertificationContext): Promise<void> {
-  await setMemoryEnabled(context.page, false);
+  await setMemoryEnabled(context.chatWindow, false);
   const beforeRecent = await recent(context.request, context.since);
   const beforeStored = await storedMemoryIds(context.request);
   await sendTurn(context.chatWindow, "M1_DISABLED_CAPTURE must remain absent.");
   expect(await recent(context.request, context.since)).toEqual(beforeRecent);
   expect(await storedMemoryIds(context.request)).toEqual(beforeStored);
-  await setMemoryEnabled(context.page, true);
+  await setMemoryEnabled(context.chatWindow, true);
 }
 
 async function certifyContentFreeJournalRefusal(context: CertificationContext): Promise<void> {
@@ -472,12 +499,15 @@ async function certifyContentFreeJournalRefusal(context: CertificationContext): 
   await window.getByRole("button", { name: "Journal", exact: true }).click();
   const row = window
     .getByTestId("memory-journal-row")
-    .filter({ hasText: "Capture reason denied-category" })
+    .filter({ has: context.page.locator('[data-reason="denied-category"]') })
     .first();
   await expect(row).toHaveAttribute("data-outcome", "rejected");
   await expect(row).not.toHaveAttribute("data-memory-id");
   await expect(row.getByText("Capture refused by policy. No content was retained.")).toBeVisible();
   await expect(row.getByText("Refused", { exact: true })).toBeVisible();
+  // A person reads why, not a policy code.
+  await expect(row.getByText("Why: It touched a protected topic, such as health.")).toBeVisible();
+  await expect(row).not.toContainText("denied-category");
   await expect(row.getByRole("button")).toHaveCount(0);
   const voiceRow = window
     .getByTestId("memory-journal-row")
@@ -501,13 +531,13 @@ Recorded by \`npm run test:e2e:memoriaviva-m1\` from the deterministic, labeled 
 | Metric                   | Numerator | Denominator | Baseline |
 | ------------------------ | --------: | ----------: | -------: |
 | Repeated-correction rate |         ${String(metrics.repeatedCorrectionTurns)} |           ${String(metrics.totalCorrectiveTurns)} |   ${rate(metrics.repeatedCorrectionTurns, metrics.totalCorrectiveTurns)} |
-| Proposal-acceptance rate |         ${String(metrics.acceptedProposals)} |           ${String(metrics.totalProposals)} |   ${rate(metrics.acceptedProposals, metrics.totalProposals)} |
+| Approval-free acceptance |         ${String(metrics.acceptedWithoutApproval)} |           ${String(metrics.totalCaptures)} |   ${rate(metrics.acceptedWithoutApproval, metrics.totalCaptures)} |
 | Capture precision        |         ${String(metrics.correctCaptures)} |           ${String(metrics.totalCaptures)} |   ${rate(metrics.correctCaptures, metrics.totalCaptures)} |
 
 ## Measurement contract for M8
 
 - Repeated-correction rate = corrective turns that repeat a correction to an already captured fact divided by all labeled corrective turns.
-- Proposal-acceptance rate = accepted proposals divided by all proposals emitted by the labeled corpus.
+- Approval-free acceptance = captures accepted without a review step divided by all captures emitted by the labeled corpus, in every mode (#4206).
 - Capture precision = captures labeled correct divided by all captures emitted by the labeled corpus.
 - M8 must rerun the same labels and denominator rules, report counts plus four-decimal rates, and compare against this corpus hash or document an intentional corpus revision.
 
@@ -521,8 +551,7 @@ function verifyCommittedBaseline(metrics: MetricCounters): void {
   expect(metrics).toEqual({
     correctCaptures: 6,
     totalCaptures: 6,
-    acceptedProposals: 1,
-    totalProposals: 1,
+    acceptedWithoutApproval: 6,
     repeatedCorrectionTurns: 1,
     totalCorrectiveTurns: 2,
   });
@@ -537,13 +566,14 @@ function verifyCommittedBaseline(metrics: MetricCounters): void {
   for (const input of DENIED_INPUTS) expect(generated).not.toContain(input.text);
   expect(generated).not.toMatch(/\bpassword\s*=/iu);
   expect(generated).not.toMatch(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu);
+  expect(generated).not.toMatch(/\bDE89\b|Kundennummer/u);
 }
 
 test.afterEach(() => {
   for (const root of temporaryProjects.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-test("certifies the real default-on M1 chat, voice, Journal, denial, forget, and metric paths", async ({
+test("certifies the real M1 chat, voice, Journal, denial, forget, and metric paths", async ({
   page,
   request,
 }) => {
@@ -551,8 +581,7 @@ test("certifies the real default-on M1 chat, voice, Journal, denial, forget, and
   const metrics: MetricCounters = {
     correctCaptures: 0,
     totalCaptures: 0,
-    acceptedProposals: 0,
-    totalProposals: 0,
+    acceptedWithoutApproval: 0,
     repeatedCorrectionTurns: 0,
     totalCorrectiveTurns: 0,
   };

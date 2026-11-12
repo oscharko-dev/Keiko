@@ -1,5 +1,10 @@
 import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import { browserChatMessages } from "./chat-message-projection.js";
+import {
+  EMPTY_STANDING_PROFILE,
+  standingProfileForUser,
+  standingProfileWire,
+} from "./memory-profile.js";
 import { parseDocumentContext } from "./chat-document-context.js";
 import {
   createChatToolTurn,
@@ -26,7 +31,11 @@ import {
   markdownSkillSelectionRefusal,
 } from "./markdown-skill-selection-admission.js";
 import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
-import { conversationSystemPrompt } from "./conversation-prompt.js";
+import {
+  CONVERSATION_REMEMBER_REFUSED_NOTICE,
+  conversationSystemPrompt,
+  renderStandingProfileBlock,
+} from "./conversation-prompt.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { hasGroundingScope, hasMixedJiraGroundingScope } from "./chat-grounding.js";
@@ -96,7 +105,13 @@ import type {
   MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
+import {
+  DEFAULT_BUDGET_TOKENS,
+  DEFAULT_STANDING_PROFILE_CAPS,
+  retrieveMemoryContext,
+  standingProfileWithout,
+  type StandingProfile,
+} from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   isMaintenanceDue,
@@ -221,8 +236,11 @@ import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
-import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
-import { scheduleMemorySalienceCapture } from "./memory-salience.js";
+import {
+  recordAutoAcceptedMemoryCaptureDecision,
+  recordRefusedStatementCaptureDecision,
+} from "./memory-capture-audit.js";
+import { memoryLearningRuntime } from "./memory-learning.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   logChatCreationRejectionEvent,
@@ -1326,9 +1344,19 @@ function recordConversationMemoryRetrieval(
 
 function toMemoryResult(
   retrieval: ReturnType<typeof retrieveMemoryContext>,
+  profile: StandingProfile = EMPTY_STANDING_PROFILE,
+  profileRetrievedCount = 0,
 ): ConversationMemoryResultWire {
   return {
     context: {
+      ...(profile.entries.length > 0 ? { profile: standingProfileWire(profile) } : {}),
+      ...(profileRetrievedCount > 0 ? { profileRetrievedCount } : {}),
+      // A fact the profile supplies anyway was not held back from the answer.
+      belowFloorCount: retrieval.omitted.filter(
+        (entry) =>
+          entry.reason === "below-threshold" &&
+          !profile.entries.some((fact) => fact.id === entry.memoryId),
+      ).length,
       enabled: true,
       text: retrieval.contextBlock.text,
       memories: retrieval.contextBlock.memories.map((item) => ({
@@ -1414,6 +1442,11 @@ export function maybeRunChatAutoMaintenance(
 // BFF route also uses (#204, O-F2/O-F3/O-F4/O-P1). semanticById is gated on the secondary-model
 // egress check; all signals are passed only when present so a fresh vault ranks byte-identically, and
 // conversation recall defaults to RRF unless KEIKO_MEMORY_FUSION=weighted-sum is set.
+// Provisional: fewer retrieved memories than the shared default of 12, because the standing profile
+// now carries the facts that apply to every answer. Lab measurement of answer accuracy against
+// over-application sets the final value (#4228).
+export const CHAT_MAX_RETRIEVED_MEMORIES = 6;
+
 async function retrieveChatMemory(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -1421,6 +1454,7 @@ async function retrieveChatMemory(
   content: string,
   budgetTokens: number | undefined,
   nowMs: number,
+  profile: StandingProfile = EMPTY_STANDING_PROFILE,
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
   const semanticGate = semanticRetrievalGateForText(
     deps,
@@ -1445,9 +1479,30 @@ async function retrieveChatMemory(
       ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
       ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
       fusion: conversationFusionMode(deps),
+      // #4228: only memories the question is about. A profile fact the question names is
+      // retrieved too and then leaves the profile for this answer (standingProfileWithout).
+      strictRelevanceFloor: true,
+      maxIncluded: CHAT_MAX_RETRIEVED_MEMORIES,
+      ...(profile.entries.length > 0
+        ? { standingProfileIds: new Set(profile.entries.map((entry) => entry.id)) }
+        : {}),
       nowMs,
     },
     vaultAsQueryPort(vault),
+  );
+}
+
+// The profile facts recall sent at least as fully as the profile would: a retrieved excerpt clipped
+// shorter than the profile line leaves the line in place, so no part of a fact is lost.
+function wholeRetrievedIds(
+  retrieval: ReturnType<typeof retrieveMemoryContext>,
+  profile: StandingProfile,
+): ReadonlySet<MemoryId> {
+  const profileText = new Map(profile.entries.map((entry) => [entry.id, entry.text]));
+  return new Set(
+    retrieval.contextBlock.memories
+      .filter((item) => item.bodyExcerpt.length >= (profileText.get(item.memoryId)?.length ?? 0))
+      .map((item) => item.memoryId),
   );
 }
 
@@ -1470,19 +1525,33 @@ export async function buildMemoryResult(
     return emptyMemoryResult(true);
   }
   const nowMs = Date.now();
+  // The profile is part of the person's memory budget; retrieval gets what it leaves.
+  const memoryBudget = budgetTokens ?? DEFAULT_BUDGET_TOKENS;
+  const profile = standingProfileForUser(vault, context.userId, nowMs, {
+    ...DEFAULT_STANDING_PROFILE_CAPS,
+    maxTokens: Math.min(DEFAULT_STANDING_PROFILE_CAPS.maxTokens, memoryBudget),
+  });
   const retrieval = await retrieveChatMemory(
     deps,
     vault,
     scopes,
     request.content,
-    budgetTokens,
+    Math.max(0, memoryBudget - profile.tokens),
     nowMs,
+    profile,
   );
   // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
   // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
   // free-running background loop.
   maybeRunChatAutoMaintenance(deps, vault);
-  const result = toMemoryResult(retrieval);
+  // A profile fact the question is about reaches the answer once, with the retrieved memories.
+  const retrievedIds = wholeRetrievedIds(retrieval, profile);
+  const answerProfile = standingProfileWithout(profile, retrievedIds);
+  const result = toMemoryResult(
+    retrieval,
+    answerProfile,
+    profile.entries.length - answerProfile.entries.length,
+  );
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
 }
@@ -1569,12 +1638,14 @@ function capturedMemoryBody(
   return memory.body;
 }
 
-function captureCandidateForMode(
+function acceptedCaptureCandidate(
   record: MemoryRecord,
+  deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
 ): MemoryRecord {
-  return memoryCaptureAutoAcceptEligible(mode, outcome) || memoryExplicitStatementEligible(outcome)
+  return memoryCaptureAutoAcceptEligible(deps, mode, outcome) ||
+    memoryExplicitStatementEligible(outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
 }
@@ -1601,6 +1672,27 @@ function explicitStatementMark(explicit: boolean): { readonly explicitStatement?
   return explicit ? { explicitStatement: true } : {};
 }
 
+interface SensitiveCandidateRefusal {
+  readonly mode: CodingWorkbenchMode;
+  readonly surface: ConversationMemoryCaptureSurfaceWire;
+  readonly scope: MemoryScope;
+  readonly explicit: boolean;
+  readonly correlationId: string;
+}
+
+// Content that is not a routine fact is refused; a person's own statement shows that in the Journal.
+function refusedSensitiveCandidate(
+  deps: UiHandlerDeps,
+  refusal: SensitiveCandidateRefusal,
+): ConversationMemoryActionWire {
+  const { mode, surface, scope, explicit, correlationId } = refusal;
+  if (explicit) {
+    const reason = SENSITIVE_MEMORY_REJECTION_REASON;
+    recordRefusedStatementCaptureDecision(deps, mode, surface, [scope], reason, correlationId);
+  }
+  return refusedCandidateAction(SENSITIVE_MEMORY_REJECTION_REASON, explicit, correlationId);
+}
+
 async function candidateActionFromOutcome(
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   deps: UiHandlerDeps,
@@ -1610,16 +1702,17 @@ async function candidateActionFromOutcome(
   correlationId: string,
 ): Promise<ConversationMemoryActionWire | null> {
   if (deps.memoryVault === undefined) return null;
-  const explicit = outcome.proposal.provenance.sourceKind === "explicit-user-instruction";
+  const { scope, provenance } = outcome.proposal;
+  const explicit = provenance.sourceKind === "explicit-user-instruction";
   if (!isPersistableMemoryCandidate(outcome)) {
-    return refusedCandidateAction(SENSITIVE_MEMORY_REJECTION_REASON, explicit, correlationId);
+    return refusedSensitiveCandidate(deps, { mode, surface, scope, explicit, correlationId });
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
     return refusedCandidateAction(FORGOTTEN_MEMORY_SUPPRESSION_REASON, explicit, correlationId);
   }
-  const candidate = captureCandidateForMode(record, mode, outcome);
+  const candidate = acceptedCaptureCandidate(record, deps, mode, outcome);
   const result = await persistCandidateRecord(
     outcome,
     deps,
@@ -1638,7 +1731,7 @@ async function candidateActionFromOutcome(
   const { persisted } = result;
   const inserted = persisted.memory;
   if ((persisted.inserted || persisted.promoted) && inserted.status === "accepted") {
-    recordAutoAcceptedMemoryCaptureDecision(deps, mode, surface, inserted);
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, surface, inserted, correlationId);
   }
   return {
     kind: "candidate",
@@ -1678,6 +1771,16 @@ async function captureActionFromOutcome(
     case "forget":
       return forgetActionFromOutcome(outcome, deps, statement.correlationId);
     case "rejected":
+      if (outcome.statement === "remember") {
+        recordRefusedStatementCaptureDecision(
+          deps,
+          mode,
+          surface,
+          statement.scopes,
+          outcome.reason,
+          statement.correlationId,
+        );
+      }
       return rejectedActionFromOutcome(outcome, deps, statement);
     case "supersession":
       return null;
@@ -1718,6 +1821,82 @@ function captureActionsFromOutcomes(
   }, Promise.resolve([]));
 }
 
+// What capture makes of the person's words in this turn. The same pure extraction serves the answer,
+// which must know before it is written whether a remember request will be refused, and the capture
+// that runs once the turn is committed.
+function turnCaptureOutcomes(
+  request: SendDesktopChatRequest,
+  vault: MemoryVaultStore,
+  deps: UiHandlerDeps,
+  context: ConversationMemoryRuntimeContext,
+): readonly CaptureOutcome[] {
+  const previousMessage = (): ChatMessage | undefined =>
+    previousUserMessage(deps, request.content, context.conversationId);
+  return extractCandidatesFromUserText(
+    request.content,
+    buildCaptureContext(context, request.clientTurnId),
+    {
+      ...memoryCapturePolicyForDeps(deps, {
+        resolver: createMemoryTargetResolver(vault),
+        rememberScopeKind: "user",
+        forgetResolver: createMemoryForgetResolver(vault, {
+          scopes: conversationMemoryScopes(context),
+          conversationId: context.conversationId,
+          lastTurnStartedAt: () => previousMessage()?.timestamp,
+          previousMessageId: () => previousMessage()?.id,
+          previousStatement: () => previousMessage()?.content,
+        }),
+      }),
+    },
+  );
+}
+
+// Whether the outcome keeps what the person asked Keiko to remember, by the same checks capture
+// applies when it persists it.
+function keepsRememberedStatement(outcome: CaptureOutcome, vault: MemoryVaultStore): boolean {
+  if (outcome.kind !== "candidate") return false;
+  if (outcome.proposal.provenance.sourceKind !== "explicit-user-instruction") return false;
+  if (!isPersistableMemoryCandidate(outcome)) return false;
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  return !isSuppressedByForgetTombstone(vault, buildMemoryRecordFromProposal(proposalId, outcome));
+}
+
+function asksToRemember(outcome: CaptureOutcome): boolean {
+  if (outcome.kind === "rejected") return outcome.statement === "remember";
+  return (
+    outcome.kind === "candidate" &&
+    outcome.proposal.provenance.sourceKind === "explicit-user-instruction"
+  );
+}
+
+// A person's own "Merke dir" that Keiko refuses must not be answered as stored (#4213).
+export function rememberRequestRefused(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+): boolean {
+  if (request.memory?.enabled !== true || deps.memoryVault === undefined) return false;
+  const projectPath = normalizeDesktopProjectPath(request.projectPath, deps);
+  if (isRouteResult(projectPath)) return false;
+  const context = resolveConversationMemoryContext(deps, projectPath, request.chatId);
+  if (isRouteResult(context)) return false;
+  return rememberRequestRefusedIn(deps, request, context);
+}
+
+// The same decision for a turn whose memory context is already resolved, such as a grounded answer.
+export function rememberRequestRefusedIn(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  context: ConversationMemoryRuntimeContext,
+): boolean {
+  const vault = deps.memoryVault;
+  if (request.memory?.enabled !== true || vault === undefined) return false;
+  const outcomes = turnCaptureOutcomes(request, vault, deps, context);
+  return (
+    outcomes.some((outcome) => asksToRemember(outcome)) &&
+    !outcomes.some((outcome) => keepsRememberedStatement(outcome, vault))
+  );
+}
+
 function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -1729,23 +1908,7 @@ function captureMemoryActions(
   }
   const previousMessage = (): ChatMessage | undefined =>
     previousUserMessage(deps, request.content, context.conversationId);
-  const outcomes = extractCandidatesFromUserText(
-    request.content,
-    buildCaptureContext(context, request.clientTurnId),
-    {
-      ...memoryCapturePolicyForDeps(deps, {
-        resolver: createMemoryTargetResolver(deps.memoryVault),
-        rememberScopeKind: "user",
-        forgetResolver: createMemoryForgetResolver(deps.memoryVault, {
-          scopes: conversationMemoryScopes(context),
-          conversationId: context.conversationId,
-          lastTurnStartedAt: () => previousMessage()?.timestamp,
-          previousMessageId: () => previousMessage()?.id,
-          previousStatement: () => previousMessage()?.content,
-        }),
-      }),
-    },
-  );
+  const outcomes = turnCaptureOutcomes(request, deps.memoryVault, deps, context);
   recordForgetNotStored(request.content, outcomes, correlationId);
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
@@ -1808,7 +1971,6 @@ export function runPostCommitConversationMemorySideEffects(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest & { readonly sourceMessageId?: string },
   context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
   memory: ConversationMemoryResultWire,
   assistantText: string,
   correlationId: string,
@@ -1818,16 +1980,28 @@ export function runPostCommitConversationMemorySideEffects(
   });
   if (context === undefined) return;
   runPostCommitMemoryEffect(deps, correlationId, "chat.memory.salience", () => {
-    scheduleMemorySalienceCapture(
-      deps,
-      request,
-      context,
-      modelId,
-      assistantText,
-      request.memory?.surface ?? "desktop",
-      correlationId,
-    );
+    markTurnForLearning(deps, request, request.sourceMessageId, correlationId);
   });
+}
+
+// #4213: the turn is learned later, by a pass, from the Chat's own stored messages. What is
+// recorded now is that memory was on, from the request's own memory setting.
+function markTurnForLearning(
+  deps: UiHandlerDeps,
+  request: { readonly memory?: SendDesktopChatRequest["memory"] },
+  sourceMessageId: string | undefined,
+  correlationId: string,
+): void {
+  if (request.memory?.enabled !== true || deps.memoryVault === undefined) return;
+  if (sourceMessageId === undefined) return;
+  memoryLearningRuntime(deps).noteTurn(
+    {
+      messageId: sourceMessageId,
+      surface: request.memory.surface ?? "desktop",
+      ...(request.memory.mode === undefined ? {} : { mode: request.memory.mode }),
+    },
+    correlationId,
+  );
 }
 
 // On the first turn of a freshly-created chat (still bearing the default title), adopt the user's
@@ -1925,6 +2099,7 @@ function finalizeGatewayAssembly(
   deps: UiHandlerDeps,
   modelId: string | undefined,
   historyDocumentCandidates: number,
+  memory: ConversationMemoryResultWire,
 ): GatewayPromptAssembly {
   if (selected === undefined) {
     throw new ContextOverflowError(
@@ -1936,6 +2111,7 @@ function finalizeGatewayAssembly(
     selected,
     request.attachments.filter((attachment) => attachment.kind === "image").length,
     historyDocumentCandidates,
+    memory,
   );
   if (selected.compaction !== undefined)
     persistRequiredChatContinuityCheckpoint(deps, {
@@ -1945,6 +2121,27 @@ function finalizeGatewayAssembly(
       correlationId,
     });
   return selected;
+}
+
+// The standing profile rides with the system prompt, ahead of a rehydrated continuity context, so
+// the existing scaffold reserve and token accounting cover it (#4228).
+function joinSystemContext(...parts: readonly (string | undefined)[]): string | undefined {
+  const present = parts.filter((part): part is string => part !== undefined && part.length > 0);
+  return present.length === 0 ? undefined : present.join("\n\n");
+}
+
+function systemContextForTurn(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memory: ConversationMemoryResultWire,
+  snapshot: GatewayTurnSnapshot,
+): string | undefined {
+  const profileFacts = memory.context.profile?.entries.map((entry) => entry.text) ?? [];
+  return joinSystemContext(
+    renderStandingProfileBlock(profileFacts),
+    rememberRequestRefused(deps, request) ? CONVERSATION_REMEMBER_REFUSED_NOTICE : undefined,
+    snapshot.rehydratedContext,
+  );
 }
 
 export function buildGatewayAssembly(
@@ -1981,7 +2178,7 @@ export function buildGatewayAssembly(
       snapshot.historyRevision,
       correlationId,
     ),
-    continuityContextText: snapshot.rehydratedContext,
+    continuityContextText: systemContextForTurn(deps, request, memory, snapshot),
     earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
@@ -1994,6 +2191,7 @@ export function buildGatewayAssembly(
     deps,
     modelId,
     historyPrefix.reduce((count, message) => count + (message.documentContext?.length ?? 0), 0),
+    memory,
   );
 }
 
@@ -2857,7 +3055,6 @@ function commitBufferedTurn(
     deps,
     { ...request, sourceMessageId: result.userMessage.id },
     memoryContext,
-    modelId,
     memory,
     redactedContent,
     assistantMessage.id,
@@ -3102,13 +3299,11 @@ export async function persistGitChangeDescriptionTurn(
     surface: "git-description",
   });
   try {
-    const memory = await resolveBufferedMemory(
-      deps,
-      prepared,
-      admission,
-      abortSignal,
-      ctx.correlationId,
-    );
+    // A change description is written from the diff alone and never sends memory, so it does
+    // not retrieve any either (#4228 R10); cancellation still settles before the provider call.
+    const memory =
+      bufferedTurnCancellationResult(deps, prepared, abortSignal, admission) ??
+      emptyMemoryResult(false);
     if (isRouteResult(memory)) return memory;
     return await completeGitChangeDescriptionTurn(
       ctx,
@@ -4356,30 +4551,21 @@ function sourceMessageOf(
   return {};
 }
 
-function scheduleCanonicalTurnSalienceCapture(
+function markCanonicalTurnForLearning(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
   correlationId: string,
 ): void {
-  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
-    return;
-  }
+  if (context === undefined) return;
   for (const pair of canonicalTurnSaliencePairs(request)) {
-    scheduleMemorySalienceCapture(
+    const { sourceMessageId } = sourceMessageOf(
       deps,
-      {
-        content: pair.userText,
-        memory: request.memory,
-        ...sourceMessageOf(deps, request, pair.userText, context.conversationId),
-      },
-      context,
-      modelId,
-      pair.assistantText,
-      request.memory.surface ?? "desktop",
-      correlationId,
+      request,
+      pair.userText,
+      context.conversationId,
     );
+    markTurnForLearning(deps, request, sourceMessageId, correlationId);
   }
 }
 
@@ -4387,7 +4573,6 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
   memory: ConversationMemoryResultWire,
   assistantText: string,
   correlationId: string,
@@ -4396,7 +4581,7 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
     recordConversationMemoryUse(deps, memory, assistantText, context);
   });
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.salience", () => {
-    scheduleCanonicalTurnSalienceCapture(deps, request, context, modelId, correlationId);
+    markCanonicalTurnForLearning(deps, request, context, correlationId);
   });
 }
 

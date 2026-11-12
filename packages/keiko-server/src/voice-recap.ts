@@ -26,6 +26,7 @@
 //  - Only the user's committed spoken text is an extraction input; assistant response text is never
 //    submitted (ADR-0109 D5). The response and audit are content-free: counts + ids, never text.
 
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 import {
@@ -33,10 +34,12 @@ import {
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
 import type {
+  CodingWorkbenchMode,
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
   MemoryScope,
+  MemorySourceKind,
   VoiceProfile,
   VoiceSessionRecapAuditRecord,
 } from "@oscharko-dev/keiko-contracts";
@@ -49,6 +52,7 @@ import {
   extractCandidatesFromUserText,
   type CaptureContext,
   type CaptureOutcome,
+  type RejectionReason,
 } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { validateProjectPath } from "./store/validation.js";
@@ -56,7 +60,10 @@ import { currentAuditRedactString, currentGatewayConfig, type UiHandlerDeps } fr
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 import { desktopChatErrorResult } from "./chat-handlers.js";
-import { resolveConversationMemoryContext } from "./memory-conversation-context.js";
+import {
+  conversationMemoryScopes,
+  resolveConversationMemoryContext,
+} from "./memory-conversation-context.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import {
   isPersistableMemoryCandidate,
@@ -64,13 +71,17 @@ import {
   memoryCapturePolicyForDeps,
   promoteEligibleMemoryRecord,
   resolvePersistedMemoryAutonomyMode,
+  SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
-import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
+import {
+  recordAutoAcceptedMemoryCaptureDecision,
+  recordRefusedCaptureDecision,
+} from "./memory-capture-audit.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import type { VoiceRecapContentAttestationStore } from "./voice-recap-provenance.js";
 
@@ -296,6 +307,12 @@ interface RecapPersistResult {
   readonly rejected: number;
 }
 
+// The mode a recap decides in and the correlation of the request that asked for it.
+interface RecapDecision {
+  readonly mode: CodingWorkbenchMode;
+  readonly correlationId: string;
+}
+
 interface RecapPersistedMemory {
   readonly id: MemoryId;
   readonly scope: MemoryScope;
@@ -306,15 +323,16 @@ async function persistRecapOutcome(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcome: CaptureOutcome,
-  mode: ReturnType<typeof resolvePersistedMemoryAutonomyMode>,
+  decision: RecapDecision,
   autoAcceptEligible: boolean,
 ): Promise<RecapPersistedMemory | null> {
+  const { mode, correlationId } = decision;
   if (!isPersistableMemoryCandidate(outcome)) return null;
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (exactCaptureSuppressionReason(vault, record) !== null) return null;
   const candidate =
-    autoAcceptEligible && memoryCaptureAutoAcceptEligible(mode, outcome)
+    autoAcceptEligible && memoryCaptureAutoAcceptEligible(deps, mode, outcome)
       ? promoteEligibleMemoryRecord(record)
       : record;
   const result = persistCapturedMemory(vault, candidate, true);
@@ -322,7 +340,7 @@ async function persistRecapOutcome(
   const inserted = result.memory;
   if (result.inserted) await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
   if (inserted.status === "accepted")
-    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted, correlationId);
   return { id: inserted.id, scope: inserted.scope, accepted: inserted.status === "accepted" };
 }
 
@@ -330,29 +348,92 @@ async function persistRecapOutcome(
 // forget-tombstone suppression, `buildMemoryRecordFromProposal`, best-effort embed-on-capture.
 // Everything else (rejected, sensitive/approval-gated candidates, governance-action kinds) is
 // COUNTED but never written — surfaced as `candidatesRejected` in the content-free response.
+// Why a recap outcome was not kept, when that reason is one the person reads in the Journal (#4206).
+function recapRefusal(
+  outcome: CaptureOutcome,
+): { readonly reason: RejectionReason; readonly sourceKind: MemorySourceKind } | null {
+  if (outcome.kind === "rejected") {
+    const sourceKind =
+      outcome.statement === "remember" ? "explicit-user-instruction" : "system-default";
+    return { reason: outcome.reason, sourceKind };
+  }
+  if (outcome.kind !== "candidate") return null;
+  // Read before the guard: a refused candidate narrows to nothing it could still be.
+  const { sourceKind } = outcome.proposal.provenance;
+  if (isPersistableMemoryCandidate(outcome)) return null;
+  return { reason: SENSITIVE_MEMORY_REJECTION_REASON, sourceKind };
+}
+
+function journalRecapRefusal(
+  deps: UiHandlerDeps,
+  decision: RecapDecision,
+  scopes: readonly MemoryScope[],
+  outcome: CaptureOutcome,
+): void {
+  const refusal = recapRefusal(outcome);
+  if (refusal === null) return;
+  recordRefusedCaptureDecision(
+    deps,
+    { mode: decision.mode, surface: "voice", scopes, ...refusal },
+    decision.correlationId,
+  );
+}
+
+interface RecapPersistRun {
+  readonly deps: UiHandlerDeps;
+  readonly vault: MemoryVaultStore;
+  readonly outcomes: readonly CaptureOutcome[];
+  readonly decision: RecapDecision;
+  readonly autoAcceptEligible: boolean;
+  readonly scopes: readonly MemoryScope[];
+  readonly proposed: { id: MemoryId; scope: MemoryScope }[];
+  readonly accepted: { id: MemoryId; scope: MemoryScope }[];
+  rejected: number;
+}
+
+// Persists one outcome after another, in order: each write may supersede the one before.
+async function persistRecapOutcomeAt(run: RecapPersistRun, index: number): Promise<void> {
+  const outcome = run.outcomes[index];
+  if (outcome === undefined) return;
+  const persisted = await persistRecapOutcome(
+    run.deps,
+    run.vault,
+    outcome,
+    run.decision,
+    run.autoAcceptEligible,
+  );
+  if (persisted === null) {
+    run.rejected += 1;
+    journalRecapRefusal(run.deps, run.decision, run.scopes, outcome);
+  } else {
+    const memory = { id: persisted.id, scope: persisted.scope };
+    (persisted.accepted ? run.accepted : run.proposed).push(memory);
+  }
+  await persistRecapOutcomeAt(run, index + 1);
+}
+
 async function persistRecapOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
   autoAcceptEligible: boolean,
+  scopes: readonly MemoryScope[],
+  correlationId: string,
 ): Promise<RecapPersistResult> {
-  const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
-  const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
-  const mode = resolvePersistedMemoryAutonomyMode(deps);
-  let rejected = 0;
-  for (const outcome of outcomes) {
-    const persisted = await persistRecapOutcome(deps, vault, outcome, mode, autoAcceptEligible);
-    if (persisted === null) {
-      rejected += 1;
-      continue;
-    }
-    const memory = { id: persisted.id, scope: persisted.scope };
-    if (persisted.accepted) {
-      accepted.push(memory);
-    } else {
-      proposed.push(memory);
-    }
-  }
+  const decision: RecapDecision = { mode: resolvePersistedMemoryAutonomyMode(deps), correlationId };
+  const run: RecapPersistRun = {
+    deps,
+    vault,
+    outcomes,
+    decision,
+    autoAcceptEligible,
+    scopes,
+    proposed: [],
+    accepted: [],
+    rejected: 0,
+  };
+  await persistRecapOutcomeAt(run, 0);
+  const { proposed, accepted, rejected } = run;
   return { proposed, accepted, extracted: outcomes.length, rejected };
 }
 
@@ -405,6 +486,7 @@ async function buildRecapResponse(
   request: RecapRequest,
   runtime: ConversationMemoryRuntimeContext,
   provenance: RecapResponseBody["provenance"],
+  correlationId: string,
 ): Promise<RecapResponseBody> {
   const startedAtMs = Date.now();
   const captureContext = buildCaptureContext(runtime);
@@ -416,7 +498,14 @@ async function buildRecapResponse(
     outcomes.push(...extractCandidatesFromUserText(span, captureContext, policy));
   }
   const autoAcceptEligible = provenance === "attested";
-  const persisted = await persistRecapOutcomes(deps, vault, outcomes, autoAcceptEligible);
+  const persisted = await persistRecapOutcomes(
+    deps,
+    vault,
+    outcomes,
+    autoAcceptEligible,
+    conversationMemoryScopes(runtime),
+    correlationId,
+  );
   recordRecapAudits(deps, profile, request, persisted, startedAtMs);
   return {
     status: "ok",
@@ -487,6 +576,11 @@ function unavailableVoiceRecapResponse(): RouteResult {
   };
 }
 
+// The request's correlation, or the sanctioned unknown id when the route carried none.
+function recapCorrelationId(ctx: RouteContext): string {
+  return ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+}
+
 export async function handleBuildVoiceRecap(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -530,6 +624,7 @@ export async function handleBuildVoiceRecap(
       { ...request, projectPath },
       runtime,
       provenance,
+      recapCorrelationId(ctx),
     );
     return { status: 200, body: response };
   } catch (error) {

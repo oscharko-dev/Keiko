@@ -10,6 +10,10 @@ the mapping apply uniformly to salience, explicit chat intent, voice recap, and
 capture-from-conversation. Amended by Issue #4211 (2026-11-05) to add D4b: a person's clear statement
 in a chat acts at once in every mode. Amended by Issue #4212 (2026-11-05) to add D4c: deterministic
 checks decide what is learned from conversation and when it replaces an older fact.
+Amended 2026-11-07 (#4206, owner decision): a routine private fact is used without approval, so D2
+no longer lets the selected mode decide whether it waits for review, D3 refuses `confidential`
+content instead of parking it, and D4 and D4c follow. The selected mode still bounds standing
+maintenance (D4a).
 
 ## Amends
 
@@ -24,10 +28,10 @@ MemoriaViva turn capture (`captureSalientFromTurn` in
 `packages/keiko-server/src/memory-salience.ts`) is live and default-on: every desktop and
 voice chat turn is scanned for salient candidates and, subject to a single boolean gate
 (`request.memory.enabled` and a provisioned vault), persisted through
-`persistSalienceActions` → `persistCandidate`. The persisted `status` a candidate receives today
-is a fixed function of content alone — secret bodies are dropped, `restricted` sensitivity is
-rejected, `confidential` sensitivity is capped at `proposed`, and every other public/routine
-candidate is inserted as `proposed` — with no notion of the user's currently selected autonomy
+`persistSalienceActions` → `persistCandidate`. At the time of #2546 (historical; D2 and D3 below were amended by #4206) the persisted `status` a candidate received
+was a fixed function of content alone — secret bodies are dropped, `restricted` sensitivity is
+rejected, `confidential` sensitivity was capped at `proposed`, and every other public/routine
+candidate was inserted as `proposed` — with no notion of the user's currently selected autonomy
 posture.
 
 ADR-0129 D1 declares that every autonomy-capable surface in Keiko, current and future, is governed
@@ -73,27 +77,37 @@ missing or malformed ceiling fails closed to `governed-assist`. For legacy calle
 preserves existing integrations byte-for-byte while letting the local human choose a narrower
 memory posture or request a higher posture that remains capped by server policy.
 
-### D2 — Per-mode target-status mapping for persistable candidates
+### D2 — A routine fact is accepted at once; the mode does not hold it for review
 
-For a candidate that already survives the existing content gates (D3, unchanged), the resolved
-mode decides the persisted `status`:
+Amended 2026-11-07 (#4206, owner decision). Nobody approves a routine private fact: Keiko uses it
+without asking. For a candidate that already survives the content gates (D3), the persisted `status`
+no longer depends on the selected mode:
 
-| Mode | Routine, public-sensitivity candidate |
-| --- | --- |
-| `governed-assist` (Ask for approval) | `proposed` — held for human review, suppressed from retrieval |
-| `supervised-coding` (Supervised workspace) | `accepted` — routine capture proceeds unattended |
-| `autonomous-delivery` (Full access) | `accepted` — routine capture proceeds unattended |
+| Mode | Routine private (user-scope) candidate | Routine team or project candidate |
+| --- | --- | --- |
+| `governed-assist` (Ask for approval) | `accepted` — used at once | `proposed` |
+| `supervised-coding` (Supervised workspace) | `accepted` — used at once | `accepted` |
+| `autonomous-delivery` (Full access) | `accepted` — used at once | `accepted` |
 
-`proposed` records are held in the review queue and are excluded from retrieval, which reads only
-`accepted` memories; `accepted` records are immediately retrievable. This gives capture the same
-shape the coding matrix already has for effectful, non-hard-denied work: the lowest posture asks
-first, the two higher postures proceed. Per ADR-0138's normative monotonicity invariant, raising
-the mode may only relax or preserve this outcome, never tighten it — there is no mode in which a
-routine-public candidate is accepted at a lower posture but held at a higher one.
+`memoryCaptureAutoAcceptEligible(deps, mode, outcome)` ignores the mode for a private fact. A fact
+the learner places in a team or project scope is project memory, which #4206 leaves to MemoriaViva
+step 3: it keeps the monotonic mode rule (`memoryUnattendedAcceptanceAllowed`), and the Journal names
+`mode-requires-approval` when it waits. The one exception for private facts is an explicit
+operator restriction: when an operator configured the Memory/Coding deployment ceiling to
+`governed-assist` (the `codingRuntimeDeploymentCeiling` option or `KEIKO_CODING_DEPLOYMENT_CEILING`;
+an invalid configured value also resolves to `governed-assist`), routine facts are held `proposed`
+for review (`memoryOperatorRestrictsAcceptance`). The absent default ceiling restricts nothing. A
+`proposed` record is excluded from retrieval, which reads only `accepted` memories.
 
-`accepted` is not a bare status flip; D4 routes it through the existing governance promotion lever,
-so a mode of `supervised-coding` or `autonomous-delivery` is necessary but not sufficient for
-`accepted` — see D4.
+A correction of a known learned fact is a candidate too: it replaces the older fact through the
+governed supersession in one transaction (`applyLearnedSupersession`), in every mode.
+
+Memory stays off by default in this step, and the review queue and mode control remain visible in
+the UI as a stated interim: they have no effect on routine facts, and existing `proposed` records are
+never promoted silently by this change. Their removal and the settlement of those records, and
+switching Memory on by default, are later steps of epic #4205 (2.1 and 2.3).
+
+`accepted` is not a bare status flip; D4 routes it through the existing governance promotion lever.
 
 ### D3 — Mode-independent hard denials are evaluated first and stay invariant across modes
 
@@ -103,27 +117,29 @@ identical in every mode:
 
 - **Secret-bearing candidate bodies** (`scanForSecrets`) are dropped during extraction; they never
   become a persistable candidate, in any mode, and produce zero persisted records.
-- **`confidential`-classified candidates** (`classifySensitivity`) are marked `requiresApproval`
-  and are therefore never mode-eligible for `accepted`; they are capped at `proposed` in every
-  mode, including `autonomous-delivery`.
-- **`restricted`-classified candidates** are rejected at persist time (`isPersistableMemoryCandidate`)
-  in every mode; no record is written.
+- **`confidential`-classified candidates** (`classifySensitivity`: an email address, a phone-shaped
+  number, a "private:" marker) are marked `requiresApproval`. Since 2026-11-07 (#4206) they are
+  refused with `sensitive-memory-requires-approval` instead of being parked as `proposed`, in every
+  mode: "too little rather than too much", at a deliberate cost in recall.
+- **`restricted`-classified candidates** are rejected at persist time (`isPersistableMemoryCandidate`,
+  which now keeps only routine `public` facts) in every mode; no record is written.
 
 Mode changes what happens to a candidate that has already cleared these gates. It never widens
 what clears them.
 
 ### D4 — `accepted` is routed through the existing governance promotion lever
 
-When D1–D3 make a candidate mode-eligible for `accepted`, the record is **not** inserted as
+When D1–D3 make a candidate eligible for `accepted` (since #4206 in every mode unless an operator
+restricts it), the record is **not** inserted as
 `accepted` by a new, capture-local decision. It is passed to the existing promotion planner,
 `planMemoryMaintenance` (`@oscharko-dev/keiko-memory-governance`, the same function the standing
 maintenance sweep calls via `memory-maintenance-handlers.ts`), which applies its own unchanged
 `shouldPromote` gate — `status: "proposed"`, `sensitivity: "public"`, and
 `strength >= promoteStrength`, where a fresh record's strength is approximated by its provenance
 confidence. Only if the plan promotes the record is it inserted with `status: "accepted"`; otherwise
-it is inserted `proposed`, exactly as it would be in `governed-assist`. Mode-eligibility is
-therefore a gate on top of governance, not a bypass of it: a mode-eligible but low-confidence
-candidate in `supervised-coding` still lands as `proposed`.
+it is inserted `proposed`, exactly as it would be under an operator restriction. Eligibility is
+therefore a gate on top of governance, not a bypass of it: an eligible but low-confidence
+candidate still lands as `proposed`.
 
 This is a deliberate reuse decision, not an optimization. Every live capture entry point — salience,
 the explicit chat-intent extractor, voice recap, and capture-from-conversation — resolves the same
@@ -174,12 +190,13 @@ A person's own "Merke dir …" or "Vergiss das" (Issue #4211) is their decision,
 learning, so D2's mapping does not hold it. It needs no model, no approval and no dialog.
 `memoryExplicitStatementEligible` routes a public, approval-free `explicit-user-instruction`
 candidate through the same promotion lever as D4 in every mode; D3's hard denials stay first, so a
-credential is refused and a sensitive body keeps its approval. An instruction to drop the assistant's
+credential is refused and, since #4206, a confidential body is refused too rather than proposed. An instruction to drop the assistant's
 rules is refused as `instruction-override` on every capture path, because it would reach each later
 answer as a fact; besides the shared fixed phrases, a sentence that asks to ignore, bypass or
 override the rules counts ("dass du ab jetzt deine Regeln ignorierst"). An ordinary wish about how
 to answer stays a memory. Everything learned from natural
-conversation stays under D2. Capture-from-conversation remains a review surface and also stays under D2.
+conversation follows D2 (accepted at once unless an operator restricts it); capture-from-conversation
+follows the same rule.
 Such a statement lands in the private user scope unless it names a project or workspace, and the
 learner does not read its turn, so it cannot store the statement itself.
 
@@ -236,8 +253,7 @@ stays out of the chat even with the same status.
 ### D4c — What is learned from conversation, and when it replaces a fact
 
 The model proposes and deterministic checks decide, on the person's own words only (Issue #4212). In
-doubt Keiko learns too little rather than too much, because nobody approves what it learns once
-D2 lets a fact through.
+doubt Keiko learns too little rather than too much, because nobody approves what it learns.
 
 - **Form.** A learned memory is the person's own words for one fact: the admitted span, never the
   model's statement, which only shows which fact the span carries. A paraphrase loses the words a
@@ -330,9 +346,10 @@ D2 lets a fact through.
   stated change, and a statement that only adds ("auch", "also") never replaces. A claim of sameness that neither the lexical
   nor the semantic duplicate gate confirms stores nothing. A changed value is never a duplicate.
 - **Supersession** reuses the `supersedes` edge, the `superseded` status and the closed validity of
-  the human correction path, in one transaction with a precondition on the older fact. Where D2
-  asks for approval, the new fact waits as a `correction` with its `corrects` edge, written in the
-  same single transaction. A learned fact replaces only what Keiko learned in the person's own scope:
+  the human correction path, in one transaction with a precondition on the older fact. In every mode
+  the correction replaces the old fact in that transaction; only under an operator restriction (D2)
+  does the new fact wait as a `correction` with its `corrects` edge, written in the same single
+  transaction. A learned fact replaces only what Keiko learned in the person's own scope:
   a clear statement (D4b) and anything outside that scope are fixed, so a learned fact never
   overwrites them. A newer clear statement replaces an older learned fact, and a learned fact the
   person rewrites is their own statement from then on. The precondition is the older fact as the
@@ -346,16 +363,41 @@ D2 lets a fact through.
 - **Forgotten while learning.** A capture still running when the person forgot that turn's
   statement stores nothing from it, because each candidate is also checked against the statement's
   own tombstone.
+- **Stated-preference fallback.** When the model's items for a message yield no fact, a sentence of
+  the person's own that opens with an explicit first-person preference ("Ich bevorzuge …", "I
+  prefer …") is checked like a model item: the same admission, denials and relation rules apply. It
+  is consulted only then, never beside a model fact, and only for one such sentence that is not a fragment cut at an abbreviation, bracket or quote. Beside any stored preference it only confirms a
+  repeat or replaces a reversed or negated one; any other sentence is left to the model, so it never
+  stores a second, possibly contradicting preference (Issue #4228).
 - **Evidence.** `memory.learn.extraction`, `memory.learn.dropped` and `memory.learn.relation`
   record counts, the source message count and closed reason, label, decision and basis values; no
   words of the person or of a fact enter the Activity Log.
+
+### D4d — Learning runs later, in passes, and loses against Chat work
+
+Learning from conversation no longer runs after each turn (Issue #4213). A turn written with memory
+on marks its stored message; a learning pass later reads a Chat's messages after its monotonic
+learned position, in Chat order, and runs the D4c capture on the person's words. Passes start after
+a measured pause without Chat work (default 15 s, `KEIKO_MEMORY_LEARNING_IDLE_MS`), when the person
+opens another Chat, at startup, on a backoff retry when the model was unavailable, and as a
+continuation when a pass reached its bounds. Every serialized Chat turn is foreground work: a pass
+does not start while one runs, and a starting turn aborts a running pass down to the provider
+request. A turn written with memory off is never learned. A clear statement (D4b) still acts at
+message time; a forget the pass reaches is applied again to facts the same pass learned from the
+Chat's earlier, still pending messages. `memory.learn.pass.started` and `memory.learn.pass.settled`
+record each pass body-free. Triggers, bounds and the measurement:
+[MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md).
+A private fact the learner labels `identity` or `constraint` carries the retention hint
+`policyKey: "standing"`, which places it in the standing profile every Chat answer receives (#4228);
+membership, order and caps:
+[MemoriaViva standing profile](../memory/memoria-viva-standing-profile.md).
 
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 
 Mode resolution cannot throw (it delegates to the total canonical clamp helper) and
 `planMemoryMaintenance` is a pure function; if either path ever throws, it is caught by
-`captureSalientFromTurn`'s existing try/catch boundary, which yields `[]` and leaves the chat
-response unaffected — capture failure never breaks a turn, mode-aware or not. Where mode
+the capture's try/catch boundary (`captureSalientFromTurn`, or `learnStoredTurn` in a learning
+pass), which yields no actions and leaves the chat response unaffected — capture failure never breaks a turn, mode-aware or not. Where mode
 resolution cannot determine an effective mode (D1's fail-closed fallback), the outcome is
 `governed-assist`. A failed UI hydration also explicitly restores `governed-assist`, while a failed
 persist leaves the previously persisted selection unchanged and surfaces a content-free error.
@@ -372,12 +414,24 @@ bodies or user text.
 
 ### Positive
 
-- Memory capture now means what the product's autonomy model says it means: Ask for approval holds
-  routine memories for review; Supervised workspace and Full access let them through, subject to the
-  same confidence gate the maintenance sweep already enforces.
-- The Memory Journal (#2547's projection, #2548's UI, M1.2/M1.3) has a real `proposed` vs.
-  `accepted` distinction to render, driven by mode, instead of a distinction that was previously a
-  fixed function of content alone.
+- Routine private facts are used without approval in every mode (#4206, owner decision), subject to
+  the same confidence gate the maintenance sweep already enforces; only an explicitly configured
+  `governed-assist` Memory ceiling holds them for review. Team and project facts keep the mode rule
+  until project memory (step 3) decides otherwise.
+- The Journal shows a forget only when a person asked for it (Memory Center, a clear statement in a
+  Chat). The `memory:forgotten` audit event carries the tombstone's `forgetterSurface`, so retention
+  and maintenance tombstones never read as the person's decision.
+- Every capture decision the Journal shows is also one registered `memory.capture.decision`
+  Activity Log line under the deciding turn's or request's correlation, written by the same
+  writer: closed outcome, reason, effective mode, surface, scope kind and source kind, never a
+  body, memory id or scope identity. A turn refused before the learner's model call (a secret, a
+  protected category) is no longer visible in the Journal only.
+- A calendar date is not read as a telephone number: dates are blanked before the telephone-shape
+  check, so a fact with an end date ("bis 31.12.2027") is learned rather than refused as
+  confidential.
+- The Memory Journal (#2547's projection, #2548's UI, M1.2/M1.3) keeps its `proposed` vs.
+  `accepted` distinction, now driven by the operator restriction and the confidence gate rather than
+  by the selected mode.
 - Legacy callers that omit `ConversationMemoryRequestWire.mode` are byte-identical to the original
   #2546 behavior: the server-owned deployment ceiling remains the effective capture mode.
 - No new capture path, promotion mechanism, mode ordering, or memory-local autonomy model is
@@ -386,17 +440,17 @@ bodies or user text.
 
 ### Negative
 
-- A `supervised-coding`/`autonomous-delivery` user now gets memories written and made retrievable
-  without a review step they may not have anticipated from capture alone; this is the intended
-  product meaning of those modes (routine work proceeds unattended) but is a real behavior change
-  for existing users who select a higher mode without reading its memory implications.
+- Every user, including one in Ask for approval, gets routine memories written and made retrievable
+  without a review step; this is the owner decision of 2026-11-07 and a real behavior change for
+  users who relied on review. Confidential content (email address, phone-shaped number, "private:"
+  marker) is refused instead of proposed, which costs some recall on purpose.
 - The requested mode is surface-selected, but the effective mode is still capped by the
   coding-runtime deployment ceiling. A user can therefore persist Full access while the effective
   mode remains narrower; the policy response exposes both values so this is observable rather than
   a silent widening.
 - Routing `accepted` through `planMemoryMaintenance` means a mode-eligible candidate can still land
   as `proposed` if its confidence is below `promoteStrength`; this is correct per D4 but is a subtler
-  outcome than "mode decides status," and must be documented for support/triage.
+  outcome than "every routine fact is accepted," and must be documented for support/triage.
 
 ### Neutral
 

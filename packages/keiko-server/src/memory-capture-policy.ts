@@ -129,10 +129,17 @@ export function memoryCapturePolicyForDeps(
   };
 }
 
+// Only a routine fact is kept. Nobody reviews a memory any more, so content classified
+// `confidential` (an email address, a phone-shaped number, a "private:" marker) is refused rather than
+// parked for a review that never comes, and `restricted` stays unrepresentable (ADR-0146 D2, #4206).
 export function isPersistableMemoryCandidate(
   outcome: CaptureOutcome,
 ): outcome is Extract<CaptureOutcome, { readonly kind: "candidate" }> {
-  return outcome.kind === "candidate" && outcome.proposal.provenance.sensitivity !== "restricted";
+  return (
+    outcome.kind === "candidate" &&
+    !outcome.requiresApproval &&
+    outcome.proposal.provenance.sensitivity === "public"
+  );
 }
 
 export function enforcePersistableMemoryOutcome(outcome: CaptureOutcome): CaptureOutcome {
@@ -153,6 +160,22 @@ export function memoryDeploymentCeiling(
     deps.codingRuntimeDeploymentCeiling ??
     DEFAULT_MEMORY_AUTONOMY_MODE
   );
+}
+
+type MemoryCeilingDeps = Pick<
+  UiHandlerDeps,
+  "memoryDeploymentCeiling" | "memoryDeploymentCeilingConfigured" | "codingRuntimeDeploymentCeiling"
+>;
+
+// Whether an operator explicitly restricted Memory to review. Only a ceiling that somebody
+// configured counts: production states whether its ceiling came from configuration, and an injected
+// composition that names a ceiling configured it. An invalid configured value already resolves to
+// `governed-assist`, so it restricts as well (fail closed). The absent default restricts nothing.
+export function memoryOperatorRestrictsAcceptance(deps: MemoryCeilingDeps): boolean {
+  const configured =
+    deps.memoryDeploymentCeilingConfigured ??
+    (deps.memoryDeploymentCeiling ?? deps.codingRuntimeDeploymentCeiling) !== undefined;
+  return configured && memoryDeploymentCeiling(deps) === "governed-assist";
 }
 
 // The effective autonomy mode for memory capture on this turn. Memory capture is an
@@ -191,34 +214,34 @@ export function resolveMemoryMaintenanceAutonomyMode(
   return resolvePersistedMemoryAutonomyMode(deps);
 }
 
-// THE lever for "may Keiko make a memory retrievable without the local human accepting it?".
+// The lever for the STANDING maintenance sweep: may it promote a record that is still `proposed`?
 //
-// ADR-0146 D2 pins the lowest posture: in `governed-assist` (Ask for approval) a routine, public
-// candidate is held as `proposed` for human review. Both auto-accept paths — the at-capture
-// promotion below and the standing maintenance sweep in memory-maintenance-handlers.ts — consult
-// this ONE predicate, so a mode-gated capture path and a mode-blind sweep can never again promote
-// two different sets. The set of modes it admits is upward-closed over CODING_WORKBENCH_MODE_ORDER
-// (governed-assist < supervised-coding < autonomous-delivery), so raising the mode never removes
-// eligibility (ADR-0138 D2 monotonicity). An absent, unknown, or malformed mode fails closed to
-// `governed-assist`, i.e. no unattended acceptance at all (ADR-0124 D2 / ADR-0138 D2).
+// Records proposed before #4206 stay as they are in `governed-assist`, so this change never accepts
+// them silently; step 2.1 settles them. The set of modes it admits is upward-closed over
+// CODING_WORKBENCH_MODE_ORDER (governed-assist < supervised-coding < autonomous-delivery), so raising
+// the mode never removes eligibility (ADR-0138 D2 monotonicity). An absent, unknown, or malformed
+// mode fails closed to `governed-assist` (ADR-0124 D2 / ADR-0138 D2).
 export function memoryUnattendedAcceptanceAllowed(mode: CodingWorkbenchMode | undefined): boolean {
   return isCodingWorkbenchMode(mode) && mode !== "governed-assist";
 }
 
-// Whether a capture outcome may be auto-accepted (promoted at capture time) under the given mode.
-// Hard denials stay upstream and mode-invariant: a secret body never becomes a candidate,
-// "restricted" is never persistable, and "confidential" carries requiresApproval — none of which
-// can be auto-accepted here regardless of mode.
+// Whether a captured routine fact is accepted at once (ADR-0146 D2, #4206). A routine PRIVATE fact
+// is, in every mode: nobody is asked to approve a memory about themselves. Hard denials stay upstream
+// and mode-invariant — a secret body never becomes a candidate, and `restricted` and `confidential`
+// content is refused before this is asked (`isPersistableMemoryCandidate`). Only an explicit operator
+// restriction keeps the fact for review. A fact about the team or project is project memory, which
+// #4206 leaves to step 3: it keeps the effective mode's rule (`mode` is already clamped by the
+// ceiling). A correction of a known fact is a candidate too, so it replaces that fact in the same
+// transaction (`applyLearnedSupersession`).
 export function memoryCaptureAutoAcceptEligible(
+  deps: MemoryCeilingDeps,
   mode: CodingWorkbenchMode,
   outcome: CaptureOutcome,
 ): boolean {
-  return (
-    memoryUnattendedAcceptanceAllowed(mode) &&
-    outcome.kind === "candidate" &&
-    !outcome.requiresApproval &&
-    outcome.proposal.provenance.sensitivity === "public"
-  );
+  if (!isPersistableMemoryCandidate(outcome) || memoryOperatorRestrictsAcceptance(deps)) {
+    return false;
+  }
+  return outcome.proposal.scope.kind === "user" || memoryUnattendedAcceptanceAllowed(mode);
 }
 
 // A person's own clear "Merke dir" is their decision, not unattended learning, so it holds in every

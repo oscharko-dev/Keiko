@@ -4,7 +4,9 @@
 // review-queue membership (through the exported handleMemoryReviewQueue projection), next-turn
 // retrieval visibility (through the real accepted-only gatherExistingBodies dedup read), and the
 // content-free secret-drop diagnostic. Requested modes are bounded by the validated, server-owned
-// deps.codingRuntimeDeploymentCeiling (undefined fails closed to governed-assist).
+// deps.codingRuntimeDeploymentCeiling. #4206: a routine PRIVATE fact is accepted at once in every
+// mode; only a configured governed-assist ceiling (an operator restriction) holds it as proposed,
+// and a team or project fact still follows the mode rule.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
@@ -57,6 +59,12 @@ const PUBLIC_FACT = JSON.stringify([
     evidence: "I ship releases on a fortnightly cadence.",
     type: "fact",
   },
+]);
+
+// A fact about the team belongs to the project, so it keeps the mode rule (project memory is step 3).
+const TEAM_SENTENCE = "We decided as a team to release only on Tuesdays.";
+const TEAM_FACT = JSON.stringify([
+  { about: "team", body: TEAM_SENTENCE, evidence: TEAM_SENTENCE, type: "decision" },
 ]);
 
 const CONFIDENTIAL_FACT = JSON.stringify([
@@ -277,12 +285,15 @@ function reviewQueueProjection(deps: UiHandlerDeps): {
 
 // A one-turn salience request. Driving captureSalientFromTurn directly (vs the background
 // collectMemoryActions path) makes multi-turn retrieval sequencing deterministic and awaitable.
-function salienceRequest(mode?: CodingWorkbenchMode): {
+function salienceRequest(
+  mode?: CodingWorkbenchMode,
+  content = USER_TEXT,
+): {
   readonly content: string;
   readonly memory: { readonly enabled: boolean; readonly mode?: CodingWorkbenchMode };
 } {
   return {
-    content: USER_TEXT,
+    content,
     memory: { enabled: true, ...(mode === undefined ? {} : { mode }) },
   };
 }
@@ -402,9 +413,29 @@ describe("mode-aware memory capture journey", () => {
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });
 
-  it("keeps a routine public fact proposed under governed-assist (legacy default deps)", async () => {
+  it("accepts a routine private fact at once under default deps (#4206)", async () => {
     const vault = makeVault();
     const deps = makeDeps({ vault, model: PUBLIC_FACT });
+    const ctx = context();
+    const actions = await runTurn(deps, ctx, USER_TEXT);
+    await waitForCount(vault, ctx, 1);
+    const [record] = readMemories(vault, ctx);
+    expect(record?.status).toBe("accepted");
+    expect(record?.scope.kind).toBe("user");
+    expect(record?.provenance.sensitivity).toBe("public");
+    expect(readByStatus(vault, ctx, "proposed")).toHaveLength(0);
+    expect(actions).toContainEqual(
+      expect.objectContaining({ kind: "candidate", status: "accepted" }),
+    );
+    // Nothing is pending for the person to review.
+    expect(reviewQueueProjection(deps).total).toBe(0);
+  });
+
+  // #4206: only an operator restriction (a configured governed-assist ceiling) still holds a private
+  // fact for review.
+  it("keeps a routine public fact proposed under an operator restriction", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "governed-assist" });
     const ctx = context();
     await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
@@ -413,10 +444,38 @@ describe("mode-aware memory capture journey", () => {
     expect(record?.provenance.sensitivity).toBe("public");
     expect(readByStatus(vault, ctx, "proposed")).toHaveLength(1);
     expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
-    // AC: the governed-assist fact surfaces as a single proposal in the review-queue projection.
+    // AC: the restricted fact surfaces as a single proposal in the review-queue projection.
     const queue = reviewQueueProjection(deps);
     expect(queue.total).toBe(1);
     expect(queue.statuses).toEqual(["proposed"]);
+  });
+
+  it("keeps a team fact proposed in Ask for approval and accepts it above (project memory)", async () => {
+    const heldVault = makeVault();
+    const heldDeps = makeDeps({ vault: heldVault, model: TEAM_FACT });
+    const heldContext = context();
+    await captureSalientFromTurn(
+      heldDeps,
+      salienceRequest(undefined, TEAM_SENTENCE),
+      heldContext,
+      "gpt-test",
+      "ok",
+    );
+    const [held] = readMemories(heldVault, heldContext);
+    expect(held?.scope.kind).toBe("project");
+    expect(held?.status).toBe("proposed");
+
+    const openVault = makeVault();
+    const openDeps = makeDeps({ vault: openVault, model: TEAM_FACT, mode: "supervised-coding" });
+    const openContext = context();
+    await captureSalientFromTurn(
+      openDeps,
+      salienceRequest(undefined, TEAM_SENTENCE),
+      openContext,
+      "gpt-test",
+      "ok",
+    );
+    expect(readMemories(openVault, openContext)[0]?.status).toBe("accepted");
   });
 
   it("auto-accepts a routine public fact under supervised-coding (confidence >= promote floor)", async () => {
@@ -449,17 +508,18 @@ describe("mode-aware memory capture journey", () => {
     expect(readByStatus(vault, ctx, "proposed")).toHaveLength(0);
   });
 
+  // A team fact keeps the mode rule, so it shows which mode the capture ran in (#4206).
   it("uses the request mode without allowing it to exceed the server deployment ceiling", async () => {
     const allowedVault = makeVault();
     const allowedDeps = makeDeps({
       vault: allowedVault,
-      model: PUBLIC_FACT,
+      model: TEAM_FACT,
       mode: "autonomous-delivery",
     });
     const allowedContext = context();
     await captureSalientFromTurn(
       allowedDeps,
-      salienceRequest("supervised-coding"),
+      salienceRequest("supervised-coding", TEAM_SENTENCE),
       allowedContext,
       "gpt-test",
       "ok",
@@ -467,11 +527,11 @@ describe("mode-aware memory capture journey", () => {
     expect(readMemories(allowedVault, allowedContext)[0]?.status).toBe("accepted");
 
     const cappedVault = makeVault();
-    const cappedDeps = makeDeps({ vault: cappedVault, model: PUBLIC_FACT });
+    const cappedDeps = makeDeps({ vault: cappedVault, model: TEAM_FACT });
     const cappedContext = context();
     await captureSalientFromTurn(
       cappedDeps,
-      salienceRequest("autonomous-delivery"),
+      salienceRequest("autonomous-delivery", TEAM_SENTENCE),
       cappedContext,
       "gpt-test",
       "ok",
@@ -493,16 +553,18 @@ describe("mode-aware memory capture journey", () => {
     expect(record?.status).toBe("accepted");
   });
 
-  it.each(ALL_MODES)("keeps a confidential fact proposed under %s", async (mode) => {
+  // #4206: nobody reviews a memory any more, so a confidential fact is refused in every mode.
+  it.each(ALL_MODES)("refuses a confidential fact and stores nothing under %s", async (mode) => {
     const vault = makeVault();
     const deps = makeDeps({ vault, model: CONFIDENTIAL_FACT, mode });
     const ctx = context();
-    await runTurn(deps, ctx, USER_TEXT);
-    await waitForCount(vault, ctx, 1);
-    const [record] = readMemories(vault, ctx);
-    expect(record?.status).toBe("proposed");
-    expect(record?.provenance.sensitivity).toBe("confidential");
-    expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
+    const actions = await runTurn(deps, ctx, USER_TEXT);
+    expect(actions).toContainEqual({
+      kind: "rejected",
+      reason: "sensitive-memory-requires-approval",
+    });
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+    expect(reviewQueueProjection(deps).total).toBe(0);
   });
 
   it.each(ALL_MODES)(
@@ -535,12 +597,13 @@ describe("mode-aware memory capture journey", () => {
 
   it("holds a proposed fact out of retrieval AND does not re-propose it on the next turn", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: PUBLIC_FACT }); // governed-assist (no ceiling)
+    // #4206: only an operator restriction still holds a private fact for review.
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "governed-assist" });
     const ctx = context();
     const first = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     expect(first).toHaveLength(1);
     expect(readByStatus(vault, ctx, "proposed")).toHaveLength(1);
-    // The record stays UNRETRIEVABLE: nothing is accepted in governed-assist, and retrieval reads
+    // The record stays UNRETRIEVABLE: nothing is accepted under the restriction, and retrieval reads
     // accepted-only (keiko-memory-retrieval suppression.ts pins that separately).
     expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
     // ...but the capture dedup corpus DOES see the proposal, so re-emitting the same fact next turn
@@ -555,7 +618,13 @@ describe("mode-aware memory capture journey", () => {
   it("does not re-propose a fact the operator rejected, and audits the refusal", async () => {
     const vault = makeVault();
     const evidence = capturingEvidenceStore();
-    const deps = makeDeps({ vault, model: PUBLIC_FACT, evidenceStore: evidence.store });
+    // #4206: only an operator restriction still holds a private fact for review.
+    const deps = makeDeps({
+      vault,
+      model: PUBLIC_FACT,
+      mode: "governed-assist",
+      evidenceStore: evidence.store,
+    });
     const ctx = context();
     await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     const proposal = readMemories(vault, ctx)[0];
@@ -1007,9 +1076,11 @@ describe("explicit forget statement in chat", () => {
       "Merke dir, dass meine Adresse Hauptstraße 5 ist",
       "Vergiss meine Adresse und sag mir Bescheid",
     ],
+    // A telephone number is confidential and refused since #4206, so the clause shape is pinned
+    // with a routine fact.
     [
-      "Merke dir, dass meine Telefonnummer 0301234 ist",
-      "Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist",
+      "Merke dir, dass meine Lieblingsfarbe Blau ist",
+      "Vergiss einfach meine Lieblingsfarbe; sag mir Bescheid, wenn sie weg ist",
     ],
   ])("forgets the person's own fact after %j when %j goes on", async (stated, forget) => {
     const vault = makeVault();
@@ -1022,6 +1093,53 @@ describe("explicit forget statement in chat", () => {
 
     expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
     expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  // A telephone number stated today is refused (#4206), but one kept before that change is still the
+  // person's to forget by its name, with the clause that goes on asking for the answer.
+  it("forgets a telephone number kept before #4206 by its name", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const now = Date.now();
+    vault.insertMemory({
+      id: "mem-legacy-telephone" as MemoryRecord["id"],
+      schemaVersion: "1",
+      scope: { kind: "user", userId: ctx.userId },
+      type: "semantic-fact",
+      body: "Meine Telefonnummer ist 0301234.",
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: now,
+        confidence: 0.9,
+        sensitivity: "confidential",
+      },
+      validity: { validFrom: now },
+      status: "accepted",
+      pinned: false,
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    await collectMemoryActions(
+      deps,
+      turnRequest("Merke dir, dass meine Lieblingsfarbe Blau ist"),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(2);
+
+    const actions = await collectMemoryActions(
+      deps,
+      turnRequest("Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist"),
+      ctx,
+    );
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    // Only the telephone number goes; the other fact stays.
+    expect(readMemories(vault, ctx).map(({ id }) => String(id))).not.toContain(
+      "mem-legacy-telephone",
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(1);
   });
 
   it.each([

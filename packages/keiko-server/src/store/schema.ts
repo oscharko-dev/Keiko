@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 77;
+export const SCHEMA_VERSION = 78;
 
 interface Migration {
   readonly version: number;
@@ -3540,6 +3540,24 @@ export const MIGRATIONS: readonly Migration[] = [
       WHERE phase = 'dispatched' OR (phase = 'acknowledged' AND consumer_kind = 'chat');
     CREATE INDEX chat_tool_mutations_native_dispatch ON chat_tool_mutations(coding_run_id, native_session_id, server_name, tool_name, native_arguments_digest)
       WHERE consumer_kind = 'coding' AND phase = 'prepared';`,
+  },
+  {
+    version: 78,
+    // #4213: learning runs later, in passes. A message records whether memory was on when it was
+    // written (every earlier message stays unmarked, so it is never learned), and a Chat records
+    // how far it has been learned. The text itself stays in chat_messages only.
+    sql: `ALTER TABLE chat_messages ADD COLUMN memory_learning TEXT
+        CHECK (memory_learning IS NULL OR memory_learning IN ('desktop', 'voice'));
+      ALTER TABLE chat_messages ADD COLUMN memory_learning_mode TEXT
+        CHECK (memory_learning_mode IS NULL OR memory_learning_mode IN
+          ('governed-assist', 'supervised-coding', 'autonomous-delivery'));
+      CREATE INDEX idx_messages_memory_learning ON chat_messages(chat_id, timestamp)
+        WHERE memory_learning IS NOT NULL;
+      CREATE TABLE chat_memory_learning (
+        chat_id TEXT NOT NULL PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+        learned_timestamp INTEGER NOT NULL,
+        learned_rowid INTEGER NOT NULL
+      ) STRICT;`,
   },
 ];
 

@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 
 import type { MemoryEdgeId, MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import { supersededValidity } from "@oscharko-dev/keiko-memory-governance";
+import { standingProfileSuccession } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryGraphPrecondition, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 const LEARNED_SUPERSESSION_REASON = "A newer statement by the person replaced this fact.";
@@ -49,9 +50,11 @@ function replaceInOneTransaction(
   const nowMs = record.createdAt;
   const validity = supersededValidity(predecessor, nowMs);
   const edgeId = randomUUID() as MemoryEdgeId;
+  // The new fact takes the old one's place in the standing profile, or its removal from it.
+  const successor = { ...record, ...standingProfileSuccession(predecessor, record) };
   const mutation = vault.applyGraphMutation({
     preconditions: [unchangedSince(predecessor, seen)],
-    inserts: [record],
+    inserts: [successor],
     updates: [
       {
         id: predecessor.id,
@@ -77,7 +80,7 @@ function replaceInOneTransaction(
       },
     ],
   });
-  const inserted = mutation.inserted[0] ?? record;
+  const inserted = mutation.inserted[0] ?? successor;
   const superseded = mutation.memories[0] ?? predecessor;
   return { record: inserted, superseded, edgeId, pendingApproval: false };
 }

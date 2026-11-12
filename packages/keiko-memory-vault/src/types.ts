@@ -161,6 +161,8 @@ export interface ListMemoriesOptions {
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];
   readonly pinned?: boolean;
+  // Only records whose retention hint carries this policy key (the column is not sealed).
+  readonly retentionPolicyKey?: string;
   readonly includeExpired?: boolean;
   readonly limit?: number;
   // Meaningful only relative to a `limit`-bounded page. KEIKO-0792 (#3328): supplying `offset`

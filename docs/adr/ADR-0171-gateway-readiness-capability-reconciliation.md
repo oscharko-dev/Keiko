@@ -51,7 +51,14 @@ mutated merely because readiness ran.
 ### D2 — Observations bind to one live configuration generation
 
 Every readiness run captures the runtime configuration generation before asynchronous work begins.
-Late results for a superseded generation are dropped. Replacing configuration resets the coarse
+Late results for a superseded generation are dropped, with one exception for the unchanged
+connection: a basic-chat check that was still answering when a replacement kept its provider entry
+(startup discovery adding another model) answers for that same connection. The new generation
+joins it (`gateway.readiness.automatic.joined`) instead of seeing no check, and its chat-only
+conclusion lands in the current generation while that generation holds no basic-chat answer yet,
+so it never overwrites a newer verification. Feature proofs keep the generation they started in.
+Without this a configured model stayed unverified for the whole process (lab run, 2026-11-08).
+Replacing configuration resets the coarse
 verification state and clears the field observations of every provider that was changed or removed;
 an unchanged provider keeps its observations under the new generation, including when the list was
 only reordered (D3). Observations intentionally survive separate HTTP requests in the current

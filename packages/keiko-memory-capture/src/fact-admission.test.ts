@@ -49,6 +49,58 @@ describe("admitProposedFact", () => {
     ["no span", "Ich mag Tabellen.", "", "no-evidence"],
     ["a span elsewhere", "Ich mag Tabellen.", "Ich mag Listen", "evidence-not-verbatim"],
     ["a different case", "Ich mag Tabellen.", "ich mag tabellen", "evidence-not-verbatim"],
+    // #4206: the provider projection masks an identifier before the model reads the words, so the
+    // model's quote holds the placeholder where the person wrote it. The reason is the identifier.
+    [
+      "a quote with a masked IBAN",
+      "Ich zahle von DE89 3704 0044 0532 0130 00.",
+      "Ich zahle von [REDACTED]",
+      "personal-identifier",
+    ],
+    [
+      "a quote whose masked span is no identifier",
+      "Ich mag Tabellen mit Rahmen.",
+      "Ich mag [REDACTED] mit Rahmen",
+      "evidence-not-verbatim",
+    ],
+    [
+      "a quote ending in a masked IBAN",
+      "Mein Konto: Ich zahle von DE89 3704 0044 0532 0130 00. Danke.",
+      "Ich zahle von [REDACTED]",
+      "personal-identifier",
+    ],
+    // A made-up quote cannot borrow an identifier said in another sentence of the message.
+    [
+      "a masked quote opening a sentence after an IBAN elsewhere",
+      "Meine IBAN ist DE89 3704 0044 0532 0130 00. Ich mag Tee.",
+      "[REDACTED] mag Tee",
+      "evidence-not-verbatim",
+    ],
+    [
+      "a masked quote closing a sentence before an IBAN elsewhere",
+      "Ich mag Tee. Meine IBAN ist DE89 3704 0044 0532 0130 00.",
+      "Ich mag [REDACTED]",
+      "evidence-not-verbatim",
+    ],
+    [
+      "a masked quote whose other parts the person never said",
+      "Ich zahle von DE89 3704 0044 0532 0130 00.",
+      "Ich zahle gern von [REDACTED]",
+      "evidence-not-verbatim",
+    ],
+    // The projection masks a JSON value holding an identifier whole: the quote is the placeholder.
+    [
+      "a wholly masked quote of a message with an IBAN",
+      "M1_DENIED_IBAN: I pay from DE89 3704 0044 0532 0130 00.",
+      "[REDACTED]",
+      "personal-identifier",
+    ],
+    [
+      "a wholly masked quote of a message without an identifier",
+      "Ich mag Tabellen mit Rahmen.",
+      "[REDACTED]",
+      "evidence-not-verbatim",
+    ],
     [
       "a span over two sentences",
       "Ich mag Tabellen. Ich mag Listen.",

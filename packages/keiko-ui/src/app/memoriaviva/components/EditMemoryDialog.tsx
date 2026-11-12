@@ -12,7 +12,10 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import { useCallback, useId, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
-import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import {
+  MEMORY_SENSITIVITIES,
+  personMemoryTags,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { correctMemory, editMemory } from "@/lib/memory-api";
 
 import { useDialogTabTrap } from "../../components/desktop/hooks/useDialogTabTrap";
@@ -40,7 +43,7 @@ export function EditMemoryDialog({
 }: EditMemoryDialogProps): ReactNode {
   const t = useTranslate();
   const [body, setBody] = useState(record.body);
-  const [tagsRaw, setTagsRaw] = useState(record.tags.join(", "));
+  const [tagsRaw, setTagsRaw] = useState(personMemoryTags(record.tags).join(", "));
   const [sensitivity, setSensitivity] = useState<MemorySensitivity>(record.provenance.sensitivity);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

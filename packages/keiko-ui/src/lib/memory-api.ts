@@ -114,7 +114,9 @@ export interface MemoryListFilters {
   readonly offset?: number;
 }
 
-export type MemoryRecentCaptureOutcome = "captured" | "proposed" | "auto-accepted" | "rejected";
+// `forgotten` is a memory the person forgot; like a refusal it names no record (#4206).
+export type MemoryRecentCaptureOutcome =
+  "captured" | "proposed" | "auto-accepted" | "rejected" | "forgotten";
 
 export interface MemoryRecentCapture {
   readonly eventId: string;

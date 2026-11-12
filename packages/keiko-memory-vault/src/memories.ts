@@ -228,6 +228,32 @@ function buildExpiryClause(
   return { clauses: ["(valid_until IS NULL OR valid_until > ?)"], params: [nowMs] };
 }
 
+function buildRetentionPolicyClause(policyKey: string | undefined): ListClauseBuild | undefined {
+  if (policyKey === undefined) return undefined;
+  return { clauses: ["retention_policy_key = ?"], params: [policyKey] };
+}
+
+// The filters every list query shares, then its paging parameters.
+function appendListFilters(
+  where: string[],
+  params: (string | number)[],
+  options: ListMemoriesOptions,
+  nowMs: number,
+): void {
+  for (const built of [
+    buildEnumClause("type", options.type),
+    buildEnumClause("status", options.status),
+    buildPinnedClause(options.pinned),
+    buildRetentionPolicyClause(options.retentionPolicyKey),
+    buildExpiryClause(options.includeExpired, nowMs),
+  ]) {
+    if (built === undefined) continue;
+    where.push(...built.clauses);
+    params.push(...built.params);
+  }
+  appendPagingParams(params, options);
+}
+
 function buildPinnedClause(pinned: boolean | undefined): ListClauseBuild | undefined {
   if (pinned === undefined) return undefined;
   return { clauses: ["pinned = ?"], params: [pinned ? 1 : 0] };
@@ -375,17 +401,7 @@ export function listMemoriesAcrossScopeRows(
   if (scopeClause === undefined) return [];
   const params: (string | number)[] = [...scopeClause.params];
   const where: string[] = [...scopeClause.clauses];
-  for (const built of [
-    buildEnumClause("type", options.type),
-    buildEnumClause("status", options.status),
-    buildPinnedClause(options.pinned),
-    buildExpiryClause(options.includeExpired, nowMs),
-  ]) {
-    if (built === undefined) continue;
-    where.push(...built.clauses);
-    params.push(...built.params);
-  }
-  appendPagingParams(params, options);
+  appendListFilters(where, params, options, nowMs);
   const rows = cachedPrepare(db, buildListSql(where, options)).all(
     ...params,
   ) as unknown as readonly MemoryRow[];
@@ -403,17 +419,7 @@ export function listMemoriesByScopeRows(
   const coordinate = scopeCoordinateOf(scope);
   const params: (string | number)[] = [kind, coordinate];
   const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
-  for (const built of [
-    buildEnumClause("type", options.type),
-    buildEnumClause("status", options.status),
-    buildPinnedClause(options.pinned),
-    buildExpiryClause(options.includeExpired, nowMs),
-  ]) {
-    if (built === undefined) continue;
-    where.push(...built.clauses);
-    params.push(...built.params);
-  }
-  appendPagingParams(params, options);
+  appendListFilters(where, params, options, nowMs);
   const rows = cachedPrepare(db, buildListSql(where, options)).all(
     ...params,
   ) as unknown as readonly MemoryRow[];
@@ -430,17 +436,7 @@ export function listMemoryMetadataByScopeRows(
   const coordinate = scopeCoordinateOf(scope);
   const params: (string | number)[] = [kind, coordinate];
   const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
-  for (const built of [
-    buildEnumClause("type", options.type),
-    buildEnumClause("status", options.status),
-    buildPinnedClause(options.pinned),
-    buildExpiryClause(options.includeExpired, nowMs),
-  ]) {
-    if (built === undefined) continue;
-    where.push(...built.clauses);
-    params.push(...built.params);
-  }
-  appendPagingParams(params, options);
+  appendListFilters(where, params, options, nowMs);
   const rows = cachedPrepare(db, buildListSql(where, options, METADATA_COLUMNS)).all(
     ...params,
   ) as unknown as readonly MemoryMetadataRow[];

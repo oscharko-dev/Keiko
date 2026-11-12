@@ -97,6 +97,10 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   // V59 retains validated/redacted user attachment context under the same private Chat owner.
   // It follows chat deletion and is omitted from browser rows; no provider/credential metadata.
   "document_context_json",
+  // V62 (#4213) records only whether memory was on when the message was written: the closed
+  // capture surface and autonomy mode. No text, provider or credential metadata.
+  "memory_learning",
+  "memory_learning_mode",
 ]);
 
 // V44 retains private per-chat composer text and its CAS revision, without provider metadata.
@@ -216,6 +220,8 @@ const EXPECTED_TABLES = new Set([
   "chat_tool_read_grants",
   "chat_drafts",
   "coding_workbench_drafts",
+  // V62 (#4213): how far each Chat has been learned, as a message position; no text.
+  "chat_memory_learning",
   "chat_messages",
   "chats",
   "coding_history_tasks",
