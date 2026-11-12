@@ -75,11 +75,19 @@ function readVerdict(target, tokens) {
 }
 
 /**
- * Another operation that answers the request just as well: its successful result carries every
- * native token. It is reported apart from an exact selection, never folded into it.
+ * A reviewed equivalent operation that answers the request just as well: it is on the case's
+ * `alternatives` list and its successful result carries every native token. Any other operation
+ * is a wrong tool, because a result can carry a single token by coincidence (a username as a
+ * reporter). It is reported apart from an exact selection, never folded into it.
  */
-function alternativeRead(calls, tokens) {
-  const answering = calls.find((call) => succeeded(call) && carriesTruth(call, tokens).complete);
+function alternativeRead(calls, tokens, alternatives) {
+  const allowed = new Set(alternatives.map(toolAlias));
+  const answering = calls.find(
+    (call) =>
+      allowed.has(toolAlias(call.call?.name)) &&
+      succeeded(call) &&
+      carriesTruth(call, tokens).complete,
+  );
   if (answering === undefined)
     return { status: "wrong-tool", detail: `${calls.length} other operation calls` };
   return {
@@ -168,7 +176,8 @@ function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   const target = targetCall(calls, entry.tool);
   if (entry.effect === "write") return { ...writeVerdict(target, effect, calls.length), path };
   if (target !== undefined) return { ...readVerdict(target, tokens), path };
-  if (calls.length > 0) return { ...alternativeRead(calls, tokens), path };
+  if (calls.length > 0)
+    return { ...alternativeRead(calls, tokens, entry.alternatives ?? []), path };
   return { status: "no-tool", path, detail: "no operation call" };
 }
 

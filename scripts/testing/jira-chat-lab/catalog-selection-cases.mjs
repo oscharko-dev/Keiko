@@ -56,6 +56,8 @@ const DISCOVERY_READS = [
   {
     id: "myself",
     tool: "jira.myself",
+    // The session read names the connected account just as well (reviewed 2026-11-12).
+    alternatives: ["jira.current-session"],
     prompt: () =>
       "Mit welchem Jira-Benutzerkonto bin ich gerade verbunden? Nenne den Benutzernamen.",
     truth: async (s) => [String((await native(s, "/rest/api/2/myself")).name)],

@@ -272,7 +272,8 @@ async function measure(session, modelId, run, cases) {
         await runRounds(context, run, cases);
       },
     });
-    complete = true;
+    // A signal during the last attempt ends the loop normally, but the run was still stopped.
+    complete = !run.stop.signal.aborted;
   } finally {
     finishReport(session, modelId, run, startedAt, complete);
   }
@@ -304,8 +305,12 @@ async function main() {
   // A signal stops the run between steps: the turn in flight is aborted, its effect is still
   // verified and removed, and the owned objects are cleaned up before the process exits.
   const EXIT_CODES = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+  // A second signal exits at once, for a native request that hangs; owned objects then remain
+  // for the next run's reconciliation.
   const interrupted = (signal) => {
-    stage("stop-requested", { signal, repeated: run.stop.signal.aborted });
+    const repeated = run.stop.signal.aborted;
+    stage("stop-requested", { signal, repeated });
+    if (repeated) process.exit(EXIT_CODES[signal]);
     process.exitCode = EXIT_CODES[signal];
     run.stop.abort();
   };

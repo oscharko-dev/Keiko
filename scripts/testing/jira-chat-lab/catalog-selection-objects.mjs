@@ -2,6 +2,7 @@
 // native Jira REST with lab credentials only; Keiko is never involved, so the truth they provide is
 // independent of the product under test. Every created id is recorded at once, so a run that fails
 // half-way still removes exactly what it created.
+import { createHash } from "node:crypto";
 import { actorDetails, basicAuth, checked, labRequest } from "./lab-client.mjs";
 
 const write = (session, actor, method, path, body, expected) =>
@@ -68,15 +69,32 @@ async function agileObjects(session, fixture, created) {
   const shared = await write(session, "admin", "POST", "/rest/api/2/filter", {
     name: `${created.boardName} filter`,
     jql: `project = ${fixture.project} ORDER BY Rank ASC`,
-    sharePermissions: [{ type: "project", project: { id: String(project.id) } }],
   });
   created.sharedFilterId = String(shared.id);
+  // Jira Data Center ignores sharePermissions on create; without the share the api actor sees
+  // neither the board nor its sprint, and those read cases would measure a visibility gap.
+  await write(
+    session,
+    "admin",
+    "POST",
+    `/rest/api/2/filter/${created.sharedFilterId}/permission`,
+    { type: "project", projectId: String(project.id) },
+    [201],
+  );
   const board = await write(session, "admin", "POST", "/rest/agile/1.0/board", {
     name: created.boardName,
     type: "scrum",
     filterId: Number(shared.id),
   });
   created.boardId = String(board.id);
+  const visible = await labRequest(
+    session,
+    "GET",
+    `/rest/agile/1.0/board/${created.boardId}`,
+    basicAuth(session, "api"),
+  );
+  if (visible.status !== 200)
+    throw new TypeError("The owned board is not visible to the api actor");
   const sprint = await write(session, "admin", "POST", "/rest/agile/1.0/sprint", {
     name: created.sprintName,
     originBoardId: Number(board.id),
@@ -212,6 +230,10 @@ export function voteRows(issue, votes) {
 
 const own = (label) => ({ owned: true, label: String(label ?? "") });
 
+/** A short digest of an object's content, so an edit of an existing object is seen as a change. */
+const contentDigest = (...parts) =>
+  createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 16);
+
 /**
  * Watchers except the api actor itself: Jira's autowatch adds the acting user when it creates or
  * comments, which is a side effect of that write, not a write of its own.
@@ -236,8 +258,14 @@ async function issueScope(session, key) {
     read(session, `${issue}?fields=*all`),
   ]);
   const rows = [
-    ...links.map((row) => [`${issue}/remotelink/${row.id}`, own(row.object?.title)]),
-    ...(worklogs.worklogs ?? []).map((row) => [`${issue}/worklog/${row.id}`, own(row.comment)]),
+    ...links.map((row) => [
+      `${issue}/remotelink/${row.id}`,
+      own(`${row.object?.title} ${contentDigest(row.object?.url)}`),
+    ]),
+    ...(worklogs.worklogs ?? []).map((row) => [
+      `${issue}/worklog/${row.id}`,
+      own(`${row.comment} ${contentDigest(row.timeSpentSeconds, row.started)}`),
+    ]),
     ...(properties.keys ?? []).map((row) => [`${issue}/properties/${row.key}`, own(row.key)]),
     ...watcherRows(issue, watchers),
     ...(state.fields?.issuelinks ?? []).map((row) => [
@@ -245,7 +273,10 @@ async function issueScope(session, key) {
       own(row.type?.name),
     ]),
     ...voteRows(issue, votes),
-    ...(comments.comments ?? []).map((row) => [`${issue}/comment/${row.id}`, own("")]),
+    ...(comments.comments ?? []).map((row) => [
+      `${issue}/comment/${row.id}`,
+      own(contentDigest(row.body)),
+    ]),
   ];
   return { state: issueState(state.fields ?? {}), rows };
 }
@@ -259,6 +290,10 @@ async function projectScope(session, fixture, created) {
     read(session, `${project}/versions`),
     read(session, `/rest/api/2/search?jql=${jql}&fields=summary,updated&maxResults=100`),
   ]);
+  // The comparison assumes the lane runs alone on a small project; a larger one is refused rather
+  // than half compared, because an issue beyond the page would look removed or added.
+  if (issues.total > issues.issues.length)
+    throw new TypeError("The selection project exceeds the scope snapshot bound of 100 issues");
   const owned = new Set([created.issueKey, created.linkTargetKey]);
   const projectRow = (label, stamp = "") => ({ owned: false, label: String(label ?? ""), stamp });
   return [
@@ -272,20 +307,47 @@ async function projectScope(session, fixture, created) {
 }
 
 /**
+ * The run's own board, sprint and filters by content; one that disappeared is absent, so its
+ * removal counts. The favourite filter is private to the api actor, so it is read as that actor.
+ */
+async function agileScope(session, created) {
+  const entries = [
+    [`/rest/agile/1.0/board/${created.boardId}`, "admin"],
+    [`/rest/agile/1.0/sprint/${created.sprintId}`, "admin"],
+    [`/rest/api/2/filter/${created.sharedFilterId}`, "admin"],
+    [`/rest/api/2/filter/${created.favouriteFilterId}`, "api"],
+  ];
+  const rows = await Promise.all(
+    entries.map(async ([path, actor]) => {
+      const response = await labRequest(session, "GET", path, basicAuth(session, actor));
+      if (response.status === 404) return undefined;
+      if (response.status !== 200)
+        throw new TypeError(`Selection scope read failed (${response.status})`);
+      const value = response.value ?? {};
+      const label = contentDigest(value.name, value.state, value.goal, value.jql, value.favourite);
+      return [path, { owned: false, label }];
+    }),
+  );
+  return rows.filter((row) => row !== undefined);
+}
+
+/**
  * Every object a write turn could add, change or remove in the scope, keyed by the native path
  * that removes it, with a label that tells owned objects (carrying the run tag) from foreign ones.
- * Both owned issues are read in full. Comparing a snapshot before and after the turn finds writes
- * the request did not ask for.
+ * Both owned issues are read in full, with the run's own agile objects and filters. Comparing a
+ * snapshot before and after the turn finds writes the request did not ask for; it assumes no other
+ * lane writes to the project meanwhile. Property values are compared by key only.
  */
 export async function scopeSnapshot(session, fixture, created) {
-  const [main, target, project] = await Promise.all([
+  const [main, target, project, agile] = await Promise.all([
     issueScope(session, created.issueKey),
     issueScope(session, created.linkTargetKey),
     projectScope(session, fixture, created),
+    agileScope(session, created),
   ]);
   return {
     issueState: JSON.stringify([main.state, target.state]),
-    objects: new Map([...project, ...main.rows, ...target.rows]),
+    objects: new Map([...project, ...agile, ...main.rows, ...target.rows]),
   };
 }
 

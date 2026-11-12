@@ -95,10 +95,14 @@ describe("gradeSelection", () => {
   });
 
   it("judges the successful target call when the model corrected a failed first call", () => {
-    const failed = { call: { name: "jira_priorities" }, result: { status: "failed", data: {} } };
-    const turn = { exchanges: [failed, call("jira_priorities")], gateway: healthy };
+    const failed = (name) => ({ call: { name }, result: { status: "failed", data: {} } });
+    const turn = {
+      exchanges: [failed("jira_priorities"), call("jira_priorities")],
+      gateway: healthy,
+    };
     expect(gradeSelection(READ, turn, { tokens: ["High"] }).status).toBe("selected");
-    const write = { exchanges: [failed, call("jira_create_worklog")], gateway: healthy };
+    const retried = [failed("jira_create_worklog"), call("jira_create_worklog")];
+    const write = { exchanges: retried, gateway: healthy };
     expect(gradeSelection(WRITE, write, { effect: { effects: 1 } }).status).toBe("selected");
   });
 
@@ -111,13 +115,16 @@ describe("gradeSelection", () => {
     expect(gradeSelection(WRITE, turn, { effect: { effects: 1 } }).status).toBe("invalid");
   });
 
-  it("counts another operation that answers completely as an alternative, apart from selected", () => {
+  it("counts a reviewed equivalent that answers completely as an alternative, apart from selected", () => {
     const other = { exchanges: [call("jira_create_fields")], gateway: healthy };
-    expect(gradeSelection(READ, other, { tokens: ["High"] })).toMatchObject({
+    const reviewed = { ...READ, alternatives: ["jira.create-fields"] };
+    expect(gradeSelection(reviewed, other, { tokens: ["High"] })).toMatchObject({
       status: "alternative",
       detail: "jira_create_fields carried every native token",
     });
-    expect(gradeSelection(READ, other, { tokens: ["High", "Low"] }).status).toBe("wrong-tool");
+    expect(gradeSelection(reviewed, other, { tokens: ["High", "Low"] }).status).toBe("wrong-tool");
+    // A result that carries the token by coincidence is no alternative without a review.
+    expect(gradeSelection(READ, other, { tokens: ["High"] }).status).toBe("wrong-tool");
     const write = { exchanges: [call("jira_edit")], gateway: healthy };
     expect(gradeSelection(WRITE, write, { effect: { effects: 1 } }).status).toBe("alternative");
     expect(gradeSelection(WRITE, write, { effect: { effects: 1, stray: 1 } }).status).toBe(

@@ -137,8 +137,9 @@ describe("Activity Log gateway evidence", () => {
   afterEach(() => rmSync(root, { recursive: true, force: true }));
   const line = (op, ts, correlationId, pid = 7, errorKind = undefined) =>
     JSON.stringify({ op, ts, pid, correlationId, ...(errorKind ? { errorKind } : {}) });
-  // A real outage's failed call carries the fallback kind `internal`; its retries carry the
-  // provider's 5xx status and its circuit events `unavailable` (observed 2026-11-12).
+  // A real outage's failed call carries the fallback kind `internal`; its retry lines carry the
+  // provider's 5xx status (registered without an error kind) and its circuit events `unavailable`
+  // (observed 2026-11-12; resilience.ts).
   const failed = (op, ts, correlationId, errorKind = "internal") =>
     line(op, ts, correlationId, 7, errorKind);
   const exhausted = (ts, correlationId, httpStatus = 500) =>
@@ -147,7 +148,6 @@ describe("Activity Log gateway evidence", () => {
       ts,
       pid: 7,
       correlationId,
-      errorKind: "internal",
       ...(httpStatus === null ? {} : { httpStatus }),
     });
   const T = (second) => `2026-11-12T05:00:${String(second).padStart(2, "0")}.000Z`;
