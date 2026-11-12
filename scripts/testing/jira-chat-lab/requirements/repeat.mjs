@@ -35,24 +35,26 @@ function summarize(runs, valid) {
   return `${runs.length} runs (${statuses}); pass rate ${green}/${valid.length} valid; ${invalid} invalid`;
 }
 
-function verdictOfValid(valid) {
-  if (valid.length === 0) return "invalid";
+// Survivorship: a repeat whose invalid runs left fewer than half valid proves nothing.
+function verdictOfValid(valid, total) {
   if (valid.some((run) => run.status === "red")) return "red";
+  if (valid.length < Math.ceil(total / 2)) return "invalid";
   return valid.every((run) => run.status === "green") ? "green" : "unverified";
 }
 
 /**
  * One journey check from several runs. Green only when every valid run is green and at least one
  * valid run exists; it then credits only what every valid run verified. A valid red run makes it
- * red; no valid run at all makes it invalid.
+ * red; fewer valid runs than half (or none) make it invalid.
  */
 export function aggregateRuns(runs) {
   if (runs.length === 0) throw new TypeError("A journey needs at least one run");
   const valid = runs.filter((run) => run.status !== "invalid");
-  const status = verdictOfValid(valid);
+  const status = verdictOfValid(valid, runs.length);
   const detail = `${summarize(runs, valid)}; ${runs.map((run, index) => `#${index + 1}: ${run.detail ?? run.status}`).join(" | ")}`;
   return {
     status,
+    ...(status === "invalid" ? { reason: "insufficient-valid-runs" } : {}),
     covers: status === "green" ? intersection(valid.map((run) => run.covers ?? [])) : [],
     detail,
     runs: runs.map(({ status: runStatus, reason, detail: runDetail, durationMs }) => ({

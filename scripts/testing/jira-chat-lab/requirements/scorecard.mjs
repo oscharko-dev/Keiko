@@ -6,14 +6,14 @@
 // A scenario is green only when every check passed AND every obligation of the catalog is covered
 // by a passing check AND the end-to-end journey is green. A journey that verifies only part of the
 // contract (or only `unverified`) leaves the scenario `partial`.
-// A check the laboratory cannot trust is `invalid`, never `red`: a lab exception, a model that
-// failed its readiness check before the journey, or a model gateway that failed a call or opened its
-// circuit during a non-green journey (read from the Activity Log of the journey's window and from
+// A check the laboratory cannot trust is `invalid`, never `red`: a lab exception (native Jira, fixture, license, transport; a failed Keiko route stays red), a model that
+// failed its readiness check before the journey, or a model gateway that exhausted its retries on a call or opened
+// its circuit during a non-green journey (read from the Activity Log of the journey's window and from
 // the turn's failure). A red model-free probe stays red. A run with any invalid scenario is
 // labelled invalid in latest.md and trend.tsv and is not a data point.
 // With --repeat N every journey runs N times in fresh Chats; a scenario reports each run's status,
 // the pass rate over its valid runs and the number of invalid runs, and is green only when every
-// valid run is green and at least one valid run exists.
+// valid run is green and at least half the runs are valid (else invalid).
 import {
   appendFileSync,
   existsSync,
@@ -33,7 +33,7 @@ import { scorecardMarkdown } from "./scorecard-markdown.mjs";
 import { JOURNEY_IDS, runJourneys } from "./journeys.mjs";
 import { PROBES } from "./probes.mjs";
 import { TREND_HEADER, countStatuses, trendLine } from "./repeat.mjs";
-import { labError } from "./validity.mjs";
+import { gradeException } from "./validity.mjs";
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -66,7 +66,7 @@ async function runChecks(scenario, journeys) {
     try {
       checks.push({ layer: "probe", ...(await probe(session, values.project)) });
     } catch (error) {
-      checks.push({ layer: "probe", ...labError(error) });
+      checks.push({ layer: "probe", ...gradeException(error) });
     }
     checks.at(-1).durationMs = Date.now() - started;
   }
@@ -74,7 +74,15 @@ async function runChecks(scenario, journeys) {
     checks.push({ layer: "journey", ...journeys[scenario.id] });
   const { status, covered, uncovered, deferred } = scenarioVerdict(scenario, checks);
   const runs = checks.find((check) => check.layer === "journey")?.runs;
-  return { ...scenario, status, covered, uncovered, deferred, checks, ...(runs ? { runs } : {}) };
+  return {
+    ...scenario,
+    status,
+    covered,
+    uncovered,
+    deferred,
+    checks,
+    ...(runs ? { runs, invalidRuns: runs.filter((run) => run.status === "invalid").length } : {}),
+  };
 }
 
 registerLane(directory);

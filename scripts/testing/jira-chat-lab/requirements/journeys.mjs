@@ -29,7 +29,15 @@ import { startDuring } from "./mid-turn.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
 import { aggregateRuns } from "./repeat.mjs";
-import { classifyJourney, invalidCheck, labError, readGatewayFailures } from "./validity.mjs";
+import {
+  classifyJourney,
+  gradeException,
+  invalidCheck,
+  isTransportFailure,
+  readGatewayFailures,
+  redCheck,
+  showsOutage,
+} from "./validity.mjs";
 import { sequentially } from "./journey-support.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
@@ -479,7 +487,7 @@ function reportJourney(id, { status, detail }, started, run) {
   );
 }
 
-/** One journey in its own fresh bound Chat; a lab error is an invalid check, never a product failure. */
+/** One journey in its own fresh bound Chat; a lab error is an invalid check, a failed Keiko route stays red. */
 async function runJourney({ ctx, session, modelId, capsuleId, id }) {
   let check;
   try {
@@ -501,7 +509,7 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
       },
     );
   } catch (error) {
-    check = labError(error);
+    check = gradeException(error);
   }
   if (id === "S14") {
     await ctx.replaceSpecification(1).catch((error) => {
@@ -515,10 +523,13 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
 
 /**
  * A cheap model readiness check through the ordinary Chat route before a journey: one short turn
- * in a fresh unbound Chat. Returns the reason the model is unavailable, or undefined when it
- * answered. A dead model server then marks the journey invalid instead of grading it red.
+ * in a fresh unbound Chat. Returns undefined when the model answered, otherwise
+ * `{ unavailable, detail }`: `unavailable` only when the Activity Log window of the readiness
+ * turn shows an infrastructure failure or the error is a transport signature; any other failure
+ * is a failed Keiko route and is the product's.
  */
-async function modelUnavailable(ctx, session, modelId) {
+export async function modelUnavailable(ctx, session, modelId) {
+  const fromMs = Date.now();
   try {
     const base = await prepareChat(ctx.origin, ctx.cookie, session, ctx.projectPath, modelId);
     await api(
@@ -539,15 +550,23 @@ async function modelUnavailable(ctx, session, modelId) {
     );
     return undefined;
   } catch (error) {
-    return String(error?.message ?? error).slice(0, 200);
+    const detail = String(error?.message ?? error).slice(0, 200);
+    const failures = readGatewayFailures(chatReadLogDirectory(session), {
+      fromMs,
+      toMs: Date.now(),
+      pid: process.pid,
+    });
+    return { unavailable: showsOutage(failures) || isTransportFailure(detail), detail };
   }
 }
 
 /** One graded run: readiness first, then the journey re-graded against its gateway evidence. */
 async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
-  const unavailable = await readiness(ctx, session, modelId);
-  if (unavailable !== undefined) {
-    return invalidCheck("model-unavailable", `model unavailable: ${unavailable}`);
+  const refused = await readiness(ctx, session, modelId);
+  if (refused !== undefined) {
+    return refused.unavailable
+      ? invalidCheck("model-unavailable", `model unavailable: ${refused.detail}`)
+      : redCheck("product-route-failed", `readiness turn failed: ${refused.detail}`);
   }
   const fromMs = Date.now();
   const check = await runJourney({ ctx, session, modelId, capsuleId, id });

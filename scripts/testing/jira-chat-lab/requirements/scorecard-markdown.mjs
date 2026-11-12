@@ -13,7 +13,7 @@ export function scorecardMarkdown(report) {
   };
   const rows = report.results.map(
     (result) =>
-      `| ${result.id} | ${icon[result.status]} ${result.status} | ${result.requirement} | #${result.issue} | ${result.title} | ${evidenceLines(result).join("<br>") || "no check yet"} |`,
+      `| ${result.id} | ${icon[result.status]} ${result.status}${result.runs ? ` (${result.invalidRuns} of ${result.runs.length} runs invalid)` : ""} | ${result.requirement} | #${result.issue} | ${result.title} | ${evidenceLines(result).join("<br>") || "no check yet"} |`,
   );
   return [
     `# Jira requirements scorecard — ${report.startedAt}${report.model ? ` — ${report.model}` : ""}${invalid > 0 ? " — INVALID RUN" : ""}`,

@@ -151,11 +151,20 @@ describe("requirements lab turn-limit provenance", () => {
 
   it("grades a journey invalid, not red, when the model fails its readiness check", async () => {
     const turn = await observedTurn({
-      readiness: async () => "connect ECONNREFUSED 127.0.0.1:4000",
+      readiness: async () => ({ unavailable: true, detail: "connect ECONNREFUSED" }),
     });
     expect(turn.status).toBe("invalid");
     expect(turn.reason).toBe("model-unavailable");
     expect(turn.covers).toEqual([]);
+    expect(fixture.sends).toBe(0);
+  });
+
+  it("keeps a journey red when the readiness turn failed on a Keiko route, not the model", async () => {
+    const turn = await observedTurn({
+      readiness: async () => ({ unavailable: false, detail: "Live Chat HTTP stage failed" }),
+    });
+    expect(turn.status).toBe("red");
+    expect(turn.reason).toBe("product-route-failed");
     expect(fixture.sends).toBe(0);
   });
 

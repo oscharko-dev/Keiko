@@ -5,25 +5,27 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-/** The closed Activity Log operations that prove the model gateway failed. */
-export const GATEWAY_FAILURE_OPS = Object.freeze({
-  "gateway.chat.failed": "failed",
-  "gateway.stream.failed": "failed",
-  "gateway.circuit.opened": "circuit",
-  "gateway.circuit.rejected": "circuit",
-});
-
-/** The closed reasons a check is invalid. */
+/** The closed reasons a check is invalid, or red because the product route failed. */
 export const INVALID_REASONS = Object.freeze([
   "lab-error",
   "model-unavailable",
   "gateway-failure",
   "gateway-circuit-open",
+  "insufficient-valid-runs",
 ]);
+export const RED_REASONS = Object.freeze(["product-route-failed"]);
 
-// A failed turn whose message names the transport or the gateway, not the product's answer.
-const GATEWAY_TURN_FAILURE =
-  /\b(GATEWAY_[A-Z_]+|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_[A-Z_]+)\b|fetch failed|socket hang up/;
+const FAILURE_OPS = new Set(["gateway.chat.failed", "gateway.stream.failed"]);
+const CIRCUIT_REJECTION_OPS = new Set(["gateway.circuit.opened", "gateway.circuit.rejected"]);
+
+// Only transport signatures: a gateway limit (context overflow, attempt admission) is a product
+// outcome, not an outage.
+const TRANSPORT_FAILURE =
+  /\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_[A-Z_]+)\b|fetch failed|socket hang up/;
+
+/** Whether a failure message names the transport to the model server, not the product. */
+export const isTransportFailure = (message) =>
+  typeof message === "string" && TRANSPORT_FAILURE.test(message);
 
 // Log lines are flushed after the journey ends; the grace keeps the late tail inside its window.
 const WINDOW_GRACE_MS = 2_000;
@@ -60,26 +62,53 @@ function inWindow(entry, { fromMs, toMs, pid }) {
   return Number.isFinite(at) && at >= fromMs && at <= toMs + WINDOW_GRACE_MS;
 }
 
+function collectLine(entry, groups, counts) {
+  if (CIRCUIT_REJECTION_OPS.has(entry.op)) counts.circuit += 1;
+  if (typeof entry.correlationId !== "string") return;
+  const ops = groups.get(entry.correlationId) ?? new Set();
+  ops.add(entry.op);
+  groups.set(entry.correlationId, ops);
+}
+
 /**
- * The gateway failures the Activity Log recorded for this process inside [fromMs, toMs]: failed
- * model calls and circuit transitions or rejections. Another lane's process writes the same
- * directory, so `pid` restricts the count to the lab server of this run.
+ * An infrastructure failure is a correlation that ends in a failed model call AND went through a
+ * retry exhaustion or a circuit event. A failure with neither (a context overflow, a refused
+ * attempt, a provider rejection) is a product or limit outcome and proves no outage.
+ */
+function classifyCorrelations(groups, counts) {
+  for (const ops of groups.values()) {
+    if (![...ops].some((op) => FAILURE_OPS.has(op))) continue;
+    const retried =
+      ops.has("gateway.retry.exhausted") ||
+      [...ops].some((op) => op.startsWith("gateway.circuit."));
+    if (retried) counts.outages += 1;
+    else counts.productFailures += 1;
+  }
+}
+
+/**
+ * The gateway evidence the Activity Log holds for this process inside [fromMs, toMs]: `outages`
+ * (failed model calls that exhausted their retries or met an open circuit), `circuit` (circuit
+ * opened or rejected events) and `productFailures` (failed calls with neither). Another lane's
+ * process writes the same directory, so `pid` restricts the count to the lab server of this run.
  */
 export function readGatewayFailures(root, window) {
-  const counts = { failed: 0, circuit: 0, unparsed: 0 };
+  const counts = { outages: 0, circuit: 0, productFailures: 0, unparsed: 0 };
+  const groups = new Map();
   for (const file of logFiles(root, window.fromMs)) {
     for (const line of readFileSync(file, "utf8").split("\n")) {
       const parsed = gatewayLine(line);
       if (parsed === undefined) continue;
       if (parsed.unparsed) counts.unparsed += 1;
-      else if (inWindow(parsed.entry, window)) {
-        const kind = GATEWAY_FAILURE_OPS[parsed.entry.op];
-        if (kind !== undefined) counts[kind] += 1;
-      }
+      else if (inWindow(parsed.entry, window)) collectLine(parsed.entry, groups, counts);
     }
   }
+  classifyCorrelations(groups, counts);
   return counts;
 }
+
+/** Whether the evidence of a window shows the model infrastructure down. */
+export const showsOutage = (failures) => failures.outages > 0 || failures.circuit > 0;
 
 /** A check the laboratory cannot trust: it credits no obligation and names its closed reason. */
 export function invalidCheck(reason, detail, base = {}) {
@@ -87,27 +116,40 @@ export function invalidCheck(reason, detail, base = {}) {
   return { ...base, status: "invalid", reason, covers: [], detail };
 }
 
-/** A lab exception is a lab error, never evidence about the product. */
-export function labError(error, base = {}) {
-  return invalidCheck("lab-error", `lab error: ${error.message}`, base);
+/** A product failure the laboratory did observe: red, with its closed reason, crediting nothing. */
+export function redCheck(reason, detail, base = {}) {
+  if (!RED_REASONS.includes(reason)) throw new TypeError(`Unknown red reason ${reason}`);
+  return { ...base, status: "red", reason, covers: [], detail };
+}
+
+// The lab's own stage helper throws this for a non-2xx answer of Keiko's routes.
+const ROUTE_FAILURE_MESSAGE = "Live Chat HTTP stage failed";
+
+/**
+ * Grades an exception of a probe or journey. A failed Keiko route is a product failure and stays
+ * red; every other exception (native Jira, fixture, license, transport) is a lab error and
+ * invalid, because it is no evidence about the product.
+ */
+export function gradeException(error, base = {}) {
+  if (error?.message === ROUTE_FAILURE_MESSAGE) {
+    return redCheck("product-route-failed", `Keiko route failed: ${error.message}`, base);
+  }
+  return invalidCheck("lab-error", `lab error: ${error?.message ?? String(error)}`, base);
 }
 
 /**
  * Re-grades a finished journey check against the gateway evidence of its window.
- *  - A green check stays green: an independent Jira or truth oracle proved the outcome, so a
- *    retried gateway failure did not change it.
- *  - Any other check during which the circuit opened or the gateway failed a model call, or whose
- *    turn failed on a gateway or transport error, cannot be trusted and is invalid.
- * `failures` is the result of `readGatewayFailures` for the journey's window.
+ *  - A green check stays green: an independent Jira or truth oracle proved the outcome.
+ *  - Any other check during which the circuit opened or a model call failed after exhausting its
+ *    retries (see `readGatewayFailures`), or whose turn failed on a transport error, is invalid.
+ *  - A failed call that was not retried (a limit such as context overflow) stays as graded.
  */
 export function classifyJourney(check, failures) {
   if (check.status === "green" || check.status === "invalid") return check;
-  const counts = `${failures.failed} failed model calls, ${failures.circuit} circuit events`;
+  const counts = `${failures.outages} infrastructure failures, ${failures.circuit} circuit events`;
   if (failures.circuit > 0)
     return invalidCheck("gateway-circuit-open", `${check.detail}; ${counts}`, check);
-  const turnFailure = check.turnFailure ?? check.failure;
-  const turnGateway = typeof turnFailure === "string" && GATEWAY_TURN_FAILURE.test(turnFailure);
-  if (failures.failed > 0 || turnGateway) {
+  if (failures.outages > 0 || isTransportFailure(check.turnFailure ?? check.failure)) {
     return invalidCheck("gateway-failure", `${check.detail ?? ""}; ${counts}`, check);
   }
   return check;

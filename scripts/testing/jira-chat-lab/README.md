@@ -1146,20 +1146,26 @@ The probes of S05, S07, S08 and S09 prove `fields-writable` by writing. `field-w
 
 A scenario is `green` only when every obligation is covered AND its end-to-end journey is green;
 probes that cover everything beside an `unverified` journey leave it `partial`. A check the
-laboratory cannot trust is `invalid`, never `red`: a probe or journey exception (lab error), a
-model that fails a short readiness turn before the journey (`model-unavailable`), and a non-green
-journey during which the model gateway failed a call or opened its circuit
-(`gateway-failure`, `gateway-circuit-open`; read from the Activity Log lines of this server process
-inside the journey's time window, plus a gateway or transport error in the turn's failure). A green
-journey stays green (the Jira oracle proved it); a red model-free probe stays red. Invalid
-propagates to the scenario unless a model-free probe is red. `latest.md` and `trend.tsv` carry an
-`invalid` column; a run with any invalid scenario is labelled `INVALID RUN` / `validity=invalid` and
-is not a data point (an older trend file with another column layout is kept aside).
+laboratory cannot trust is `invalid`, never `red`: a native-Jira, fixture, license or transport
+exception (`lab-error`), a model that fails a short readiness turn before the journey while the
+Activity Log of that turn shows an infrastructure failure or the error is a transport signature
+(`model-unavailable`), and a non-green journey during which the gateway failed (`gateway-failure`,
+`gateway-circuit-open`). Infrastructure failure is read from the Activity Log lines of this server
+process inside the window, grouped by correlation: a `gateway.chat.failed`/`gateway.stream.failed`
+correlation that contains `gateway.retry.exhausted` or a `gateway.circuit.*` event, or any circuit
+opened/rejected event. A failure with neither (context overflow, refused attempt) is a product
+outcome and stays red. A failed Keiko route (`Live Chat HTTP stage failed`, also from the readiness
+turn when no outage is shown) is red with reason `product-route-failed`. A green journey stays
+green. Any red check decides the scenario before invalid. `latest.md` and `trend.tsv` carry an
+`invalid` column; a run with any invalid scenario is labelled `INVALID RUN` / `validity=invalid`
+and is not a data point (an older trend file with another layout is kept aside).
+`modelUnavailable` (`journeys.mjs`) and `isTransportFailure` (`validity.mjs`) are reusable by other
+lanes.
 
-`--repeat N` (default 1, at most 20) runs every journey N times in fresh Chats. Each scenario then
-reports every run's status, the pass rate over its valid runs and the number of invalid runs; it is
-green only when every valid run is green and at least one valid run exists, red when a valid run is
-red, invalid when no run is valid.
+`--repeat N` (default 1, at most 20) runs every journey N times in fresh Chats. Each scenario
+reports every run, the pass rate over valid runs and the invalid count (shown next to the status).
+It is green only when every valid run is green and at least ceil(N/2) runs are valid, red when a
+valid run is red, otherwise invalid (`insufficient-valid-runs`).
 
 The scorecard writes `requirements-scorecard/<timestamp>.json`, `latest.md` and `trend.tsv` into
 the private session. Before a group it checks the remaining license time: the published test
