@@ -884,6 +884,16 @@ and follow the **Symptom**, **Root Cause**, **Diagnostic Steps**, and
 **Resolution** structure. Do not include API keys, customer data,
 internal endpoints, or unredacted log lines in examples.
 
+## Platform tiers
+
+macOS and Windows are the parity platforms. The Linux desktop package is a community tier
+(owner decision of 2026-11-12, [ADR-0183](docs/adr/ADR-0183-linux-desktop-community-tier.md)).
+Qualify a new or changed operating-system feature on macOS and Windows. On Linux it reuses an
+existing implementation or reports itself unavailable and fails closed. Keep the `linux-x64`
+archive, the existing Linux capabilities and their CI jobs green. A contributed Linux implementation
+is reviewed under the usual rules, but it never blocks a macOS or Windows delivery. Linux remains
+the development and CI platform.
+
 ## Coding mode availability
 
 The owner decision of 2026-09-27 exposes all three Coding Workbench modes on a normal installation

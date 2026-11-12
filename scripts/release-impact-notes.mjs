@@ -244,7 +244,7 @@ function addPortableReleasePromotion(groups, options) {
   addGroupedBullet(
     groups,
     "normal\u0000update-notes",
-    "Download Keiko for Windows x64, Linux x64, macOS arm64, and macOS x64 and start from the bundled launcher; npm remains available for developer and compatibility workflows.",
+    "Download Keiko for Windows x64, macOS arm64, and macOS x64, or Linux x64 as a community-tier package, and start from the bundled launcher; npm remains available for developer and compatibility workflows.",
   );
 }
 

@@ -65,7 +65,7 @@ The desktop packages include the Node.js runtime and launch Keiko without a sepa
 | macOS (Apple Silicon) | `keiko-macos-arm64.zip`                                  |
 | macOS (Intel)         | `keiko-macos-x64.zip`                                    |
 | Windows x64           | `keiko-windows-x64-setup.exe` or `keiko-windows-x64.zip` |
-| Linux x64             | `keiko-linux-x64.zip`                                    |
+| Linux x64 (community) | `keiko-linux-x64.zip`                                    |
 
 Keiko is an open-source project and does not yet buy Apple and Microsoft code-signing certificates, so macOS and Windows ask once before the first launch: on macOS **System Settings → Privacy & Security → Open Anyway**, on Windows SmartScreen **More info → Run anyway**. Every release states this plainly. Keiko then opens at `http://127.0.0.1:1983`.
 
@@ -93,6 +93,7 @@ Connected folders do not need Git metadata or a `package.json`. Run `npx keiko i
 ## Honest limits
 
 - `npm install -g @oscharko-dev/keiko` installs Keiko without its third-party runtime dependencies, and `keiko start` then fails at startup. Install it into a project folder instead, as shown above, or use the desktop packages ([#3582](https://github.com/oscharko-dev/Keiko/issues/3582)).
+- The Linux package is a community tier. It keeps what it does today, but new features that depend on the operating system are built and qualified for macOS and Windows first and may not reach Linux ([ADR-0183](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0183-linux-desktop-community-tier.md)).
 - Updating from before 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
 - Windows Chat, Files and manual Editor use are separate from Coding execution. The Windows gateway-filter work remains a development implementation and does not enable the Coding runtime; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/windows-gateway-runtime-progress.md).
 - Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.

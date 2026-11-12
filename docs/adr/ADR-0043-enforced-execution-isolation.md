@@ -75,6 +75,10 @@ with no single cross-platform API: Linux has unprivileged network namespaces (bu
 equivalent and relies on a container runtime. A container runtime (`docker`/`podman run
 --network=none`) is the one primitive that enforces egress identically on all three.
 
+_Amended 2026-11-12 ([ADR-0183](ADR-0183-linux-desktop-community-tier.md)): the existing Linux
+backends stay and keep their CI proof, but new isolation capabilities are qualified on macOS and
+Windows only; on Linux they reuse an existing backend or report themselves unavailable._
+
 ## Decision
 
 ### D1 — A dedicated, reusable isolation package

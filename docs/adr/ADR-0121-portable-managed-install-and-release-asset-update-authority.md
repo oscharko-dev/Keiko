@@ -6,7 +6,9 @@ Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Iss
 2026-08-04); construction surface replaced by a Keiko-owned native bootstrap (Issue #2992,
 2026-08-29); platform-neutral release trust adopted for unsigned native delivery (Epic #3403,
 2026-09-10); amended with the production-qualified Linux x64 archive (Issue #3451, 2026-09-10);
-D8 amended by the `dev` release rehearsal of ADR-0177 (2026-09-14).
+D8 amended by the `dev` release rehearsal of ADR-0177 (2026-09-14). The `linux-x64` archive is a
+community-tier asset without a parity commitment for new operating-system features
+([ADR-0183](ADR-0183-linux-desktop-community-tier.md), 2026-11-12).
 
 ## Context
 

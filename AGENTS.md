@@ -112,6 +112,16 @@ This shapes the product _and_ how you work on it:
   belongs to the central gateway configuration. Local pod storage does not imply local model
   providers. Preserve existing model-use policy, containment and audit guards; see
   [Knowledge Pods](docs/local-knowledge/knowledge-pods.md).
+- **Linux desktop is a community tier (owner decision, 2026-11-12):** Keiko promises feature
+  parity for macOS and Windows only. Design, implement and qualify new or changed
+  operating-system features (supervision, sandbox and egress confinement, credential storage, file
+  ownership, native dialogs, launcher, installer, update handoff, runtime activation) for those two.
+  On Linux such a feature reuses an existing implementation or reports itself unavailable through
+  its existing closed disposition and fails closed; never block a macOS or Windows delivery on Linux
+  qualification. Keep building and publishing `keiko-linux-x64.zip` and every gate on it. Existing
+  Linux capabilities, tests and CI jobs stay, and a red Linux job is fixed, never skipped. Linux
+  remains the development and CI platform (§3, §9). See
+  [ADR-0183](docs/adr/ADR-0183-linux-desktop-community-tier.md).
 - Local browser connection uses the trusted native launcher and existing single-use fragment
   redemption. The one-click open request returns only a closed outcome, never proof or cookies;
   preserve server-owned destinations, fixed browser targets, launch bounds and authenticated APIs.
