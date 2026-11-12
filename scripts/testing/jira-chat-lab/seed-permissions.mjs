@@ -141,6 +141,20 @@ export async function verifyQualificationSeparation(session, actors, keys) {
   }
 }
 
+/**
+ * The shared KEIKO scheme: the widened set goes to admin and api only. The editor, assignee and
+ * restricted actors keep exactly the narrow grants the denial cases (editor cannot assign or
+ * transition, restricted cannot read KEIKO) depend on.
+ */
+export function keikoGrantPlan(qualification) {
+  return [
+    ...grants("admin", qualification),
+    ...grants("api", qualification),
+    ...grants("editor", ["BROWSE_PROJECTS", "EDIT_ISSUES", "ADD_COMMENTS"]),
+    ...grants("assignee", ["BROWSE_PROJECTS", "ASSIGNABLE_USER"]),
+  ];
+}
+
 export async function ensureFixturePermissions(session, actors) {
   const inventory = await checked(
     session,
@@ -150,12 +164,7 @@ export async function ensureFixturePermissions(session, actors) {
     basicAuth(session, "admin"),
   );
   const qualification = qualificationGrantKeys(inventory);
-  await associateScheme(session, "KEIKO", [
-    ...grants("admin", qualification),
-    ...grants("api", qualification),
-    ...grants("editor", ["BROWSE_PROJECTS", "EDIT_ISSUES", "ADD_COMMENTS"]),
-    ...grants("assignee", ["BROWSE_PROJECTS", "ASSIGNABLE_USER"]),
-  ]);
+  await associateScheme(session, "KEIKO", keikoGrantPlan(qualification));
   await associateScheme(session, "ISOLATED", [
     ...grants("admin", full),
     ...grants("restricted", ["BROWSE_PROJECTS"]),

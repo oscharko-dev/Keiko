@@ -5,7 +5,10 @@ import { URL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCase } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
 import { COLLECTION_SEED_STEPS } from "../testing/jira-chat-lab/api-qualification-collection-seeds.mjs";
-import { vacuousReads } from "../testing/jira-chat-lab/api-qualification-evidence.mjs";
+import {
+  executableVacuousCount,
+  vacuousReads,
+} from "../testing/jira-chat-lab/api-qualification-evidence.mjs";
 import {
   QualificationPreparationError,
   hiddenFormFields,
@@ -14,6 +17,7 @@ import {
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 import {
   QUALIFICATION_EXTRA,
+  keikoGrantPlan,
   ensureFixturePermissions,
   qualificationGrantKeys,
   verifyQualificationSeparation,
@@ -89,6 +93,23 @@ describe("vacuous evidence", () => {
       { identity: "GET /d" },
     ];
     expect(vacuousReads(operations)).toEqual(["GET /a", "GET /b"]);
+  });
+});
+
+describe("emptyAllowed declaration", () => {
+  it("rejects a blank or non-text reason at construction", () => {
+    for (const reason of ["", "   ", 5, null])
+      expect(() => readCase("jira.x", "/p", ["id"], { emptyAllowed: reason })).toThrow(
+        /nonblank reason/u,
+      );
+  });
+  it("counts only executable vacuous rows for the summary", () => {
+    const rows = [
+      { runtimeAvailability: "executable", identity: "a", readback: { vacuous: true } },
+      { runtimeAvailability: "unknown", identity: "b", readback: { vacuous: true } },
+      { runtimeAvailability: "executable", identity: "c", readback: { matched: true } },
+    ];
+    expect(executableVacuousCount(rows)).toBe(1);
   });
 });
 
@@ -290,6 +311,16 @@ describe("qualification permissions", () => {
     expect(holders("BROWSE_PROJECTS")).toContain("keiko-editor");
     const isolated = created.find((scheme) => scheme.name.includes("ISOLATED"));
     expect(isolated.permissions.map((grant) => grant.permission)).not.toContain("WORK_ISSUES");
+  });
+  it("keeps editor, assignee and restricted on the narrow grants the denial cases rely on", () => {
+    const plan = keikoGrantPlan(qualificationGrantKeys(inventory()));
+    const held = (name) =>
+      plan.filter((grant) => grant.holder.parameter === name).map((grant) => grant.permission);
+    // editor cannot assign or transition; assignee cannot edit or transition; restricted sees nothing.
+    expect(held("keiko-editor").sort()).toEqual(["ADD_COMMENTS", "BROWSE_PROJECTS", "EDIT_ISSUES"]);
+    expect(held("keiko-assignee").sort()).toEqual(["ASSIGNABLE_USER", "BROWSE_PROJECTS"]);
+    expect(held("keiko-restricted")).toEqual([]);
+    expect(held("keiko-api")).toContain("TRANSITION_ISSUES");
   });
   it("proves every narrow actor holds none of the extras and the api actor all of them", async () => {
     const { session } = sessionContext();

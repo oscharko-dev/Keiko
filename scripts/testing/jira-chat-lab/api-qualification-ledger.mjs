@@ -13,6 +13,7 @@ import {
   qualificationDigest,
   qualificationSummary,
   vacuousReads,
+  executableVacuousCount,
   isApprovedDeferred,
 } from "./api-qualification-evidence.mjs";
 import { decidedQualificationDeferrals } from "./api-qualification-policy.mjs";
@@ -156,6 +157,7 @@ function publication(ledger, report, sourceRevision, decisions) {
     phase: "complete",
     counts: qualificationSummary(report.operations),
     vacuousReads: vacuousReads(report.operations),
+    executableVacuous: executableVacuousCount(report.operations),
     operations: report.operations.map(archivedCase),
   };
   return {

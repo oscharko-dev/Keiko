@@ -1,23 +1,27 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 
 const calls = [];
+const failures = { restore: false };
 vi.mock("../testing/jira-chat-lab/seed-admin.mjs", () => ({
   withLabAdmin: async (_session, run) => run("page"),
   setFixtureFieldRequirement: async (_page, _session, required) => {
     calls.push(required);
+    if (required && failures.restore) throw new TypeError("restore refused");
   },
   configureFixtureTransition: async () => undefined,
 }));
-const { withFixtureFieldOptional } = await import("../testing/jira-chat-lab/seed-fields.mjs");
+const { withFixtureFieldOptional, recoverFixtureFieldRequirement } =
+  await import("../testing/jira-chat-lab/seed-fields.mjs");
 
 const directories = [];
 afterEach(() => {
   vi.restoreAllMocks();
   calls.length = 0;
+  failures.restore = false;
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true });
 });
 function session(fields) {
@@ -55,4 +59,44 @@ it("restores the requirement when the work fails", async () => {
 it("leaves a lab without the qualification field untouched", async () => {
   expect(await withFixtureFieldOptional(session([{ name: "Other" }]), async () => 7)).toBe(7);
   expect(calls).toEqual([]);
+});
+
+const marker = (lab) => join(lab.directory, "required-field-lifted.json");
+const FIELD = [{ name: "Keiko required text" }];
+
+it("holds a private marker while the requirement is lifted and removes it afterwards", async () => {
+  const lab = session(FIELD);
+  await withFixtureFieldOptional(lab, async () => {
+    expect(existsSync(marker(lab))).toBe(true);
+  });
+  expect(existsSync(marker(lab))).toBe(false);
+});
+
+it("restores first when a crashed run left its marker", async () => {
+  const lab = session(FIELD);
+  writeFileSync(marker(lab), "{}");
+  await withFixtureFieldOptional(lab, async () => undefined);
+  expect(calls).toEqual([true, false, true]);
+  writeFileSync(marker(lab), "{}");
+  expect(await recoverFixtureFieldRequirement(lab)).toBe(true);
+  expect(await recoverFixtureFieldRequirement(lab)).toBe(false);
+  expect(existsSync(marker(lab))).toBe(false);
+});
+
+it("keeps the work's own error when the restore also fails, and the marker for recovery", async () => {
+  const lab = session(FIELD);
+  failures.restore = true;
+  const error = await withFixtureFieldOptional(lab, async () => {
+    throw new TypeError("bulk refused");
+  }).catch((value) => value);
+  expect(error.message).toBe("bulk refused");
+  expect(error.cause.message).toBe("restore refused");
+  expect(existsSync(marker(lab))).toBe(true);
+});
+
+it("reports a failed restore after successful work", async () => {
+  const lab = session(FIELD);
+  failures.restore = true;
+  await expect(withFixtureFieldOptional(lab, async () => 1)).rejects.toThrow("restore refused");
+  expect(existsSync(marker(lab))).toBe(true);
 });

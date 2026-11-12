@@ -153,6 +153,13 @@ async function nativeReadComplete(context, path) {
   assert.ok(!morePages(last, key, rows.length), "The native collection exceeds the paging bound");
   return { status: 200, value: { ...first.value, [key]: rows, isLast: true } };
 }
+function assertEmptyReason(tool, reason) {
+  if (reason !== undefined && (typeof reason !== "string" || !reason.trim()))
+    throw new TypeError(`emptyAllowed for ${tool} needs a nonblank reason`);
+}
+/** A product page that fills its limit is compared with that prefix of the complete native rows. */
+const expectedPrefix = (expected, actual, limit) =>
+  expected.length > limit && actual.length === limit ? expected.slice(0, limit) : expected;
 function requestedLimit(args, fixture) {
   try {
     const limit = args(fixture ?? {}).maxResults;
@@ -163,8 +170,7 @@ function requestedLimit(args, fixture) {
 }
 const emptyCollection = (native, emptyAllowed) => {
   if (native.length > 0) return {};
-  if (typeof emptyAllowed === "string" && emptyAllowed.trim().length > 0)
-    return { vacuousReason: emptyAllowed };
+  if (emptyAllowed !== undefined) return { vacuousReason: emptyAllowed };
   assert.fail("The native collection is empty: seed an owned record or declare emptyAllowed");
 };
 /**
@@ -187,6 +193,7 @@ export function readCase(
     unordered = false,
   } = {},
 ) {
+  assertEmptyReason(tool, emptyAllowed);
   return {
     tool,
     arguments: args,
@@ -202,13 +209,11 @@ export function readCase(
       const projected = projectRows(data, productRoot);
       const actual = rowValues(projected, fields);
       const expected = rowValues(native, fields, nativeNames);
-      // The product asks for one page; it must return exactly that prefix of the complete native
-      // collection, and the native total stays on record next to it.
+      // The product returns exactly the requested prefix of the complete native collection.
       const limit = requestedLimit(args, fixture);
-      const limited = expected.length > limit && actual.length === limit;
       // An unordered native collection proves membership; the order Keiko pages it in is its own.
       if (unordered) assert.ok(native.length <= limit, "Membership needs the complete collection");
-      const wanted = limited ? expected.slice(0, limit) : expected;
+      const wanted = expectedPrefix(expected, actual, limit);
       assertQualificationJson(
         unordered ? membership(actual) : actual,
         unordered ? membership(wanted) : wanted,

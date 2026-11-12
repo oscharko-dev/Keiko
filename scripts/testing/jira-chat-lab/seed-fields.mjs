@@ -1,4 +1,7 @@
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { basicAuth, checked } from "./lab-client.mjs";
+import { privateJson } from "./private-json.mjs";
 import {
   withLabAdmin,
   setFixtureFieldRequirement,
@@ -115,21 +118,56 @@ async function resetLegacyIssue(session, fieldId, key) {
 }
 
 const REQUIRED_FIELD_NAME = "Keiko required text";
+const OPTIONAL_MARKER = "required-field-lifted.json";
+
+const markerPath = (session) => join(session.directory, OPTIONAL_MARKER);
+
+/** A marker left by a killed run means the requirement may still be lifted: restore it first. */
+export async function recoverFixtureFieldRequirement(session) {
+  if (!existsSync(markerPath(session))) return false;
+  await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, true));
+  rmSync(markerPath(session));
+  console.log(
+    JSON.stringify({ operation: "jira-lab-admin", case: "required-field", recovered: true }),
+  );
+  return true;
+}
 
 /**
  * The qualification field is required in Jira's one default field configuration, which every
  * other project inherits. A lab that seeds other projects (the requirements lab) runs its writes
- * inside this bracket: the requirement is lifted for the duration and restored afterwards, also on
- * failure, so the qualification project keeps its required-field proof. No field, no bracket.
+ * inside this bracket: a private marker is written, the requirement is lifted for the duration and
+ * restored afterwards, also on failure; a restore failure never masks the work's own error. A
+ * marker that survived a crash is recovered at the next bracket. No field, no bracket.
  */
 export async function withFixtureFieldOptional(session, run) {
   const auth = basicAuth(session, "admin");
   const fields = await checked(session, "find-required-field", "GET", "/rest/api/2/field", auth);
   if (!fields.some((field) => field.name === REQUIRED_FIELD_NAME)) return run();
+  await recoverFixtureFieldRequirement(session);
+  privateJson(markerPath(session), { lifted: true });
   await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, false));
+  let result;
   try {
-    return await run();
-  } finally {
-    await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, true));
+    result = await run();
+  } catch (error) {
+    await restoreAfterFailure(session, error);
+    throw error;
+  }
+  await restoreRequirement(session);
+  return result;
+}
+
+async function restoreRequirement(session) {
+  await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, true));
+  rmSync(markerPath(session));
+}
+
+/** Keeps the marker for the next bracket when the restore fails; the work's error stays primary. */
+async function restoreAfterFailure(session, error) {
+  try {
+    await restoreRequirement(session);
+  } catch (restore) {
+    error.cause ??= restore;
   }
 }

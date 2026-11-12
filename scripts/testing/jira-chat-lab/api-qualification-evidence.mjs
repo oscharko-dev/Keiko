@@ -145,6 +145,10 @@ export function qualificationSummary(operations) {
  * Reads whose native collection was empty under a reviewed declaration. They stay executable (the
  * governed call ran and matched) but are listed separately: they prove no projection of any row.
  */
+export const executableVacuousCount = (operations) =>
+  vacuousReads(operations.filter((operation) => operation.runtimeAvailability === "executable"))
+    .length;
+
 export function vacuousReads(operations) {
   return operations
     .filter((operation) => operation.readback?.vacuous === true)

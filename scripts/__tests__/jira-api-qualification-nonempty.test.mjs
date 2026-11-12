@@ -44,11 +44,12 @@ it("refuses an empty owned collection for a read that asks for a nonempty fixtur
       vacuousReason: "Jira cannot hold a board in this lab",
       nativeCount: 0,
     });
-    const blank = readCase("jira.boards", "/rest/api/2/x", ["id"], {
-      nativeRoot: "values",
-      emptyAllowed: "  ",
-    });
-    await expect(blank.readback(context, { items: [] }, {})).rejects.toThrow(/empty/u);
+    expect(() =>
+      readCase("jira.boards", "/rest/api/2/x", ["id"], {
+        nativeRoot: "values",
+        emptyAllowed: "  ",
+      }),
+    ).toThrow(/nonblank/u);
   } finally {
     native.mockRestore();
     rmSync(directory, { recursive: true, force: true });
