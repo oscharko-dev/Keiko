@@ -1,6 +1,6 @@
 // Scenario verdict of the requirements scorecard (epic #4173, #4174). Pure, so it is testable
 // without a laboratory: a scenario is green only when every obligation of the catalog is covered
-// by a passing check and an end-to-end journey took part.
+// by a passing check and a green end-to-end journey took part.
 
 /**
  * The obligations a scenario defers to a follow-up issue. An obligation may be deferred only with
@@ -40,10 +40,13 @@ export function evidenceLines(result) {
 /**
  * Grades one scenario from its checks.
  *  - unchecked:  no check exists
- *  - red:        any check failed
- *  - green:      every obligation is covered by a passing check, one of them an end-to-end journey
- *  - partial:    a journey ran but obligations remain uncovered (a check that could not verify
- *                its evidence reports `unverified` and covers nothing)
+ *  - red:        any check failed (a red check decides before any invalid one)
+ *  - invalid:    a check the laboratory cannot trust (lab error, model unavailable, gateway
+ *                failure) and no check is red; never graded as a product failure
+ *  - green:      every obligation is covered by a passing check AND the end-to-end journey is
+ *                green; probes covering everything beside an `unverified` journey stay partial
+ *  - partial:    a journey ran but obligations remain uncovered or it could not verify its
+ *                evidence (`unverified` covers nothing)
  *  - probe-only: only model-free probes ran
  * A check lists the obligations it verifies in `covers`; unknown names fail closed.
  */
@@ -65,6 +68,9 @@ export function scenarioVerdict(scenario, checks) {
   const uncovered = scenario.obligations.filter((name) => !covered.has(name));
   const base = { covered: [...covered].sort(), uncovered, deferred };
   if (checks.some((check) => check.status === "red")) return { status: "red", ...base };
-  if (!checks.some((check) => check.layer === "journey")) return { status: "probe-only", ...base };
-  return { status: uncovered.length === 0 ? "green" : "partial", ...base };
+  if (checks.some((check) => check.status === "invalid")) return { status: "invalid", ...base };
+  const journey = checks.find((check) => check.layer === "journey");
+  if (journey === undefined) return { status: "probe-only", ...base };
+  const green = uncovered.length === 0 && journey.status === "green";
+  return { status: green ? "green" : "partial", ...base };
 }
