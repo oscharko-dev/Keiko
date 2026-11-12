@@ -1,6 +1,6 @@
 // Independent lab reads shared by the API qualification case tables: every oracle goes straight to
 // Jira with the lab actor's credentials, never through Keiko.
-import assert, { recordNativeRead } from "./api-qualification-assert.mjs";
+import assert, { plumbingAssert, recordNativeRead } from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 
 /**
@@ -46,15 +46,15 @@ export async function read(context, path) {
   // The message names the route shape and status only; identifiers and query values stay out.
   const shape = path.split("?")[0].replace(/\d+/gu, "#");
   if (response.status !== 200) throw new NativeReadError(shape, response.status);
-  recordNativeRead();
+  recordNativeRead(path);
   return response.value;
 }
 
 /** Reads one record by the numeric id Keiko returned and checks the native record carries it. */
 export async function readRecord(context, id, path) {
-  assert.match(id, /^[1-9][0-9]*$/u);
+  plumbingAssert.match(id, /^[1-9][0-9]*$/u);
   const value = await read(context, path);
-  assert.equal(String(value.id), id);
+  plumbingAssert.equal(String(value.id), id);
   return value;
 }
 

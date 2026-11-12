@@ -38,6 +38,7 @@ import { NativeReadError } from "./api-qualification-read.mjs";
 import {
   annotateCause,
   causeSummary,
+  suspectSummary,
   describeFailure,
   localRefusal,
   markNotAttempted,
@@ -119,7 +120,13 @@ async function observeReadback(context, specification, attempted, fixture, snaps
     return { failure: "outcome-refused", product: attempted.verifyRefused };
   try {
     const readback = await measuredReadback(context, specification, attempted, fixture);
-    return { readback: { ...readback, measuredPresenceReads: attempted.presenceReads ?? 0 } };
+    return {
+      readback: {
+        ...readback,
+        measuredPresenceReads: attempted.presenceReads ?? 0,
+        presenceReadPaths: attempted.presenceReadPaths ?? [],
+      },
+    };
   } catch (error) {
     return { failure: readbackFailure(error), detail: describeFailure(error) };
   }
@@ -311,11 +318,13 @@ function needsReconcile(journal, evidence, snapshot) {
 /**
  * A mutation whose journal settled with a native 2xx the witness itself observed is a certain
  * effect: it happened, whatever the oracle could see. Anything else (an unsettled journal, a
- * timeout, a rate limit, 5xx, a lost transport) stays uncertain and still needs reconciliation.
+ * timeout, a rate limit, 5xx, a lost transport, or a started effect without an observed response)
+ * stays uncertain and still needs reconciliation.
  */
-export function certainEffect(journal, snapshot) {
+export function certainEffect(journal, snapshot, effectsStarted) {
   return (
     journal?.phase === "settled" &&
+    snapshot.responses.length === effectsStarted &&
     new Set(["succeeded", "succeeded-unconfirmed"]).has(journal.outcome) &&
     snapshot.blocked === 0 &&
     snapshot.responses.length > 0 &&
@@ -344,7 +353,10 @@ async function gradeCase(
     caseEvidence(specification, attempted, snapshot, readback, extra, report),
     { snapshot },
   );
-  if (evidence.runtimeAvailability === "unknown" && certainEffect(attempted.journal, snapshot))
+  if (
+    evidence.runtimeAvailability === "unknown" &&
+    certainEffect(attempted.journal, snapshot, witness.effectsStarted())
+  )
     evidence.certainEffect = true;
   evidence.auxiliaryReferences = recordAuxiliaries(attempted, directory, report);
   privateJson(join(directory, `${evidence.id}.json`), evidence, true);
@@ -358,6 +370,12 @@ async function gradeCase(
     ...(evidence.cause ? { cause: evidence.cause } : {}),
   });
   return evidence;
+}
+/** The operator learns which cases may have left changed Jira state behind. */
+export function recordLeftoverState(report, evidence) {
+  if (evidence.certainEffect !== true) return;
+  report.leftoverState ??= [];
+  report.leftoverState.push(evidence.id);
 }
 const auxiliaryBlocker = (context) =>
   context.qualificationAuxiliaryFailure === undefined
@@ -545,6 +563,7 @@ async function executeCases(context, specifications, report, directory, witness,
       verificationReferences:
         evidence.runtimeAvailability === "unknown" ? [] : [`${report.file}#${evidence.id}`],
     });
+    recordLeftoverState(report, evidence);
     if (evidence.runtimeAvailability === "unknown")
       state.failedRoots.set(specification.tool, specification.identity);
     privateJson(join(directory, report.file), report);
@@ -655,6 +674,7 @@ function finishReport(report, output) {
   markNotAttempted(report.operations);
   report.counts = qualificationSummary(report.operations);
   report.causeCounts = causeSummary(report.operations);
+  report.suspectCounts = suspectSummary(report.operations);
   privateJson(join(output, report.file), report);
 }
 async function runBatches({ session, selected, witness, report, output, emailDefaultOracle }) {
@@ -702,6 +722,7 @@ async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = 
     sourceRevision: revision,
     counts: report.counts,
     causes: report.causeCounts,
+    suspects: report.suspectCounts,
     proposals: report.proposals.length,
   });
   return { report, counts: report.counts };

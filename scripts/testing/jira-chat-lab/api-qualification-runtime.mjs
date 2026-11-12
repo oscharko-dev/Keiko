@@ -28,6 +28,7 @@ import { labSessionConnection } from "./lab-client.mjs";
 import {
   measuredAssertionCount,
   measuredNativeReadCount,
+  measuredNativeReadPaths,
   resetAssertionCount,
 } from "./api-qualification-assert.mjs";
 import { productRefusalDetail, succeededOutcome } from "./api-qualification-cause.mjs";
@@ -78,6 +79,7 @@ async function witnessRequest(owner, origin, port, request, canonicalCleanup) {
   if (target && result.kind === "response")
     owner.state.responses.push({
       status: result.status,
+      path: url.pathname,
       truncated: result.truncated,
       bodyBytes: result.bodyBytes,
       responseDigest: qualificationDigest(result.bodyText),
@@ -425,6 +427,7 @@ async function dispatchHeldCall(held, specification, args) {
     const offered = bound.binder.offerTool(toolRef);
     // Native reads the recipe actually made before this dispatch: the measured presence proof.
     const presenceReads = measuredNativeReadCount();
+    const presenceReadPaths = measuredNativeReadPaths();
     const dispatch = await bound.binder.dispatch(
       {
         kind: "bound",
@@ -441,6 +444,7 @@ async function dispatchHeldCall(held, specification, args) {
       dispatch,
       binding: operation.binding,
       presenceReads,
+      presenceReadPaths,
       mutation: operation.definition.effects.includes("remote-write"),
       journal: context.deps.store.chatToolMutations.find(actionId),
       ...(witness === undefined ? {} : { witness: witness.snapshot() }),

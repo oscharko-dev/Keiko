@@ -51,8 +51,12 @@ function attempt(identity = primary.identity, mutation = false) {
 }
 const verified = { matched: true, assertionCount: 2, measuredAssertionCount: 2 };
 /** What the driver persists for a readback that already ran: the measured assertions and reads. */
-const persisted = { ...verified, measuredPresenceReads: 0 };
-const witness = { arm: vi.fn(), snapshot: () => ({ blocked: 1, responses: [] }) };
+const persisted = { ...verified, measuredPresenceReads: 0, presenceReadPaths: [] };
+const witness = {
+  arm: vi.fn(),
+  effectsStarted: () => 0,
+  snapshot: () => ({ blocked: 1, responses: [] }),
+};
 function specification(fixture) {
   return {
     ...primary,

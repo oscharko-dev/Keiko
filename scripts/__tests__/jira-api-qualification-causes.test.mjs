@@ -15,11 +15,13 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => ({
 }));
 import assert, {
   measuredAssertionCount,
+  measuredNativeReadPaths,
   resetAssertionCount,
 } from "../testing/jira-chat-lab/api-qualification-assert.mjs";
 import {
   certainEffect,
   orderByDependencies,
+  recordLeftoverState,
   runQualificationCase,
   unknownAfterEffect,
 } from "../testing/jira-chat-lab/api-qualification.mjs";
@@ -29,9 +31,14 @@ import {
   describeFailure,
   jiraClass,
   markNotAttempted,
+  suspectSummary,
 } from "../testing/jira-chat-lab/api-qualification-cause.mjs";
 import { classifyQualification } from "../testing/jira-chat-lab/api-qualification-evidence.mjs";
-import { NativeReadError } from "../testing/jira-chat-lab/api-qualification-read.mjs";
+import {
+  NativeReadError,
+  read,
+  readRecord,
+} from "../testing/jira-chat-lab/api-qualification-read.mjs";
 import { nonClusteredAbsence } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
 import { API_QUALIFICATION_WORKFLOW_CASES } from "../testing/jira-chat-lab/api-qualification-workflow-cases.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
@@ -86,8 +93,8 @@ const specification = (extra = {}) => ({
   },
   ...extra,
 });
-const run = (spec, context = {}, snapshot) =>
-  runQualificationCase(context, {}, spec, {}, witnessFor(snapshot), directory(), report);
+const run = (spec, context = {}, snapshot, started = 0) =>
+  runQualificationCase(context, {}, spec, {}, witnessFor(snapshot, started), directory(), report);
 
 describe("measured assertions", () => {
   it("counts only assertions that held, including async ones", async () => {
@@ -99,6 +106,37 @@ describe("measured assertions", () => {
     expect(measuredAssertionCount()).toBe(3);
     resetAssertionCount();
     expect(measuredAssertionCount()).toBe(0);
+  });
+});
+
+describe("measured assertions of shared transport", () => {
+  it("does not count the native read helper's own status check as a recipe assertion", async () => {
+    const labDirectory = directory();
+    mkdirSync(join(labDirectory, "secrets"));
+    writeFileSync(join(labDirectory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () => new globalThis.Response(JSON.stringify({ id: "5" }), { status: 200 }),
+    );
+    const context = {
+      session: { ...DEFAULT_LAB_CONNECTION, directory: labDirectory },
+      actor: "admin",
+    };
+    resetAssertionCount();
+    await read(context, "/rest/api/2/issue/10001");
+    await readRecord(context, "5", "/rest/api/2/issue/10001");
+    expect(measuredAssertionCount()).toBe(0);
+    expect(measuredNativeReadPaths()).toEqual(["/rest/api/2/issue/10001"]);
+    dispatch.mockResolvedValue(attempt());
+    const evidence = await run(
+      specification({
+        readback: async () => {
+          await read(context, "/rest/api/2/issue/10001");
+          return { matched: true, assertionCount: 5 };
+        },
+      }),
+    );
+    expect(evidence.runtimeAvailability).toBe("unknown");
+    expect(evidence.readback.measuredAssertionCount).toBe(0);
   });
 });
 
@@ -140,8 +178,9 @@ describe("driver evidence", () => {
       report,
     );
     expect(evidence.failure).toBe("dispatch-failed");
-    expect(evidence.cause).toBe("lab");
-    expect(evidence.detail).toMatchObject({ errorType: "TypeError" });
+    // No recipe frame and no transport signal: ambiguous, never blamed on the lab.
+    expect(evidence.cause).toBe("undetermined");
+    expect(evidence.detail).toMatchObject({ errorType: "TypeError", origin: "unknown" });
     expect(JSON.stringify(evidence)).not.toContain("private value");
     const stored = JSON.parse(readFileSync(join(output, `${evidence.id}.json`), "utf8"));
     expect(stored.detail.errorType).toBe("TypeError");
@@ -206,7 +245,10 @@ describe("certain versus uncertain effects", () => {
   });
   const unknownRow = { runtimeAvailability: "unknown" };
   it("continues after a settled native 2xx whose oracle disagreed", () => {
-    expect(certainEffect(settled, snapshot(204))).toBe(true);
+    expect(certainEffect(settled, snapshot(204), 1)).toBe(true);
+    // A started effect without an observed response, or a response count that differs, is uncertain.
+    expect(certainEffect(settled, snapshot(204), 0)).toBe(false);
+    expect(certainEffect(settled, snapshot(204), 2)).toBe(false);
     const evidence = { ...unknownRow, certainEffect: true };
     expect(
       unknownAfterEffect(evidence, { effectsStarted: () => 1, snapshot: () => snapshot(204) }),
@@ -220,8 +262,8 @@ describe("certain versus uncertain effects", () => {
     ["a server error", { ...settled, httpStatus: 503 }, 503],
     ["a status the journal does not carry", settled, 200],
   ])("stays uncertain for %s", (_name, journal, status) => {
-    expect(certainEffect(journal, snapshot(status))).toBe(false);
-    expect(certainEffect(undefined, snapshot(204))).toBe(false);
+    expect(certainEffect(journal, snapshot(status), 1)).toBe(false);
+    expect(certainEffect(undefined, snapshot(204), 1)).toBe(false);
     expect(
       unknownAfterEffect(unknownRow, { effectsStarted: () => 1, snapshot: () => snapshot(status) }),
     ).toBe(true);
@@ -243,9 +285,16 @@ describe("certain versus uncertain effects", () => {
           assert.equal(1, 2);
         },
       }),
+      {},
+      undefined,
+      1,
     );
     expect(evidence.runtimeAvailability).toBe("unknown");
     expect(evidence.certainEffect).toBe(true);
+    const leftover = {};
+    recordLeftoverState(leftover, evidence);
+    recordLeftoverState(leftover, { id: "other" });
+    expect(leftover.leftoverState).toEqual([evidence.id]);
     expect(evidence.cause).toBe("undetermined");
     expect(
       readdirSync(directories[directories.length - 1]).some((n) => n.endsWith(".pending.json")),
@@ -260,7 +309,12 @@ describe("cause table", () => {
   });
   it.each([
     [row({ failure: "prepare-precondition" }), "lab"],
-    [row({ failure: "prepare-failed", detail: { errorType: "TimeoutError" } }), "infrastructure"],
+    [
+      row({ failure: "prepare-failed", detail: { infrastructureCode: "ETIMEDOUT" } }),
+      "infrastructure",
+    ],
+    [row({ failure: "dispatch-failed", detail: { errorType: "TimeoutError" } }), "undetermined"],
+    [row({ failure: "dispatch-failed", detail: { origin: "unknown" } }), "undetermined"],
     [row({ failure: "dispatch-failed", detail: { origin: "product" } }), "product"],
     [row({ failure: "dispatch-failed", detail: { origin: "lab" } }), "lab"],
     [
@@ -268,7 +322,7 @@ describe("cause table", () => {
       "infrastructure",
     ],
     [row({ failure: "product-refused" }), "product"],
-    [row({ failure: "readback-mismatch", ...witness(503) }), "infrastructure"],
+    [row({ failure: "readback-mismatch", ...witness(503) }), "undetermined"],
     [row({ failure: "readback-mismatch", ...witness(429) }), "infrastructure"],
     [row({ failure: "readback-mismatch", ...witness(400) }), "undetermined"],
     [
@@ -315,6 +369,32 @@ describe("cause table", () => {
       undetermined: 0,
     });
     expect(() => causeSummary([{ runtimeAvailability: "unknown", cause: "invented" }])).toThrow();
+  });
+  it("marks a product that succeeded against a disagreeing oracle as suspect, and counts it", () => {
+    const mismatch = annotateCause(
+      row({
+        failure: "readback-mismatch",
+        dispatch: { result: { data: { outcome: "succeeded" } } },
+        ...witness(200),
+      }),
+    );
+    expect(mismatch).toMatchObject({ cause: "undetermined", suspect: "product" });
+    const other = annotateCause(row({ failure: "readback-mismatch", ...witness(400) }));
+    expect(other.suspect).toBeUndefined();
+    expect(suspectSummary([mismatch, other])).toEqual({ product: 1 });
+    expect(
+      annotateCause(row({ failure: "readback-mismatch", ...witness(503) }), {
+        labHealthFailed: true,
+      }).cause,
+    ).toBe("infrastructure");
+  });
+  it("finds a product frame in the cause chain", () => {
+    const inner = new Error("inner");
+    inner.stack = "Error: inner\n    at x (/repo/packages/keiko-server/dist/atlassian/a.js:3:1)";
+    const outer = new Error("outer", { cause: inner });
+    outer.stack =
+      "Error: outer\n    at y (/repo/scripts/testing/jira-chat-lab/api-qualification-cases.mjs:9:1)";
+    expect(describeFailure(outer).origin).toBe("product");
   });
   it("classifies Jira answers into closed categories", () => {
     expect(jiraClass([])).toBe("none");

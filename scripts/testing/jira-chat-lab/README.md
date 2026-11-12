@@ -736,8 +736,10 @@ settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
   it above zero. The recipe's declared `proof(n)` is only a documentation hint and can no
   longer satisfy the grader.
 - **`priorPresence`.** A DELETE whose product read answers "not found" qualifies only when
-  the recipe measurably read Jira natively before the dispatch
-  (`readback.measuredPresenceReads > 0`, counted by `read()` in `api-qualification-read.mjs`).
+  the recipe measurably read, natively before the dispatch, the exact object the DELETE removed:
+  one of `readback.presenceReadPaths` (pathnames recorded by `read()`) must equal the pathname the
+  witness saw the DELETE use. Shared transport helpers use the uncounted `plumbingAssert`, so only
+  assertions the recipe's own readback makes count toward `measuredAssertionCount`.
 - **Documented non-2xx.** A read may declare an exact documented status set with
   `documentedStatusProof` (`readback.documentedNativeStatuses`). The grader accepts only the
   closed allow-list `[404]`, only for reads, only when the witness observed exactly those
@@ -753,7 +755,8 @@ settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
   `product` (a local product refusal before dispatch, or Keiko failed while Jira answered
   2xx), `lab` (preparation, fixture, argument-builder or oracle fault), `cascade` (with
   `blockedBy`: the auxiliary fixture tool or earlier case that failed), `infrastructure`
-  (transport, timeout, 429/5xx), `not-attempted` and `undetermined` (Jira refused Keiko's
+  (a transport signal such as ECONNRESET, or 408/425/429; a 5xx or timeout alone stays
+  `undetermined` unless the lab's own health read also fails), `not-attempted` and `undetermined` (Jira refused Keiko's
   request, or the oracle disagreed after a native 2xx). Evidence also carries the closed
   failure word (`product-refused` for a refusal before any native request, `outcome-refused`,
   `oracle-read-refused`, `dispatch-failed` with recipe/product frame sites and error type),
@@ -765,7 +768,10 @@ settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
 - **Certain effects do not stop the run.** A mutation whose journal settled with a native 2xx
   the witness itself observed but whose oracle mismatched is recorded unknown with
   `certainEffect: true` and cause `undetermined`; dependents cascade and the run continues.
-  An unsettled or unknown journal, 408/425/429/5xx and a lost transport still raise
+  The witnessed response count must equal the started effects, and the case id is listed in
+  `report.leftoverState`. A row where the product succeeded after a native 2xx but the oracle
+  disagreed also carries `suspect: "product"`, counted in `report.suspectCounts`. An unsettled or
+  unknown journal, 408/425/429/5xx and a lost transport still raise
   `ReconcileRequiredError`, and the pending intent is never removed or replayed.
 
 ## Limit-run fault plan (Amendment 3)

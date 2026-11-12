@@ -1,5 +1,5 @@
 // Explicit independent oracles; specification documents never become HTTP dispatch authority.
-import assert from "./api-qualification-assert.mjs";
+import assert, { plumbingAssert, recordAssertion } from "./api-qualification-assert.mjs";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { URLSearchParams } from "node:url";
@@ -44,12 +44,13 @@ export async function missingReleaseCapability(context, tool, statuses, { shadow
   if (!routeLevel) {
     // The literal path segment is captured by a sibling wildcard route, which names it as an id.
     const probe = await nativeRead(context, shadow.path);
-    assert.equal(probe.status, 400);
+    plumbingAssert.equal(probe.status, 400);
     assert.deepEqual(probe.value?.errorMessages, [shadow.message]);
   }
   const observed = await nativeRead(context, "/rest/api/2/serverInfo");
-  assert.equal(observed.status, 200);
+  plumbingAssert.equal(observed.status, 200);
   assertSessionServerInfo(context.session, observed.value);
+  recordAssertion(); // the release inventory comparison above is this proof's recipe assertion
   return {
     capabilityAbsent: true,
     ...(routeLevel ? {} : { routeShadowed: true }),
@@ -73,8 +74,9 @@ export async function nonClusteredAbsence(context, statuses, nativeStatus) {
   if (nativeStatus !== 405 || statuses.length === 0 || !statuses.every((status) => status === 405))
     return undefined;
   const observed = await nativeRead(context, "/rest/api/2/serverInfo");
-  assert.equal(observed.status, 200);
+  plumbingAssert.equal(observed.status, 200);
   assertSessionServerInfo(context.session, observed.value);
+  recordAssertion(); // the independent identical 405 plus the observed release is the proof
   return {
     capabilityAbsent: true,
     status: 405,
@@ -167,10 +169,13 @@ export function readCase(
     readback: async (context, data, fixture) => {
       const selectedPath = typeof path === "function" ? path(fixture) : path;
       const response = await nativeRead(context, selectedPath);
-      if (response.status === 403) return { permissionDenied: true, status: response.status };
+      if (response.status === 403) {
+        recordAssertion(); // the independent native read reproduced the same 403
+        return { permissionDenied: true, status: response.status };
+      }
       const absent = await absentReadback(context, tool, response.status, nonClusteredAbsent);
       if (absent !== undefined) return absent;
-      assert.equal(response.status, 200);
+      plumbingAssert.equal(response.status, 200);
       const native = nativeRows(response.value, nativeRoot);
       // A read of a collection this run just populated proves nothing when it is empty: the
       // refused write that should have populated it would pass as a vacuous match.

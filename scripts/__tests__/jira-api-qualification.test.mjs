@@ -149,7 +149,10 @@ describe("native Jira qualification evidence", () => {
       binding,
       mutation: true,
       journal: { phase: "settled", outcome: "succeeded-unconfirmed", httpStatus: 204 },
-      witness: { blocked: 0, responses: [{ status: 204, truncated: false }] },
+      witness: {
+        blocked: 0,
+        responses: [{ status: 204, path: "/rest/api/2/issue/10001", truncated: false }],
+      },
     };
     base.dispatch = {
       ...o.dispatch,
@@ -165,6 +168,14 @@ describe("native Jira qualification evidence", () => {
     // The declared proof alone is not enough: the recipe must have measurably read Jira before.
     expect(classifyQualification(base)).toBe("unknown");
     base.readback = { ...base.readback, measuredPresenceReads: 1 };
+    expect(classifyQualification(base)).toBe("unknown");
+    // A read of an unrelated object does not prove this object was present.
+    base.readback = { ...base.readback, presenceReadPaths: ["/rest/api/2/issue/10002"] };
+    expect(classifyQualification(base)).toBe("unknown");
+    base.readback = {
+      ...base.readback,
+      presenceReadPaths: ["/rest/api/2/issue/10002", "/rest/api/2/issue/10001"],
+    };
     expect(classifyQualification(base)).toBe("executable");
     expect(
       classifyQualification({ ...base, readback: { matched: false, priorPresence: true } }),
