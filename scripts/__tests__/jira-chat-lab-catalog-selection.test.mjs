@@ -12,6 +12,7 @@ import {
   voteKey,
   voteRows,
 } from "../testing/jira-chat-lab/catalog-selection-objects.mjs";
+import { turnRefusals } from "../testing/jira-chat-lab/catalog-selection.mjs";
 import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
 
 const FIXTURE = {
@@ -202,6 +203,8 @@ describe("gradeSelection", () => {
     expect(
       gradeSelection(READ, { exchanges: [], gateway: other }, { tokens: ["High"] }).status,
     ).toBe("no-tool");
+    const exact = { exchanges: [call("jira_edit")], gateway };
+    expect(gradeSelection(WRITE, exact, { effect: { effects: 1 } }).status).toBe("alternative");
     const stray = gradeSelection(WRITE, turn, { effect: { effects: 0, stray: 1 } });
     expect(stray.status).toBe("wrong-tool");
     const dashed = { ...healthy, rejected: { "keiko.jira.issue.property.keys": 1 } };
@@ -209,6 +212,16 @@ describe("gradeSelection", () => {
     expect(gradeSelection(keys, { exchanges: [], gateway: dashed }, { tokens: ["a"] }).status).toBe(
       "wrong-arguments",
     );
+  });
+
+  it("reads no refusal evidence for a turn the lane aborted", () => {
+    const evidence = { rejected: { "keiko.jira.priorities": 1 }, unidentified: 0, failedCalls: 1 };
+    expect(turnRefusals({}, () => evidence)).toBe(evidence);
+    expect(turnRefusals({ failure: "aborted" }, () => evidence)).toEqual({
+      rejected: {},
+      unidentified: 0,
+      failedCalls: 0,
+    });
   });
 
   it("fails a correct write that also wrote objects the request did not ask for", () => {

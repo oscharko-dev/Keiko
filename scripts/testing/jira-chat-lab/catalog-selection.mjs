@@ -75,17 +75,21 @@ const LOG_SETTLE_MS = 2_500;
 const ABORTED_GRACE_MS = 30_000;
 const pause = (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 
+/**
+ * An aborted turn may keep running on the server, and its late refusals would land in the next
+ * attempt's window, so a turn the lane aborted carries no refusal evidence of its own. A late line
+ * of an aborted turn can still reach the next attempt's window; the grace before it narrows this.
+ */
+export function turnRefusals(turn, read) {
+  return turn.failure === undefined ? read() : { rejected: {}, unidentified: 0, failedCalls: 0 };
+}
+
 async function withGateway(session, turn) {
   await pause(turn.failure === undefined ? LOG_SETTLE_MS : ABORTED_GRACE_MS);
   const window = { fromMs: turn.fromMs, toMs: Date.now(), pid: process.pid };
   const root = join(chatReadLogDirectory(session), "logs");
   const counts = readGatewayFailures(root, window);
-  // An aborted turn may keep running on the server, and its late refusals would land in the next
-  // attempt's window, so a turn the lane aborted carries no refusal evidence of its own.
-  const tools =
-    turn.failure === undefined
-      ? readToolRejections(root, window)
-      : { rejected: {}, unidentified: 0, failedCalls: 0 };
+  const tools = turnRefusals(turn, () => readToolRejections(root, window));
   // A transport failure of the lab's own call to Keiko is no gateway evidence; a turn that failed
   // without a transcript is graded invalid on its own.
   return {
