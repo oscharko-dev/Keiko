@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 import {
+  callTrace,
   carriesTruth,
   gradeSelection,
   selectionPath,
@@ -132,6 +133,20 @@ describe("gradeSelection", () => {
 });
 
 describe("selection helpers", () => {
+  it("records each called tool with its closed result, never its arguments or data", () => {
+    const exchanges = [
+      { call: { name: "jira.discover", arguments: { query: "secret words" } }, result: {} },
+      call("jira_priorities"),
+    ];
+    expect(callTrace(exchanges)).toEqual([
+      "jira_discover:none:none",
+      "jira_priorities:completed:succeeded",
+    ]);
+    expect(
+      gradeSelection(READ, { exchanges, gateway: healthy }, { tokens: ["High"] }).calls,
+    ).toHaveLength(2);
+  });
+
   it("reads the path and the truth from the transcript only", () => {
     expect(selectionPath([call("jira_describe")])).toBe("discovery");
     expect(selectionPath([call("jira.search")])).toBe("direct");

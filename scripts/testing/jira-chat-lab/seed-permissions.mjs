@@ -23,9 +23,11 @@ const full = [
  * the editor, assignee and restricted actors keep their narrow grants so denials stay provable.
  */
 export const QUALIFICATION_EXTRA = [
-  "WORK_ISSUES",
+  "WORK_ON_ISSUES",
   "EDIT_OWN_WORKLOGS",
+  "EDIT_ALL_WORKLOGS",
   "DELETE_OWN_WORKLOGS",
+  "DELETE_ALL_WORKLOGS",
   "EDIT_ALL_COMMENTS",
   "DELETE_OWN_COMMENTS",
   "DELETE_ALL_COMMENTS",
@@ -248,14 +250,14 @@ async function verifyTransitionDenial(session, actors, path) {
   );
 }
 
-const ROLE_DEVELOPER_PERMISSIONS = [
+export const ROLE_DEVELOPER_PERMISSIONS = [
   "BROWSE_PROJECTS",
   "CREATE_ISSUES",
   "EDIT_ISSUES",
   "ASSIGN_ISSUES",
   "ASSIGNABLE_USER",
   "TRANSITION_ISSUES",
-  "WORK_ISSUES",
+  "WORK_ON_ISSUES",
   "ADD_COMMENTS",
   "EDIT_OWN_COMMENTS",
   "LINK_ISSUES",

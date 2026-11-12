@@ -89,7 +89,23 @@ const gatewayFailed = (gateway = {}) => gateway.unrecovered > 0;
  * native read truth, `effect` the native write verification. A gateway outage is invalid, never a
  * product or model verdict.
  */
+/** The called tools in order with their closed result, never their arguments or data. */
+export function callTrace(exchanges) {
+  return exchanges.map((exchange) =>
+    [
+      toolAlias(exchange.call?.name),
+      String(exchange.result?.status ?? "none"),
+      String(exchange.result?.data?.outcome ?? "none"),
+    ].join(":"),
+  );
+}
+
 export function gradeSelection(entry, turn, { tokens = [], effect } = {}) {
+  const verdict = gradeTurn(entry, turn, { tokens, effect });
+  return { ...verdict, calls: callTrace(turn.exchanges ?? []) };
+}
+
+function gradeTurn(entry, turn, { tokens, effect }) {
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
   if (gatewayFailed(turn.gateway))

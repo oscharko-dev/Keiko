@@ -23,7 +23,7 @@ const PERMISSIONS = [
   "ASSIGN_ISSUES",
   "ASSIGNABLE_USER",
   "TRANSITION_ISSUES",
-  "WORK_ISSUES",
+  "WORK_ON_ISSUES",
   "ADD_COMMENTS",
   "EDIT_OWN_COMMENTS",
   "LINK_ISSUES",
@@ -573,7 +573,7 @@ describe("observed native browser role permissions", () => {
       expect.arrayContaining([NATIVE.manage, "SCHEDULE_ISSUES", "ADMINISTER_PROJECTS"]),
     );
     expect(plan.byActor.developer).toEqual(
-      expect.arrayContaining(["WORK_ISSUES", "CREATE_ISSUES", "LINK_ISSUES", "MANAGE_WATCHERS"]),
+      expect.arrayContaining(["WORK_ON_ISSUES", "CREATE_ISSUES", "LINK_ISSUES", "MANAGE_WATCHERS"]),
     );
     expect(plan.byActor.developer).not.toEqual(expect.arrayContaining([NATIVE.manage]));
     expect(plan.byActor.developer).not.toContain("ADMINISTER_PROJECTS");

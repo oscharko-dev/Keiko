@@ -117,6 +117,19 @@ export async function createSelectionObjects(session, fixture, tag, created) {
 }
 
 const REMOVED = new Set([200, 204, 404]);
+/** The resource kind of a lab path without its ids, keys or query. */
+const pathShape = (path) =>
+  path
+    .split("?")[0]
+    .replaceAll(/\/[A-Z][A-Z0-9]+-\d+/gu, "/{key}")
+    .replaceAll(/\/\d+/gu, "/{id}");
+
+// Jira Data Center 10 has no DELETE for a version; it removes one through removeAndSwap.
+const VERSION_PATH = /^\/rest\/api\/2\/version\/\d+$/u;
+const removal = (session, path, auth) =>
+  VERSION_PATH.test(path)
+    ? labRequest(session, "POST", `${path}/removeAndSwap`, auth, {})
+    : labRequest(session, "DELETE", path, auth);
 
 /**
  * Removes native objects by exact path; an already absent object is not an error. Every path is
@@ -126,10 +139,10 @@ export async function removeNative(session, paths, actor = "admin") {
   const failed = [];
   for (const path of paths) {
     try {
-      const response = await labRequest(session, "DELETE", path, basicAuth(session, actor));
-      if (!REMOVED.has(response.status)) failed.push(response.status);
+      const response = await removal(session, path, basicAuth(session, actor));
+      if (!REMOVED.has(response.status)) failed.push(`${response.status} ${pathShape(path)}`);
     } catch (error) {
-      failed.push(error instanceof Error ? error.name : "unknown");
+      failed.push(`${error instanceof Error ? error.name : "unknown"} ${pathShape(path)}`);
     }
   }
   if (failed.length > 0)
@@ -251,5 +264,8 @@ export async function removeSelectionObjects(session, created) {
     optional(created.favouriteFilterId, `/rest/api/2/filter/${created.favouriteFilterId}`),
     "api",
   );
-  if (errors.length > 0) throw new AggregateError(errors, "Selection cleanup was incomplete");
+  if (errors.length > 0)
+    throw new TypeError(
+      `Selection cleanup was incomplete: ${errors.map((error) => error.message).join("; ")}`,
+    );
 }

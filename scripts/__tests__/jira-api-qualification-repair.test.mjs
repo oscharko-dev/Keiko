@@ -17,6 +17,7 @@ import {
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 import {
   QUALIFICATION_EXTRA,
+  ROLE_DEVELOPER_PERMISSIONS,
   keikoGrantPlan,
   ensureFixturePermissions,
   qualificationGrantKeys,
@@ -246,6 +247,30 @@ describe("form fields", () => {
   });
 });
 
+// The PROJECT and global permission keys an independent read of /rest/api/2/permissions returned on
+// the lab's Jira Software Data Center 10.3 (2026-11-12). The grant lists are checked against this
+// observation, never against themselves: a guessed key ("WORK_ISSUES") passed every test that
+// built its inventory from the same list and failed only against a real Jira.
+const OBSERVED_JIRA_10_3_PERMISSION_KEYS = new Set(
+  `A4J_PERM_IMPERSONATE_ACTOR_GLOBAL A4J_PERM_IMPERSONATE_ACTOR_PROJECT ADD_COMMENTS ADMINISTER
+  ADMINISTER_PROJECTS ARCHIVE_ISSUES ASSIGNABLE_USER ASSIGN_ISSUES BROWSE_ARCHIVE BROWSE_PROJECTS
+  BULK_CHANGE CLOSE_ISSUES CREATE_ATTACHMENTS CREATE_ISSUES CREATE_SHARED_OBJECTS
+  DELETE_ALL_ATTACHMENTS DELETE_ALL_COMMENTS DELETE_ALL_WORKLOGS DELETE_ISSUES DELETE_OWN_ATTACHMENTS
+  DELETE_OWN_COMMENTS DELETE_OWN_WORKLOGS EDIT_ALL_COMMENTS EDIT_ALL_WORKLOGS EDIT_ISSUES
+  EDIT_OWN_COMMENTS EDIT_OWN_WORKLOGS EDIT_SPRINT_NAME_AND_GOAL_PERMISSION GLOBAL_BROWSE_ARCHIVE
+  LINK_ISSUES MANAGE_GROUP_FILTER_SUBSCRIPTIONS MANAGE_SPRINTS_PERMISSION MANAGE_WATCHERS
+  MODIFY_REPORTER MOVE_ISSUES RESOLVE_ISSUES RESTORE_ISSUES SCHEDULE_ISSUES SET_ISSUE_SECURITY
+  START_STOP_SPRINTS_PERMISSION SYSTEM_ADMIN TRANSITION_ISSUES USER_PICKER VIEW_DEV_TOOLS
+  VIEW_READONLY_WORKFLOW VIEW_VOTERS_AND_WATCHERS WORK_ON_ISSUES`.split(/\s+/u),
+);
+
+describe("grant lists against the observed Jira permission inventory", () => {
+  it("names only permission keys a real Jira 10.3 offers", () => {
+    for (const key of [...QUALIFICATION_EXTRA, ...ROLE_DEVELOPER_PERMISSIONS])
+      expect(OBSERVED_JIRA_10_3_PERMISSION_KEYS.has(key), key).toBe(true);
+  });
+});
+
 describe("qualification permissions", () => {
   const inventory = (omit = []) => ({
     permissions: Object.fromEntries(
@@ -264,14 +289,14 @@ describe("qualification permissions", () => {
   });
   it("adds worklog, comment deletion, sprint and voter grants with Jira's own sprint key", () => {
     const keys = qualificationGrantKeys(inventory());
-    for (const key of ["WORK_ISSUES", "DELETE_OWN_COMMENTS", "SCHEDULE_ISSUES"])
+    for (const key of ["WORK_ON_ISSUES", "DELETE_OWN_COMMENTS", "SCHEDULE_ISSUES"])
       expect(keys).toContain(key);
     expect(keys).toContain("VIEW_VOTERS_AND_WATCHERS");
     expect(keys).toContain("MANAGE_SPRINTS_PERMISSION");
     expect(keys).toContain("BROWSE_PROJECTS");
   });
   it("names the grant Jira does not offer, and refuses an ambiguous sprint permission", () => {
-    expect(() => qualificationGrantKeys(inventory(["WORK_ISSUES"]))).toThrow(/WORK_ISSUES/u);
+    expect(() => qualificationGrantKeys(inventory(["WORK_ON_ISSUES"]))).toThrow(/WORK_ON_ISSUES/u);
     const twice = inventory();
     twice.permissions.OTHER = { key: "OTHER", name: "manage sprints", type: "PROJECT" };
     expect(() => qualificationGrantKeys(twice)).toThrow(/ambiguous/u);
@@ -310,7 +335,7 @@ describe("qualification permissions", () => {
     expect(holders("MANAGE_SPRINTS_PERMISSION")).toEqual(["keiko-admin", "keiko-api"]);
     expect(holders("BROWSE_PROJECTS")).toContain("keiko-editor");
     const isolated = created.find((scheme) => scheme.name.includes("ISOLATED"));
-    expect(isolated.permissions.map((grant) => grant.permission)).not.toContain("WORK_ISSUES");
+    expect(isolated.permissions.map((grant) => grant.permission)).not.toContain("WORK_ON_ISSUES");
   });
   it("keeps editor, assignee and restricted on the narrow grants the denial cases rely on", () => {
     const plan = keikoGrantPlan(qualificationGrantKeys(inventory()));
