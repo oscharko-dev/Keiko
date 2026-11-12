@@ -94,11 +94,26 @@ export function reviewerFailureReason(failureCode: string | undefined): ReviewIn
   return "model-failed";
 }
 
+type StartedReviewerRun = Extract<ReviewRuntimeRunResult, { readonly ok: true }>;
+
+/**
+ * A session the read allowance stopped before it filed one accepted report (R4130-054). Keiko cut
+ * its reading short and nothing shows what it examined, so its part is not a reviewed part. A
+ * session that reported after the cut keeps its completed outcome.
+ */
+function stoppedByReadAllowanceWithoutReport(result: StartedReviewerRun): boolean {
+  return (result.readCalls?.refused ?? 0) > 0 && result.candidates.length === 0;
+}
+
 /** The Reviewer's outcome as the settlement reads it; a run the runtime never started is skipped. */
 export function reviewerOutcomeFact(
-  result: Extract<ReviewRuntimeRunResult, { readonly ok: true }>,
+  result: StartedReviewerRun,
 ): ReviewerSettlementFact | PreparationSettlement {
-  if (result.outcome === "completed") return { outcome: "completed" };
+  if (result.outcome === "completed") {
+    return stoppedByReadAllowanceWithoutReport(result)
+      ? { outcome: "failed", reason: "budget-exhausted" }
+      : { outcome: "completed" };
+  }
   if (result.outcome === "cancelled") return { outcome: "cancelled" };
   if (result.outcome === "refused") return { kind: "skipped", reason: "model-unavailable" };
   return { outcome: "failed", reason: reviewerFailureReason(result.failureCode) };

@@ -533,7 +533,7 @@ describe("createReviewRuntimeService", () => {
   // #4130: a Reviewer that kept reading resent its whole conversation with every call and ran out
   // of prompt budget before it reported. Each session gets its own read allowance.
   describe("the session's read allowance", () => {
-    it("returns the answered and the refused read calls of the session", async () => {
+    it("returns the admitted and the refused read calls of the session", async () => {
       const { repo, base, head } = headRepository();
       const { subject } = service({ reports: [VALID_REPORT], reads: 5 }, { maxReadCalls: 3 });
 
@@ -558,6 +558,18 @@ describe("createReviewRuntimeService", () => {
       expect(compose).toHaveBeenCalledTimes(1);
       expect(first).toMatchObject({ ok: true, readCalls: { admitted: 2, refused: 0 } });
       expect(second).toMatchObject({ ok: true, readCalls: { admitted: 2, refused: 0 } });
+    });
+
+    it("holds no allowance once the session has ended", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject, compose } = service({ reports: [], reads: 1 }, { maxReadCalls: 2 });
+
+      await subject.run(request(repo, base, head));
+
+      const reads = compose.mock.calls[0]?.[2] as
+        ((runId: string) => ReviewReadAllowance | undefined) | undefined;
+      expect(reads).toBeTypeOf("function");
+      expect(reads?.("review-run-1")).toBeUndefined();
     });
 
     it("answers the contract's default number of read calls", async () => {

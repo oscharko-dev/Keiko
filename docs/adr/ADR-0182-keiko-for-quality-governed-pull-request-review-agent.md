@@ -76,14 +76,20 @@ Each session also has a read allowance (Issue #4130): the tool facade answers at
 every further one before any admission, with one fixed instruction to report the confirmed findings
 and end the turn. `keiko_review_report` is never counted or refused by it. The task already carries
 every changed hunk of the part, so the allowance bounds only how much surrounding code a session
-fetches. A session that ends its turn after the allowance is a completed session, and its part
-counts as reviewed. Its `review.run.part` line records the answered and the refused read calls
-(`readCallCount`, `refusedReadCallCount`), so every part that reached the allowance is visible. The
+fetches. A session that was refused a read and then ends its turn is judged by what it filed
+(R4130-054). With at least one accepted report it is a completed session, and its part counts as
+reviewed. Without one, Keiko cut its reading short and nothing shows what it examined, so its part
+fails with `budget-exhausted` and the run settles `incomplete` (D6). Before the allowance the same
+session ran out of prompt budget and settled the same way, so the allowance never turns unfinished
+work into a clean review. Each `review.run.part` line records the read calls the allowance let
+through to admission and the ones it refused (`readCallCount`, `refusedReadCallCount`). A call
+counts when the allowance lets it through, whether or not a later check then answers it `busy` or
+denies it, because each one costs the Reviewer a model call. The
 reason is the measured behaviour of a local Reviewer: every tool call resends the whole
 conversation, and in the 418 stored reviews of the 4-bit gate runs the 127 that ran out of prompt
 budget had made 39 to 45 model calls (first to third quartile), 73 of them without one report.
 After 26 model calls a review had used 703,000 prompt tokens at the median and 1,143,000 at most,
-which leaves room for its reports within the default allowance. The Reviewer prompt names the
+which leaves room for its reports within the default prompt budget. The Reviewer prompt names the
 allowance and still plans for about 15 calls. The counter and its predicate live beside the layer-4
 guard (`reviewRuntimeGuard.ts`); the review runtime creates one per session and returns its counts
 with the session's result.
@@ -334,7 +340,8 @@ review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too
 `skipped/diff-too-large`, `runtime-unavailable` and a Reviewer run the orchestrator refused
 `skipped/model-unavailable`, a failed read-only self-check `skipped/policy-invalid`, and a failed
 rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted prompt allowance or
-authority budget is `incomplete/budget-exhausted`, with an exhausted envelope duration
+authority budget is `incomplete/budget-exhausted`, and so is a Reviewer session that the read
+allowance (D1) refused a read and that filed no accepted report; with an exhausted envelope duration
 `incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`; its candidates are still
 counter-checked, and findings confirmed before an incomplete settlement are presented. A Reviewer
 runtime run that settled `recovery-required` is such a failed Reviewer, with one exception (#4136):

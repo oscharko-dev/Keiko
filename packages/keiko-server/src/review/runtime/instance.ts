@@ -122,8 +122,8 @@ export type ReviewRuntimeRunResult =
       readonly candidates: readonly ReviewCandidateFinding[];
       readonly rejections: Readonly<Record<ReviewReportRejectionReason, number>>;
       /**
-       * The session's read, search and discover calls the tool facade answered and the ones it
-       * refused once the read allowance was used up (#4130); absent when no session started.
+       * The session's read, search and discover calls the read allowance let through to admission
+       * and the ones it refused once it was used up (#4130); absent when no session started.
        */
       readonly readCalls?: ReviewReadCallCounts | undefined;
     }

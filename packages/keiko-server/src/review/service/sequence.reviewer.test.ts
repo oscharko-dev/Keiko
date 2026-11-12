@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { captureActivityLog } from "../../activityLogCapture.test-support.js";
 import type { ReviewDiffPackage } from "../diff-package/types.js";
+import type { ReviewCandidateFinding } from "../runtime/findingIntake.js";
 import type { ReviewRuntimeRunRequest, ReviewRuntimeRunResult } from "../runtime/instance.js";
 import { ReviewRunEventHub } from "./events.js";
 import {
@@ -30,6 +31,18 @@ const COMPLETED: Extract<ReviewRuntimeRunResult, { readonly ok: true }> = {
     "limit-reached": 0,
   },
 };
+
+/** The phase reads only a candidate's fingerprint. */
+function candidateOf(index: number): ReviewCandidateFinding {
+  return { fingerprint: String(index).padStart(64, "0") } as ReviewCandidateFinding;
+}
+
+/** A completed session's result for one part, with the read calls and report the options name. */
+function sessionResult(options: PhaseOptions, index: number): ReviewRuntimeRunResult {
+  const readCalls = options.readCalls?.[index];
+  const candidates = options.reportingParts?.includes(index) === true ? [candidateOf(index)] : [];
+  return { ...COMPLETED, candidates, ...(readCalls === undefined ? {} : { readCalls }) };
+}
 
 /** A fresh readiness observation lives this long in the fixture. */
 const READINESS_LIFETIME_MS = 300_000;
@@ -55,6 +68,8 @@ interface PhaseOptions {
   readonly ensureReady?: boolean;
   /** The read calls each session's result reports, by part index (#4130). */
   readonly readCalls?: readonly ReviewRuntimeReadCalls[];
+  /** The part indexes whose session filed one accepted report. */
+  readonly reportingParts?: readonly number[];
 }
 
 type ReviewRuntimeReadCalls = NonNullable<
@@ -80,8 +95,7 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
       return { ok: false, reason: "runtime-unavailable" };
     }
     clock.now += options.sessionMs ?? 1_000;
-    const readCalls = options.readCalls?.[request.diffPart?.index ?? 0];
-    return readCalls === undefined ? COMPLETED : { ...COMPLETED, readCalls };
+    return sessionResult(options, request.diffPart?.index ?? 0);
   };
   const ensureReady = (modelId: string, correlationId: string | undefined): Promise<void> => {
     order.push(`ready:${modelId}:${String(correlationId)}`);
@@ -175,19 +189,50 @@ describe("the Reviewer model's readiness at each launch (Issue #4130)", () => {
 });
 
 describe("the Reviewer session's read calls on the part line (Issue #4130)", () => {
-  it("records each session's answered and refused read calls on its own part line", async () => {
+  it("records each session's admitted and refused read calls on its own part line", async () => {
     const { partLines, state } = await runPhase({
       partCount: 2,
       readCalls: [
         { admitted: 7, refused: 0 },
         { admitted: 24, refused: 3 },
       ],
+      reportingParts: [1],
     });
 
     expect(state.reviewer).toEqual({ outcome: "completed" });
     expect(partLines).toMatchObject([
       { partNumber: 1, outcome: "completed", readCallCount: 7, refusedReadCallCount: 0 },
       { partNumber: 2, outcome: "completed", readCallCount: 24, refusedReadCallCount: 3 },
+    ]);
+  });
+
+  // R4130-054: the allowance stopped the session, the session ended its turn as told, and the part
+  // settled as a clean `complete` although nothing was reported.
+  it("fails a part whose session was refused a read and filed no report", async () => {
+    const { partLines, state, completed } = await runPhase({
+      partCount: 3,
+      readCalls: [
+        { admitted: 24, refused: 2 },
+        { admitted: 24, refused: 1 },
+        { admitted: 5, refused: 0 },
+      ],
+      reportingParts: [0],
+    });
+
+    expect(state.reviewer).toEqual({ outcome: "failed", reason: "budget-exhausted" });
+    expect(completed).toBe(true);
+    expect(state.candidates).toHaveLength(1);
+    expect(partLines).toMatchObject([
+      { partNumber: 1, outcome: "completed", candidateCount: 1, refusedReadCallCount: 2 },
+      {
+        partNumber: 2,
+        outcome: "failed",
+        reason: "budget-exhausted",
+        candidateCount: 0,
+        readCallCount: 24,
+        refusedReadCallCount: 1,
+      },
+      { partNumber: 3, outcome: "completed", candidateCount: 0, refusedReadCallCount: 0 },
     ]);
   });
 

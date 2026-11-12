@@ -319,6 +319,8 @@ required seed.
 | 2026-11-09 | `572cf0d25` (described schema repairs, first commit of #4330)                                 | 12 of 13       | off-by-one missed                                                           | 1                              | 17 complete                 |
 | 2026-11-10 | `712f39913` (one defect definition, #4332) plus five lab-only commits, local head `d5b6de1d8` | 12 of 13       | off-by-one missed                                                           | 0                              | 16 complete, 1 model-failed |
 | 2026-11-12 | `ba4a5993b` (three lines after a change)                                                      | 12 of 13       | workspace-relative missed                                                   | 0                              | 17 complete                 |
+| 2026-11-12 | `0929b4ed0` (local merge of the read allowance `d5eb80bd5` and `39144f91a`)                   | 12 of 13       | secretbox-authentication incomplete                                         | 0                              | 16 complete, 1 model-failed |
+| 2026-11-12 | `0929b4ed0`, second run                                                                       | 11 of 13       | swallowed-error missed; workspace-relative incomplete                       | 0                              | 16 complete, 1 model-failed |
 
 Each tree is the checkout commit the run's evidence records. #4330 merged as the squash
 commit `1ed4787e9`, which also contains its second commit `883a8b355`; the trees from 2026-11-10 on
@@ -345,8 +347,26 @@ Reading of these runs:
 - With three lines after a change the off-by-one seed's guard is inside the hunk, and the
   2026-11-12 run found that seed. In the workspace-relative seed the check was already in view, so
   more context is not what that seed lacks.
-- In the 2026-11-12 run one review, `secretbox-authentication-failure-swallowed`, used 970,637 of
-  the run's 1,291,313 Reviewer prompt tokens in a single session.
+- In the 2026-11-12 run on `ba4a5993b` one review, `secretbox-authentication-failure-swallowed`,
+  used 970,637 of the run's 1,291,313 Reviewer prompt tokens in a single session.
+- The two runs on `0929b4ed0` measure the Reviewer's read allowance of 24 calls. Their review code
+  is the code of the merge commit `3eef798e7`, without the later rule that a session which was
+  refused a read and filed no report is incomplete. One session of the 34 reached the allowance: 24
+  calls were let through and one was refused, then the session filed its report and completed. No
+  review ran out of prompt budget, and the Reviewer used 935,336 and 546,547 prompt tokens per run.
+- The three required seeds these two runs did not find have three different causes, and none is the
+  pattern above. In the first run the Counter-checker's model call failed and left the one candidate
+  undecided. In the second run the Counter-checker refuted a correct report of the swallowed-error
+  seed as `evidence-mismatch`, and the Reviewer's report call for the workspace-relative seed was
+  invalid twice, so the turn failed with `invalid-tool-call` and the session ended without a
+  candidate.
+- Two prompt variants were run twice each on top of `0929b4ed0` in the same night, on local
+  branches: a Counter-checker rule that an overstated consequence is still a defect, and a Reviewer
+  step that works out one concrete input before it reports. Each variant found 13 of 13 once and 12
+  of 13 once, and each had one false alarm on a clean control in its two runs. A clean control drew
+  a candidate in 1 of 6 reviews on the unchanged tree, in 2 of 6 with the Counter-checker rule and
+  in 5 of 6 with the Reviewer step. Two runs per variant do not separate either from the unchanged
+  tree, so neither is adopted.
 
 ## Decision
 

@@ -177,8 +177,8 @@ const REVIEW_RUN_PART = defineActivityLogOperation({
     },
     runtimeRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 64 },
     candidateCount: COUNT,
-    // #4130: the session's read, search and discover calls the tool facade answered, and the ones
-    // it refused once the read allowance was used up. Absent when no session started.
+    // #4130: the session's read, search and discover calls the read allowance let through to
+    // admission, and the ones it refused once it was used up. Absent when no session started.
     readCallCount: OPTIONAL_COUNT,
     refusedReadCallCount: OPTIONAL_COUNT,
     promptTokens: COUNT,
@@ -354,7 +354,7 @@ export interface ReviewRunPartLine {
     Exclude<ReviewRunSettlement, { readonly kind: "complete" }>["reason"] | undefined;
   readonly runtimeRunId?: string | undefined;
   readonly candidateCount: number;
-  /** The session's answered and refused read calls (#4130); absent when no session started. */
+  /** The session's admitted and refused read calls (#4130); absent when no session started. */
   readonly readCalls?: { readonly admitted: number; readonly refused: number } | undefined;
   readonly totals: ReviewRoleTotals;
 }
