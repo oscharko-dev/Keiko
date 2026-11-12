@@ -129,7 +129,17 @@ describe("gradeSelection", () => {
     expect(gradeSelection(WRITE, failed, { effect: { effects: 1 } }).status).toBe("wrong-result");
     const other = { exchanges: [call("jira_edit")], gateway: healthy };
     expect(gradeSelection(WRITE, other, { effect: { effects: 1 } }).status).toBe("wrong-tool");
-    expect(gradeSelection(WRITE, other, { effect: { effects: 0 } }).status).toBe("no-tool");
+    expect(gradeSelection(WRITE, other, { effect: { effects: 0 } }).status).toBe("wrong-tool");
+    const none = { exchanges: [], gateway: healthy };
+    expect(gradeSelection(WRITE, none, { effect: { effects: 0 } }).status).toBe("no-tool");
+  });
+
+  it("grades another operation's stray write as a wrong tool, not as a wrong result", () => {
+    const comment = { exchanges: [call("jira_add_comment")], gateway: healthy };
+    expect(gradeSelection(WRITE, comment, { effect: { effects: 0, stray: 1 } })).toMatchObject({
+      status: "wrong-tool",
+      detail: "1 other operation calls, 0 native effects",
+    });
   });
 
   it("fails a correct write that also wrote objects the request did not ask for", () => {

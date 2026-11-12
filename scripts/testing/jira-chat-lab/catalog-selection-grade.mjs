@@ -63,18 +63,28 @@ function readVerdict(target, tokens) {
     : { status: "wrong-result", detail: `${truth.missing}/${tokens.length} native tokens missing` };
 }
 
-function writeVerdict(target, effect) {
+/**
+ * A write without a target call is a selection failure (another operation, or none), even when it
+ * also wrote something; only a called target is judged by its native effect and stray writes.
+ */
+function missingTarget(effect, otherCalls) {
+  if (otherCalls === 0 && effect.effects === 0 && (effect.stray ?? 0) === 0)
+    return { status: "no-tool", detail: "no operation call" };
+  const detail = `${otherCalls} other operation calls, ${effect.effects} native effects`;
+  return { status: "wrong-tool", detail };
+}
+
+function writeVerdict(target, effect, otherCalls) {
+  if (target === undefined) return missingTarget(effect, otherCalls);
   if ((effect.stray ?? 0) > 0)
     return { status: "wrong-result", detail: `${effect.stray} writes the request did not ask for` };
+  if (!succeeded(target))
+    return { status: "wrong-result", detail: "the target call did not succeed" };
   if (effect.effects !== 1 || effect.wrongValue === true) {
     const detail = `${effect.effects} native effects${effect.wrongValue ? ", wrong value" : ""}`;
-    return { status: target === undefined ? "no-tool" : "wrong-result", detail };
+    return { status: "wrong-result", detail };
   }
-  if (target === undefined)
-    return { status: "wrong-tool", detail: "the effect came from another operation" };
-  return succeeded(target)
-    ? { status: "selected", detail: "exactly one verified native effect" }
-    : { status: "wrong-result", detail: "the target call did not succeed" };
+  return { status: "selected", detail: "exactly one verified native effect" };
 }
 
 /**
@@ -114,7 +124,7 @@ function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
     return { status: "invalid", path, detail: "the native truth read failed" };
   const calls = operationCalls(exchanges);
   const target = calls.find((exchange) => toolAlias(exchange.call?.name) === toolAlias(entry.tool));
-  if (entry.effect === "write") return { ...writeVerdict(target, effect), path };
+  if (entry.effect === "write") return { ...writeVerdict(target, effect, calls.length), path };
   if (target !== undefined) return { ...readVerdict(target, tokens), path };
   if (calls.length > 0)
     return { status: "wrong-tool", path, detail: `${calls.length} other operation calls` };
