@@ -2,14 +2,7 @@
 // One run per model says nothing about variance: with `--repeat N` a journey runs N times in fresh
 // Chats and the scenario reports each run, the pass rate over the valid runs and the invalid runs.
 
-export const STATUSES = Object.freeze([
-  "green",
-  "red",
-  "partial",
-  "probe-only",
-  "unchecked",
-  "invalid",
-]);
+const STATUSES = Object.freeze(["green", "red", "partial", "probe-only", "unchecked", "invalid"]);
 
 /** The status counts of the scenario results; an unknown status fails closed. */
 export function countStatuses(results) {

@@ -7,7 +7,7 @@
  * preparation, oracle or argument-builder fault. `cascade`: a root cause elsewhere (`blockedBy`).
  * `infrastructure`: transport, timeout, 5xx, rate limit. `not-attempted`: never reached.
  * `undetermined`: genuinely ambiguous, e.g. Jira refused Keiko's request or an oracle disagreed. */
-export const QUALIFICATION_CAUSES = Object.freeze([
+const QUALIFICATION_CAUSES = Object.freeze([
   "product",
   "lab",
   "cascade",
@@ -41,7 +41,7 @@ const CLIENT_CLASSES = new Map([
   [405, "405"],
   [409, "409"],
 ]);
-export function jiraSummary(snapshot) {
+function jiraSummary(snapshot) {
   const statuses = (snapshot?.responses ?? []).map((response) => response.status);
   return { statuses, class: jiraClass(statuses) };
 }

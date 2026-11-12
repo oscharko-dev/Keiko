@@ -30,7 +30,7 @@ const SAME_LASTENHEFT =
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 /** The closed, body-free names of the facts that can stop a bulk step. */
-export const BULK_FACTS = Object.freeze([
+const BULK_FACTS = Object.freeze([
   "violation-turn-evidence-unavailable",
   "violation-not-exactly-one-create",
   "violation-not-refused-without-effect",

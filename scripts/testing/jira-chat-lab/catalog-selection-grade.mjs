@@ -2,19 +2,8 @@
 // a laboratory. The model's answer text is never evidence; only the tool transcript and native
 // Jira truth are.
 
-/** The closed statuses of one selection attempt. */
-export const SELECTION_STATUSES = Object.freeze([
-  "selected",
-  "alternative",
-  "wrong-result",
-  "wrong-arguments",
-  "wrong-tool",
-  "no-tool",
-  "invalid",
-]);
-
 const DISCOVERY_ALIASES = new Set(["jira_discover", "jira_describe"]);
-export const toolAlias = (name) => String(name ?? "").replaceAll(/[.-]/gu, "_");
+const toolAlias = (name) => String(name ?? "").replaceAll(/[.-]/gu, "_");
 
 /** How the model reached its tools: through the catalog search or only through visible tools. */
 export function selectionPath(exchanges) {

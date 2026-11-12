@@ -161,8 +161,7 @@ const removal = (session, path, auth) =>
     : labRequest(session, "DELETE", path, auth);
 
 /** The snapshot key of a removal: a path, or the `key` of a `{ key, path, actor }` removal. */
-export const removalKey = (entry) =>
-  typeof entry === "string" ? entry : (entry.key ?? entry.path);
+const removalKey = (entry) => (typeof entry === "string" ? entry : (entry.key ?? entry.path));
 
 /**
  * Removes native objects by exact path; an already absent object is not an error. An entry is a

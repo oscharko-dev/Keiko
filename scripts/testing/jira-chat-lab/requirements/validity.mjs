@@ -6,13 +6,13 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** The closed reasons a check is invalid, or red because the product route failed. */
-export const INVALID_REASONS = Object.freeze([
+const INVALID_REASONS = Object.freeze([
   "lab-error",
   "model-unavailable",
   "gateway-failure",
   "insufficient-valid-runs",
 ]);
-export const RED_REASONS = Object.freeze(["product-route-failed"]);
+const RED_REASONS = Object.freeze(["product-route-failed"]);
 
 const FAILURE_OPS = new Set(["gateway.chat.failed", "gateway.stream.failed"]);
 // The closed error kinds of a failed model call that describe the model infrastructure. Any other
