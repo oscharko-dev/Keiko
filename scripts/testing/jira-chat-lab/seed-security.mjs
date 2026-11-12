@@ -74,6 +74,23 @@ async function associate(page, session, projectId, schemeId) {
   await page.waitForLoadState("domcontentloaded");
 }
 
+/** A failing administration stage is named in one closed, body-free line before it propagates. */
+async function stage(name, run) {
+  try {
+    await run();
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        operation: "jira-lab-admin",
+        case: "security-scheme",
+        stage: name,
+        failed: true,
+      }),
+    );
+    throw error;
+  }
+}
+
 /** Returns true when the scheme, its level and the project association all exist afterwards. */
 export async function ensureFixtureSecurityScheme(session) {
   let state = await observeSecurity(session);
@@ -81,15 +98,16 @@ export async function ensureFixtureSecurityScheme(session) {
   if (state.projectId === undefined) throw new TypeError("Synthetic project is missing");
   await withLabAdmin(session, async (page) => {
     if (state.schemeId === undefined) {
-      await addScheme(page, session);
+      await stage("add-scheme", () => addScheme(page, session));
       state = await observeSecurity(session);
     }
     if (state.schemeId === undefined) throw new TypeError("Scheme was not created");
     if (!state.hasLevel) {
-      await addLevel(page, session, state.schemeId);
+      await stage("add-level", () => addLevel(page, session, state.schemeId));
       state = await observeSecurity(session);
     }
-    if (!state.associated) await associate(page, session, state.projectId, state.schemeId);
+    if (!state.associated)
+      await stage("associate", () => associate(page, session, state.projectId, state.schemeId));
   });
   state = await observeSecurity(session);
   const ready = state.schemeId !== undefined && state.hasLevel && state.associated;

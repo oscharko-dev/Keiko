@@ -17,6 +17,43 @@ const full = [
   "CREATE_ATTACHMENTS",
   "LINK_ISSUES",
 ];
+/**
+ * What the model-free AC7 write cases need beyond the basic set: worklogs, comment and attachment
+ * deletion, sprint scheduling, voters and watchers. Only the two qualification actors hold them;
+ * the editor, assignee and restricted actors keep their narrow grants so denials stay provable.
+ */
+export const QUALIFICATION_EXTRA = [
+  "WORK_ISSUES",
+  "EDIT_OWN_WORKLOGS",
+  "DELETE_OWN_WORKLOGS",
+  "EDIT_ALL_COMMENTS",
+  "DELETE_OWN_COMMENTS",
+  "DELETE_ALL_COMMENTS",
+  "DELETE_OWN_ATTACHMENTS",
+  "DELETE_ISSUES",
+  "MOVE_ISSUES",
+  "SCHEDULE_ISSUES",
+  "MANAGE_WATCHERS",
+  "VIEW_VOTERS_AND_WATCHERS",
+];
+
+/** The extra grants plus Jira's own key for "Manage Sprints", all verified against the inventory. */
+export function qualificationGrantKeys(inventory) {
+  if (inventory?.permissions === null || typeof inventory?.permissions !== "object")
+    throw new TypeError("Native permission inventory is unavailable");
+  const offered = Object.entries(inventory.permissions).map(([key, value]) => ({ ...value, key }));
+  const sprint = offered.filter(
+    (value) =>
+      typeof value.name === "string" && value.name.trim().toLowerCase() === "manage sprints",
+  );
+  if (sprint.length !== 1) throw new TypeError("Manage Sprints is missing or ambiguous");
+  const keys = new Set(offered.map((value) => value.key));
+  const missing = QUALIFICATION_EXTRA.filter((key) => !keys.has(key));
+  if (missing.length > 0)
+    throw new TypeError(`Native permissions unavailable for AC7 fixtures: ${missing.join(",")}`);
+  return [...full, ...QUALIFICATION_EXTRA, sprint[0].key];
+}
+
 function grants(actor, permissions) {
   return permissions.map((permission) => ({
     permission,
@@ -88,10 +125,34 @@ async function associateScheme(session, project, permissions) {
     await checked(session, "associate-permission-scheme", "PUT", path, auth, { id: scheme.id });
 }
 
+/** Native booleans prove the qualification actors hold every extra grant and the others none. */
+export async function verifyQualificationSeparation(session, actors, keys) {
+  const extra = keys.filter((key) => !full.includes(key));
+  const query = `/rest/api/2/mypermissions?projectKey=KEIKO&permissions=${extra.join(",")}`;
+  for (const [actor, expected] of [
+    ["api", true],
+    ["editor", false],
+    ["assignee", false],
+    ["restricted", false],
+  ]) {
+    const result = await checked(session, "qualification-separation", "GET", query, actors[actor]);
+    if (extra.some((key) => result.permissions[key]?.havePermission !== expected))
+      throw new TypeError("Synthetic qualification permissions do not separate capabilities");
+  }
+}
+
 export async function ensureFixturePermissions(session, actors) {
+  const inventory = await checked(
+    session,
+    "permission-inventory",
+    "GET",
+    "/rest/api/2/permissions",
+    basicAuth(session, "admin"),
+  );
+  const qualification = qualificationGrantKeys(inventory);
   await associateScheme(session, "KEIKO", [
-    ...grants("admin", full),
-    ...grants("api", full),
+    ...grants("admin", qualification),
+    ...grants("api", qualification),
     ...grants("editor", ["BROWSE_PROJECTS", "EDIT_ISSUES", "ADD_COMMENTS"]),
     ...grants("assignee", ["BROWSE_PROJECTS", "ASSIGNABLE_USER"]),
   ]);
@@ -117,6 +178,7 @@ export async function ensureFixturePermissions(session, actors) {
     if (names.some((name, index) => result.permissions[name].havePermission !== expected[index]))
       throw new TypeError("Synthetic permissions do not separate capabilities");
   }
+  await verifyQualificationSeparation(session, actors, qualification);
 }
 
 export async function verifyFixtureRestrictions(session, actors, key) {

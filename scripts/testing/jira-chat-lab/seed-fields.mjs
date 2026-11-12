@@ -113,3 +113,23 @@ async function resetLegacyIssue(session, fieldId, key) {
     [204],
   );
 }
+
+const REQUIRED_FIELD_NAME = "Keiko required text";
+
+/**
+ * The qualification field is required in Jira's one default field configuration, which every
+ * other project inherits. A lab that seeds other projects (the requirements lab) runs its writes
+ * inside this bracket: the requirement is lifted for the duration and restored afterwards, also on
+ * failure, so the qualification project keeps its required-field proof. No field, no bracket.
+ */
+export async function withFixtureFieldOptional(session, run) {
+  const auth = basicAuth(session, "admin");
+  const fields = await checked(session, "find-required-field", "GET", "/rest/api/2/field", auth);
+  if (!fields.some((field) => field.name === REQUIRED_FIELD_NAME)) return run();
+  await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, false));
+  try {
+    return await run();
+  } finally {
+    await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, true));
+  }
+}

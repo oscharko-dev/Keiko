@@ -141,6 +141,17 @@ export function qualificationSummary(operations) {
   return counts;
 }
 
+/**
+ * Reads whose native collection was empty under a reviewed declaration. They stay executable (the
+ * governed call ran and matched) but are listed separately: they prove no projection of any row.
+ */
+export function vacuousReads(operations) {
+  return operations
+    .filter((operation) => operation.readback?.vacuous === true)
+    .map((operation) => operation.identity)
+    .sort((left, right) => left.localeCompare(right, "en"));
+}
+
 /** A report covers one exact source, release and complete inventory; no cross-run pooling. */
 export function isApprovedDeferred(row, decisions) {
   const decision = decisions.get(row.identity);

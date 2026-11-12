@@ -3,6 +3,15 @@ import { chromium, expect } from "@playwright/test";
 import { join } from "node:path";
 import { readPrivateFile } from "./lab-client.mjs";
 
+/**
+ * A step's own closed reason (a plain identifier, never page content) is preserved. Playwright
+ * error details may contain filled values or CSRF-bearing URLs, so nothing else survives.
+ */
+function administrationError(error) {
+  if (typeof error?.reason === "string" && /^[a-z][a-z-]*$/u.test(error.reason)) return error;
+  return new TypeError("Synthetic Jira administration failed");
+}
+
 export async function withLabAdmin(session, run) {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -28,9 +37,8 @@ export async function withLabAdmin(session, run) {
         .waitFor({ state: "hidden" });
     }
     return await run(page);
-  } catch {
-    // Playwright error details may contain filled values or CSRF-bearing URLs.
-    throw new TypeError("Synthetic Jira administration failed");
+  } catch (error) {
+    throw administrationError(error);
   } finally {
     await browser.close();
   }

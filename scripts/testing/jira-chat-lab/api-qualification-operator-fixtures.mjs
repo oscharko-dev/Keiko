@@ -5,95 +5,61 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { URL } from "node:url";
-import { basicAuth, labSessionConnection } from "./lab-client.mjs";
+import { labSessionConnection } from "./lab-client.mjs";
+import {
+  PREPARATION_REASONS,
+  QualificationPreparationError,
+  adminRequest,
+  expectNative,
+} from "./api-qualification-preparation-core.mjs";
+import { COLLECTION_SEED_STEPS } from "./api-qualification-collection-seeds.mjs";
+import { ensureFixtureSecurityScheme } from "./seed-security.mjs";
 import { privateJson } from "./private-json.mjs";
 import { withLabAdmin } from "./seed-admin.mjs";
 
-export const PREPARATION_REASONS = Object.freeze([
-  "native-response-unexpected",
-  "sprint-not-synced",
-  "dashboard-not-created",
-  "option-not-created",
-  "attribute-not-stored",
-  "email-default-unavailable",
-  "fixture-manifest-invalid",
-]);
-
-export class QualificationPreparationError extends Error {
-  constructor(reason, status) {
-    super(`AC7 preparation refused: ${reason}`);
-    this.name = "QualificationPreparationError";
-    this.reason = reason;
-    if (status !== undefined) this.status = status;
-  }
-}
+export { PREPARATION_REASONS, QualificationPreparationError, adminRequest };
 
 const SELECT_TYPE = "com.atlassian.jira.plugin.system.customfieldtypes:select";
 const SELECT_SEARCHER = "com.atlassian.jira.plugin.system.customfieldtypes:multiselectsearcher";
 const DEFAULT_PERMISSION_ATTRIBUTE = "ac7.synthetic.attribute";
 const numeric = /^[1-9]\d*$/u;
 
-/** Authenticated admin call straight to the lab; a body is JSON unless raw text is requested. */
-export async function adminRequest(session, method, path, body, contentType) {
-  if (!path.startsWith("/rest/")) throw new TypeError("Unexpected laboratory API path");
-  const origin = labSessionConnection(session).origin;
-  const response = await globalThis.fetch(new URL(path, origin), {
-    method,
-    redirect: "manual",
-    signal: globalThis.AbortSignal.timeout(30_000),
-    headers: {
-      Accept: "application/json",
-      Authorization: basicAuth(session, "admin"),
-      "X-Atlassian-Token": "no-check",
-      ...(body === undefined ? {} : { "Content-Type": contentType ?? "application/json" }),
-    },
-    ...(body === undefined
-      ? {}
-      : { body: contentType === undefined ? JSON.stringify(body) : String(body) }),
-  });
-  const text = (await response.text()).slice(0, 1_048_576);
-  let value;
-  try {
-    value = text === "" ? undefined : JSON.parse(text);
-  } catch {
-    value = undefined;
-  }
-  return { status: response.status, value };
-}
-
-async function expectNative(io, method, path, body, statuses, contentType) {
-  const result = await io.request(method, path, body, contentType);
-  if (!statuses.includes(result.status))
-    throw new QualificationPreparationError("native-response-unexpected", result.status);
-  return result.value;
-}
-
 /** A failed administration page never leaks Playwright details; it becomes one closed reason. */
 async function uiStep(io, reason, run) {
   try {
     return await io.withAdmin(run);
-  } catch {
+  } catch (error) {
+    if (error instanceof QualificationPreparationError) throw error;
     throw new QualificationPreparationError(reason);
   }
 }
 
 const nonceName = (label, nonce) => `Synthetic AC7 ${label} ${nonce}`;
 
+const FEATURE_DISABLED = /synced sprint when the feature is disabled/iu;
+
+/** Jira refuses a synced sprint with a closed 400 text when the lab's feature flag is missing. */
+async function createSyncedSprint(io, boardId, name) {
+  const result = await io.request("POST", "/rest/agile/1.0/sprint", {
+    name,
+    originBoardId: Number(boardId),
+    autoStartStop: false,
+    synced: true,
+  });
+  if (result.status === 201) return result.value;
+  const messages = JSON.stringify(result.value?.errorMessages ?? result.value?.message ?? "");
+  if (result.status === 400 && FEATURE_DISABLED.test(messages))
+    throw new QualificationPreparationError("sprint-sync-feature-disabled", result.status);
+  throw new QualificationPreparationError("native-response-unexpected", result.status);
+}
+
 async function createSyncedSprints(io, boardId, nonce, label, count) {
   const ids = [];
   for (let index = 0; index < count; index++) {
-    const created = await expectNative(
+    const created = await createSyncedSprint(
       io,
-      "POST",
-      "/rest/agile/1.0/sprint",
-      {
-        name: `AC7 ${label} ${nonce.slice(0, 6)}-${index + 1}`,
-        originBoardId: Number(boardId),
-        autoStartStop: false,
-        synced: true,
-      },
-      [201],
+      boardId,
+      `AC7 ${label} ${nonce.slice(0, 6)}-${index + 1}`,
     );
     const id = String(created?.id);
     if (!numeric.test(id)) throw new QualificationPreparationError("native-response-unexpected");
@@ -261,21 +227,70 @@ async function dashboardIdByName(io, name) {
 
 const GADGET_URL =
   "rest/gadgets/1.0/g/com.atlassian.jira.gadgets:assigned-to-me-gadget/gadgets/assigned-to-me-gadget.xml";
+const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+const decodeEntities = (text) =>
+  text.replace(/&(?:amp|lt|gt|quot|#39);/gu, (entity) => ENTITIES[entity]);
 
-/** Create the dashboard in Jira's own UI, then add one gadget with the UI's own authenticated call. */
-async function createDashboardThroughUi(page, origin, name) {
-  await page.goto(`${origin}/secure/AddPortalPage!default.jspa`, { waitUntil: "domcontentloaded" });
-  await page.locator("input[name=portalPageName]").fill(name);
-  await page.getByRole("button", { name: "Add", exact: true }).click();
-  await page.waitForURL((url) => /selectPageId=\d+/u.test(url.search));
-  const id = /selectPageId=(\d+)/u.exec(page.url())?.[1];
-  if (id === undefined) return undefined;
-  const response = await page.request.post(`${origin}/rest/dashboards/1.0/${id}/gadget`, {
-    data: { url: GADGET_URL },
+/** The hidden inputs of a Jira administration form (its XSRF token among them), by name. */
+export function hiddenFormFields(html) {
+  const fields = {};
+  for (const tag of html.match(/<input\b[^>]*>/giu) ?? []) {
+    const attributes = Object.fromEntries(
+      [...tag.matchAll(/([a-z][\w-]*)="([^"]*)"/giu)].map((match) => [
+        match[1].toLowerCase(),
+        decodeEntities(match[2]),
+      ]),
+    );
+    if (attributes.type?.toLowerCase() === "hidden" && attributes.name)
+      fields[attributes.name] = attributes.value ?? "";
+  }
+  return fields;
+}
+
+/**
+ * Jira's own "Create dashboard" form, submitted with the form's own XSRF token over the signed-in
+ * administrator session. Every refusal names its stage and native status; no page content leaves.
+ */
+async function createDashboardThroughForm(page, origin, name) {
+  const form = await page.request.get(`${origin}/secure/AddPortalPage!default.jspa`);
+  if (!form.ok())
+    throw new QualificationPreparationError("dashboard-form-unavailable", form.status());
+  const hidden = hiddenFormFields(await form.text());
+  if (!Object.hasOwn(hidden, "atl_token"))
+    throw new QualificationPreparationError("dashboard-form-unavailable", form.status());
+  const submitted = await page.request.post(`${origin}/secure/AddPortalPage.jspa`, {
+    form: {
+      ...hidden,
+      portalPageName: name,
+      portalPageDescription: "Synthetic AC7 dashboard",
+      favourite: "true",
+    },
     headers: { "X-Atlassian-Token": "no-check" },
+    maxRedirects: 0,
   });
-  if (!response.ok()) return undefined;
-  return { id, itemId: String((await response.json())?.id) };
+  if (submitted.status() !== 302)
+    throw new QualificationPreparationError("dashboard-create-refused", submitted.status());
+  return /selectPageId=(\d+)/u.exec(submitted.headers().location ?? "")?.[1];
+}
+
+async function firstGadgetId(io, id) {
+  const dashboard = await io.request("GET", `/rest/dashboards/1.0/${id}`);
+  const gadgets = dashboard.status === 200 ? dashboard.value?.gadgets : undefined;
+  const found = Array.isArray(gadgets) ? gadgets[0]?.id : undefined;
+  return numeric.test(String(found)) ? String(found) : undefined;
+}
+
+/** One gadget through the dashboard plugin's own REST resource, as the browser's picker does. */
+async function addDashboardItem(io, id) {
+  const added = await io.request("POST", `/rest/dashboards/1.0/${id}/gadget`, {
+    url: GADGET_URL,
+  });
+  if (![200, 201].includes(added.status))
+    throw new QualificationPreparationError("dashboard-gadget-refused", added.status);
+  const direct = String(added.value?.id ?? added.value?.gadgetId);
+  const itemId = numeric.test(direct) ? direct : await firstGadgetId(io, id);
+  if (itemId === undefined) throw new QualificationPreparationError("dashboard-gadget-refused");
+  return itemId;
 }
 
 /** The item is accepted only when Jira's own REST resource names the dashboard and the item. */
@@ -291,13 +306,15 @@ export async function prepareAssetDashboard(io, fixture, nonce) {
   const known = fixture.assetDashboard;
   if (known && (await itemIsNative(io, known.id, known.itemId, known.name))) return {};
   const name = nonceName("dashboard", nonce);
-  const created = await uiStep(io, "dashboard-not-created", (page) =>
-    createDashboardThroughUi(page, io.origin, name),
+  await uiStep(io, "dashboard-create-refused", (page) =>
+    createDashboardThroughForm(page, io.origin, name),
   );
   const id = await dashboardIdByName(io, name);
-  if (!created || id !== created.id || !(await itemIsNative(io, id, created.itemId, name)))
+  if (id === undefined) throw new QualificationPreparationError("dashboard-not-created");
+  const itemId = await addDashboardItem(io, id);
+  if (!(await itemIsNative(io, id, itemId, name)))
     throw new QualificationPreparationError("dashboard-not-created");
-  return { assetDashboard: { id, itemId: created.itemId, name } };
+  return { assetDashboard: { id, itemId, name } };
 }
 
 /** The pack is captured before any template mutation and never replaced by a later capture. */
@@ -331,22 +348,87 @@ function readFixtureManifest(directory) {
   return { path, value };
 }
 
+/** Retries are bounded; the step observes the native state first, so a repeat never duplicates. */
+async function securityStep(io) {
+  for (let attempt = 1; attempt <= SECURITY_ATTEMPTS; attempt++) {
+    try {
+      if (await io.ensureSecurityScheme()) return {};
+    } catch {
+      // A cold Jira can time out an administration page; the next attempt starts from observation.
+    }
+    if (attempt < SECURITY_ATTEMPTS) await io.sleep(SECURITY_BACKOFF_MS);
+  }
+  throw new QualificationPreparationError("security-scheme-unavailable");
+}
+const SECURITY_ATTEMPTS = 3;
+const SECURITY_BACKOFF_MS = 5_000;
+
+const outcomeReason = (error) =>
+  error instanceof QualificationPreparationError ? error.reason : "step-unexpected-error";
+
+/**
+ * Runs independent steps in order and records each outcome. A failed step never stops the others;
+ * only a step that names a failed `needs` entry is skipped, with `dependency-failed`.
+ */
+export async function runPreparationSteps(steps, initial, persist) {
+  let manifest = initial;
+  const failed = new Set();
+  const outcomes = [];
+  for (const step of steps) {
+    const dependency = (step.needs ?? []).find((name) => failed.has(name));
+    if (dependency !== undefined) {
+      failed.add(step.name);
+      outcomes.push({
+        step: step.name,
+        outcome: "skipped",
+        reason: "dependency-failed",
+        dependency,
+      });
+      continue;
+    }
+    try {
+      manifest = { ...manifest, ...(await step.run(manifest)) };
+      persist(manifest);
+      outcomes.push({ step: step.name, outcome: "completed" });
+    } catch (error) {
+      failed.add(step.name);
+      outcomes.push({
+        step: step.name,
+        outcome: "failed",
+        reason: outcomeReason(error),
+        ...(Number.isSafeInteger(error?.status) ? { status: error.status } : {}),
+      });
+    }
+  }
+  return { manifest, outcomes };
+}
+
 /** The email pack goes first: nothing before it may touch an email template. */
 export async function prepareOperatorFixtures(session, io, options = {}) {
   const { path, value } = readFixtureManifest(session.directory);
   const nonce = options.nonce ?? randomBytes(4).toString("hex");
   const key = options.permissionAttributeKey ?? DEFAULT_PERMISSION_ATTRIBUTE;
-  let manifest = { ...value, ...(await prepareEmailDefault(io, value, session)) };
   const steps = [
-    (current) => prepareSyncedSprints(io, current, nonce),
-    (current) => prepareOptionFixture(io, current, nonce),
-    (current) => preparePermissionAttribute(io, current, nonce, key),
-    (current) => prepareAssetDashboard(io, current, nonce),
+    { name: "email-default", run: (current) => prepareEmailDefault(io, current, session) },
+    { name: "synced-sprints", run: (current) => prepareSyncedSprints(io, current, nonce) },
+    { name: "option-field", run: (current) => prepareOptionFixture(io, current, nonce) },
+    {
+      name: "permission-attribute",
+      run: (current) => preparePermissionAttribute(io, current, nonce, key),
+    },
+    { name: "asset-dashboard", run: (current) => prepareAssetDashboard(io, current, nonce) },
+    { name: "security-scheme", run: () => securityStep(io) },
+    ...COLLECTION_SEED_STEPS.map(([name, run]) => ({ name, run: (current) => run(io, current) })),
   ];
-  privateJson(path, manifest);
-  for (const step of steps) {
-    manifest = { ...manifest, ...(await step(manifest)) };
-    privateJson(path, manifest);
+  privateJson(path, value);
+  const { manifest, outcomes } = await runPreparationSteps(steps, value, (current) =>
+    privateJson(path, current),
+  );
+  options.onOutcomes?.(outcomes);
+  if (outcomes.some((outcome) => outcome.outcome !== "completed")) {
+    const error = new QualificationPreparationError("fixture-steps-failed");
+    error.outcomes = outcomes;
+    throw error;
   }
   return Object.keys(manifest).filter((name) => !(name in value));
 }
@@ -359,5 +441,7 @@ export function defaultOperatorIo(session, observeEmailPack) {
       adminRequest(session, method, path, body, contentType),
     withAdmin: (run) => withLabAdmin(session, run),
     observeEmailPack: () => observeEmailPack({ session, actor: "admin" }),
+    ensureSecurityScheme: () => ensureFixtureSecurityScheme(session),
+    sleep: (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)),
   };
 }

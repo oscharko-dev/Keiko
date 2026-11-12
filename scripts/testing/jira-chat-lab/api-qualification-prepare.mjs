@@ -48,6 +48,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         completed: false,
         errorType: error instanceof Error ? error.name : "unknown",
         ...(typeof error?.reason === "string" ? { reason: error.reason } : {}),
+        ...(Array.isArray(error?.outcomes) ? { outcomes: error.outcomes } : {}),
         reconcileRequired: true,
       }),
     );

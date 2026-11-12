@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { URLSearchParams } from "node:url";
+import { URL, URLSearchParams } from "node:url";
 import { assertSessionServerInfo, basicAuth, labRequest } from "./lab-client.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
 
@@ -98,7 +98,7 @@ export function nativeInstant(value) {
   return new Date(value).toISOString();
 }
 function assertOptionalFields(actual, native, fields, names, transforms = {}) {
-  for (const [index, row] of native.slice(0, 100).entries()) {
+  for (const [index, row] of native.slice(0, actual.length).entries()) {
     for (const field of fields) {
       const key = names?.[field] ?? field;
       const observed = row[key];
@@ -119,6 +119,59 @@ const membership = (rows) =>
     .map((row) => JSON.stringify(row))
     .sort((left, right) => left.localeCompare(right, "en"))
     .map((row) => JSON.parse(row));
+const PAGE_KEYS = ["values", "issues", "worklogs", "comments", "dashboards", "screens", "schemes"];
+const MAX_NATIVE_PAGES = 100;
+function pageProperty(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (!Number.isSafeInteger(value.startAt)) return undefined;
+  return PAGE_KEYS.find((key) => Array.isArray(value[key]));
+}
+const morePages = (value, key, collected) =>
+  value.isLast === false ||
+  (Number.isSafeInteger(value.total) && collected < value.total && value[key].length > 0);
+function withStartAt(path, startAt) {
+  const url = new URL(path, "http://lab.invalid");
+  url.searchParams.set("startAt", String(startAt));
+  return `${url.pathname}${url.search}`;
+}
+/** Follows Jira's own paging markers so the oracle sees the complete collection, never a prefix. */
+async function nativeReadComplete(context, path) {
+  const first = await nativeRead(context, path);
+  const key = first.status === 200 ? pageProperty(first.value) : undefined;
+  if (key === undefined) return first;
+  const rows = [...first.value[key]];
+  let last = first.value;
+  for (let page = 1; page < MAX_NATIVE_PAGES && morePages(last, key, rows.length); page++) {
+    const next = await nativeRead(context, withStartAt(path, rows.length));
+    assert.equal(next.status, 200, "A later native page must be readable");
+    const more = next.value?.[key];
+    assert.ok(Array.isArray(more), "A later native page must carry its rows");
+    if (more.length === 0) break;
+    rows.push(...more);
+    last = next.value;
+  }
+  assert.ok(!morePages(last, key, rows.length), "The native collection exceeds the paging bound");
+  return { status: 200, value: { ...first.value, [key]: rows, isLast: true } };
+}
+function requestedLimit(args, fixture) {
+  try {
+    const limit = args(fixture ?? {}).maxResults;
+    return Number.isSafeInteger(limit) && limit > 0 ? limit : 100;
+  } catch {
+    return 100;
+  }
+}
+const emptyCollection = (native, emptyAllowed) => {
+  if (native.length > 0) return {};
+  if (typeof emptyAllowed === "string" && emptyAllowed.trim().length > 0)
+    return { vacuousReason: emptyAllowed };
+  assert.fail("The native collection is empty: seed an owned record or declare emptyAllowed");
+};
+/**
+ * A collection read proves a projection only when Jira actually holds rows. An empty native
+ * collection therefore fails unless the case carries a reviewed `emptyAllowed` reason; such a read
+ * is recorded as `vacuous` and never counts as proof of projection.
+ */
 export function readCase(
   tool,
   path,
@@ -130,7 +183,7 @@ export function readCase(
     nativeNames,
     optionalFields = [],
     optionalTransforms,
-    nonEmpty = false,
+    emptyAllowed,
     unordered = false,
   } = {},
 ) {
@@ -139,32 +192,35 @@ export function readCase(
     arguments: args,
     readback: async (context, data, fixture) => {
       const selectedPath = typeof path === "function" ? path(fixture) : path;
-      const response = await nativeRead(context, selectedPath);
+      const response = await nativeReadComplete(context, selectedPath);
       if (response.status === 403) return { permissionDenied: true, status: response.status };
       const absent = await missingReleaseCapability(context, tool, [response.status]);
       if (absent !== undefined) return absent;
       assert.equal(response.status, 200);
       const native = nativeRows(response.value, nativeRoot);
-      // A read of a collection this run just populated proves nothing when it is empty: the
-      // refused write that should have populated it would pass as a vacuous match.
-      if (nonEmpty) assert.ok(native.length > 0, "the owned fixture must be natively present");
+      const { vacuousReason } = emptyCollection(native, emptyAllowed);
       const projected = projectRows(data, productRoot);
       const actual = rowValues(projected, fields);
-      const expected = rowValues(native, fields, nativeNames).slice(0, 100);
+      const expected = rowValues(native, fields, nativeNames);
+      // The product asks for one page; it must return exactly that prefix of the complete native
+      // collection, and the native total stays on record next to it.
+      const limit = requestedLimit(args, fixture);
+      const limited = expected.length > limit && actual.length === limit;
       // An unordered native collection proves membership; the order Keiko pages it in is its own.
-      if (unordered) assert.ok(native.length <= 100, "Membership needs the complete collection");
+      if (unordered) assert.ok(native.length <= limit, "Membership needs the complete collection");
+      const wanted = limited ? expected.slice(0, limit) : expected;
       assertQualificationJson(
         unordered ? membership(actual) : actual,
-        unordered ? membership(expected) : expected,
+        unordered ? membership(wanted) : wanted,
         "Keiko's observation must equal the independent native read",
       );
       assertOptionalFields(projected, native, optionalFields, nativeNames, optionalTransforms);
-      // Empty collections prove their exact count, not an invented sample row.
       return {
         matched: true,
         assertionCount: 1 + actual.length * (fields.length + optionalFields.length),
         nativeCount: native.length,
         projectedCount: projected.length,
+        ...(vacuousReason === undefined ? {} : { vacuous: true, vacuousReason }),
       };
     },
   };

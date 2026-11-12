@@ -28,6 +28,7 @@ import {
   classifyQualification,
   qualificationDigest,
   qualificationSummary,
+  vacuousReads,
 } from "./api-qualification-evidence.mjs";
 
 const repository = resolve(import.meta.dirname, "..", "..", "..");
@@ -581,12 +582,14 @@ async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = 
   assert.equal(sourceRevision(), revision, "Qualification sources changed during the run");
   report.phase = counts.unknown === 0 ? "complete" : "incomplete";
   report.counts = counts;
+  report.vacuousReads = vacuousReads(report.operations);
   privateJson(join(output, report.file), report);
   rmSync(pending);
   stage({
     release: session.jiraVersion,
     sourceRevision: revision,
     counts,
+    vacuousReads: report.vacuousReads.length,
     proposals: report.proposals.length,
   });
   return { report, counts };

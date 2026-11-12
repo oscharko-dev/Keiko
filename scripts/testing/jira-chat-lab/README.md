@@ -18,6 +18,24 @@ in the exclusive lab window. It reuses `seed.mjs` and its one-use PAT creation,
 then verifies the disposable administrator's identity and native administration
 permission. It never starts Jira or configures a model.
 
+A fresh session needs no manual step. `seed.mjs` grants the qualification actors (`keiko-admin`,
+`keiko-api`) the worklog, comment/attachment deletion, sprint and voter permissions the write cases need
+(the editor, assignee and restricted actors keep their narrow grants, and the run proves it). The
+preparation then runs every operator step independently and prints one outcome per step: synced
+sprints (a disabled lab feature is reported as `sprint-sync-feature-disabled`), the select option, the
+permission attribute, the dashboard and item (Jira's own create form with its XSRF token, then the
+dashboard plugin's gadget resource; the failing stage is named), the issue-security scheme (bounded
+retries) and one owned record for each collection the lab can populate (`api-qualification-collection-seeds.mjs`).
+A failed step never hides the others; a step that names a failed `needs` entry is skipped as
+`dependency-failed`. A collection read is nonempty by default: only a per-case `emptyAllowed` reason
+admits an empty native collection, and such rows are recorded as `vacuous` in the evidence and in the
+report's `vacuousReads` list. They stay executable but prove no projection. The native expected side is
+paged completely (bounded) before it is compared.
+
+The required-field proof lifts the field's requirement in Jira's default field configuration for
+a moment; `requirements/seed-projects.mjs` therefore brackets its writes with `withFixtureFieldOptional`,
+which restores the requirement on exit, also on failure.
+
 `api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]` uses this lab's
 paired production server, credential vault, verified TLS connection, accepted Chat
 turn, operation-selected managed provider, catalog authority, budget and durable
