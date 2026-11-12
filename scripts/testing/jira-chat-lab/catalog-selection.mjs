@@ -257,6 +257,14 @@ async function main() {
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
   const cases = SELECTION_CASES.filter((entry) => only === undefined || only.has(entry.id));
   const run = selectionRun(fixture, repeat, pendingPath);
+  // An interrupted run still removes its owned objects; a pending write stays for reconciliation.
+  const interrupted = (signal) => {
+    void cleanUp(session, run.created, true).finally(() => {
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    });
+  };
+  process.once("SIGINT", interrupted);
+  process.once("SIGTERM", interrupted);
   let failed = false;
   try {
     await measure(session, modelId, run, cases);

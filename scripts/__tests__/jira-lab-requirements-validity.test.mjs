@@ -135,7 +135,11 @@ describe("Activity Log gateway evidence", () => {
     mkdirSync(join(root, "logs"));
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
-  const line = (op, ts, correlationId, pid = 7) => JSON.stringify({ op, ts, pid, correlationId });
+  const line = (op, ts, correlationId, pid = 7, errorKind = undefined) =>
+    JSON.stringify({ op, ts, pid, correlationId, ...(errorKind ? { errorKind } : {}) });
+  // A real outage's failed call carries the closed error kind `internal` (observed 2026-11-12).
+  const failed = (op, ts, correlationId, errorKind = "internal") =>
+    line(op, ts, correlationId, 7, errorKind);
   const T = (second) => `2026-11-12T05:00:${String(second).padStart(2, "0")}.000Z`;
   const window = {
     fromMs: Date.parse("2026-11-12T05:00:00.000Z"),
@@ -148,12 +152,12 @@ describe("Activity Log gateway evidence", () => {
     write([
       line("gateway.chat.started", T(1), "a"),
       line("gateway.retry.exhausted", T(2), "a"),
-      line("gateway.chat.failed", T(3), "a"),
+      failed("gateway.chat.failed", T(3), "a"),
       line("gateway.chat.started", T(4), "b"),
-      line("gateway.chat.failed", T(5), "b"),
+      failed("gateway.chat.failed", T(5), "b"),
       line("gateway.stream.started", T(6), "c"),
       line("gateway.circuit.rejected", T(7), "c"),
-      line("gateway.stream.failed", T(8), "c"),
+      failed("gateway.stream.failed", T(8), "c"),
       line("gateway.retry.exhausted", T(9), "d"),
     ]);
     expect(readGatewayFailures(root, window)).toEqual({
@@ -164,10 +168,27 @@ describe("Activity Log gateway evidence", () => {
     });
   });
 
+  it("counts a model that kept answering invalidly as a model outcome, not an outage", () => {
+    write([
+      line("gateway.retry.exhausted", T(2), "a"),
+      failed("gateway.chat.failed", T(3), "a", "validation-failed"),
+      line("gateway.retry.exhausted", T(4), "b"),
+      failed("gateway.chat.failed", T(5), "b", "invalid-request"),
+      line("gateway.retry.exhausted", T(6), "c"),
+      failed("gateway.chat.failed", T(7), "c", "timeout"),
+    ]);
+    expect(readGatewayFailures(root, window)).toEqual({
+      outages: 1,
+      circuit: 0,
+      productFailures: 2,
+      unparsed: 0,
+    });
+  });
+
   it("ignores lines outside the window, of other processes, and counts unparsable lines", () => {
     write([
       line("gateway.retry.exhausted", T(10), "a"),
-      line("gateway.chat.failed", T(11), "a"),
+      failed("gateway.chat.failed", T(11), "a"),
       line("gateway.circuit.opened", "2026-11-12T04:00:00.000Z", "z"),
       line("gateway.chat.failed", T(12), "x", 99),
       '{"op":"gateway.chat.failed", truncated',

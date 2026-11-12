@@ -15,6 +15,11 @@ export const INVALID_REASONS = Object.freeze([
 export const RED_REASONS = Object.freeze(["product-route-failed"]);
 
 const FAILURE_OPS = new Set(["gateway.chat.failed", "gateway.stream.failed"]);
+// The closed error kinds of a failed model call that describe the model infrastructure. Any other
+// kind (validation-failed for a model that kept producing an invalid answer, invalid-request,
+// permission-denied, conflict, ...) is a product or model outcome, even after exhausted retries.
+const INFRASTRUCTURE_FAILURE = "infrastructure-failure";
+const INFRASTRUCTURE_ERROR_KINDS = new Set(["internal", "unavailable", "timeout", "rate-limited"]);
 const CIRCUIT_REJECTION_OPS = new Set(["gateway.circuit.opened", "gateway.circuit.rejected"]);
 
 // Only transport signatures: a gateway limit (context overflow, attempt admission) is a product
@@ -66,13 +71,17 @@ function collectLine(entry, groups, counts) {
   if (typeof entry.correlationId !== "string") return;
   const ops = groups.get(entry.correlationId) ?? new Set();
   ops.add(entry.op);
+  // A failed call is marked by its closed error kind, so the outage rule can read it.
+  if (FAILURE_OPS.has(entry.op) && INFRASTRUCTURE_ERROR_KINDS.has(entry.errorKind))
+    ops.add(INFRASTRUCTURE_FAILURE);
   groups.set(entry.correlationId, ops);
 }
 
 /**
- * An infrastructure failure is a correlation that ends in a failed model call AND went through a
- * retry exhaustion or a circuit event. A failure with neither (a context overflow, a refused
- * attempt, a provider rejection) is a product or limit outcome and proves no outage.
+ * An infrastructure failure is a correlation that ends in a failed model call of an infrastructure
+ * error kind AND went through a retry exhaustion or a circuit event. A failure with neither, or of
+ * another kind (a context overflow, a refused attempt, a provider rejection, a model that kept
+ * producing an invalid answer), is a product or model outcome and proves no outage.
  */
 function classifyCorrelations(groups, counts) {
   for (const ops of groups.values()) {
@@ -80,7 +89,7 @@ function classifyCorrelations(groups, counts) {
     const retried =
       ops.has("gateway.retry.exhausted") ||
       [...ops].some((op) => op.startsWith("gateway.circuit."));
-    if (retried) counts.outages += 1;
+    if (retried && ops.has(INFRASTRUCTURE_FAILURE)) counts.outages += 1;
     else counts.productFailures += 1;
   }
 }
