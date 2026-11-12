@@ -24,7 +24,7 @@ export type SuiteName = WorkflowKind | "all";
 export const SUITE_NAMES: readonly SuiteName[] = ["unit-tests", "bug-investigation", "all"];
 
 export function isSuiteName(value: string): value is SuiteName {
-  return (SUITE_NAMES as readonly string[]).includes(value);
+  return SUITE_NAMES.some((name) => name === value);
 }
 
 // Resolves the fixtures for a named suite. `all` returns every fixture; a workflow kind filters.
