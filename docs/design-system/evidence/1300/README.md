@@ -327,3 +327,20 @@ findings across the seven modes. All 108 browser captures retain zero page error
 requests, missing selectors, crashed windows, visible error notices and unavailable workspace-trust
 states. The records rebind only the `next.config.mjs` digest; the committed captures are kept. No
 producer assertion, tolerance, fixture or budget changed.
+
+## PR #4375 dependency input refresh — 2026-11-12
+
+Dependabot #4350 and #4326, taken within the seven-day cooldown, change the root and `keiko-ui`
+manifests and the lockfile (Next.js 16.4.5, Vite 8.3.5, PostCSS 8.5.32, KaTeX 0.19.1 and the
+ProseMirror patches among them), all declared producer inputs. The four original producers were
+rerun in the isolated Linux arm64 container with Node 24.18.0 and the Playwright Chromium revision
+the lockfile pins. Component fidelity retains 427 probes with zero gated or recorded differences and
+no missing selectors. Editor fidelity retains all 14 reference captures and zero gated differences;
+its previously documented accent and reference-only differences remain recorded. Accessibility
+retains zero serious/critical violations and zero unresolved incomplete findings across the seven
+modes. All 108 browser captures retain zero page errors, unexpected API requests, missing selectors,
+crashed windows, visible error notices and unavailable workspace-trust states. The captures are
+committed as recaptured: the memory-relationships workspace now shows the current Memory autonomy
+copy (the kept 2026-11-10 captures predated it), and the editor references move by a few pixels of
+line height with unchanged content. Representative captures were visually inspected. No producer
+assertion, tolerance, fixture or budget changed.

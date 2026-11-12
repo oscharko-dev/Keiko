@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1034940,
-    "loadedTotalBytes": 1034940,
+    "shipsTotalBytes": 1034987,
+    "loadedTotalBytes": 1034987,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 110901,
+    "largestWorkerBytes": 110927,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 110901,
+    "largestLoadedWorkerBytes": 110927,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,8 +30,8 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 110901,
-      "path": "dist/ui/static/_next/static/chunks/3-vp5mbiz_k0a.js"
+      "gzipBytes": 110927,
+      "path": "dist/ui/static/_next/static/chunks/3yogj6ro-lqay.js"
     },
     {
       "label": "editor",
@@ -49,20 +49,20 @@
   "editorRuntimeChunks": [
     {
       "path": "dist/ui/static/_next/static/chunks/02jl1lf3a8dud.js",
-      "gzipBytes": 635285,
+      "gzipBytes": 635284,
       "rawBytes": 2569892,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/1ka7n7_t88nku.js",
-      "gzipBytes": 288480,
-      "rawBytes": 1212214,
+      "path": "dist/ui/static/_next/static/chunks/0dttat8nssvs3.js",
+      "gzipBytes": 288502,
+      "rawBytes": 1212264,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/3-vp5mbiz_k0a.js",
-      "gzipBytes": 110901,
-      "rawBytes": 362727,
+      "path": "dist/ui/static/_next/static/chunks/3yogj6ro-lqay.js",
+      "gzipBytes": 110927,
+      "rawBytes": 363080,
       "workerLabel": "editor"
     },
     {
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "f84ccd9cca381bedb1b5149fcf2e2624d3addeaa078b90eb595f0aae4d336912"
+  "measurementSha256": "4ee42c34e52d00d6b2c39b7006bc29de0e43cb9b57cd2d6c9c82c05665736d33"
 }
