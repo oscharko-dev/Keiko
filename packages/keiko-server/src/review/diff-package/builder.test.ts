@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { reviewDiffCoverageSettlement } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
+import { REVIEW_SEED_CORPUS } from "../qualification/seed-corpus/index.js";
 import { buildReviewDiffPackage } from "./builder.js";
 import { DiffFixtureRepository, realRunnerDeps } from "./diffFixtures.test-support.js";
 import { build, listNames, numbered, packaged } from "./diffPackageAssertions.test-support.js";
@@ -20,8 +21,10 @@ afterEach(() => {
   fixture.cleanup();
 });
 
-describe("hunk context (PR-Agent patch_extra_lines_before = 5, after = 1)", () => {
-  it("carries five lines before and one after, with base and head line numbers", async () => {
+// #4130 seeds: with one line after a change, a guard two lines below a changed loop bound lay
+// outside the hunk, and the Reviewer reported the value that guard stops.
+describe("hunk context (five lines before as PR-Agent, three after)", () => {
+  it("carries five lines before and three after, with base and head line numbers", async () => {
     const before = numbered(30);
     const after = before.replace("line 15\n", "line fifteen\n");
     const base = fixture.commit([{ path: "src/a.txt", content: before }]);
@@ -30,9 +33,9 @@ describe("hunk context (PR-Agent patch_extra_lines_before = 5, after = 1)", () =
     expect(result.files[0]?.hunks).toEqual([
       {
         oldStart: 10,
-        oldLines: 7,
+        oldLines: 9,
         newStart: 10,
-        newLines: 7,
+        newLines: 9,
         lines: [
           " line 10",
           " line 11",
@@ -42,29 +45,47 @@ describe("hunk context (PR-Agent patch_extra_lines_before = 5, after = 1)", () =
           "-line 15",
           "+line fifteen",
           " line 16",
+          " line 17",
+          " line 18",
         ],
       },
     ]);
     expect(result.text).toContain("__new hunk__\n10  line 10\n");
-    expect(result.text).toContain("15 +line fifteen\n16  line 16\n__old hunk__\n");
+    expect(result.text).toContain(
+      "15 +line fifteen\n16  line 16\n17  line 17\n18  line 18\n__old hunk__\n",
+    );
   });
 
-  it("joins changes at most six unchanged lines apart and splits farther ones", async () => {
+  it("joins changes at most eight unchanged lines apart and splits farther ones", async () => {
     const before = numbered(40);
-    const near = before.replace("line 10\n", "ten\n").replace("line 17\n", "seventeen\n");
-    const far = before.replace("line 10\n", "ten\n").replace("line 18\n", "eighteen\n");
+    const near = before.replace("line 10\n", "ten\n").replace("line 19\n", "nineteen\n");
+    const far = before.replace("line 10\n", "ten\n").replace("line 20\n", "twenty\n");
     const base = fixture.commit([{ path: "a.txt", content: before }]);
     const joined = await packaged(
       fixture,
       base,
       fixture.commit([{ path: "a.txt", content: near }]),
     );
-    expect(joined.files[0]?.hunks.map((hunk) => [hunk.newStart, hunk.newLines])).toEqual([[5, 14]]);
+    expect(joined.files[0]?.hunks.map((hunk) => [hunk.newStart, hunk.newLines])).toEqual([[5, 18]]);
     const split = await packaged(fixture, base, fixture.commit([{ path: "a.txt", content: far }]));
     expect(split.files[0]?.hunks.map((hunk) => [hunk.newStart, hunk.newLines])).toEqual([
-      [5, 7],
-      [13, 7],
+      [5, 9],
+      [15, 9],
     ]);
+  });
+
+  it("shows the guard two lines below the changed loop bound of the off-by-one seed", async () => {
+    const seed = REVIEW_SEED_CORPUS.find(
+      (entry) => entry.seed.id === "synthetic-off-by-one-boundary",
+    );
+    if (seed === undefined) throw new Error("the off-by-one seed is missing from the corpus");
+    const tree = (files: Readonly<Record<string, string>>): { path: string; content: string }[] =>
+      Object.entries(files).map(([path, content]) => ({ path, content }));
+    const base = fixture.commit(tree(seed.baseFiles));
+    const head = fixture.commit(tree(seed.headFiles));
+    const result = await packaged(fixture, base, head);
+    expect(result.text).toContain("4 +  for (let index = start; index <= Math.min(");
+    expect(result.text).toContain("6      if (item !== undefined) result.push(item);\n");
   });
 
   it("extends a hunk up to its enclosing function header within ten lines", async () => {
