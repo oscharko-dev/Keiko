@@ -228,4 +228,15 @@ describe("createSelectionObjects", () => {
     const reads = requests.filter((entry) => entry.path === "/rest/agile/1.0/board/7");
     expect(reads).toHaveLength(3);
   });
+
+  it("refuses an invisible sprint after recording its id", async () => {
+    statuses.set("/rest/agile/1.0/sprint/8", 403);
+    const created = selectionNames(fixture, "t");
+    await expect(createSelectionObjects({}, fixture, "t", created)).rejects.toThrow(
+      "not visible to the api actor",
+    );
+    expect(created).toMatchObject({ boardId: "7", sprintId: "8" });
+    const reads = requests.filter((entry) => entry.path === "/rest/agile/1.0/sprint/8");
+    expect(reads).toHaveLength(3);
+  });
 });

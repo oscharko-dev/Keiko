@@ -272,14 +272,18 @@ function finishReport(session, modelId, run, startedAt, complete) {
 
 async function measure(session, modelId, run, cases) {
   const startedAt = new Date().toISOString();
-  await createSelectionObjects(session, run.fixture, run.tag, run.created);
-  // Refuse before any model turn: a project beyond the snapshot bound, or orphans of a killed run.
-  const preflight = await scopeSnapshot(session, run.fixture, run.created);
-  const orphans = orphanedIssues(preflight, run.created);
-  if (orphans > 0)
-    throw new TypeError(`${orphans} owned issues of an earlier run remain; remove them first`);
   let complete = false;
+  // A refusal before the first turn still writes a report, marked incomplete with no attempts, so
+  // an older report is never read as this run's result.
   try {
+    await createSelectionObjects(session, run.fixture, run.tag, run.created);
+    // Refuse before any model turn: a project beyond the snapshot bound, or orphans of a killed run.
+    const preflight = await scopeSnapshot(session, run.fixture, run.created);
+    const orphans = orphanedIssues(preflight, run.created);
+    if (orphans > 0)
+      throw new TypeError(
+        `${orphans} issues summarized "Auswahl Vorgang|Ziel" of an earlier run remain; delete them natively first`,
+      );
     await withLiveChat({
       session,
       modelId,

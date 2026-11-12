@@ -326,9 +326,10 @@ export function orphanedIssues(snapshot, created) {
 }
 
 /**
- * The run's own board, sprint and filters by content; agile objects or filters a model created by
- * mistake are not enumerated, so such a stray write escapes this snapshot. one that disappeared is absent, so its
- * removal counts. The favourite filter is private to the api actor, so it is read as that actor.
+ * The run's own board, sprint and filters by content. One that disappeared reads as absent, so its
+ * removal counts. Agile objects or filters a model created by mistake are not enumerated, so such a
+ * stray write escapes this snapshot. The favourite filter is private to the api actor, so it is read
+ * as that actor.
  */
 async function agileScope(session, created) {
   const entries = [
