@@ -16,11 +16,14 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => ({
 import assert, {
   measuredAssertionCount,
   measuredNativeReadPaths,
+  recordNativeRead,
   resetAssertionCount,
+  resetNativeReadCount,
 } from "../testing/jira-chat-lab/api-qualification-assert.mjs";
 import {
   certainEffect,
   orderByDependencies,
+  recordFailedRoot,
   recordLeftoverState,
   runQualificationCase,
   unknownAfterEffect,
@@ -512,6 +515,81 @@ describe("cause table", () => {
       errorType: "TypeError",
     });
     expect(JSON.stringify(detail)).not.toContain("private value");
+  });
+});
+
+describe("repaired review findings", () => {
+  it("keeps every distinct read path for the presence proof", () => {
+    resetNativeReadCount();
+    for (let index = 0; index < 60; index++) recordNativeRead(`/rest/api/2/issue/${index}?x=1`);
+    recordNativeRead("/rest/api/2/issue/59");
+    expect(measuredNativeReadPaths()).toHaveLength(60);
+    expect(measuredNativeReadPaths()).toContain("/rest/api/2/issue/59");
+    resetNativeReadCount();
+  });
+  it("never persists an assertion message, whatever the detail setting", () => {
+    const error = new assert.AssertionError({ message: "expected project KEIKO-4711 to equal 7" });
+    for (const mode of [undefined, "values"]) {
+      vi.stubEnv("KEIKO_AC7_DETAIL", mode ?? "");
+      const detail = describeFailure(error, mode);
+      expect(detail).not.toHaveProperty("message");
+      expect(JSON.stringify(detail)).not.toContain("KEIKO-4711");
+    }
+    vi.unstubAllEnvs();
+  });
+  it("labels an oracle read answered 429 as infrastructure and keeps 403 as lab", async () => {
+    dispatch.mockResolvedValue(attempt());
+    const limited = await run(
+      specification({
+        readback: async () => {
+          throw new NativeReadError("/rest/api/2/project", 429);
+        },
+      }),
+    );
+    expect(limited).toMatchObject({ failure: "oracle-read-refused", cause: "infrastructure" });
+    const denied = annotateCause({
+      runtimeAvailability: "unknown",
+      failure: "oracle-read-refused",
+      detail: { nativeStatus: 403 },
+    });
+    expect(denied.cause).toBe("lab");
+  });
+  it("does not call a settled dispatch without an outcome a product refusal", async () => {
+    const withoutData = () => {
+      const settled = attempt();
+      delete settled.dispatch.result.data;
+      return settled;
+    };
+    dispatch.mockResolvedValue(withoutData());
+    const local = await run(specification());
+    expect(local).toMatchObject({ failure: "result-unavailable", cause: "undetermined" });
+    expect(local.product).toBeUndefined();
+    const verifyInvocation = vi.fn();
+    dispatch.mockResolvedValue(withoutData());
+    const verified = await run(
+      specification({ verifyInvocation }),
+      {},
+      { blocked: 0, responses: [{ status: 200, truncated: false }] },
+    );
+    expect(verified).toMatchObject({ failure: "result-unavailable", cause: "undetermined" });
+    expect(verifyInvocation).not.toHaveBeenCalled();
+    // Control: an explicit non-success outcome is still the product's refusal.
+    dispatch.mockResolvedValue(
+      attempt({ outcome: "rejected", reason: "invalid-arguments", responses: [] }),
+    );
+    expect((await run(specification())).failure).toBe("product-refused");
+  });
+  it("blocks the dependents of every root that did not qualify", () => {
+    const roots = new Map();
+    const root = { tool: "jira.root", identity: "POST /root" };
+    for (const runtimeAvailability of ["denied", "unavailable", "unknown"]) {
+      roots.clear();
+      recordFailedRoot(roots, root, { runtimeAvailability, cause: "lab" });
+      expect(roots.get("jira.root")).toEqual({ identity: "POST /root", cause: "lab" });
+    }
+    roots.clear();
+    recordFailedRoot(roots, root, { runtimeAvailability: "executable" });
+    expect(roots.size).toBe(0);
   });
 });
 

@@ -786,7 +786,8 @@ settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
   `undetermined` unless the lab's own health read also fails), `not-attempted` and `undetermined` (Jira refused Keiko's
   request, or the oracle disagreed after a native 2xx). Evidence also carries the closed
   failure word (`product-refused` for a refusal before any native request, `outcome-refused`,
-  `oracle-read-refused`, `dispatch-failed` with recipe/product frame sites and error type),
+  `result-unavailable` for a settled dispatch without any outcome, which is never blamed on the
+  product, `oracle-read-refused`, `dispatch-failed` with recipe/product frame sites and error type),
   the product's closed `outcome`/`reason`, and the Jira status class. No raw Jira text is
   persisted. The report summary adds `causeCounts`; the console summary prints them.
 - **Cascades and order.** Cases may declare `dependsOn` (tool names). The driver runs a root

@@ -31,7 +31,7 @@ import {
   measuredNativeReadPaths,
   resetAssertionCount,
 } from "./api-qualification-assert.mjs";
-import { productRefusalDetail, succeededOutcome } from "./api-qualification-cause.mjs";
+import { hasOutcome, productRefusalDetail, succeededOutcome } from "./api-qualification-cause.mjs";
 
 function readRequest(request, url) {
   return (
@@ -597,7 +597,9 @@ export async function dispatchQualification(context, chat, specification, args) 
 async function verifiedInvocation(held, specification, attempted) {
   const { context } = held;
   const settled = attempted.dispatch.result?.data;
-  if (!succeededOutcome(settled?.outcome)) return { verifyRefused: productRefusalDetail(settled) };
+  // Without an explicit outcome there is nothing to verify and nothing to call a refusal.
+  if (!hasOutcome(settled)) return {};
+  if (!succeededOutcome(settled.outcome)) return { verifyRefused: productRefusalDetail(settled) };
   resetAssertionCount();
   const readback = await specification.verifyInvocation(
     context,

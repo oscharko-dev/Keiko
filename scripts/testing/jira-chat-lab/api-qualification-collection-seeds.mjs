@@ -14,15 +14,25 @@ const SYNTHETIC_KEY = "keiko.synthetic.fixture";
 const SNAPSHOT_POLLS = 60;
 const SNAPSHOT_POLL_MS = 2_000;
 
+/** A collection read that is not an array is a malformed response, never an empty collection. */
 const rowsOf = (value, root) => {
   const rows = root === undefined ? value : value?.[root];
-  return Array.isArray(rows) ? rows : [];
+  if (!Array.isArray(rows)) throw new QualificationPreparationError("native-response-unexpected");
+  return rows;
 };
 const present = async (io, path, root) =>
   rowsOf(await expectNative(io, "GET", path, undefined, [200]), root).length > 0;
 async function observed(io, path, root) {
   if (!(await present(io, path, root)))
     throw new QualificationPreparationError("collection-seed-not-observed");
+}
+/** Bounded readback for a collection Jira exposes only after its index caught up. */
+async function observedWithin(io, path, root) {
+  for (let poll = 0; poll < SNAPSHOT_POLLS; poll++) {
+    if (await present(io, path, root)) return;
+    await io.sleep(SNAPSHOT_POLL_MS);
+  }
+  throw new QualificationPreparationError("collection-seed-not-observed");
 }
 const idOf = (value) => {
   const id = String(value?.id);
@@ -167,6 +177,7 @@ async function seedBoardEpic(io) {
     },
     [201],
   );
+  await observedWithin(io, `${search}${jql}`, "issues");
   return { seedBoardEpic: true };
 }
 

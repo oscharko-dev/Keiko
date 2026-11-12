@@ -170,8 +170,14 @@ async function nativeReadComplete(context, path) {
   const rows = [...first.value[key]];
   let last = first.value;
   for (let page = 1; page < MAX_NATIVE_PAGES && morePages(last, key, rows.length); page++) {
-    const next = await nativeRead(context, withStartAt(path, rows.length));
+    const offset = rows.length;
+    const next = await nativeRead(context, withStartAt(path, offset));
     plumbingAssert.equal(next.status, 200, "A later native page must be readable");
+    plumbingAssert.equal(
+      next.value?.startAt,
+      offset,
+      "A later native page must start where the previous one ended",
+    );
     const more = next.value?.[key];
     plumbingAssert.ok(Array.isArray(more), "A later native page must carry its rows");
     if (more.length === 0) break;

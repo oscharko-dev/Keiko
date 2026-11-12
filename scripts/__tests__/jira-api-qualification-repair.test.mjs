@@ -72,12 +72,29 @@ describe("complete native paging", () => {
     await expect(entry().readback(context, { items: rows(0, 99) }, {})).rejects.toThrow();
     await expect(entry().readback(context, { items: rows(1, 101) }, {})).rejects.toThrow();
   });
-  it("fails closed when the collection exceeds the paging bound", async () => {
+  it("rejects a repeated native page instead of accepting a prefix of it", async () => {
     const { context } = sessionContext();
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
+        new globalThis.Response(JSON.stringify({ startAt: 0, total: 150, values: rows(0, 100) }), {
+          status: 200,
+        }),
+    );
+    await expect(entry().readback(context, { items: rows(0, 100) }, {})).rejects.toThrow(
+      /start where the previous one ended/u,
+    );
+  });
+  it("fails closed when the collection exceeds the paging bound", async () => {
+    const { context } = sessionContext();
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (url) =>
         new globalThis.Response(
-          JSON.stringify({ startAt: 0, total: 1e9, isLast: false, values: [{ id: 1 }] }),
+          JSON.stringify({
+            startAt: Number(new URL(url).searchParams.get("startAt") ?? 0),
+            total: 1e9,
+            isLast: false,
+            values: [{ id: 1 }],
+          }),
           { status: 200 },
         ),
     );
@@ -156,6 +173,25 @@ describe("preparation steps", () => {
   });
 });
 
+describe("preparation persistence", () => {
+  it("stops before the next step when the manifest cannot be persisted", async () => {
+    const ran = [];
+    const steps = ["a", "b"].map((name) => ({
+      name,
+      run: async () => {
+        ran.push(name);
+        return { [name]: 1 };
+      },
+    }));
+    await expect(
+      runPreparationSteps(steps, {}, () => {
+        throw new Error("disk full");
+      }),
+    ).rejects.toThrow("disk full");
+    expect(ran).toEqual(["a"]);
+  });
+});
+
 describe("collection seeds", () => {
   /** A scripted Jira: each collection is empty until its seeding write happens. */
   function lab() {
@@ -228,6 +264,53 @@ describe("collection seeds", () => {
       request: async (method) => ({ status: method === "GET" ? 200 : 201, value: [] }),
     };
     await expect(step("seed-project-category")(blind, fixture)).rejects.toMatchObject({
+      reason: "collection-seed-not-observed",
+    });
+  });
+  it("refuses a malformed collection read before any seeding write", async () => {
+    const writes = [];
+    const malformed = {
+      sleep: async () => undefined,
+      request: async (method, path) => {
+        if (method !== "GET") writes.push(`${method} ${path}`);
+        return { status: 200, value: { unexpected: true } };
+      },
+    };
+    await expect(step("seed-project-category")(malformed, fixture)).rejects.toMatchObject({
+      reason: "native-response-unexpected",
+    });
+    expect(writes).toEqual([]);
+  });
+  it("waits for the seeded Epic to appear in the search and fails closed when it never does", async () => {
+    const make = (visibleAfter) => {
+      let searches = 0;
+      return {
+        sleep: async () => undefined,
+        request: async (method, path) => {
+          if (method === "POST") return { status: 201, value: { id: "5" } };
+          if (path.startsWith("/rest/api/2/search")) {
+            searches += 1;
+            return {
+              status: 200,
+              value: { issues: searches > visibleAfter ? [{ key: "K-1" }] : [] },
+            };
+          }
+          if (path === "/rest/api/2/project/KEIKO")
+            return { status: 200, value: { issueTypes: [{ id: "10000", name: "Epic" }] } };
+          return {
+            status: 200,
+            value: [
+              {
+                id: "customfield_1",
+                schema: { custom: "com.pyxis.greenhopper.jira:gh-epic-label" },
+              },
+            ],
+          };
+        },
+      };
+    };
+    expect(await step("seed-board-epic")(make(3), fixture)).toEqual({ seedBoardEpic: true });
+    await expect(step("seed-board-epic")(make(1e6), fixture)).rejects.toMatchObject({
       reason: "collection-seed-not-observed",
     });
   });

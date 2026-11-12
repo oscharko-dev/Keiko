@@ -43,6 +43,7 @@ import {
   suspectSummary,
   describeFailure,
   localRefusal,
+  settledWithoutOutcome,
   markNotAttempted,
 } from "./api-qualification-cause.mjs";
 
@@ -118,6 +119,7 @@ async function observeReadback(context, specification, attempted, fixture, snaps
   // A refusal before any native request leaves nothing to read back; it is not a mismatch.
   const refusal = localRefusal(attempted.dispatch, snapshot);
   if (refusal !== undefined) return { failure: "product-refused", product: refusal };
+  if (settledWithoutOutcome(attempted.dispatch)) return { failure: "result-unavailable" };
   if (attempted.verifyRefused !== undefined)
     return { failure: "outcome-refused", product: attempted.verifyRefused };
   try {
@@ -491,6 +493,11 @@ function attachFixtureDispatcher(
     return evidence;
   };
 }
+/** A root that did not qualify (anything but executable) blocks its declared dependents. */
+export function recordFailedRoot(failedRoots, specification, evidence) {
+  if (evidence.runtimeAvailability === "executable") return;
+  failedRoots.set(specification.tool, { identity: specification.identity, cause: evidence.cause });
+}
 /** The first declared root cause of this case that already failed earlier in the run. */
 function failedRoot(specification, failedRoots) {
   const tool = (specification.dependsOn ?? []).find((root) => failedRoots.has(root));
@@ -576,11 +583,7 @@ async function executeCases(context, specifications, report, directory, witness,
         evidence.runtimeAvailability === "unknown" ? [] : [`${report.file}#${evidence.id}`],
     });
     recordLeftoverState(report, evidence);
-    if (evidence.runtimeAvailability === "unknown")
-      state.failedRoots.set(specification.tool, {
-        identity: specification.identity,
-        cause: evidence.cause,
-      });
+    recordFailedRoot(state.failedRoots, specification, evidence);
     privateJson(join(directory, report.file), report);
     // A failure before any native effect leaves nothing to reconcile; the run continues.
     if (unknownAfterEffect(evidence, witness)) throw new ReconcileRequiredError();

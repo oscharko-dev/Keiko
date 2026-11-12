@@ -24,7 +24,7 @@ export const resetNativeReadCount = () => {
   meter.readPaths = [];
 };
 /** The resolved pathname (no query) of each successful native read, for the presence proof. */
-export const measuredNativeReadPaths = () => [...new Set(meter.readPaths)].slice(0, 50);
+export const measuredNativeReadPaths = () => [...new Set(meter.readPaths)];
 export const recordNativeRead = (path) => {
   meter.nativeReads += 1;
   if (typeof path === "string") meter.readPaths.push(new URL(path, "http://lab.invalid").pathname);

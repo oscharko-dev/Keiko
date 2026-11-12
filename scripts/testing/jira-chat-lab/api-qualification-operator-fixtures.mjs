@@ -388,8 +388,6 @@ export async function runPreparationSteps(steps, initial, persist) {
     }
     try {
       manifest = { ...manifest, ...(await step.run(manifest)) };
-      persist(manifest);
-      outcomes.push({ step: step.name, outcome: "completed" });
     } catch (error) {
       failed.add(step.name);
       outcomes.push({
@@ -398,7 +396,12 @@ export async function runPreparationSteps(steps, initial, persist) {
         reason: outcomeReason(error),
         ...(Number.isSafeInteger(error?.status) ? { status: error.status } : {}),
       });
+      continue;
     }
+    // A persistence failure is not a step failure: the new identities would exist only in memory,
+    // so the run stops before another step can write to Jira.
+    persist(manifest);
+    outcomes.push({ step: step.name, outcome: "completed" });
   }
   return { manifest, outcomes };
 }

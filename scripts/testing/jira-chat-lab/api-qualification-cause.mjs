@@ -3,8 +3,6 @@
 // says WHY, so a product defect, a lab or fixture fault, a cascade and an infrastructure fault are
 // no longer indistinguishable. Everything persisted is a closed word, a status code, a count or a
 // source line, never a value.
-import { AssertionError } from "node:assert";
-
 /** `product`: Keiko refused locally or failed/misprojected while Jira answered 2xx. `lab`: fixture,
  * preparation, oracle or argument-builder fault. `cascade`: a root cause elsewhere (`blockedBy`).
  * `infrastructure`: transport, timeout, 5xx, rate limit. `not-attempted`: never reached.
@@ -72,25 +70,22 @@ function throwingSide(frames) {
   }
   return "unknown";
 }
-const failureMessage = (error, values) =>
-  error instanceof AssertionError && (!error.generatedMessage || values)
-    ? String(error.message).slice(0, values ? 700 : 160)
-    : undefined;
 const failureCode = (error) => {
   const code = typeof error?.cause?.code === "string" ? error.cause.code : error?.code;
   return typeof code === "string" && INFRASTRUCTURE_CODES.test(code) ? code : undefined;
 };
-/** Names the recipe and product lines that failed, never a value: a message only when written by hand. */
-export function describeFailure(error, detailMode = process.env.KEIKO_AC7_DETAIL) {
+/**
+ * Names the recipe and product lines that failed, never a value: no assertion message is persisted,
+ * because a generated or hand-written message can carry the compared Jira values.
+ */
+export function describeFailure(error) {
   const frames = chain(error).flatMap(lines);
   const sites = unique(frames.map((line) => RECIPE_FRAME.exec(line)?.[1]).filter(Boolean));
   const productSites = unique(frames.map((line) => PRODUCT_FRAME.exec(line)?.[1]).filter(Boolean));
-  const message = failureMessage(error, detailMode === "values");
   const code = failureCode(error);
   return {
     ...(sites.length > 0 ? { sites } : {}),
     ...(productSites.length > 0 ? { productSites } : {}),
-    ...(message === undefined ? {} : { message }),
     errorType: error instanceof Error ? error.name : "unknown",
     origin: throwingSide(frames),
     ...(code === undefined ? {} : { infrastructureCode: code }),
@@ -114,8 +109,14 @@ export function productRefusalDetail(data) {
 export function localRefusal(dispatch, snapshot) {
   if (dispatch?.kind !== "settled" || (snapshot?.responses ?? []).length > 0) return undefined;
   const data = dispatch.result?.data;
-  return succeededOutcome(data?.outcome) ? undefined : productRefusalDetail(data);
+  if (!hasOutcome(data) || succeededOutcome(data.outcome)) return undefined;
+  return productRefusalDetail(data);
 }
+/** A refusal is the product's explicit word; a settled result without one proves nothing. */
+export const hasOutcome = (data) => typeof data?.outcome === "string";
+/** A settled dispatch whose result carries no outcome: unknown, never a product refusal. */
+export const settledWithoutOutcome = (dispatch) =>
+  dispatch?.kind === "settled" && !hasOutcome(dispatch.result?.data);
 
 /**
  * Closed refusal codes of the dispatch that describe the lab's own configuration (a held
@@ -140,7 +141,7 @@ const preparedCause = (row) => {
   return infrastructureDetail(row.detail) ? "infrastructure" : "lab";
 };
 const oracleCause = (row, jira) => {
-  if (infrastructureDetail(row.detail)) return "infrastructure";
+  if (infrastructureDetail(row.detail) || row.detail?.nativeStatus === 429) return "infrastructure";
   return writeSucceeded(row, jira) ? "undetermined" : "lab";
 };
 function byJira(row, jira, labHealthFailed) {
