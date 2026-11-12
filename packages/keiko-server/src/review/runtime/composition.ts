@@ -119,6 +119,10 @@ export interface ReviewRuntimeCompositionInput {
   ) => NonNullable<UiHandlerDeps["codingSidecarGatewayEvidenceAggregator"]>;
   /** The review report port of one minted run (the instance's run-bound intake). */
   readonly reviewReportPort: (runId: string) => ProductionManagedWorktreeToolInput["reviewReport"];
+  /** The read allowance of one minted run (the instance's session in flight, #4130). */
+  readonly reviewReadAllowance: (
+    runId: string,
+  ) => ProductionManagedWorktreeToolInput["reviewReadAllowance"];
   readonly serverPrincipal: () => string | undefined;
   readonly activityLog: ServerLogSink;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -316,6 +320,7 @@ export function composeReviewRuntime(
     resolveWorkspaceRootAccess: rootAccess(workspace),
     confirmationConsumer: confirmations.consumer,
     reviewReportPort: input.reviewReportPort,
+    reviewReadAllowance: input.reviewReadAllowance,
     ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   });
   const host = createProductionCodingRuntimeHost({

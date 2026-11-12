@@ -41533,9 +41533,21 @@
               "required": true
             },
             {
+              "name": "readCallCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "refusedReadCallCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

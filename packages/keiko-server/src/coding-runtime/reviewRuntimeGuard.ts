@@ -95,3 +95,67 @@ export function refuseReviewBridgeTransport(
   logReviewActionRefused(log.sink, log.correlationId(), "tool-bridge", transport);
   return true;
 }
+
+/** The wire actions that read the reviewed head commit; a review run's read allowance counts them. */
+export const REVIEW_RUN_READ_ACTIONS: ReadonlySet<CodingToolAction> = new Set<CodingToolAction>([
+  "read",
+  "discover",
+  "search",
+]);
+
+/**
+ * One Reviewer session's read allowance (ADR-0182 D1, Issue #4130). The session's task already
+ * carries every changed hunk; the read tools only fetch surrounding code. A session that keeps
+ * reading resends its whole conversation with every call and ends on its prompt allowance before
+ * it reports, so the tool facade answers at most `maxCalls` read, discover and search calls and
+ * refuses the rest with one fixed instruction to report and end.
+ */
+export interface ReviewReadAllowance {
+  /** Counts one read call; `false` once the allowance is used up, and the call must not run. */
+  readonly admit: () => boolean;
+  readonly counts: () => ReviewReadCallCounts;
+}
+
+export interface ReviewReadCallCounts {
+  /** Read calls the facade let through to its ordinary admission. */
+  readonly admitted: number;
+  /** Read calls refused because the allowance was used up. */
+  readonly refused: number;
+}
+
+export function createReviewReadAllowance(maxCalls: number): ReviewReadAllowance {
+  if (!Number.isSafeInteger(maxCalls) || maxCalls < 0) {
+    throw new TypeError("invalid review read allowance");
+  }
+  let admitted = 0;
+  let refused = 0;
+  return {
+    admit: (): boolean => {
+      if (admitted < maxCalls) {
+        admitted += 1;
+        return true;
+      }
+      refused = Math.min(Number.MAX_SAFE_INTEGER, refused + 1);
+      return false;
+    },
+    counts: (): ReviewReadCallCounts => ({ admitted, refused }),
+  };
+}
+
+/** What the Reviewer is told by a read tool once the allowance is used up. */
+export const REVIEW_READ_ALLOWANCE_GUIDANCE =
+  "This review's read allowance is used up, so no read, search or discover call is answered any more. Do not call these tools again. Report every finding you have confirmed with keiko_review_report, then end your turn with one short sentence.";
+
+/**
+ * Whether a review run's read allowance refuses this request. Only a review run with an allowance
+ * is counted, and only its three read actions; `keiko_review_report` is never refused here.
+ */
+export function reviewReadAllowanceRefuses(
+  purpose: CodingRuntimePurpose | undefined,
+  request: Pick<CodingToolActionRequest, "action">,
+  allowance: ReviewReadAllowance | undefined,
+): boolean {
+  if (purpose !== "review" || allowance === undefined) return false;
+  if (!REVIEW_RUN_READ_ACTIONS.has(request.action)) return false;
+  return !allowance.admit();
+}

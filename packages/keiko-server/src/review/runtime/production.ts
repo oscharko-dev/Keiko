@@ -122,6 +122,7 @@ export interface ProductionReviewRuntimeInput extends Omit<
   | "runtimeStateDir"
   | "evidenceStore"
   | "reviewReportPort"
+  | "reviewReadAllowance"
   | "promptTokenBudget"
   | "maxDurationMinutes"
 > {
@@ -140,13 +141,14 @@ export function createProductionReviewRuntimeService(
     throw new RangeError("review runtime state dir must be absolute");
   const runtimeStateDir = join(input.stateDir, REVIEW_RUNTIME_STATE_DIR_NAME);
   return createReviewRuntimeService({
-    compose: (instanceId, reviewReportPort) =>
+    compose: (instanceId, reviewReportPort, reviewReadAllowance) =>
       composeReviewRuntime({
         ...input,
         instanceId,
         runtimeStateDir,
         evidenceStore: createInMemoryEvidenceStore(),
         reviewReportPort,
+        reviewReadAllowance,
         promptTokenBudget: input.budget.promptTokenBudget,
         maxDurationMinutes: input.budget.maxDurationMinutes,
       }),

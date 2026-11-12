@@ -28,13 +28,21 @@ import type {
   ReviewReportRejectionReason,
   ReviewRulesFileOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
-import { REVIEW_RUNTIME_DEFAULT_IDLE_MS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
+  REVIEW_RUNTIME_DEFAULT_IDLE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 
 import type {
   GovernedCodingToolPort,
   GovernedCodingToolResult,
 } from "../../coding-runtime/codingToolGovernedDelegate.js";
+import {
+  createReviewReadAllowance,
+  type ReviewReadAllowance,
+  type ReviewReadCallCounts,
+} from "../../coding-runtime/reviewRuntimeGuard.js";
 import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { reportReviewFailure } from "../diagnostics.js";
@@ -113,6 +121,11 @@ export type ReviewRuntimeRunResult =
       readonly rulesText?: string | undefined;
       readonly candidates: readonly ReviewCandidateFinding[];
       readonly rejections: Readonly<Record<ReviewReportRejectionReason, number>>;
+      /**
+       * The session's read, search and discover calls the tool facade answered and the ones it
+       * refused once the read allowance was used up (#4130); absent when no session started.
+       */
+      readonly readCalls?: ReviewReadCallCounts | undefined;
     }
   | {
       readonly ok: false;
@@ -126,6 +139,7 @@ export interface ReviewRuntimeServiceDeps {
   readonly compose: (
     instanceId: string,
     reviewReportPort: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
+    reviewReadAllowance: (runId: string) => ReviewReadAllowance | undefined,
   ) => ReviewRuntimeComposition | ReviewRuntimeComposeRefusal;
   /** What the self-check reads for a composed instance about to run one review. */
   readonly layersFor: (
@@ -139,6 +153,8 @@ export interface ReviewRuntimeServiceDeps {
   /** Where a failed readiness check is reported (#4130); the server's diagnostic sink by default. */
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly idleMs?: number | undefined;
+  /** Read, search and discover calls one session gets answered (#4130); the contract default. */
+  readonly maxReadCalls?: number | undefined;
   readonly now?: (() => number) | undefined;
   readonly setTimer?: ((callback: () => void, ms: number) => unknown) | undefined;
   readonly clearTimer?: ((handle: unknown) => void) | undefined;
@@ -164,7 +180,12 @@ export interface ReviewRuntimeService {
 
 interface LiveInstance {
   readonly composition: ReviewRuntimeComposition;
-  readonly slot: { intake: ReviewFindingIntake | undefined; pending: PendingIntake | undefined };
+  readonly slot: {
+    intake: ReviewFindingIntake | undefined;
+    pending: PendingIntake | undefined;
+    /** The read allowance of the session in flight; one session at a time per instance. */
+    reads: ReviewReadAllowance | undefined;
+  };
   busy: boolean;
   runCount: number;
   idleSince: number;
@@ -256,9 +277,13 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
     placement?: ReviewRuntimePlacement,
   ): LiveInstance | undefined {
     const startedAt = this.now();
-    const slot: LiveInstance["slot"] = { intake: undefined, pending: undefined };
+    const slot: LiveInstance["slot"] = { intake: undefined, pending: undefined, reads: undefined };
     const instanceId = randomUUID();
-    const composition = this.deps.compose(instanceId, reviewReportPortFor(slot));
+    const composition = this.deps.compose(
+      instanceId,
+      reviewReportPortFor(slot),
+      (): ReviewReadAllowance | undefined => slot.reads,
+    );
     if ("startFailure" in composition) {
       this.startFailed(instanceId, composition.startFailure, correlationId);
       return undefined;
@@ -569,6 +594,9 @@ async function runOnInstance(
     if (request.signal?.aborted === true) return cancelledBeforeLaunch(prepared.rules);
     const refusal = selfCheckRefusal(context, live, request);
     if (refusal !== undefined) return { ok: false, reason: refusal, rules: prepared.rules };
+    live.slot.reads = createReviewReadAllowance(
+      context.deps.maxReadCalls ?? REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
+    );
     live.slot.pending = {
       create: (runId): ReviewFindingIntake =>
         createReviewFindingIntake({
@@ -590,6 +618,7 @@ async function runOnInstance(
     workspace.clear();
     live.slot.pending = undefined;
     live.slot.intake = undefined;
+    live.slot.reads = undefined;
     live.busy = false;
     live.runCount += 1;
     // `runReview` re-arms the idle stop once the repository's reservation is released.
@@ -627,6 +656,7 @@ function collected(
     rules,
     candidates: intake?.candidates() ?? [],
     rejections: intake?.rejections() ?? NO_REJECTIONS,
+    ...(live.slot.reads === undefined ? {} : { readCalls: live.slot.reads.counts() }),
   };
 }
 

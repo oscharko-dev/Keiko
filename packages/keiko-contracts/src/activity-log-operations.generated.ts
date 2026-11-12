@@ -34558,6 +34558,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      readCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      refusedReadCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       promptTokens: {
         type: "integer",
         dataClass: "count",

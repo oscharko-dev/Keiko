@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
   REVIEW_RUN_MAX_CANDIDATE_REPORTS,
   REVIEW_RUN_MAX_DIFF_PARTS,
   REVIEW_RUNTIME_TOOL_NAMES,
@@ -43,6 +44,11 @@ describe("REVIEW_SYSTEM_PROMPT", () => {
     expect(REVIEW_SYSTEM_PROMPT).toContain("as soon as you have confirmed it");
     expect(REVIEW_SYSTEM_PROMPT).toContain("only the findings you have already reported count");
     expect(REVIEW_SYSTEM_PROMPT).toContain("about 15 read or search calls");
+    // #4130: the prompt states the allowance the tool facade enforces, with the contract's number.
+    expect(REVIEW_SYSTEM_PROMPT).toContain(
+      `answer at most ${String(REVIEW_RUN_DEFAULT_MAX_READ_CALLS)} calls in one review`,
+    );
+    expect(REVIEW_SYSTEM_PROMPT).toContain("report what you have confirmed and end your turn");
   });
 
   it("defines a finding as a defect an input reaches past every later guard", () => {

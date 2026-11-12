@@ -20,6 +20,7 @@ import type {
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { ServerLogSink } from "../observability/index.js";
+import type { ReviewReadAllowance } from "./reviewRuntimeGuard.js";
 
 export interface CodingToolProducerBinding {
   readonly runId: string;
@@ -224,6 +225,12 @@ export interface CodingToolFacadeOptions {
   /** Where a layer-4 refusal is recorded, and under which correlation; the process sink otherwise. */
   readonly runtimePurposeLog?:
     { readonly sink: ServerLogSink; readonly correlationId: () => string | undefined } | undefined;
+  /**
+   * ADR-0182 D1 (#4130): a review run's read allowance. Once it is used up, the facade refuses the
+   * run's read, discover and search calls with one fixed instruction, before any admission. Absent,
+   * or on a run without the review purpose, nothing is counted.
+   */
+  readonly reviewReadAllowance?: ReviewReadAllowance | undefined;
 }
 
 export interface CodingToolFacadeInput {

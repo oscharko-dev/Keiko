@@ -71,6 +71,23 @@ findings about the changed code in that part; a single-part task has no such lin
 holdout motivated the split: 158 of 226 measured reviews left diff files unprocessed because the
 whole package had to fit one task.
 
+Each session also has a read allowance (Issue #4130): the tool facade answers at most
+`REVIEW_RUN_DEFAULT_MAX_READ_CALLS` (24) read, search and discover calls of a session. It refuses
+every further one before any admission, with one fixed instruction to report the confirmed findings
+and end the turn. `keiko_review_report` is never counted or refused by it. The task already carries
+every changed hunk of the part, so the allowance bounds only how much surrounding code a session
+fetches. A session that ends its turn after the allowance is a completed session, and its part
+counts as reviewed. Its `review.run.part` line records the answered and the refused read calls
+(`readCallCount`, `refusedReadCallCount`), so every part that reached the allowance is visible. The
+reason is the measured behaviour of a local Reviewer: every tool call resends the whole
+conversation, and in the 418 stored reviews of the 4-bit gate runs the 127 that ran out of prompt
+budget had made 39 to 45 model calls (first to third quartile), 73 of them without one report.
+After 26 model calls a review had used 703,000 prompt tokens at the median and 1,143,000 at most,
+which leaves room for its reports within the default allowance. The Reviewer prompt names the
+allowance and still plans for about 15 calls. The counter and its predicate live beside the layer-4
+guard (`reviewRuntimeGuard.ts`); the review runtime creates one per session and returns its counts
+with the session's result.
+
 ### D2 — Read-only by construction, independent of the autonomy mode
 
 A review run has a closed tool allowlist: `keiko_workspace_read`, `keiko_workspace_discover`,

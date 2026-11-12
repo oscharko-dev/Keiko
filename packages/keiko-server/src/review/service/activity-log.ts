@@ -177,6 +177,10 @@ const REVIEW_RUN_PART = defineActivityLogOperation({
     },
     runtimeRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 64 },
     candidateCount: COUNT,
+    // #4130: the session's read, search and discover calls the tool facade answered, and the ones
+    // it refused once the read allowance was used up. Absent when no session started.
+    readCallCount: OPTIONAL_COUNT,
+    refusedReadCallCount: OPTIONAL_COUNT,
     promptTokens: COUNT,
     completionTokens: COUNT,
     durationMs: DURATION,
@@ -350,6 +354,8 @@ export interface ReviewRunPartLine {
     Exclude<ReviewRunSettlement, { readonly kind: "complete" }>["reason"] | undefined;
   readonly runtimeRunId?: string | undefined;
   readonly candidateCount: number;
+  /** The session's answered and refused read calls (#4130); absent when no session started. */
+  readonly readCalls?: { readonly admitted: number; readonly refused: number } | undefined;
   readonly totals: ReviewRoleTotals;
 }
 
@@ -373,6 +379,12 @@ export function logReviewRunPart(
         ...(line.reason === undefined ? {} : { reason: line.reason }),
         ...(line.runtimeRunId === undefined ? {} : { runtimeRunId: line.runtimeRunId }),
         candidateCount: line.candidateCount,
+        ...(line.readCalls === undefined
+          ? {}
+          : {
+              readCallCount: line.readCalls.admitted,
+              refusedReadCallCount: line.readCalls.refused,
+            }),
         promptTokens: line.totals.promptTokens,
         completionTokens: line.totals.completionTokens,
         durationMs: Math.max(0, Math.round(line.totals.durationMs)),

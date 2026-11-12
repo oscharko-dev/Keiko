@@ -744,6 +744,16 @@ export const REVIEW_RULES_FILE_DEFAULT_PATH = ".keiko/review-rules.md";
 export const REVIEW_RUN_DEFAULT_PROMPT_TOKENS = 1_500_000;
 export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
 /**
+ * The read, search and discover calls one Reviewer session gets answered (ADR-0182 D1, Issue
+ * #4130). Every call resends the whole conversation, so a session that keeps reading uses up its
+ * prompt allowance before it reports. In the 418 stored reviews of the 4-bit gate runs, the 127
+ * that ran out of prompt budget made 39 to 45 model calls (first to third quartile), and 73 of them
+ * had reported nothing. After 26 model calls a review had used 703,000 prompt tokens at the median
+ * and 1,143,000 at most, which leaves room for the reports. The Reviewer prompt still plans for
+ * about 15 calls.
+ */
+export const REVIEW_RUN_DEFAULT_MAX_READ_CALLS = 24;
+/**
  * The most parts one review's diff package is split into (ADR-0182 D1). Each part fits the
  * runtime's first-prompt bound and gets its own Reviewer session, which the run budgets above
  * bound one by one; whatever does not fit these parts is `unprocessed` (`budget`).

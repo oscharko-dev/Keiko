@@ -146,6 +146,7 @@ describe("review run Activity Log proofs", () => {
         ...part,
         outcome: "completed",
         runtimeRunId: "run-7f3c",
+        readCalls: { admitted: 24, refused: 2 },
       });
     });
     expect(expectActivityLogProof("review.run.part.line", completed)).toMatchObject({
@@ -155,6 +156,9 @@ describe("review run Activity Log proofs", () => {
       fileCount: 5,
       outcome: "completed",
       runtimeRunId: "run-7f3c",
+      // #4130: the session's answered read calls, and the ones refused past its allowance.
+      readCallCount: 24,
+      refusedReadCallCount: 2,
       promptTokens: 1200,
       durationMs: 4_000,
     });
@@ -171,6 +175,9 @@ describe("review run Activity Log proofs", () => {
       reason: "budget-exhausted",
     });
     expect(JSON.parse(failed)).not.toHaveProperty("runtimeRunId");
+    // A part whose session never started carries no read counts.
+    expect(JSON.parse(failed)).not.toHaveProperty("readCallCount");
+    expect(JSON.parse(failed)).not.toHaveProperty("refusedReadCallCount");
   });
 
   it("proves review.run.settled with settlement, verdict counts and role totals", () => {

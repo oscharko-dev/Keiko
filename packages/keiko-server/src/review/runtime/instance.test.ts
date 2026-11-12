@@ -5,9 +5,11 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
+import { REVIEW_RUN_DEFAULT_MAX_READ_CALLS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 import type { GovernedCodingToolPort } from "../../coding-runtime/codingToolGovernedDelegate.js";
+import type { ReviewReadAllowance } from "../../coding-runtime/reviewRuntimeGuard.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../../diagnostics-log.js";
 import { DiffFixtureRepository } from "../diff-package/diffFixtures.test-support.js";
 import type { ReviewRuntimeComposeRefusal, ReviewRuntimeComposition } from "./composition.js";
@@ -96,6 +98,7 @@ function service(
     readonly layers?: ReviewRuntimeLayers | (() => ReviewRuntimeLayers);
     readonly compose?: boolean;
     readonly diagnostics?: ServerDiagnosticSink;
+    readonly maxReadCalls?: number;
   } = {},
 ): ServiceFixture {
   const log = createBufferedServerLogSink();
@@ -107,11 +110,12 @@ function service(
     (
       instanceId: string,
       port: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
+      reads: (runId: string) => ReviewReadAllowance | undefined,
     ): ReviewRuntimeComposition | ReviewRuntimeComposeRefusal => {
       if (options.compose === false) return { startFailure: "loopback-unavailable" };
       const scripted = scripts[Math.min(composed, scripts.length - 1)] ?? { reports: [] };
       composed += 1;
-      return fakeReviewComposition(instanceId, port, scripted, observed);
+      return fakeReviewComposition(instanceId, port, scripted, observed, reads);
     },
   );
   const subject = createReviewRuntimeService({
@@ -121,6 +125,7 @@ function service(
     runner: () => createGitReviewProcessRunner(),
     activityLog: log,
     diagnostics: options.diagnostics,
+    ...(options.maxReadCalls === undefined ? {} : { maxReadCalls: options.maxReadCalls }),
     setTimer: (callback) => {
       timers.push(callback);
       return timers.length;
@@ -523,6 +528,60 @@ describe("createReviewRuntimeService", () => {
         expect(next).not.toMatchObject({ reason: "busy" });
       },
     );
+  });
+
+  // #4130: a Reviewer that kept reading resent its whole conversation with every call and ran out
+  // of prompt budget before it reported. Each session gets its own read allowance.
+  describe("the session's read allowance", () => {
+    it("returns the answered and the refused read calls of the session", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject } = service({ reports: [VALID_REPORT], reads: 5 }, { maxReadCalls: 3 });
+
+      const result = await subject.run(request(repo, base, head));
+
+      expect(result).toMatchObject({
+        ok: true,
+        outcome: "completed",
+        readCalls: { admitted: 3, refused: 2 },
+      });
+      if (!result.ok) throw new Error("expected a run");
+      expect(result.candidates).toHaveLength(1);
+    });
+
+    it("gives the next session of the instance a fresh allowance", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject, compose } = service({ reports: [], reads: 2 }, { maxReadCalls: 2 });
+
+      const first = await subject.run(request(repo, base, head));
+      const second = await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
+
+      expect(compose).toHaveBeenCalledTimes(1);
+      expect(first).toMatchObject({ ok: true, readCalls: { admitted: 2, refused: 0 } });
+      expect(second).toMatchObject({ ok: true, readCalls: { admitted: 2, refused: 0 } });
+    });
+
+    it("answers the contract's default number of read calls", async () => {
+      const { repo, base, head } = headRepository();
+      const reads = REVIEW_RUN_DEFAULT_MAX_READ_CALLS + 1;
+      const { subject } = service({ reports: [], reads });
+
+      await expect(subject.run(request(repo, base, head))).resolves.toMatchObject({
+        ok: true,
+        readCalls: { admitted: REVIEW_RUN_DEFAULT_MAX_READ_CALLS, refused: 1 },
+      });
+    });
+
+    it("reports no read calls for a launch that started no session", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject } = service(
+        { reports: [] },
+        { layers: { ...reviewLayers(), toolProfile: "native" } },
+      );
+
+      const refused = await subject.run(request(repo, base, head));
+
+      expect(refused).toEqual({ ok: false, reason: "native-profile", rules: "absent" });
+    });
   });
 
   // R4130-019: a composition that failed returned `undefined` without a line, so every review
