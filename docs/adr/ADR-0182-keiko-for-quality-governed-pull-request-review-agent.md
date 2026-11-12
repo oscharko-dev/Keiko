@@ -421,9 +421,13 @@ a part's verification drops ends that file. Whatever does not fit the last part 
 sum of the parts' counts. PR-Agent applies its extra lines (five before, one after) on top of the
 provider's three default context lines; Keiko applies its own counts exactly. Child 8 measurement
 changed the lines after a change from one to three (Issue #4130): with one line, a guard two lines
-below a changed condition lay outside the hunk, and the Reviewer reported the input that guard
-stops. On the off-by-one seed, 8 of 30 sampled Reviewer reports named only the consequence that
-gets past the guard with one line, and 20 of 28 with three.
+below a changed condition lay outside the hunk, and the Reviewer reported the value that guard
+stops. The basis is a lab probe, not a gate run: it sampled the Reviewer alone on the off-by-one
+seed, with approximated read tools and no Counter-checker. With one line, 8 of 30 sampled reports
+named only the consequence that gets past the guard (three pooled rounds). With three lines, 20 of
+28 did (two pooled rounds, 16 of the 28 samples from a hand-edited task and 12 from the product's
+builder). The seed gate is the end-to-end measurement of this default, and its runs are recorded in
+`docs/qa/review-agent-offline-gate-2026-11-01.md`.
 
 ### D7 — Finding decisions and the audit trail
 
