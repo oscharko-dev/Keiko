@@ -163,7 +163,9 @@
         "root-product",
         "package:@oscharko-dev/keiko-verification",
         "package:@oscharko-dev/keiko-cli",
-        "package:@oscharko-dev/keiko-tools"
+        "package:@oscharko-dev/keiko-tools",
+        "package:@oscharko-dev/keiko-security",
+        "package:@oscharko-dev/keiko-ui"
       ]
     },
     {
