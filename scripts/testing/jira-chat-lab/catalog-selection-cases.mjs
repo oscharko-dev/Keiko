@@ -1,7 +1,8 @@
 // Natural-language catalog selection cases (#4327). A request names neither the tool nor its
 // arguments, so the model has to find the operation in the Jira catalog itself (directly or through
 // jira.discover / jira.describe) and build the arguments from the person's words. Every truth is an
-// independent native Jira read with the lab actor's credentials, never Keiko's own answer.
+// independent native Jira read with the lab actor's credentials, never Keiko's own answer; a read
+// that cannot see an owned object, or a list beyond the tools' first page, makes the attempt invalid.
 import { voteKey } from "./catalog-selection-objects.mjs";
 import { actorDetails, basicAuth, checked } from "./lab-client.mjs";
 
@@ -14,19 +15,33 @@ const projectPath = (f, suffix = "") =>
   `/rest/api/2/project/${encodeURIComponent(f.project)}${suffix}`;
 const issuePath = (f, suffix = "") =>
   `/rest/api/2/issue/${encodeURIComponent(f.selection.issueKey)}${suffix}`;
+const utcDay = () => new Date().toISOString().slice(0, 10);
 const countMatching = (rows, predicate) => rows.filter(predicate).length;
+// The catalog's list reads return 25 rows unless asked for more; a longer native list could hide
+// the owned object from a correct call, so such a truth is refused instead of graded.
+const TOOL_PAGE_ROWS = 25;
+
+/** The owned object's name, after the native read proved it visible on the tools' first page. */
+function ownedName(rows, name, read = (row) => row.name) {
+  if (rows.length > TOOL_PAGE_ROWS) throw new TypeError("The native list exceeds one tool page");
+  if (!rows.some((row) => String(read(row)) === name))
+    throw new TypeError("An owned object is not visible to the api actor");
+  return [name];
+}
 
 /** Read cases whose operation is reachable only through the catalog search. */
 const DISCOVERY_READS = [
   {
     id: "priorities",
     tool: "jira.priorities",
+    alternatives: ["jira.priority-page"],
     prompt: () => "Welche Prioritätsstufen sind in unserem Jira definiert? Nenne alle Namen.",
     truth: async (s) => names(await native(s, "/rest/api/2/priority")),
   },
   {
     id: "resolutions",
     tool: "jira.resolutions",
+    alternatives: ["jira.resolution-page"],
     prompt: () =>
       "Welche Lösungen (Resolutions) kann ein Vorgang in unserem Jira bekommen? Nenne alle Namen.",
     truth: async (s) => names(await native(s, "/rest/api/2/resolution")),
@@ -40,7 +55,10 @@ const DISCOVERY_READS = [
   {
     id: "project-statuses",
     tool: "jira.project-statuses",
-    prompt: (f) => `Welche Status können Vorgänge im Jira-Projekt ${f.project} annehmen?`,
+    // Not "Vorgänge im Projekt": that wording asks about issues, which jira.report answers from the
+    // statuses issues currently have, not from the project's configuration.
+    prompt: (f) =>
+      `Welche Status sind für das Jira-Projekt ${f.project} im Workflow konfiguriert? Nenne alle Namen.`,
     truth: async (s, f) =>
       (await native(s, projectPath(f, "/statuses"))).flatMap((type) => names(type.statuses)),
   },
@@ -71,6 +89,7 @@ const DISCOVERY_READS = [
   {
     id: "global-issue-types",
     tool: "jira.global-issue-types",
+    alternatives: ["jira.issue-type-page"],
     prompt: () =>
       "Welche Vorgangstypen sind systemweit in unserem Jira angelegt? Nenne alle Namen.",
     truth: async (s) => names(await native(s, "/rest/api/2/issuetype")),
@@ -79,45 +98,68 @@ const DISCOVERY_READS = [
     id: "components",
     tool: "jira.components",
     prompt: (f) => `Welche Komponenten hat das Jira-Projekt ${f.project}?`,
-    truth: async (_s, f) => [f.selection.componentName],
+    truth: async (s, f) =>
+      ownedName(await native(s, projectPath(f, "/components")), f.selection.componentName),
   },
   {
     id: "versions",
     tool: "jira.versions",
+    alternatives: ["jira.project-version-page"],
     prompt: (f) => `Welche Versionen sind im Jira-Projekt ${f.project} angelegt?`,
-    truth: async (_s, f) => [f.selection.versionName],
+    truth: async (s, f) =>
+      ownedName(await native(s, projectPath(f, "/versions")), f.selection.versionName),
   },
   {
     id: "remote-links",
     tool: "jira.remote-links",
     prompt: (f) =>
       `Welche externen Links (Remote Links) hängen am Vorgang ${f.selection.issueKey}?`,
-    truth: async (_s, f) => [f.selection.remoteLinkTitle],
+    truth: async (s, f) =>
+      ownedName(
+        await native(s, issuePath(f, "/remotelink")),
+        f.selection.remoteLinkTitle,
+        (row) => row.object?.title,
+      ),
   },
   {
     id: "issue-property-keys",
     tool: "jira.issue-property-keys",
     prompt: (f) =>
       `Welche Entity-Properties sind am Vorgang ${f.selection.issueKey} gespeichert? Nenne die Schlüssel.`,
-    truth: async (_s, f) => [f.selection.propertyKey],
+    truth: async (s, f) =>
+      ownedName(
+        (await native(s, issuePath(f, "/properties"))).keys ?? [],
+        f.selection.propertyKey,
+        (row) => row.key,
+      ),
   },
   {
     id: "favourite-filters",
     tool: "jira.favourite-filters",
     prompt: () => "Welche Jira-Filter habe ich als Favoriten markiert?",
-    truth: async (_s, f) => [f.selection.filterName],
+    truth: async (s, f) =>
+      ownedName(await native(s, "/rest/api/2/filter/favourite"), f.selection.filterName),
   },
   {
     id: "boards",
     tool: "jira.boards",
     prompt: () => "Welche Agile-Boards gibt es in unserem Jira?",
-    truth: async (_s, f) => [f.selection.boardName],
+    truth: async (s, f) =>
+      ownedName(
+        (await native(s, "/rest/agile/1.0/board?maxResults=50")).values ?? [],
+        f.selection.boardName,
+      ),
   },
   {
     id: "sprints",
     tool: "jira.sprints",
     prompt: (f) => `Welche Sprints hat das Agile-Board "${f.selection.boardName}"?`,
-    truth: async (_s, f) => [f.selection.sprintName],
+    truth: async (s, f) =>
+      ownedName(
+        (await native(s, `/rest/agile/1.0/board/${f.selection.boardId}/sprint?maxResults=50`))
+          .values ?? [],
+        f.selection.sprintName,
+      ),
   },
 ];
 
@@ -126,6 +168,7 @@ const BASE_READS = [
   {
     id: "search",
     tool: "jira.search",
+    alternatives: ["jira.search-post"],
     prompt: (f) => `Welche Vorgänge gibt es im Jira-Projekt ${f.project}? Nenne die Schlüssel.`,
     // Every key while the project fits one truth page; otherwise only the two owned issues, which
     // any complete answer names, because a longer listing's first page depends on the tool's order.
@@ -140,6 +183,8 @@ const BASE_READS = [
   {
     id: "issue",
     tool: "jira.issue",
+    // A key search returns the summary just as well (reviewed 2026-11-12).
+    alternatives: ["jira.search", "jira.search-post"],
     prompt: (f) => `Wie lautet die Zusammenfassung des Vorgangs ${f.selection.issueKey}?`,
     truth: async (s, f) => [
       String((await native(s, issuePath(f, "?fields=summary"))).fields.summary),
@@ -234,7 +279,9 @@ const WRITES = [
     id: "worklog",
     tool: "jira.create-worklog",
     prompt: (f, m) =>
-      `Buche auf den Vorgang ${f.selection.issueKey} 30 Minuten Arbeitszeit mit dem Kommentar "${m} W".`,
+      // The tool requires a start time, which the request has to supply; "Kommentar" alone would
+      // also fit an issue comment, so the text is named as the worklog's description.
+      `Buche auf den Vorgang ${f.selection.issueKey} 30 Minuten Arbeitszeit, begonnen am ${utcDay()} um 09:00 Uhr UTC, mit der Beschreibung "${m} W" für die Zeitbuchung.`,
     verify: async (s, f, m) => {
       const page = await native(s, issuePath(f, "/worklog"));
       const rows = page.worklogs.filter((row) => row.comment === `${m} W`);

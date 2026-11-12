@@ -29,6 +29,7 @@ const {
   selectionNames,
   strayWrites,
 } = await import("../testing/jira-chat-lab/catalog-selection-objects.mjs");
+const { SELECTION_CASES } = await import("../testing/jira-chat-lab/catalog-selection-cases.mjs");
 
 describe("removeNative", () => {
   beforeEach(() => {
@@ -238,5 +239,27 @@ describe("createSelectionObjects", () => {
     expect(created).toMatchObject({ boardId: "7", sprintId: "8" });
     const reads = requests.filter((entry) => entry.path === "/rest/agile/1.0/sprint/8");
     expect(reads).toHaveLength(3);
+  });
+});
+
+describe("owned read truths", () => {
+  const fixture = { project: "KEIKO", selection: { componentName: "Auswahl Komponente t" } };
+  const truth = () => SELECTION_CASES.find((entry) => entry.id === "components").truth({}, fixture);
+  const path = "/rest/api/2/project/KEIKO/components";
+  beforeEach(() => reads.clear());
+
+  it("reads the owned object natively instead of trusting the fixture", async () => {
+    reads.set(path, [{ name: "Other" }, { name: "Auswahl Komponente t" }]);
+    await expect(truth()).resolves.toEqual(["Auswahl Komponente t"]);
+  });
+
+  it("refuses a truth the api actor cannot see or a tool's first page cannot hold", async () => {
+    reads.set(path, [{ name: "Other" }]);
+    await expect(truth()).rejects.toThrow("not visible to the api actor");
+    reads.set(
+      path,
+      Array.from({ length: 26 }, (_, index) => ({ name: `Auswahl Komponente ${index}` })),
+    );
+    await expect(truth()).rejects.toThrow("exceeds one tool page");
   });
 });
