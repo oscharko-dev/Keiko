@@ -243,23 +243,52 @@ describe("createSelectionObjects", () => {
 });
 
 describe("owned read truths", () => {
-  const fixture = { project: "KEIKO", selection: { componentName: "Auswahl Komponente t" } };
-  const truth = () => SELECTION_CASES.find((entry) => entry.id === "components").truth({}, fixture);
-  const path = "/rest/api/2/project/KEIKO/components";
+  const selection = {
+    issueKey: "KEIKO-1",
+    boardId: "7",
+    componentName: "Auswahl Komponente t",
+    versionName: "Auswahl Version t",
+    remoteLinkTitle: "Auswahl Link t",
+    propertyKey: "keiko.selection.owned.t",
+    filterName: "Auswahl Favorit t",
+    boardName: "Auswahl Board t",
+    sprintName: "Auswahl Sprint t",
+  };
+  const fixture = { project: "KEIKO", selection };
+  const issue = "/rest/api/2/issue/KEIKO-1";
+  // Each reader's native path and how the owned name sits in that answer.
+  const READERS = [
+    ["components", "/rest/api/2/project/KEIKO/components", (name) => [{ name }]],
+    ["versions", "/rest/api/2/project/KEIKO/versions", (name) => [{ name }]],
+    ["remote-links", `${issue}/remotelink`, (title) => [{ object: { title } }]],
+    ["issue-property-keys", `${issue}/properties`, (key) => ({ keys: [{ key }] })],
+    ["favourite-filters", "/rest/api/2/filter/favourite", (name) => [{ name }]],
+    ["boards", "/rest/agile/1.0/board", (name) => ({ values: [{ name }] })],
+    ["sprints", "/rest/agile/1.0/board/7/sprint", (name) => ({ values: [{ name }] })],
+  ];
+  const owned = {
+    components: selection.componentName,
+    versions: selection.versionName,
+    "remote-links": selection.remoteLinkTitle,
+    "issue-property-keys": selection.propertyKey,
+    "favourite-filters": selection.filterName,
+    boards: selection.boardName,
+    sprints: selection.sprintName,
+  };
+  const truth = (id) => SELECTION_CASES.find((entry) => entry.id === id).truth({}, fixture);
   beforeEach(() => reads.clear());
 
-  it("reads the owned object natively instead of trusting the fixture", async () => {
-    reads.set(path, [{ name: "Other" }, { name: "Auswahl Komponente t" }]);
-    await expect(truth()).resolves.toEqual(["Auswahl Komponente t"]);
+  it.each(READERS)("%s reads the owned object natively", async (id, path, answer) => {
+    reads.set(path, answer(owned[id]));
+    await expect(truth(id)).resolves.toEqual([owned[id]]);
+    reads.set(path, answer("Something else"));
+    await expect(truth(id)).rejects.toThrow("not visible to the api actor");
   });
 
-  it("refuses a truth the api actor cannot see or a tool's first page cannot hold", async () => {
-    reads.set(path, [{ name: "Other" }]);
-    await expect(truth()).rejects.toThrow("not visible to the api actor");
-    reads.set(
-      path,
-      Array.from({ length: 26 }, (_, index) => ({ name: `Auswahl Komponente ${index}` })),
-    );
-    await expect(truth()).rejects.toThrow("exceeds one tool page");
+  it("refuses a native list that a tool's first page cannot hold", async () => {
+    const path = "/rest/agile/1.0/board";
+    const values = Array.from({ length: 26 }, (_, index) => ({ name: `Board ${index}` }));
+    reads.set(path, { values: [...values, { name: selection.boardName }] });
+    await expect(truth("boards")).rejects.toThrow("exceeds one tool page");
   });
 });

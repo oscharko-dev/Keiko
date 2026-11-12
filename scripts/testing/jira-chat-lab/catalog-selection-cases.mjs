@@ -183,7 +183,8 @@ const BASE_READS = [
   {
     id: "issue",
     tool: "jira.issue",
-    // A key search returns the summary just as well (reviewed 2026-11-12).
+    // A key search returns the summary just as well (reviewed 2026-11-12). A broader search that
+    // merely lists the issue also carries it; both count as an alternative, never as selected.
     alternatives: ["jira.search", "jira.search-post"],
     prompt: (f) => `Wie lautet die Zusammenfassung des Vorgangs ${f.selection.issueKey}?`,
     truth: async (s, f) => [
