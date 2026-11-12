@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const requests = [];
 const statuses = new Map();
@@ -12,7 +12,9 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
       requests.push({ method, path, body });
       return creations.get(path) ?? {};
     }
-    const key = [...reads.keys()].find((prefix) => path.startsWith(prefix));
+    const key = [...reads.keys()]
+      .filter((prefix) => path.startsWith(prefix))
+      .sort((a, b) => b.length - a.length)[0];
     return structuredClone(reads.get(key) ?? {});
   }),
   labRequest: vi.fn(async (_session, method, path, auth) => {
@@ -88,6 +90,7 @@ describe("scopeSnapshot", () => {
     reads.clear();
     requests.length = 0;
     statuses.clear();
+    reads.set("/rest/api/2/filter/my", []);
     reads.set("/rest/api/2/project/KEIKO/components", []);
     reads.set("/rest/api/2/project/KEIKO/versions", []);
     reads.set("/rest/api/2/search", { total: 2, issues: [{ key: "K-1" }, { key: "K-2" }] });
@@ -146,6 +149,7 @@ describe("scopeSnapshot content", () => {
     reads.clear();
     requests.length = 0;
     statuses.clear();
+    reads.set("/rest/api/2/filter/my", []);
     reads.set("/rest/api/2/project/KEIKO/", []);
     reads.set("/rest/api/2/search", { total: 2, issues: [{ key: "K-1" }, { key: "K-2" }] });
     for (const key of ["K-1", "K-2"]) {
@@ -166,6 +170,36 @@ describe("scopeSnapshot content", () => {
     statuses.set("/rest/agile/1.0/sprint/8", 404);
     const after = await scopeSnapshot({}, { project: "KEIKO" }, created);
     expect(strayWrites(before, after, [], "Auswahl t")).toMatchObject({ changed: 1, removed: 1 });
+  });
+
+  it("sees an overwritten property value and a filter the api actor created as stray writes", async () => {
+    reads.set(`${issue("K-1")}/properties`, { keys: [{ key: "p" }] });
+    reads.set(`${issue("K-1")}/properties/p`, { value: { a: 1 } });
+    reads.set("/rest/api/2/filter/my", [{ id: 10, name: "Auswahl Favorit" }]);
+    const before = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    reads.set(`${issue("K-1")}/properties/p`, { value: { a: 2 } });
+    reads.set("/rest/api/2/filter/my", [
+      { id: 10, name: "Auswahl Favorit" },
+      { id: 11, name: "Extra", jql: "project = KEIKO" },
+    ]);
+    const after = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    const stray = strayWrites(before, after, [], "Auswahl t");
+    expect(stray).toMatchObject({ changed: 1 });
+    expect(stray.remove).toEqual([{ path: "/rest/api/2/filter/11", actor: "api" }]);
+  });
+
+  it("refuses a filter collection it cannot read completely", async () => {
+    reads.set(
+      "/rest/api/2/filter/my",
+      Array.from({ length: 100 }, (_, id) => ({ id: id + 50 })),
+    );
+    await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow(
+      "filters exceed",
+    );
+    reads.set("/rest/api/2/filter/my", {});
+    await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow(
+      "filters exceed",
+    );
   });
 
   it("fails closed when the search answer carries no total", async () => {
@@ -189,6 +223,7 @@ describe("scopeSnapshot content", () => {
 });
 
 describe("createSelectionObjects", () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     requests.length = 0;
     statuses.clear();
@@ -220,10 +255,13 @@ describe("createSelectionObjects", () => {
 
   it("refuses an invisible board after recording every id it created", async () => {
     statuses.set("/rest/agile/1.0/board/7", 404);
+    vi.useFakeTimers();
     const created = selectionNames(fixture, "t");
-    await expect(createSelectionObjects({}, fixture, "t", created)).rejects.toThrow(
+    const outcome = expect(createSelectionObjects({}, fixture, "t", created)).rejects.toThrow(
       "not visible to the api actor",
     );
+    await vi.advanceTimersByTimeAsync(1000);
+    await outcome;
     expect(created).toMatchObject({ sharedFilterId: "9", boardId: "7" });
     expect(created.sprintId).toBeUndefined();
     const reads = requests.filter((entry) => entry.path === "/rest/agile/1.0/board/7");
@@ -232,10 +270,13 @@ describe("createSelectionObjects", () => {
 
   it("refuses an invisible sprint after recording its id", async () => {
     statuses.set("/rest/agile/1.0/sprint/8", 403);
+    vi.useFakeTimers();
     const created = selectionNames(fixture, "t");
-    await expect(createSelectionObjects({}, fixture, "t", created)).rejects.toThrow(
+    const outcome = expect(createSelectionObjects({}, fixture, "t", created)).rejects.toThrow(
       "not visible to the api actor",
     );
+    await vi.advanceTimersByTimeAsync(1000);
+    await outcome;
     expect(created).toMatchObject({ boardId: "7", sprintId: "8" });
     const reads = requests.filter((entry) => entry.path === "/rest/agile/1.0/sprint/8");
     expect(reads).toHaveLength(3);

@@ -130,6 +130,22 @@ async function settleWrite(session, run, entry, turnFor, before) {
 }
 
 /**
+ * The recovery after a failed settlement: the whole scope is brought back to its state before the
+ * turn, not only the case's own effect, and proven by a fresh snapshot. A scope that cannot be
+ * shown clean throws, so the run stops with its pending marker kept for reconciliation.
+ */
+export async function recoverScope(session, run, entry, turnFor, before) {
+  const { fixture, marker, tag } = turnFor;
+  const wide = `Auswahl ${run.tag}`;
+  const after = await scopeSnapshot(session, fixture, fixture.selection);
+  await removeNative(session, strayWrites(before, after, [], wide).remove);
+  await cleanBefore(session, fixture, entry, marker, tag);
+  const final = await scopeSnapshot(session, fixture, fixture.selection);
+  if (strayWrites(before, final, [], wide).remove.length > 0)
+    throw new TypeError(`Owned scope of ${entry.id} is not clean after recovery`);
+}
+
+/**
  * One write turn on owned objects. A native read or removal that fails after the turn makes this
  * attempt invalid; the case's own scope is then cleaned again, and only if that also fails does
  * the run stop, keeping the pending marker for reconciliation.
@@ -155,7 +171,7 @@ async function writeAttempt(context, run, entry, turnFor) {
     settled = await settleWrite(session, run, entry, turnFor, before);
   } catch (error) {
     stage("verify-unavailable", { id: entry.id, errorType: errorName(error) });
-    await cleanBefore(session, fixture, entry, marker, tag);
+    await recoverScope(session, run, entry, turnFor, before);
     settled = { proof: { truthUnavailable: true } };
   }
   rmSync(run.pendingPath);

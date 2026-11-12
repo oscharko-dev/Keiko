@@ -254,6 +254,20 @@ function watcherRows(issue, watchers) {
     .map((row) => [`${issue}/watchers?username=${encodeURIComponent(row.name)}`, own(row.name)]);
 }
 
+const PROPERTIES_MAX = 20;
+
+/** Every bounded property by key and a digest of its value, so an overwrite is seen as a change. */
+function propertyRows(session, issue, keys) {
+  if (keys.length > PROPERTIES_MAX)
+    throw new TypeError("An owned issue exceeds the property snapshot bound");
+  return Promise.all(
+    keys.map(async (row) => {
+      const value = await read(session, `${issue}/properties/${encodeURIComponent(row.key)}`);
+      return [`${issue}/properties/${row.key}`, own(`${row.key} ${contentDigest(value.value)}`)];
+    }),
+  );
+}
+
 /** The objects and fields of one owned issue a write turn could add or change. */
 async function issueScope(session, key) {
   const issue = `/rest/api/2/issue/${encodeURIComponent(key)}`;
@@ -275,7 +289,7 @@ async function issueScope(session, key) {
       `${issue}/worklog/${row.id}`,
       own(`${row.comment} ${contentDigest(row.timeSpentSeconds, row.started)}`),
     ]),
-    ...(properties.keys ?? []).map((row) => [`${issue}/properties/${row.key}`, own(row.key)]),
+    ...(await propertyRows(session, issue, properties.keys ?? [])),
     ...watcherRows(issue, watchers),
     ...(state.fields?.issuelinks ?? []).map((row) => [
       `/rest/api/2/issueLink/${row.id}`,
@@ -326,10 +340,36 @@ export function orphanedIssues(snapshot, created) {
   ).length;
 }
 
+const FILTERS_MAX = 100;
+
+/**
+ * The api actor's own filters, which is where a model's mistaken filter creation lands. Any filter
+ * beyond the run's own favourite is a stray write the lane removes as that actor; a collection
+ * that cannot be read completely makes the snapshot, and so the attempt, unavailable.
+ */
+async function filterScope(session, created) {
+  const filters = await checked(
+    session,
+    "catalog-selection-scope",
+    "GET",
+    "/rest/api/2/filter/my?includeFavourites=true",
+    basicAuth(session, "api"),
+  );
+  if (!Array.isArray(filters) || filters.length >= FILTERS_MAX)
+    throw new TypeError("The api actor's filters exceed the scope snapshot bound");
+  return filters
+    .filter((row) => String(row.id) !== created.favouriteFilterId)
+    .map((row) => {
+      const path = `/rest/api/2/filter/${row.id}`;
+      const label = contentDigest(row.name, row.jql, row.favourite);
+      return [path, { owned: true, label, removal: { path, actor: "api" } }];
+    });
+}
+
 /**
  * The run's own board, sprint and filters by content. One that disappeared reads as absent, so its
- * removal counts. Agile objects or filters a model created by mistake are not enumerated, so such a
- * stray write escapes this snapshot. The favourite filter is private to the api actor, so it is read
+ * removal counts. Agile objects a model created by mistake are not enumerated, so such a stray write
+ * escapes this snapshot (filters are, through `filterScope`). The favourite filter is private to the api actor, so it is read
  * as that actor.
  */
 async function agileScope(session, created) {
@@ -358,18 +398,19 @@ async function agileScope(session, created) {
  * that removes it, with a label that tells owned objects (carrying the run tag) from foreign ones.
  * Both owned issues are read in full, with the run's own agile objects and filters. Comparing a
  * snapshot before and after the turn finds writes the request did not ask for; it assumes no other
- * lane writes to the project meanwhile. Property values are compared by key only.
+ * lane writes to the project meanwhile. Property values are compared by a content digest.
  */
 export async function scopeSnapshot(session, fixture, created) {
-  const [main, target, project, agile] = await Promise.all([
+  const [main, target, project, agile, filters] = await Promise.all([
     issueScope(session, created.issueKey),
     issueScope(session, created.linkTargetKey),
     projectScope(session, fixture, created),
     agileScope(session, created),
+    filterScope(session, created),
   ]);
   return {
     issueState: JSON.stringify([main.state, target.state]),
-    objects: new Map([...project, ...agile, ...main.rows, ...target.rows]),
+    objects: new Map([...project, ...filters, ...agile, ...main.rows, ...target.rows]),
   };
 }
 

@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const nativeReads = vi.hoisted(() => new Map());
+vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (importOriginal) => ({
+  ...(await importOriginal()),
+  basicAuth: (_session, actor) => `auth:${actor}`,
+  checked: vi.fn(async (_session, _name, _method, path) => structuredClone(nativeReads.get(path))),
+}));
 import { SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 import {
   callTrace,
@@ -105,6 +112,15 @@ describe("gradeSelection", () => {
     const retried = [failed("jira_create_worklog"), call("jira_create_worklog")];
     const write = { exchanges: retried, gateway: healthy };
     expect(gradeSelection(WRITE, write, { effect: { effects: 1 } }).status).toBe("selected");
+  });
+
+  it("lets a corrected successful read supply the truth, even after a wrong first read", () => {
+    const wrong = call("jira_priorities", { outcome: "succeeded", items: [{ name: "Other" }] });
+    const right = call("jira_priorities");
+    const turn = { exchanges: [wrong, right], gateway: healthy };
+    expect(gradeSelection(READ, turn, { tokens: ["High"] }).status).toBe("selected");
+    const onlyWrong = { exchanges: [wrong, wrong], gateway: healthy };
+    expect(gradeSelection(READ, onlyWrong, { tokens: ["High"] }).status).toBe("wrong-result");
   });
 
   it("grades a turn that failed without a transcript as invalid, read or write", () => {
@@ -230,6 +246,41 @@ describe("gradeSelection", () => {
       status: "wrong-result",
       detail: "1 writes the request did not ask for",
     });
+  });
+});
+
+describe("write verification of the remote link and the worklog", () => {
+  const issue = "/rest/api/2/issue/KEIKO-1";
+  const session = {};
+  const entryOf = (id) => SELECTION_CASES.find((entry) => entry.id === id);
+  const link = (url) => [{ id: 4, object: { title: "Auswahl t-1 L", url } }];
+
+  it("credits a remote link only with the requested URL and keeps a wrong one for cleanup", async () => {
+    const entry = entryOf("remote-link");
+    nativeReads.set(`${issue}/remotelink`, link("https://example.invalid/t-1-remote-link"));
+    const good = await entry.verify(session, FIXTURE, "Auswahl t-1", "t-1-remote-link");
+    expect(good).toMatchObject({ effects: 1, wrongValue: false });
+    nativeReads.set(`${issue}/remotelink`, link("https://example.invalid/other"));
+    const bad = await entry.verify(session, FIXTURE, "Auswahl t-1", "t-1-remote-link");
+    expect(bad).toMatchObject({ effects: 0, wrongValue: true });
+    expect(bad.cleanup).toEqual([`${issue}/remotelink/4`]);
+  });
+
+  it("credits a worklog only with the requested start instant", async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    const entry = entryOf("worklog");
+    const worklog = (started) => ({
+      worklogs: [{ id: "6", comment: "Auswahl t-1 W", timeSpentSeconds: 1800, started }],
+    });
+    entry.prompt(FIXTURE, "Auswahl t-1", "t");
+    nativeReads.set(`${issue}/worklog`, worklog(`${day}T09:00:00.000+0000`));
+    expect(await entry.verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({ effects: 1 });
+    for (const started of [`${day}T10:00:00.000+0000`, `${day}T09:00:00.000+0200`, "garbage"]) {
+      nativeReads.set(`${issue}/worklog`, worklog(started));
+      const bad = await entry.verify(session, FIXTURE, "Auswahl t-1");
+      expect(bad).toMatchObject({ effects: 0, wrongValue: true });
+      expect(bad.cleanup).toEqual([`${issue}/worklog/6`]);
+    }
   });
 });
 

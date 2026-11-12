@@ -16,6 +16,12 @@ const projectPath = (f, suffix = "") =>
 const issuePath = (f, suffix = "") =>
   `/rest/api/2/issue/${encodeURIComponent(f.selection.issueKey)}${suffix}`;
 const utcDay = () => new Date().toISOString().slice(0, 10);
+// The day a worklog request named, by its unique marker, so the check cannot drift across midnight.
+const requestedDays = new Map();
+const START_HOUR = "T09:00:00.000Z";
+/** Jira writes the start as `…+0000`, which Date.parse refuses without a colon in the offset. */
+const startedInstant = (started) =>
+  Date.parse(String(started).replace(/([+-]\d\d)(\d\d)$/u, "$1:$2"));
 const countMatching = (rows, predicate) => rows.filter(predicate).length;
 // The catalog's list reads return 25 rows unless asked for more; a longer native list could hide
 // the owned object from a correct call, so such a truth is refused instead of graded.
@@ -200,12 +206,6 @@ const BASE_READS = [
   },
 ];
 
-/** Owned rows by an exact marker, with the native paths that remove them again. */
-function owned(rows, matches, path) {
-  const hits = rows.filter(matches);
-  return { effects: hits.length, cleanup: hits.map(path) };
-}
-
 /** Write cases on owned synthetic objects; the effect is verified natively and then removed. */
 const WRITES = [
   // Components and versions need project administration, which the lab's api actor deliberately
@@ -250,12 +250,17 @@ const WRITES = [
     tool: "jira.upsert-remote-link",
     prompt: (f, m, tag) =>
       `Füge dem Vorgang ${f.selection.issueKey} einen externen Link auf https://example.invalid/${tag} mit dem Titel "${m} L" hinzu.`,
-    verify: async (s, f, m) =>
-      owned(
-        await native(s, issuePath(f, "/remotelink")),
+    verify: async (s, f, m, tag) => {
+      const rows = (await native(s, issuePath(f, "/remotelink"))).filter(
         (row) => row.object?.title === `${m} L`,
-        (row) => issuePath(f, `/remotelink/${row.id}`),
-      ),
+      );
+      const url = `https://example.invalid/${tag}`;
+      return {
+        effects: countMatching(rows, (row) => row.object?.url === url),
+        wrongValue: rows.some((row) => row.object?.url !== url),
+        cleanup: rows.map((row) => issuePath(f, `/remotelink/${row.id}`)),
+      };
+    },
   },
   {
     id: "issue-property",
@@ -279,16 +284,22 @@ const WRITES = [
   {
     id: "worklog",
     tool: "jira.create-worklog",
-    prompt: (f, m) =>
+    prompt: (f, m) => {
       // The tool requires a start time, which the request has to supply; "Kommentar" alone would
       // also fit an issue comment, so the text is named as the worklog's description.
-      `Buche auf den Vorgang ${f.selection.issueKey} 30 Minuten Arbeitszeit, begonnen am ${utcDay()} um 09:00 Uhr UTC, mit der Beschreibung "${m} W" für die Zeitbuchung.`,
+      const day = utcDay();
+      requestedDays.set(m, day);
+      return `Buche auf den Vorgang ${f.selection.issueKey} 30 Minuten Arbeitszeit, begonnen am ${day} um 09:00 Uhr UTC, mit der Beschreibung "${m} W" für die Zeitbuchung.`;
+    },
     verify: async (s, f, m) => {
       const page = await native(s, issuePath(f, "/worklog"));
       const rows = page.worklogs.filter((row) => row.comment === `${m} W`);
+      const start = Date.parse(`${requestedDays.get(m) ?? utcDay()}${START_HOUR}`);
+      const correct = (row) =>
+        row.timeSpentSeconds === 1800 && startedInstant(row.started) === start;
       return {
-        effects: countMatching(rows, (row) => row.timeSpentSeconds === 1800),
-        wrongValue: rows.some((row) => row.timeSpentSeconds !== 1800),
+        effects: countMatching(rows, correct),
+        wrongValue: rows.some((row) => !correct(row)),
         cleanup: rows.map((row) => issuePath(f, `/worklog/${row.id}`)),
       };
     },

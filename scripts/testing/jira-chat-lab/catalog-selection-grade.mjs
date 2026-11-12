@@ -165,10 +165,14 @@ function invalidReason(turn, exchanges, truthUnavailable) {
   return undefined;
 }
 
-/** The target call that decides: a successful one if the model retried, else the first one. */
-function targetCall(calls, tool) {
+/**
+ * The target call that decides: for a read the successful call that carries every native token
+ * (a corrected second read supplies the truth), else a successful one, else the first one.
+ */
+function targetCall(calls, tool, tokens = []) {
   const targets = calls.filter((exchange) => toolAlias(exchange.call?.name) === toolAlias(tool));
-  return targets.find(succeeded) ?? targets[0];
+  const complete = (exchange) => succeeded(exchange) && carriesTruth(exchange, tokens).complete;
+  return targets.find(complete) ?? targets.find(succeeded) ?? targets[0];
 }
 
 /** The gateway's argument refusals of the target, keyed by its canonical id (`keiko.jira.…`). */
@@ -206,7 +210,7 @@ function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   const invalid = invalidReason(turn, exchanges, truthUnavailable);
   if (invalid !== undefined) return { status: "invalid", path, detail: invalid };
   const calls = operationCalls(exchanges);
-  const target = targetCall(calls, entry.tool);
+  const target = targetCall(calls, entry.tool, entry.effect === "write" ? [] : tokens);
   if (target !== undefined)
     return entry.effect === "write"
       ? { ...writeVerdict(target, effect, calls.length), path }
