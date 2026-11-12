@@ -470,7 +470,7 @@ describe("cause table", () => {
         ).toBeUndefined();
     });
     it("treats lab-configuration refusals as lab and every other local refusal as product", () => {
-      for (const reason of ["capability-held", "approval-required", "license-expired"])
+      for (const reason of ["capability-held", "approval-required", "auth-failed"])
         expect(
           annotateCause(
             row({ failure: "product-refused", product: { outcome: "rejected", reason } }),

@@ -119,15 +119,12 @@ export function localRefusal(dispatch, snapshot) {
 
 /**
  * Closed refusal codes of the dispatch that describe the lab's own configuration (a held
- * capability, a missing approval, a license, a credential), never a product defect. Matched on the
+ * capability, a missing approval or mode, a failed credential), never a product defect. Matched on the
  * code only, never on message text.
  */
 const LAB_CONFIGURATION_REFUSALS = new Set([
   "capability-held",
   "approval-required",
-  "license-required",
-  "license-invalid",
-  "license-expired",
   "auth-failed",
   "effect-denied",
 ]);
