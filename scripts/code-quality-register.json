@@ -3332,13 +3332,13 @@
       "anti-slop/require-safety-comment-for-type-assertion": 44
     },
     "packages/keiko-editor/src/components/on-mount.ts": {
-      "anti-slop/no-chained-type-assertions": 15,
+      "anti-slop/no-chained-type-assertions": 3,
       "anti-slop/no-conditional-empty-object-spread": 6,
       "anti-slop/no-known-value-widening": 1,
-      "anti-slop/no-runtime-typeof": 17,
+      "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unknown-returns": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 33
+      "anti-slop/require-safety-comment-for-type-assertion": 9
     },
     "packages/keiko-editor/src/components/references-bridge.test.ts": {
       "anti-slop/no-known-value-widening": 1
