@@ -103,7 +103,7 @@ export function boundedRedactedText(value: string): string {
 // Exported for the same reuse reason as `boundedRedactedText` above [w4a-security-log-port].
 export function safeName(value: object): string | undefined {
   try {
-    const name: unknown = Reflect.get(value, "name");
+    const name: unknown = "name" in value ? value.name : undefined;
     return typeof name === "string" ? name : undefined;
   } catch {
     return undefined;

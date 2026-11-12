@@ -359,8 +359,8 @@ function healthResult(statusCode: number | undefined, body: string): HealthProbe
   try {
     const payload = JSON.parse(body) as unknown;
     const launchId: unknown =
-      typeof payload === "object" && payload !== null
-        ? Reflect.get(payload, "launchId")
+      typeof payload === "object" && payload !== null && "launchId" in payload
+        ? payload.launchId
         : undefined;
     return {
       reachable: true,

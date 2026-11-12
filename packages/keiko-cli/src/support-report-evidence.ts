@@ -443,7 +443,7 @@ const SYSTEM_ERROR_KINDS: ReadonlyMap<string, ActivityLogErrorKind> = new Map<
 ]);
 
 function systemErrorKind(error: unknown): ActivityLogErrorKind {
-  const code: unknown = error instanceof Error ? Reflect.get(error, "code") : undefined;
+  const code: unknown = error instanceof Error && "code" in error ? error.code : undefined;
   return (typeof code === "string" ? SYSTEM_ERROR_KINDS.get(code) : undefined) ?? "internal";
 }
 
