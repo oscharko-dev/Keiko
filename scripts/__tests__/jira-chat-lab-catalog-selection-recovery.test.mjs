@@ -94,6 +94,16 @@ describe("recoverScope", () => {
     expect(deletions).toEqual([]);
   });
 
+  it("throws on a foreign object it may not remove, without deleting anything", async () => {
+    const before = await scopeSnapshot({}, fixture, fixture.selection);
+    // Another writer added a component without the run marker: recovery must stop, not remove it.
+    reads.set("/rest/api/2/project/KEIKO/components", [{ id: 5, name: "Other team" }]);
+    await expect(recoverScope({}, run, entry, turnFor, before)).rejects.toThrow(
+      "not clean after recovery",
+    );
+    expect(deletions).toEqual([]);
+  });
+
   it("throws when the scope still holds an extra object after a removal that reported success", async () => {
     const before = await scopeSnapshot({}, fixture, fixture.selection);
     filters = [...filters, { id: 11, name: "Extra" }];
