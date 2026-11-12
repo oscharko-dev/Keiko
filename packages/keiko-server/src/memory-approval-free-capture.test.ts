@@ -231,6 +231,13 @@ describe("a routine fact needs no approval (#4206)", () => {
   });
 });
 
+const RANDOM_IDENTIFIER_RE =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b(?=\d*[a-f])[0-9a-f]{12,}\b/gu;
+
+function withoutRandomIdentifiers(evidence: string): string {
+  return evidence.replace(RANDOM_IDENTIFIER_RE, "<id>");
+}
+
 describe("refusals are mode-independent and visible (#4206)", () => {
   const refusals = [
     [
@@ -263,7 +270,12 @@ describe("refusals are mode-independent and visible (#4206)", () => {
         const lines = JSON.stringify(sink.events);
         for (const evidence of [ledger, lines]) {
           expect(evidence).not.toContain(sentence);
-          expect(evidence).not.toMatch(/example\.com|DE89|4711|1234 5678|medication/u);
+          // Random event ids and hex digests may spell "4711" by chance ("…-475782484711"); they
+          // carry no content, so only the evidence without them is searched for the refused words.
+          // A run of digits alone is never treated as an id.
+          expect(withoutRandomIdentifiers(evidence)).not.toMatch(
+            /example\.com|DE89|4711|1234 5678|medication/u,
+          );
         }
         expect(decisionLine(sink)).toMatchObject({
           outcome: "rejected",
