@@ -422,7 +422,7 @@ verbatim (exact bytes for a name that is not UTF-8) and never enter the Activity
 is `incomplete/files-unprocessed`; nothing reviewable is `skipped/no-reviewable-changes`, or
 `skipped/diff-too-large` when reviewable files were left unprocessed; an exceeded time or byte bound
 fails the package closed as `skipped/diff-too-large` (`reviewDiffPackageFailureSettlement`). The
-packaging ports PR-Agent v0.49.0: five lines of context before and one after each hunk, extension to
+packaging ports PR-Agent v0.49.0: five lines of context before and three after each hunk, extension to
 the enclosing function or class header within ten lines (detected by Keiko for TypeScript,
 JavaScript, Python, Java, Go, C# and Kotlin, since in-tree attributes are neutralized), files of the
 base commit's dominant languages first and larger changes first, and `clip`, which in Keiko keeps
@@ -435,8 +435,16 @@ every part is open, the single-part rules apply to the last one. Each part is ve
 and a file keeps only the hunks that follow each other without a gap from its first hunk, so a hunk
 a part's verification drops ends that file. Whatever does not fit the last part is `unprocessed`
 (`budget`) and settles the run `incomplete/files-unprocessed` exactly as before; `usedTokens` is the
-sum of the parts' counts. PR-Agent applies its extra lines on top of the provider's three default context lines;
-Keiko applies the five and one exactly, and child 8 measurement may change these defaults.
+sum of the parts' counts. PR-Agent applies its extra lines (five before, one after) on top of the
+provider's three default context lines; Keiko applies its own counts exactly. Child 8 measurement
+changed the lines after a change from one to three (Issue #4130): with one line, a guard two lines
+below a changed condition lay outside the hunk, and the Reviewer reported the value that guard
+stops. The basis is a lab probe, not a gate run: it sampled the Reviewer alone on the off-by-one
+seed, with approximated read tools and no Counter-checker. With one line, 8 of 30 sampled reports
+named only the consequence that gets past the guard (three pooled rounds). With three lines, 20 of
+28 did (two pooled rounds, 16 of the 28 samples from a hand-edited task and 12 from the product's
+builder). The seed gate is the end-to-end measurement of this default, and its runs are recorded in
+`docs/qa/review-agent-offline-gate-2026-11-01.md`.
 
 ### D7 — Finding decisions and the audit trail
 

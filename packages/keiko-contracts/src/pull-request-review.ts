@@ -489,9 +489,18 @@ export interface ReviewPullRequestDetailResponse {
  * `max_extra_lines_before_dynamic_context`): every included hunk carries this many unchanged
  * lines before and after its changes, and is extended upward to its enclosing function or class
  * header when that header lies within the dynamic window. Child 8 measurement may change them.
+ *
+ * The lines after a change are 3, not PR-Agent's configured 1 (#4130 seeds, 2026-11-11). PR-Agent
+ * adds its one line to the three the provider's patch already carries, so it shows four. With
+ * exactly one line the off-by-one seed's hunk ended before the guard two lines below the changed
+ * loop bound, and the Reviewer reported the value that guard stops. The basis is a lab probe of
+ * the Reviewer alone, with approximated read tools and no Counter-checker: 8 of 30 sampled reports
+ * named only the consequence that gets past the guard with one line, and 20 of 28 with three (16
+ * of those 28 from a hand-edited task). The seed gate is the end-to-end measurement; its runs are
+ * recorded in docs/qa/review-agent-offline-gate-2026-11-01.md.
  */
 export const REVIEW_DIFF_CONTEXT_LINES_BEFORE = 5;
-export const REVIEW_DIFF_CONTEXT_LINES_AFTER = 1;
+export const REVIEW_DIFF_CONTEXT_LINES_AFTER = 3;
 export const REVIEW_DIFF_DYNAMIC_CONTEXT_MAX_LINES = 10;
 /** PR-Agent's own cap on configured context lines (`MAX_EXTRA_LINES`). */
 export const REVIEW_DIFF_CONTEXT_LINES_MAX = 10;
