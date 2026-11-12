@@ -325,7 +325,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-sonarjs": "^4.2.1",
     "fallow": "3.35.0",
-    "knip": "6.44.1",
+    "knip": "6.41.0",
     "pdfjs-dist": "6.3.289",
     "prettier": "^3.0.0",
     "semver": "^7.8.5",
