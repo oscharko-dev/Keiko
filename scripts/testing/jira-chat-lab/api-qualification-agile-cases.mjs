@@ -147,7 +147,6 @@ export const API_QUALIFICATION_AGILE_CASES = [
     {
       args: (f) => ({ name: filterName(f), maxResults: 100 }),
       nativeRoot: "values",
-      nonEmpty: true,
     },
   ),
   readCase("jira.board", boardPath, ["id", "name", "type"], {

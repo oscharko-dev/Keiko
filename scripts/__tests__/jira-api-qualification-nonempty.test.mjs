@@ -33,14 +33,23 @@ it("refuses an empty owned collection for a read that asks for a nonempty fixtur
   const native = vi.spyOn(globalThis, "fetch").mockImplementation(respond({ values: [] }));
   try {
     const plain = readCase("jira.boards", "/rest/api/2/x", ["id"], { nativeRoot: "values" });
-    await expect(plain.readback(context, { items: [] }, {})).resolves.toMatchObject({
-      matched: true,
-    });
-    const owned = readCase("jira.boards", "/rest/api/2/x", ["id"], {
+    await expect(plain.readback(context, { items: [] }, {})).rejects.toThrow(/empty/u);
+    const declared = readCase("jira.boards", "/rest/api/2/x", ["id"], {
       nativeRoot: "values",
-      nonEmpty: true,
+      emptyAllowed: "Jira cannot hold a board in this lab",
     });
-    await expect(owned.readback(context, { items: [] }, {})).rejects.toThrow(/natively present/u);
+    await expect(declared.readback(context, { items: [] }, {})).resolves.toMatchObject({
+      matched: true,
+      vacuous: true,
+      vacuousReason: "Jira cannot hold a board in this lab",
+      nativeCount: 0,
+    });
+    expect(() =>
+      readCase("jira.boards", "/rest/api/2/x", ["id"], {
+        nativeRoot: "values",
+        emptyAllowed: "  ",
+      }),
+    ).toThrow(/nonblank/u);
   } finally {
     native.mockRestore();
     rmSync(directory, { recursive: true, force: true });
@@ -79,7 +88,7 @@ it("declares the owned fixture reads of the audited cases as nonempty", async ()
       const entry = byTool(list, tool);
       if (entry === undefined) continue;
       await expect(entry.readback(context, { items: [] }, fixture)).rejects.toThrow(
-        /natively present/u,
+        /natively present|seed an owned record/u,
       );
     }
   } finally {

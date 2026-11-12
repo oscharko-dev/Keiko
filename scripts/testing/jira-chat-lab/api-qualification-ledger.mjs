@@ -12,6 +12,8 @@ import {
   classifyQualification,
   qualificationDigest,
   qualificationSummary,
+  vacuousReads,
+  executableVacuousCount,
   isApprovedDeferred,
 } from "./api-qualification-evidence.mjs";
 import { decidedQualificationDeferrals } from "./api-qualification-policy.mjs";
@@ -82,6 +84,7 @@ function archivedReadback(readback) {
     permissionDenied: readback?.permissionDenied === true,
     capabilityAbsent: readback?.capabilityAbsent === true,
     routeShadowed: readback?.routeShadowed === true,
+    vacuous: readback?.vacuous === true,
     digest: qualificationDigest(readback),
   };
 }
@@ -156,6 +159,8 @@ function publication(ledger, report, sourceRevision, decisions) {
     modelCalls: 0,
     phase: "complete",
     counts: qualificationSummary(report.operations),
+    vacuousReads: vacuousReads(report.operations),
+    executableVacuous: executableVacuousCount(report.operations),
     operations: report.operations.map(archivedCase),
   };
   return {

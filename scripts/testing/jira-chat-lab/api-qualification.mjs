@@ -28,6 +28,8 @@ import {
   classifyQualification,
   qualificationDigest,
   qualificationSummary,
+  vacuousReads,
+  executableVacuousCount,
 } from "./api-qualification-evidence.mjs";
 import {
   measuredAssertionCount,
@@ -675,6 +677,8 @@ function finishReport(report, output) {
   report.counts = qualificationSummary(report.operations);
   report.causeCounts = causeSummary(report.operations);
   report.suspectCounts = suspectSummary(report.operations);
+  report.vacuousReads = vacuousReads(report.operations);
+  report.executableVacuous = executableVacuousCount(report.operations);
   privateJson(join(output, report.file), report);
 }
 async function runBatches({ session, selected, witness, report, output, emailDefaultOracle }) {
@@ -723,6 +727,7 @@ async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = 
     counts: report.counts,
     causes: report.causeCounts,
     suspects: report.suspectCounts,
+    executableVacuous: report.executableVacuous,
     proposals: report.proposals.length,
   });
   return { report, counts: report.counts };

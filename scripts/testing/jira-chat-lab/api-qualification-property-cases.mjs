@@ -94,7 +94,6 @@ export function qualificationPropertyCases(entity) {
               {
                 args: (f) => ({ ...entity.arguments(f), maxResults: 100 }),
                 nativeRoot: (value) => value.keys,
-                nonEmpty: true,
               },
             ),
           },

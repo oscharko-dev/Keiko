@@ -43,13 +43,27 @@ const workflow = (specification) =>
     "/rest/api/2/project/KEIKO/workflowscheme",
     (value) => value.id,
   );
-const issueTypeScheme = (specification) =>
-  selecting(
-    specification,
-    "issueTypeSchemeId",
-    "/rest/api/2/issuetypescheme",
-    (value) => value.schemes[0]?.id,
-  );
+/** The fixture scheme is the one Jira associates with KEIKO, so its association list is never empty. */
+const issueTypeScheme = (specification) => ({
+  ...specification,
+  prepare: async (context, fixture) => {
+    const auth = basicAuth(context.session, context.actor);
+    const list = await labRequest(context.session, "GET", "/rest/api/2/issuetypescheme", auth);
+    assert.equal(list.status, 200);
+    for (const scheme of list.value.schemes) {
+      const path = `/rest/api/2/issuetypescheme/${scheme.id}/associations`;
+      const associations = await labRequest(context.session, "GET", path, auth);
+      assert.equal(associations.status, 200);
+      if (associations.value.some((row) => row.key === "KEIKO")) {
+        fixture.issueTypeSchemeId = String(scheme.id);
+        id(fixture, "issueTypeSchemeId");
+        await specification.prepare?.(context, fixture);
+        return;
+      }
+    }
+    assert.fail("An existing native issue type scheme associated with KEIKO is required");
+  },
+});
 const priority = (specification) =>
   selecting(
     specification,

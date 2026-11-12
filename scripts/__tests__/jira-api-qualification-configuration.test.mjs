@@ -70,7 +70,9 @@ it("selects actual native fixture identities using reads and admits every config
     "/rest/api/2/permissionscheme/0/permission": { permissions: [{ id: 37 }] },
     "/rest/api/2/project/KEIKO/workflowscheme": { id: 53 },
     "/rest/api/2/notificationscheme": { values: [{ id: 61 }] },
-    "/rest/api/2/issuetypescheme": { schemes: [{ id: "59" }] },
+    "/rest/api/2/issuetypescheme": { schemes: [{ id: "58" }, { id: "59" }] },
+    "/rest/api/2/issuetypescheme/58/associations": [{ id: "9", key: "OTHER" }],
+    "/rest/api/2/issuetypescheme/59/associations": [{ id: "1", key: "KEIKO" }],
     "/rest/api/2/priorityschemes": { schemes: [{ id: 41 }] },
     "/rest/api/2/screens": { screens: [{ id: 43 }] },
     "/rest/api/2/screens/43/tabs": [{ id: 47 }],
@@ -104,6 +106,7 @@ it("selects actual native fixture identities using reads and admits every config
       screenId: "43",
       tabId: "47",
       workflowSchemeId: "53",
+      issueTypeSchemeId: "59",
     });
   } finally {
     native.mockRestore();

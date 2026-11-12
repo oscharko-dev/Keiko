@@ -50,6 +50,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
     ["id", "name", "subtask"],
     {
       args: (f) => ({ issueTypeId: f.issueTypeId, maxResults: 100 }),
+      emptyAllowed:
+        "Jira lists alternatives only from issue types sharing a scheme with the fixture type; the lab's KEIKO scheme holds none",
     },
   ),
   readCase(
@@ -186,6 +188,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
     {
       args: () => ({ hasOldPassword: false, maxResults: 100 }),
       nativeRoot: (value) => value.map((requirement) => ({ requirement })),
+      emptyAllowed:
+        "The lab's internal user directory enforces no password policy, so Jira returns no requirements",
     },
   ),
   readCase(
@@ -197,6 +201,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
   readCase("jira.duplicate-users", "/rest/api/2/user/duplicated/list?flush=false", ["username"], {
     args: page,
     nativeRoot: (value) => Object.keys(value).map((username) => ({ username })),
+    emptyAllowed:
+      "Duplicate user names exist only across user directories; the lab has one internal directory",
   }),
   readCase("jira.email-template-types", "/rest/api/2/email-templates/types", ["id", "eventName"], {
     args: page,
