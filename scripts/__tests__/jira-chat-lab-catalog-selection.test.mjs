@@ -7,7 +7,12 @@ import {
   selectionPath,
   summarizeSelection,
 } from "../testing/jira-chat-lab/catalog-selection-grade.mjs";
-import { strayWrites } from "../testing/jira-chat-lab/catalog-selection-objects.mjs";
+import {
+  strayWrites,
+  voteKey,
+  voteRows,
+} from "../testing/jira-chat-lab/catalog-selection-objects.mjs";
+import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
 
 const FIXTURE = {
   project: "KEIKO",
@@ -69,7 +74,8 @@ describe("gradeSelection", () => {
   });
 
   it("separates a wrong tool, no tool and a failed target call", () => {
-    const wrong = { exchanges: [call("jira_resolutions")], gateway: healthy };
+    const fixed = { outcome: "succeeded", items: [{ name: "Fixed" }] };
+    const wrong = { exchanges: [call("jira_resolutions", fixed)], gateway: healthy };
     expect(gradeSelection(READ, wrong, { tokens: ["High"] }).status).toBe("wrong-tool");
     expect(
       gradeSelection(READ, { exchanges: [], gateway: healthy }, { tokens: ["High"] }),
@@ -85,6 +91,37 @@ describe("gradeSelection", () => {
     const gateway = { unrecovered: 1, circuit: 0 };
     expect(gradeSelection(READ, { exchanges: [], gateway }, { tokens: ["High"] }).status).toBe(
       "invalid",
+    );
+  });
+
+  it("judges the successful target call when the model corrected a failed first call", () => {
+    const failed = { call: { name: "jira_priorities" }, result: { status: "failed", data: {} } };
+    const turn = { exchanges: [failed, call("jira_priorities")], gateway: healthy };
+    expect(gradeSelection(READ, turn, { tokens: ["High"] }).status).toBe("selected");
+    const write = { exchanges: [failed, call("jira_create_worklog")], gateway: healthy };
+    expect(gradeSelection(WRITE, write, { effect: { effects: 1 } }).status).toBe("selected");
+  });
+
+  it("grades a turn that failed without a transcript as invalid, read or write", () => {
+    const turn = { exchanges: [], failure: "Live Chat HTTP stage failed", gateway: healthy };
+    expect(gradeSelection(READ, turn, { tokens: ["High"] })).toMatchObject({
+      status: "invalid",
+      detail: "the turn failed before it returned a transcript",
+    });
+    expect(gradeSelection(WRITE, turn, { effect: { effects: 1 } }).status).toBe("invalid");
+  });
+
+  it("counts another operation that answers completely as an alternative, apart from selected", () => {
+    const other = { exchanges: [call("jira_create_fields")], gateway: healthy };
+    expect(gradeSelection(READ, other, { tokens: ["High"] })).toMatchObject({
+      status: "alternative",
+      detail: "jira_create_fields carried every native token",
+    });
+    expect(gradeSelection(READ, other, { tokens: ["High", "Low"] }).status).toBe("wrong-tool");
+    const write = { exchanges: [call("jira_edit")], gateway: healthy };
+    expect(gradeSelection(WRITE, write, { effect: { effects: 1 } }).status).toBe("alternative");
+    expect(gradeSelection(WRITE, write, { effect: { effects: 1, stray: 1 } }).status).toBe(
+      "wrong-tool",
     );
   });
 
@@ -128,7 +165,7 @@ describe("gradeSelection", () => {
     };
     expect(gradeSelection(WRITE, failed, { effect: { effects: 1 } }).status).toBe("wrong-result");
     const other = { exchanges: [call("jira_edit")], gateway: healthy };
-    expect(gradeSelection(WRITE, other, { effect: { effects: 1 } }).status).toBe("wrong-tool");
+    expect(gradeSelection(WRITE, other, { effect: { effects: 2 } }).status).toBe("wrong-tool");
     expect(gradeSelection(WRITE, other, { effect: { effects: 0 } }).status).toBe("wrong-tool");
     const none = { exchanges: [], gateway: healthy };
     expect(gradeSelection(WRITE, none, { effect: { effects: 0 } }).status).toBe("no-tool");
@@ -194,6 +231,8 @@ describe("selection helpers", () => {
     expect(strayWrites(before, after, ["/rest/api/2/component/2"], "Auswahl t")).toEqual({
       remove: ["/rest/api/2/component/4", "/issue/X/worklog/9"],
       foreign: 1,
+      changed: 0,
+      removed: 0,
       issueChanged: 1,
       count: 4,
     });
@@ -201,25 +240,50 @@ describe("selection helpers", () => {
     expect(same.count).toBe(0);
   });
 
-  it("removes a stray vote as its own voter and skips the expected one by its key", () => {
-    const vote = (actor) => ({
-      owned: true,
-      label: actor,
-      removal: { path: "/issue/X/votes", actor },
-    });
-    const before = { issueState: "a", objects: new Map() };
+  it("counts renamed, re-stamped and removed objects that the lane cannot undo", () => {
+    const before = {
+      issueState: "a",
+      objects: new Map([
+        ["/rest/api/2/component/1", { owned: false, label: "Old" }],
+        ["/rest/api/2/issue/K-9", { owned: false, label: "Other", stamp: "t1" }],
+        ["/issue/X/remotelink/5", { owned: true, label: "Link" }],
+      ]),
+    };
     const after = {
       issueState: "a",
       objects: new Map([
-        ["/issue/X/votes@keiko-api", vote("api")],
-        ["/issue/X/votes@keiko-editor", vote("editor")],
-        ["/issue/X/votes@someone", { owned: false, label: "someone" }],
+        ["/rest/api/2/component/1", { owned: false, label: "Renamed" }],
+        ["/rest/api/2/issue/K-9", { owned: false, label: "Other", stamp: "t2" }],
       ]),
     };
-    const expected = [{ key: "/issue/X/votes@keiko-api", path: "/issue/X/votes", actor: "api" }];
+    expect(strayWrites(before, after, [], "Auswahl t")).toEqual({
+      remove: [],
+      foreign: 0,
+      changed: 2,
+      removed: 1,
+      issueChanged: 0,
+      count: 3,
+    });
+  });
+
+  it("removes a stray vote as its own voter and skips the expected one by its key", () => {
+    const issue = "/rest/api/2/issue/X";
+    const api = actorDetails("api").name;
+    const editor = actorDetails("editor").name;
+    const before = { issueState: "a", objects: new Map() };
+    const after = {
+      issueState: "a",
+      objects: new Map(
+        voteRows(issue, { voters: [{ name: api }, { name: editor }, { name: "x" }] }),
+      ),
+    };
+    // The vote case's expected removal, built through the same key helper as the snapshot.
+    const expected = [{ key: voteKey(issue, api), path: `${issue}/votes`, actor: "api" }];
     expect(strayWrites(before, after, expected, "Auswahl t")).toEqual({
-      remove: [{ path: "/issue/X/votes", actor: "editor" }],
+      remove: [{ path: `${issue}/votes`, actor: "editor" }],
       foreign: 1,
+      changed: 0,
+      removed: 0,
       issueChanged: 0,
       count: 2,
     });

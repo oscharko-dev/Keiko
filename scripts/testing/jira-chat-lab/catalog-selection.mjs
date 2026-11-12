@@ -24,10 +24,12 @@ import {
   strayWrites,
 } from "./catalog-selection-objects.mjs";
 import { loadSession, requireLicense } from "./lab-client.mjs";
-import { isTransportFailure, readGatewayFailures } from "./requirements/validity.mjs";
+import { readGatewayFailures } from "./requirements/validity.mjs";
 
 const TURN_LIMIT_MS = 480_000;
 const MEMORY_OFF = { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} };
+
+const errorName = (error) => (error instanceof Error ? error.name : "unknown");
 
 function stage(operation, extra = {}) {
   console.log(JSON.stringify({ qualification: "jira-catalog-selection", operation, ...extra }));
@@ -37,6 +39,7 @@ function stage(operation, extra = {}) {
 async function selectionTurn(context, chat, content) {
   const controller = new globalThis.AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), TURN_LIMIT_MS);
+  const signal = globalThis.AbortSignal.any([controller.signal, context.stop]);
   const fromMs = Date.now();
   try {
     const completed = await jsonRequest(
@@ -54,7 +57,7 @@ async function selectionTurn(context, chat, content) {
         memory: MEMORY_OFF,
       },
       "POST",
-      controller.signal,
+      signal,
     );
     const user = completed.messages?.find((message) => message.role === "user");
     return { fromMs, exchanges: user?.toolTranscript?.exchanges ?? [] };
@@ -78,8 +81,9 @@ async function withGateway(session, turn) {
     toMs: Date.now(),
     pid: process.pid,
   });
-  const transport = isTransportFailure(turn.failure) ? 1 : 0;
-  return { ...turn, gateway: { unrecovered: counts.outages + transport, circuit: counts.circuit } };
+  // A transport failure of the lab's own call to Keiko is no gateway evidence; a turn that failed
+  // without a transcript is graded invalid on its own.
+  return { ...turn, gateway: { unrecovered: counts.outages, circuit: counts.circuit } };
 }
 
 /** The owned scope is clean before a write turn: no effect of this case exists yet. */
@@ -91,6 +95,27 @@ async function cleanBefore(session, fixture, entry, marker, tag) {
     throw new TypeError(`Owned scope of ${entry.id} is not clean before the turn`);
 }
 
+/** The native effect and stray writes of a finished write turn; removes both again. */
+async function settleWrite(session, run, entry, turnFor, before) {
+  const { fixture, marker, tag } = turnFor;
+  const effect = await entry.verify(session, fixture, marker, tag);
+  const after = await scopeSnapshot(session, fixture, fixture.selection);
+  const stray = strayWrites(before, after, effect.cleanup, `Auswahl ${run.tag}`);
+  await removeNative(session, [...effect.cleanup, ...stray.remove]);
+  // The lane runs alone in its session; a foreign object is never deleted, only reported.
+  if (stray.foreign > 0) run.foreignStray += stray.foreign;
+  const { foreign, changed, removed, issueChanged } = stray;
+  return {
+    proof: { effect: { ...effect, stray: stray.count } },
+    stray: { foreign, changed, removed, issueChanged },
+  };
+}
+
+/**
+ * One write turn on owned objects. A native read or removal that fails after the turn makes this
+ * attempt invalid; the case's own scope is then cleaned again, and only if that also fails does
+ * the run stop, keeping the pending marker for reconciliation.
+ */
 async function writeAttempt(context, run, entry, turnFor) {
   const { session } = context;
   const { fixture, marker, tag } = turnFor;
@@ -98,18 +123,16 @@ async function writeAttempt(context, run, entry, turnFor) {
   await cleanBefore(session, fixture, entry, marker, tag);
   const before = await scopeSnapshot(session, fixture, fixture.selection);
   const turn = await withGateway(session, await turnFor.send());
-  const effect = await entry.verify(session, fixture, marker, tag);
-  const after = await scopeSnapshot(session, fixture, fixture.selection);
-  const stray = strayWrites(before, after, effect.cleanup, `Auswahl ${run.tag}`);
-  await removeNative(session, [...effect.cleanup, ...stray.remove]);
+  let settled;
+  try {
+    settled = await settleWrite(session, run, entry, turnFor, before);
+  } catch (error) {
+    stage("verify-unavailable", { id: entry.id, errorType: errorName(error) });
+    await cleanBefore(session, fixture, entry, marker, tag);
+    settled = { proof: { truthUnavailable: true } };
+  }
   rmSync(run.pendingPath);
-  // The lane runs alone in its session; a foreign object is never deleted, only reported.
-  if (stray.foreign > 0) run.foreignStray += stray.foreign;
-  return {
-    turn,
-    proof: { effect: { ...effect, stray: stray.count } },
-    stray: { foreign: stray.foreign, issueChanged: stray.issueChanged },
-  };
+  return { turn, ...settled };
 }
 
 /** A failed native truth read is a lab error of this attempt; it never stops the other cases. */
@@ -118,8 +141,7 @@ async function readAttempt(context, run, entry, turnFor) {
   try {
     return { turn, proof: { tokens: await selectionTruth(context.session, run.fixture, entry) } };
   } catch (error) {
-    const errorType = error instanceof Error ? error.name : "unknown";
-    stage("truth-unavailable", { id: entry.id, errorType });
+    stage("truth-unavailable", { id: entry.id, errorType: errorName(error) });
     return { turn, proof: { truthUnavailable: true } };
   }
 }
@@ -158,14 +180,13 @@ async function attempt(context, run, entry, round) {
 }
 
 async function runRounds(context, run, cases) {
-  const attempts = [];
   for (let round = 1; round <= run.repeat; round += 1) {
     for (const entry of cases) {
+      if (run.stop.signal.aborted) throw new TypeError("The run was stopped by a signal");
       await requireLicense(context.session);
-      attempts.push(await attempt(context, run, entry, round));
+      run.attempts.push(await attempt({ ...context, stop: run.stop.signal }, run, entry, round));
     }
   }
-  return attempts;
 }
 
 function markdown(report) {
@@ -173,17 +194,18 @@ function markdown(report) {
   const lines = [
     `# Jira catalog selection (${report.model}, ${report.repeat} rounds)`,
     "",
-    `Selected ${summary.selected}/${summary.valid} valid attempts; ${summary.invalid} invalid.`,
+    `Selected ${summary.selected}/${summary.valid} valid attempts exactly, ${summary.alternative} through an equivalent alternative; ${summary.invalid} invalid.`,
+    report.complete ? "" : "**Incomplete: the run stopped before every attempt finished.**",
     summary.sufficient ? "" : "**Insufficient: fewer than half of the attempts were valid.**",
     report.foreignStray > 0
       ? `**${report.foreignStray} foreign objects appeared during write turns and were left in place.**`
       : "",
     "",
-    "| Case | Catalog | Runs | Selected / valid |",
+    "| Case | Catalog | Runs | Selected / alternative / valid |",
     "| --- | --- | --- | --- |",
     ...summary.rows.map(
       (row) =>
-        `| ${row.id} | ${row.catalog} | ${row.runs.join(", ")} | ${row.selected}/${row.valid} |`,
+        `| ${row.id} | ${row.catalog} | ${row.runs.join(", ")} | ${row.selected}/${row.alternative}/${row.valid} |`,
     ),
   ];
   return `${lines.join("\n")}\n`;
@@ -219,35 +241,50 @@ function selectionRun(fixture, repeat, pendingPath) {
     pendingPath,
     created,
     foreignStray: 0,
+    attempts: [],
+    stop: new globalThis.AbortController(),
     fixture: { ...fixture, selection: created },
   };
+}
+
+/** The report of the attempts so far; an interrupted or failed run is marked incomplete. */
+function finishReport(session, modelId, run, startedAt, complete) {
+  const { attempts } = run;
+  const report = { startedAt, model: modelId, repeat: run.repeat, complete, attempts };
+  report.foreignStray = run.foreignStray;
+  report.summary = summarizeSelection(attempts);
+  writeReport(session, report);
+  const { selected, alternative, valid, invalid, sufficient } = report.summary;
+  stage("completed", { complete, selected, alternative, valid, invalid, sufficient });
+  // A signal's exit code is kept; otherwise an incomplete or insufficient run fails.
+  if (!sufficient || !complete) process.exitCode ??= 1;
 }
 
 async function measure(session, modelId, run, cases) {
   const startedAt = new Date().toISOString();
   await createSelectionObjects(session, run.fixture, run.tag, run.created);
-  // withLiveChat returns nothing; the attempts leave the paired product through this binding.
-  let attempts = [];
-  await withLiveChat({
-    session,
-    modelId,
-    run: async (context) => {
-      attempts = await runRounds(context, run, cases);
-    },
-  });
-  const report = { startedAt, model: modelId, repeat: run.repeat, attempts };
-  report.foreignStray = run.foreignStray;
-  report.summary = summarizeSelection(attempts);
-  writeReport(session, report);
-  const { selected, valid, invalid, sufficient } = report.summary;
-  stage("completed", { selected, valid, invalid, sufficient });
-  if (!sufficient) process.exitCode = 1;
+  let complete = false;
+  try {
+    await withLiveChat({
+      session,
+      modelId,
+      run: async (context) => {
+        await runRounds(context, run, cases);
+      },
+    });
+    complete = true;
+  } finally {
+    finishReport(session, modelId, run, startedAt, complete);
+  }
 }
 
 /** A cleanup failure never replaces the error that stopped the run; it is reported beside it. */
-async function cleanUp(session, created, failed) {
+async function cleanUp(session, run, failed) {
   try {
-    await removeSelectionObjects(session, created);
+    await removeSelectionObjects(session, run.created);
+    // Every write targets owned objects, which this removal deleted, so no effect is left to
+    // reconcile; only a failed removal keeps the pending marker.
+    rmSync(run.pendingPath, { force: true });
   } catch (error) {
     if (!failed) throw error;
     stage("cleanup-failed", { errorType: error instanceof Error ? error.name : "unknown" });
@@ -264,14 +301,15 @@ async function main() {
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
   const cases = SELECTION_CASES.filter((entry) => only === undefined || only.has(entry.id));
   const run = selectionRun(fixture, repeat, pendingPath);
-  // An interrupted run still removes its owned objects; a pending write stays for reconciliation.
+  // A signal stops the run between steps: the turn in flight is aborted, its effect is still
+  // verified and removed, and the owned objects are cleaned up before the process exits.
+  const EXIT_CODES = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
   const interrupted = (signal) => {
-    void cleanUp(session, run.created, true).finally(() => {
-      process.exit(signal === "SIGINT" ? 130 : 143);
-    });
+    stage("stop-requested", { signal, repeated: run.stop.signal.aborted });
+    process.exitCode = EXIT_CODES[signal];
+    run.stop.abort();
   };
-  process.once("SIGINT", interrupted);
-  process.once("SIGTERM", interrupted);
+  for (const signal of Object.keys(EXIT_CODES)) process.on(signal, interrupted);
   let failed = false;
   try {
     await measure(session, modelId, run, cases);
@@ -279,13 +317,13 @@ async function main() {
     failed = true;
     throw error;
   } finally {
-    await cleanUp(session, run.created, failed);
+    await cleanUp(session, run, failed);
   }
 }
 
 if (isMainModule(import.meta.url))
   await main().catch((error) => {
-    stage("failed", { errorType: error instanceof Error ? error.name : "unknown" });
+    stage("failed", { errorType: errorName(error) });
     console.error(`jira-catalog-selection: ${String(error?.message ?? error).slice(0, 200)}`);
-    process.exitCode = 1;
+    process.exitCode ??= 1;
   });

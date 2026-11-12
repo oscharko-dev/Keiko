@@ -19,7 +19,19 @@ const FAILURE_OPS = new Set(["gateway.chat.failed", "gateway.stream.failed"]);
 // kind (validation-failed for a model that kept producing an invalid answer, invalid-request,
 // permission-denied, conflict, ...) is a product or model outcome, even after exhausted retries.
 const INFRASTRUCTURE_FAILURE = "infrastructure-failure";
-const INFRASTRUCTURE_ERROR_KINDS = new Set(["internal", "unavailable", "timeout", "rate-limited"]);
+// `internal` is the fallback kind of any unclassified error, so it alone proves no outage; a
+// provider that answered 5xx or 429 to a retried call does.
+const INFRASTRUCTURE_ERROR_KINDS = new Set(["unavailable", "timeout", "rate-limited"]);
+const PROVIDER_STATUS_OPS = new Set(["gateway.retry.scheduled", "gateway.retry.exhausted"]);
+const providerOutageStatus = (status) =>
+  Number.isInteger(status) && (status === 429 || (status >= 500 && status <= 599));
+
+/** Whether one line shows the model provider failing, not Keiko or the model's answer. */
+function infrastructureLine(entry) {
+  if (FAILURE_OPS.has(entry.op) || entry.op.startsWith("gateway.circuit."))
+    if (INFRASTRUCTURE_ERROR_KINDS.has(entry.errorKind)) return true;
+  return PROVIDER_STATUS_OPS.has(entry.op) && providerOutageStatus(entry.httpStatus);
+}
 const CIRCUIT_REJECTION_OPS = new Set(["gateway.circuit.opened", "gateway.circuit.rejected"]);
 
 // Only transport signatures: a gateway limit (context overflow, attempt admission) is a product
@@ -71,17 +83,17 @@ function collectLine(entry, groups, counts) {
   if (typeof entry.correlationId !== "string") return;
   const ops = groups.get(entry.correlationId) ?? new Set();
   ops.add(entry.op);
-  // A failed call is marked by its closed error kind, so the outage rule can read it.
-  if (FAILURE_OPS.has(entry.op) && INFRASTRUCTURE_ERROR_KINDS.has(entry.errorKind))
-    ops.add(INFRASTRUCTURE_FAILURE);
+  // A provider failure is marked by its closed error kind or status, so the outage rule can read it.
+  if (infrastructureLine(entry)) ops.add(INFRASTRUCTURE_FAILURE);
   groups.set(entry.correlationId, ops);
 }
 
 /**
- * An infrastructure failure is a correlation that ends in a failed model call of an infrastructure
- * error kind AND went through a retry exhaustion or a circuit event. A failure with neither, or of
- * another kind (a context overflow, a refused attempt, a provider rejection, a model that kept
- * producing an invalid answer), is a product or model outcome and proves no outage.
+ * An infrastructure failure is a correlation that ends in a failed model call AND went through a
+ * retry exhaustion or a circuit event AND shows the provider failing: an unavailable, timeout or
+ * rate-limited error kind, or a 5xx/429 provider status on a retry. Any other failure (a context
+ * overflow, a refused attempt, a provider rejection, a model that kept producing an invalid answer,
+ * an unclassified internal error) is a product or model outcome and proves no outage.
  */
 function classifyCorrelations(groups, counts) {
   for (const ops of groups.values()) {

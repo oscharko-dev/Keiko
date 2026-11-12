@@ -2,6 +2,7 @@
 // arguments, so the model has to find the operation in the Jira catalog itself (directly or through
 // jira.discover / jira.describe) and build the arguments from the person's words. Every truth is an
 // independent native Jira read with the lab actor's credentials, never Keiko's own answer.
+import { voteKey } from "./catalog-selection-objects.mjs";
 import { actorDetails, basicAuth, checked } from "./lab-client.mjs";
 
 const TRUTH_TOKENS_MAX = 20;
@@ -124,10 +125,14 @@ const BASE_READS = [
     id: "search",
     tool: "jira.search",
     prompt: (f) => `Welche Vorgänge gibt es im Jira-Projekt ${f.project}? Nenne die Schlüssel.`,
+    // Every key while the project fits one truth page; otherwise only the two owned issues, which
+    // any complete answer names, because a longer listing's first page depends on the tool's order.
     truth: async (s, f) => {
       const jql = encodeURIComponent(`project = ${f.project} ORDER BY key ASC`);
       const page = await native(s, `/rest/api/2/search?jql=${jql}&fields=summary&maxResults=20`);
-      return page.issues.map((issue) => issue.key);
+      return page.total <= page.issues.length
+        ? page.issues.map((issue) => issue.key)
+        : [f.selection.issueKey, f.selection.linkTargetKey];
     },
   },
   {
@@ -185,7 +190,7 @@ const WRITES = [
       const present = countMatching(votes.voters ?? [], (row) => row.name === name);
       // Only the voter can withdraw a vote, so the removal runs as the api actor.
       const removal = {
-        key: issuePath(f, `/votes@${name}`),
+        key: voteKey(issuePath(f), name),
         path: issuePath(f, "/votes"),
         actor: "api",
       };

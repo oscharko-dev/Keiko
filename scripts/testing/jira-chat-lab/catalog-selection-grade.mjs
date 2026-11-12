@@ -5,6 +5,7 @@
 /** The closed statuses of one selection attempt. */
 export const SELECTION_STATUSES = Object.freeze([
   "selected",
+  "alternative",
   "wrong-result",
   "wrong-tool",
   "no-tool",
@@ -55,21 +56,49 @@ export function carriesTruth(exchange, tokens) {
   return { complete: tokens.length > 0 && missing.length === 0, missing: missing.length };
 }
 
+// Truth tokens are synthetic lab names, so the private report may name the missing ones.
+const missingTokens = (exchange, tokens) => {
+  const leaves = resultLeaves(exchange.result?.data ?? {});
+  return tokens.filter((token) => !leaves.has(token));
+};
+
 function readVerdict(target, tokens) {
   if (!succeeded(target)) return { status: "wrong-result", detail: "target call did not succeed" };
-  const truth = carriesTruth(target, tokens);
-  return truth.complete
+  const missing = missingTokens(target, tokens);
+  return tokens.length > 0 && missing.length === 0
     ? { status: "selected", detail: `${tokens.length} native tokens present` }
-    : { status: "wrong-result", detail: `${truth.missing}/${tokens.length} native tokens missing` };
+    : {
+        status: "wrong-result",
+        detail: `${missing.length}/${tokens.length} native tokens missing`,
+        missingTokens: missing,
+      };
+}
+
+/**
+ * Another operation that answers the request just as well: its successful result carries every
+ * native token. It is reported apart from an exact selection, never folded into it.
+ */
+function alternativeRead(calls, tokens) {
+  const answering = calls.find((call) => succeeded(call) && carriesTruth(call, tokens).complete);
+  if (answering === undefined)
+    return { status: "wrong-tool", detail: `${calls.length} other operation calls` };
+  return {
+    status: "alternative",
+    detail: `${toolAlias(answering.call?.name)} carried every native token`,
+  };
 }
 
 /**
  * A write without a target call is a selection failure (another operation, or none), even when it
- * also wrote something; only a called target is judged by its native effect and stray writes.
+ * also wrote something, unless another operation produced exactly the requested effect and nothing
+ * else; only a called target is judged by its native effect and stray writes.
  */
 function missingTarget(effect, otherCalls) {
-  if (otherCalls === 0 && effect.effects === 0 && (effect.stray ?? 0) === 0)
+  const stray = effect.stray ?? 0;
+  if (otherCalls === 0 && effect.effects === 0 && stray === 0)
     return { status: "no-tool", detail: "no operation call" };
+  if (otherCalls > 0 && effect.effects === 1 && effect.wrongValue !== true && stray === 0)
+    return { status: "alternative", detail: "another operation produced exactly the effect" };
   const detail = `${otherCalls} other operation calls, ${effect.effects} native effects`;
   return { status: "wrong-tool", detail };
 }
@@ -88,17 +117,12 @@ function writeVerdict(target, effect, otherCalls) {
 }
 
 /**
- * A model call that failed after exhausting its retries or at an open circuit, or a transport
- * failure of the turn itself. A circuit that opened and recovered without failing a call is
- * reported, but proves no outage, so it never hides a product or model verdict.
+ * A model call that failed after exhausting its retries or at an open circuit with a provider
+ * failure. A circuit that opened and recovered without failing a call is reported, but proves no
+ * outage, so it never hides a product or model verdict.
  */
 const gatewayFailed = (gateway = {}) => gateway.unrecovered > 0;
 
-/**
- * One attempt: `turn` is { failure, exchanges, gateway: { unrecovered, circuit } }, `tokens` the
- * native read truth, `effect` the native write verification. A gateway outage or an unavailable
- * native truth is invalid, never a product or model verdict.
- */
 /** The called tools in order with their closed result, never their arguments or data. */
 export function callTrace(exchanges) {
   return exchanges.map((exchange) =>
@@ -110,28 +134,50 @@ export function callTrace(exchanges) {
   );
 }
 
+/**
+ * One attempt: `turn` is { failure, exchanges, gateway: { unrecovered, circuit } }, `tokens` the
+ * native read truth, `effect` the native write verification. A gateway outage, an unavailable
+ * native truth, or a turn that failed before it returned a transcript is invalid, never a product
+ * or model verdict: without a transcript the selection is unknowable.
+ */
 export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavailable } = {}) {
   const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable });
   return { ...verdict, calls: callTrace(turn.exchanges ?? []) };
 }
 
+function invalidReason(turn, exchanges, truthUnavailable) {
+  if (gatewayFailed(turn.gateway)) return "the model gateway failed during the turn";
+  if (truthUnavailable === true) return "the native truth read failed";
+  if (turn.failure !== undefined && exchanges.length === 0)
+    return "the turn failed before it returned a transcript";
+  return undefined;
+}
+
+/** The target call that decides: a successful one if the model retried, else the first one. */
+function targetCall(calls, tool) {
+  const targets = calls.filter((exchange) => toolAlias(exchange.call?.name) === toolAlias(tool));
+  return targets.find(succeeded) ?? targets[0];
+}
+
 function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
-  if (gatewayFailed(turn.gateway))
-    return { status: "invalid", path, detail: "the model gateway failed during the turn" };
-  if (truthUnavailable === true)
-    return { status: "invalid", path, detail: "the native truth read failed" };
+  const invalid = invalidReason(turn, exchanges, truthUnavailable);
+  if (invalid !== undefined) return { status: "invalid", path, detail: invalid };
   const calls = operationCalls(exchanges);
-  const target = calls.find((exchange) => toolAlias(exchange.call?.name) === toolAlias(entry.tool));
+  const target = targetCall(calls, entry.tool);
   if (entry.effect === "write") return { ...writeVerdict(target, effect, calls.length), path };
   if (target !== undefined) return { ...readVerdict(target, tokens), path };
-  if (calls.length > 0)
-    return { status: "wrong-tool", path, detail: `${calls.length} other operation calls` };
-  return { status: "no-tool", path, detail: turn.failure ? "turn failed" : "no operation call" };
+  if (calls.length > 0) return { ...alternativeRead(calls, tokens), path };
+  return { status: "no-tool", path, detail: "no operation call" };
 }
 
-/** Pass rate over valid attempts per case and overall; invalid attempts are counted, not graded. */
+const countOf = (runs, status) => runs.filter((value) => value === status).length;
+
+/**
+ * Pass rate over valid attempts per case and overall; invalid attempts are counted, not graded.
+ * An equivalent alternative is counted apart from an exact selection.
+ */
 export function summarizeSelection(attempts) {
   const byCase = new Map();
   for (const attempt of attempts) {
@@ -140,15 +186,22 @@ export function summarizeSelection(attempts) {
     byCase.set(attempt.id, row);
   }
   const rows = [...byCase.values()].map((row) => {
-    const valid = row.runs.filter((status) => status !== "invalid");
-    const selected = valid.filter((status) => status === "selected").length;
-    return { ...row, valid: valid.length, selected, invalid: row.runs.length - valid.length };
+    const invalid = countOf(row.runs, "invalid");
+    const valid = row.runs.length - invalid;
+    const selected = countOf(row.runs, "selected");
+    return { ...row, valid, selected, alternative: countOf(row.runs, "alternative"), invalid };
   });
   const total = (key) => rows.reduce((sum, row) => sum + row[key], 0);
   const valid = total("valid");
-  const invalid = total("invalid");
   // Like the scorecard's repeat rule: a run that lost most of its attempts to outages measures
   // nothing, so it is reported as insufficient instead of as a low (or perfect) rate.
   const sufficient = attempts.length > 0 && valid >= Math.ceil(attempts.length / 2);
-  return { rows, valid, selected: total("selected"), invalid, sufficient };
+  return {
+    rows,
+    valid,
+    selected: total("selected"),
+    alternative: total("alternative"),
+    invalid: total("invalid"),
+    sufficient,
+  };
 }

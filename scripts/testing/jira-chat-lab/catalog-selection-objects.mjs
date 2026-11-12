@@ -164,35 +164,41 @@ const optional = (id, path) => (id === undefined ? [] : [path]);
 const read = (session, path) =>
   checked(session, "catalog-selection-scope", "GET", path, basicAuth(session, "admin"));
 
-const ISSUE_FIELDS = [
-  "summary",
-  "description",
-  "status",
-  "assignee",
-  "priority",
-  "labels",
-  "components",
-  "fixVersions",
+// Fields an expected write changes as a side effect of its own effect (a worklog's time tracking,
+// the update stamp), and the collections the snapshot enumerates as objects instead.
+const VOLATILE_FIELDS = new Set([
+  "updated",
+  "lastViewed",
+  "watches",
+  "votes",
+  "issuelinks",
+  "worklog",
   "comment",
-  "attachment",
-  "subtasks",
-  "duedate",
-];
-const named = (value) => (Array.isArray(value) ? value.map(named) : (value?.name ?? value));
+  "timespent",
+  "aggregatetimespent",
+  "timeestimate",
+  "aggregatetimeestimate",
+  "timetracking",
+  "progress",
+  "aggregateprogress",
+  "workratio",
+]);
 
-/** The owned issue's fields that none of the write cases may change. */
+/** Every field of an owned issue except the volatile ones, as one comparable value. */
 function issueState(fields) {
-  return JSON.stringify(
-    ISSUE_FIELDS.map((field) =>
-      field === "comment" ? (fields.comment?.total ?? 0) : named(fields[field] ?? null),
-    ),
-  );
+  const kept = Object.keys(fields)
+    .filter((field) => !VOLATILE_FIELDS.has(field))
+    .sort();
+  return JSON.stringify(kept.map((field) => [field, fields[field] ?? null]));
 }
 
 const LAB_ACTORS = ["api", "assignee", "editor", "restricted"];
 
+/** The snapshot key of one voter's vote; the vote case and the snapshot share it. */
+export const voteKey = (issue, name) => `${issue}/votes@${name}`;
+
 /** A vote is removed by its own voter, so a lab actor's vote is owned and a foreign one is not. */
-function voteRows(issue, votes) {
+export function voteRows(issue, votes) {
   const actors = new Map(LAB_ACTORS.map((actor) => [actorDetails(actor).name, actor]));
   return (votes.voters ?? []).map((row) => {
     const actor = actors.get(row.name);
@@ -200,74 +206,116 @@ function voteRows(issue, votes) {
       actor === undefined
         ? { owned: false, label: String(row.name ?? "") }
         : { owned: true, label: row.name, removal: { path: `${issue}/votes`, actor } };
-    return [`${issue}/votes@${row.name}`, value];
+    return [voteKey(issue, row.name), value];
   });
 }
 
+const own = (label) => ({ owned: true, label: String(label ?? "") });
+
 /**
- * Every object a write turn could add in the scope, keyed by the native path that removes it, with
- * a label that tells owned objects (carrying the run tag) from foreign ones. Comparing a snapshot
- * before and after the turn finds writes the request did not ask for.
+ * Watchers except the api actor itself: Jira's autowatch adds the acting user when it creates or
+ * comments, which is a side effect of that write, not a write of its own.
  */
-export async function scopeSnapshot(session, fixture, created) {
-  const project = `/rest/api/2/project/${encodeURIComponent(fixture.project)}`;
-  const issue = `/rest/api/2/issue/${encodeURIComponent(created.issueKey)}`;
-  const jql = encodeURIComponent(`project = ${fixture.project} ORDER BY created DESC`);
-  const [components, versions, links, worklogs, properties, watchers, votes, state, issues] =
-    await Promise.all([
-      read(session, `${project}/components`),
-      read(session, `${project}/versions`),
-      read(session, `${issue}/remotelink`),
-      read(session, `${issue}/worklog`),
-      read(session, `${issue}/properties`),
-      read(session, `${issue}/watchers`),
-      read(session, `${issue}/votes`),
-      read(session, `${issue}?fields=${ISSUE_FIELDS.join(",")},issuelinks`),
-      read(session, `/rest/api/2/search?jql=${jql}&fields=summary&maxResults=100`),
-    ]);
-  const own = (label) => ({ owned: true, label: String(label ?? "") });
-  const projectRow = (label) => ({ owned: false, label: String(label ?? "") });
-  return {
-    issueState: issueState(state.fields ?? {}),
-    objects: new Map([
-      ...components.map((row) => [`/rest/api/2/component/${row.id}`, projectRow(row.name)]),
-      ...versions.map((row) => [`/rest/api/2/version/${row.id}`, projectRow(row.name)]),
-      ...issues.issues.map((row) => [
-        `/rest/api/2/issue/${encodeURIComponent(row.key)}`,
-        projectRow(row.fields?.summary),
-      ]),
-      ...links.map((row) => [`${issue}/remotelink/${row.id}`, own(row.object?.title)]),
-      ...worklogs.worklogs.map((row) => [`${issue}/worklog/${row.id}`, own(row.comment)]),
-      ...(properties.keys ?? []).map((row) => [`${issue}/properties/${row.key}`, own(row.key)]),
-      ...watchers.watchers.map((row) => [
-        `${issue}/watchers?username=${encodeURIComponent(row.name)}`,
-        own(row.name),
-      ]),
-      ...(state.fields?.issuelinks ?? []).map((row) => [
-        `/rest/api/2/issueLink/${row.id}`,
-        own(row.type?.name),
-      ]),
-      ...voteRows(issue, votes),
+function watcherRows(issue, watchers) {
+  const self = actorDetails("api").name;
+  return (watchers.watchers ?? [])
+    .filter((row) => row.name !== self)
+    .map((row) => [`${issue}/watchers?username=${encodeURIComponent(row.name)}`, own(row.name)]);
+}
+
+/** The objects and fields of one owned issue a write turn could add or change. */
+async function issueScope(session, key) {
+  const issue = `/rest/api/2/issue/${encodeURIComponent(key)}`;
+  const [links, worklogs, properties, watchers, votes, comments, state] = await Promise.all([
+    read(session, `${issue}/remotelink`),
+    read(session, `${issue}/worklog`),
+    read(session, `${issue}/properties`),
+    read(session, `${issue}/watchers`),
+    read(session, `${issue}/votes`),
+    read(session, `${issue}/comment`),
+    read(session, `${issue}?fields=*all`),
+  ]);
+  const rows = [
+    ...links.map((row) => [`${issue}/remotelink/${row.id}`, own(row.object?.title)]),
+    ...(worklogs.worklogs ?? []).map((row) => [`${issue}/worklog/${row.id}`, own(row.comment)]),
+    ...(properties.keys ?? []).map((row) => [`${issue}/properties/${row.key}`, own(row.key)]),
+    ...watcherRows(issue, watchers),
+    ...(state.fields?.issuelinks ?? []).map((row) => [
+      `/rest/api/2/issueLink/${row.id}`,
+      own(row.type?.name),
     ]),
-  };
+    ...voteRows(issue, votes),
+    ...(comments.comments ?? []).map((row) => [`${issue}/comment/${row.id}`, own("")]),
+  ];
+  return { state: issueState(state.fields ?? {}), rows };
+}
+
+/** Project-wide objects; another issue carries its update stamp so a write on it is seen. */
+async function projectScope(session, fixture, created) {
+  const project = `/rest/api/2/project/${encodeURIComponent(fixture.project)}`;
+  const jql = encodeURIComponent(`project = ${fixture.project} ORDER BY created DESC`);
+  const [components, versions, issues] = await Promise.all([
+    read(session, `${project}/components`),
+    read(session, `${project}/versions`),
+    read(session, `/rest/api/2/search?jql=${jql}&fields=summary,updated&maxResults=100`),
+  ]);
+  const owned = new Set([created.issueKey, created.linkTargetKey]);
+  const projectRow = (label, stamp = "") => ({ owned: false, label: String(label ?? ""), stamp });
+  return [
+    ...components.map((row) => [`/rest/api/2/component/${row.id}`, projectRow(row.name)]),
+    ...versions.map((row) => [`/rest/api/2/version/${row.id}`, projectRow(row.name)]),
+    ...issues.issues.map((row) => [
+      `/rest/api/2/issue/${encodeURIComponent(row.key)}`,
+      projectRow(row.fields?.summary, owned.has(row.key) ? "" : String(row.fields?.updated ?? "")),
+    ]),
+  ];
 }
 
 /**
- * What a turn wrote beyond `expected` (the case's own verified effect paths): `remove` holds the
- * paths the lane may delete (on its own issue, or carrying `marker`), `foreign` counts the objects
- * the lane does not own and leaves in place, `issueChanged` a change to the owned issue's fields.
+ * Every object a write turn could add, change or remove in the scope, keyed by the native path
+ * that removes it, with a label that tells owned objects (carrying the run tag) from foreign ones.
+ * Both owned issues are read in full. Comparing a snapshot before and after the turn finds writes
+ * the request did not ask for.
+ */
+export async function scopeSnapshot(session, fixture, created) {
+  const [main, target, project] = await Promise.all([
+    issueScope(session, created.issueKey),
+    issueScope(session, created.linkTargetKey),
+    projectScope(session, fixture, created),
+  ]);
+  return {
+    issueState: JSON.stringify([main.state, target.state]),
+    objects: new Map([...project, ...main.rows, ...target.rows]),
+  };
+}
+
+function changedRow(previous, row) {
+  return previous.label !== row.label || previous.stamp !== row.stamp;
+}
+
+/**
+ * What a turn wrote beyond `expected` (the case's own verified effect removals): `remove` holds the
+ * removals the lane may run (owned objects, or objects carrying `marker`), `foreign` counts added
+ * objects the lane does not own and leaves in place, `changed` objects whose label or update stamp
+ * changed, `removed` objects that disappeared, and `issueChanged` a change to an owned issue's
+ * fields. Changes and removals are counted but cannot be undone by the lane.
  */
 export function strayWrites(before, after, expected, marker) {
   const expectedKeys = new Set(expected.map(removalKey));
   const remove = [];
   let foreign = 0;
+  let changed = 0;
   for (const [path, row] of after.objects) {
-    if (before.objects.has(path) || expectedKeys.has(path)) continue;
-    if (row.owned || row.label.includes(marker)) remove.push(row.removal ?? path);
+    const previous = before.objects.get(path);
+    if (previous !== undefined) changed += changedRow(previous, row) ? 1 : 0;
+    else if (expectedKeys.has(path)) continue;
+    else if (row.owned || row.label.includes(marker)) remove.push(row.removal ?? path);
     else foreign += 1;
   }
+  const removed = [...before.objects.keys()].filter((path) => !after.objects.has(path)).length;
   const issueChanged = before.issueState === after.issueState ? 0 : 1;
-  return { remove, foreign, issueChanged, count: remove.length + foreign + issueChanged };
+  const count = remove.length + foreign + changed + removed + issueChanged;
+  return { remove, foreign, changed, removed, issueChanged, count };
 }
 
 /** Removes the run's owned objects; a partially created set removes what exists. */
