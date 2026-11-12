@@ -178,7 +178,10 @@ async function nativeReadComplete(context, path) {
     rows.push(...more);
     last = next.value;
   }
-  plumbingAssert.ok(!morePages(last, key, rows.length), "The native collection exceeds the paging bound");
+  plumbingAssert.ok(
+    !morePages(last, key, rows.length),
+    "The native collection exceeds the paging bound",
+  );
   return { status: 200, value: { ...first.value, [key]: rows, isLast: true } };
 }
 function assertEmptyReason(tool, reason) {
@@ -199,8 +202,32 @@ function requestedLimit(args, fixture) {
 const emptyCollection = (native, emptyAllowed) => {
   if (native.length > 0) return {};
   if (emptyAllowed !== undefined) return { vacuousReason: emptyAllowed };
-  plumbingAssert.fail("The native collection is empty: seed an owned record or declare emptyAllowed");
+  plumbingAssert.fail(
+    "The native collection is empty: seed an owned record or declare emptyAllowed",
+  );
 };
+function assertProjection(actual, wanted, unordered) {
+  assertQualificationJson(
+    unordered ? membership(actual) : actual,
+    unordered ? membership(wanted) : wanted,
+    "Keiko's observation must equal the independent native read",
+  );
+}
+/**
+ * The complete native collection behind a read case, or the settled readback when Jira's own
+ * answer already decides it (the same 403, or a capability this release or topology lacks).
+ */
+async function completeNativeRows(context, tool, selectedPath, { nonClusteredAbsent, nativeRoot }) {
+  const response = await nativeReadComplete(context, selectedPath);
+  if (response.status === 403) {
+    recordAssertion(); // the independent native read reproduced the same 403
+    return { settled: { permissionDenied: true, status: response.status } };
+  }
+  const absent = await absentReadback(context, tool, response.status, nonClusteredAbsent);
+  if (absent !== undefined) return { settled: absent };
+  plumbingAssert.equal(response.status, 200);
+  return { rows: nativeRows(response.value, nativeRoot) };
+}
 /**
  * A collection read proves a projection only when Jira actually holds rows. An empty native
  * collection therefore fails unless the case carries a reviewed `emptyAllowed` reason; such a read
@@ -228,15 +255,12 @@ export function readCase(
     arguments: args,
     readback: async (context, data, fixture) => {
       const selectedPath = typeof path === "function" ? path(fixture) : path;
-      const response = await nativeReadComplete(context, selectedPath);
-      if (response.status === 403) {
-        recordAssertion(); // the independent native read reproduced the same 403
-        return { permissionDenied: true, status: response.status };
-      }
-      const absent = await absentReadback(context, tool, response.status, nonClusteredAbsent);
-      if (absent !== undefined) return absent;
-      plumbingAssert.equal(response.status, 200);
-      const native = nativeRows(response.value, nativeRoot);
+      const read = await completeNativeRows(context, tool, selectedPath, {
+        nonClusteredAbsent,
+        nativeRoot,
+      });
+      if (read.settled !== undefined) return read.settled;
+      const native = read.rows;
       const { vacuousReason } = emptyCollection(native, emptyAllowed);
       const projected = projectRows(data, productRoot);
       const actual = rowValues(projected, fields);
@@ -245,12 +269,7 @@ export function readCase(
       const limit = requestedLimit(args, fixture);
       // An unordered native collection proves membership; the order Keiko pages it in is its own.
       if (unordered) assert.ok(native.length <= limit, "Membership needs the complete collection");
-      const wanted = expectedPrefix(expected, actual, limit);
-      assertQualificationJson(
-        unordered ? membership(actual) : actual,
-        unordered ? membership(wanted) : wanted,
-        "Keiko's observation must equal the independent native read",
-      );
+      assertProjection(actual, expectedPrefix(expected, actual, limit), unordered);
       assertOptionalFields(projected, native, optionalFields, nativeNames, optionalTransforms);
       return {
         matched: true,
