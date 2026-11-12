@@ -1,3 +1,4 @@
+import assert from "../testing/jira-chat-lab/api-qualification-assert.mjs";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,13 +49,20 @@ function attempt(identity = primary.identity, mutation = false) {
     ...(mutation ? { journal: { phase: "settled", outcome: "succeeded" } } : {}),
   };
 }
-const verified = { matched: true, assertionCount: 2 };
+const verified = { matched: true, assertionCount: 2, measuredAssertionCount: 2 };
+/** What the driver persists for a readback that already ran: the measured assertions and reads. */
+const persisted = { ...verified, measuredPresenceReads: 0 };
 const witness = { arm: vi.fn(), snapshot: () => ({ blocked: 1, responses: [] }) };
 function specification(fixture) {
   return {
     ...primary,
     arguments: () => ({ selected: fixture.selected }),
-    readback: async () => verified,
+    // The driver measures what the readback actually asserts; a stub that asserts nothing never grades.
+    readback: async () => {
+      assert.ok(true);
+      assert.ok(true);
+      return { matched: true, assertionCount: 2 };
+    },
   };
 }
 it("resolves arguments after held preparation and keeps the frozen primary witness", async () => {
@@ -116,10 +124,10 @@ it("retains native readback obtained before the private session's canonical clea
   selected.readback = vi.fn(async () => {
     throw new TypeError("The private session is already closed");
   });
-  dispatch.mockResolvedValue({ ...attempt(), readback: verified });
+  dispatch.mockResolvedValue({ ...attempt(), readback: verified, measuredAssertionCount: 2 });
   const evidence = await runQualificationCase({}, {}, selected, {}, witness, directory(), report);
   expect(evidence.runtimeAvailability).toBe("executable");
-  expect(evidence.readback).toEqual(verified);
+  expect(evidence.readback).toEqual(persisted);
   expect(selected.readback).not.toHaveBeenCalled();
 });
 it("retains a reconciliation marker when an auxiliary lacks independent proof", async () => {

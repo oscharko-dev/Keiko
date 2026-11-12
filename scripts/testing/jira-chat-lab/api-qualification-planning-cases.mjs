@@ -1,5 +1,5 @@
 // Planning fixtures and qualifying effects share the governed dispatcher; native GETs are oracles.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { URL, URLSearchParams } from "node:url";
 import { jiraSprintLifecycleSnapshot } from "../../../packages/keiko-connectors/dist/jira-sprint-lifecycle-values.js";
 import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";

@@ -1,5 +1,5 @@
 // Isolated synthetic configuration lifecycles through the existing governed qualifier.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import {
   dispatchedStatuses,
   missingReleaseCapability,

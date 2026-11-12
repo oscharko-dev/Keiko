@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { deletionProof, read, proof } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";

@@ -522,6 +522,16 @@ reference or owner exclusion has been added. AC1–AC9 remain open. Complete met
 does not establish complete supported fields, consumer composition, native permissions, version
 availability, current-head quality gates or acceptance of the original user journeys.
 
+Grading of the live AC7 run is measured, not declared: a readback grades only when assertions
+actually held while it ran (`measuredAssertionCount`), a DELETE "not found" needs a measured native
+read before the dispatch, and the only documented non-2xx accepted for a read is the exact 404 of
+`GET /rest/api/2/reindex` with an independently proven state. A route-level 405 for
+`GET /rest/api/2/cluster/nodes` is `unavailable` only with the independent identical 405 and an
+observed release. Rows that are not graded stay `unknown` and are refused by the ledger, but each
+carries a closed cause (`product`, `lab`, `cascade`, `infrastructure`, `not-attempted`,
+`undetermined`) in the private run evidence and the report's `causeCounts`; see
+`scripts/testing/jira-chat-lab/README.md`.
+
 Fifteen avatar effects reuse the existing file/content/approval and private session owners. Chat
 preview reads the authorized connected file; required review binds its exact byte snapshot, while
 allowed mode mints the same immutable snapshot without a new mandatory approval. PNG/JPEG content

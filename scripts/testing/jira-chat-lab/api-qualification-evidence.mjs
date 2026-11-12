@@ -60,13 +60,41 @@ function successfulJournal(journal, outcome) {
       journal.outcome === outcome)
   );
 }
+/**
+ * A readback grades only when assertions actually held while it ran. The recipe's declared
+ * `assertionCount` is a documentation hint: the driver measures the assertions that held, and a
+ * readback that asserted nothing proves nothing however many it declares.
+ */
 function matchedReadback(readback) {
   return (
     readback?.matched === true &&
-    Number.isSafeInteger(readback.assertionCount) &&
-    readback.assertionCount > 0
+    Number.isSafeInteger(readback.measuredAssertionCount) &&
+    readback.measuredAssertionCount > 0
   );
 }
+/**
+ * The only non-2xx native statuses a recipe may declare as the documented answer for a read: the
+ * plain 404 Jira gives while the addressed singleton does not exist (`GET /rest/api/2/reindex`
+ * before any reindex task ran). 405 stays reserved for proven capability absence, other 4xx and 5xx
+ * never grade as executable.
+ */
+const DOCUMENTED_NATIVE_STATUSES = new Set([404]);
+function nativeSuccessStatuses(statuses, readback, mutation) {
+  if (statuses.every((status) => status >= 200 && status < 300)) return true;
+  const documented = readback?.documentedNativeStatuses;
+  return (
+    mutation !== true &&
+    Array.isArray(documented) &&
+    documented.length > 0 &&
+    documented.every((status) => DOCUMENTED_NATIVE_STATUSES.has(status)) &&
+    statuses.every((status) => documented.includes(status))
+  );
+}
+/** `priorPresence` counts only when the recipe measurably read Jira natively before the DELETE. */
+const provenPriorPresence = (readback) =>
+  readback?.priorPresence === true &&
+  Number.isSafeInteger(readback.measuredPresenceReads) &&
+  readback.measuredPresenceReads > 0;
 function observedReceipt(dispatch) {
   const receipt = dispatch.receipt;
   return (
@@ -84,7 +112,7 @@ function observedReceipt(dispatch) {
  */
 const unconfirmedReason = (identity, reason, readback) =>
   reason === "unavailable" ||
-  (identity.startsWith("DELETE ") && reason === "not-found" && readback?.priorPresence === true);
+  (identity.startsWith("DELETE ") && reason === "not-found" && provenPriorPresence(readback));
 function settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation, readback) {
   const data = dispatch.result.data;
   if (data.outcome === "succeeded") return dispatch.result.status === "completed";
@@ -101,7 +129,7 @@ function settledNativeAcknowledgement(identity, dispatch, statuses, journal, mut
 function executableObservation(identity, dispatch, statuses, readback, journal, mutation) {
   return (
     settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation, readback) &&
-    statuses.every((status) => status >= 200 && status < 300) &&
+    nativeSuccessStatuses(statuses, readback, mutation) &&
     new Set(["succeeded", "succeeded-unconfirmed"]).has(dispatch.result.data.outcome) &&
     matchedReadback(readback) &&
     successfulJournal(journal, dispatch.result.data.outcome)

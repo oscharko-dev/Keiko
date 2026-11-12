@@ -1,5 +1,5 @@
 // Native reads select existing fixture identities; only the governed provider qualifies them.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 

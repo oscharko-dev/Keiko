@@ -1,5 +1,5 @@
 // Explicit independent oracles; specification documents never become HTTP dispatch authority.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { URLSearchParams } from "node:url";
@@ -62,6 +62,26 @@ export async function missingReleaseCapability(context, tool, statuses, { shadow
     ],
   };
 }
+/**
+ * Jira answers a cluster-only route with a route-level 405 unless the instance runs as a cluster.
+ * That proves the capability absent only when the independent native read, the lab actor's own
+ * request to the same route, answers the identical 405 as the product's dispatch and the running
+ * release is observed again; the lab Jira is a single node by construction. A clustered instance
+ * answers 200 and then takes the ordinary matching path.
+ */
+export async function nonClusteredAbsence(context, statuses, nativeStatus) {
+  if (nativeStatus !== 405 || statuses.length === 0 || !statuses.every((status) => status === 405))
+    return undefined;
+  const observed = await nativeRead(context, "/rest/api/2/serverInfo");
+  assert.equal(observed.status, 200);
+  assertSessionServerInfo(context.session, observed.value);
+  return {
+    capabilityAbsent: true,
+    status: 405,
+    release: observed.value.version,
+    reason: "route-405-on-non-clustered-instance",
+  };
+}
 /** The status the qualification witness observed for this case's own native dispatch. */
 export const dispatchedStatuses = (context) =>
   (context.qualificationWitness?.snapshot().responses ?? []).map((response) => response.status);
@@ -119,6 +139,12 @@ const membership = (rows) =>
     .map((row) => JSON.stringify(row))
     .sort((left, right) => left.localeCompare(right, "en"))
     .map((row) => JSON.parse(row));
+/** A native read that proves the capability absent for this release, or undefined. */
+async function absentReadback(context, tool, status, nonClusteredAbsent) {
+  const absent = await missingReleaseCapability(context, tool, [status]);
+  if (absent !== undefined || !nonClusteredAbsent) return absent;
+  return nonClusteredAbsence(context, dispatchedStatuses(context), status);
+}
 export function readCase(
   tool,
   path,
@@ -132,6 +158,7 @@ export function readCase(
     optionalTransforms,
     nonEmpty = false,
     unordered = false,
+    nonClusteredAbsent = false,
   } = {},
 ) {
   return {
@@ -141,7 +168,7 @@ export function readCase(
       const selectedPath = typeof path === "function" ? path(fixture) : path;
       const response = await nativeRead(context, selectedPath);
       if (response.status === 403) return { permissionDenied: true, status: response.status };
-      const absent = await missingReleaseCapability(context, tool, [response.status]);
+      const absent = await absentReadback(context, tool, response.status, nonClusteredAbsent);
       if (absent !== undefined) return absent;
       assert.equal(response.status, 200);
       const native = nativeRows(response.value, nativeRoot);

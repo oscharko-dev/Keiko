@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { URL } from "node:url";
 import { basicAuth, labSessionConnection } from "./lab-client.mjs";
 import { read, proof } from "./api-qualification-read.mjs";

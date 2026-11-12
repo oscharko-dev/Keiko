@@ -29,6 +29,19 @@ import {
   qualificationDigest,
   qualificationSummary,
 } from "./api-qualification-evidence.mjs";
+import {
+  measuredAssertionCount,
+  resetAssertionCount,
+  resetNativeReadCount,
+} from "./api-qualification-assert.mjs";
+import { NativeReadError } from "./api-qualification-read.mjs";
+import {
+  annotateCause,
+  causeSummary,
+  describeFailure,
+  localRefusal,
+  markNotAttempted,
+} from "./api-qualification-cause.mjs";
 
 const repository = resolve(import.meta.dirname, "..", "..", "..");
 const ledgerPath = join(repository, "docs/local-knowledge/jira-api-coverage/operations.json");
@@ -86,21 +99,32 @@ function caseRows(ledger, cases) {
   });
 }
 
-async function observeReadback(context, specification, attempted, fixture) {
+const readbackFailure = (error) => {
+  if (error instanceof NativeReadError) return "oracle-read-refused";
+  return error instanceof assert.AssertionError ? "readback-mismatch" : "readback-failed";
+};
+/** The readback runs under the assertion meter; a verification that already ran carries its count. */
+async function measuredReadback(context, specification, attempted, fixture) {
+  if (attempted.readback !== undefined)
+    return { ...attempted.readback, measuredAssertionCount: attempted.measuredAssertionCount ?? 0 };
+  resetAssertionCount();
+  const readback = await specification.readback(context, attempted.dispatch.result?.data, fixture);
+  return { ...readback, measuredAssertionCount: measuredAssertionCount() };
+}
+async function observeReadback(context, specification, attempted, fixture, snapshot) {
+  // A refusal before any native request leaves nothing to read back; it is not a mismatch.
+  const refusal = localRefusal(attempted.dispatch, snapshot);
+  if (refusal !== undefined) return { failure: "product-refused", product: refusal };
+  if (attempted.verifyRefused !== undefined)
+    return { failure: "outcome-refused", product: attempted.verifyRefused };
   try {
-    return {
-      readback:
-        attempted.readback ??
-        (await specification.readback(context, attempted.dispatch.result?.data, fixture)),
-    };
+    const readback = await measuredReadback(context, specification, attempted, fixture);
+    return { readback: { ...readback, measuredPresenceReads: attempted.presenceReads ?? 0 } };
   } catch (error) {
-    return {
-      failure: error instanceof assert.AssertionError ? "readback-mismatch" : "readback-failed",
-      detail: prepareSite(error),
-    };
+    return { failure: readbackFailure(error), detail: describeFailure(error) };
   }
 }
-function caseEvidence(specification, attempted, observation, readback, failure, report) {
+function caseEvidence(specification, attempted, observation, readback, extra, report) {
   const runtimeAvailability = classifyQualification({
     ...attempted,
     identity: specification.identity,
@@ -142,7 +166,7 @@ function caseEvidence(specification, attempted, observation, readback, failure, 
           },
     resultDigest: qualificationDigest(attempted.dispatch.result),
     readback,
-    ...(failure === undefined ? {} : { failure }),
+    ...extra,
   };
 }
 /** The one intentional stop: a native effect whose outcome is not certain is never built upon. */
@@ -157,23 +181,29 @@ const caseId = (specification) =>
 /**
  * A case that could not be prepared or dispatched is graded unknown; it never aborts the run.
  * `effects` is the real count of started native writes; `refused` says each one was definitely refused.
+ * `extra` carries the safe failure detail and the cause tracking (`blockedBy`, snapshot).
  */
-function ungradedEvidence(specification, report, failure, effects, refused = false) {
-  return {
-    runId: report.runId,
-    sourceRevision: report.sourceRevision,
-    release: report.release,
-    imageDigest: report.imageDigest,
-    id: caseId(specification),
-    identity: specification.identity,
-    tool: specification.tool,
-    runtimeAvailability: "unknown",
-    mutation: specification.mutation === true,
-    failure,
-    // An effect that started before the failure needs reconciliation before it is trusted.
-    ...(effects > 0 && !refused ? { reconcileRequired: true } : {}),
-    ...(effects > 0 && refused ? { refusedEffects: effects } : {}),
-  };
+function ungradedEvidence(specification, report, failure, effects, refused = false, extra = {}) {
+  const { detail, blockedBy, snapshot } = extra;
+  return annotateCause(
+    {
+      runId: report.runId,
+      sourceRevision: report.sourceRevision,
+      release: report.release,
+      imageDigest: report.imageDigest,
+      id: caseId(specification),
+      identity: specification.identity,
+      tool: specification.tool,
+      runtimeAvailability: "unknown",
+      mutation: specification.mutation === true,
+      failure,
+      ...(detail === undefined ? {} : { detail }),
+      // An effect that started before the failure needs reconciliation before it is trusted.
+      ...(effects > 0 && !refused ? { reconcileRequired: true } : {}),
+      ...(effects > 0 && refused ? { refusedEffects: effects } : {}),
+    },
+    { blockedBy, snapshot },
+  );
 }
 function recordUngraded(specification, directory, evidence) {
   privateJson(join(directory, `${evidence.id}.json`), evidence, true);
@@ -181,43 +211,21 @@ function recordUngraded(specification, directory, evidence) {
     identity: specification.identity,
     runtimeAvailability: "unknown",
     failure: evidence.failure,
+    cause: evidence.cause,
+    ...(evidence.blockedBy === undefined ? {} : { blockedBy: evidence.blockedBy.tool }),
     ...(evidence.reconcileRequired ? { reconcileRequired: true } : {}),
   });
   return evidence;
 }
 const prepareFailure = (error) =>
   error instanceof assert.AssertionError ? "prepare-precondition" : "prepare-failed";
-/** Names the recipe line that refused, never a value: a message only when the recipe wrote it. */
-function prepareSite(error) {
-  const sites = String(error?.stack ?? "")
-    .split("\n")
-    .map((line) => /(api-qualification-[\w-]+\.mjs:\d+)/u.exec(line)?.[1])
-    .filter((site) => site !== undefined)
-    .slice(0, 3);
-  // A generated comparison message carries values, so it stays out unless an operator asks locally.
-  const message =
-    error instanceof assert.AssertionError &&
-    (!error.generatedMessage || process.env.KEIKO_AC7_DETAIL === "values");
-  return {
-    ...(sites.length > 0 ? { sites } : {}),
-    ...(message
-      ? {
-          message: String(error.message).slice(
-            0,
-            process.env.KEIKO_AC7_DETAIL === "values" ? 700 : 160,
-          ),
-        }
-      : {}),
-    errorType: error instanceof Error ? error.name : "unknown",
-  };
-}
 async function prepareCase(context, chat, specification, fixture) {
   try {
     await specification.prepare?.(context, fixture, chat);
     return undefined;
   } catch (error) {
     if (error instanceof ReconcileRequiredError) throw error;
-    context.qualificationPrepareDetail = prepareSite(error);
+    context.qualificationPrepareDetail = describeFailure(error);
     return prepareFailure(error);
   }
 }
@@ -230,9 +238,13 @@ const refusedOnly = (snapshot) =>
   snapshot.blocked === 0 &&
   snapshot.responses.length > 0 &&
   snapshot.responses.every((response) => DEFINITE_REFUSAL_STATUSES.has(response.status));
-/** An ungraded case after a native effect needs reconciliation unless every response was a refusal. */
-const unknownAfterEffect = (evidence, witness) =>
+/**
+ * An ungraded case after a native effect needs reconciliation unless every response was a refusal or
+ * the effect is certain (a settled native 2xx that the oracle merely could not confirm).
+ */
+export const unknownAfterEffect = (evidence, witness) =>
   evidence.runtimeAvailability === "unknown" &&
+  evidence.certainEffect !== true &&
   witness.effectsStarted() > 0 &&
   !refusedOnly(witness.snapshot());
 async function dispatchCase(context, chat, specification, fixture, witness, pending) {
@@ -243,13 +255,14 @@ async function dispatchCase(context, chat, specification, fixture, witness, pend
       ),
     };
   } catch (error) {
-    stage({ identity: specification.identity, dispatchFailure: prepareSite(error) });
+    const detail = describeFailure(error);
+    stage({ identity: specification.identity, dispatchFailure: detail });
     // Before any native effect started, a refusal or local failure proves nothing about Jira.
     // A native effect whose every observed response is a definite refusal changed nothing.
     if (witness.effectsStarted() > 0 && !refusedOnly(witness.snapshot()))
       throw new ReconcileRequiredError();
     rmSync(pending);
-    return { failure: "dispatch-failed" };
+    return { failure: "dispatch-failed", detail };
   }
 }
 function recordAuxiliaries(attempted, directory, report) {
@@ -265,7 +278,7 @@ function recordAuxiliaries(attempted, directory, report) {
       auxiliary.attempted,
       auxiliary.attempted.witness,
       auxiliary.readback,
-      undefined,
+      {},
       report,
     );
     assert.equal(row.runtimeAvailability, "executable", "Auxiliary evidence must remain verified");
@@ -295,24 +308,44 @@ function needsReconcile(journal, evidence, snapshot) {
   if (journal.phase === "settled" && refusedOnly(snapshot)) return false;
   return !settledRefusal(journal, evidence);
 }
+/**
+ * A mutation whose journal settled with a native 2xx the witness itself observed is a certain
+ * effect: it happened, whatever the oracle could see. Anything else (an unsettled journal, a
+ * timeout, a rate limit, 5xx, a lost transport) stays uncertain and still needs reconciliation.
+ */
+export function certainEffect(journal, snapshot) {
+  return (
+    journal?.phase === "settled" &&
+    new Set(["succeeded", "succeeded-unconfirmed"]).has(journal.outcome) &&
+    snapshot.blocked === 0 &&
+    snapshot.responses.length > 0 &&
+    snapshot.responses.every(
+      (response) =>
+        response.status >= 200 &&
+        response.status < 300 &&
+        response.status === journal.httpStatus &&
+        (response.truncated === false || response.statusOnly === true),
+    )
+  );
+}
 async function gradeCase(
   { context, specification, fixture, witness, directory, report },
   attempted,
 ) {
-  const {
-    readback,
-    failure: readbackFailure,
-    detail,
-  } = await observeReadback(context, specification, attempted, fixture);
-  const evidence = caseEvidence(
+  const snapshot = attempted.witness ?? witness.snapshot();
+  const { readback, ...extra } = await observeReadback(
+    context,
     specification,
     attempted,
-    attempted.witness ?? witness.snapshot(),
-    readback,
-    readbackFailure,
-    report,
+    fixture,
+    snapshot,
   );
-  if (detail !== undefined) evidence.detail = detail;
+  const evidence = annotateCause(
+    caseEvidence(specification, attempted, snapshot, readback, extra, report),
+    { snapshot },
+  );
+  if (evidence.runtimeAvailability === "unknown" && certainEffect(attempted.journal, snapshot))
+    evidence.certainEffect = true;
   evidence.auxiliaryReferences = recordAuxiliaries(attempted, directory, report);
   privateJson(join(directory, `${evidence.id}.json`), evidence, true);
   if (needsReconcile(attempted.journal, evidence, evidence.witness))
@@ -321,10 +354,15 @@ async function gradeCase(
   stage({
     identity: specification.identity,
     runtimeAvailability: evidence.runtimeAvailability,
-    ...(readbackFailure ? { failure: readbackFailure } : {}),
+    ...(evidence.failure ? { failure: evidence.failure } : {}),
+    ...(evidence.cause ? { cause: evidence.cause } : {}),
   });
   return evidence;
 }
+const auxiliaryBlocker = (context) =>
+  context.qualificationAuxiliaryFailure === undefined
+    ? undefined
+    : { kind: "auxiliary", ...context.qualificationAuxiliaryFailure };
 export async function runQualificationCase(
   context,
   chat,
@@ -336,10 +374,14 @@ export async function runQualificationCase(
 ) {
   const failure = await prepareCase(context, chat, specification, fixture);
   if (failure !== undefined)
-    return recordUngraded(specification, directory, {
-      ...ungradedEvidence(specification, report, failure, witness.effectsStarted()),
-      detail: context.qualificationPrepareDetail,
-    });
+    return recordUngraded(
+      specification,
+      directory,
+      ungradedEvidence(specification, report, failure, witness.effectsStarted(), false, {
+        detail: context.qualificationPrepareDetail,
+        blockedBy: auxiliaryBlocker(context),
+      }),
+    );
   const id = caseId(specification);
   const pending = join(directory, `${id}.pending.json`);
   privateJson(
@@ -359,6 +401,11 @@ export async function runQualificationCase(
         dispatched.failure,
         witness.effectsStarted(),
         refusedOnly(witness.snapshot()),
+        {
+          detail: dispatched.detail,
+          blockedBy: auxiliaryBlocker(context),
+          snapshot: witness.snapshot(),
+        },
       ),
     );
   return gradeCase(
@@ -405,6 +452,8 @@ function attachFixtureDispatcher(
       directory,
       report,
     );
+    if (evidence.runtimeAvailability !== "executable")
+      context.qualificationAuxiliaryFailure ??= { tool, identity: operation.identity };
     assert.equal(
       evidence.runtimeAvailability,
       "executable",
@@ -413,6 +462,59 @@ function attachFixtureDispatcher(
     witness.markVerified();
     return evidence;
   };
+}
+/** The first declared root cause of this case that already failed earlier in the run. */
+function failedRoot(specification, failedRoots) {
+  const tool = (specification.dependsOn ?? []).find((root) => failedRoots.has(root));
+  return tool === undefined ? undefined : { kind: "case", tool, identity: failedRoots.get(tool) };
+}
+/**
+ * Root-cause cases run before their declared dependents; every other case keeps its position, so the
+ * order stays deterministic. A dependency outside the selection never moves anything.
+ */
+export function orderByDependencies(specifications) {
+  const byTool = new Map(specifications.map((entry) => [entry.tool, entry]));
+  const ordered = [];
+  const placed = new Set();
+  const place = (entry, trail = new Set()) => {
+    if (placed.has(entry.tool) || trail.has(entry.tool)) return;
+    trail.add(entry.tool);
+    for (const root of entry.dependsOn ?? []) if (byTool.has(root)) place(byTool.get(root), trail);
+    placed.add(entry.tool);
+    ordered.push(entry);
+  };
+  for (const entry of specifications) place(entry);
+  return ordered;
+}
+function recordBlocked(specification, directory, report, blockedBy) {
+  return recordUngraded(
+    specification,
+    directory,
+    ungradedEvidence(specification, report, "blocked-by-root", 0, false, { blockedBy }),
+  );
+}
+async function chatFor(context, chats, specification) {
+  const binding = `${context.actor}:${specification.administration === true}`;
+  if (!chats.has(binding))
+    chats.set(
+      binding,
+      await prepareModelFreeChat(context, context.actor, specification.administration === true),
+    );
+  return chats.get(binding);
+}
+async function executeCase(state, specification) {
+  const { context, fixture, report, directory, witness } = state;
+  await requireLicense(context.session);
+  context.actor = specification.actor ?? "api";
+  const chat = await chatFor(context, state.chats, specification);
+  context.qualificationChat = chat;
+  context.qualificationAuxiliaryFailure = undefined;
+  resetNativeReadCount();
+  attachFixtureDispatcher(context, chat, specification, fixture, witness, directory, report);
+  witness.reset();
+  const blockedBy = failedRoot(specification, state.failedRoots);
+  if (blockedBy !== undefined) return recordBlocked(specification, directory, report, blockedBy);
+  return runQualificationCase(context, chat, specification, fixture, witness, directory, report);
 }
 async function executeCases(context, specifications, report, directory, witness, priorFixture) {
   context.actor = "api";
@@ -425,29 +527,17 @@ async function executeCases(context, specifications, report, directory, witness,
   fixture.runId = report.runId;
   context.qualificationFixtureState = fixture;
   context.qualificationWitness = witness;
-  const chats = new Map();
+  const state = {
+    context,
+    fixture,
+    report,
+    directory,
+    witness,
+    chats: new Map(),
+    failedRoots: report.failedRoots,
+  };
   for (const specification of specifications) {
-    await requireLicense(context.session);
-    context.actor = specification.actor ?? "api";
-    const binding = `${context.actor}:${specification.administration === true}`;
-    if (!chats.has(binding))
-      chats.set(
-        binding,
-        await prepareModelFreeChat(context, context.actor, specification.administration === true),
-      );
-    const chat = chats.get(binding);
-    context.qualificationChat = chat;
-    attachFixtureDispatcher(context, chat, specification, fixture, witness, directory, report);
-    witness.reset();
-    const evidence = await runQualificationCase(
-      context,
-      chat,
-      specification,
-      fixture,
-      witness,
-      directory,
-      report,
-    );
+    const evidence = await executeCase(state, specification);
     const row = report.operations.find(
       (operation) => operation.identity === specification.identity,
     );
@@ -455,6 +545,8 @@ async function executeCases(context, specifications, report, directory, witness,
       verificationReferences:
         evidence.runtimeAvailability === "unknown" ? [] : [`${report.file}#${evidence.id}`],
     });
+    if (evidence.runtimeAvailability === "unknown")
+      state.failedRoots.set(specification.tool, specification.identity);
     privateJson(join(directory, report.file), report);
     // A failure before any native effect leaves nothing to reconcile; the run continues.
     if (unknownAfterEffect(evidence, witness)) throw new ReconcileRequiredError();
@@ -470,7 +562,7 @@ function createReport(session, ledger, revision, runId) {
   const identities = new Set(ledger.operations.map((row) => row.identity));
   for (const proposal of proposals.proposals)
     assert.ok(proposal.identities.every((identity) => identities.has(identity)));
-  return {
+  const report = {
     schemaVersion: 1,
     runId,
     sourceRevision: revision,
@@ -498,6 +590,9 @@ function createReport(session, ledger, revision, runId) {
         : { identity: row.identity, runtimeAvailability: "unknown", verificationReferences: [] },
     ),
   };
+  // Run state, not evidence: the tools whose failure quarantines their declared dependents.
+  Object.defineProperty(report, "failedRoots", { value: new Map(), enumerable: false });
+  return report;
 }
 async function observeRelease(session) {
   const native = await labRequest(
@@ -547,19 +642,22 @@ function qualificationPlan(directory, only) {
         ledger,
       ),
     );
-  const selected = caseRows(ledger, API_QUALIFICATION_ALL_CASES).filter(
-    (entry) => only === undefined || only.includes(entry.tool),
+  const selected = orderByDependencies(
+    caseRows(ledger, API_QUALIFICATION_ALL_CASES).filter(
+      (entry) => only === undefined || only.includes(entry.tool),
+    ),
   );
   assert.ok(selected.length > 0);
   return { session, ledger, revision, selected };
 }
-async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = {}) {
-  const { session, ledger, revision, selected } = qualificationPlan(directory, only);
-  await observeRelease(session);
-  const { report, output, pending } = prepareRun(session, ledger, revision);
-  await admitSnapshot(session, selected, report, snapshotId);
-  const witness = qualificationWitness(session);
-  privateJson(join(output, report.file), report, true);
+/** Every row's cause is complete before the summary: rows never reached are named as such. */
+function finishReport(report, output) {
+  markNotAttempted(report.operations);
+  report.counts = qualificationSummary(report.operations);
+  report.causeCounts = causeSummary(report.operations);
+  privateJson(join(output, report.file), report);
+}
+async function runBatches({ session, selected, witness, report, output, emailDefaultOracle }) {
   let fixture;
   await runQualificationBatches({
     session,
@@ -572,24 +670,41 @@ async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = 
       report.productStateFiles.push(file);
       privateJson(join(output, report.file), report);
     },
-    run: async (context, selected) => {
+    run: async (context, batchCases) => {
       context.qualificationEmailDefaultOracle = emailDefaultOracle;
-      fixture = await executeCases(context, selected, report, output, witness, fixture);
+      fixture = await executeCases(context, batchCases, report, output, witness, fixture);
     },
   });
-  const counts = qualificationSummary(report.operations);
+}
+async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = {}) {
+  const { session, ledger, revision, selected } = qualificationPlan(directory, only);
+  await observeRelease(session);
+  const { report, output, pending } = prepareRun(session, ledger, revision);
+  await admitSnapshot(session, selected, report, snapshotId);
+  const witness = qualificationWitness(session);
+  privateJson(join(output, report.file), report, true);
+  try {
+    await runBatches({ session, selected, witness, report, output, emailDefaultOracle });
+  } catch (error) {
+    // The one intentional stop still leaves a complete cause record of everything it did not reach.
+    report.phase = "incomplete";
+    report.stoppedEarly = { errorType: error instanceof Error ? error.name : "unknown" };
+    finishReport(report, output);
+    throw error;
+  }
   assert.equal(sourceRevision(), revision, "Qualification sources changed during the run");
-  report.phase = counts.unknown === 0 ? "complete" : "incomplete";
-  report.counts = counts;
+  finishReport(report, output);
+  report.phase = report.counts.unknown === 0 ? "complete" : "incomplete";
   privateJson(join(output, report.file), report);
   rmSync(pending);
   stage({
     release: session.jiraVersion,
     sourceRevision: revision,
-    counts,
+    counts: report.counts,
+    causes: report.causeCounts,
     proposals: report.proposals.length,
   });
-  return { report, counts };
+  return { report, counts: report.counts };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

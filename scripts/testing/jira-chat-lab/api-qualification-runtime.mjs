@@ -25,6 +25,12 @@ import {
   qualificationDigest,
 } from "./api-qualification-evidence.mjs";
 import { labSessionConnection } from "./lab-client.mjs";
+import {
+  measuredAssertionCount,
+  measuredNativeReadCount,
+  resetAssertionCount,
+} from "./api-qualification-assert.mjs";
+import { productRefusalDetail, succeededOutcome } from "./api-qualification-cause.mjs";
 
 function readRequest(request, url) {
   return (
@@ -417,6 +423,8 @@ async function dispatchHeldCall(held, specification, args) {
     held.shared = { budget: bound.budget, counters: bound.counters };
     const toolRef = operation.declaration.descriptor.toolRef;
     const offered = bound.binder.offerTool(toolRef);
+    // Native reads the recipe actually made before this dispatch: the measured presence proof.
+    const presenceReads = measuredNativeReadCount();
     const dispatch = await bound.binder.dispatch(
       {
         kind: "bound",
@@ -432,6 +440,7 @@ async function dispatchHeldCall(held, specification, args) {
     return {
       dispatch,
       binding: operation.binding,
+      presenceReads,
       mutation: operation.definition.effects.includes("remote-write"),
       journal: context.deps.store.chatToolMutations.find(actionId),
       ...(witness === undefined ? {} : { witness: witness.snapshot() }),
@@ -509,6 +518,29 @@ async function prepareHeldQualification(context, chat, specification) {
     auxiliary,
   };
 }
+/** The readback of an auxiliary fixture runs under the assertion meter like every case's own. */
+async function measuredAuxiliaryReadback(context, entry, data) {
+  resetAssertionCount();
+  const readback = await entry.readback(context, data);
+  return { ...readback, measuredAssertionCount: measuredAssertionCount() };
+}
+async function settleAuxiliary(held, entry, selected) {
+  const { context } = held;
+  const attempted = await dispatchHeldCall(held, selected, entry.arguments);
+  const readback = await measuredAuxiliaryReadback(context, entry, attempted.dispatch.result?.data);
+  const runtimeAvailability = classifyQualification({
+    ...attempted,
+    identity: selected.identity,
+    witness: attempted.witness,
+    readback,
+  });
+  assert.equal(
+    runtimeAvailability,
+    "executable",
+    "A held-turn fixture needs verified native evidence",
+  );
+  return { attempted, readback };
+}
 function heldFixtureDispatcher(held, auxiliaries) {
   const { context } = held;
   const remaining = new Set(held.auxiliary);
@@ -522,23 +554,17 @@ function heldFixtureDispatcher(held, auxiliaries) {
       identity: operation.definition.identity,
       mutation: operation.definition.effects.includes("remote-write"),
     };
-    const attempted = await dispatchHeldCall(held, selected, entry.arguments);
-    const readback = await entry.readback(context, attempted.dispatch.result?.data);
-    const runtimeAvailability = classifyQualification({
-      ...attempted,
-      identity: selected.identity,
-      witness: attempted.witness,
-      readback,
-    });
-    assert.equal(
-      runtimeAvailability,
-      "executable",
-      "A held-turn fixture needs verified native evidence",
-    );
-    // An independently verified auxiliary leaves no native effect open for reconciliation.
-    held.witness.markVerified?.();
-    auxiliaries.push({ tool: entry.tool, identity: selected.identity, attempted, readback });
-    return attempted.dispatch.result.data;
+    try {
+      const { attempted, readback } = await settleAuxiliary(held, entry, selected);
+      // An independently verified auxiliary leaves no native effect open for reconciliation.
+      held.witness.markVerified?.();
+      auxiliaries.push({ tool: entry.tool, identity: selected.identity, attempted, readback });
+      return attempted.dispatch.result.data;
+    } catch (error) {
+      // A dependent case names the fixture that failed as the cause of its own failure.
+      context.qualificationAuxiliaryFailure ??= { tool: entry.tool, identity: selected.identity };
+      throw error;
+    }
   };
 }
 /**
@@ -560,25 +586,32 @@ export async function dispatchQualification(context, chat, specification, args) 
     }
   });
 }
+/**
+ * The recipe's own verification of the native effect. A settled outcome that is not a success is not
+ * verified: it is reported as the product's refusal instead of being thrown as a failed dispatch.
+ */
+async function verifiedInvocation(held, specification, attempted) {
+  const { context } = held;
+  const settled = attempted.dispatch.result?.data;
+  if (!succeededOutcome(settled?.outcome)) return { verifyRefused: productRefusalDetail(settled) };
+  resetAssertionCount();
+  const readback = await specification.verifyInvocation(
+    context,
+    context.qualificationFixtureState,
+    settled,
+  );
+  return { readback, measuredAssertionCount: measuredAssertionCount() };
+}
 async function runHeldCase(held, specification, args, auxiliaries) {
   const { context, accepted } = held;
   await specification.prepareInvocation?.(context, context.qualificationFixtureState);
   // A preparation may replace source-derived arguments, e.g. the current temporary crop.
   const actualArgs = typeof args === "function" ? args() : args;
   const attempted = await dispatchHeldCall(held, specification, actualArgs);
-  let readback;
-  if (specification.verifyInvocation !== undefined) {
-    const settled = attempted.dispatch.result?.data;
-    assert.ok(
-      new Set(["succeeded", "succeeded-unconfirmed"]).has(settled?.outcome),
-      `Settled outcome ${String(settled?.outcome)} reason ${String(settled?.reason)}`,
-    );
-    readback = await specification.verifyInvocation(
-      context,
-      context.qualificationFixtureState,
-      attempted.dispatch.result.data,
-    );
-  }
+  const verified =
+    specification.verifyInvocation === undefined
+      ? {}
+      : await verifiedInvocation(held, specification, attempted);
   completeQualificationTurn(context, accepted.turn);
-  return { ...attempted, auxiliaries, ...(readback === undefined ? {} : { readback }) };
+  return { ...attempted, auxiliaries, ...verified };
 }

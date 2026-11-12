@@ -1,5 +1,5 @@
 // Synthetic project-scoped resources; every effect goes through Keiko, every oracle is separate.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
 import { proof, read, readRecord } from "./api-qualification-read.mjs";

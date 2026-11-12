@@ -1,11 +1,11 @@
 // AC7 recipes 66-78: reindex, search error lookup, security level, project-owned avatars and the
 // upgrade result. Every oracle reads Jira directly with the lab actor; evidence stays body-free.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { URL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { basicAuth, labSessionConnection } from "./lab-client.mjs";
 import { missingReleaseCapability, readCase } from "./api-qualification-cases.mjs";
-import { proof, read } from "./api-qualification-read.mjs";
+import { documentedStatusProof, proof, read } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
   bindQualificationFile,
@@ -110,7 +110,8 @@ const reindexStatus = admin({
     const response = await native(c, "/rest/api/2/reindex");
     if (response.status === 404) {
       assert.equal(data.taskState, "no-prior-task");
-      return proof(2);
+      // The oracle's own native read answered the documented 404 and the product reported the same state.
+      return documentedStatusProof(2, [404]);
     }
     assert.equal(response.status, 200);
     assert.equal(data.taskSelection, "active-or-latest");

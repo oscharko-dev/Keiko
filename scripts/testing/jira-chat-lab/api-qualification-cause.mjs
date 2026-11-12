@@ -1,0 +1,171 @@
+// Cause classification for every qualification row that is not graded. The disposition itself is
+// never reinterpreted: an unknown row stays unknown and the ledger keeps refusing it. The cause only
+// says WHY, so a product defect, a lab or fixture fault, a cascade and an infrastructure fault are
+// no longer indistinguishable. Everything persisted is a closed word, a status code, a count or a
+// source line, never a value.
+import { AssertionError } from "node:assert";
+
+/** `product`: Keiko refused locally or failed/misprojected while Jira answered 2xx. `lab`: fixture,
+ * preparation, oracle or argument-builder fault. `cascade`: a root cause elsewhere (`blockedBy`).
+ * `infrastructure`: transport, timeout, 5xx, rate limit. `not-attempted`: never reached.
+ * `undetermined`: genuinely ambiguous, e.g. Jira refused Keiko's request or an oracle disagreed. */
+export const QUALIFICATION_CAUSES = Object.freeze([
+  "product",
+  "lab",
+  "cascade",
+  "infrastructure",
+  "not-attempted",
+  "undetermined",
+]);
+
+const SUCCESS_OUTCOMES = new Set(["succeeded", "succeeded-unconfirmed"]);
+export const succeededOutcome = (outcome) => SUCCESS_OUTCOMES.has(outcome);
+
+/** A closed category for the statuses Jira answered; never raw Jira text. */
+export function jiraClass(statuses) {
+  if (statuses.length === 0) return "none";
+  const classes = new Set(statuses.map(statusClass));
+  return classes.size === 1 ? [...classes][0] : "mixed";
+}
+function statusClass(status) {
+  if (status >= 200 && status < 300) return "2xx";
+  if (status >= 300 && status < 400) return "3xx";
+  if (status === 408 || status === 425 || status === 429) return "retryable";
+  if (status >= 500) return "5xx";
+  return CLIENT_CLASSES.get(status) ?? "4xx-other";
+}
+const CLIENT_CLASSES = new Map([
+  [400, "4xx-validation"],
+  [422, "4xx-validation"],
+  [401, "4xx-auth"],
+  [403, "4xx-auth"],
+  [404, "404"],
+  [405, "405"],
+  [409, "409"],
+]);
+export function jiraSummary(snapshot) {
+  const statuses = (snapshot?.responses ?? []).map((response) => response.status);
+  return { statuses, class: jiraClass(statuses) };
+}
+
+const PRODUCT_FRAME = /\/packages\/keiko-[\w-]+\/dist\/[\w./-]*?([\w-]+\.js:\d+)/u;
+const RECIPE_FRAME = /(api-qualification[\w-]*\.mjs:\d+)/u;
+const NODE_FRAME = /\(?node:|\/node_modules\//u;
+const INFRASTRUCTURE_ERRORS = new Set(["TimeoutError", "AbortError"]);
+const INFRASTRUCTURE_CODES =
+  /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|UND_ERR_[A-Z_]+)$/u;
+const lines = (error) => String(error?.stack ?? "").split("\n");
+const unique = (values) => [...new Set(values)].slice(0, 3);
+/** Which side threw: the first frame that belongs to Keiko's product build or to the lab recipes. */
+function throwingSide(frames) {
+  for (const line of frames) {
+    if (NODE_FRAME.test(line) || /api-qualification-assert\.mjs/u.test(line)) continue;
+    if (PRODUCT_FRAME.test(line)) return "product";
+    if (RECIPE_FRAME.test(line)) return "lab";
+  }
+  return "unknown";
+}
+const failureMessage = (error, values) =>
+  error instanceof AssertionError && (!error.generatedMessage || values)
+    ? String(error.message).slice(0, values ? 700 : 160)
+    : undefined;
+const failureCode = (error) => {
+  const code = typeof error?.cause?.code === "string" ? error.cause.code : error?.code;
+  return typeof code === "string" && INFRASTRUCTURE_CODES.test(code) ? code : undefined;
+};
+/** Names the recipe and product lines that failed, never a value: a message only when written by hand. */
+export function describeFailure(error, detailMode = process.env.KEIKO_AC7_DETAIL) {
+  const frames = lines(error);
+  const sites = unique(frames.map((line) => RECIPE_FRAME.exec(line)?.[1]).filter(Boolean));
+  const productSites = unique(frames.map((line) => PRODUCT_FRAME.exec(line)?.[1]).filter(Boolean));
+  const message = failureMessage(error, detailMode === "values");
+  const code = failureCode(error);
+  return {
+    ...(sites.length > 0 ? { sites } : {}),
+    ...(productSites.length > 0 ? { productSites } : {}),
+    ...(message === undefined ? {} : { message }),
+    errorType: error instanceof Error ? error.name : "unknown",
+    origin: throwingSide(frames),
+    ...(code === undefined ? {} : { infrastructureCode: code }),
+    ...(Number.isSafeInteger(error?.nativeStatus) ? { nativeStatus: error.nativeStatus } : {}),
+  };
+}
+const infrastructureDetail = (detail) =>
+  INFRASTRUCTURE_ERRORS.has(detail?.errorType) || detail?.infrastructureCode !== undefined;
+
+const SAFE_WORD = /^[a-z0-9][a-z0-9-]{0,63}$/u;
+const safeWord = (value) =>
+  typeof value === "string" && SAFE_WORD.test(value) ? value : "unspecified";
+/** The product's own refusal word and outcome; both are closed vocabularies of the product. */
+export function productRefusalDetail(data) {
+  return { outcome: safeWord(data?.outcome), reason: safeWord(data?.reason) };
+}
+/**
+ * The product answered locally with a non-success outcome before any native request left the
+ * process: a refusal that proves nothing about Jira. A request that reached Jira is never one.
+ */
+export function localRefusal(dispatch, snapshot) {
+  if (dispatch?.kind !== "settled" || (snapshot?.responses ?? []).length > 0) return undefined;
+  const data = dispatch.result?.data;
+  return succeededOutcome(data?.outcome) ? undefined : productRefusalDetail(data);
+}
+
+function byJira(row, jira) {
+  if (jira.class === "retryable" || jira.class === "5xx") return "infrastructure";
+  const outcome = row.dispatch?.result?.data?.outcome;
+  // Jira answered 2xx: a product that then failed misprojected; one that succeeded met a
+  // disagreeing oracle, which cannot be told apart from an oracle fault.
+  if (jira.class === "2xx" && outcome !== undefined && !succeededOutcome(outcome)) return "product";
+  return "undetermined";
+}
+const transportFault = (row, jira) =>
+  infrastructureDetail(row.detail) || jira.class === "retryable" || jira.class === "5xx";
+/** Failures decided by the failure word alone; the rest fall through to what Jira answered. */
+const FAILURE_CAUSES = new Map([
+  ["not-attempted", () => "not-attempted"],
+  ["prepare-precondition", (row) => (infrastructureDetail(row.detail) ? "infrastructure" : "lab")],
+  ["prepare-failed", (row) => (infrastructureDetail(row.detail) ? "infrastructure" : "lab")],
+  ["oracle-read-refused", (row) => (infrastructureDetail(row.detail) ? "infrastructure" : "lab")],
+  ["readback-failed", (row) => (infrastructureDetail(row.detail) ? "infrastructure" : "lab")],
+  ["product-refused", () => "product"],
+  [
+    "dispatch-failed",
+    (row, jira) => {
+      if (row.detail?.origin === "product") return "product";
+      return transportFault(row, jira) ? "infrastructure" : "lab";
+    },
+  ],
+]);
+const byFailure = (row, jira) => (FAILURE_CAUSES.get(row.failure) ?? byJira)(row, jira);
+/**
+ * Adds `cause` (and `blockedBy`, `jira`, never a changed disposition) to a row that is not graded.
+ * `blockedBy` names the auxiliary fixture or earlier case whose failure caused this one.
+ */
+export function annotateCause(row, { blockedBy, snapshot } = {}) {
+  if (row.runtimeAvailability !== "unknown") return row;
+  const jira = jiraSummary(snapshot ?? row.witness);
+  const cause = blockedBy === undefined ? byFailure(row, jira) : "cascade";
+  return {
+    ...row,
+    cause,
+    ...(blockedBy === undefined ? {} : { blockedBy }),
+    ...(jira.statuses.length > 0 ? { jira } : {}),
+  };
+}
+/** Counts of every cause among the rows that are not graded; the vocabulary is always complete. */
+export function causeSummary(operations) {
+  const counts = Object.fromEntries(QUALIFICATION_CAUSES.map((cause) => [cause, 0]));
+  for (const operation of operations) {
+    if (operation.runtimeAvailability !== "unknown") continue;
+    const cause = operation.cause ?? "undetermined";
+    if (!Object.hasOwn(counts, cause)) throw new TypeError("Unknown qualification cause");
+    counts[cause] += 1;
+  }
+  return counts;
+}
+/** Rows the run never reached keep their unknown disposition and say so. */
+export function markNotAttempted(operations) {
+  for (const operation of operations)
+    if (operation.runtimeAvailability === "unknown" && operation.cause === undefined)
+      Object.assign(operation, { cause: "not-attempted", failure: "not-attempted" });
+}

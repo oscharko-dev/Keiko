@@ -1,5 +1,5 @@
 // Real Files grants and independent native asset observations for the synthetic AC7 lab.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { URL } from "node:url";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";

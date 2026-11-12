@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { read, readRecord, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import {

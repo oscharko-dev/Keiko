@@ -1,5 +1,5 @@
 // Issue effects are sent only by the governed catalog; these reads are independent oracles.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { API_QUALIFICATION_COMMENT_PROPERTY_CASES } from "./api-qualification-property-cases.mjs";
 import { proof, read } from "./api-qualification-read.mjs";

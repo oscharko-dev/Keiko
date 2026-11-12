@@ -72,10 +72,13 @@ function validateCase(ledger, report, operation, row) {
   const actual = classifyQualification({ ...row, journal: row.journal ?? undefined });
   requireEvidence(actual !== "unknown" && actual === row.runtimeAvailability);
 }
+const safeCount = (value) => (Number.isSafeInteger(value) ? value : 0);
 function archivedReadback(readback) {
   return {
     matched: readback?.matched === true,
-    assertionCount: Number.isSafeInteger(readback?.assertionCount) ? readback.assertionCount : 0,
+    assertionCount: safeCount(readback?.assertionCount),
+    measuredAssertionCount: safeCount(readback?.measuredAssertionCount),
+    documentedNativeStatuses: [...(readback?.documentedNativeStatuses ?? [])],
     permissionDenied: readback?.permissionDenied === true,
     capabilityAbsent: readback?.capabilityAbsent === true,
     routeShadowed: readback?.routeShadowed === true,

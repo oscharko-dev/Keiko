@@ -1,5 +1,5 @@
 // Each layout write is checked against the complete independently observed native parent layout.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { read, proof } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import { fixtureWrite, createQualificationField } from "./api-qualification-fixtures.mjs";

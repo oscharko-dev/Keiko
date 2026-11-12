@@ -204,7 +204,10 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
   }),
   readCase("jira.app-monitoring", "/rest/api/2/monitoring/app", ["enabled"], single),
   readCase("jira.ipd-monitoring", "/rest/api/2/monitoring/ipd", ["enabled"], single),
-  readCase("jira.cluster-nodes", "/rest/api/2/cluster/nodes", ["nodeId", "state"], { args: page }),
+  readCase("jira.cluster-nodes", "/rest/api/2/cluster/nodes", ["nodeId", "state"], {
+    args: page,
+    nonClusteredAbsent: true,
+  }),
   readCase("jira.cluster-upgrade-state", "/rest/api/2/cluster/zdu/state", ["state"], single),
   readCase("jira.index-snapshots", "/rest/api/2/index-snapshot", ["absolutePath"], { args: page }),
   readCase(

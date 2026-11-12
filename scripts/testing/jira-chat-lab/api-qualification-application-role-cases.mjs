@@ -1,5 +1,5 @@
 // Application-role recipes add a governed, independently observed empty synthetic group.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { URLSearchParams } from "node:url";
 import {
   adminMutationCase,
