@@ -25,7 +25,7 @@ import {
   strayWrites,
 } from "./catalog-selection-objects.mjs";
 import { loadSession, requireLicense } from "./lab-client.mjs";
-import { readGatewayFailures } from "./requirements/validity.mjs";
+import { readGatewayFailures, readToolRejections } from "./requirements/validity.mjs";
 
 const TURN_LIMIT_MS = 480_000;
 const MEMORY_OFF = { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} };
@@ -77,14 +77,22 @@ const pause = (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms
 
 async function withGateway(session, turn) {
   await pause(turn.failure === undefined ? LOG_SETTLE_MS : ABORTED_GRACE_MS);
-  const counts = readGatewayFailures(join(chatReadLogDirectory(session), "logs"), {
-    fromMs: turn.fromMs,
-    toMs: Date.now(),
-    pid: process.pid,
-  });
+  const window = { fromMs: turn.fromMs, toMs: Date.now(), pid: process.pid };
+  const root = join(chatReadLogDirectory(session), "logs");
+  const counts = readGatewayFailures(root, window);
+  const tools = readToolRejections(root, window);
   // A transport failure of the lab's own call to Keiko is no gateway evidence; a turn that failed
   // without a transcript is graded invalid on its own.
-  return { ...turn, gateway: { unrecovered: counts.outages, circuit: counts.circuit } };
+  return {
+    ...turn,
+    gateway: {
+      unrecovered: counts.outages,
+      circuit: counts.circuit,
+      failedCalls: tools.failedCalls,
+      rejected: tools.rejected,
+      unidentified: tools.unidentified,
+    },
+  };
 }
 
 /** The owned scope is clean before a write turn: no effect of this case exists yet. */

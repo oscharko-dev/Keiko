@@ -186,6 +186,26 @@ describe("gradeSelection", () => {
     });
   });
 
+  it("grades a target the gateway refused for its arguments as wrong-arguments", () => {
+    const gateway = { ...healthy, rejected: { "keiko.jira.create.worklog": 2, "keiko.jira.x": 1 } };
+    const turn = { exchanges: [call("jira_discover")], gateway };
+    expect(gradeSelection(WRITE, turn, { effect: { effects: 0 } })).toMatchObject({
+      status: "wrong-arguments",
+      detail: "the target was called; 2 calls refused for their arguments",
+    });
+    const read = {
+      exchanges: [],
+      gateway: { ...healthy, rejected: { "keiko.jira.priorities": 1 } },
+    };
+    expect(gradeSelection(READ, read, { tokens: ["High"] }).status).toBe("wrong-arguments");
+    const other = { ...healthy, rejected: { "keiko.jira.resolutions": 1 } };
+    expect(
+      gradeSelection(READ, { exchanges: [], gateway: other }, { tokens: ["High"] }).status,
+    ).toBe("no-tool");
+    const exact = { exchanges: [call("jira_edit")], gateway };
+    expect(gradeSelection(WRITE, exact, { effect: { effects: 1 } }).status).toBe("alternative");
+  });
+
   it("fails a correct write that also wrote objects the request did not ask for", () => {
     const turn = { exchanges: [call("jira_create_worklog")], gateway: healthy };
     expect(gradeSelection(WRITE, turn, { effect: { effects: 1, stray: 1 } })).toMatchObject({

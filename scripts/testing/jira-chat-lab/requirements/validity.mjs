@@ -128,6 +128,32 @@ export function readGatewayFailures(root, window) {
 }
 
 /**
+ * Tool calls the gateway refused before dispatch in [fromMs, toMs] of this process: `rejected`
+ * counts refusals per canonical tool id (an argument refusal of a tool the model did select),
+ * `unidentified` those without one (a name outside the current catalog), and `failedCalls` model
+ * calls that failed on any cause. Read from the same body-free Activity Log as the outage rule.
+ */
+export function readToolRejections(root, window) {
+  const evidence = { rejected: {}, unidentified: 0, failedCalls: 0 };
+  for (const file of logFiles(root, window.fromMs)) {
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      const parsed = gatewayLine(line);
+      if (parsed?.entry !== undefined && inWindow(parsed.entry, window))
+        collectRejection(parsed.entry, evidence);
+    }
+  }
+  return evidence;
+}
+
+function collectRejection({ op, canonicalToolId }, evidence) {
+  if (FAILURE_OPS.has(op)) evidence.failedCalls += 1;
+  if (op !== "gateway.tool-catalog.rejected") return;
+  if (typeof canonicalToolId === "string")
+    evidence.rejected[canonicalToolId] = (evidence.rejected[canonicalToolId] ?? 0) + 1;
+  else evidence.unidentified += 1;
+}
+
+/**
  * Whether the evidence of a window shows the model infrastructure down: a failed model call that
  * went through retry exhaustion or a circuit event. A circuit event alone (a recovered
  * open, half-open, closed cycle) is reported but proves no failed call, so it is no outage.

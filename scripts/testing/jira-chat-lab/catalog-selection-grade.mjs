@@ -7,6 +7,7 @@ export const SELECTION_STATUSES = Object.freeze([
   "selected",
   "alternative",
   "wrong-result",
+  "wrong-arguments",
   "wrong-tool",
   "no-tool",
   "invalid",
@@ -170,6 +171,20 @@ function targetCall(calls, tool) {
   return targets.find(succeeded) ?? targets[0];
 }
 
+/** The gateway's argument refusals of the target, keyed by its canonical id (`keiko.jira.…`). */
+function refusedTarget(gateway, tool) {
+  const wanted = toolAlias(tool);
+  return Object.entries(gateway?.rejected ?? {})
+    .filter(([id]) => toolAlias(id.replace(/^keiko\./u, "")) === wanted)
+    .reduce((sum, [, count]) => sum + count, 0);
+}
+
+function untargetedVerdict(entry, calls, { tokens, effect }) {
+  if (entry.effect === "write") return missingTarget(effect, calls.length);
+  if (calls.length > 0) return alternativeRead(calls, tokens, entry.alternatives ?? []);
+  return { status: "no-tool", detail: "no operation call" };
+}
+
 function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
@@ -177,11 +192,21 @@ function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   if (invalid !== undefined) return { status: "invalid", path, detail: invalid };
   const calls = operationCalls(exchanges);
   const target = targetCall(calls, entry.tool);
-  if (entry.effect === "write") return { ...writeVerdict(target, effect, calls.length), path };
-  if (target !== undefined) return { ...readVerdict(target, tokens), path };
-  if (calls.length > 0)
-    return { ...alternativeRead(calls, tokens, entry.alternatives ?? []), path };
-  return { status: "no-tool", path, detail: "no operation call" };
+  if (target !== undefined)
+    return entry.effect === "write"
+      ? { ...writeVerdict(target, effect, calls.length), path }
+      : { ...readVerdict(target, tokens), path };
+  // A target the gateway refused for its arguments never reaches the transcript; the model did
+  // select it, so this is an argument failure, not a selection failure. An exact alternative wins.
+  const verdict = untargetedVerdict(entry, calls, { tokens, effect });
+  const refused = refusedTarget(turn.gateway, entry.tool);
+  if (refused > 0 && verdict.status !== "alternative")
+    return {
+      status: "wrong-arguments",
+      path,
+      detail: `the target was called; ${refused} calls refused for their arguments`,
+    };
+  return { ...verdict, path };
 }
 
 const countOf = (runs, status) => runs.filter((value) => value === status).length;

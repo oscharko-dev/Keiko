@@ -21,6 +21,7 @@ import {
   showsOutage,
   redCheck,
   readGatewayFailures,
+  readToolRejections,
 } from "../testing/jira-chat-lab/requirements/validity.mjs";
 import { result } from "../testing/jira-chat-lab/requirements/journey-support.mjs";
 
@@ -230,6 +231,29 @@ describe("Activity Log gateway evidence", () => {
 
   it("reads an absent log directory as no evidence", () => {
     expect(readGatewayFailures(join(root, "absent"), { fromMs: 0, toMs: 1 })).toEqual(NONE);
+  });
+
+  it("counts the gateway's tool refusals per canonical tool and the failed model calls", () => {
+    const refused = (ts, canonicalToolId, pid = 7) =>
+      JSON.stringify({
+        op: "gateway.tool-catalog.rejected",
+        ts,
+        pid,
+        ...(canonicalToolId ? { canonicalToolId } : {}),
+      });
+    write([
+      refused(T(2), "keiko.jira.upsert.remote.link"),
+      refused(T(3), "keiko.jira.upsert.remote.link"),
+      refused(T(4)),
+      failed("gateway.chat.failed", T(5), "a", "validation-failed"),
+      refused(T(6), "keiko.jira.other", 8),
+      refused("2026-11-12T04:00:00.000Z", "keiko.jira.other"),
+    ]);
+    expect(readToolRejections(root, window)).toEqual({
+      rejected: { "keiko.jira.upsert.remote.link": 2 },
+      unidentified: 1,
+      failedCalls: 1,
+    });
   });
 });
 
