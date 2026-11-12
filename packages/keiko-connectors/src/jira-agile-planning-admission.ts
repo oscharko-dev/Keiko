@@ -123,7 +123,8 @@ async function rankSelection(
     issues.push(issue.value);
   }
   // Jira keeps epics out of the board issue list, so an epic's identity is bound by its own
-  // `epic/{id}` read instead; the board still supplies the rank field and is rechecked later.
+  // `epic/{id}` read instead. Jira's epic rank is not board-scoped: the reviewed board supplies
+  // only the rank field, so no board membership is claimed for the ranked epic or its anchor.
   const scope =
     input.operation === "jira.rank-epic"
       ? undefined
