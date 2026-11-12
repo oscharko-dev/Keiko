@@ -3837,16 +3837,14 @@
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 15,
       "anti-slop/no-unknown-parameters": 4,
-      "anti-slop/no-unsafe-dictionary-type": 7,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unsafe-dictionary-type": 7
     },
     "packages/keiko-harness/src/emitter.test.ts": {
       "anti-slop/no-known-value-widening": 2
     },
     "packages/keiko-harness/src/emitter.ts": {
       "anti-slop/no-conditional-empty-object-spread": 3,
-      "anti-slop/no-known-value-widening": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-known-value-widening": 1
     },
     "packages/keiko-harness/src/executor-shaper.test.ts": {
       "anti-slop/no-chained-type-assertions": 1,
@@ -3865,17 +3863,14 @@
     "packages/keiko-harness/src/legacy-port-catalog.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unknown-parameters": 1
     },
     "packages/keiko-harness/src/loop.test.ts": {
       "anti-slop/no-array-filter-map": 1
     },
     "packages/keiko-harness/src/loop.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-runtime-typeof": 1
     },
     "packages/keiko-harness/src/ports.test.ts": {
       "anti-slop/no-known-value-widening": 1
@@ -3896,8 +3891,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 4
     },
     "packages/keiko-harness/src/sinks.ts": {
-      "anti-slop/no-known-value-widening": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-known-value-widening": 1
     },
     "packages/keiko-local-knowledge/src/_support.ts": {
       "anti-slop/no-conditional-empty-object-spread": 5,

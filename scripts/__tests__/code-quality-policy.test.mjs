@@ -72,6 +72,7 @@ const ZERO_FINDING_SCOPES = {
   ]),
   "anti-slop/require-safety-comment-for-type-assertion": zeroFindingScopes([
     "git",
+    "harness",
     "memory-capture",
     "memory-consolidation",
     "memory-governance",

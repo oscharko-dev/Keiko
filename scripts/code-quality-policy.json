@@ -280,7 +280,8 @@
         "package:@oscharko-dev/keiko-memory-consolidation",
         "package:@oscharko-dev/keiko-memory-retrieval",
         "package:@oscharko-dev/keiko-verification",
-        "package:@oscharko-dev/keiko-workflows"
+        "package:@oscharko-dev/keiko-workflows",
+        "package:@oscharko-dev/keiko-harness"
       ]
     },
     {
