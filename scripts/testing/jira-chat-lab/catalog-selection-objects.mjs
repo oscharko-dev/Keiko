@@ -36,6 +36,10 @@ async function ownedIssue(session, fixture, created) {
       issuetype: { id: String(fixture.issueTypeId) },
       summary: created.issueSummary,
       description: "Synthetic Keiko laboratory data. No customer content.",
+      // A session that ran qualify-fields.mjs holds a globally required field.
+      ...(fixture.requiredFieldId === undefined
+        ? {}
+        : { [fixture.requiredFieldId]: "Synthetic required value" }),
     },
   });
   if (!/^[A-Z][A-Z0-9]+-\d+$/u.test(String(issue.key)))

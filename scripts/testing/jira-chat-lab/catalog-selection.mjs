@@ -103,6 +103,7 @@ async function writeAttempt(context, run, entry, turnFor) {
   const stray = strayWrites(before, after, effect.cleanup, `Auswahl ${run.tag}`);
   await removeNative(session, [...effect.cleanup, ...stray.remove]);
   rmSync(run.pendingPath);
+  // The lane runs alone in its session; a foreign object is never deleted, only reported.
   if (stray.foreign > 0) run.foreignStray += stray.foreign;
   return {
     turn,

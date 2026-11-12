@@ -63,25 +63,18 @@ function readVerdict(target, tokens) {
     : { status: "wrong-result", detail: `${truth.missing}/${tokens.length} native tokens missing` };
 }
 
-/** Exactly one correct native effect, without stray writes; undefined if that is not the case. */
-function exactEffect(effect) {
+function writeVerdict(target, effect) {
   if ((effect.stray ?? 0) > 0)
     return { status: "wrong-result", detail: `${effect.stray} writes the request did not ask for` };
-  return effect.effects === 1 && effect.wrongValue !== true ? undefined : effect;
-}
-
-function writeVerdict(target, effect) {
-  const failed = exactEffect(effect);
-  if (failed?.status !== undefined) return failed;
-  if (failed === undefined) {
-    if (target === undefined)
-      return { status: "wrong-tool", detail: "the effect came from another operation" };
-    return succeeded(target)
-      ? { status: "selected", detail: "exactly one verified native effect" }
-      : { status: "wrong-result", detail: "the target call did not succeed" };
+  if (effect.effects !== 1 || effect.wrongValue === true) {
+    const detail = `${effect.effects} native effects${effect.wrongValue ? ", wrong value" : ""}`;
+    return { status: target === undefined ? "no-tool" : "wrong-result", detail };
   }
-  const detail = `${effect.effects} native effects${effect.wrongValue ? ", wrong value" : ""}`;
-  return { status: target === undefined ? "no-tool" : "wrong-result", detail };
+  if (target === undefined)
+    return { status: "wrong-tool", detail: "the effect came from another operation" };
+  return succeeded(target)
+    ? { status: "selected", detail: "exactly one verified native effect" }
+    : { status: "wrong-result", detail: "the target call did not succeed" };
 }
 
 /**
