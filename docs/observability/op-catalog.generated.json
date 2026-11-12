@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e69d79a7bbc23a4b8eecdaba0784a3ba2900124b28bf86a1958a8f627d59bee7",
+    "catalogDigest": "5a4d0fa75bf1c3870f0faecf2b47a66094e17d619fa5cad770c76586bb41ada0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38425,8 +38425,8 @@
         },
         "failureClasses": ["security-vault-delete"],
         "proofIds": ["security.vault.entries-delete-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:272",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:890"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:277",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:895"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38458,8 +38458,8 @@
         "failureClasses": ["security-vault-delete"],
         "proofIds": ["security.vault.entries-deleted.count"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:256",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:870"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:261",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:875"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38511,8 +38511,8 @@
         },
         "failureClasses": ["security-vault-write"],
         "proofIds": ["security.vault.entries-merge-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:284",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:917"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:289",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:922"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38544,8 +38544,8 @@
         "failureClasses": ["security-vault-write"],
         "proofIds": ["security.vault.entries-merged.count"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:240",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:855"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:245",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:860"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38597,8 +38597,8 @@
         },
         "failureClasses": ["security-vault-rollback"],
         "proofIds": ["security.vault.entries-rollback-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:308",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1098"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:313",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1103"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38645,8 +38645,8 @@
         },
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.key-resolution-failed.evidence"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:231",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:541"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:236",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:546"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38679,8 +38679,8 @@
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.key-resolved.source"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:208",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:559"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:213",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:564"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38732,8 +38732,8 @@
         },
         "failureClasses": ["security-vault-read"],
         "proofIds": ["security.vault.shard-unreadable.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:296",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1013"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:301",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1018"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107649,49 +107649,49 @@
     {
       "op": "security.vault.entries-delete-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:274",
+      "site": "packages/keiko-security/src/secret-vault.ts:279",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-deleted",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:259",
+      "site": "packages/keiko-security/src/secret-vault.ts:264",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merge-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:286",
+      "site": "packages/keiko-security/src/secret-vault.ts:291",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merged",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:243",
+      "site": "packages/keiko-security/src/secret-vault.ts:248",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-rollback-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:310",
+      "site": "packages/keiko-security/src/secret-vault.ts:315",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolution-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:233",
+      "site": "packages/keiko-security/src/secret-vault.ts:238",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:211",
+      "site": "packages/keiko-security/src/secret-vault.ts:216",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:298",
+      "site": "packages/keiko-security/src/secret-vault.ts:303",
       "package": "keiko-security"
     },
     {
