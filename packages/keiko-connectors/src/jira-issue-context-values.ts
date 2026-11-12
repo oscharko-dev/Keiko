@@ -32,9 +32,12 @@ export function jiraRemoteLinkMembership(
   const raw = asRecord(value);
   if (raw?.self === undefined || raw.self === null) return true;
   const id = jiraNativeNumericId(raw.id);
+  // Jira 10.3 names the parent by key in a link's `self`; older responses name it by numeric ID.
   return (
     id !== undefined &&
-    jiraResourceSelfMatches(raw.self, `issue/${binding.issueId}/remotelink/${id}`)
+    [binding.issueId, binding.issueKey].some((issue) =>
+      jiraResourceSelfMatches(raw.self, `issue/${issue}/remotelink/${id}`),
+    )
   );
 }
 type SubtaskParentBinding = Pick<JiraIssueContextBinding, "issueId" | "issueKey">;

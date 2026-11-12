@@ -12,6 +12,8 @@ import {
   classifyQualification,
   qualificationDigest,
   qualificationSummary,
+  vacuousReads,
+  executableVacuousCount,
   isApprovedDeferred,
 } from "./api-qualification-evidence.mjs";
 import { decidedQualificationDeferrals } from "./api-qualification-policy.mjs";
@@ -72,13 +74,17 @@ function validateCase(ledger, report, operation, row) {
   const actual = classifyQualification({ ...row, journal: row.journal ?? undefined });
   requireEvidence(actual !== "unknown" && actual === row.runtimeAvailability);
 }
+const safeCount = (value) => (Number.isSafeInteger(value) ? value : 0);
 function archivedReadback(readback) {
   return {
     matched: readback?.matched === true,
-    assertionCount: Number.isSafeInteger(readback?.assertionCount) ? readback.assertionCount : 0,
+    assertionCount: safeCount(readback?.assertionCount),
+    measuredAssertionCount: safeCount(readback?.measuredAssertionCount),
+    documentedNativeStatuses: [...(readback?.documentedNativeStatuses ?? [])],
     permissionDenied: readback?.permissionDenied === true,
     capabilityAbsent: readback?.capabilityAbsent === true,
     routeShadowed: readback?.routeShadowed === true,
+    vacuous: readback?.vacuous === true,
     digest: qualificationDigest(readback),
   };
 }
@@ -153,6 +159,8 @@ function publication(ledger, report, sourceRevision, decisions) {
     modelCalls: 0,
     phase: "complete",
     counts: qualificationSummary(report.operations),
+    vacuousReads: vacuousReads(report.operations),
+    executableVacuous: executableVacuousCount(report.operations),
     operations: report.operations.map(archivedCase),
   };
   return {

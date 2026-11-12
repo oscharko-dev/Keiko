@@ -2,7 +2,7 @@
 // Every effect acts on fixtures this recipe creates (issues, a project, an issue type, a PNG it
 // generates) or on the dedicated lab actors; no password, license text or image bytes appear in
 // arguments or evidence. Protected values come only from the product's human-input custody.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { read, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";

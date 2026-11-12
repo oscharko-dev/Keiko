@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "b056fbca3054e53f328c14e3ea4643b1acf8f3968dadc0aaafb31826d62a072a"
+      "sha256": "f4d90286edf95bedbb068a31f30cbab9c7477e34f8ea9d0d68d719fa25dbaeb9"
     },
     {
       "path": "package.json",
-      "sha256": "8a9eb2b1a6ed45a06a5262a7ef684f27b25822c660b60133bf126a040c7c3c46"
+      "sha256": "0a30d71b50b915ff60ba05d940f7d33df78a2685422cfaea6ca3ba0ce880b617"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "404dd2aba3ec24b4e16dac535d9f84ad71e30fd47760c5d8138a99fae9559900"
+      "sha256": "c334733c18a9e4e7e25d626049108a0bcef55106d64055c77503de92887cb04e"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -122,7 +122,7 @@
   ],
   "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
   "run": {
-    "generatedAt": "2026-11-10T02:48:04.808Z",
+    "generatedAt": "2026-11-12T19:24:56.247Z",
     "repoHeadSha": "unknown"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",

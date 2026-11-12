@@ -1,5 +1,5 @@
 // Reversible instance and user settings use exact native preconditions and explicit changed values.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { read, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";

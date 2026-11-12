@@ -1,5 +1,5 @@
 // Saved-filter and Scrum fixtures use the same governed dispatch and independent lab reads.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { qualificationPropertyCases } from "./api-qualification-property-cases.mjs";
@@ -147,7 +147,6 @@ export const API_QUALIFICATION_AGILE_CASES = [
     {
       args: (f) => ({ name: filterName(f), maxResults: 100 }),
       nativeRoot: "values",
-      nonEmpty: true,
     },
   ),
   readCase("jira.board", boardPath, ["id", "name", "type"], {

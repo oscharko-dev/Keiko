@@ -54,6 +54,7 @@ beforeEach(() => {
       readback: {
         matched: true,
         assertionCount: 2,
+        measuredAssertionCount: 2,
         privateCanary: "synthetic private readback body",
       },
       verificationReferences: [`${file}#${id}`],
@@ -179,7 +180,7 @@ it.each([
       row.runId = "00000000-0000-4000-8000-000000000002";
     },
     "empty-readback": () => {
-      row.readback.assertionCount = 0;
+      row.readback.measuredAssertionCount = 0;
     },
     receipt: () => {
       row.dispatch.receipt.effectStarted = false;
@@ -233,6 +234,7 @@ it("publishes proven Jira permission and version refusals without upgrading poli
       permissionDenied: status === 403,
       capabilityAbsent: status === 405,
       assertionCount: 1,
+      measuredAssertionCount: 1,
     };
   }
   save();

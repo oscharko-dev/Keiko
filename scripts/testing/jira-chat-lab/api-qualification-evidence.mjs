@@ -60,13 +60,52 @@ function successfulJournal(journal, outcome) {
       journal.outcome === outcome)
   );
 }
+/**
+ * A readback grades only when assertions actually held while it ran. The recipe's declared
+ * `assertionCount` is a documentation hint: the driver measures the assertions that held, and a
+ * readback that asserted nothing proves nothing however many it declares.
+ */
 function matchedReadback(readback) {
   return (
     readback?.matched === true &&
-    Number.isSafeInteger(readback.assertionCount) &&
-    readback.assertionCount > 0
+    Number.isSafeInteger(readback.measuredAssertionCount) &&
+    readback.measuredAssertionCount > 0
   );
 }
+/**
+ * The only non-2xx native statuses a recipe may declare as the documented answer for a read: the
+ * plain 404 Jira gives while the addressed singleton does not exist (`GET /rest/api/2/reindex`
+ * before any reindex task ran). 405 stays reserved for proven capability absence, other 4xx and 5xx
+ * never grade as executable.
+ */
+const DOCUMENTED_NATIVE_STATUSES = new Set([404]);
+function nativeSuccessStatuses(statuses, readback, mutation) {
+  if (statuses.every((status) => status >= 200 && status < 300)) return true;
+  const documented = readback?.documentedNativeStatuses;
+  return (
+    mutation !== true &&
+    Array.isArray(documented) &&
+    documented.length > 0 &&
+    documented.every((status) => DOCUMENTED_NATIVE_STATUSES.has(status)) &&
+    statuses.every((status) => documented.includes(status))
+  );
+}
+/**
+ * `priorPresence` counts only when the recipe measurably read, natively and before the dispatch,
+ * the exact object the DELETE removed: a read path must equal the pathname the witness saw the
+ * DELETE use. A read of any other object proves nothing about this deletion.
+ */
+const provenPriorPresence = (readback, witness) =>
+  readback?.priorPresence === true &&
+  Number.isSafeInteger(readback.measuredPresenceReads) &&
+  readback.measuredPresenceReads > 0 &&
+  Array.isArray(readback.presenceReadPaths) &&
+  Array.isArray(witness?.responses) &&
+  witness.responses.length > 0 &&
+  witness.responses.every(
+    (response) =>
+      typeof response.path === "string" && readback.presenceReadPaths.includes(response.path),
+  );
 function observedReceipt(dispatch) {
   const receipt = dispatch.receipt;
   return (
@@ -82,26 +121,45 @@ function observedReceipt(dispatch) {
  * DELETE (`readback.priorPresence`); without that proof the identity stays unknown. The product's
  * own disposition is never reinterpreted, and every other condition still applies.
  */
-const unconfirmedReason = (identity, reason, readback) =>
+const unconfirmedReason = (identity, reason, readback, witness) =>
   reason === "unavailable" ||
-  (identity.startsWith("DELETE ") && reason === "not-found" && readback?.priorPresence === true);
-function settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation, readback) {
+  (identity.startsWith("DELETE ") &&
+    reason === "not-found" &&
+    provenPriorPresence(readback, witness));
+function settledNativeAcknowledgement(
+  identity,
+  dispatch,
+  statuses,
+  journal,
+  mutation,
+  readback,
+  witness,
+) {
   const data = dispatch.result.data;
   if (data.outcome === "succeeded") return dispatch.result.status === "completed";
   return (
     mutation === true &&
     dispatch.result.status === "failed" &&
     data.outcome === "succeeded-unconfirmed" &&
-    unconfirmedReason(identity, data.reason, readback) &&
+    unconfirmedReason(identity, data.reason, readback, witness) &&
     journal?.phase === "settled" &&
     journal.outcome === "succeeded-unconfirmed" &&
     statuses.every((status) => status === journal.httpStatus)
   );
 }
-function executableObservation(identity, dispatch, statuses, readback, journal, mutation) {
+function executableObservation(identity, dispatch, statuses, evidence) {
+  const { readback, journal, mutation, witness } = evidence;
   return (
-    settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation, readback) &&
-    statuses.every((status) => status >= 200 && status < 300) &&
+    settledNativeAcknowledgement(
+      identity,
+      dispatch,
+      statuses,
+      journal,
+      mutation,
+      readback,
+      witness,
+    ) &&
+    nativeSuccessStatuses(statuses, readback, mutation) &&
     new Set(["succeeded", "succeeded-unconfirmed"]).has(dispatch.result.data.outcome) &&
     matchedReadback(readback) &&
     successfulJournal(journal, dispatch.result.data.outcome)
@@ -126,7 +184,12 @@ export function classifyQualification({
   const data = dispatch.result.data;
   const refusal = nativeRefusal(statuses, data, readback);
   if (refusal !== undefined) return refusal;
-  return executableObservation(identity, dispatch, statuses, readback, journal, mutation)
+  return executableObservation(identity, dispatch, statuses, {
+    readback,
+    journal,
+    mutation,
+    witness,
+  })
     ? "executable"
     : "unknown";
 }
@@ -139,6 +202,21 @@ export function qualificationSummary(operations) {
     counts[operation.runtimeAvailability] += 1;
   }
   return counts;
+}
+
+/**
+ * Reads whose native collection was empty under a reviewed declaration. They stay executable (the
+ * governed call ran and matched) but are listed separately: they prove no projection of any row.
+ */
+export const executableVacuousCount = (operations) =>
+  vacuousReads(operations.filter((operation) => operation.runtimeAvailability === "executable"))
+    .length;
+
+export function vacuousReads(operations) {
+  return operations
+    .filter((operation) => operation.readback?.vacuous === true)
+    .map((operation) => operation.identity)
+    .sort((left, right) => left.localeCompare(right, "en"));
 }
 
 /** A report covers one exact source, release and complete inventory; no cross-run pooling. */

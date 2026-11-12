@@ -278,9 +278,15 @@ async function assertNativeRequestHeaders(request: Request, path: string): Promi
     /^\/context\/rest\/api\/2\/project\/[1-9][0-9]*\/priorityscheme(?:\/[1-9][0-9]*)?$/u.test(path);
   expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
   if (path === "/context/rest/api/2/email-templates") {
-    expect(request.headers.get("x-atlassian-token")).toBeNull();
-    if (request.method === "GET") expect(request.headers.get("accept")).toBe("application/zip");
-    else expect(request.headers.get("content-type")).toBe("application/zip");
+    // Live Jira 10.3 refuses the raw ZIP POST with a 403 XSRF failure without the opt-out
+    // (AC7 laboratory evidence, 2026-11-09); the read carries no token.
+    if (request.method === "GET") {
+      expect(request.headers.get("x-atlassian-token")).toBeNull();
+      expect(request.headers.get("accept")).toBe("application/zip");
+    } else {
+      expect(request.headers.get("x-atlassian-token")).toBe("no-check");
+      expect(request.headers.get("content-type")).toBe("application/zip");
+    }
   }
   await assertDirectoryRequestHeaders(request, path);
   const attribute =

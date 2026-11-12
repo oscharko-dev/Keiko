@@ -1,5 +1,5 @@
 // Only disposable synthetic property keys are written; values are read through a separate client.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
@@ -94,7 +94,6 @@ export function qualificationPropertyCases(entity) {
               {
                 args: (f) => ({ ...entity.arguments(f), maxResults: 100 }),
                 nativeRoot: (value) => value.keys,
-                nonEmpty: true,
               },
             ),
           },

@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 
 /** Catalog JSON may use null prototypes. Compare its JSON value, preserving every array element. */
 export function assertQualificationJson(actual, expected, message) {

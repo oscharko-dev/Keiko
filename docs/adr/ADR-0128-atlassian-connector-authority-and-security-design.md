@@ -926,7 +926,9 @@ a bodiless native write (`PUT`, `POST` or `DELETE` without a body) carries
 `X-Atlassian-Token: no-check`, as the attachment upload does, because Jira refuses it with
 "XSRF check failed" otherwise; the header disables only Jira's browser-CSRF check, which a
 server-side client holding explicit credentials does not need, and the raw `application/zip`
-email-template upload keeps its exact closed header set. `PUT /settings/baseUrl` sends the base URL
+email-template upload (never multipart) carries the exact closed header set `content-type:
+application/zip` and `x-atlassian-token: no-check`, because live Jira 10.3 refuses it with a 403
+XSRF failure otherwise (AC7 laboratory evidence, 2026-11-09). Jira 10.3 returns an issue type scheme's member and default types only with `?expand=issueTypes,defaultIssueType`, so the review read behind every issue-type scheme write and the single-scheme read request that expansion; without it the review was incomplete and all seven scheme writes were refused as unavailable before any native effect. Jira also keeps epics out of the board issue list, so `jira.rank-epic` binds the moved epic and its anchor through their own `epic/{id}` reads and does not require them in the board subset (`jira.rank-issues` keeps that check). Jira's epic rank is not board-scoped: the reviewed board supplies only the rank field, so the receipt claims no board membership for the ranked epic or its anchor. Jira 10.3 names the parent issue by key in a remote link's `self`, so the issue remote-link membership check accepts the bound issue's key as well as its numeric ID (another issue's key or ID still conflicts). `PUT /settings/baseUrl` sends the base URL
 as raw text, which is the only form Jira accepts there; every other string body stays JSON. The bulk
 archive request `POST /issue/archive` asks for `text/plain`, the only representation Jira returns
 (`application/json` answers 406). Default (global) role actors are sent by user key: Jira answers

@@ -262,6 +262,20 @@ describe("reviewed membership and global rank evidence", () => {
     ).toMatchObject({ ok: false, reason: "conflict" });
     expect(writes(drift)).toEqual([]);
   });
+  it("ranks epics although Jira lists no epic on the board, and still refuses an issue rank", async () => {
+    const epics = agilePlanningFixture();
+    epics.controls.epicsOffBoard = true;
+    expect(
+      await executeJiraAgilePlanningMutation(CASES[1].name, CASES[1].args, epics.ports),
+    ).toMatchObject({ receipt: CASES[1].receipt });
+    expect(writes(epics)).toHaveLength(1);
+    const issues = agilePlanningFixture();
+    issues.controls.epicsOffBoard = true;
+    expect(
+      await executeJiraAgilePlanningMutation(CASES[2].name, CASES[2].args, issues.ports),
+    ).toMatchObject({ ok: false });
+    expect(writes(issues)).toEqual([]);
+  });
   it("refuses duplicate alias targets and an anchor that aliases a moved issue", async () => {
     for (const args of [
       {

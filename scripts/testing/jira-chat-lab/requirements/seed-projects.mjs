@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { basicAuth, checked, labRequest, loadSession } from "../lab-client.mjs";
 import { privateJson } from "../private-json.mjs";
+import { recoverFixtureFieldRequirement, withFixtureFieldOptional } from "../seed-fields.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { LARGE_PROJECT, largePlan, largeTruth } from "./large-project.mjs";
 
@@ -356,22 +357,31 @@ function cliOptions(args) {
   return { directory, only };
 }
 
-async function main() {
-  const { directory, only } = cliOptions(process.argv.slice(2));
+export async function main(args) {
+  const { directory, only } = cliOptions(args);
   const session = loadSession(directory);
   const context = {
     session,
     auth: basicAuth(session, "admin"),
     truthPath: join(session.directory, "requirements-truth.json"),
   };
+  // A marker left by a seed whose requirement restore failed must be recovered before any skip.
+  await recoverFixtureFieldRequirement(session);
   if (only === undefined && existsSync(context.truthPath)) {
     console.log(JSON.stringify({ operation: "requirements-seed", skipped: "truth exists" }));
     return;
   }
   if (only !== undefined && !existsSync(context.truthPath))
     throw new TypeError("--only adds to a seeded laboratory: run the full seed first");
-  if (only === undefined) await seedBase(context);
-  await seedLarge(context);
+  const largeSeeded =
+    only !== undefined && JSON.parse(readFileSync(context.truthPath, "utf8")).large !== undefined;
+  if (largeSeeded) return seedLarge(context);
+  // The qualification lab's required field would otherwise reject every bulk create here.
+  await withFixtureFieldOptional(session, async () => {
+    if (only === undefined) await seedBase(context);
+    await seedLarge(context);
+  });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  await main(process.argv.slice(2));

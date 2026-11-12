@@ -6,7 +6,7 @@
 // on the administrator Chat's own private session, which is ended with the case. A protected value
 // reaches Jira only through the product's human-input custody: it is generated at runtime or read
 // from the lab credential file, and never appears in arguments, evidence, logs or repository files.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { Buffer } from "node:buffer";
 import { setTimeout as delay } from "node:timers/promises";
 import { projectJiraAnonymizationTaskSnapshot } from "../../../packages/keiko-connectors/dist/jira-managed-anonymization-reads.js";

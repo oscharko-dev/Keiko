@@ -245,7 +245,7 @@ describe("release-impact release notes", () => {
     expect(result.notes).toContain("### Normal · Update Notes");
     expect(result.notes).not.toContain("Keiko now ships");
     expect(result.notes).toContain(
-      "Download Keiko for Windows x64, Linux x64, macOS arm64, and macOS x64",
+      "Download Keiko for Windows x64, macOS arm64, and macOS x64, or Linux x64 as a community-tier package",
     );
     expect(result.notes).toContain(
       "npm remains available for developer and compatibility workflows",
@@ -395,7 +395,7 @@ describe("release-impact release notes", () => {
     }
     expect(result.status).toBe(0);
     expect(output).toContain(
-      "Download Keiko for Windows x64, Linux x64, macOS arm64, and macOS x64",
+      "Download Keiko for Windows x64, macOS arm64, and macOS x64, or Linux x64 as a community-tier package",
     );
     expect(output).toContain("npm remains available for developer and compatibility workflows");
     expect(output).toContain("release-publish: PLAN-ONLY complete.");

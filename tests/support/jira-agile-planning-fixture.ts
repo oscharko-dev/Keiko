@@ -105,6 +105,7 @@ interface PlanningControls {
   omitEpic: boolean;
   omitEstimate: boolean;
   partialBoard: boolean;
+  epicsOffBoard: boolean;
   cancelledReadback: boolean;
 }
 interface PlanningCall {
@@ -197,6 +198,7 @@ function planningControls(): PlanningControls {
     omitEpic: false,
     omitEstimate: false,
     partialBoard: false,
+    epicsOffBoard: false,
     cancelledReadback: false,
   };
 }
@@ -231,14 +233,13 @@ function platformRead(state: PlanningState, path: string): AtlassianWriteHttpOut
 }
 
 function boardIssuesRead(state: PlanningState): AtlassianWriteHttpOutcome {
-  const partial = state.controls.partialBoard;
+  // Live Jira keeps epics out of the board issue list, so an epic subset query returns no rows.
+  const count = state.controls.epicsOffBoard ? 0 : state.controls.partialBoard ? 1 : 2;
   return ok({
     startAt: 0,
     maxResults: 100,
-    total: partial ? 1 : 2,
-    issues: [...state.issues.values()]
-      .slice(0, partial ? 1 : 2)
-      .map(({ id, key }) => ({ id, key })),
+    total: count,
+    issues: [...state.issues.values()].slice(0, count).map(({ id, key }) => ({ id, key })),
   });
 }
 

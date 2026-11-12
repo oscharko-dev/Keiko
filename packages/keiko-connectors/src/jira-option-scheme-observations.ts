@@ -28,7 +28,10 @@ export async function readOptionScheme(
   kind: SchemeKind,
   id: string,
 ): Promise<SchemeObservation<SchemeSnapshot>> {
-  const response = await request(`${schemePath(kind)}/${id}`);
+  // Jira 10.3 returns an issue type scheme's member and default types only when asked for them;
+  // without the expansion the review is incomplete and every dependent write was refused.
+  const expansion = kind === "issue-type" ? "?expand=issueTypes,defaultIssueType" : "";
+  const response = await request(`${schemePath(kind)}/${id}${expansion}`);
   if (!response.ok) return dispatchFailure(response);
   if (response.status !== 200 || response.body === undefined) return SCHEME_MALFORMED;
   const projected =

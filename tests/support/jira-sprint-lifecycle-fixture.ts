@@ -25,6 +25,13 @@ const SPRINT_LIFECYCLE_SECOND = {
   synced: true,
 } as const;
 const ACTOR = "synthetic-actor";
+/** An open sprint on another origin board, added to a fixture only by the tests that need it. */
+export const SPRINT_LIFECYCLE_OTHER_BOARD = {
+  ...SPRINT_LIFECYCLE_FIRST,
+  id: "13",
+  originBoardId: "8",
+  name: "Synthetic other board sprint",
+} as const;
 export const SPRINT_LIFECYCLE_FIXTURE_CASES = [
   {
     name: "jira.replace-sprint",
@@ -96,12 +103,15 @@ interface SprintState {
   order: string[];
   readback: boolean;
 }
+const BOARDS: Readonly<Record<string, CatalogJsonObject>> = {
+  "board/7": { id: 7, name: "Synthetic board", type: "scrum" },
+  "board/8": { id: 8, name: "Synthetic other board", type: "scrum" },
+};
 function sprintRead(state: SprintState, path: string): AtlassianWriteHttpOutcome {
   const { sprints, controls, actor, order } = state;
   if (path === "myself") return { ok: true, status: 200, body: actor };
   if (path === "field") return { ok: true, status: 200, body: undefined, items: controls.fields };
-  if (path === "board/7")
-    return { ok: true, status: 200, body: { id: 7, name: "Synthetic board", type: "scrum" } };
+  if (path in BOARDS) return { ok: true, status: 200, body: BOARDS[path] };
   if (path === "board/7/sprint?startAt=0&maxResults=100")
     return {
       ok: true,
@@ -114,7 +124,7 @@ function sprintRead(state: SprintState, path: string): AtlassianWriteHttpOutcome
         values: order.map((id) => sprints.get(id)),
       },
     };
-  const match = /^sprint\/(11|12)$/u.exec(path);
+  const match = /^sprint\/(11|12|13)$/u.exec(path);
   const value = match === null ? undefined : sprints.get(match[1] ?? "");
   if (value === undefined) return { ok: false, reason: "not-found", httpStatus: 404 };
   return {
@@ -123,7 +133,7 @@ function sprintRead(state: SprintState, path: string): AtlassianWriteHttpOutcome
     body:
       state.readback && controls.malformedReadback
         ? { id: value.id }
-        : { ...value, id: Number(value.id), originBoardId: 7 },
+        : { ...value, id: Number(value.id), originBoardId: Number(value.originBoardId) },
   };
 }
 function sprintUnmapEffect(

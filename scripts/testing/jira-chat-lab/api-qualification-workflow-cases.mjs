@@ -1,5 +1,5 @@
 // Complete native configurations are reviewed before each governed workflow-scheme operation.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { read, proof, readRecord } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
@@ -143,9 +143,14 @@ const draftRead = (tool, suffix, fields, options = {}) => ({
   administration: true,
 });
 
+/** Cases whose fixture state only exists once the named root case succeeded (see `dependsOn`). */
+const dependingOn = (root, entries) => entries.map((entry) => ({ ...entry, dependsOn: [root] }));
+const SCHEME = "jira.create-workflow-scheme";
+const DRAFT = "jira.create-workflow-scheme-draft";
+
 export const API_QUALIFICATION_WORKFLOW_CASES = [
   adminMutationCase(
-    "jira.create-workflow-scheme",
+    SCHEME,
     (f) => ({
       expectedActorKey: f.adminActorKey,
       name: `AC7 workflow ${f.runId}`,
@@ -175,16 +180,18 @@ export const API_QUALIFICATION_WORKFLOW_CASES = [
       assert.equal(typeof f.workflowName, "string");
     },
   ),
-  updateCase(false),
-  mappingCase("default", false, true),
-  mappingCase("default", false, false),
-  mappingCase("issue-type", false, false),
-  mappingCase("issue-type", false, true),
-  mappingCase("workflow", false, false),
-  mappingCase("workflow", false, true),
-  deleteCase(false),
+  ...dependingOn(SCHEME, [
+    updateCase(false),
+    mappingCase("default", false, true),
+    mappingCase("default", false, false),
+    mappingCase("issue-type", false, false),
+    mappingCase("issue-type", false, true),
+    mappingCase("workflow", false, false),
+    mappingCase("workflow", false, true),
+    deleteCase(false),
+  ]),
   adminMutationCase(
-    "jira.create-workflow-scheme-draft",
+    DRAFT,
     (f) => ({ expectedActorKey: f.adminActorKey, expectedScheme: f.workflowParent }),
     async (c, data, f) => {
       const actual = workflowReview(await read(c, path(f, true)));
@@ -206,28 +213,30 @@ export const API_QUALIFICATION_WORKFLOW_CASES = [
       assert.deepEqual(selectedParent, f.workflowParent);
     },
   ),
-  draftRead("jira.workflow-scheme-draft", "", ["id", "name", "defaultWorkflow"]),
-  updateCase(true),
-  mappingCase("default", true, true),
-  mappingCase("default", true, false),
-  draftRead("jira.workflow-scheme-draft-default", "/default", ["workflow"]),
-  mappingCase("issue-type", true, false),
-  draftRead(
-    "jira.workflow-scheme-draft-issue-type",
-    (f) => `/issuetype/${f.issueTypeId}`,
-    ["issueTypeId", "workflow"],
-    {
-      arguments: (f) => ({ issueTypeId: f.issueTypeId }),
-      nativeNames: { issueTypeId: "issueType" },
-    },
-  ),
-  mappingCase("issue-type", true, true),
-  mappingCase("workflow", true, false),
-  draftRead("jira.workflow-scheme-draft-workflows", "/workflow", ["workflow", "issueTypeIds"], {
-    nativeRoot: undefined,
-    productRoot: undefined,
-    nativeNames: { issueTypeIds: "issueTypes" },
-  }),
-  mappingCase("workflow", true, true),
-  deleteCase(true),
+  ...dependingOn(DRAFT, [
+    draftRead("jira.workflow-scheme-draft", "", ["id", "name", "defaultWorkflow"]),
+    updateCase(true),
+    mappingCase("default", true, true),
+    mappingCase("default", true, false),
+    draftRead("jira.workflow-scheme-draft-default", "/default", ["workflow"]),
+    mappingCase("issue-type", true, false),
+    draftRead(
+      "jira.workflow-scheme-draft-issue-type",
+      (f) => `/issuetype/${f.issueTypeId}`,
+      ["issueTypeId", "workflow"],
+      {
+        arguments: (f) => ({ issueTypeId: f.issueTypeId }),
+        nativeNames: { issueTypeId: "issueType" },
+      },
+    ),
+    mappingCase("issue-type", true, true),
+    mappingCase("workflow", true, false),
+    draftRead("jira.workflow-scheme-draft-workflows", "/workflow", ["workflow", "issueTypeIds"], {
+      nativeRoot: undefined,
+      productRoot: undefined,
+      nativeNames: { issueTypeIds: "issueTypes" },
+    }),
+    mappingCase("workflow", true, true),
+    deleteCase(true),
+  ]),
 ];

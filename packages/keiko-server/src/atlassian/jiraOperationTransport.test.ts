@@ -2544,7 +2544,11 @@ const SCENARIOS: readonly Scenario[] = [
   },
   {
     tool: "jira.issue-type-scheme",
-    expectedPrimary: { method: "GET", apiRoot: "/rest/api/2", path: "issuetypescheme/37" },
+    expectedPrimary: {
+      method: "GET",
+      apiRoot: "/rest/api/2",
+      path: "issuetypescheme/37?expand=issueTypes,defaultIssueType",
+    },
     args: { schemeId: "37" },
     parameters: { schemeId: "37" },
   },

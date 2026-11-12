@@ -320,28 +320,45 @@ function schemeStaticRead(
   }
   return undefined;
 }
+/** Live Jira 10.3 returns an issue type scheme's member and default types only on request. */
+function expandIssueScheme(stored: SchemeRecord, query: string): SchemeRecord {
+  const expanded = new URLSearchParams(query).get("expand")?.split(",") ?? [];
+  const item = { ...stored };
+  if (!expanded.includes("issueTypes")) delete item.issueTypes;
+  if (!expanded.includes("defaultIssueType")) delete item.defaultIssueType;
+  return item;
+}
+function schemeAssociations(state: OptionSchemeState): AtlassianWriteHttpOutcome {
+  return state.controls.missingAssociations
+    ? schemeOk()
+    : {
+        ok: true,
+        status: 200,
+        body: undefined,
+        items: state.associations.map((id) => ({ ...state.projects.get(id) })),
+      };
+}
+function splitRead(path: string): { parts: string[]; query: string } {
+  const at = path.indexOf("?");
+  return {
+    parts: (at < 0 ? path : path.slice(0, at)).split("/"),
+    query: at < 0 ? "" : path.slice(at + 1),
+  };
+}
 function schemeRead(state: OptionSchemeState, path: string): AtlassianWriteHttpOutcome {
   const failure = schemeReadbackFailure(state);
   if (failure !== undefined) return failure;
   const fixed = schemeStaticRead(state, path);
   if (fixed !== undefined) return fixed;
-  const { controls } = state;
-  const parts = path.split("/");
-  const selected = parts[0] === "issuetypescheme" ? state.issueSchemes : state.prioritySchemes;
-  const item = selected.get(parts[1] ?? "");
-  if (item === undefined) return schemeMissing();
-  if (parts[2] === "associations")
-    return controls.missingAssociations
-      ? schemeOk()
-      : {
-          ok: true,
-          status: 200,
-          body: undefined,
-          items: state.associations.map((id) => ({ ...state.projects.get(id) })),
-        };
+  const { parts, query } = splitRead(path);
+  const issue = parts[0] === "issuetypescheme";
+  const stored = (issue ? state.issueSchemes : state.prioritySchemes).get(parts[1] ?? "");
+  if (stored === undefined) return schemeMissing();
+  if (parts[2] === "associations") return schemeAssociations(state);
+  const concurrent = state.writes > 0 && state.controls.wrongReadback;
   return schemeOk({
-    ...item,
-    ...(state.writes && controls.wrongReadback ? { name: "Concurrent scheme" } : {}),
+    ...(issue ? expandIssueScheme(stored, query) : stored),
+    ...(concurrent ? { name: "Concurrent scheme" } : {}),
   });
 }
 function schemeAssociate(

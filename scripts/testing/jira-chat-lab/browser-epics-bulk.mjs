@@ -29,8 +29,23 @@ const SAME_LASTENHEFT =
   "The Knowledge Pod holds the same Lastenheft as Markdown, DOCX and PDF, so a bare requirement ID is ambiguous.";
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-function requireFact(condition, message) {
-  if (!condition) throw new TypeError(message);
+/** The closed, body-free names of the facts that can stop a bulk step. */
+const BULK_FACTS = Object.freeze([
+  "violation-turn-evidence-unavailable",
+  "violation-not-exactly-one-create",
+  "violation-not-refused-without-effect",
+  "batch-not-matching-manifest-prefix",
+  "untracked-native-epics-present",
+  "unclassified",
+]);
+class BulkFactError extends TypeError {
+  constructor(message, fact) {
+    super(message);
+    this.fact = BULK_FACTS.includes(fact) ? fact : "unclassified";
+  }
+}
+function requireFact(condition, message, fact) {
+  if (!condition) throw new BulkFactError(message, fact);
 }
 
 function batchPrompt(projectKey, requirements) {
@@ -147,10 +162,15 @@ async function deliberateViolation(ctx, options, target, state, persist) {
   const turn = await ctx.turn(options.chat, target.prompt, { operations: ["jira.create"] });
   const after = await readGoldenIssues(options.read, options.projectKey, { signal: ctx.signal });
   const exchanges = turn.toolExchanges ?? turn.exchanges;
-  requireFact(Array.isArray(exchanges), "Visible violation turn evidence is unavailable");
+  requireFact(
+    Array.isArray(exchanges),
+    "Visible violation turn evidence is unavailable",
+    "violation-turn-evidence-unavailable",
+  );
   requireFact(
     exchanges.filter((exchange) => toolExchangeOf(exchange, "jira.create")).length === 1,
     "A deliberate violation must have exactly one real create attempt",
+    "violation-not-exactly-one-create",
   );
   requireFact(
     gradeRuleRefusal({
@@ -161,6 +181,7 @@ async function deliberateViolation(ctx, options, target, state, persist) {
       ruleId: target.ruleId,
     }),
     "Deliberate formal violation was not independently refused without effects",
+    "violation-not-refused-without-effect",
   );
   next = {
     ...next,
@@ -202,7 +223,11 @@ async function executeBatch(ctx, options, batch, state, persist) {
     projectKey: options.projectKey,
     requirementIds: coveredIds,
   });
-  requireFact(grade.ok, "Native bulk Epic batch does not match its complete manifest prefix");
+  requireFact(
+    grade.ok,
+    "Native bulk Epic batch does not match its complete manifest prefix",
+    "batch-not-matching-manifest-prefix",
+  );
   next = {
     ...next,
     phase: "observed",
@@ -248,6 +273,7 @@ export async function runBrowserEpicsBulk(ctx, options) {
       requirementIds: [],
     }).ok,
     "Untracked native Epics require independent reconciliation before any bulk write",
+    "untracked-native-epics-present",
   );
   for (const target of violations)
     state = await deliberateViolation(ctx, options, target, state, persist);
@@ -265,8 +291,8 @@ export async function runBrowserEpicsBulk(ctx, options) {
   };
 }
 
-function publicResult(status, counts, detail) {
-  return { step: STEP, status, detail, counts };
+function publicResult(status, counts, detail, fact) {
+  return { step: STEP, status, detail, counts, ...(fact === undefined ? {} : { fact }) };
 }
 
 function contextOptions(ctx) {
@@ -415,7 +441,7 @@ async function executeFreshBulk(ctx, options, violations, faults) {
       { ...result.counts, ...viewCounts(views) },
       "Native Epics and ordinary Backlog were independently observed as separate views",
     );
-  } catch {
+  } catch (error) {
     return publicResult(
       "red",
       {
@@ -424,6 +450,7 @@ async function executeFreshBulk(ctx, options, violations, faults) {
         refusedCount: latest.refusedCount,
       },
       "Bulk qualification stopped; retain the private intent and reconcile without replay",
+      error instanceof BulkFactError ? error.fact : "unclassified",
     );
   }
 }

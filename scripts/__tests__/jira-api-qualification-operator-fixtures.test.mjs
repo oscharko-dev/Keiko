@@ -35,6 +35,8 @@ function io(handlers, extra = {}) {
       return result ?? { status: 404 };
     },
     withAdmin: async () => undefined,
+    ensureSecurityScheme: async () => true,
+    sleep: async () => undefined,
     observeEmailPack: async () => ({ manifestSha256: "m", entries: [{ path: "a" }] }),
     ...extra,
   };
@@ -98,6 +100,21 @@ describe("synced sprints", () => {
         ? Promise.resolve(handlers.get(path))
         : original(method, path, body);
     expect(await reasonOf(prepareSyncedSprints(fake, {}, NONCE))).toBe("sprint-not-synced");
+  });
+  it("reports a disabled synced-sprint feature by its own closed reason", async () => {
+    const fake = io({
+      "POST /rest/api/2/filter": { status: 200, value: { id: "7" } },
+      "POST /rest/agile/1.0/board": { status: 201, value: { id: 5 } },
+      "POST /rest/agile/1.0/sprint": {
+        status: 400,
+        value: {
+          errorMessages: ["You cannot create a synced sprint when the feature is disabled."],
+        },
+      },
+    });
+    expect(await reasonOf(prepareSyncedSprints(fake, {}, NONCE))).toBe(
+      "sprint-sync-feature-disabled",
+    );
   });
   it("refuses an unexpected board response", async () => {
     const fake = io({
@@ -218,30 +235,78 @@ describe("asset dashboard", () => {
     "GET /rest/api/2/dashboard/50": { status: 200, value: { id: "50", name } },
     "GET /rest/api/2/dashboard/50/items/60/properties": { status: 200, value: { keys: [] } },
   };
-  it("takes the UI-created dashboard and item only after native readback", async () => {
-    const page = {
-      goto: vi.fn(),
-      locator: () => ({ fill: vi.fn() }),
-      getByRole: () => ({ click: vi.fn() }),
-      waitForURL: vi.fn(),
-      url: () => "http://127.0.0.1:18081/secure/Dashboard.jspa?selectPageId=50",
-      request: { post: async () => ({ ok: () => true, json: async () => ({ id: 60 }) }) },
-    };
-    const fake = io(native, { withAdmin: async (run) => run(page) });
+  const formPage = (post) => ({
+    request: {
+      get: async () => ({
+        ok: () => true,
+        status: () => 200,
+        text: async () => '<form><input type="hidden" name="atl_token" value="T&amp;1"></form>',
+      }),
+      post,
+    },
+  });
+  const created = async (_url, options) => ({
+    status: () => 302,
+    headers: () => ({ location: "/secure/Dashboard.jspa?selectPageId=50" }),
+    options,
+  });
+  const gadget = { "POST /rest/dashboards/1.0/50/gadget": { status: 200, value: { id: 60 } } };
+  it("creates the dashboard through its own form and adds the item only after native readback", async () => {
+    const post = vi.fn(created);
+    const fake = io({ ...native, ...gadget }, { withAdmin: async (run) => run(formPage(post)) });
     expect(await prepareAssetDashboard(fake, {}, NONCE)).toEqual({
       assetDashboard: { id: "50", itemId: "60", name },
     });
+    const sent = post.mock.calls[0][1];
+    expect(sent.form).toMatchObject({ atl_token: "T&1", portalPageName: name });
+    expect(sent.maxRedirects).toBe(0);
   });
-  it("refuses when the UI gives no item or Jira does not list the dashboard", async () => {
-    const noItem = io(native, { withAdmin: async () => undefined });
-    expect(await reasonOf(prepareAssetDashboard(noItem, {}, NONCE))).toBe("dashboard-not-created");
+  it("takes the item from the dashboard when the gadget response carries no id", async () => {
+    const handlers = {
+      ...native,
+      "POST /rest/dashboards/1.0/50/gadget": { status: 201, value: {} },
+      "GET /rest/dashboards/1.0/50": { status: 200, value: { gadgets: [{ id: 60 }] } },
+    };
+    const fake = io(handlers, { withAdmin: async (run) => run(formPage(created)) });
+    expect((await prepareAssetDashboard(fake, {}, NONCE)).assetDashboard.itemId).toBe("60");
+  });
+  it("names the stage that refused: form, create, gadget or readback", async () => {
+    const noToken = {
+      request: { get: async () => ({ ok: () => true, status: () => 200, text: async () => "" }) },
+    };
+    const denied = { request: { get: async () => ({ ok: () => false, status: () => 403 }) } };
+    const rejected = formPage(async () => ({ status: () => 200, headers: () => ({}) }));
+    for (const [page, reason] of [
+      [noToken, "dashboard-form-unavailable"],
+      [denied, "dashboard-form-unavailable"],
+      [rejected, "dashboard-create-refused"],
+    ])
+      expect(
+        await reasonOf(
+          prepareAssetDashboard(io(native, { withAdmin: async (run) => run(page) }), {}, NONCE),
+        ),
+      ).toBe(reason);
+    const noGadget = io(
+      { ...native, "POST /rest/dashboards/1.0/50/gadget": { status: 500 } },
+      { withAdmin: async (run) => run(formPage(created)) },
+    );
+    expect(await reasonOf(prepareAssetDashboard(noGadget, {}, NONCE))).toBe(
+      "dashboard-gadget-refused",
+    );
+    const unlisted = io(
+      { "POST /rest/dashboards/1.0/50/gadget": gadget["POST /rest/dashboards/1.0/50/gadget"] },
+      { withAdmin: async (run) => run(formPage(created)) },
+    );
+    expect(await reasonOf(prepareAssetDashboard(unlisted, {}, NONCE))).toBe(
+      "dashboard-not-created",
+    );
     const throwing = io(native, {
       withAdmin: async () => {
         throw new TypeError("x");
       },
     });
     expect(await reasonOf(prepareAssetDashboard(throwing, {}, NONCE))).toBe(
-      "dashboard-not-created",
+      "dashboard-create-refused",
     );
   });
   it("keeps a still-native stored dashboard", async () => {
@@ -299,16 +364,67 @@ describe("manifest merge", () => {
         await reasonOf(prepareOperatorFixtures(session(manifestDirectory(content)), io({}))),
       ).toBe("fixture-manifest-invalid");
   });
-  it("preserves existing keys, writes privately and stops at the first refusal", async () => {
+  it("preserves existing keys, writes privately and runs every step despite refusals", async () => {
     const directory = manifestDirectory(
       JSON.stringify({ project: "KEIKO", issueKeys: ["KEIKO-1"] }),
     );
     const fake = io({ "POST /rest/api/2/filter": { status: 500 } });
-    await reasonOf(prepareOperatorFixtures(session(directory), fake, { nonce: NONCE }));
+    let outcomes;
+    await reasonOf(
+      prepareOperatorFixtures(session(directory), fake, {
+        nonce: NONCE,
+        onOutcomes: (value) => (outcomes = value),
+      }),
+    );
+    expect(outcomes.find((entry) => entry.step === "email-default").outcome).toBe("completed");
+    expect(outcomes.find((entry) => entry.step === "synced-sprints")).toMatchObject({
+      outcome: "failed",
+      reason: "native-response-unexpected",
+      status: 500,
+    });
+    expect(outcomes.find((entry) => entry.step === "seed-subtask")).toBeDefined();
     const written = JSON.parse(readFileSync(join(directory, "fixture.json"), "utf8"));
     expect(written).toMatchObject({ project: "KEIKO", issueKeys: ["KEIKO-1"] });
     expect(written.assetEmailDefault.entries).toHaveLength(1);
     expect(statSync(join(directory, "fixture.json")).mode & 0o077).toBe(0);
+  });
+});
+
+describe("security scheme step", () => {
+  const manifest = () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-operator-"));
+    directories.push(directory);
+    writeFileSync(join(directory, "fixture.json"), JSON.stringify({ issueKeys: ["KEIKO-1"] }));
+    return { ...DEFAULT_LAB_CONNECTION, directory };
+  };
+  const securityOutcome = async (ensure) => {
+    let outcomes;
+    await prepareOperatorFixtures(manifest(), io({}, { ensureSecurityScheme: ensure }), {
+      nonce: NONCE,
+      onOutcomes: (value) => (outcomes = value),
+    }).catch(() => undefined);
+    return outcomes.find((entry) => entry.step === "security-scheme");
+  };
+  it("retries a cold administration page from observation and then succeeds", async () => {
+    const ensure = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("timeout"))
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    expect(await securityOutcome(ensure)).toEqual({
+      step: "security-scheme",
+      outcome: "completed",
+    });
+    expect(ensure).toHaveBeenCalledTimes(3);
+  });
+  it("reports a closed reason after the bounded attempts", async () => {
+    const ensure = vi.fn().mockResolvedValue(false);
+    expect(await securityOutcome(ensure)).toEqual({
+      step: "security-scheme",
+      outcome: "failed",
+      reason: "security-scheme-unavailable",
+    });
+    expect(ensure).toHaveBeenCalledTimes(3);
   });
 });
 

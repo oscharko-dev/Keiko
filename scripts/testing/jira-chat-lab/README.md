@@ -18,6 +18,33 @@ in the exclusive lab window. It reuses `seed.mjs` and its one-use PAT creation,
 then verifies the disposable administrator's identity and native administration
 permission. It never starts Jira or configures a model.
 
+A fresh session needs no manual step. `seed.mjs` grants the qualification actors (`keiko-admin`,
+`keiko-api`) the worklog, comment/attachment deletion, sprint and voter permissions the write cases need
+(the editor, assignee and restricted actors keep their narrow grants, and the run proves it).
+These widened grants live only in the lab's own permission scheme `Keiko synthetic KEIKO permissions`,
+which is associated with the synthetic project KEIKO alone; ISOLATED and every other project keep their
+own schemes. The denial cases (restricted cannot read KEIKO, editor cannot assign or transition) rely on
+the unchanged narrow grants, which `keikoGrantPlan` and the native `mypermissions` check pin. The
+preparation then runs every operator step independently and prints one outcome per step: synced
+sprints (a disabled lab feature is reported as `sprint-sync-feature-disabled`), the select option, the
+permission attribute, the dashboard and item (Jira's own create form with its XSRF token, then the
+dashboard plugin's gadget resource; the failing stage is named), the issue-security scheme (bounded
+retries) and one owned record for each collection the lab can populate (`api-qualification-collection-seeds.mjs`).
+A failed step never hides the others; a step that names a failed `needs` entry is skipped as
+`dependency-failed`. A collection read is nonempty by default: only a per-case `emptyAllowed` reason
+admits an empty native collection, and such rows are recorded as `vacuous` in the evidence and in the
+report's `vacuousReads` list and counted separately as `executableVacuous` in the console summary,
+report and archive. They stay executable but prove no projection. An `emptyAllowed` reason must be nonblank
+text or the case fails at construction. The native expected side is
+paged completely (bounded) before it is compared.
+
+The required-field proof lifts the field's requirement in Jira's default field configuration for
+a moment; `requirements/seed-projects.mjs` therefore brackets its writes with `withFixtureFieldOptional`,
+which restores the requirement on exit, also on failure. It writes a private marker
+`required-field-lifted.json` in the session directory while the requirement is lifted; the next bracket and
+`qualify-fields.mjs` restore first when the marker survived a crash. A failed restore keeps the work's own
+error (the restore failure is its `cause`) and leaves the marker for that recovery.
+
 `api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]` uses this lab's
 paired production server, credential vault, verified TLS connection, accepted Chat
 turn, operation-selected managed provider, catalog authority, budget and durable
@@ -69,6 +96,12 @@ governed provider and produce separate private receipts, settled journals and na
 readbacks. Declared same-turn prerequisites share one bounded accepted authority
 and private lifetime; their evidence cannot replace the frozen primary witness.
 File sources are attached to the actual Chat through its protected Files scope.
+
+Every session's Jira starts with `-Datlassian.authentication.legacy.mode=true` (set in
+`compose.yaml`). Jira 10.3 otherwise answers `POST /rest/auth/1/session` with a 403 "two-step
+verification" refusal, so the private administrator session that websudo, session and user-avatar
+recipes need could not exist. The setting is part of provisioning: a session started from this
+compose file needs no UI step, and the credentials stay read programmatically from its private files.
 
 Some recipes require genuine operator fixtures in the owned session's `fixture.json`:
 `planningSyncedSprintIds` and `planningAllSyncedSprintIds` identify real synced sprints;
@@ -721,6 +754,54 @@ independent readback never turns `malformed-payload` or `not-found` into native
 success. Failed/unconfirmed writes qualify only with native 2xx, the matching
 settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
 
+### Grading, measured proof and causes (#4327)
+
+- **Measured assertions.** Every recipe, fixture and oracle helper imports
+  `api-qualification-assert.mjs`, a drop-in for `node:assert/strict` that counts the
+  assertions that held. The driver resets the counter around each readback and persists
+  `readback.measuredAssertionCount`; `executable`, `denied` and `unavailable` evidence needs
+  it above zero. The recipe's declared `proof(n)` is only a documentation hint and can no
+  longer satisfy the grader.
+- **`priorPresence`.** A DELETE whose product read answers "not found" qualifies only when
+  the recipe measurably read, natively before the dispatch, the exact object the DELETE removed:
+  one of `readback.presenceReadPaths` (pathnames recorded by `read()`) must equal the pathname the
+  witness saw the DELETE use. Shared transport helpers use the uncounted `plumbingAssert`, so only
+  assertions the recipe's own readback makes count toward `measuredAssertionCount`.
+- **Documented non-2xx.** A read may declare an exact documented status set with
+  `documentedStatusProof` (`readback.documentedNativeStatuses`). The grader accepts only the
+  closed allow-list `[404]`, only for reads, only when the witness observed exactly those
+  statuses and the oracle independently proved the state (`GET /rest/api/2/reindex` before any
+  reindex task ran). 405 stays reserved for proven capability absence.
+- **Non-clustered 405.** `GET /rest/api/2/cluster/nodes` grades `unavailable` only when the
+  lab actor's own native read answers the identical 405, the running release is observed
+  again, and the readback carries `capabilityAbsent` (`nonClusteredAbsence`); the lab Jira is a
+  single node by construction. The release inventory path does not apply because the route is
+  published for 10.3.
+- **Causes.** Every row that is not graded keeps its disposition (unknown stays unknown and
+  `applyQualificationReport` still refuses it) and gains a closed `cause`:
+  `product` (a local product refusal before dispatch, or Keiko failed while Jira answered
+  2xx), `lab` (preparation, fixture, argument-builder or oracle fault), `cascade` (with
+  `blockedBy`: the auxiliary fixture tool or earlier case that failed), `infrastructure`
+  (a transport signal such as ECONNRESET, or 408/425/429; a 5xx or timeout alone stays
+  `undetermined` unless the lab's own health read also fails), `not-attempted` and `undetermined` (Jira refused Keiko's
+  request, or the oracle disagreed after a native 2xx). Evidence also carries the closed
+  failure word (`product-refused` for a refusal before any native request, `outcome-refused`,
+  `result-unavailable` for a settled dispatch without any outcome, which is never blamed on the
+  product, `oracle-read-refused`, `dispatch-failed` with recipe/product frame sites and error type),
+  the product's closed `outcome`/`reason`, and the Jira status class. No raw Jira text is
+  persisted. The report summary adds `causeCounts`; the console summary prints them.
+- **Cascades and order.** Cases may declare `dependsOn` (tool names). The driver runs a root
+  case before its dependents in a deterministic stable order, and a dependent of a root that
+  did not qualify is recorded `blocked-by-root` as a cascade instead of being dispatched.
+- **Certain effects do not stop the run.** A mutation whose journal settled with a native 2xx
+  the witness itself observed but whose oracle mismatched is recorded unknown with
+  `certainEffect: true` and cause `undetermined`; dependents cascade and the run continues.
+  The witnessed response count must equal the started effects, and the case id is listed in
+  `report.leftoverState`. A row where the product succeeded after a native 2xx but the oracle
+  disagreed also carries `suspect: "product"`, counted in `report.suspectCounts`. An unsettled or
+  unknown journal, 408/425/429/5xx and a lost transport still raise
+  `ReconcileRequiredError`, and the pending intent is never removed or replayed.
+
 ## Limit-run fault plan (Amendment 3)
 
 `browser-bulk-fault.mjs` exports exactly
@@ -1137,6 +1218,27 @@ KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
 ```
 
 The probes of S05, S07, S08 and S09 prove `fields-writable` by writing. `field-writes.mjs` takes every field Jira lists for the issue type on create and on edit, writes it alone through Keiko's production mutation path into its own project `FLD`, and reads it back from Jira. Comment, attachment and link take their own calls and must land the same way. Jira's own refusal of a value, such as a sprint on a sub-task, is listed in the check's detail and does not count against Keiko. A refusal that never reached Jira, a failure after the write, or a value Jira did not keep turns the scenario red.
+
+A scenario is `green` only when every obligation is covered AND its end-to-end journey is green;
+probes that cover everything beside an `unverified` journey leave it `partial`. A check the
+laboratory cannot trust is `invalid`, never `red`: a native-Jira, fixture, license or transport
+exception (`lab-error`), a model that fails a short readiness turn before the journey while the
+Activity Log of that turn shows an infrastructure failure or the error is a transport signature
+(`model-unavailable`), and a non-green journey during which the gateway failed (`gateway-failure`). Infrastructure failure is read from the Activity Log lines of this server
+process inside the window, grouped by correlation: a `gateway.chat.failed`/`gateway.stream.failed`
+correlation that contains `gateway.retry.exhausted` or a `gateway.circuit.*` event; circuit events alone are only reported. A readiness-turn deadline abort (by error name) is `model-unavailable`. A failure with neither (context overflow, refused attempt) is a product
+outcome and stays red. A failed Keiko route (`Live Chat HTTP stage failed`, also from the readiness
+turn when no outage is shown) is red with reason `product-route-failed`. A green journey stays
+green. Any red check decides the scenario before invalid. `latest.md` and `trend.tsv` carry an
+`invalid` column; a run with any invalid scenario is labelled `INVALID RUN` / `validity=invalid`
+and is not a data point (an older trend file with another layout is kept aside).
+`modelUnavailable` (`journeys.mjs`) and `isTransportFailure` (`validity.mjs`) are reusable by other
+lanes.
+
+`--repeat N` (default 1, at most 20) runs every journey N times in fresh Chats. Each scenario
+reports every run, the pass rate over valid runs and the invalid count (shown next to the status).
+It is green only when every valid run is green and at least ceil(N/2) runs are valid, red when a
+valid run is red, otherwise invalid (`insufficient-valid-runs`).
 
 The scorecard writes `requirements-scorecard/<timestamp>.json`, `latest.md` and `trend.tsv` into
 the private session. Before a group it checks the remaining license time: the published test

@@ -1,5 +1,5 @@
 // Independent field projections are authored here, not imported from the provider's codecs.
-import { readCase } from "./api-qualification-cases.mjs";
+import { nativeInstant, readCase } from "./api-qualification-cases.mjs";
 
 const single = { nativeRoot: "single", productRoot: "single" };
 const page = () => ({ maxResults: 100 });
@@ -50,6 +50,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
     ["id", "name", "subtask"],
     {
       args: (f) => ({ issueTypeId: f.issueTypeId, maxResults: 100 }),
+      emptyAllowed:
+        "Jira lists alternatives only from issue types sharing a scheme with the fixture type; the lab's KEIKO scheme holds none",
     },
   ),
   readCase(
@@ -146,6 +148,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
     {
       args: page,
       nativeRoot: "values",
+      optionalFields: ["lastValueUpdate"],
+      optionalTransforms: { lastValueUpdate: nativeInstant },
     },
   ),
   readCase(
@@ -184,6 +188,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
     {
       args: () => ({ hasOldPassword: false, maxResults: 100 }),
       nativeRoot: (value) => value.map((requirement) => ({ requirement })),
+      emptyAllowed:
+        "The lab's internal user directory enforces no password policy, so Jira returns no requirements",
     },
   ),
   readCase(
@@ -195,6 +201,8 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
   readCase("jira.duplicate-users", "/rest/api/2/user/duplicated/list?flush=false", ["username"], {
     args: page,
     nativeRoot: (value) => Object.keys(value).map((username) => ({ username })),
+    emptyAllowed:
+      "Duplicate user names exist only across user directories; the lab has one internal directory",
   }),
   readCase("jira.email-template-types", "/rest/api/2/email-templates/types", ["id", "eventName"], {
     args: page,
@@ -202,7 +210,10 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
   }),
   readCase("jira.app-monitoring", "/rest/api/2/monitoring/app", ["enabled"], single),
   readCase("jira.ipd-monitoring", "/rest/api/2/monitoring/ipd", ["enabled"], single),
-  readCase("jira.cluster-nodes", "/rest/api/2/cluster/nodes", ["nodeId", "state"], { args: page }),
+  readCase("jira.cluster-nodes", "/rest/api/2/cluster/nodes", ["nodeId", "state"], {
+    args: page,
+    nonClusteredAbsent: true,
+  }),
   readCase("jira.cluster-upgrade-state", "/rest/api/2/cluster/zdu/state", ["state"], single),
   readCase("jira.index-snapshots", "/rest/api/2/index-snapshot", ["absolutePath"], { args: page }),
   readCase(

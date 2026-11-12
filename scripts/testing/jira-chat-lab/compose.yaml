@@ -50,6 +50,14 @@ services:
       JVM_MAXIMUM_MEMORY: 2048m
       CLUSTERED: "false"
       ATL_TOMCAT_ACCESSLOG: "false"
+      # Jira 10.3 refuses POST /rest/auth/1/session with 403 "two-step verification being enabled"
+      # unless the authentication plugin runs in legacy mode, so no administrator cookie session
+      # (and therefore no websudo or session-bound avatar proof) exists. The documented system
+      # property restores the pre-2SV login contract of the instance a customer upgrades from.
+      # The synced-sprints feature flag lets an administrator create the genuinely synced sprints
+      # the sprint unmap qualification needs; Jira answers "cannot create a synced sprint when the
+      # feature is disabled" otherwise. The flag is the `.enabled` dark feature of its definition.
+      JVM_SUPPORT_RECOMMENDED_ARGS: "-Datlassian.authentication.legacy.mode=true -Datlassian.darkfeature.com.atlassian.jira.agile.darkfeature.synced.sprints.enabled=true"
     entrypoint: [/bin/sh, /opt/keiko-jira-entrypoint.sh]
     secrets: [database_password]
     volumes:

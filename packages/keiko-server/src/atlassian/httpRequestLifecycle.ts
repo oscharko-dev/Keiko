@@ -123,7 +123,7 @@ function emailTemplateBodyHeaders(request: AtlassianHttpBodyRequest): Record<str
   if (request.method === "GET" && request.upload === undefined)
     return { accept: "application/zip" };
   if (request.method === "POST" && request.upload?.contentType === "application/zip")
-    return { "content-type": "application/zip" };
+    return { "content-type": "application/zip", "x-atlassian-token": "no-check" };
   throw new AtlassianCredentialCustodyError("invalid-input", [
     "Unsupported email-template archive body",
   ]);

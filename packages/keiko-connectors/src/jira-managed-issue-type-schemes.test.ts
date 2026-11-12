@@ -64,7 +64,9 @@ describe("native issue-type scheme inspection", () => {
         request,
       ),
     ).toMatchObject({ data: { schemeId: "10000", items: [{ id: "10000" }], total: 1 } });
-    expect(request).toHaveBeenCalledWith("issuetypescheme/10000");
+    expect(request).toHaveBeenCalledWith(
+      "issuetypescheme/10000?expand=issueTypes,defaultIssueType",
+    );
   });
   it("refuses a mismatching single resource", async () => {
     const request = vi

@@ -1,5 +1,5 @@
 // Exact AC7 asset identities. Every effect uses the existing governed catalog and journal.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { observeAdminActor, adminMutationCase } from "./api-qualification-admin-cases.mjs";

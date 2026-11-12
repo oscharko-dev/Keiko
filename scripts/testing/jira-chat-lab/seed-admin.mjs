@@ -3,6 +3,15 @@ import { chromium, expect } from "@playwright/test";
 import { join } from "node:path";
 import { readPrivateFile } from "./lab-client.mjs";
 
+/**
+ * A step's own closed reason (a plain identifier, never page content) is preserved. Playwright
+ * error details may contain filled values or CSRF-bearing URLs, so nothing else survives.
+ */
+function administrationError(error) {
+  if (typeof error?.reason === "string" && /^[a-z][a-z-]*$/u.test(error.reason)) return error;
+  return new TypeError("Synthetic Jira administration failed");
+}
+
 export async function withLabAdmin(session, run) {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -13,9 +22,11 @@ export async function withLabAdmin(session, run) {
     await page.goto(`${session.origin}/secure/admin/ViewFieldLayouts.jspa`, {
       waitUntil: "domcontentloaded",
     });
-    await page.locator("#username-field").fill("keiko-admin");
-    await page.locator("#password-field").fill(password);
-    await page.getByRole("button", { name: "Log in", exact: true }).click();
+    // The authentication plugin's login page and the classic one that legacy mode serves (the
+    // laboratory compose file selects it) use different field identifiers.
+    await page.locator("#username-field, #login-form-username").fill("keiko-admin");
+    await page.locator("#password-field, #login-form-password").fill(password);
+    await page.locator("#login-form-submit, button:text-is('Log in')").first().click();
     await page.waitForURL((url) => url.pathname !== "/login.jsp");
     await page.waitForLoadState("domcontentloaded");
     if (await page.locator("input[name=webSudoPassword]").count()) {
@@ -26,9 +37,8 @@ export async function withLabAdmin(session, run) {
         .waitFor({ state: "hidden" });
     }
     return await run(page);
-  } catch {
-    // Playwright error details may contain filled values or CSRF-bearing URLs.
-    throw new TypeError("Synthetic Jira administration failed");
+  } catch (error) {
+    throw administrationError(error);
   } finally {
     await browser.close();
   }

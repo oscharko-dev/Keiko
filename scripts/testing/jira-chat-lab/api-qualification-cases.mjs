@@ -1,8 +1,8 @@
 // Explicit independent oracles; specification documents never become HTTP dispatch authority.
-import assert from "node:assert/strict";
+import assert, { plumbingAssert, recordAssertion } from "./api-qualification-assert.mjs";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { URLSearchParams } from "node:url";
+import { URL, URLSearchParams } from "node:url";
 import { assertSessionServerInfo, basicAuth, labRequest } from "./lab-client.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
 
@@ -44,12 +44,13 @@ export async function missingReleaseCapability(context, tool, statuses, { shadow
   if (!routeLevel) {
     // The literal path segment is captured by a sibling wildcard route, which names it as an id.
     const probe = await nativeRead(context, shadow.path);
-    assert.equal(probe.status, 400);
+    plumbingAssert.equal(probe.status, 400);
     assert.deepEqual(probe.value?.errorMessages, [shadow.message]);
   }
   const observed = await nativeRead(context, "/rest/api/2/serverInfo");
-  assert.equal(observed.status, 200);
+  plumbingAssert.equal(observed.status, 200);
   assertSessionServerInfo(context.session, observed.value);
+  recordAssertion(); // the release inventory comparison above is this proof's recipe assertion
   return {
     capabilityAbsent: true,
     ...(routeLevel ? {} : { routeShadowed: true }),
@@ -60,6 +61,27 @@ export async function missingReleaseCapability(context, tool, statuses, { shadow
       "docs/local-knowledge/jira-api-coverage/operations.json",
       "docs/local-knowledge/jira-api-coverage/provenance.json",
     ],
+  };
+}
+/**
+ * Jira answers a cluster-only route with a route-level 405 unless the instance runs as a cluster.
+ * That proves the capability absent only when the independent native read, the lab actor's own
+ * request to the same route, answers the identical 405 as the product's dispatch and the running
+ * release is observed again; the lab Jira is a single node by construction. A clustered instance
+ * answers 200 and then takes the ordinary matching path.
+ */
+export async function nonClusteredAbsence(context, statuses, nativeStatus) {
+  if (nativeStatus !== 405 || statuses.length === 0 || !statuses.every((status) => status === 405))
+    return undefined;
+  const observed = await nativeRead(context, "/rest/api/2/serverInfo");
+  plumbingAssert.equal(observed.status, 200);
+  assertSessionServerInfo(context.session, observed.value);
+  recordAssertion(); // the independent identical 405 plus the observed release is the proof
+  return {
+    capabilityAbsent: true,
+    status: 405,
+    release: observed.value.version,
+    reason: "route-405-on-non-clustered-instance",
   };
 }
 /** The status the qualification witness observed for this case's own native dispatch. */
@@ -91,17 +113,26 @@ function rowValues(rows, fields, names = {}) {
     }),
   );
 }
-function assertOptionalFields(actual, native, fields, names) {
-  for (const [index, row] of native.slice(0, 100).entries()) {
+/** Jira 10.3 reports a field's last value update as epoch ms; the product reads that exact UTC instant. */
+export function nativeInstant(value) {
+  if (typeof value !== "number") return value;
+  assert.ok(Number.isSafeInteger(value) && value >= 0);
+  return new Date(value).toISOString();
+}
+function assertOptionalFields(actual, native, fields, names, transforms = {}) {
+  for (const [index, row] of native.slice(0, actual.length).entries()) {
     for (const field of fields) {
-      const observed = row[names?.[field] ?? field];
+      const key = names?.[field] ?? field;
+      const observed = row[key];
       if (observed === undefined || observed === null)
         assert.equal(Object.hasOwn(actual[index], field), false);
-      else
+      else {
+        const expected = { ...row, [key]: (transforms[field] ?? ((value) => value))(observed) };
         assertQualificationJson(
           rowValues([actual[index]], [field]),
-          rowValues([row], [field], names),
+          rowValues([expected], [field], names),
         );
+      }
     }
   }
 }
@@ -110,6 +141,104 @@ const membership = (rows) =>
     .map((row) => JSON.stringify(row))
     .sort((left, right) => left.localeCompare(right, "en"))
     .map((row) => JSON.parse(row));
+/** A native read that proves the capability absent for this release, or undefined. */
+async function absentReadback(context, tool, status, nonClusteredAbsent) {
+  const absent = await missingReleaseCapability(context, tool, [status]);
+  if (absent !== undefined || !nonClusteredAbsent) return absent;
+  return nonClusteredAbsence(context, dispatchedStatuses(context), status);
+}
+const PAGE_KEYS = ["values", "issues", "worklogs", "comments", "dashboards", "screens", "schemes"];
+const MAX_NATIVE_PAGES = 100;
+function pageProperty(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (!Number.isSafeInteger(value.startAt)) return undefined;
+  return PAGE_KEYS.find((key) => Array.isArray(value[key]));
+}
+const morePages = (value, key, collected) =>
+  value.isLast === false ||
+  (Number.isSafeInteger(value.total) && collected < value.total && value[key].length > 0);
+function withStartAt(path, startAt) {
+  const url = new URL(path, "http://lab.invalid");
+  url.searchParams.set("startAt", String(startAt));
+  return `${url.pathname}${url.search}`;
+}
+/** Follows Jira's own paging markers so the oracle sees the complete collection, never a prefix. */
+async function nativeReadComplete(context, path) {
+  const first = await nativeRead(context, path);
+  const key = first.status === 200 ? pageProperty(first.value) : undefined;
+  if (key === undefined) return first;
+  const rows = [...first.value[key]];
+  let last = first.value;
+  for (let page = 1; page < MAX_NATIVE_PAGES && morePages(last, key, rows.length); page++) {
+    const offset = rows.length;
+    const next = await nativeRead(context, withStartAt(path, offset));
+    plumbingAssert.equal(next.status, 200, "A later native page must be readable");
+    plumbingAssert.equal(
+      next.value?.startAt,
+      offset,
+      "A later native page must start where the previous one ended",
+    );
+    const more = next.value?.[key];
+    plumbingAssert.ok(Array.isArray(more), "A later native page must carry its rows");
+    if (more.length === 0) break;
+    rows.push(...more);
+    last = next.value;
+  }
+  plumbingAssert.ok(
+    !morePages(last, key, rows.length),
+    "The native collection exceeds the paging bound",
+  );
+  return { status: 200, value: { ...first.value, [key]: rows, isLast: true } };
+}
+function assertEmptyReason(tool, reason) {
+  if (reason !== undefined && (typeof reason !== "string" || !reason.trim()))
+    throw new TypeError(`emptyAllowed for ${tool} needs a nonblank reason`);
+}
+/** A product page that fills its limit is compared with that prefix of the complete native rows. */
+const expectedPrefix = (expected, actual, limit) =>
+  expected.length > limit && actual.length === limit ? expected.slice(0, limit) : expected;
+function requestedLimit(args, fixture) {
+  try {
+    const limit = args(fixture ?? {}).maxResults;
+    return Number.isSafeInteger(limit) && limit > 0 ? limit : 100;
+  } catch {
+    return 100;
+  }
+}
+const emptyCollection = (native, emptyAllowed) => {
+  if (native.length > 0) return {};
+  if (emptyAllowed !== undefined) return { vacuousReason: emptyAllowed };
+  plumbingAssert.fail(
+    "The native collection is empty: seed an owned record or declare emptyAllowed",
+  );
+};
+function assertProjection(actual, wanted, unordered) {
+  assertQualificationJson(
+    unordered ? membership(actual) : actual,
+    unordered ? membership(wanted) : wanted,
+    "Keiko's observation must equal the independent native read",
+  );
+}
+/**
+ * The complete native collection behind a read case, or the settled readback when Jira's own
+ * answer already decides it (the same 403, or a capability this release or topology lacks).
+ */
+async function completeNativeRows(context, tool, selectedPath, { nonClusteredAbsent, nativeRoot }) {
+  const response = await nativeReadComplete(context, selectedPath);
+  if (response.status === 403) {
+    recordAssertion(); // the independent native read reproduced the same 403
+    return { settled: { permissionDenied: true, status: response.status } };
+  }
+  const absent = await absentReadback(context, tool, response.status, nonClusteredAbsent);
+  if (absent !== undefined) return { settled: absent };
+  plumbingAssert.equal(response.status, 200);
+  return { rows: nativeRows(response.value, nativeRoot) };
+}
+/**
+ * A collection read proves a projection only when Jira actually holds rows. An empty native
+ * collection therefore fails unless the case carries a reviewed `emptyAllowed` reason; such a read
+ * is recorded as `vacuous` and never counts as proof of projection.
+ */
 export function readCase(
   tool,
   path,
@@ -120,41 +249,40 @@ export function readCase(
     productRoot,
     nativeNames,
     optionalFields = [],
-    nonEmpty = false,
+    optionalTransforms,
+    emptyAllowed,
     unordered = false,
+    nonClusteredAbsent = false,
   } = {},
 ) {
+  assertEmptyReason(tool, emptyAllowed);
   return {
     tool,
     arguments: args,
     readback: async (context, data, fixture) => {
       const selectedPath = typeof path === "function" ? path(fixture) : path;
-      const response = await nativeRead(context, selectedPath);
-      if (response.status === 403) return { permissionDenied: true, status: response.status };
-      const absent = await missingReleaseCapability(context, tool, [response.status]);
-      if (absent !== undefined) return absent;
-      assert.equal(response.status, 200);
-      const native = nativeRows(response.value, nativeRoot);
-      // A read of a collection this run just populated proves nothing when it is empty: the
-      // refused write that should have populated it would pass as a vacuous match.
-      if (nonEmpty) assert.ok(native.length > 0, "the owned fixture must be natively present");
+      const read = await completeNativeRows(context, tool, selectedPath, {
+        nonClusteredAbsent,
+        nativeRoot,
+      });
+      if (read.settled !== undefined) return read.settled;
+      const native = read.rows;
+      const { vacuousReason } = emptyCollection(native, emptyAllowed);
       const projected = projectRows(data, productRoot);
       const actual = rowValues(projected, fields);
-      const expected = rowValues(native, fields, nativeNames).slice(0, 100);
+      const expected = rowValues(native, fields, nativeNames);
+      // The product returns exactly the requested prefix of the complete native collection.
+      const limit = requestedLimit(args, fixture);
       // An unordered native collection proves membership; the order Keiko pages it in is its own.
-      if (unordered) assert.ok(native.length <= 100, "Membership needs the complete collection");
-      assertQualificationJson(
-        unordered ? membership(actual) : actual,
-        unordered ? membership(expected) : expected,
-        "Keiko's observation must equal the independent native read",
-      );
-      assertOptionalFields(projected, native, optionalFields, nativeNames);
-      // Empty collections prove their exact count, not an invented sample row.
+      if (unordered) assert.ok(native.length <= limit, "Membership needs the complete collection");
+      assertProjection(actual, expectedPrefix(expected, actual, limit), unordered);
+      assertOptionalFields(projected, native, optionalFields, nativeNames, optionalTransforms);
       return {
         matched: true,
         assertionCount: 1 + actual.length * (fields.length + optionalFields.length),
         nativeCount: native.length,
         projectedCount: projected.length,
+        ...(vacuousReason === undefined ? {} : { vacuous: true, vacuousReason }),
       };
     },
   };

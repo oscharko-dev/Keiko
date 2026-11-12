@@ -28,8 +28,23 @@ import { FORMATS } from "./formats.mjs";
 import { startDuring } from "./mid-turn.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
+import { aggregateRuns } from "./repeat.mjs";
+import {
+  classifyJourney,
+  gradeException,
+  invalidCheck,
+  isDeadlineAbort,
+  isTransportFailure,
+  gatewayEvidenceTrusted,
+  readGatewayFailures,
+  redCheck,
+  redactLabDetail,
+  showsOutage,
+} from "./validity.mjs";
+import { sequentially } from "./journey-support.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
+const READINESS_LIMIT_MS = 120_000;
 
 const api = (ctx, name, path, body, method = "POST", signal = undefined) =>
   jsonRequest(ctx.origin, ctx.cookie, name, path, body, method, signal);
@@ -462,11 +477,12 @@ function journeyContext(live, session, truth) {
  * A journey that is not green names why at once, so a lane in progress can be diagnosed against
  * the Activity Log window it ran in before the scorecard is written.
  */
-function reportJourney(id, { status, detail }, started) {
+function reportJourney(id, { status, detail }, started, run) {
   console.log(
     JSON.stringify({
       operation: "requirements-journey",
       id,
+      run,
       status,
       startedAt: new Date(started).toISOString(),
       ...(status === "green" || detail === undefined ? {} : { detail }),
@@ -474,7 +490,23 @@ function reportJourney(id, { status, detail }, started) {
   );
 }
 
-/** One journey in its own fresh bound Chat; a lab error is a red check, never a lost scenario. */
+/**
+ * S14 replaces the shared specification. A restoration that failed leaves a stale or partly
+ * indexed specification: the run is invalid and no later run may start from that fixture.
+ */
+async function restoreSpecification(ctx, check) {
+  try {
+    await ctx.replaceSpecification(1);
+    return check;
+  } catch (error) {
+    const detail = redactLabDetail(String(error?.message ?? error)).slice(0, 200);
+    console.log(JSON.stringify({ operation: "requirements-restore", error: detail }));
+    ctx.specificationRestoreFailed = true;
+    return invalidCheck("lab-error", `specification restore failed: ${detail}`, check);
+  }
+}
+
+/** One journey in its own fresh bound Chat; a lab error is an invalid check, a failed Keiko route stays red. */
 async function runJourney({ ctx, session, modelId, capsuleId, id }) {
   let check;
   try {
@@ -496,19 +528,91 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
       },
     );
   } catch (error) {
-    check = { status: "red", detail: `lab error: ${error.message}` };
+    check = gradeException(error);
   }
-  if (id === "S14") {
-    await ctx.replaceSpecification(1).catch((error) => {
-      console.log(
-        JSON.stringify({ operation: "requirements-restore", error: String(error.message) }),
-      );
-    });
-  }
+  if (id === "S14") check = await restoreSpecification(ctx, check);
   return check;
 }
 
-export async function runJourneys({ session, directory, modelId, embeddingModelId, truth, ids }) {
+/**
+ * A cheap model readiness check through the ordinary Chat route before a journey: one short turn
+ * in a fresh unbound Chat. Returns undefined when the model answered, otherwise
+ * `{ unavailable, detail }`: `unavailable` only when the Activity Log window of the readiness
+ * turn shows an infrastructure failure or the error is a transport signature; any other failure
+ * is a failed Keiko route and is the product's.
+ */
+export async function modelUnavailable(ctx, session, modelId) {
+  const fromMs = Date.now();
+  try {
+    const base = await prepareChat(ctx.origin, ctx.cookie, session, ctx.projectPath, modelId);
+    await api(
+      ctx,
+      "readiness",
+      "/api/desktop/chat",
+      {
+        chatId: base.id,
+        projectPath: ctx.projectPath,
+        modelId,
+        clientTurnId: randomUUID(),
+        expectedGroundingScopeIdentity: base.groundingScopeIdentity,
+        content: "Reply with the single word OK.",
+        memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
+      },
+      "POST",
+      globalThis.AbortSignal.timeout(READINESS_LIMIT_MS),
+    );
+    return undefined;
+  } catch (error) {
+    const detail = redactLabDetail(String(error?.message ?? error)).slice(0, 200);
+    const logRoot = chatReadLogDirectory(session);
+    const failures = readGatewayFailures(logRoot, {
+      fromMs,
+      toMs: Date.now(),
+      pid: process.pid,
+    });
+    const evidenceTrusted = gatewayEvidenceTrusted(logRoot, failures);
+    // The readiness turn's own deadline fired: a hung model is unavailable, not a product failure.
+    const unavailable =
+      showsOutage(failures) || isTransportFailure(detail) || isDeadlineAbort(error);
+    return { unavailable, evidenceTrusted, detail };
+  }
+}
+
+/** One graded run: readiness first, then the journey re-graded against its gateway evidence. */
+async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
+  const refused = await readiness(ctx, session, modelId);
+  if (refused !== undefined) {
+    if (refused.unavailable)
+      return invalidCheck("model-unavailable", `model unavailable: ${refused.detail}`);
+    // A failure whose gateway evidence is unreadable cannot be attributed to the product.
+    if (refused.evidenceTrusted === false)
+      return invalidCheck("lab-error", `readiness evidence unavailable: ${refused.detail}`);
+    return redCheck("product-route-failed", `readiness turn failed: ${refused.detail}`);
+  }
+  const fromMs = Date.now();
+  const check = await runJourney({ ctx, session, modelId, capsuleId, id });
+  const logRoot = chatReadLogDirectory(session);
+  const failures = readGatewayFailures(logRoot, { fromMs, toMs: Date.now(), pid: process.pid });
+  return classifyJourney(check, failures, gatewayEvidenceTrusted(logRoot, failures));
+}
+
+/**
+ * Runs every selected journey `repeat` times, each in a fresh Chat, and returns the checks keyed
+ * by scenario: the single run itself for `repeat` 1, otherwise the aggregate over the runs.
+ */
+export async function runJourneys({
+  session,
+  directory,
+  modelId,
+  embeddingModelId,
+  truth,
+  ids,
+  repeat = 1,
+  readiness = modelUnavailable,
+}) {
+  if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 20) {
+    throw new TypeError("Invalid journey repeat count");
+  }
   const checks = {};
   await withLiveChat({
     session,
@@ -536,13 +640,24 @@ export async function runJourneys({ session, directory, modelId, embeddingModelI
         ordered,
         (minimumSeconds) => ensureLicenseWindow(session, directory, minimumSeconds),
         async (id) => {
-          const started = Date.now();
-          checks[id] = await runJourney({ ctx, session, modelId, capsuleId, id });
-          checks[id].durationMs = Date.now() - started;
-          reportJourney(id, checks[id], started);
+          const runs = await sequentially(
+            Array.from({ length: repeat }, (_, i) => i + 1),
+            (run) => timedRun({ ctx, session, modelId, capsuleId, id, readiness }, run),
+          );
+          checks[id] = repeat === 1 ? runs[0] : aggregateRuns(runs);
         },
       );
     },
   });
   return checks;
+}
+
+async function timedRun(args, run) {
+  const started = Date.now();
+  const check = args.ctx.specificationRestoreFailed
+    ? invalidCheck("lab-error", "specification restore failed in an earlier run")
+    : await gradedRun(args);
+  check.durationMs = Date.now() - started;
+  reportJourney(args.id, check, started, run);
+  return check;
 }

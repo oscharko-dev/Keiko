@@ -839,6 +839,36 @@ describe("ordinary browser bulk orchestration", () => {
       current: { kind: "violation" },
     });
   });
+  it.each([
+    ["violation-turn-evidence-unavailable", () => ({ clientTurnId: "t" })],
+    ["violation-not-exactly-one-create", () => ({ clientTurnId: "t", exchanges: [] })],
+    [
+      "violation-not-refused-without-effect",
+      () => ({
+        clientTurnId: "t",
+        exchanges: [
+          {
+            call: { name: "jira_create" },
+            result: {
+              toolRef: { canonicalId: "keiko.jira.create" },
+              status: "failed",
+              effectStarted: false,
+              data: { outcome: "rejected", reason: "acceptance-criteria-missing" },
+            },
+          },
+        ],
+      }),
+    ],
+  ])("keeps the closed failed fact %s on the stopped step result", async (fact, reply) => {
+    const ctx = bulkHarness();
+    const ordinary = ctx.turn.getMockImplementation();
+    ctx.turn.mockImplementation(async (chat, prompt, options) =>
+      prompt.includes("deliberate formal violation") ? reply() : ordinary(chat, prompt, options),
+    );
+    const result = await runBulkEpics(ctx);
+    expect(result).toMatchObject({ status: "red", fact });
+    expect(JSON.stringify(result)).not.toMatch(/synthetic-refusal|prompt/iu);
+  });
   it("blocks before any write when the native board identity is unavailable", async () => {
     const ctx = bulkHarness();
     delete ctx.intent.state["ac5-project"].resources.boardId;

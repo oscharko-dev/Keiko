@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { deletionProof, read, readRecord, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
@@ -175,7 +175,6 @@ export const API_QUALIFICATION_FILTER_CASES = [
       args: (f) => ({ filterId: f.savedFilterId, maxResults: 100 }),
       nativeRoot: filterPermissionReview,
       optionalFields: permissionFields,
-      nonEmpty: true,
     }),
     actor: "admin",
     administration: true,

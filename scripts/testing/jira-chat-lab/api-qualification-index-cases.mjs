@@ -1,5 +1,5 @@
 // Native index artifacts and bounded issue suggestions; asynchronous acknowledgements stay unconfirmed.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { URLSearchParams } from "node:url";
 import { read, proof } from "./api-qualification-read.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";

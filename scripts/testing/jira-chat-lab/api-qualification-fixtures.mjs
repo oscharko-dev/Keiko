@@ -1,6 +1,6 @@
 // Auxiliary fixtures use the very same governed dispatcher, journal and independent readback.
 // No fixture helper has an HTTP mutation fallback.
-import assert from "node:assert/strict";
+import assert from "./api-qualification-assert.mjs";
 import { URL } from "node:url";
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes } from "node:crypto";
@@ -75,22 +75,25 @@ export function issueReview(value) {
     issueTypeId: String(value.fields.issuetype.id),
   };
 }
+/** The governed create-version tool takes no actor binding; its schema refuses an extra property. */
+export function versionFixtureArguments(f, name) {
+  return {
+    projectId: f.projectId,
+    name,
+    description: "Synthetic AC7 auxiliary version",
+    startDate: "2026-11-08",
+    releaseDate: "2026-12-01",
+    released: false,
+    archived: false,
+  };
+}
 export async function createQualificationVersion(context, f, label) {
   const name = `AC7 ${label} ${f.runId}`;
   let actual;
   await fixtureWrite(
     context,
     "jira.create-version",
-    {
-      expectedActorKey: f.adminActorKey,
-      projectId: f.projectId,
-      name,
-      description: "Synthetic AC7 auxiliary version",
-      startDate: "2026-11-08",
-      releaseDate: "2026-12-01",
-      released: false,
-      archived: false,
-    },
+    versionFixtureArguments(f, name),
     async (c, data) => {
       assert.match(data.versionId, /^[1-9]\d*$/u);
       actual = await read(c, `/rest/api/2/version/${data.versionId}`);
