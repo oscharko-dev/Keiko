@@ -207,6 +207,11 @@ function wordsOf(text: string): Set<string> {
 // nutze Excel") or name the person's own thing from their previous message ("Sie beginnen …" →
 // "Meine Berichte beginnen …"); it may not bring in a word the person wrote in neither message.
 // The evidence span, by contrast, must stand in this message as written.
+// A sentence the person opens with an explicit preference of their own, which the stated-preference
+// fallback learns from their words when the model's items give no fact.
+const STATED_PREFERENCE_OPENING_RE =
+  /(?:^|[.!?]\s+|\n)(?:ich\s+bevorzuge|i\s+prefer|i\s+would\s+prefer|i['’]d\s+prefer)\s/iu;
+
 function expectOwnWords(outcome: SalienceOutcome, userText: string, earlier: string): void {
   if (outcome.kind !== "candidate") return;
   const { body, provenance } = outcome.proposal;
@@ -404,6 +409,7 @@ describe("memory capture properties", () => {
     { timeout: PROPERTY_TIMEOUT_MS },
     async () => {
       const proposed = new Map<ForeignSource, number>();
+      let withoutOpening = 0;
       const runs = runsOf("foreign evidence", 300);
       await checkProperty({
         name: "foreign evidence",
@@ -420,9 +426,19 @@ describe("memory capture properties", () => {
             proposed.set(source, (proposed.get(source) ?? 0) + 1);
           }
           const { outcomes } = await learn(inputOf(turn, turn.assistantText), reply(foreign));
-          expect(outcomes).toEqual([]);
+          // The foreign items add nothing: what is learned is exactly what the message alone yields
+          // without any model item, and that is only the person's own stated preference, if any.
+          const alone = await learn(inputOf(turn, turn.assistantText), reply([]));
+          expect(outcomes).toEqual(alone.outcomes);
+          for (const outcome of outcomes) expectOwnWords(outcome, userText, "");
+          if (!STATED_PREFERENCE_OPENING_RE.test(userText)) {
+            withoutOpening += 1;
+            expect(outcomes).toEqual([]);
+          }
         },
       });
+      // The unconditional "nothing learned" case must be reached, not only the stated-preference one.
+      expect(withoutOpening).toBeGreaterThanOrEqual(scaledFloor(150, 300, runs));
       // Each kind of foreign span must reach admission, or one of them was never tried.
       const summary = JSON.stringify(Object.fromEntries(proposed));
       for (const source of ["near-miss", "assistant", "earlier"] as const)

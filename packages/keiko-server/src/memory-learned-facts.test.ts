@@ -939,6 +939,31 @@ describe("learning leaves body-free evidence", () => {
     expect(record?.provenance.sourceMessageIds).toEqual(["message-7"]);
   });
 
+  it("counts a preference learned from the person's own words when the model returned none", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const vault = makeVault();
+    const ctx = context();
+    await captureSalientFromTurn(
+      makeDeps(vault, []),
+      { content: "Thanks! Ich bevorzuge Tabellen.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+
+    const extraction = sink.events.find((event) => event.op === "memory.learn.extraction");
+    if (extraction === undefined) throw new Error("expected an extraction line");
+    const line = formatActivityLogProofLine(extraction);
+    expect(expectActivityLogProof("memory.learn.extraction.line", line)).toMatchObject({
+      rawItemCount: 0,
+      admittedCount: 0,
+      statedPreferenceCount: 1,
+    });
+    expect(line).not.toContain("Tabellen");
+    expect([...liveBodies(vault, ctx)]).toEqual(["Ich bevorzuge Tabellen"]);
+  });
+
   it("logs every reason capture can report", () => {
     expect(MEMORY_LEARN_DROP_REASONS).toEqual(expect.arrayContaining([...FACT_DROP_REASONS]));
     expect(MEMORY_LEARN_RELATION_LABELS).toEqual([...FACT_RELATION_LABELS]);

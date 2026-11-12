@@ -293,6 +293,9 @@ function logSalienceDiagnostic(
         admittedCount: diagnostic.acceptedCount,
         knownFactCount: diagnostic.knownFactCount,
         sourceMessageCount,
+        ...(diagnostic.statedPreferenceCount === undefined
+          ? {}
+          : { statedPreferenceCount: diagnostic.statedPreferenceCount }),
       },
       correlationId,
     );

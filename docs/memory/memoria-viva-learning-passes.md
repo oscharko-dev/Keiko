@@ -17,6 +17,16 @@ governed capture a turn used before (salience extraction, deterministic admissio
 status, hard denials first). After each turn the position moves past it, so a stopped server neither
 loses nor repeats a turn.
 
+When the model's items for a message yield no fact, a preference the person states about themself in
+a sentence of its own ("Ich bevorzuge …", "I prefer …") is still learned from their words. It passes
+the same admission, relation and denial checks as a model item, so a question, a quote, someone
+else's preference or an identifier stays out. A sentence cut short at an abbreviation ("z.B.") is
+not learned, nor is a sentence split inside brackets or quotes, and a message with two such sentences is left to the model. Beside any stored preference the fallback only confirms a repeat or replaces a reversed
+or negated one; "I prefer spaces" beside "I prefer tabs" is left to the model, so the fallback never
+stores a second, possibly contradicting preference.
+The vocabulary is deliberately narrow: only these explicit first-person preference openings.
+`memory.learn.extraction` counts the facts it learned or confirmed as `statedPreferenceCount`.
+
 | Trigger        | When                                                                             |
 | -------------- | -------------------------------------------------------------------------------- |
 | `inactivity`   | No Chat work for the pause after a marked turn (default 15 s)                    |

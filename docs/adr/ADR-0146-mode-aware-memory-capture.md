@@ -363,6 +363,12 @@ doubt Keiko learns too little rather than too much, because nobody approves what
 - **Forgotten while learning.** A capture still running when the person forgot that turn's
   statement stores nothing from it, because each candidate is also checked against the statement's
   own tombstone.
+- **Stated-preference fallback.** When the model's items for a message yield no fact, a sentence of
+  the person's own that opens with an explicit first-person preference ("Ich bevorzuge …", "I
+  prefer …") is checked like a model item: the same admission, denials and relation rules apply. It
+  is consulted only then, never beside a model fact, and only for one such sentence that is not a fragment cut at an abbreviation, bracket or quote. Beside any stored preference it only confirms a
+  repeat or replaces a reversed or negated one; any other sentence is left to the model, so it never
+  stores a second, possibly contradicting preference (Issue #4228).
 - **Evidence.** `memory.learn.extraction`, `memory.learn.dropped` and `memory.learn.relation`
   record counts, the source message count and closed reason, label, decision and basis values; no
   words of the person or of a fact enter the Activity Log.

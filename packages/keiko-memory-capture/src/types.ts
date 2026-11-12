@@ -178,6 +178,8 @@ export type SalienceDiagnostic =
       readonly rawItemCount: number;
       readonly acceptedCount: number;
       readonly knownFactCount: number;
+      /** Facts learned or confirmed from the person's own stated preference after the model gave none. */
+      readonly statedPreferenceCount?: number;
     };
 
 export type SalienceModelMessageRole = "system" | "user" | "assistant";

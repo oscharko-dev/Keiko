@@ -161,8 +161,14 @@ describe("extractSalientMemories", () => {
     ["paraphrases into other words", "Mag Spreadsheets", "ich bevorzuge Tabellen"],
     ["returns a span the person did not write", "Bevorzugt Tabellen", "ich liebe Tabellen"],
     ["returns no span", "Bevorzugt Tabellen", ""],
-  ])("stores nothing when the model %s", async (_case, body, evidence) => {
-    expect(await learn("Ich bevorzuge Tabellen.", [fact(body, evidence)])).toEqual([]);
+  ])("stores nothing of the model's when it %s", async (_case, body, evidence) => {
+    // Deliberately no "Ich bevorzuge" opening: that sentence would be learned from the person's own
+    // words by the stated-preference fallback, which the second assertion pins.
+    expect(await learn("Ich arbeite gern mit Tabellen.", [fact(body, evidence)])).toEqual([]);
+    // A preference the person stated is learned from their own words, never from the model's item.
+    expect(bodies(await learn("Ich bevorzuge Tabellen.", [fact(body, evidence)]))).toEqual([
+      "Ich bevorzuge Tabellen",
+    ]);
   });
 
   it("never treats an assistant claim as a fact about the person", async () => {
@@ -398,7 +404,7 @@ describe("extractSalientMemories", () => {
     const { deps, diagnostics } = harness(
       reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen", { type: "vibe" })),
     );
-    expect(await extractSalientMemories(input("Ich bevorzuge Tabellen."), deps)).toEqual([]);
+    expect(await extractSalientMemories(input("Ich arbeite gern mit Tabellen."), deps)).toEqual([]);
     expect(diagnostics).toContainEqual({
       kind: "dropped-model-items",
       reason: "unknown-type",
@@ -427,11 +433,163 @@ describe("extractSalientMemories", () => {
     });
   });
 
+  describe("a preference the person states when the model returns none", () => {
+    it("learns the person's own preference from a mixed-language message the model left out", async () => {
+      const { deps, diagnostics } = harness(reply());
+      const text =
+        "Can you help me with the quarterly numbers? Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst. Thanks in advance.";
+      const outcomes = await extractSalientMemories(input(text), deps);
+      expect(bodies(outcomes)).toEqual(["Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst"]);
+      expect(candidates(outcomes)[0]?.proposal.type).toBe("preference");
+      expect(diagnostics).toContainEqual({
+        kind: "extraction-summary",
+        rawItemCount: 0,
+        acceptedCount: 0,
+        knownFactCount: 0,
+        statedPreferenceCount: 1,
+      });
+    });
+
+    it("learns an English preference after malformed model output", async () => {
+      const { deps } = harness("[{broken");
+      const outcomes = await extractSalientMemories(input("I prefer spaces over tabs."), deps);
+      expect(bodies(outcomes)).toEqual(["I prefer spaces over tabs"]);
+    });
+
+    it("adds nothing when the model's items already yielded a fact", async () => {
+      const { deps, diagnostics } = harness(reply(fact("Wohnt in Bonn", "Ich wohne in Bonn")));
+      const outcomes = await extractSalientMemories(
+        input("Ich wohne in Bonn. Ich bevorzuge Tabellen."),
+        deps,
+      );
+      expect(bodies(outcomes)).toEqual(["Ich wohne in Bonn"]);
+      expect(diagnostics).toContainEqual({
+        kind: "extraction-summary",
+        rawItemCount: 1,
+        acceptedCount: 1,
+        knownFactCount: 0,
+      });
+    });
+
+    it.each([
+      ["a question", "Ich bevorzuge Tabellen?"],
+      ["a customer number", "Ich bevorzuge die Kundennummer 4711-0815-22."],
+      ["a statement inside quotes", 'Er schrieb: "Ich bevorzuge Tabellen."'],
+      ["someone else's preference", "Mein Kollege sagt, ich bevorzuge Tabellen."],
+      ["no stated preference", "Kannst du mir die Zahlen zeigen?"],
+    ])("keeps the same checks as a model item: %s learns nothing", async (_label, text) => {
+      const { deps } = harness(reply());
+      expect(bodies(await extractSalientMemories(input(text), deps))).toEqual([]);
+    });
+
+    it.each([
+      ["an abbreviation before a noun", "Ich bevorzuge z.B. Tabellen."],
+      ["a spaced abbreviation", "Ich bevorzuge z. B. Tabellen."],
+      ["an abbreviation before a capitalised word", "Ich bevorzuge Tabellen, d.h. Excel."],
+      ["an English abbreviation", "I prefer tea, e.g. Green tea."],
+      ["a comparison", "I prefer Python vs. Java for scripts."],
+      ["a title", "I prefer Dr. Smith's style."],
+      ["an approximation", "Ich bevorzuge ca. Zehn Zeilen."],
+    ])("stores no sentence cut at %s", async (_label, text) => {
+      // The whole sentence carries a stop before a capital, which admission refuses for a model item
+      // too; a sentence cut at the abbreviation ("Ich bevorzuge z.B") must never be stored instead.
+      const { deps } = harness(reply());
+      expect(bodies(await extractSalientMemories(input(`${text} Danke!`), deps))).toEqual([]);
+    });
+
+    it.each([
+      ["an abbreviation inside brackets", "Ich bevorzuge Tabellen (z. B. Excel). Gut so."],
+      ["a stop inside quotes", 'Ich bevorzuge "Tabellen. Listen" als Wort.'],
+      ["two stated preferences", "Ich bevorzuge Tabellen. Ich bevorzuge Listen."],
+    ])("stores no fragment or guess for %s", async (_label, text) => {
+      const { deps } = harness(reply());
+      expect(bodies(await extractSalientMemories(input(text), deps))).toEqual([]);
+    });
+
+    it("learns a whole sentence that ends in a dotted name", async () => {
+      const { deps } = harness(reply());
+      const outcomes = await extractSalientMemories(input("I prefer Node.js."), deps);
+      expect(bodies(outcomes)).toEqual(["I prefer Node.js"]);
+    });
+
+    it("keeps a stop before a lower-case word inside the sentence", async () => {
+      const { deps } = harness(reply());
+      const outcomes = await extractSalientMemories(
+        input("Ich bevorzuge Tabellen, z.B. bei Zahlen."),
+        deps,
+      );
+      expect(bodies(outcomes)).toEqual(["Ich bevorzuge Tabellen, z.B. bei Zahlen"]);
+    });
+
+    it.each([
+      [
+        "a new value for the same purpose",
+        "Ich bevorzuge Listen für Zahlen.",
+        "Ich bevorzuge Tabellen für Zahlen",
+      ],
+      ["a single-word value", "I prefer spaces.", "I prefer tabs"],
+      ["another single-word value", "Ich bevorzuge Listen.", "Bevorzugt Tabellen"],
+      ["a stated change", "Ich bevorzuge jetzt Listen.", "Ich bevorzuge Tabellen"],
+    ])("stores no second preference beside a stored one: %s", async (_label, text, stored) => {
+      const { deps } = harness(reply());
+      const outcomes = await extractSalientMemories(
+        input(text, { knownFacts: [{ id: "k", body: stored }] }),
+        deps,
+      );
+      expect(outcomes).toEqual([]);
+    });
+
+    it("holds beside any stored preference, even an unrelated one", async () => {
+      const { deps } = harness(reply());
+      const outcomes = await extractSalientMemories(
+        input("I prefer dark mode.", { knownFacts: [{ id: "k", body: "Mag Kaffee" }] }),
+        deps,
+      );
+      expect(outcomes).toEqual([]);
+    });
+
+    it("still replaces a stored preference the person reverses", async () => {
+      const { deps } = harness(reply());
+      const outcomes = await extractSalientMemories(
+        input("I prefer tabs over spaces.", {
+          knownFacts: [{ id: "k", body: "I prefer spaces over tabs" }],
+        }),
+        deps,
+      );
+      expect(bodies(outcomes)).toEqual(["I prefer tabs over spaces"]);
+      expect(candidates(outcomes)[0]?.relation).toMatchObject({ kind: "supersede", memoryId: "k" });
+    });
+
+    it("still learns a preference about something else beside a stored one", async () => {
+      const { deps } = harness(reply());
+      const outcomes = await extractSalientMemories(
+        input("I prefer dark mode.", {
+          knownFacts: [{ id: "k", body: "Wohnt in Bonn" }],
+        }),
+        deps,
+      );
+      expect(bodies(outcomes)).toEqual(["I prefer dark mode"]);
+    });
+
+    it("relates the stated preference to a stored fact the same way as a model item", async () => {
+      const { deps } = harness(reply());
+      const outcomes = await extractSalientMemories(
+        input("Ich bevorzuge Tabellen.", {
+          knownFacts: [{ id: "k", body: "Ich bevorzuge Tabellen" }],
+        }),
+        deps,
+      );
+      expect(bodies(outcomes)).toEqual([]);
+    });
+  });
+
   it.each(["I could not find anything.", "[{broken", '{"items": "nope"}'])(
     "returns [] on malformed output %j and says so",
     async (output) => {
       const { deps, diagnostics } = harness(output);
-      expect(await extractSalientMemories(input("Ich bevorzuge Tabellen."), deps)).toEqual([]);
+      expect(await extractSalientMemories(input("Ich arbeite gern mit Tabellen."), deps)).toEqual(
+        [],
+      );
       expect(diagnostics).toContainEqual({ kind: "parse-or-empty-output", rawItemCount: 0 });
     },
   );

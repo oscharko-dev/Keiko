@@ -372,6 +372,11 @@ export function compareFacts(a: string, b: string): FactComparison {
     : "different";
 }
 
+// Whether a stored body states a preference ("Bevorzugt Tabellen", "Likes dark mode").
+export function statesPreference(body: string): boolean {
+  return PREFERENCE_RE.test(body);
+}
+
 // Whether two bodies state one fact. A changed value or a reversed preference is never the same
 // fact, however alike the two read.
 export function statesSameFact(a: string, b: string): boolean {

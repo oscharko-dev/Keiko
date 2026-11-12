@@ -36619,6 +36619,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      statedPreferenceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "none",
     lifecycle: "state",

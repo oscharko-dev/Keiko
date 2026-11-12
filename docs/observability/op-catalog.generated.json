@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "07c5b02edee465d16d4577d215dd7054ac2c8a85f4d63fbe97b765b3527bc64e",
+    "catalogDigest": "a81b4a5b3986e6e5ce725df386c54caec3935a2e1ca01698cf147768850a2efa",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38074,8 +38074,8 @@
           }
         },
         "proofIds": ["memory.learn.dropped.line"],
-        "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:81",
-        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:105"]
+        "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:83",
+        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:107"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38119,11 +38119,16 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "statedPreferenceCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "proofIds": ["memory.learn.extraction.line"],
         "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:28",
-        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:51"]
+        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:53"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38322,8 +38327,8 @@
           }
         },
         "proofIds": ["memory.learn.relation.line"],
-        "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:141",
-        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:179"]
+        "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:143",
+        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:181"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -103185,6 +103190,12 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "statedPreferenceCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["completeness-state", "count", "loss-state"],
@@ -118193,7 +118204,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:334",
+      "site": "packages/keiko-server/src/memory-salience.ts:337",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121815,7 +121826,7 @@
     {
       "op": "memory.learn.dropped",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-learned-facts-log.ts:83",
+      "site": "packages/keiko-server/src/memory-learned-facts-log.ts:85",
       "package": "keiko-server"
     },
     {
@@ -121834,7 +121845,7 @@
     {
       "op": "memory.learn.pass",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:1066",
+      "site": "packages/keiko-server/src/memory-salience.ts:1069",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121853,7 +121864,7 @@
     {
       "op": "memory.learn.relation",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-learned-facts-log.ts:143",
+      "site": "packages/keiko-server/src/memory-learned-facts-log.ts:145",
       "package": "keiko-server"
     },
     {
