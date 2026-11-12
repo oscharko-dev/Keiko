@@ -87,6 +87,14 @@ describe("gradeSelection", () => {
     );
   });
 
+  it("grades an unavailable native truth as invalid, never as a model verdict", () => {
+    const turn = { exchanges: [call("jira_priorities")], gateway: healthy };
+    expect(gradeSelection(READ, turn, { truthUnavailable: true })).toMatchObject({
+      status: "invalid",
+      detail: "the native truth read failed",
+    });
+  });
+
   it("keeps the verdict when a circuit opened and recovered without failing a call", () => {
     const gateway = { unrecovered: 0, circuit: 2 };
     expect(gradeSelection(READ, { exchanges: [], gateway }, { tokens: ["High"] }).status).toBe(

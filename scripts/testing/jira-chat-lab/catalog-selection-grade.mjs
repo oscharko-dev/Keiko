@@ -86,8 +86,8 @@ const gatewayFailed = (gateway = {}) => gateway.unrecovered > 0;
 
 /**
  * One attempt: `turn` is { failure, exchanges, gateway: { unrecovered, circuit } }, `tokens` the
- * native read truth, `effect` the native write verification. A gateway outage is invalid, never a
- * product or model verdict.
+ * native read truth, `effect` the native write verification. A gateway outage or an unavailable
+ * native truth is invalid, never a product or model verdict.
  */
 /** The called tools in order with their closed result, never their arguments or data. */
 export function callTrace(exchanges) {
@@ -100,16 +100,18 @@ export function callTrace(exchanges) {
   );
 }
 
-export function gradeSelection(entry, turn, { tokens = [], effect } = {}) {
-  const verdict = gradeTurn(entry, turn, { tokens, effect });
+export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavailable } = {}) {
+  const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable });
   return { ...verdict, calls: callTrace(turn.exchanges ?? []) };
 }
 
-function gradeTurn(entry, turn, { tokens, effect }) {
+function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
   if (gatewayFailed(turn.gateway))
     return { status: "invalid", path, detail: "the model gateway failed during the turn" };
+  if (truthUnavailable === true)
+    return { status: "invalid", path, detail: "the native truth read failed" };
   const calls = operationCalls(exchanges);
   const target = calls.find((exchange) => toolAlias(exchange.call?.name) === toolAlias(entry.tool));
   if (entry.effect === "write") return { ...writeVerdict(target, effect), path };

@@ -44,10 +44,13 @@ const DISCOVERY_READS = [
       (await native(s, projectPath(f, "/statuses"))).flatMap((type) => names(type.statuses)),
   },
   {
-    id: "project-roles",
-    tool: "jira.project-roles",
-    prompt: (f) => `Welche Projektrollen gibt es im Jira-Projekt ${f.project}?`,
-    truth: async (s, f) => Object.keys(await native(s, projectPath(f, "/role"))),
+    // Project roles need project administration, which the lab's api actor deliberately lacks, so
+    // a roles case would measure a permission refusal instead of the model's selection.
+    id: "link-types",
+    tool: "jira.link-types",
+    prompt: () =>
+      "Welche Arten von Verknüpfungen zwischen Vorgängen gibt es in unserem Jira? Nenne alle Namen.",
+    truth: async (s) => names((await native(s, "/rest/api/2/issueLinkType")).issueLinkTypes),
   },
   {
     id: "myself",

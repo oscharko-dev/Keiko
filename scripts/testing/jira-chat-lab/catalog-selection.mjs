@@ -112,9 +112,16 @@ async function writeAttempt(context, run, entry, turnFor) {
   };
 }
 
+/** A failed native truth read is a lab error of this attempt; it never stops the other cases. */
 async function readAttempt(context, run, entry, turnFor) {
   const turn = await withGateway(context.session, await turnFor.send());
-  return { turn, proof: { tokens: await selectionTruth(context.session, run.fixture, entry) } };
+  try {
+    return { turn, proof: { tokens: await selectionTruth(context.session, run.fixture, entry) } };
+  } catch (error) {
+    const errorType = error instanceof Error ? error.name : "unknown";
+    stage("truth-unavailable", { id: entry.id, errorType });
+    return { turn, proof: { truthUnavailable: true } };
+  }
 }
 
 async function attempt(context, run, entry, round) {
