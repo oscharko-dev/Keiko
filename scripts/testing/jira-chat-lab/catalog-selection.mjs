@@ -273,6 +273,7 @@ function finishReport(session, modelId, run, startedAt, complete) {
 async function measure(session, modelId, run, cases) {
   const startedAt = new Date().toISOString();
   let complete = false;
+  let stopped;
   // A refusal before the first turn still writes a report, marked incomplete with no attempts, so
   // an older report is never read as this run's result.
   try {
@@ -293,8 +294,21 @@ async function measure(session, modelId, run, cases) {
     });
     // A signal during the last attempt ends the loop normally, but the run was still stopped.
     complete = !run.stop.signal.aborted;
+  } catch (error) {
+    stopped = error;
+    throw error;
   } finally {
-    finishReport(session, modelId, run, startedAt, complete);
+    reportBeside(stopped, () => finishReport(session, modelId, run, startedAt, complete));
+  }
+}
+
+/** A failed report write never replaces the error that stopped the run; it is reported beside it. */
+function reportBeside(stopped, write) {
+  try {
+    write();
+  } catch (error) {
+    if (stopped === undefined) throw error;
+    stage("report-failed", { errorType: error instanceof Error ? error.name : "unknown" });
   }
 }
 
