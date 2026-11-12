@@ -189,17 +189,15 @@ describe("scopeSnapshot content", () => {
   });
 
   it("refuses a filter collection it cannot read completely", async () => {
-    reads.set(
-      "/rest/api/2/filter/my",
-      Array.from({ length: 100 }, (_, id) => ({ id: id + 50 })),
-    );
+    const filters = (length) => Array.from({ length }, (_, id) => ({ id: id + 50 }));
+    reads.set("/rest/api/2/filter/my", filters(999));
+    await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).resolves.toBeDefined();
+    reads.set("/rest/api/2/filter/my", filters(1000));
     await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow(
-      "filters exceed",
+      "1000 filters reach the snapshot bound",
     );
     reads.set("/rest/api/2/filter/my", {});
-    await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow(
-      "filters exceed",
-    );
+    await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow("not a list");
   });
 
   it("fails closed when the search answer carries no total", async () => {

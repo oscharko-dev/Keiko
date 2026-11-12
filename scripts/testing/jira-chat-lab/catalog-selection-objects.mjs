@@ -340,7 +340,8 @@ export function orphanedIssues(snapshot, created) {
   ).length;
 }
 
-const FILTERS_MAX = 100;
+// Jira answers the actor's filters in one unpaged list; leftovers of earlier lab runs stay under this.
+const FILTERS_MAX = 1000;
 
 /**
  * The api actor's own filters, which is where a model's mistaken filter creation lands. Any filter
@@ -355,8 +356,10 @@ async function filterScope(session, created) {
     "/rest/api/2/filter/my?includeFavourites=true",
     basicAuth(session, "api"),
   );
-  if (!Array.isArray(filters) || filters.length >= FILTERS_MAX)
-    throw new TypeError("The api actor's filters exceed the scope snapshot bound");
+  if (!Array.isArray(filters))
+    throw new TypeError("The api actor's filter collection is not a list");
+  if (filters.length >= FILTERS_MAX)
+    throw new RangeError(`The api actor's ${filters.length} filters reach the snapshot bound`);
   return filters
     .filter((row) => String(row.id) !== created.favouriteFilterId)
     .map((row) => {

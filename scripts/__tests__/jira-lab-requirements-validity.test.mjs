@@ -162,7 +162,7 @@ describe("Activity Log gateway evidence", () => {
   // The mtime is fixed inside the window so the fixture never depends on the host clock.
   const write = (lines) => {
     const file = join(root, "logs", "activity-1.jsonl");
-    writeFileSync(file, lines.join("\n"));
+    writeFileSync(file, lines.map((entry) => `${entry}\n`).join(""));
     const inside = new Date(window.fromMs + 30_000);
     utimesSync(file, inside, inside);
   };
@@ -247,6 +247,17 @@ describe("Activity Log gateway evidence", () => {
     write(['{"op":"gateway.chat.failed", truncated']);
     const failures = readGatewayFailures(join(root, "logs"), window);
     expect(gatewayEvidenceTrusted(join(root, "logs"), failures)).toBe(false);
+  });
+
+  it("skips an unterminated last record the writer is still appending", () => {
+    const file = join(root, "logs", "activity-1.jsonl");
+    const complete = [exhausted(T(10), "a"), failed("gateway.chat.failed", T(11), "a")];
+    writeFileSync(file, `${complete.join("\n")}\n{"op":"gateway.chat.fai`);
+    const inside = new Date(window.fromMs + 30_000);
+    utimesSync(file, inside, inside);
+    const failures = readGatewayFailures(join(root, "logs"), window);
+    expect(failures).toMatchObject({ outages: 1, unparsed: 0 });
+    expect(gatewayEvidenceTrusted(join(root, "logs"), failures)).toBe(true);
   });
 
   it("reads an absent log directory as no evidence", () => {

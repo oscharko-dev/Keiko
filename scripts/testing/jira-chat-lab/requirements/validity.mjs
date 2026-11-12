@@ -112,11 +112,18 @@ function classifyCorrelations(groups, counts) {
  * opened or rejected events) and `productFailures` (failed calls with neither). Another lane's
  * process writes the same directory, so `pid` restricts the count to the lab server of this run.
  */
+/** The writer ends every record with a newline; an unterminated tail is still being written. */
+function completeLines(text) {
+  const lines = text.split("\n");
+  lines.pop();
+  return lines;
+}
+
 export function readGatewayFailures(root, window) {
   const counts = { outages: 0, circuit: 0, productFailures: 0, unparsed: 0 };
   const groups = new Map();
   for (const file of logFiles(root, window.fromMs)) {
-    for (const line of readFileSync(file, "utf8").split("\n")) {
+    for (const line of completeLines(readFileSync(file, "utf8"))) {
       const parsed = gatewayLine(line);
       if (parsed === undefined) continue;
       if (parsed.unparsed) counts.unparsed += 1;
@@ -136,7 +143,7 @@ export function readGatewayFailures(root, window) {
 export function readToolRejections(root, window) {
   const evidence = { rejected: {}, unidentified: 0, failedCalls: 0 };
   for (const file of logFiles(root, window.fromMs)) {
-    for (const line of readFileSync(file, "utf8").split("\n")) {
+    for (const line of completeLines(readFileSync(file, "utf8"))) {
       const parsed = gatewayLine(line);
       if (parsed?.entry !== undefined && inWindow(parsed.entry, window))
         collectRejection(parsed.entry, evidence);
