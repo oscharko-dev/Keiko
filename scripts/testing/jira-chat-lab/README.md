@@ -1149,11 +1149,9 @@ probes that cover everything beside an `unverified` journey leave it `partial`. 
 laboratory cannot trust is `invalid`, never `red`: a native-Jira, fixture, license or transport
 exception (`lab-error`), a model that fails a short readiness turn before the journey while the
 Activity Log of that turn shows an infrastructure failure or the error is a transport signature
-(`model-unavailable`), and a non-green journey during which the gateway failed (`gateway-failure`,
-`gateway-circuit-open`). Infrastructure failure is read from the Activity Log lines of this server
+(`model-unavailable`), and a non-green journey during which the gateway failed (`gateway-failure`). Infrastructure failure is read from the Activity Log lines of this server
 process inside the window, grouped by correlation: a `gateway.chat.failed`/`gateway.stream.failed`
-correlation that contains `gateway.retry.exhausted` or a `gateway.circuit.*` event, or any circuit
-opened/rejected event. A failure with neither (context overflow, refused attempt) is a product
+correlation that contains `gateway.retry.exhausted` or a `gateway.circuit.*` event; circuit events alone are only reported. A readiness-turn deadline abort (by error name) is `model-unavailable`. A failure with neither (context overflow, refused attempt) is a product
 outcome and stays red. A failed Keiko route (`Live Chat HTTP stage failed`, also from the readiness
 turn when no outage is shown) is red with reason `product-route-failed`. A green journey stays
 green. Any red check decides the scenario before invalid. `latest.md` and `trend.tsv` carry an

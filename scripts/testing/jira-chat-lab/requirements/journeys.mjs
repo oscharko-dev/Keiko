@@ -33,6 +33,7 @@ import {
   classifyJourney,
   gradeException,
   invalidCheck,
+  isDeadlineAbort,
   isTransportFailure,
   readGatewayFailures,
   redCheck,
@@ -556,7 +557,10 @@ export async function modelUnavailable(ctx, session, modelId) {
       toMs: Date.now(),
       pid: process.pid,
     });
-    return { unavailable: showsOutage(failures) || isTransportFailure(detail), detail };
+    // The readiness turn's own deadline fired: a hung model is unavailable, not a product failure.
+    const unavailable =
+      showsOutage(failures) || isTransportFailure(detail) || isDeadlineAbort(error);
+    return { unavailable, detail };
   }
 }
 

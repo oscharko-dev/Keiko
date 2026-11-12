@@ -10,7 +10,6 @@ export const INVALID_REASONS = Object.freeze([
   "lab-error",
   "model-unavailable",
   "gateway-failure",
-  "gateway-circuit-open",
   "insufficient-valid-runs",
 ]);
 export const RED_REASONS = Object.freeze(["product-route-failed"]);
@@ -107,8 +106,16 @@ export function readGatewayFailures(root, window) {
   return counts;
 }
 
-/** Whether the evidence of a window shows the model infrastructure down. */
-export const showsOutage = (failures) => failures.outages > 0 || failures.circuit > 0;
+/**
+ * Whether the evidence of a window shows the model infrastructure down: a failed model call that
+ * went through retry exhaustion or a circuit event. A circuit event alone (a recovered
+ * open, half-open, closed cycle) is reported but proves no failed call, so it is no outage.
+ */
+export const showsOutage = (failures) => failures.outages > 0;
+
+/** Whether an error is the abort of a deadline signal (`AbortSignal.timeout`), by name only. */
+export const isDeadlineAbort = (error) =>
+  error?.name === "TimeoutError" || error?.name === "AbortError";
 
 /** A check the laboratory cannot trust: it credits no obligation and names its closed reason. */
 export function invalidCheck(reason, detail, base = {}) {
@@ -140,16 +147,14 @@ export function gradeException(error, base = {}) {
 /**
  * Re-grades a finished journey check against the gateway evidence of its window.
  *  - A green check stays green: an independent Jira or truth oracle proved the outcome.
- *  - Any other check during which the circuit opened or a model call failed after exhausting its
+ *  - Any other check during which a model call failed after exhausting its
  *    retries (see `readGatewayFailures`), or whose turn failed on a transport error, is invalid.
  *  - A failed call that was not retried (a limit such as context overflow) stays as graded.
  */
 export function classifyJourney(check, failures) {
   if (check.status === "green" || check.status === "invalid") return check;
   const counts = `${failures.outages} infrastructure failures, ${failures.circuit} circuit events`;
-  if (failures.circuit > 0)
-    return invalidCheck("gateway-circuit-open", `${check.detail}; ${counts}`, check);
-  if (failures.outages > 0 || isTransportFailure(check.turnFailure ?? check.failure)) {
+  if (showsOutage(failures) || isTransportFailure(check.turnFailure ?? check.failure)) {
     return invalidCheck("gateway-failure", `${check.detail ?? ""}; ${counts}`, check);
   }
   return check;
