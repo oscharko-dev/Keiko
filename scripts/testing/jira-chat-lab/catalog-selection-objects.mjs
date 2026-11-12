@@ -131,7 +131,8 @@ export function selectionNames(_fixture, tag) {
     sprintName: `Auswahl Sprint ${tag}`,
     issueSummary: `Auswahl Vorgang ${tag}`,
     linkTargetSummary: `Auswahl Ziel ${tag}`,
-    watcherName: actorDetails("assignee").name,
+    // jira.watch only adds the connected user (the api actor); it cannot select another user.
+    watcherName: actorDetails("api").name,
   };
 }
 

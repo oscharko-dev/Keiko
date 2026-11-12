@@ -249,7 +249,7 @@ const WRITES = [
     id: "watch",
     tool: "jira.watch",
     prompt: (f) =>
-      `Setze den Jira-Benutzer ${f.selection.watcherName} als Beobachter auf den Vorgang ${f.selection.issueKey}.`,
+      `Ich möchte über Änderungen am Vorgang ${f.selection.issueKey} informiert werden. Beobachte ihn ab jetzt für mich.`,
     verify: async (s, f) => {
       const page = await native(s, issuePath(f, "/watchers"));
       const name = f.selection.watcherName;
