@@ -2,7 +2,7 @@
 // arguments, so the model has to find the operation in the Jira catalog itself (directly or through
 // jira.discover / jira.describe) and build the arguments from the person's words. Every truth is an
 // independent native Jira read with the lab actor's credentials, never Keiko's own answer.
-import { basicAuth, checked } from "./lab-client.mjs";
+import { actorDetails, basicAuth, checked } from "./lab-client.mjs";
 
 const TRUTH_TOKENS_MAX = 20;
 const native = (session, path, actor = "api") =>
@@ -155,29 +155,42 @@ function owned(rows, matches, path) {
 
 /** Write cases on owned synthetic objects; the effect is verified natively and then removed. */
 const WRITES = [
+  // Components and versions need project administration, which the lab's api actor deliberately
+  // lacks; their cases measured a 403/404 refusal. Linking and voting are within its grants.
   {
-    id: "create-component",
-    tool: "jira.create-component",
-    prompt: (f, m) =>
-      `Lege im Jira-Projekt ${f.project} eine neue Komponente mit dem Namen "${m} K" an.`,
-    verify: async (s, f, m) =>
-      owned(
-        await native(s, projectPath(f, "/components")),
-        (row) => row.name === `${m} K`,
-        (row) => `/rest/api/2/component/${row.id}`,
-      ),
+    id: "issue-link",
+    tool: "jira.create-issue-link",
+    prompt: (f) =>
+      `Verknüpfe den Vorgang ${f.selection.issueKey} mit dem Vorgang ${f.selection.linkTargetKey} über die Verknüpfungsart "Relates".`,
+    verify: async (s, f) => {
+      const issue = await native(s, issuePath(f, "?fields=issuelinks"));
+      const target = f.selection.linkTargetKey;
+      const rows = (issue.fields?.issuelinks ?? []).filter(
+        (row) => row.outwardIssue?.key === target || row.inwardIssue?.key === target,
+      );
+      return {
+        effects: countMatching(rows, (row) => row.type?.name === "Relates"),
+        wrongValue: rows.some((row) => row.type?.name !== "Relates"),
+        cleanup: rows.map((row) => `/rest/api/2/issueLink/${row.id}`),
+      };
+    },
   },
   {
-    id: "create-version",
-    tool: "jira.create-version",
-    prompt: (f, m) =>
-      `Lege im Jira-Projekt ${f.project} eine neue Version mit dem Namen "${m} V" an.`,
-    verify: async (s, f, m) =>
-      owned(
-        await native(s, projectPath(f, "/versions")),
-        (row) => row.name === `${m} V`,
-        (row) => `/rest/api/2/version/${row.id}`,
-      ),
+    id: "vote",
+    tool: "jira.vote",
+    prompt: (f) => `Stimme in Jira für den Vorgang ${f.selection.issueKey} ab.`,
+    verify: async (s, f) => {
+      const name = actorDetails("api").name;
+      const votes = await native(s, issuePath(f, "/votes"));
+      const present = countMatching(votes.voters ?? [], (row) => row.name === name);
+      // Only the voter can withdraw a vote, so the removal runs as the api actor.
+      const removal = {
+        key: issuePath(f, `/votes@${name}`),
+        path: issuePath(f, "/votes"),
+        actor: "api",
+      };
+      return { effects: present, cleanup: present > 0 ? [removal] : [] };
+    },
   },
   {
     id: "remote-link",

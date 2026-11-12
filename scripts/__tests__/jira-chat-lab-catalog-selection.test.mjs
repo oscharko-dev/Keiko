@@ -13,6 +13,7 @@ const FIXTURE = {
   project: "KEIKO",
   selection: {
     issueKey: "KEIKO-1",
+    linkTargetKey: "KEIKO-2",
     componentName: "Auswahl Komponente t",
     versionName: "Auswahl Version t",
     remoteLinkTitle: "Auswahl Link t",
@@ -188,6 +189,30 @@ describe("selection helpers", () => {
     });
     const same = strayWrites(before, before, [], "Auswahl t");
     expect(same.count).toBe(0);
+  });
+
+  it("removes a stray vote as its own voter and skips the expected one by its key", () => {
+    const vote = (actor) => ({
+      owned: true,
+      label: actor,
+      removal: { path: "/issue/X/votes", actor },
+    });
+    const before = { issueState: "a", objects: new Map() };
+    const after = {
+      issueState: "a",
+      objects: new Map([
+        ["/issue/X/votes@keiko-api", vote("api")],
+        ["/issue/X/votes@keiko-editor", vote("editor")],
+        ["/issue/X/votes@someone", { owned: false, label: "someone" }],
+      ]),
+    };
+    const expected = [{ key: "/issue/X/votes@keiko-api", path: "/issue/X/votes", actor: "api" }];
+    expect(strayWrites(before, after, expected, "Auswahl t")).toEqual({
+      remove: [{ path: "/issue/X/votes", actor: "editor" }],
+      foreign: 1,
+      issueChanged: 0,
+      count: 2,
+    });
   });
 
   it("marks a run that lost most attempts as insufficient", () => {

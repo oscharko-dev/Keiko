@@ -29,12 +29,12 @@ async function projectObjects(session, fixture, created) {
   created.versionId = String(version.id);
 }
 
-async function ownedIssue(session, fixture, created) {
+async function ownedIssue(session, fixture, summary) {
   const issue = await write(session, "admin", "POST", "/rest/api/2/issue", {
     fields: {
       project: { key: fixture.project },
       issuetype: { id: String(fixture.issueTypeId) },
-      summary: created.issueSummary,
+      summary,
       description: "Synthetic Keiko laboratory data. No customer content.",
       // A session that ran qualify-fields.mjs holds a globally required field.
       ...(fixture.requiredFieldId === undefined
@@ -44,7 +44,7 @@ async function ownedIssue(session, fixture, created) {
   });
   if (!/^[A-Z][A-Z0-9]+-\d+$/u.test(String(issue.key)))
     throw new TypeError("Invalid owned selection issue identity");
-  created.issueKey = String(issue.key);
+  return String(issue.key);
 }
 
 async function issueObjects(session, created, tag) {
@@ -104,13 +104,15 @@ export function selectionNames(_fixture, tag) {
     boardName: `Auswahl Board ${tag}`,
     sprintName: `Auswahl Sprint ${tag}`,
     issueSummary: `Auswahl Vorgang ${tag}`,
+    linkTargetSummary: `Auswahl Ziel ${tag}`,
     watcherName: actorDetails("assignee").name,
   };
 }
 
 /** Creates every owned object into `created` (from `selectionNames`), recording ids as it goes. */
 export async function createSelectionObjects(session, fixture, tag, created) {
-  await ownedIssue(session, fixture, created);
+  created.issueKey = await ownedIssue(session, fixture, created.issueSummary);
+  created.linkTargetKey = await ownedIssue(session, fixture, created.linkTargetSummary);
   await projectObjects(session, fixture, created);
   await issueObjects(session, created, tag);
   await agileObjects(session, fixture, created);
@@ -131,15 +133,23 @@ const removal = (session, path, auth) =>
     ? labRequest(session, "POST", `${path}/removeAndSwap`, auth, {})
     : labRequest(session, "DELETE", path, auth);
 
+/** The snapshot key of a removal: a path, or the `key` of a `{ key, path, actor }` removal. */
+export const removalKey = (entry) =>
+  typeof entry === "string" ? entry : (entry.key ?? entry.path);
+
 /**
- * Removes native objects by exact path; an already absent object is not an error. Every path is
- * attempted even when an earlier one fails, so one refusal never leaks the remaining objects.
+ * Removes native objects by exact path; an already absent object is not an error. An entry is a
+ * path (removed as `actor`) or `{ path, actor }` for an object only its own actor can remove, such
+ * as a vote. Every entry is attempted even when an earlier one fails, so one refusal never leaks
+ * the remaining objects.
  */
-export async function removeNative(session, paths, actor = "admin") {
+export async function removeNative(session, entries, actor = "admin") {
   const failed = [];
-  for (const path of paths) {
+  for (const entry of entries) {
+    const path = typeof entry === "string" ? entry : entry.path;
+    const owner = typeof entry === "string" ? actor : entry.actor;
     try {
-      const response = await removal(session, path, basicAuth(session, actor));
+      const response = await removal(session, path, basicAuth(session, owner));
       if (!REMOVED.has(response.status)) failed.push(`${response.status} ${pathShape(path)}`);
     } catch (error) {
       failed.push(`${error instanceof Error ? error.name : "unknown"} ${pathShape(path)}`);
@@ -163,7 +173,6 @@ const ISSUE_FIELDS = [
   "labels",
   "components",
   "fixVersions",
-  "issuelinks",
   "comment",
   "attachment",
   "subtasks",
@@ -180,6 +189,21 @@ function issueState(fields) {
   );
 }
 
+const LAB_ACTORS = ["api", "assignee", "editor", "restricted"];
+
+/** A vote is removed by its own voter, so a lab actor's vote is owned and a foreign one is not. */
+function voteRows(issue, votes) {
+  const actors = new Map(LAB_ACTORS.map((actor) => [actorDetails(actor).name, actor]));
+  return (votes.voters ?? []).map((row) => {
+    const actor = actors.get(row.name);
+    const value =
+      actor === undefined
+        ? { owned: false, label: String(row.name ?? "") }
+        : { owned: true, label: row.name, removal: { path: `${issue}/votes`, actor } };
+    return [`${issue}/votes@${row.name}`, value];
+  });
+}
+
 /**
  * Every object a write turn could add in the scope, keyed by the native path that removes it, with
  * a label that tells owned objects (carrying the run tag) from foreign ones. Comparing a snapshot
@@ -189,7 +213,7 @@ export async function scopeSnapshot(session, fixture, created) {
   const project = `/rest/api/2/project/${encodeURIComponent(fixture.project)}`;
   const issue = `/rest/api/2/issue/${encodeURIComponent(created.issueKey)}`;
   const jql = encodeURIComponent(`project = ${fixture.project} ORDER BY created DESC`);
-  const [components, versions, links, worklogs, properties, watchers, state, issues] =
+  const [components, versions, links, worklogs, properties, watchers, votes, state, issues] =
     await Promise.all([
       read(session, `${project}/components`),
       read(session, `${project}/versions`),
@@ -197,7 +221,8 @@ export async function scopeSnapshot(session, fixture, created) {
       read(session, `${issue}/worklog`),
       read(session, `${issue}/properties`),
       read(session, `${issue}/watchers`),
-      read(session, `${issue}?fields=${ISSUE_FIELDS.join(",")}`),
+      read(session, `${issue}/votes`),
+      read(session, `${issue}?fields=${ISSUE_FIELDS.join(",")},issuelinks`),
       read(session, `/rest/api/2/search?jql=${jql}&fields=summary&maxResults=100`),
     ]);
   const own = (label) => ({ owned: true, label: String(label ?? "") });
@@ -218,6 +243,11 @@ export async function scopeSnapshot(session, fixture, created) {
         `${issue}/watchers?username=${encodeURIComponent(row.name)}`,
         own(row.name),
       ]),
+      ...(state.fields?.issuelinks ?? []).map((row) => [
+        `/rest/api/2/issueLink/${row.id}`,
+        own(row.type?.name),
+      ]),
+      ...voteRows(issue, votes),
     ]),
   };
 }
@@ -228,11 +258,12 @@ export async function scopeSnapshot(session, fixture, created) {
  * the lane does not own and leaves in place, `issueChanged` a change to the owned issue's fields.
  */
 export function strayWrites(before, after, expected, marker) {
+  const expectedKeys = new Set(expected.map(removalKey));
   const remove = [];
   let foreign = 0;
   for (const [path, row] of after.objects) {
-    if (before.objects.has(path) || expected.includes(path)) continue;
-    if (row.owned || row.label.includes(marker)) remove.push(path);
+    if (before.objects.has(path) || expectedKeys.has(path)) continue;
+    if (row.owned || row.label.includes(marker)) remove.push(row.removal ?? path);
     else foreign += 1;
   }
   const issueChanged = before.issueState === after.issueState ? 0 : 1;
@@ -258,6 +289,10 @@ export async function removeSelectionObjects(session, created) {
     ...optional(
       created.issueKey,
       `/rest/api/2/issue/${encodeURIComponent(created.issueKey)}?deleteSubtasks=true`,
+    ),
+    ...optional(
+      created.linkTargetKey,
+      `/rest/api/2/issue/${encodeURIComponent(created.linkTargetKey)}?deleteSubtasks=true`,
     ),
   ]);
   await attempt(
