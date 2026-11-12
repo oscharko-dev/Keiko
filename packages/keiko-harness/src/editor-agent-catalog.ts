@@ -81,7 +81,7 @@ const SCALAR_TYPES: ReadonlySet<string> = new Set([
   "null",
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -282,15 +282,19 @@ function actionDisposition(result: EditorAgentActionResult): LegacyPortCatalogRe
     : EDITOR_FAILURE_DISPOSITIONS[result.failure.code];
 }
 
+type EditorErrorKind = Extract<EditorAgentToolOutput, { readonly ok: false }>["error"]["kind"];
+
+function isEditorErrorKind(kind: string): kind is EditorErrorKind {
+  return Object.hasOwn(EDITOR_ERROR_DISPOSITIONS, kind);
+}
+
 function failedEditorDisposition(
   value: Record<string, unknown>,
 ): LegacyPortCatalogResultDisposition {
   const error = isRecord(value.error) ? value.error : undefined;
   const kind = error?.kind;
-  return typeof kind === "string" && Object.hasOwn(EDITOR_ERROR_DISPOSITIONS, kind)
-    ? EDITOR_ERROR_DISPOSITIONS[
-        kind as Extract<EditorAgentToolOutput, { readonly ok: false }>["error"]["kind"]
-      ]
+  return typeof kind === "string" && isEditorErrorKind(kind)
+    ? EDITOR_ERROR_DISPOSITIONS[kind]
     : RESULT_CONTRACT_FAILED;
 }
 

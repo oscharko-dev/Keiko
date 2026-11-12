@@ -41,6 +41,7 @@ import {
   type ToolHandlerSetIdentity,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type { HarnessCatalogContext, HarnessCatalogFactory } from "./catalog-runtime.js";
+import { isRecord } from "./editor-agent-catalog.js";
 import type { ToolCallResult, ToolPort } from "./ports.js";
 
 type CompiledProjection = ReturnType<typeof compileToolProjection>;
@@ -378,10 +379,14 @@ async function executeOrFail(
   | { readonly failed: true; readonly disposition: FailureDisposition }
 > {
   try {
+    // A legacy port takes an argument object. The catalog validated the arguments against the
+    // tool's input schema, but a schema need not declare an object root, so this is checked here.
+    const args = invocation.arguments;
+    if (!isRecord(args)) throw new TypeError("Bound tool arguments are not an object");
     const result = await port.execute({
       toolCallId,
       toolName: alias,
-      arguments: invocation.arguments as Record<string, unknown>,
+      arguments: args,
       signal: context.signal,
     });
     return { result };

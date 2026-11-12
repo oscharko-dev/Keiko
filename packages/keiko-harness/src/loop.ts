@@ -282,13 +282,15 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
     const postDispatchGuard = checkWallTimePostDispatch(ctx, dispatched);
     state = transition(ctx, state, postDispatchGuard ?? dispatched);
   }
-  if (!isTerminalHarnessState(state)) {
-    ctx.failure = toFailure(HARNESS_CODES.INTERNAL, "state-machine safety step limit exceeded");
-    state = transition(ctx, state, {
-      to: "failed",
-      reason: "internal: state-machine step limit exceeded",
-    });
+  if (isTerminalHarnessState(state)) {
+    emitTerminal(ctx, state);
+    return state;
   }
-  emitTerminal(ctx, state);
-  return state as RunOutcome;
+  ctx.failure = toFailure(HARNESS_CODES.INTERNAL, "state-machine safety step limit exceeded");
+  transition(ctx, state, {
+    to: "failed",
+    reason: "internal: state-machine step limit exceeded",
+  });
+  emitTerminal(ctx, "failed");
+  return "failed";
 }
