@@ -6,11 +6,16 @@ import {
   type ClientErrorEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
-function safeProperty(error: unknown, key: string): unknown {
+function safeProperty(error: unknown, key: "cause" | "stack"): unknown {
   if ((typeof error !== "object" || error === null) && typeof error !== "function")
     return undefined;
   try {
-    return Reflect.get(error, key);
+    switch (key) {
+      case "cause":
+        return "cause" in error ? error.cause : undefined;
+      case "stack":
+        return "stack" in error ? error.stack : undefined;
+    }
   } catch {
     recordClientDiagnosticLoss("errorsSuppressed");
     return undefined;
