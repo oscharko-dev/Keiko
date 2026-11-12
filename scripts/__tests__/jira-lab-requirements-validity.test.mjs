@@ -1,5 +1,5 @@
 // The requirements scorecard never grades an infrastructure outage as a product failure (#4173).
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,7 +15,9 @@ import { scorecardMarkdown } from "../testing/jira-chat-lab/requirements/scoreca
 import {
   classifyJourney,
   invalidCheck,
+  gatewayEvidenceTrusted,
   gradeException,
+  redactLabDetail,
   isDeadlineAbort,
   isTransportFailure,
   showsOutage,
@@ -157,7 +159,13 @@ describe("Activity Log gateway evidence", () => {
     toMs: Date.parse("2026-11-12T05:01:00.000Z"),
     pid: 7,
   };
-  const write = (lines) => writeFileSync(join(root, "logs", "activity-1.jsonl"), lines.join("\n"));
+  // The mtime is fixed inside the window so the fixture never depends on the host clock.
+  const write = (lines) => {
+    const file = join(root, "logs", "activity-1.jsonl");
+    writeFileSync(file, lines.join("\n"));
+    const inside = new Date(window.fromMs + 30_000);
+    utimesSync(file, inside, inside);
+  };
 
   it("counts a failed call that exhausted its retries as an outage, a bare failure as a limit", () => {
     write([
@@ -227,6 +235,18 @@ describe("Activity Log gateway evidence", () => {
       productFailures: 0,
       unparsed: 1,
     });
+  });
+
+  it("treats an absent log directory or an unparsable gateway line as untrusted evidence", () => {
+    const missing = join(root, "absent");
+    expect(gatewayEvidenceTrusted(missing, readGatewayFailures(missing, window))).toBe(false);
+    write([line("gateway.chat.started", T(1), "a")]);
+    expect(
+      gatewayEvidenceTrusted(join(root, "logs"), readGatewayFailures(join(root, "logs"), window)),
+    ).toBe(true);
+    write(['{"op":"gateway.chat.failed", truncated']);
+    const failures = readGatewayFailures(join(root, "logs"), window);
+    expect(gatewayEvidenceTrusted(join(root, "logs"), failures)).toBe(false);
   });
 
   it("reads an absent log directory as no evidence", () => {
@@ -349,5 +369,31 @@ describe("counts, markdown and trend", () => {
     repeated.results[0].invalidRuns = 2;
     expect(scorecardMarkdown(repeated)).toContain("invalid (2 of 3 runs invalid)");
     expect(scorecardMarkdown(report(["green"]))).not.toContain("INVALID RUN");
+  });
+});
+
+describe("untrusted gateway evidence and redacted details", () => {
+  it("grades a failed journey invalid, not red, when its gateway evidence is untrusted", () => {
+    const graded = classifyJourney(
+      journey("red", { turnFailure: "model call failed" }),
+      NONE,
+      false,
+    );
+    expect(graded).toMatchObject({ status: "invalid", reason: "lab-error", covers: [] });
+    const check = journey("red", { turnFailure: "model call failed" });
+    expect(classifyJourney(check, NONE, true)).toBe(check);
+    const clean = journey("unverified");
+    expect(classifyJourney(clean, NONE, false)).toBe(clean);
+    const green = journey("green");
+    expect(classifyJourney(green, NONE, false)).toBe(green);
+  });
+
+  it("redacts endpoints and credentials but keeps the lab's loopback address", () => {
+    const text = "fetch https://corp.example/v1 via 10.1.2.3:8443 Bearer abc.def 127.0.0.1:8080";
+    expect(redactLabDetail(text)).toBe(
+      "fetch [redacted-url] via [redacted-host] [redacted-credential] 127.0.0.1:8080",
+    );
+    const graded = gradeException(new TypeError("connect ECONNREFUSED 10.1.2.3:8443"));
+    expect(graded.detail).toBe("lab error: connect ECONNREFUSED [redacted-host]");
   });
 });

@@ -5,11 +5,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 
 const calls = [];
-const failures = { restore: false };
+const failures = { restore: false, lift: false };
 vi.mock("../testing/jira-chat-lab/seed-admin.mjs", () => ({
   withLabAdmin: async (_session, run) => run("page"),
   setFixtureFieldRequirement: async (_page, _session, required) => {
     calls.push(required);
+    if (!required && failures.lift) throw new TypeError("lift refused");
     if (required && failures.restore) throw new TypeError("restore refused");
   },
   configureFixtureTransition: async () => undefined,
@@ -22,6 +23,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   calls.length = 0;
   failures.restore = false;
+  failures.lift = false;
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true });
 });
 function session(fields) {
@@ -98,5 +100,26 @@ it("reports a failed restore after successful work", async () => {
   const lab = session(FIELD);
   failures.restore = true;
   await expect(withFixtureFieldOptional(lab, async () => 1)).rejects.toThrow("restore refused");
+  expect(existsSync(marker(lab))).toBe(true);
+});
+
+it("restores the requirement when lifting it fails partway", async () => {
+  const lab = session(FIELD);
+  failures.lift = true;
+  await expect(withFixtureFieldOptional(lab, async () => 1)).rejects.toThrow("lift refused");
+  expect(calls).toEqual([false, true]);
+  expect(existsSync(marker(lab))).toBe(false);
+});
+
+it("records a failed restore even when the work's error already has a cause", async () => {
+  const lab = session(FIELD);
+  failures.restore = true;
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const error = await withFixtureFieldOptional(lab, async () => {
+    throw new TypeError("bulk refused", { cause: new Error("original cause") });
+  }).catch((value) => value);
+  expect(error.message).toBe("bulk refused");
+  expect(error.cause.message).toBe("original cause");
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('"restoreFailed":true'));
   expect(existsSync(marker(lab))).toBe(true);
 });

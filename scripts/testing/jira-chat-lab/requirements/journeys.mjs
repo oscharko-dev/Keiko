@@ -35,8 +35,10 @@ import {
   invalidCheck,
   isDeadlineAbort,
   isTransportFailure,
+  gatewayEvidenceTrusted,
   readGatewayFailures,
   redCheck,
+  redactLabDetail,
   showsOutage,
 } from "./validity.mjs";
 import { sequentially } from "./journey-support.mjs";
@@ -488,6 +490,22 @@ function reportJourney(id, { status, detail }, started, run) {
   );
 }
 
+/**
+ * S14 replaces the shared specification. A restoration that failed leaves a stale or partly
+ * indexed specification: the run is invalid and no later run may start from that fixture.
+ */
+async function restoreSpecification(ctx, check) {
+  try {
+    await ctx.replaceSpecification(1);
+    return check;
+  } catch (error) {
+    const detail = redactLabDetail(String(error?.message ?? error)).slice(0, 200);
+    console.log(JSON.stringify({ operation: "requirements-restore", error: detail }));
+    ctx.specificationRestoreFailed = true;
+    return invalidCheck("lab-error", `specification restore failed: ${detail}`, check);
+  }
+}
+
 /** One journey in its own fresh bound Chat; a lab error is an invalid check, a failed Keiko route stays red. */
 async function runJourney({ ctx, session, modelId, capsuleId, id }) {
   let check;
@@ -512,13 +530,7 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
   } catch (error) {
     check = gradeException(error);
   }
-  if (id === "S14") {
-    await ctx.replaceSpecification(1).catch((error) => {
-      console.log(
-        JSON.stringify({ operation: "requirements-restore", error: String(error.message) }),
-      );
-    });
-  }
+  if (id === "S14") check = await restoreSpecification(ctx, check);
   return check;
 }
 
@@ -551,16 +563,18 @@ export async function modelUnavailable(ctx, session, modelId) {
     );
     return undefined;
   } catch (error) {
-    const detail = String(error?.message ?? error).slice(0, 200);
-    const failures = readGatewayFailures(chatReadLogDirectory(session), {
+    const detail = redactLabDetail(String(error?.message ?? error)).slice(0, 200);
+    const logRoot = chatReadLogDirectory(session);
+    const failures = readGatewayFailures(logRoot, {
       fromMs,
       toMs: Date.now(),
       pid: process.pid,
     });
+    const evidenceTrusted = gatewayEvidenceTrusted(logRoot, failures);
     // The readiness turn's own deadline fired: a hung model is unavailable, not a product failure.
     const unavailable =
       showsOutage(failures) || isTransportFailure(detail) || isDeadlineAbort(error);
-    return { unavailable, detail };
+    return { unavailable, evidenceTrusted, detail };
   }
 }
 
@@ -568,18 +582,18 @@ export async function modelUnavailable(ctx, session, modelId) {
 async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
   const refused = await readiness(ctx, session, modelId);
   if (refused !== undefined) {
-    return refused.unavailable
-      ? invalidCheck("model-unavailable", `model unavailable: ${refused.detail}`)
-      : redCheck("product-route-failed", `readiness turn failed: ${refused.detail}`);
+    if (refused.unavailable)
+      return invalidCheck("model-unavailable", `model unavailable: ${refused.detail}`);
+    // A failure whose gateway evidence is unreadable cannot be attributed to the product.
+    if (refused.evidenceTrusted === false)
+      return invalidCheck("lab-error", `readiness evidence unavailable: ${refused.detail}`);
+    return redCheck("product-route-failed", `readiness turn failed: ${refused.detail}`);
   }
   const fromMs = Date.now();
   const check = await runJourney({ ctx, session, modelId, capsuleId, id });
-  const failures = readGatewayFailures(chatReadLogDirectory(session), {
-    fromMs,
-    toMs: Date.now(),
-    pid: process.pid,
-  });
-  return classifyJourney(check, failures);
+  const logRoot = chatReadLogDirectory(session);
+  const failures = readGatewayFailures(logRoot, { fromMs, toMs: Date.now(), pid: process.pid });
+  return classifyJourney(check, failures, gatewayEvidenceTrusted(logRoot, failures));
 }
 
 /**
@@ -640,7 +654,9 @@ export async function runJourneys({
 
 async function timedRun(args, run) {
   const started = Date.now();
-  const check = await gradedRun(args);
+  const check = args.ctx.specificationRestoreFailed
+    ? invalidCheck("lab-error", "specification restore failed in an earlier run")
+    : await gradedRun(args);
   check.durationMs = Date.now() - started;
   reportJourney(args.id, check, started, run);
   return check;

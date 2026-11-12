@@ -12,7 +12,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { basicAuth, checked, labRequest, loadSession } from "../lab-client.mjs";
 import { privateJson } from "../private-json.mjs";
-import { withFixtureFieldOptional } from "../seed-fields.mjs";
+import { recoverFixtureFieldRequirement, withFixtureFieldOptional } from "../seed-fields.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { LARGE_PROJECT, largePlan, largeTruth } from "./large-project.mjs";
 
@@ -357,14 +357,16 @@ function cliOptions(args) {
   return { directory, only };
 }
 
-async function main() {
-  const { directory, only } = cliOptions(process.argv.slice(2));
+export async function main(args) {
+  const { directory, only } = cliOptions(args);
   const session = loadSession(directory);
   const context = {
     session,
     auth: basicAuth(session, "admin"),
     truthPath: join(session.directory, "requirements-truth.json"),
   };
+  // A marker left by a seed whose requirement restore failed must be recovered before any skip.
+  await recoverFixtureFieldRequirement(session);
   if (only === undefined && existsSync(context.truthPath)) {
     console.log(JSON.stringify({ operation: "requirements-seed", skipped: "truth exists" }));
     return;
@@ -381,4 +383,5 @@ async function main() {
   });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  await main(process.argv.slice(2));

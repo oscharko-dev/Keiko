@@ -12,6 +12,14 @@ const fixture = vi.hoisted(() => ({
   sends: 0,
   aborts: 0,
   readinessError: undefined,
+  indexes: 0,
+  failIndexAfter: undefined,
+  refuseLateIndex(name) {
+    if (name !== "pod-index") return;
+    this.indexes += 1;
+    if (this.failIndexAfter !== undefined && this.indexes > this.failIndexAfter)
+      throw new Error("index refused at https://litellm.internal.example/v1");
+  },
 }));
 
 vi.mock("node:timers/promises", () => ({
@@ -28,9 +36,14 @@ vi.mock("../testing/jira-chat-lab/requirements/license-window.mjs", () => ({
     ids.reduce((previous, id) => previous.then(() => run(id)), Promise.resolve()),
 }));
 vi.mock("../testing/jira-chat-lab/requirements/journey-checks.mjs", () => ({
-  JOURNEY_IDS: ["S17"],
+  JOURNEY_IDS: ["S17", "S14"],
   JOURNEYS: {
     S17: async (ctx, chat) => ({
+      status: "unverified",
+      covers: [],
+      ...(await ctx.turn(chat, "Synthetischer Lab-Turn")),
+    }),
+    S14: async (ctx, chat) => ({
       status: "unverified",
       covers: [],
       ...(await ctx.turn(chat, "Synthetischer Lab-Turn")),
@@ -55,6 +68,7 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
     withLiveChat: async ({ run }) => run(fixture.live),
     jsonRequest: async (_origin, _cookie, name, _path, _body, _method, signal) => {
       if (name === "readiness" && fixture.readinessError) throw fixture.readinessError;
+      fixture.refuseLateIndex(name);
       if (Object.hasOwn(responses, name)) return responses[name];
       switch (name) {
         case "observe": {
@@ -100,6 +114,8 @@ beforeEach(() => {
     sends: 0,
     aborts: 0,
     readinessError: undefined,
+    indexes: 0,
+    failIndexAfter: undefined,
     live: {
       projectPath: directory,
       origin: "http://127.0.0.1:19999",
@@ -169,6 +185,37 @@ describe("requirements lab turn-limit provenance", () => {
     expect(turn.status).toBe("red");
     expect(turn.reason).toBe("product-route-failed");
     expect(fixture.sends).toBe(0);
+  });
+
+  it("grades a failed journey invalid when its gateway log evidence is missing", async () => {
+    fixture.mode = "product-failure";
+    const turn = await observedTurn();
+    expect(turn).toMatchObject({ status: "invalid", reason: "lab-error", covers: [] });
+  });
+
+  it("grades a failed readiness turn invalid when its gateway evidence is missing", async () => {
+    fixture.readinessError = new TypeError("Live Chat HTTP stage failed");
+    const turn = await observedTurn({ readiness: undefined });
+    expect(turn).toMatchObject({ status: "invalid", reason: "lab-error" });
+    expect(fixture.sends).toBe(0);
+  });
+
+  it("invalidates S14 and starts no further run when the specification restore fails", async () => {
+    fixture.mode = "completed";
+    fixture.failIndexAfter = 1;
+    const result = await runJourneys({
+      session: { directory },
+      directory,
+      modelId: "synthetic-model",
+      embeddingModelId: "synthetic-embedding",
+      truth: {},
+      ids: ["S14"],
+      repeat: 3,
+    });
+    expect(fixture.sends).toBe(1);
+    expect(result.S14.runs.map((run) => run.status)).toEqual(["invalid", "invalid", "invalid"]);
+    expect(result.S14.runs[0].detail).toContain("specification restore failed");
+    expect(JSON.stringify(result.S14)).not.toContain("litellm.internal.example");
   });
 
   it("runs a journey --repeat times in fresh Chats and aggregates the runs", async () => {

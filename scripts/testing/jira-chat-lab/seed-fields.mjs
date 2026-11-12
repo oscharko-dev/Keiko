@@ -146,9 +146,10 @@ export async function withFixtureFieldOptional(session, run) {
   if (!fields.some((field) => field.name === REQUIRED_FIELD_NAME)) return run();
   await recoverFixtureFieldRequirement(session);
   privateJson(markerPath(session), { lifted: true });
-  await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, false));
   let result;
   try {
+    // A lift that fails partway may already have changed the checkbox: it is restored as well.
+    await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, false));
     result = await run();
   } catch (error) {
     await restoreAfterFailure(session, error);
@@ -169,5 +170,15 @@ async function restoreAfterFailure(session, error) {
     await restoreRequirement(session);
   } catch (restore) {
     error.cause ??= restore;
+    // The cause may already name the work's own failure: the restoration failure is always
+    // recorded, as a closed body-free line, so the retained marker is never unexplained.
+    console.log(
+      JSON.stringify({
+        operation: "jira-lab-admin",
+        case: "required-field",
+        restoreFailed: true,
+        errorClass: restore?.constructor?.name ?? "unknown",
+      }),
+    );
   }
 }

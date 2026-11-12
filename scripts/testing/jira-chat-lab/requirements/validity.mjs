@@ -166,6 +166,24 @@ export const showsOutage = (failures) => failures.outages > 0;
 export const isDeadlineAbort = (error) =>
   error?.name === "TimeoutError" || error?.name === "AbortError";
 
+// Exception text reaches the scorecard: a URL, a credential header or a non-loopback address can
+// name a provider endpoint, so only the lab's own loopback hosts stay readable.
+const URL_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/\S+/gi;
+const BEARER_TEXT = /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
+const IPV4_TEXT = /\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/g;
+
+/** Redacts endpoints and credentials from a lab exception text before it becomes evidence. */
+export function redactLabDetail(text) {
+  return String(text)
+    .replace(URL_TEXT, "[redacted-url]")
+    .replace(BEARER_TEXT, "[redacted-credential]")
+    .replace(IPV4_TEXT, (match) => (match.startsWith("127.") ? match : "[redacted-host]"));
+}
+
+/** Whether the gateway evidence of a window can be trusted: its log exists and every line parsed. */
+export const gatewayEvidenceTrusted = (root, failures) =>
+  existsSync(root) && failures.unparsed === 0;
+
 /** A check the laboratory cannot trust: it credits no obligation and names its closed reason. */
 export function invalidCheck(reason, detail, base = {}) {
   if (!INVALID_REASONS.includes(reason)) throw new TypeError(`Unknown invalid reason ${reason}`);
@@ -190,21 +208,34 @@ export function gradeException(error, base = {}) {
   if (error?.message === ROUTE_FAILURE_MESSAGE) {
     return redCheck("product-route-failed", `Keiko route failed: ${error.message}`, base);
   }
-  return invalidCheck("lab-error", `lab error: ${error?.message ?? String(error)}`, base);
+  return invalidCheck(
+    "lab-error",
+    `lab error: ${redactLabDetail(error?.message ?? String(error))}`,
+    base,
+  );
 }
+
+const failedWithoutEvidence = (check, evidenceTrusted) =>
+  !evidenceTrusted && (check.turnFailure ?? check.failure) !== undefined;
 
 /**
  * Re-grades a finished journey check against the gateway evidence of its window.
  *  - A green check stays green: an independent Jira or truth oracle proved the outcome.
  *  - Any other check during which a model call failed after exhausting its
  *    retries (see `readGatewayFailures`), or whose turn failed on a transport error, is invalid.
+ *  - Any other non-green check whose gateway evidence is unavailable or malformed
+ *    (`evidenceTrusted` false) and that carries a failure is invalid: no evidence is not evidence of no outage.
  *  - A failed call that was not retried (a limit such as context overflow) stays as graded.
  */
-export function classifyJourney(check, failures) {
+export function classifyJourney(check, failures, evidenceTrusted = true) {
   if (check.status === "green" || check.status === "invalid") return check;
   const counts = `${failures.outages} infrastructure failures, ${failures.circuit} circuit events`;
   if (showsOutage(failures) || isTransportFailure(check.turnFailure ?? check.failure)) {
     return invalidCheck("gateway-failure", `${check.detail ?? ""}; ${counts}`, check);
   }
+  // Absent or malformed gateway evidence is not evidence of zero outages: a failed journey whose
+  // model-call evidence the laboratory cannot read is untrusted, never a product failure.
+  if (failedWithoutEvidence(check, evidenceTrusted))
+    return invalidCheck("lab-error", `${check.detail ?? ""}; gateway evidence unavailable`, check);
   return check;
 }
