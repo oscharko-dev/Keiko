@@ -320,8 +320,9 @@ required seed.
 | 2026-11-10 | `712f39913` (one defect definition, #4332) plus five lab-only commits, local head `d5b6de1d8` | 12 of 13       | off-by-one missed                                                           | 0                              | 16 complete, 1 model-failed |
 | 2026-11-12 | `ba4a5993b` (three lines after a change)                                                      | 12 of 13       | workspace-relative missed                                                   | 0                              | 17 complete                 |
 
-Each tree is the checkout commit the run's evidence records. #4330 merged with a second commit,
-`883a8b355`; the runs from 2026-11-10 on include it.
+Each tree is the checkout commit the run's evidence records. #4330 merged as the squash
+commit `1ed4787e9`, which also contains its second commit `883a8b355`; the trees from 2026-11-10 on
+include `1ed4787e9`.
 
 Reading of these runs:
 
