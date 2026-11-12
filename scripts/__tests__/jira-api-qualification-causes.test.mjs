@@ -202,6 +202,7 @@ describe("driver evidence", () => {
       qualificationAuxiliaryFailure: {
         tool: "jira.create-version",
         identity: "POST /rest/api/2/version",
+        rootCause: "product",
       },
     };
     dispatch.mockRejectedValue(new TypeError("auxiliary failed"));
@@ -211,7 +212,13 @@ describe("driver evidence", () => {
       kind: "auxiliary",
       tool: "jira.create-version",
       identity: "POST /rest/api/2/version",
+      rootCause: "product",
     });
+    // Healthy contrast: a root that left no visible cause is no explanation.
+    const invisible = await run(specification(), {
+      qualificationAuxiliaryFailure: { tool: "jira.create-version", identity: "POST x" },
+    });
+    expect(invisible.cause).toBe("undetermined");
     const prepared = await run(
       specification({
         prepare: async () => {
@@ -349,7 +356,12 @@ describe("cause table", () => {
   it("leaves graded rows alone, cascades with the blocker and counts every cause", () => {
     const graded = { runtimeAvailability: "executable" };
     expect(annotateCause(graded)).toBe(graded);
-    const blocker = { kind: "case", tool: "jira.create-workflow-scheme-draft", identity: "POST x" };
+    const blocker = {
+      kind: "case",
+      tool: "jira.create-workflow-scheme-draft",
+      identity: "POST x",
+      rootCause: "lab",
+    };
     const cascade = annotateCause(row({ failure: "blocked-by-root" }), { blockedBy: blocker });
     expect(cascade).toMatchObject({ cause: "cascade", blockedBy: blocker });
     const operations = [
@@ -379,7 +391,7 @@ describe("cause table", () => {
       }),
     );
     expect(mismatch).toMatchObject({ cause: "undetermined", suspect: "product" });
-    const other = annotateCause(row({ failure: "readback-mismatch", ...witness(400) }));
+    const other = annotateCause(row({ failure: "readback-mismatch", ...witness(404) }));
     expect(other.suspect).toBeUndefined();
     expect(suspectSummary([mismatch, other])).toEqual({ product: 1 });
     expect(
@@ -395,6 +407,89 @@ describe("cause table", () => {
     outer.stack =
       "Error: outer\n    at y (/repo/scripts/testing/jira-chat-lab/api-qualification-cases.mjs:9:1)";
     expect(describeFailure(outer).origin).toBe("product");
+  });
+  describe("attribution holes (second audit)", () => {
+    const succeeded = { result: { data: { outcome: "succeeded" } } };
+    it("honours a product origin for failed preparation, with a lab control", () => {
+      expect(
+        annotateCause(row({ failure: "prepare-failed", detail: { origin: "product" } })).cause,
+      ).toBe("product");
+      expect(
+        annotateCause(row({ failure: "prepare-precondition", detail: { origin: "product" } }))
+          .cause,
+      ).toBe("product");
+      expect(
+        annotateCause(row({ failure: "prepare-failed", detail: { origin: "lab" } })).cause,
+      ).toBe("lab");
+    });
+    it("does not blame the lab for an oracle that failed after a successful 2xx write", () => {
+      const wrongObject = annotateCause(
+        row({
+          failure: "oracle-read-refused",
+          mutation: true,
+          dispatch: succeeded,
+          ...witness(200),
+        }),
+      );
+      expect(wrongObject).toMatchObject({ cause: "undetermined", suspect: "product" });
+      // Controls: a read, a failed write, or a product that did not succeed keeps the lab fault.
+      for (const control of [
+        row({
+          failure: "oracle-read-refused",
+          mutation: false,
+          dispatch: succeeded,
+          ...witness(200),
+        }),
+        row({
+          failure: "oracle-read-refused",
+          mutation: true,
+          dispatch: succeeded,
+          ...witness(403),
+        }),
+        row({
+          failure: "oracle-read-refused",
+          mutation: true,
+          dispatch: { result: { data: { outcome: "failed" } } },
+          ...witness(200),
+        }),
+      ])
+        expect(annotateCause(control)).toMatchObject({ cause: "lab" });
+    });
+    it("suspects the product when Jira rejects Keiko's own request as invalid", () => {
+      for (const status of [400, 422])
+        expect(
+          annotateCause(row({ failure: "readback-mismatch", ...witness(status) })),
+        ).toMatchObject({
+          cause: "undetermined",
+          suspect: "product",
+        });
+      // Controls: other 4xx answers stay ambiguous without a suspect.
+      for (const status of [404, 409])
+        expect(
+          annotateCause(row({ failure: "readback-mismatch", ...witness(status) })).suspect,
+        ).toBeUndefined();
+    });
+    it("treats lab-configuration refusals as lab and every other local refusal as product", () => {
+      for (const reason of ["capability-held", "approval-required", "auth-failed"])
+        expect(
+          annotateCause(
+            row({ failure: "product-refused", product: { outcome: "rejected", reason } }),
+          ).cause,
+        ).toBe("lab");
+      for (const reason of ["conflict", "invalid-arguments", "unavailable"])
+        expect(
+          annotateCause(
+            row({ failure: "product-refused", product: { outcome: "rejected", reason } }),
+          ).cause,
+        ).toBe("product");
+    });
+    it("cascades only from a root with a visible cause", () => {
+      const blocker = { kind: "case", tool: "jira.a", identity: "POST a" };
+      expect(annotateCause(row({}), { blockedBy: { ...blocker, rootCause: "lab" } }).cause).toBe(
+        "cascade",
+      );
+      expect(annotateCause(row({}), { blockedBy: blocker }).cause).toBe("undetermined");
+    });
   });
   it("classifies Jira answers into closed categories", () => {
     expect(jiraClass([])).toBe("none");

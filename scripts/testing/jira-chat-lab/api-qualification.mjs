@@ -434,6 +434,14 @@ export async function runQualificationCase(
   );
 }
 
+/** The first failed auxiliary is the blocker; its own cause is named only when its row carries one. */
+function noteAuxiliaryFailure(context, tool, identity, evidence) {
+  context.qualificationAuxiliaryFailure ??= {
+    tool,
+    identity,
+    ...(evidence.cause === undefined ? {} : { rootCause: evidence.cause }),
+  };
+}
 function attachFixtureDispatcher(
   context,
   chat,
@@ -473,7 +481,7 @@ function attachFixtureDispatcher(
       report,
     );
     if (evidence.runtimeAvailability !== "executable")
-      context.qualificationAuxiliaryFailure ??= { tool, identity: operation.identity };
+      noteAuxiliaryFailure(context, tool, operation.identity, evidence);
     assert.equal(
       evidence.runtimeAvailability,
       "executable",
@@ -486,7 +494,9 @@ function attachFixtureDispatcher(
 /** The first declared root cause of this case that already failed earlier in the run. */
 function failedRoot(specification, failedRoots) {
   const tool = (specification.dependsOn ?? []).find((root) => failedRoots.has(root));
-  return tool === undefined ? undefined : { kind: "case", tool, identity: failedRoots.get(tool) };
+  if (tool === undefined) return undefined;
+  const root = failedRoots.get(tool);
+  return { kind: "case", tool, identity: root.identity, rootCause: root.cause };
 }
 /**
  * Root-cause cases run before their declared dependents; every other case keeps its position, so the
@@ -567,7 +577,10 @@ async function executeCases(context, specifications, report, directory, witness,
     });
     recordLeftoverState(report, evidence);
     if (evidence.runtimeAvailability === "unknown")
-      state.failedRoots.set(specification.tool, specification.identity);
+      state.failedRoots.set(specification.tool, {
+        identity: specification.identity,
+        cause: evidence.cause,
+      });
     privateJson(join(directory, report.file), report);
     // A failure before any native effect leaves nothing to reconcile; the run continues.
     if (unknownAfterEffect(evidence, witness)) throw new ReconcileRequiredError();
