@@ -202,8 +202,13 @@ describe("gradeSelection", () => {
     expect(
       gradeSelection(READ, { exchanges: [], gateway: other }, { tokens: ["High"] }).status,
     ).toBe("no-tool");
-    const exact = { exchanges: [call("jira_edit")], gateway };
-    expect(gradeSelection(WRITE, exact, { effect: { effects: 1 } }).status).toBe("alternative");
+    const stray = gradeSelection(WRITE, turn, { effect: { effects: 0, stray: 1 } });
+    expect(stray.status).toBe("wrong-tool");
+    const dashed = { ...healthy, rejected: { "keiko.jira.issue.property.keys": 1 } };
+    const keys = { id: "k", tool: "jira.issue-property-keys", effect: "read" };
+    expect(gradeSelection(keys, { exchanges: [], gateway: dashed }, { tokens: ["a"] }).status).toBe(
+      "wrong-arguments",
+    );
   });
 
   it("fails a correct write that also wrote objects the request did not ask for", () => {

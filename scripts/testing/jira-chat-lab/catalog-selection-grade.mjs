@@ -185,6 +185,21 @@ function untargetedVerdict(entry, calls, { tokens, effect }) {
   return { status: "no-tool", detail: "no operation call" };
 }
 
+/**
+ * A target the gateway refused for its arguments never reaches the transcript; the model did
+ * select it, so this is an argument failure, not a selection failure. An exact alternative wins,
+ * and a write that also wrote something else, or a wrong value, keeps that verdict.
+ */
+function refusedVerdict(entry, turn, verdict, effect) {
+  const refused = refusedTarget(turn.gateway, entry.tool);
+  const clean = (effect?.stray ?? 0) === 0 && effect?.wrongValue !== true;
+  if (refused === 0 || !clean || verdict.status === "alternative") return verdict;
+  return {
+    status: "wrong-arguments",
+    detail: `the target was called; ${refused} calls refused for their arguments`,
+  };
+}
+
 function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
@@ -196,17 +211,8 @@ function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
     return entry.effect === "write"
       ? { ...writeVerdict(target, effect, calls.length), path }
       : { ...readVerdict(target, tokens), path };
-  // A target the gateway refused for its arguments never reaches the transcript; the model did
-  // select it, so this is an argument failure, not a selection failure. An exact alternative wins.
   const verdict = untargetedVerdict(entry, calls, { tokens, effect });
-  const refused = refusedTarget(turn.gateway, entry.tool);
-  if (refused > 0 && verdict.status !== "alternative")
-    return {
-      status: "wrong-arguments",
-      path,
-      detail: `the target was called; ${refused} calls refused for their arguments`,
-    };
-  return { ...verdict, path };
+  return { ...refusedVerdict(entry, turn, verdict, effect), path };
 }
 
 const countOf = (runs, status) => runs.filter((value) => value === status).length;
@@ -226,7 +232,9 @@ export function summarizeSelection(attempts) {
     const invalid = countOf(row.runs, "invalid");
     const valid = row.runs.length - invalid;
     const selected = countOf(row.runs, "selected");
-    return { ...row, valid, selected, alternative: countOf(row.runs, "alternative"), invalid };
+    const alternative = countOf(row.runs, "alternative");
+    const wrongArguments = countOf(row.runs, "wrong-arguments");
+    return { ...row, valid, selected, alternative, wrongArguments, invalid };
   });
   const total = (key) => rows.reduce((sum, row) => sum + row[key], 0);
   const valid = total("valid");
@@ -238,6 +246,7 @@ export function summarizeSelection(attempts) {
     valid,
     selected: total("selected"),
     alternative: total("alternative"),
+    wrongArguments: total("wrongArguments"),
     invalid: total("invalid"),
     sufficient,
   };

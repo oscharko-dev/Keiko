@@ -234,11 +234,12 @@ describe("Activity Log gateway evidence", () => {
   });
 
   it("counts the gateway's tool refusals per canonical tool and the failed model calls", () => {
-    const refused = (ts, canonicalToolId, pid = 7) =>
+    const refused = (ts, canonicalToolId, pid = 7, reason = "invalid-arguments") =>
       JSON.stringify({
         op: "gateway.tool-catalog.rejected",
         ts,
         pid,
+        reason,
         ...(canonicalToolId ? { canonicalToolId } : {}),
       });
     write([
@@ -248,6 +249,8 @@ describe("Activity Log gateway evidence", () => {
       failed("gateway.chat.failed", T(5), "a", "validation-failed"),
       refused(T(6), "keiko.jira.other", 8),
       refused("2026-11-12T04:00:00.000Z", "keiko.jira.other"),
+      refused(T(7), "keiko.jira.stale", 7, "workspace-stale"),
+      JSON.stringify({ op: "gateway.chat.failed", ts: T(8), pid: 8, correlationId: "z" }),
     ]);
     expect(readToolRejections(root, window)).toEqual({
       rejected: { "keiko.jira.upsert.remote.link": 2 },

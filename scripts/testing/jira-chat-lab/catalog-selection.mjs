@@ -80,7 +80,12 @@ async function withGateway(session, turn) {
   const window = { fromMs: turn.fromMs, toMs: Date.now(), pid: process.pid };
   const root = join(chatReadLogDirectory(session), "logs");
   const counts = readGatewayFailures(root, window);
-  const tools = readToolRejections(root, window);
+  // An aborted turn may keep running on the server, and its late refusals would land in the next
+  // attempt's window, so a turn the lane aborted carries no refusal evidence of its own.
+  const tools =
+    turn.failure === undefined
+      ? readToolRejections(root, window)
+      : { rejected: {}, unidentified: 0, failedCalls: 0 };
   // A transport failure of the lab's own call to Keiko is no gateway evidence; a turn that failed
   // without a transcript is graded invalid on its own.
   return {
@@ -212,7 +217,7 @@ function markdown(report) {
   const lines = [
     `# Jira catalog selection (${report.model}, ${report.repeat} rounds)`,
     "",
-    `Selected ${summary.selected}/${summary.valid} valid attempts exactly, ${summary.alternative} through an equivalent alternative; ${summary.invalid} invalid.`,
+    `Selected ${summary.selected}/${summary.valid} valid attempts exactly, ${summary.alternative} through an equivalent alternative, ${summary.wrongArguments} with the right tool but refused arguments; ${summary.invalid} invalid.`,
     report.complete ? "" : "**Incomplete: the run stopped before every attempt finished.**",
     summary.sufficient ? "" : "**Insufficient: fewer than half of the attempts were valid.**",
     report.foreignStray > 0
@@ -272,8 +277,16 @@ function finishReport(session, modelId, run, startedAt, complete) {
   report.foreignStray = run.foreignStray;
   report.summary = summarizeSelection(attempts);
   writeReport(session, report);
-  const { selected, alternative, valid, invalid, sufficient } = report.summary;
-  stage("completed", { complete, selected, alternative, valid, invalid, sufficient });
+  const { selected, alternative, wrongArguments, valid, invalid, sufficient } = report.summary;
+  stage("completed", {
+    complete,
+    selected,
+    alternative,
+    wrongArguments,
+    valid,
+    invalid,
+    sufficient,
+  });
   // A signal's exit code is kept; otherwise an incomplete or insufficient run fails.
   if (!sufficient || !complete) process.exitCode ??= 1;
 }

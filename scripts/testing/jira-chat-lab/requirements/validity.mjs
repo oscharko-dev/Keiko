@@ -128,8 +128,8 @@ export function readGatewayFailures(root, window) {
 }
 
 /**
- * Tool calls the gateway refused before dispatch in [fromMs, toMs] of this process: `rejected`
- * counts refusals per canonical tool id (an argument refusal of a tool the model did select),
+ * Tool calls the gateway refused for their arguments in [fromMs, toMs] of this process: `rejected`
+ * counts them per canonical tool id (an argument refusal of a tool the model did select),
  * `unidentified` those without one (a name outside the current catalog), and `failedCalls` model
  * calls that failed on any cause. Read from the same body-free Activity Log as the outage rule.
  */
@@ -145,9 +145,11 @@ export function readToolRejections(root, window) {
   return evidence;
 }
 
-function collectRejection({ op, canonicalToolId }, evidence) {
+// Only an argument refusal says the model selected the tool; a stale catalog or a version
+// mismatch is the product's own refusal and proves nothing about the model's arguments.
+function collectRejection({ op, canonicalToolId, reason }, evidence) {
   if (FAILURE_OPS.has(op)) evidence.failedCalls += 1;
-  if (op !== "gateway.tool-catalog.rejected") return;
+  if (op !== "gateway.tool-catalog.rejected" || reason !== "invalid-arguments") return;
   if (typeof canonicalToolId === "string")
     evidence.rejected[canonicalToolId] = (evidence.rejected[canonicalToolId] ?? 0) + 1;
   else evidence.unidentified += 1;
