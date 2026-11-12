@@ -3039,6 +3039,7 @@
     "keiko-ui/app/components/desktop/widgets/coding-workbench/CodingWorkbenchInfoPanel",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/CodingWorkbenchIssueIntake",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/CodingWorkbenchJourneyOutcome",
+    "keiko-ui/app/components/desktop/widgets/coding-workbench/CodingWorkbenchLocationNotices",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/CodingWorkbenchMcpServers",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/CodingWorkbenchModelCards",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/CodingWorkbenchNativeActionReview",
