@@ -162,6 +162,30 @@ import {
 import type { EditorLanguageIntelligenceReporter } from "./language-intelligence.js";
 
 /** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
+// Every provider registration except completion is optional on the mount view, so a Monaco build
+// without one degrades cleanly: each install checks with `offers` before it registers.
+type OptionalLanguageRegistrars = MonacoInlineCompletionsRegistrar &
+  MonacoHoverRegistrar &
+  MonacoDocumentSymbolRegistrar &
+  MonacoDocumentFormattingRegistrar &
+  MonacoDefinitionRegistrar &
+  MonacoTypeDefinitionRegistrar &
+  MonacoImplementationRegistrar &
+  MonacoInlayHintsRegistrar &
+  MonacoSemanticTokensRegistrar &
+  MonacoReferenceRegistrar &
+  MonacoCodeActionRegistrar &
+  MonacoSignatureHelpRegistrar;
+
+export type MountLanguages = MonacoLanguagesRegistrar & Partial<OptionalLanguageRegistrars>;
+
+function offers<K extends keyof OptionalLanguageRegistrars>(
+  languages: MountLanguages,
+  ...members: readonly K[]
+): languages is MountLanguages & Pick<OptionalLanguageRegistrars, K> {
+  return members.every((member) => languages[member] !== undefined);
+}
+
 export interface MountMonaco {
   readonly editor: MonacoThemeRegistrar & {
     readonly MouseTargetType?: { readonly GUTTER_GLYPH_MARGIN: number } | undefined;
@@ -199,7 +223,7 @@ export interface MountMonaco {
   // The `languages` registry is present on the live `monaco` namespace; it is optional here so the
   // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
   // when it (or the completion args) is absent.
-  readonly languages?: MonacoLanguagesRegistrar | undefined;
+  readonly languages?: MountLanguages | undefined;
   // `MarkerSeverity` lives on the TOP-LEVEL `monaco` namespace (not `monaco.editor`); diagnostics
   // need it to map severities. Optional so theme-only mounts need not provide it.
   readonly MarkerSeverity?: MonacoMarkerSeverities | undefined;
@@ -666,12 +690,14 @@ function installInlineCompletionProvider(args: WireEditorOnMountArgs): MonacoDis
   if (inlineCompletion === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoInlineCompletionsRegistrar;
-  if (typeof registrar.registerInlineCompletionsProvider !== "function") {
-    return null;
-  }
+  const inlineMembers = [
+    "registerInlineCompletionsProvider",
+    "InlineCompletionTriggerKind",
+    "InlineCompletionEndOfLifeReasonKind",
+  ] as const;
+  if (!offers(languages, ...inlineMembers)) return null;
   return registerKeikoInlineCompletionProvider({
-    languages: registrar,
+    languages,
     resolve: inlineCompletion.resolve,
     isCurrentDocument: inlineCompletion.isCurrentDocument,
     documentLanguages: inlineCompletion.languages ?? INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
@@ -694,12 +720,9 @@ function installHoverProvider(args: WireEditorOnMountArgs): MonacoDisposable | n
   if (hover === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoHoverRegistrar;
-  if (typeof registrar.registerHoverProvider !== "function") {
-    return null;
-  }
+  if (!offers(languages, "registerHoverProvider")) return null;
   return registerKeikoHoverProvider({
-    languages: registrar,
+    languages,
     resolve: hover.resolve,
     isCurrentDocument: hover.isCurrentDocument,
     documentLanguages: hover.languages ?? HOVER_ELIGIBLE_LANGUAGES,
@@ -716,12 +739,9 @@ function installDocumentSymbolProvider(args: WireEditorOnMountArgs): MonacoDispo
   if (symbols === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoDocumentSymbolRegistrar;
-  if (typeof registrar.registerDocumentSymbolProvider !== "function") {
-    return null;
-  }
+  if (!offers(languages, "registerDocumentSymbolProvider", "SymbolKind")) return null;
   return registerKeikoDocumentSymbolProvider({
-    languages: registrar,
+    languages,
     resolve: symbols.resolve,
     isCurrentDocument: symbols.isCurrentDocument,
     documentLanguages: symbols.languages ?? SYMBOLS_ELIGIBLE_LANGUAGES,
@@ -739,12 +759,9 @@ function installFormattingProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   if (formatting === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoDocumentFormattingRegistrar;
-  if (typeof registrar.registerDocumentFormattingEditProvider !== "function") {
-    return null;
-  }
+  if (!offers(languages, "registerDocumentFormattingEditProvider")) return null;
   return registerKeikoFormattingProvider({
-    languages: registrar,
+    languages,
     resolve: formatting.resolve,
     isCurrentDocument: formatting.isCurrentDocument,
     documentLanguages: formatting.languages ?? FORMATTING_ELIGIBLE_LANGUAGES,
@@ -772,12 +789,9 @@ function installDefinitionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   if (definition === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoDefinitionRegistrar;
-  if (typeof registrar.registerDefinitionProvider !== "function") {
-    return null;
-  }
+  if (!offers(languages, "registerDefinitionProvider")) return null;
   return registerKeikoDefinitionProvider({
-    languages: registrar,
+    languages,
     resolve: definition.resolve,
     isCurrentDocument: definition.isCurrentDocument,
     documentLanguages: definition.languages ?? DEFINITION_ELIGIBLE_LANGUAGES,
@@ -792,10 +806,9 @@ function installTypeDefinitionProvider(args: WireEditorOnMountArgs): MonacoDispo
   const wiring = args.typeDefinition;
   const languages = args.monaco.languages;
   if (wiring === undefined || languages === undefined) return null;
-  const registrar = languages as unknown as MonacoTypeDefinitionRegistrar;
-  if (typeof registrar.registerTypeDefinitionProvider !== "function") return null;
+  if (!offers(languages, "registerTypeDefinitionProvider")) return null;
   return registerKeikoTypeDefinitionProvider({
-    languages: registrar,
+    languages,
     resolve: wiring.resolve,
     isCurrentDocument: wiring.isCurrentDocument,
     documentLanguages: wiring.languages ?? TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
@@ -810,10 +823,9 @@ function installImplementationProvider(args: WireEditorOnMountArgs): MonacoDispo
   const wiring = args.implementation;
   const languages = args.monaco.languages;
   if (wiring === undefined || languages === undefined) return null;
-  const registrar = languages as unknown as MonacoImplementationRegistrar;
-  if (typeof registrar.registerImplementationProvider !== "function") return null;
+  if (!offers(languages, "registerImplementationProvider")) return null;
   return registerKeikoImplementationProvider({
-    languages: registrar,
+    languages,
     resolve: wiring.resolve,
     isCurrentDocument: wiring.isCurrentDocument,
     documentLanguages: wiring.languages ?? IMPLEMENTATION_ELIGIBLE_LANGUAGES,
@@ -828,10 +840,9 @@ function installInlayHintsProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   const wiring = args.inlayHints;
   const languages = args.monaco.languages;
   if (wiring === undefined || languages === undefined) return null;
-  const registrar = languages as unknown as MonacoInlayHintsRegistrar;
-  if (typeof registrar.registerInlayHintsProvider !== "function") return null;
+  if (!offers(languages, "registerInlayHintsProvider")) return null;
   return registerKeikoInlayHintsProvider({
-    languages: registrar,
+    languages,
     resolve: wiring.resolve,
     isCurrentDocument: wiring.isCurrentDocument,
     documentLanguages: wiring.languages ?? INLAY_HINTS_ELIGIBLE_LANGUAGES,
@@ -845,10 +856,9 @@ function installSemanticTokensProvider(args: WireEditorOnMountArgs): MonacoDispo
   const wiring = args.semanticTokens;
   const languages = args.monaco.languages;
   if (wiring === undefined || languages === undefined) return null;
-  const registrar = languages as unknown as MonacoSemanticTokensRegistrar;
-  if (typeof registrar.registerDocumentSemanticTokensProvider !== "function") return null;
+  if (!offers(languages, "registerDocumentSemanticTokensProvider")) return null;
   const registrations = wiring.languages.map((language) =>
-    registrar.registerDocumentSemanticTokensProvider(language, wiring.provider),
+    languages.registerDocumentSemanticTokensProvider(language, wiring.provider),
   );
   return {
     dispose(): void {
@@ -891,12 +901,9 @@ function installReferencesProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   if (references === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoReferenceRegistrar;
-  if (typeof registrar.registerReferenceProvider !== "function") {
-    return null;
-  }
+  if (!offers(languages, "registerReferenceProvider")) return null;
   return registerKeikoReferencesProvider({
-    languages: registrar,
+    languages,
     resolve: references.resolve,
     isCurrentDocument: references.isCurrentDocument,
     documentLanguages: references.languages ?? REFERENCES_ELIGIBLE_LANGUAGES,
@@ -913,12 +920,9 @@ function installCodeActionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   if (codeActions === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoCodeActionRegistrar;
-  if (typeof registrar.registerCodeActionProvider !== "function") {
-    return null;
-  }
+  if (!offers(languages, "registerCodeActionProvider")) return null;
   return registerKeikoCodeActionProvider({
-    languages: registrar,
+    languages,
     resolve: codeActions.resolve,
     isCurrentDocument: codeActions.isCurrentDocument,
     documentLanguages: codeActions.languages ?? CODE_ACTION_ELIGIBLE_LANGUAGES,
@@ -934,12 +938,9 @@ function installSignatureHelpProvider(args: WireEditorOnMountArgs): MonacoDispos
   if (signatureHelp === undefined || languages === undefined) {
     return null;
   }
-  const registrar = languages as unknown as MonacoSignatureHelpRegistrar;
-  if (typeof registrar.registerSignatureHelpProvider !== "function") {
-    return null;
-  }
+  if (!offers(languages, "registerSignatureHelpProvider")) return null;
   return registerKeikoSignatureHelpProvider({
-    languages: registrar,
+    languages,
     resolve: signatureHelp.resolve,
     isCurrentDocument: signatureHelp.isCurrentDocument,
     documentLanguages: signatureHelp.languages ?? SIGNATURE_HELP_ELIGIBLE_LANGUAGES,
