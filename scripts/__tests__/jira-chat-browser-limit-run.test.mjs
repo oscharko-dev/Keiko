@@ -13,6 +13,7 @@ import {
 } from "../testing/jira-chat-lab/browser-limit-run.mjs";
 import { privateJson } from "../testing/jira-chat-lab/private-json.mjs";
 
+const LONG_IMPORT_TIMEOUT_MS = 90_000;
 const directories = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -195,53 +196,59 @@ it("refuses to complete an incomplete intent even if a caller falsely labels its
   expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe("incomplete");
 });
 
-it("consumes actual F threshold-missed results as unverified without any fault injection or native read", async () => {
-  const { createFaultPlan } = await import("../testing/jira-chat-lab/browser-bulk-fault.mjs");
-  const f = fixture();
-  f.blocks.createFaultPlan.mockImplementation(createFaultPlan);
-  f.ctx.read = vi.fn(() => {
-    throw new TypeError("No native read is expected at a missed final threshold");
-  });
-  f.ctx.search = vi.fn(() => {
-    throw new TypeError("No native search is expected at a missed final threshold");
-  });
-  f.ctx.page = { route: vi.fn(), unroute: vi.fn() };
-  f.ctx.recovery = { restartServer: vi.fn() };
-  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).resolves.toMatchObject({
-    status: "unverified",
-    counts: { steps: 28 },
-  });
-  expect(Object.keys(f.ctx.intent.state.faults).sort()).toEqual([
-    "bulk-epics:response-drop",
-    "bulk-epics:server-kill",
-    "hierarchy:response-drop",
-    "hierarchy:server-kill",
-    "progress:response-drop",
-    "progress:server-kill",
-  ]);
-  for (const evidence of Object.values(f.ctx.intent.state.faults))
-    expect(evidence).toEqual({ phase: "skipped", progress01: 1, reason: "threshold-missed" });
-  expect(f.ctx.read).not.toHaveBeenCalled();
-  expect(f.ctx.search).not.toHaveBeenCalled();
-  expect(f.ctx.page.route).not.toHaveBeenCalled();
-  expect(f.ctx.page.unroute).not.toHaveBeenCalled();
-  expect(f.ctx.recovery.restartServer).not.toHaveBeenCalled();
-  const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
-  expect(saved.phase).toBe("incomplete");
-  expect(
-    saved.results
-      .filter((entry) => entry.step.startsWith("ac8-"))
-      .map(({ result }) => ({
-        status: result.status,
-        counts: result.counts,
-      })),
-  ).toEqual(
-    Array.from({ length: 3 }, () => ({
+it(
+  "consumes actual F threshold-missed results as unverified without any fault injection or native read",
+  async () => {
+    const { createFaultPlan } = await import("../testing/jira-chat-lab/browser-bulk-fault.mjs");
+    const f = fixture();
+    f.blocks.createFaultPlan.mockImplementation(createFaultPlan);
+    f.ctx.read = vi.fn(() => {
+      throw new TypeError("No native read is expected at a missed final threshold");
+    });
+    f.ctx.search = vi.fn(() => {
+      throw new TypeError("No native search is expected at a missed final threshold");
+    });
+    f.ctx.page = { route: vi.fn(), unroute: vi.fn() };
+    f.ctx.recovery = { restartServer: vi.fn() };
+    await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).resolves.toMatchObject({
       status: "unverified",
-      counts: { injected: 0, recovered: 0, duplicates: 0, lost: 0 },
-    })),
-  );
-});
+      counts: { steps: 28 },
+    });
+    expect(Object.keys(f.ctx.intent.state.faults).sort()).toEqual([
+      "bulk-epics:response-drop",
+      "bulk-epics:server-kill",
+      "hierarchy:response-drop",
+      "hierarchy:server-kill",
+      "progress:response-drop",
+      "progress:server-kill",
+    ]);
+    for (const evidence of Object.values(f.ctx.intent.state.faults))
+      expect(evidence).toEqual({ phase: "skipped", progress01: 1, reason: "threshold-missed" });
+    expect(f.ctx.read).not.toHaveBeenCalled();
+    expect(f.ctx.search).not.toHaveBeenCalled();
+    expect(f.ctx.page.route).not.toHaveBeenCalled();
+    expect(f.ctx.page.unroute).not.toHaveBeenCalled();
+    expect(f.ctx.recovery.restartServer).not.toHaveBeenCalled();
+    const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
+    expect(saved.phase).toBe("incomplete");
+    expect(
+      saved.results
+        .filter((entry) => entry.step.startsWith("ac8-"))
+        .map(({ result }) => ({
+          status: result.status,
+          counts: result.counts,
+        })),
+    ).toEqual(
+      Array.from({ length: 3 }, () => ({
+        status: "unverified",
+        counts: { injected: 0, recovered: 0, duplicates: 0, lost: 0 },
+      })),
+    );
+  },
+  // A long runtime, not a hang (#4369): the dynamic import of the real fault plan transforms the
+  // whole browser-turn module chain, which measured 19.8 s twice on an idle-ish machine.
+  LONG_IMPORT_TIMEOUT_MS,
+);
 
 it("stops the current product block immediately when an intermediate F verdict is red", async () => {
   const f = fixture();
