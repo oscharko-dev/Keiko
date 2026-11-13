@@ -217,7 +217,13 @@ function configure(deps: UiHandlerDeps, proof: ToolProof = true, contextWindow?:
     runtime.generation(),
   );
 }
-function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
+function metadata(
+  deps: UiHandlerDeps,
+  overrides: {
+    readonly generation?: number;
+    readonly verificationStatus?: "ok" | "unverified";
+  } = {},
+): AtlassianCredentialMetadata {
   const ownerDigest = jiraChatActorDigest(deps);
   if (ownerDigest === undefined) throw new Error("Missing principal");
   return {
@@ -226,7 +232,7 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     displayName: "Synthetic Jira",
     baseUrl: "https://jira.example.invalid",
     createdAt: 1,
-    generation: 1,
+    generation: overrides.generation ?? 1,
     provider: "jira",
     deployment: "data-center",
     authScheme: "bearer-pat",
@@ -236,7 +242,7 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
       creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
       verificationRevision: 1,
       verificationInProgress: false,
-      verificationStatus: "ok",
+      verificationStatus: overrides.verificationStatus ?? "ok",
     },
   };
 }
@@ -1239,20 +1245,72 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
     },
   );
-  it("refuses a turn bound to a Jira Pod that was removed, before any model or Jira call (#4371)", async () => {
+  // The refusal tells the person what happened and what to do, with a closed code the UI localizes;
+  // nothing about the Pod beyond that closed state is revealed, and nothing is called (#4371).
+  it.each([
+    {
+      name: "a removed Jira Pod",
+      list: (): AtlassianCredentialMetadata[] => [],
+      code: "JIRA_POD_UNAVAILABLE",
+      readiness: "pod-unavailable",
+    },
+    {
+      name: "a Jira Pod that needs verifying again",
+      list: (deps: UiHandlerDeps): AtlassianCredentialMetadata[] => [
+        metadata(deps, { verificationStatus: "unverified" }),
+      ],
+      code: "JIRA_POD_VERIFICATION_REQUIRED",
+      readiness: "verification-required",
+    },
+    {
+      name: "a Jira connection that changed since the Pod was chosen",
+      list: (deps: UiHandlerDeps): AtlassianCredentialMetadata[] => [
+        metadata(deps, { generation: 2 }),
+      ],
+      code: "JIRA_POD_CONNECTION_CHANGED",
+      readiness: "generation-changed",
+    },
+  ])(
+    "refuses a turn bound to $name with its own code, before any model or Jira call",
+    async ({ list, code, readiness }) => {
+      const f = fixture();
+      const credentials = f.deps.atlassianConnectorCredentials;
+      if (credentials === undefined) throw new Error("Missing credential owner");
+      vi.spyOn(credentials.custody, "list").mockImplementation(() => list(f.deps));
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const result = await send(f, "refused-pod-turn");
+
+        expect(result.status, JSON.stringify(result.body)).toBe(409);
+        expect(result.body).toMatchObject({ error: { code } });
+        expect(f.calls).toHaveLength(0);
+        expect(f.requests()).toBe(0);
+        // The refusal line carries the closed readiness, like the other authority call site.
+        const registered = sink.events.filter(
+          (event) =>
+            event.op === "chat.tool-authority.operation" && event.extra?.phase === "register",
+        );
+        expect(registered.map((event) => event.extra?.readiness)).toContain(readiness);
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("keeps the generic refusal when the authority registry is unavailable", async () => {
     const f = fixture();
-    const credentials = f.deps.atlassianConnectorCredentials;
-    if (credentials === undefined) throw new Error("Missing credential owner");
-    // The Pod vanished after the Chat was bound to it.
-    vi.spyOn(credentials.custody, "list").mockImplementation(() => []);
+    // Not a Pod state: nothing about the Pod is revealed.
+    Object.assign(f.deps, { agentAuthorityRegistry: undefined });
 
-    const result = await send(f, "removed-pod-turn");
+    const result = await send(f, "registry-unavailable-turn");
 
-    expect(result.status, JSON.stringify(result.body)).toBe(403);
+    expect(result.status).toBe(403);
     expect(result.body).toMatchObject({ error: { code: "FORBIDDEN" } });
     expect(f.calls).toHaveLength(0);
     expect(f.requests()).toBe(0);
   });
+
   it("preserves ordinary unbound Chat without tool-calling proof", async () => {
     const f = fixture();
     f.deps.store.updateChat(f.chatId, { jiraPodId: null });
@@ -2808,7 +2866,9 @@ function preparationFailureDeps(
   const deps: UiHandlerDeps = {
     ...f.deps,
     diagnostics: { record },
-    ...(failure === "authority" ? { atlassianConnectorCredentials: undefined } : {}),
+    // A generic authority denial that says nothing about the Pod. A Pod that cannot serve the Chat has
+    // its own refusals (#4371): the turn-level suite above pins their codes.
+    ...(failure === "authority" ? { agentAuthorityRegistry: undefined } : {}),
   };
   if (failure === "tool-proof") configure(deps, false);
   if (failure === "catalog") {

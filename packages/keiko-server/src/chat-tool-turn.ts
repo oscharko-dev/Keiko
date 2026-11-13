@@ -116,6 +116,7 @@ import {
 } from "./store/chatToolTranscript.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
+import { requireNoJiraPodRefusal } from "./chat-jira-pod-refusal.js";
 import { CatalogDispatchFault, requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import {
@@ -221,6 +222,8 @@ export function mintAndBoundChatTurn<
     nowMs: Date.now(),
     correlationId,
   });
+  // A Jira Pod that cannot serve this Chat says so; every other refusal stays the generic one.
+  requireNoJiraPodRefusal(authority);
   requireDispatch(authority.ok, "denied", "authority-invalid");
   const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
   requireDispatch(remaining > 0, "denied", "authority-expired");

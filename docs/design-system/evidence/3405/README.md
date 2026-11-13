@@ -493,3 +493,14 @@ Linux arm64 gates container (Node 24.18.0, existing Chromium cache mounted read-
 `generatedAt` in the three records were taken from this run; its fallback-font captures were
 discarded and the 14 committed captures are unchanged. No record binds capture bytes. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Chat refusal codes in the core catalogs — 2026-11-13 (#4371)
+
+Five closed error codes (the unavailable Knowledge Pod and Knowledge Pod store, and a Jira Pod that is
+gone, needs verifying again or whose connection changed) gained localized notices in both core
+catalogs, so the freshness gate rejected their digests. The complete original nine-case producer ran
+with `KEIKO_WRITE_TRACKED_EVIDENCE=1` in the Linux arm64 gates container (Node 24.18.0): **9 passed
+(1.6m)**, including the real BFF stop and restart, and `npm run check:update-ui-evidence` passes. Only
+the source digests and `generatedAt` in the three records were taken from this run; its fallback-font
+captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
+assertion or numerical ceiling changed. This remains updater fixture evidence.

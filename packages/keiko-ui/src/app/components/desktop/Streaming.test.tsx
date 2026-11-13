@@ -458,23 +458,30 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     // React puts focus back after a commit that moved it, so the active element alone cannot show
     // that Stop was asked to let go: the input must never be told to take focus while Stop holds it.
     const focusCalls = vi.spyOn(HTMLElement.prototype, "focus");
-    const composerInput = screen.getByRole("textbox", { name: "Chat message" });
+    try {
+      const composerInput = screen.getByRole("textbox", { name: "Chat message" });
 
-    // contacting -> streaming, then further chunks: new session objects, new messages.
-    rerender(view({ ...base, sendStatus: "streaming" }));
-    expect(stop).toHaveFocus();
-    rerender(
-      view({ ...base, sendStatus: "streaming", messages: [userMessage("hi"), userMessage("a")] }),
-    );
-    rerender(
-      view({ ...base, sendStatus: "streaming", messages: [userMessage("hi"), userMessage("ab")] }),
-    );
-    // A composer re-render for any other reason (the next draft being typed) does not release it.
-    rerender(view({ ...base, sendStatus: "streaming", draft: "next" }));
-    rerender(view({ ...base, sendStatus: "streaming", draft: "next m" }));
-    expect(screen.getByRole("button", { name: "Cancel response" })).toHaveFocus();
-    expect(focusCalls.mock.contexts.filter((target) => target === composerInput)).toHaveLength(0);
-    focusCalls.mockRestore();
+      // contacting -> streaming, then further chunks: new session objects, new messages.
+      rerender(view({ ...base, sendStatus: "streaming" }));
+      expect(stop).toHaveFocus();
+      rerender(
+        view({ ...base, sendStatus: "streaming", messages: [userMessage("hi"), userMessage("a")] }),
+      );
+      rerender(
+        view({
+          ...base,
+          sendStatus: "streaming",
+          messages: [userMessage("hi"), userMessage("ab")],
+        }),
+      );
+      // A composer re-render for any other reason (the next draft being typed) does not release it.
+      rerender(view({ ...base, sendStatus: "streaming", draft: "next" }));
+      rerender(view({ ...base, sendStatus: "streaming", draft: "next m" }));
+      expect(screen.getByRole("button", { name: "Cancel response" })).toHaveFocus();
+      expect(focusCalls.mock.contexts.filter((target) => target === composerInput)).toHaveLength(0);
+    } finally {
+      focusCalls.mockRestore();
+    }
     expect(screen.getByRole("textbox", { name: "Chat message" })).not.toHaveFocus();
 
     rerender(view({ ...base, sendStatus: "completed", sending: false }));
