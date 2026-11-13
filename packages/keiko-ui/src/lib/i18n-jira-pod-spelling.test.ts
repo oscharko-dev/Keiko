@@ -43,9 +43,21 @@ describe("Jira Pod terminology (#4353)", () => {
     const core = readFileSync(join(__dirname, "i18n-messages.de.ts"), "utf8");
     const refusal = /"chat\.error\.jiraAuthentication\.[a-z]+":\s*"([^"]*)"/gu;
     const texts = [...core.matchAll(refusal)].map((match) => match[1] ?? "");
-    expect(texts.length).toBe(3);
+    expect(texts).toHaveLength(3);
     for (const text of texts) expect(text).not.toMatch(/\b(?:Sie|Ihnen|Ihr\w*)\b/u);
     expect(texts.join(" ")).toContain("Öffne den Knowledge Pods Hub");
+  });
+  it("names the 10.3.0 floor and the remedy in the unsupported-release Pod dialog copy, in English and German (#4353 AC3)", () => {
+    const key = "atlassianConnectors.verify.unsupported-version.copy";
+    const english = OPTIONAL_WIDGET_EN_MESSAGES[key];
+    const german = OPTIONAL_WIDGET_DE_MESSAGES[key];
+    expect(english).toContain("Jira Data Center 10.3.0 or later");
+    expect(english).toContain(
+      "Upgrade Jira to 10.3.0 or later, or enter the address of a supported instance",
+    );
+    expect(german).toContain("Jira Data Center ab Version 10.3.0");
+    expect(german).toContain("Aktualisiere Jira auf 10.3.0 oder neuer");
+    expect(german).toContain("gib die Adresse einer unterstützten Instanz ein");
   });
   it("gives every closed auth-unverified message in both languages and none of them names a host or identity", () => {
     for (const catalog of [OPTIONAL_WIDGET_EN_MESSAGES, OPTIONAL_WIDGET_DE_MESSAGES]) {

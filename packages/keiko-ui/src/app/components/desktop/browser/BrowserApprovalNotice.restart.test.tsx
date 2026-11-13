@@ -178,7 +178,7 @@ describe("after Keiko restarted (#4370)", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(120_000);
     });
-    expect(vi.mocked(restart.noteConnectedServerInstance).mock.calls.length).toBe(calls);
+    expect(vi.mocked(restart.noteConnectedServerInstance).mock.calls).toHaveLength(calls);
     view.unmount();
   });
 });

@@ -21,7 +21,7 @@ import { resolveWindowsPowerShellExecutable } from "./windows-system-directory.j
 export const WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS = 3_000;
 // A Windows command line is at most 32,767 UTF-16 units; UTF-8 needs up to three bytes for each.
 export const WINDOWS_PROCESS_IDENTITY_MAX_OUTPUT_BYTES = 3 * 32_768;
-const MAX_PID = 0xffff_fffc;
+const MAX_PID = 0xff_ff_ff_fc;
 
 // Loading the CIM cmdlets is the host getting ready, not the query: under x64 emulation it alone
 // took longer than the query's 3 s limit, so every read ran into the limit although the query is
@@ -32,7 +32,7 @@ const PREPARATION = "Import-Module CimCmdlets -ErrorAction Stop";
 
 // The pid arrives as one decimal line on standard input and is checked again here, so nothing is
 // ever interpolated into this fixed program. A process that does not exist answers with no output.
-const QUERY = String.raw`
+const QUERY = `
 $line = [Console]::In.ReadLine()
 if ($line -notmatch '^[0-9]{1,10}$') { exit 1 }
 try {

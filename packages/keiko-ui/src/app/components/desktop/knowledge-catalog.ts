@@ -425,7 +425,7 @@ type CatalogSeed =
 
 function catalogSeed(): CatalogSeed {
   const cached = reusableSnapshot(Date.now(), KNOWLEDGE_CATALOG_TTL_MS);
-  if (cached !== undefined && cached.loadError === null) {
+  if (cached?.loadError === null) {
     return { snapshot: cached, refresh: "none" };
   }
   if (lastGoodSnapshot !== undefined) {
@@ -439,6 +439,14 @@ function catalogSeed(): CatalogSeed {
     : { snapshot: cached, refresh: "none" };
 }
 
+function refreshOutcome(
+  current: boolean,
+  next: KnowledgeCatalogSnapshot,
+): ClientKnowledgeCatalogRefresh["outcome"] {
+  if (!current) return "superseded";
+  return next.loadError === null ? "ok" : "failed";
+}
+
 // A foreground refresh settled: report a slow one, and apply it unless a later one replaced it.
 function settleForegroundRefresh(
   startedAt: number,
@@ -446,10 +454,7 @@ function settleForegroundRefresh(
   current: boolean,
   apply: (snapshot: (previous: KnowledgeCatalogSnapshot) => KnowledgeCatalogSnapshot) => void,
 ): boolean {
-  reportSlowRefresh(
-    startedAt,
-    current ? (next.loadError === null ? "ok" : "failed") : "superseded",
-  );
+  reportSlowRefresh(startedAt, refreshOutcome(current, next));
   if (current) apply((previous) => keepSnapshotOnTimeout(previous, next));
   return current;
 }

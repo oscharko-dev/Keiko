@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8287d7c77cb518ae9ca969d90e2c872147ea49412d578ff568a7bb396639195d",
+    "catalogDigest": "59fafcc2352e11cd352343edd0877f2a5b8e9bb016d9b9e82cd89245418d051c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4240,8 +4240,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:559",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:606"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:552",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:599"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4327,9 +4327,7 @@
               "report-coverage",
               "unsupported-issue-key",
               "knowledge-coverage",
-              "raw-report-key",
-              "announced-create",
-              "tool-call-as-text"
+              "raw-report-key"
             ]
           },
           "omittedFindingCount": {
@@ -4352,11 +4350,6 @@
             "dataClass": "count",
             "required": false
           },
-          "announcementCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": false
-          },
           "pendingKnowledgePageCount": {
             "type": "integer",
             "dataClass": "count",
@@ -4370,7 +4363,7 @@
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:391",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:541"]
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:534"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -19203,7 +19196,7 @@
         "proofIds": ["coding-sidecar.gateway.request-validated.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:319",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5875"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5879"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -19344,7 +19337,7 @@
         "proofIds": ["coding-sidecar.gateway.skill-attached.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:368",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5808"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5812"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -67695,12 +67688,6 @@
               "causal": "correlation",
               "analyzerProjection": "timeline",
               "safeContextFields": [
-                {
-                  "name": "announcementCount",
-                  "type": "integer",
-                  "dataClass": "count",
-                  "required": false
-                },
                 {
                   "name": "correctionKind",
                   "type": "string",
@@ -118795,7 +118782,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:421",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:411",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119300,7 +119287,7 @@
     {
       "op": "atlassian.connection.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/wiring.ts:652",
+      "site": "packages/keiko-server/src/atlassian/wiring.ts:656",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119651,7 +119638,7 @@
     {
       "op": "chat.tool-turn.batch-draft-offer",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:562",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:555",
       "package": "keiko-server"
     },
     {
@@ -121539,7 +121526,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:5233",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:5237",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
