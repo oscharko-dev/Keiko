@@ -95,8 +95,6 @@ import {
   CLIENT_UPDATE_NOTICE_KINDS,
   CLIENT_UPDATE_NOTICE_PRESENTATIONS,
   CLIENT_EDITOR_LINE_ENDINGS,
-  CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS,
-  CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES,
   CLIENT_EDITOR_LINE_ENDING_SOURCES,
   CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
@@ -133,6 +131,7 @@ import {
 } from "./editor/inlineCompletionRateLimiter.js";
 import { logClientJiraResult } from "./client-jira-result-log.js";
 import { logClientJiraFields } from "./client-jira-fields-log.js";
+import { knowledgeCatalogRefreshEvent } from "./client-diagnostics-catalog-refresh.js";
 import { getServerLogger } from "./observability/index.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
@@ -1677,40 +1676,6 @@ const CLIENT_EDITOR_LINE_ENDING_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// #4371: a Knowledge Pod catalog refresh the picker did not wait for, because it kept its last good
-// snapshot: a slow answer, a failure, or a request a later refresh superseded. Routine, closed
-// outcome and duration bucket only.
-const CLIENT_KNOWLEDGE_CATALOG_REFRESH_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "client.knowledge-catalog.refreshed",
-  category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "client-diagnostics-routes.logClientKnowledgeCatalogRefresh",
-  fields: {
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES,
-    },
-    duration: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS,
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["client-knowledge-catalog-refresh"],
-  proofIds: ["client.knowledge-catalog.refreshed.line"],
-  releaseImpact: "patch",
-});
-
 const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -2508,18 +2473,8 @@ function logClientKnowledgeCatalogRefresh(
 ): boolean {
   const report = request.knowledgeCatalogRefresh;
   if (report === undefined) return false;
-  getServerLogger().info(
-    activityLogEvent(
-      CLIENT_KNOWLEDGE_CATALOG_REFRESH_OPERATION,
-      clientDiagnosticCorrelation(request, correlationId),
-      {
-        outcome: report.outcome,
-        duration: report.duration,
-        completeness: "complete",
-        loss: "none",
-      },
-    ),
-  );
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  getServerLogger().info(knowledgeCatalogRefreshEvent(report, envelope));
   return true;
 }
 

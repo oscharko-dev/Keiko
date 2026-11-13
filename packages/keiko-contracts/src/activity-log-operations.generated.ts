@@ -7105,7 +7105,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "client.knowledge-catalog.refreshed",
     category: "diagnostic",
     owner: "keiko-server",
-    emitter: "client-diagnostics-routes.logClientKnowledgeCatalogRefresh",
+    emitter: "client-diagnostics-catalog-refresh.knowledgeCatalogRefreshEvent",
     fields: {
       completeness: {
         type: "string",

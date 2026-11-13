@@ -620,15 +620,27 @@ export interface ClientEditorLineEnding {
 const EDITOR_LINE_ENDINGS: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDINGS);
 const EDITOR_LINE_ENDING_SOURCES: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDING_SOURCES);
 
-function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
-  const report = value.editorLineEnding;
+// A closed report of exactly two closed-vocabulary fields, under a correlation id.
+type ClosedField = readonly [name: string, allowed: ReadonlySet<unknown>];
+function hasValidClosedPairReport(
+  value: Record<string, unknown>,
+  key: string,
+  fields: readonly [ClosedField, ClosedField],
+): boolean {
+  const report = value[key];
   if (report === undefined) return true;
   if (!isRecord(report) || !isActivityLogCorrelationId(value.correlationId)) return false;
   return (
-    Object.keys(report).length === 2 &&
-    EDITOR_LINE_ENDINGS.has(report.lineEnding) &&
-    EDITOR_LINE_ENDING_SOURCES.has(report.source)
+    Object.keys(report).length === fields.length &&
+    fields.every(([name, allowed]) => allowed.has(report[name]))
   );
+}
+
+function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
+  return hasValidClosedPairReport(value, "editorLineEnding", [
+    ["lineEnding", EDITOR_LINE_ENDINGS],
+    ["source", EDITOR_LINE_ENDING_SOURCES],
+  ]);
 }
 
 // #4371: a Knowledge Pod catalog refresh that outlasted the picker's patience, or that a later
@@ -648,14 +660,10 @@ const KNOWLEDGE_CATALOG_REFRESH_DURATIONS: ReadonlySet<unknown> = new Set(
 );
 
 function hasValidKnowledgeCatalogRefreshContext(value: Record<string, unknown>): boolean {
-  const report = value.knowledgeCatalogRefresh;
-  if (report === undefined) return true;
-  if (!isRecord(report) || !isActivityLogCorrelationId(value.correlationId)) return false;
-  return (
-    Object.keys(report).length === 2 &&
-    KNOWLEDGE_CATALOG_REFRESH_OUTCOMES.has(report.outcome) &&
-    KNOWLEDGE_CATALOG_REFRESH_DURATIONS.has(report.duration)
-  );
+  return hasValidClosedPairReport(value, "knowledgeCatalogRefresh", [
+    ["outcome", KNOWLEDGE_CATALOG_REFRESH_OUTCOMES],
+    ["duration", KNOWLEDGE_CATALOG_REFRESH_DURATIONS],
+  ]);
 }
 
 function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
@@ -672,7 +680,12 @@ function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
   );
 }
 
-export interface ClientDiagnosticIngestRequest {
+// The catalog-refresh report rides beside the other closed reports (#4371).
+interface ClientKnowledgeCatalogRefreshReport {
+  readonly knowledgeCatalogRefresh?: ClientKnowledgeCatalogRefresh | undefined;
+}
+
+export interface ClientDiagnosticIngestRequest extends ClientKnowledgeCatalogRefreshReport {
   readonly message: string;
   readonly clientTs: string;
   readonly readyState?: ClientDiagnosticReadyState | undefined;
@@ -724,7 +737,6 @@ export interface ClientDiagnosticIngestRequest {
   readonly updateNotice?: ClientUpdateNotice | undefined;
   // The Editor's model adopted the line ending of text Keiko wrote into it (#4123).
   readonly editorLineEnding?: ClientEditorLineEnding | undefined;
-  readonly knowledgeCatalogRefresh?: ClientKnowledgeCatalogRefresh | undefined;
   // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
   // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
   // and how many were cut, never a message, path or run name.
