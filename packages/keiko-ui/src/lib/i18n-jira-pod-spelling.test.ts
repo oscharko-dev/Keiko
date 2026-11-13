@@ -45,7 +45,7 @@ describe("Jira Pod terminology (#4353)", () => {
     const texts = [...core.matchAll(refusal)].map((match) => match[1] ?? "");
     expect(texts.length).toBe(3);
     for (const text of texts) expect(text).not.toMatch(/\b(?:Sie|Ihnen|Ihr\w*)\b/u);
-    expect(texts.join(" ")).toMatch(/\bÖffne\b/u);
+    expect(texts.join(" ")).toContain("Öffne den Knowledge Pods Hub");
   });
   it("gives every closed auth-unverified message in both languages and none of them names a host or identity", () => {
     for (const catalog of [OPTIONAL_WIDGET_EN_MESSAGES, OPTIONAL_WIDGET_DE_MESSAGES]) {
