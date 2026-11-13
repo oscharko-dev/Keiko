@@ -1,4 +1,5 @@
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import {
   recordConnectionCheck,
   recordJiraHumanInput,
@@ -417,7 +418,20 @@ function observePort<
     () => currentJiraAuthenticationObservation(pinned, owner.custody.getMetadata(pinned.authRef)),
     identityObservation(owner, pinned, id, lifecycle),
     {
-      onUnsettled: (): void => {
+      onUnsettled: (reason, error): void => {
+        if (reason === "probe-error") {
+          // A credential change thrown out of the probe port: body-free class and frames only.
+          emitServerDiagnostic(
+            undefined,
+            serverDiagnosticFromError({
+              correlationId: id,
+              operation: "atlassian.connection.checked",
+              source: "atlassian.identity-probe",
+              error,
+              redact: (message) => message,
+            }),
+          );
+        }
         recordConnectionCheck(
           owner.options,
           id,

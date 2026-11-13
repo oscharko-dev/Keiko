@@ -96,8 +96,11 @@ export type JiraIdentityProbeOutcome = "confirmed" | "rejected" | "inconclusive"
 export type JiraUnsettledProbe = "stale" | "cancelled-or-expired" | "probe-error";
 
 export interface JiraAuthenticationObservationOptions {
-  /** Called once when a probe could not settle for a reason the probe owner cannot record. */
-  readonly onUnsettled?: (reason: JiraUnsettledProbe) => void;
+  /**
+   * Called once when a probe could not settle for a reason the probe owner cannot record. A
+   * `probe-error` carries the thrown error so the owner can report it with its frames.
+   */
+  readonly onUnsettled?: (reason: JiraUnsettledProbe, error?: unknown) => void;
 }
 
 /**
@@ -148,8 +151,12 @@ async function settledProbe(
 ): Promise<JiraIdentityProbeOutcome> {
   try {
     return await probe(deadline, signal);
-  } catch {
-    options.onUnsettled?.("probe-error");
+  } catch (error) {
+    reportProbeFailure(options, error);
     return "inconclusive";
   }
+}
+
+function reportProbeFailure(options: JiraAuthenticationObservationOptions, error: unknown): void {
+  options.onUnsettled?.("probe-error", error);
 }
