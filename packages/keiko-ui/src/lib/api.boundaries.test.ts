@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   ApiError,
   StreamingUnavailableError,
@@ -295,6 +296,78 @@ describe("API BFF boundary helpers", () => {
       message: "HTTP 500",
       status: 500,
     } satisfies Partial<ApiError>);
+  });
+
+  it.each([
+    { sent: "a".repeat(32), kept: true },
+    { sent: "A".repeat(32), kept: false },
+    { sent: "a".repeat(31), kept: false },
+    { sent: 42, kept: false },
+  ])(
+    "keeps a health instance identity only in its closed shape (#4370): $sent",
+    async ({ sent, kept }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(jsonResponse({ status: "ok", version: "1.0.0", instanceId: sent })),
+        ),
+      );
+      const health = await fetchHealth();
+      expect(health.instanceId).toBe(kept ? sent : undefined);
+      expect("instanceId" in health).toBe(kept);
+    },
+  );
+
+  // A real server answers with its diagnostics block, and the identity must survive it. The body is
+  // typed by the contract the server's health producer returns (`HealthResponse`), not hand-reduced.
+  const INSTANCE = "0123456789abcdef".repeat(2);
+  const REAL_HEALTH: HealthResponse = {
+    status: "ok",
+    version: "1.4.0",
+    diagnostics: {
+      readiness: "ready",
+      reasons: [],
+      writer: "production-file",
+      lostEvents: 0,
+    },
+    memory: { readiness: "ready", reason: "none" },
+    instanceId: INSTANCE,
+  };
+
+  it("keeps the server instance identity next to valid diagnostics and memory (#4370)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(REAL_HEALTH))),
+    );
+    const health = await fetchHealth();
+    expect(health.instanceId).toBe(INSTANCE);
+    expect(health.diagnostics).toEqual(REAL_HEALTH.diagnostics);
+    expect(health.memory).toEqual(REAL_HEALTH.memory);
+    expect(health.diagnosticsInvalid).toBeUndefined();
+  });
+
+  it("keeps the server instance identity when the diagnostics block is invalid (#4370)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(jsonResponse({ ...REAL_HEALTH, diagnostics: { readiness: "unknown" } })),
+      ),
+    );
+    const health = await fetchHealth();
+    expect(health.instanceId).toBe(INSTANCE);
+    expect(health.diagnosticsInvalid).toBe(true);
+    expect(health.diagnostics).toBeUndefined();
+  });
+
+  it("drops only an identity outside its closed shape and keeps the rest of the snapshot (#4370)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse({ ...REAL_HEALTH, instanceId: "NOT-AN-ID" }))),
+    );
+    const health = await fetchHealth();
+    expect("instanceId" in health).toBe(false);
+    expect(health.diagnostics).toEqual(REAL_HEALTH.diagnostics);
+    expect(health.memory).toEqual(REAL_HEALTH.memory);
   });
 
   it("fails closed when a run-start governance projection violates its response contract", async () => {

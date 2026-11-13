@@ -2623,6 +2623,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "browserApproval.notice":
     "Verbinde diesen Browser, um private Entwürfe zu speichern und geschützte Funktionen zu verwenden.",
   "browserApproval.launchNotice": "Keiko öffnet ein verbundenes Fenster in diesem Browser.",
+  "browserApproval.restarted":
+    "Keiko wurde neu gestartet, deshalb muss dieser Browser erneut verbunden werden. Ein Klick auf „Browser verbinden“ genügt. Dein geöffneter Chat und sein Entwurf bleiben erhalten. Ein Browser, den du unter Einstellungen → Sicherheit → Browser-Freigaben gemerkt hast, verbindet sich von selbst wieder.",
+  "browserApproval.restartedCompact":
+    "Keiko wurde neu gestartet. Verbinde erneut; Chat und Entwurf bleiben erhalten.",
   "browserApproval.launchFailed":
     "Keiko konnte diesen Browser nicht verbinden. Versuche es erneut oder öffne Keiko über den Starter.",
   "browserApproval.open": "Browser verbinden",

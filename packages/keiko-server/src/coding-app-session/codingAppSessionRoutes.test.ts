@@ -278,9 +278,9 @@ describe("app-session lifecycle lines (F65)", () => {
     };
   }
 
-  function pairingRequest(body: unknown): RouteContext {
+  function pairingRequest(body: unknown, cookie?: string): RouteContext {
     const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
-      headers: {},
+      headers: cookie === undefined ? {} : { cookie },
       socket: {},
     });
     return { ...ctx(), correlationId: "pair-correlation", req: req as unknown as IncomingMessage };
@@ -305,6 +305,7 @@ describe("app-session lifecycle lines (F65)", () => {
         extra: {
           expiredSessionCount: 0,
           evictedSessionClass: "none",
+          reconnect: "no-credential",
           completeness: "complete",
           loss: "none",
         },
@@ -314,6 +315,47 @@ describe("app-session lifecycle lines (F65)", () => {
       "coding-app-session.paired.request",
       formatActivityLogProofLine(events[0] ?? {}),
     );
+  });
+
+  it("records how a pairing relates to the credential the browser presented (#4370)", async () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, idleTtlMs: 100 });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const { deps: logDeps, events } = logged(channel);
+    const foreign = `${APP_SESSION_COOKIE_NAME}=sess_${"e".repeat(24)}.credential-of-an-earlier-process`;
+    const live = registry.mint("live");
+    const stale = registry.mint("stale");
+    now = 90;
+    registry.verify(live.cookieToken);
+    now = 101;
+
+    // A credential from before the process, presented twice (two tabs): both are after-restart.
+    await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody(), foreign), logDeps);
+    await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody(), foreign), logDeps);
+    await handleCodingAppSessionPair(
+      pairingRequest(fakePairingRequestBody(), `${APP_SESSION_COOKIE_NAME}=${live.cookieToken}`),
+      logDeps,
+    );
+    // Expired and still stored: ended, not live.
+    await handleCodingAppSessionPair(
+      pairingRequest(fakePairingRequestBody(), `${APP_SESSION_COOKIE_NAME}=${stale.cookieToken}`),
+      logDeps,
+    );
+    await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody()), logDeps);
+
+    expect(events.map((event) => event.extra?.reconnect)).toEqual([
+      "after-restart",
+      "after-restart",
+      "live-credential",
+      "ended-credential",
+      "no-credential",
+    ]);
+    const persisted = JSON.stringify(events);
+    for (const value of ["credential-of-an-earlier-process", live.cookieToken, stale.cookieToken])
+      expect(persisted).not.toContain(value);
   });
 
   it("records expiry cleanup and active-session protection during capacity admission", async () => {
@@ -487,6 +529,49 @@ describe("app-session lifecycle lines (F65)", () => {
     expect(events).toEqual([]);
   });
 
+  it("counts an isolated refused repair under its closed reason once its window closes (#4370)", () => {
+    vi.useFakeTimers();
+    try {
+      const { channel } = pairedChannel();
+      const { deps: logDeps, events } = logged(channel);
+      const stale = `${APP_SESSION_COOKIE_NAME}=sess_${"f".repeat(24)}.synthetic-foreign`;
+      handleCodingAppSessionLocalSession(ctx(stale), logDeps);
+      handleCodingAppSessionLocalSession(ctx(), logDeps);
+      handleCodingAppSessionLocalSession(ctx(), logDeps);
+      // Nothing is written per request, and nothing below the alert threshold used to be written at all.
+      expect(events).toEqual([]);
+      vi.advanceTimersByTime(60_000);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        op: "coding-app-session.local-session.denied",
+        level: "info",
+        extra: {
+          reason: "authority-unavailable",
+          count: 3,
+          windowClosed: true,
+          sessionUnregisteredCount: 1,
+          proofMissingCount: 2,
+          proofMalformedCount: 0,
+          secretMismatchCount: 0,
+          inactivityCount: 0,
+          lifetimeCount: 0,
+          approvalCount: 0,
+          invalidClockCount: 0,
+          lifetimeInsufficientCount: 0,
+          proofUnavailableCount: 0,
+          channelUnavailableCount: 0,
+        },
+      });
+      expectActivityLogProof(
+        "coding-app-session.local-session.denied.request",
+        formatActivityLogProofLine(events[0] ?? {}),
+      );
+      expect(JSON.stringify(events)).not.toContain("synthetic-foreign");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("aggregates a flood of caller-controlled local-session denials without bearer material", () => {
     const { channel } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
@@ -515,6 +600,64 @@ describe("app-session lifecycle lines (F65)", () => {
     const persisted = JSON.stringify(events);
     for (const value of ["sess_", "attacker-private-cookie", "synthetic-foreign"])
       expect(persisted).not.toContain(value);
+  });
+
+  it("keeps a failing sink from escaping the window timer and reports it on the structured path (#4370)", () => {
+    vi.useFakeTimers();
+    try {
+      const { channel } = pairedChannel();
+      const diagnostics = { record: vi.fn() };
+      const failing = {
+        write: (): void => {
+          throw new Error("sink unavailable");
+        },
+      };
+      const logDeps = {
+        codingAppSessionChannel: channel,
+        activityLog: failing,
+        diagnostics,
+        codingAppSessionDenialWindows: new CodingAppSessionDenialWindows(),
+      } as unknown as UiHandlerDeps;
+      handleCodingAppSessionLocalSession(ctx(), logDeps);
+      // The timer's write throws; before the guard this was an uncaught exception in the timer.
+      expect(() => vi.advanceTimersByTime(60_000)).not.toThrow();
+      expect(diagnostics.record).toHaveBeenCalledOnce();
+      expect(diagnostics.record.mock.calls[0]?.[0]).toMatchObject({
+        operation: "coding-app-session.local-session.denied",
+        source: "coding-app-session-routes",
+      });
+      expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("sink unavailable");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a failing sink from failing the request that closes the previous window (#4370)", () => {
+    const { channel } = pairedChannel();
+    const diagnostics = { record: vi.fn() };
+    let failing = false;
+    const events: ServerLogEvent[] = [];
+    const windows = new CodingAppSessionDenialWindows();
+    const logDeps = {
+      codingAppSessionChannel: channel,
+      activityLog: {
+        write: (event: ServerLogEvent): void => {
+          if (failing) throw new Error("sink unavailable");
+          events.push(event);
+        },
+      },
+      diagnostics,
+      codingAppSessionDenialWindows: windows,
+    } as unknown as UiHandlerDeps;
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    handleCodingAppSessionLocalSession(ctx(), logDeps);
+    failing = true;
+    now.mockReturnValue(70_000);
+    expect(handleCodingAppSessionLocalSession(ctx(), logDeps).status).toBe(200);
+    expect(diagnostics.record).toHaveBeenCalledOnce();
+    now.mockRestore();
+    windows.reset();
   });
 
   it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {
