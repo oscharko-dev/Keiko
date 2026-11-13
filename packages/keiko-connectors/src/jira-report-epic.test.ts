@@ -92,7 +92,10 @@ async function run(
     searches: fixture.requests.filter((item) => item.includes("search?")),
   };
 }
-function respondJson(base: AtlassianHttpBodyPort, edit: (items: Record<string, unknown>[]) => void): Wrap {
+function respondJson(
+  base: AtlassianHttpBodyPort,
+  edit: (items: Record<string, unknown>[]) => void,
+): Wrap {
   return () => async (request) => {
     const answer = await base(request);
     if (!new URL(request.url).pathname.endsWith("/field") || answer.kind !== "response")
@@ -106,27 +109,35 @@ const fieldEdit =
   (edit: (items: Record<string, unknown>[]) => void): Wrap =>
   (base) =>
     respondJson(base, edit)(base);
-const refuse = (base: AtlassianHttpBodyPort): AtlassianHttpBodyPort => (request) => {
-  const url = new URL(request.url);
-  if (url.pathname.endsWith("/search") && (url.searchParams.get("jql") ?? "").includes("cf["))
-    return Promise.resolve({
-      kind: "response",
-      status: 400,
-      bodyText: "{}",
-      bodyBytes: 2,
-      truncated: false,
-    });
-  return base(request);
-};
+const refuse =
+  (base: AtlassianHttpBodyPort): AtlassianHttpBodyPort =>
+  (request) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/search") && (url.searchParams.get("jql") ?? "").includes("cf["))
+      return Promise.resolve({
+        kind: "response",
+        status: 400,
+        bodyText: "{}",
+        bodyBytes: 2,
+        truncated: false,
+      });
+    return base(request);
+  };
+
+function reportIdOf(result: Awaited<ReturnType<typeof executeJiraReportTool>>): string {
+  const { reportId } = result.data;
+  if (typeof reportId !== "string") throw new TypeError("The result carries no report id");
+  return reportId;
+}
 
 describe("an Epic-scoped report (#4356)", () => {
   it("counts the sub-tasks of the Epic's members, as an independent readback does", async () => {
     const h = await run({ epicKey: EPIC });
     const expected = expectedScope(issues, EPIC);
     const done = expected.filter((issue) => issue.category === "done").length;
-    expect(
-      expected.some((issue) => issue.type === "Sub-task" && issue.category === "done"),
-    ).toBe(true);
+    expect(expected.some((issue) => issue.type === "Sub-task" && issue.category === "done")).toBe(
+      true,
+    );
     expect(h.result.data.status).toBe("complete");
     const report = reportOf(h.result);
     expect(record(record(report.progress).project)).toMatchObject({
@@ -150,7 +161,7 @@ describe("an Epic-scoped report (#4356)", () => {
     const jql = String(record(reportOf(h.result).scope).jql);
     expect(jql).toContain('cf[10777] = "');
     expect(jql).not.toMatch(/Epic|Verkn/u);
-    expect(h.searches.every((search) => !decodeURIComponent(search).match(/Epic/u))).toBe(true);
+    expect(h.searches.some((search) => decodeURIComponent(search).includes("Epic"))).toBe(false);
     const expected = expectedScope(issues, EPIC);
     expect(record(record(reportOf(h.result).progress).project).total).toBe(expected.length);
   });
@@ -160,7 +171,10 @@ describe("an Epic-scoped report (#4356)", () => {
       issue.epic === undefined ? issue : { ...issue, epic: undefined, parent: issue.epic },
     );
     const dropped = fieldEdit((items) => {
-      items.splice(items.findIndex((item) => item.id === "customfield_10014"), 1);
+      items.splice(
+        items.findIndex((item) => item.id === "customfield_10014"),
+        1,
+      );
     });
     const h = await run({ epicKey: EPIC }, { issues: children }, dropped);
     expect(h.result.data.status).toBe("complete");
@@ -173,7 +187,7 @@ describe("an Epic-scoped report (#4356)", () => {
 
   it("never narrows silently: a refused clause or an ambiguous field is a labelled gap", async () => {
     const refused = await run({ epicKey: EPIC }, {}, refuse);
-    const again = reportOf(await refused.call({ reportId: String(refused.result.data.reportId) }));
+    const again = reportOf(await refused.call({ reportId: reportIdOf(refused.result) }));
     expect(refused.result.data.status).not.toBe("complete");
     expect(record(again.completeness)).toMatchObject({ complete: false, reason: "read-failed" });
     const doubled = fieldEdit((items) => {
@@ -181,7 +195,7 @@ describe("an Epic-scoped report (#4356)", () => {
       items.push({ ...link, id: "customfield_10778" });
     });
     const ambiguous = await run({ epicKey: EPIC }, {}, doubled);
-    const second = reportOf(await ambiguous.call({ reportId: String(ambiguous.result.data.reportId) }));
+    const second = reportOf(await ambiguous.call({ reportId: reportIdOf(ambiguous.result) }));
     expect(record(second.completeness)).toMatchObject({ complete: false, reason: "read-failed" });
     const unreadable = await run({ epicKey: EPIC }, { omitFieldList: true });
     expect(unreadable.result.data.status).not.toBe("complete");
@@ -213,17 +227,15 @@ describe("an Epic-scoped report (#4356)", () => {
       category: index % 3 === 0 ? "done" : "indeterminate",
       status: index % 3 === 0 ? "Closed" : "Working",
     }));
-    const subtasks = stories.map(
-      (parent, index): FixtureIssue => ({
-        ...task,
-        key: `REP-${String(5000 + index)}`,
-        parent: parent.key,
-        // The first sub-task is selected by the Epic Link as well as by its parent: it counts once.
-        ...(index === 0 ? { epic: "REP-1" } : {}),
-        category: index % 2 === 0 ? "done" : "new",
-        status: index % 2 === 0 ? "Closed" : "Open",
-      }),
-    );
+    const subtasks = stories.map((parent, index): FixtureIssue => ({
+      ...task,
+      key: `REP-${String(5000 + index)}`,
+      parent: parent.key,
+      // The first sub-task is selected by the Epic Link as well as by its parent: it counts once.
+      ...(index === 0 ? { epic: "REP-1" } : {}),
+      category: index % 2 === 0 ? "done" : "new",
+      status: index % 2 === 0 ? "Closed" : "Open",
+    }));
     const big = [{ ...epic, key: "REP-1" }, ...stories, ...subtasks];
     const h = await run({ epicKey: "REP-1" }, { issues: big });
     expect(h.result.data.status).toBe("complete");
@@ -235,11 +247,16 @@ describe("an Epic-scoped report (#4356)", () => {
     expect(String(record(report.scope).epicMembersDigest)).toMatch(/^[0-9a-f]{64}$/u);
     const windows = new Set(
       h.searches
-        .map((search) => new URLSearchParams(search.slice(search.indexOf("?") + 1)).get("jql") ?? "")
+        .map(
+          (search) => new URLSearchParams(search.slice(search.indexOf("?") + 1)).get("jql") ?? "",
+        )
         .filter((jql) => jql.includes("parent in (")),
     );
     expect(windows.size).toBeGreaterThan(1);
-    const fewer = await run({ epicKey: "REP-1" }, { issues: big.slice(0, -40).filter((i) => i.key !== "REP-1000") });
+    const fewer = await run(
+      { epicKey: "REP-1" },
+      { issues: big.slice(0, -40).filter((i) => i.key !== "REP-1000") },
+    );
     expect(String(record(reportOf(fewer.result).scope).epicMembersDigest)).not.toBe(
       String(record(report.scope).epicMembersDigest),
     );

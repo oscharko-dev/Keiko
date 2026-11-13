@@ -178,6 +178,13 @@ export interface JiraReportDeviationRecord {
   readonly details: readonly string[];
 }
 
+export interface JiraReportRequirementSet {
+  readonly declared: number;
+  readonly covered: number;
+  readonly items: readonly JiraReportRequirementCoverage[];
+  readonly uncovered: readonly string[];
+}
+
 export interface JiraReportRequirementCoverage {
   readonly id: string;
   readonly coveredBy: readonly string[];
@@ -294,19 +301,23 @@ export interface JiraReport {
     readonly containerRoles: "observed" | "unobserved";
     readonly uncoveredEpics: readonly string[];
     readonly orphans: readonly string[];
+    /**
+     * The headline coverage. With explicit identifiers in the documents it counts those only; a
+     * document without any has the derived units as its requirements and they form the figure.
+     */
     readonly requirements:
-      | {
-          readonly declared: number;
-          readonly covered: number;
-          readonly items: readonly JiraReportRequirementCoverage[];
-          readonly uncovered: readonly string[];
-          /**
-           * A readable name per uncovered identifier Keiko derived for a statement without one.
-           * A derived handle is not a requirement a person wrote down by number: the name tells a
-           * lead whether it is a real requirement or a context sentence the detector took for one.
-           */
+      | (JiraReportRequirementSet & {
+          /** The readable name of each uncovered identifier Keiko derived (headline of a document without explicit ones). */
           readonly uncoveredLabels: Readonly<Record<string, string>>;
-        }
+          /**
+           * Units Keiko derived from statements without an identifier, beside an explicit headline,
+           * with their own counts and their readable names. A context sentence the detector took
+           * for a requirement shows up here, never in the headline and never dropped.
+           */
+          readonly derived?: JiraReportRequirementSet & {
+            readonly names: Readonly<Record<string, string>>;
+          };
+        })
       | undefined;
   };
   /** Per-issue rows for the export; never part of the tool result. */

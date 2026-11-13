@@ -1685,7 +1685,7 @@ figures, exports and the report comment disclose unavailable estimates. The exis
 `project-screen`, `time-tracking`, `unavailable`) and an optional closed
 `estimateUnavailableReason`, with no field id or display name.
 
-**Complete and truthful reports (#4356, 2026-11-13).** Four rules keep a figure from
+**Complete and truthful reports (#4356, 2026-11-13).** Five rules keep a figure from
 overstating what Jira allowed Keiko to read.
 (1) *Estimate applicability.* The report requests the selected estimate field for every hit, but
 Jira leaves a field out of a hit for two different reasons: the issue's type does not have it at
@@ -1695,29 +1695,47 @@ estimate never becomes a complete zero, an explicit `null` stays unestimated and
 a measured zero). Keiko decides from the create metadata it already reads per issue type
 (`estimateByType`): a hit that lacks the field is exempt only when that type's create screen was
 read and does not list the field while another type's does. A field no screen lists, such as an
-explicit `estimateFieldId` unknown to the metadata, exempts no type, and a type whose screen could
-not be read is never exempt. Only the independently measured prefix is kept when a later page
+explicit `estimateFieldId` unknown to the metadata, exempts no type, and nothing is exempt unless
+the whole metadata read succeeded: a partial, denied or failed read leaves the read strict. Only the independently measured prefix is kept when a later page
 withholds the field.
 (2) *An incomplete report says so first.* `report.figures` of an incomplete report opens with one
 `INCOMPLETE REPORT: <read> of <total> issues were read (<closed cause>)` line that states every
 figure below covers only the issues read; a complete report is unchanged. The export, comment
 and card already carry the status; an unavailable estimate stays `unavailable`, never zero.
 (3) *Epic scope.* `epicKey` is an additive scope (activity `scopeKind` `epic`), combinable with
-`projectKey` and `jql`, which it never widens. Keiko reads the Epic's members (`key = E OR "Epic
-Link" = E OR parent = E`; an instance that answers 400 for the `Epic Link` clause is read by
-`parent` alone), takes the members that can hold sub-tasks, and composes the reconcilable clause
-`<members clause> OR parent in (<member keys>)`, stated as `scope.jql`; no single JQL clause names
-the sub-tasks of an Epic's members, so a member list is part of the clause. An Epic that is not
-visible fails as `not-found`, one whose clause would exceed 3000 characters (or 1000 members) as
-`bounds-exceeded`; neither becomes an empty or silently narrowed scope.
-(4) *Derived requirement handles are named.* A `DRV-` handle is detected from a statement without
-an identifier, so a context sentence that contains an obligation phrase can become one and then
-reads as the one uncovered requirement. The denominator keeps them (an issue can name a derived
-handle through its trace footer or `keiko-req-` label), and Keiko lists a readable name for every
-derived handle it hands the report (`labels`: section and the start of the statement, redacted
-like other model-visible content). The uncovered handle then reads `id;statement` in
-`report.figures`, `label` in the requirement section page, in the Markdown export and in the CSV
-`summary` column; the Jira comment still carries identifiers only.
+`projectKey` and `jql`, which it never widens. Keiko addresses the Epic Link field by its id,
+resolved from the instance's field list through Jira's own schema key
+(`com.pyxis.greenhopper.jira:gh-epic-link`) as `cf[N]`, never by a display name that an instance
+may localize or rename. The Epic and its members are read through `key = E OR cf[N] = E OR parent
+= E`. A field list that holds no such field (an instance whose Epics are parents) is read by
+`parent` alone and the scope says `epicLink: absent`; an unreadable or ambiguous field list, or a
+clause the instance refuses, is an initialization failure and ends the report incomplete after the
+bounded retry; it is never read by a narrower clause. No single JQL clause names the sub-tasks of
+an Epic's members, so Keiko reads the members that can hold sub-tasks first and then selects their
+sub-tasks with `parent in (<member keys>)`, in as many queries ("windows") as the 2,500 character
+bound of one GET requires; the windows are read one after another, an issue selected twice counts
+once, and the total is the sum of the windows' totals less those duplicates. The scope states the
+clause that selects the Epic and its members (`scope.jql`), the member count and the digest of the
+member keys (`epicMemberCount`, `epicMembersDigest`), which is what a reader needs to reconcile
+the sub-task windows. An Epic that is not visible fails as `not-found`, one beyond 10,000 members
+as `bounds-exceeded`; neither becomes an empty or silently narrowed scope.
+(4) *Derived requirement handles are reported beside the headline.* A `DRV-` handle is detected
+from a statement without an identifier, so a context sentence that contains an obligation phrase
+can become one. With explicit requirement identifiers in the documents the coverage figure counts
+those only; the derived units are reported beside it (`coverage.requirements.derived`, with their
+own covered and uncovered counts and their names), never mixed into the headline and never
+dropped. A document with no explicit identifier has the derived units as its requirements and they
+form the figure as before. The rule is deterministic and needs no language detector. A derived
+handle's name (section and the start of its statement, redacted like other model-visible content)
+is untrusted document text: it is neutralised as data (control, format and line-break characters,
+markup and the report's delimiters removed, at most 120 characters) and rendered as one quoted
+value, `id;"statement"`, under a header that calls it data and never an instruction. It appears in
+`report.figures`, on the requirement section page (`derived: true`, `label`), in the Markdown
+export, in the CSV (kind `derived-requirement`, name in the `summary` column); the Jira comment
+carries identifiers and counts only.
+(5) *Per-type estimates.* A type whose create screen carries no estimate field reads
+`estimateField: "not-carried"` in `progress.byType` beside the unestimated count, so the answer can
+say "not estimable" where an issue type that carries the field has issues nobody estimated yet.
 Known limits: derived ids are salted by the document's identity, so the same text in two formats
 gets two derived ids (explicit ids are identical); a statement cell without a modal verb yields no
 unit for a row without an identifier; an Epic report does not follow sub-tasks of sub-tasks;

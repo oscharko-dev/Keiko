@@ -50,13 +50,15 @@ function memberClause(epicKey: string, linkClause: string | undefined): string {
  * name, which an instance may localize or rename. `absent` means the readable field list holds
  * none, as on an instance whose Epics are parents; `unresolved` means it holds several.
  */
-function epicLinkClause(
-  catalog: readonly JiraReportFieldCatalogEntry[],
-): string | undefined | "unresolved" {
+type EpicLink =
+  | { readonly kind: "absent" }
+  | { readonly kind: "unresolved" }
+  | { readonly kind: "clause"; readonly clause: string };
+function epicLinkOf(catalog: readonly JiraReportFieldCatalogEntry[]): EpicLink {
   const fields = catalog.filter((field) => field.schemaKey === JIRA_EPIC_LINK_SCHEMA_KEY);
-  if (fields.length === 0) return undefined;
+  if (fields.length === 0) return { kind: "absent" };
   const id = fields.length === 1 ? CUSTOM_FIELD_ID.exec(fields[0]?.id ?? "")?.[1] : undefined;
-  return id === undefined ? "unresolved" : `cf[${id}]`;
+  return id === undefined ? { kind: "unresolved" } : { kind: "clause", clause: `cf[${id}]` };
 }
 
 interface Collected {
@@ -132,9 +134,9 @@ export async function resolveJiraReportEpicScope(
   catalog: readonly JiraReportFieldCatalogEntry[] | undefined,
 ): Promise<JiraReportEpicResolution> {
   if (catalog === undefined) return { kind: "failed", reason: "unavailable" };
-  const link = epicLinkClause(catalog);
-  if (link === "unresolved") return { kind: "failed", reason: "malformed-payload" };
-  const clause = memberClause(epicKey, link);
+  const link = epicLinkOf(catalog);
+  if (link.kind === "unresolved") return { kind: "failed", reason: "malformed-payload" };
+  const clause = memberClause(epicKey, link.kind === "clause" ? link.clause : undefined);
   const into: Collected = { epicSeen: false, parents: new Set() };
   const reason = await readMembers(http, epicKey, clause, 0, into);
   if (reason !== undefined) return { kind: "failed", reason };
@@ -147,7 +149,7 @@ export async function resolveJiraReportEpicScope(
       windows: [clause, ...chunks(parents)],
       memberCount: parents.length,
       membersDigest: sha256Hex(parents.join("\n")),
-      link: link === undefined ? "absent" : "field",
+      link: link.kind === "clause" ? "field" : "absent",
     },
   };
 }

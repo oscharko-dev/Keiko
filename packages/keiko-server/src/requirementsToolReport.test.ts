@@ -207,7 +207,7 @@ describe("the requirement list Keiko hands jira.report", () => {
     );
   });
 
-  it("keeps the same denominator and uncovered requirement as the explicit-id control in the automatic report", async () => {
+  it("keeps every unit and covered state of the explicit-id control, the derived one beside the headline", async () => {
     const text = `${specification(1).text}\n### Ohne Kennung\n\nDas Portal muss Belege innerhalb von 5 Minuten verarbeiten.\n`;
     const f = await fixture([{ capsuleId: "cap-a", text }]);
     const detected = await detectedUnits(f);
@@ -218,15 +218,13 @@ describe("the requirement list Keiko hands jira.report", () => {
     const automatic = await coverage(f, issues, { requirementsFromPods: true });
     const control = await coverage(f, issues, { requirementIds: [explicit, derived] });
 
-    // The denominator and every covered state stay those of the explicit-id control; the automatic
-    // report additionally names the uncovered derived handle.
-    const unnamed = automatic.map((item) => {
-      const { label: _label, ...rest } = item as Record<string, unknown>;
-      return rest;
-    });
-    expect(unnamed).toEqual(control);
+    // Every unit and every covered state of the explicit-id control is still there: the derived
+    // unit is no longer in the headline but reported beside it, named, and never dropped (#4356).
+    const states = (items: readonly unknown[]): readonly (readonly [unknown, unknown])[] =>
+      items.map((item) => [(item as { id: unknown }).id, (item as { covered: unknown }).covered]);
+    expect(states(automatic)).toEqual(states(control));
     expect(automatic[0]).toMatchObject({ id: explicit, covered: true, coveredBy: ["SYN-1"] });
-    expect(automatic[1]).toMatchObject({ id: derived, covered: false });
+    expect(automatic[1]).toMatchObject({ id: derived, covered: false, derived: true });
     expect((automatic[1] as { label?: string }).label).toContain("Das Portal muss Belege");
   });
 
@@ -240,9 +238,15 @@ describe("the requirement list Keiko hands jira.report", () => {
       requirementsFromPods: true,
     });
 
+    // The explicit headline first, then the derived unit beside it, covered by its trace.
     expect(items).toEqual([
-      expect.objectContaining({ id: detected[1]?.id, covered: true, coveredBy: ["SYN-2"] }),
       { id: detected[0]?.id, covered: false },
+      expect.objectContaining({
+        id: detected[1]?.id,
+        covered: true,
+        derived: true,
+        coveredBy: ["SYN-2"],
+      }),
     ]);
   });
 

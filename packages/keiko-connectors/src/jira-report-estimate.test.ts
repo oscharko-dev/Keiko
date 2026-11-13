@@ -82,15 +82,20 @@ function transport(
     if (url.pathname.endsWith("/agile/1.0/board")) return boardPage(url, options);
     const board = /\/board\/(\d+)\/configuration$/u.exec(url.pathname)?.[1];
     if (board !== undefined) return response(options.configurations?.[board] ?? CONFIG);
-    if (options.createMetaStatus !== undefined && url.pathname.includes("/createmeta/"))
-      return { ...response({}), status: options.createMetaStatus };
-    const answer = await base(request);
-    if (answer.kind !== "response" || answer.status !== 200) return answer;
-    if (url.pathname.includes("/createmeta/REP/issuetypes/"))
-      return createMetaOf(url, answer, options);
-    if (url.pathname.endsWith("/search")) return searchOf(answer, options);
-    return answer;
+    return rewritten(url, await base(request), options);
   };
+}
+function rewritten(
+  url: URL,
+  answer: AtlassianHttpBodyResult,
+  options: Options,
+): AtlassianHttpBodyResult {
+  if (url.pathname.includes("/createmeta/") && options.createMetaStatus !== undefined)
+    return { ...response({}), status: options.createMetaStatus };
+  if (answer.kind !== "response" || answer.status !== 200) return answer;
+  if (url.pathname.includes("/createmeta/REP/issuetypes/"))
+    return createMetaOf(url, answer, options);
+  return url.pathname.endsWith("/search") ? searchOf(answer, options) : answer;
 }
 function createMetaOf(
   url: URL,
@@ -593,7 +598,9 @@ describe("an issue type that does not carry the estimate field (#4356)", () => {
 describe("the native time estimate and the metadata states of the applicability rule (#4356)", () => {
   const TIME = { fieldId: "timetracking", name: "Time Tracking", required: false };
   const NATIVE = {
-    configurations: { "7": { estimation: { type: "field", field: { fieldId: "timeoriginalestimate" } } } },
+    configurations: {
+      "7": { estimation: { type: "field", field: { fieldId: "timeoriginalestimate" } } },
+    },
     screenFields: [TIME],
   } as const;
   const issues = syntheticProject(60);
@@ -621,7 +628,12 @@ describe("the native time estimate and the metadata states of the applicability 
 
   it("exempts nothing, and stays strict, when the whole metadata read is denied or fails", async () => {
     for (const createMetaStatus of [403, 500]) {
-      const first = await run({ issues, ...NATIVE, withoutEstimateTypes: ["12"], createMetaStatus });
+      const first = await run({
+        issues,
+        ...NATIVE,
+        withoutEstimateTypes: ["12"],
+        createMetaStatus,
+      });
       const second = reportOf(await first.call({ reportId: idOf(first.result) }));
       expect(first.result.data.status).not.toBe("complete");
       expect(record(second.completeness)).toMatchObject({ complete: false, reason: "read-failed" });

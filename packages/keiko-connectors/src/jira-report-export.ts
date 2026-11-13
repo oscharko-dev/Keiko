@@ -7,6 +7,7 @@ import type {
   JiraReport,
   JiraReportContainer,
   JiraReportProgress,
+  JiraReportRequirementCoverage,
   JiraReportRow,
 } from "./jira-report-types.js";
 import { jiraReportEstimateSummary } from "./jira-report-figures.js";
@@ -73,43 +74,53 @@ function issueRow(row: JiraReportRow): string {
     issue.summary,
   ]);
 }
+function coveredRow(item: JiraReportRequirementCoverage, kind: string): string {
+  return csvRow([
+    kind,
+    item.id,
+    undefined,
+    undefined,
+    undefined,
+    "covered",
+    undefined,
+    item.coveredBy.join(";"),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    item.itemCount,
+    item.done,
+    undefined,
+  ]);
+}
+function uncoveredRow(id: string, kind: string, name: string | undefined): string {
+  return csvRow([
+    kind,
+    id,
+    undefined,
+    undefined,
+    undefined,
+    "uncovered",
+    ...Array.from({ length: CSV_SUMMARY_COLUMN - 6 }, () => undefined),
+    name,
+  ]);
+}
+/** Derived units are rows of their own kind, so a spreadsheet never mixes them into the headline. */
 function requirementRows(report: JiraReport): readonly string[] {
   const requirements = report.coverage.requirements;
   if (requirements === undefined) return [];
+  const { derived } = requirements;
   return [
-    ...requirements.items.map((item) =>
-      csvRow([
-        "requirement",
-        item.id,
-        undefined,
-        undefined,
-        undefined,
-        "covered",
-        undefined,
-        item.coveredBy.join(";"),
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        item.itemCount,
-        item.done,
-        undefined,
-      ]),
-    ),
+    ...requirements.items.map((item) => coveredRow(item, "requirement")),
     ...requirements.uncovered.map((id) =>
-      csvRow([
-        "requirement",
-        id,
-        undefined,
-        undefined,
-        undefined,
-        "uncovered",
-        ...Array.from({ length: CSV_SUMMARY_COLUMN - 6 }, () => undefined),
-        requirements.uncoveredLabels[id],
-      ]),
+      uncoveredRow(id, "requirement", requirements.uncoveredLabels[id]),
     ),
+    ...(derived?.items.map((item) => coveredRow(item, "derived-requirement")) ?? []),
+    ...(derived?.uncovered.map((id) =>
+      uncoveredRow(id, "derived-requirement", derived.names[id]),
+    ) ?? []),
   ];
 }
 // Spreadsheet programs read a UTF-8 CSV as text in their own code page without this mark.
@@ -269,6 +280,25 @@ const INFERRED_PARENT_NOTE =
   "_Not verified: the parent relation comes from a custom field whose role Jira does not state; name it in parentFieldIds to confirm it._\n";
 const REQUIREMENT_REFERENCE_NOTE =
   "Requirement coverage counts textual references in the issues read. Source revisions and requirement satisfaction are not verified.";
+function derivedSection(
+  derived: NonNullable<NonNullable<JiraReport["coverage"]["requirements"]>["derived"]>,
+): readonly string[] {
+  return [
+    "### Derived requirements\n",
+    `${String(derived.covered)} of ${String(derived.declared)} units Keiko derived from statements without an identifier are named by an issue. They are not counted above.\n`,
+    table(
+      ["Derived requirement", "Statement", "Named by"],
+      [
+        ...derived.items.map((item) => [
+          item.id,
+          markdownText(derived.names[item.id] ?? ""),
+          item.coveredBy.join(", "),
+        ]),
+        ...derived.uncovered.map((id) => [id, markdownText(derived.names[id] ?? ""), ""]),
+      ],
+    ),
+  ];
+}
 function coverageSection(report: JiraReport): string {
   const { coverage } = report;
   const lines = [
@@ -306,6 +336,7 @@ function coverageSection(report: JiraReport): string {
         }),
       ),
     );
+  if (requirements?.derived !== undefined) lines.push(...derivedSection(requirements.derived));
   return lines.join("\n");
 }
 function scopeText(report: JiraReport): string {
@@ -394,6 +425,11 @@ export function jiraReportCommentText(report: JiraReport): string {
           `Requirements named by an issue: ${String(coverage.requirements.covered)} of ${String(coverage.requirements.declared)}`,
           REQUIREMENT_REFERENCE_NOTE,
           keyList("Requirements without an issue", coverage.requirements.uncovered),
+          ...(coverage.requirements.derived === undefined
+            ? []
+            : [
+                `Derived requirements named by an issue: ${String(coverage.requirements.derived.covered)} of ${String(coverage.requirements.derived.declared)}`,
+              ]),
         ]),
   ];
   return lines.join("\n").slice(0, COMMENT_MAX_CHARS);

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { compareIssueKeys } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { jiraReportDataText } from "./jira-report-data-text.js";
 import { compareCodePoints } from "./jira-report-order.js";
 
 export { compareCodePoints };
@@ -14,6 +15,7 @@ import type {
   JiraReportIssueClass,
   JiraReportProgress,
   JiraReportRequirementCoverage,
+  JiraReportRequirementSet,
   JiraReportRow,
   JiraReportScope,
   JiraReportStatusCount,
@@ -389,15 +391,12 @@ function requirementItems(graph: Graph, coveredBy: readonly string[]): readonly 
   for (const key of coveredBy) items.delete(key);
   return [...items.values()];
 }
-function requirementsOf(
+function coverageSetOf(
   graph: Graph,
   issues: readonly JiraReportIssue[],
-  declared: readonly string[],
-  labels: Readonly<Record<string, string>>,
+  ids: readonly string[],
   estimatesAvailable: boolean,
-): JiraReport["coverage"]["requirements"] {
-  if (declared.length === 0) return undefined;
-  const ids = [...new Set(declared)].sort((left, right) => compareCodePoints(left, right));
+): JiraReportRequirementSet {
   const coverers = new Map<string, string[]>();
   for (const issue of issues)
     for (const id of issue.requirementIds) {
@@ -425,13 +424,50 @@ function requirementsOf(
       byType: byTypeOf(traced, estimatesAvailable),
     });
   }
-  const uncoveredLabels = Object.fromEntries(
-    uncovered.flatMap((id): [string, string][] => {
-      const label = Object.hasOwn(labels, id) ? labels[id] : undefined;
-      return label === undefined ? [] : [[id, label]];
+  return { declared: ids.length, covered: items.length, items, uncovered };
+}
+function namesOf(
+  ids: readonly string[],
+  labels: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    ids.flatMap((id): [string, string][] => {
+      const label = Object.hasOwn(labels, id) ? jiraReportDataText(labels[id] ?? "") : "";
+      return label.length === 0 ? [] : [[id, label]];
     }),
   );
-  return { declared: ids.length, covered: items.length, items, uncovered, uncoveredLabels };
+}
+/**
+ * The identifiers Keiko derived for statements without one are named in `labels`. With explicit
+ * identifiers declared they are the headline and the derived units are reported beside it; with
+ * none, the derived units are the requirements and form the headline, as before.
+ */
+function requirementsOf(
+  graph: Graph,
+  issues: readonly JiraReportIssue[],
+  declared: readonly string[],
+  labels: Readonly<Record<string, string>>,
+  estimatesAvailable: boolean,
+): JiraReport["coverage"]["requirements"] {
+  if (declared.length === 0) return undefined;
+  const ids = [...new Set(declared)].sort((left, right) => compareCodePoints(left, right));
+  const derivedIds = ids.filter((id) => Object.hasOwn(labels, id));
+  const explicitIds = ids.filter((id) => !Object.hasOwn(labels, id));
+  const headline = explicitIds.length === 0 ? ids : explicitIds;
+  const set = coverageSetOf(graph, issues, headline, estimatesAvailable);
+  const beside = explicitIds.length > 0 && derivedIds.length > 0;
+  return {
+    ...set,
+    uncoveredLabels: namesOf(set.uncovered, labels),
+    ...(beside
+      ? {
+          derived: {
+            ...coverageSetOf(graph, issues, derivedIds, estimatesAvailable),
+            names: namesOf(derivedIds, labels),
+          },
+        }
+      : {}),
+  };
 }
 
 function classOf(graph: Graph, issue: JiraReportIssue): JiraReportIssueClass {
