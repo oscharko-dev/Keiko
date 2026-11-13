@@ -483,6 +483,11 @@ const ORDINARY_WORD_QUERIES: readonly (readonly [query: string, tool: string])[]
   ["priorities", "jira.priorities"],
   ["board configuration", "jira.board-configuration"],
   ["project versions", "jira.versions"],
+  // The everyday operations the lab's deployment model did not reach (3 of 3 wrong tool each).
+  ["list all fields", "jira.fields"],
+  ["all fields", "jira.fields"],
+  ["search users", "jira.users"],
+  ["find a user", "jira.users"],
 ];
 const FIRST_PAGE = 5;
 

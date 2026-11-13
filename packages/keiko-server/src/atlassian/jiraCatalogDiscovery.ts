@@ -121,6 +121,11 @@ const PLAIN_ALIASES: Readonly<Record<string, readonly string[]>> = {
     "follow",
   ],
   "jira.unwatch": ["remove watcher", "stop watching", "unsubscribe", "unfollow"],
+  "jira.users": [
+    // The summary says "search"; people say "find" or "look up" a user.
+    "find user",
+    "look user",
+  ],
   "jira.watchers": [
     // Reading who watches: the summary says "visible watcher identities".
     "who watch",
