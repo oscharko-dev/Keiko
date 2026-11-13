@@ -5,10 +5,13 @@
 // German-language mode, in the one order that works: every step that drives labelled English pages
 // or English names runs first, the German locale last. `inventory` is the statement of which
 // fixtures the lab holds, read natively, so it cannot drift from the lab.
-// Usage: node release-1-fixtures.mjs <private-session-directory> [--language de]
+// Usage: node release-1-fixtures.mjs <private-session-directory> [--seed] [--language de]
 //        node release-1-fixtures.mjs <private-session-directory> --inventory
+// `--seed` runs the base seeds first, so a session straight after `setup.mjs` needs nothing else.
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { basicAuth, checked, labRequest, loadSession } from "./lab-client.mjs";
 import { main as seedEstimateMix } from "./requirements/seed-estimate-mix.mjs";
@@ -106,14 +109,40 @@ export async function fixtureInventory(session) {
   };
 }
 
+/** The existing base seeds, each idempotent and each driving English labels or English names. */
+export const BASE_SEED_STEPS = Object.freeze([
+  "seed.mjs",
+  "qualify-fields.mjs",
+  "seed-content.mjs",
+  "requirements/seed-projects.mjs",
+  "requirements/seed-estimates.mjs",
+]);
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+function runScript(script, directory) {
+  const result = spawnSync(process.execPath, [join(HERE, script), directory], {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  if (result.status !== 0) throw new TypeError(`Lab step ${script} failed`);
+}
+
 /**
- * Completes a session for the Release 1 walk. The requirements projects come first (their seed
- * drives English administration and English status names), then the two new fixtures; the German
- * locale is applied last and only when asked, because every English-labelled seed after it would
- * fail on localized names.
+ * Completes a session for the Release 1 walk. With `seed`, the base seeds run first (after license
+ * setup, nothing else is needed). The requirements projects come before the two new fixtures
+ * (their seed drives English administration and English status names); the actors are English while
+ * any of that runs, and the German locale is applied last and only when asked, because
+ * `qualify-fields.mjs` failed on localized names (2026-11-13).
  */
-export async function prepareRelease1Fixtures(directory, { language = "en" } = {}) {
+export async function prepareRelease1Fixtures(
+  directory,
+  { language = "en", seed = false, run = runScript } = {},
+) {
   if (!Object.hasOwn(LAB_LOCALES, language)) throw new TypeError("Unsupported lab language");
+  if (seed) {
+    // A session left German by an earlier run must be English before any English-labelled seed.
+    if (existsSync(join(directory, "language.json"))) await seedLanguage([directory, "en"]);
+    for (const script of BASE_SEED_STEPS) run(script, directory);
+  }
   await seedEstimateMix([directory]);
   await seedParentFields([directory]);
   await seedLanguage([directory, language]);
@@ -123,19 +152,20 @@ export async function prepareRelease1Fixtures(directory, { language = "en" } = {
 }
 
 export async function main(args) {
-  const [directory, flag, value, ...extra] = args;
-  const inventoryOnly = flag === "--inventory" && value === undefined;
-  const withLanguage = flag === "--language" && value !== undefined;
-  if (!directory || extra.length > 0 || !(inventoryOnly || withLanguage || flag === undefined))
-    throw new TypeError(
-      "Usage: release-1-fixtures.mjs <session-directory> [--language de|en | --inventory]",
-    );
-  if (inventoryOnly) {
+  const usage =
+    "Usage: release-1-fixtures.mjs <session-directory> [--seed] [--language de|en] | --inventory";
+  const [directory, ...flags] = args;
+  if (!directory) throw new TypeError(usage);
+  if (flags.length === 1 && flags[0] === "--inventory") {
     const inventory = await fixtureInventory(loadSession(directory));
     console.log(JSON.stringify({ operation: "jira-lab-release-1-fixtures", ...inventory }));
     return inventory;
   }
-  return prepareRelease1Fixtures(directory, { language: value ?? "en" });
+  const seed = flags.includes("--seed");
+  const rest = flags.filter((flag) => flag !== "--seed");
+  const withLanguage = rest[0] === "--language" && rest.length === 2;
+  if (rest.length > 0 && !withLanguage) throw new TypeError(usage);
+  return prepareRelease1Fixtures(directory, { language: withLanguage ? rest[1] : "en", seed });
 }
 
 if (isMainModule(import.meta.url)) await main(process.argv.slice(2));

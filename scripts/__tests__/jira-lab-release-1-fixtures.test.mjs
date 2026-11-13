@@ -22,6 +22,11 @@ import {
   readMixTruth,
 } from "../testing/jira-chat-lab/requirements/seed-estimate-mix.mjs";
 import {
+  BASE_SEED_STEPS,
+  main as fixturesMain,
+  prepareRelease1Fixtures,
+} from "../testing/jira-chat-lab/release-1-fixtures.mjs";
+import {
   findParentLink,
   offeredParentFields,
   parentFieldsTruth,
@@ -238,5 +243,35 @@ describe("parent-field project", () => {
     expect(() =>
       parentFieldsTruth({ project: "PAR", ids, offered: { Bug: offered.Bug }, issues: [] }),
     ).toThrow("side by side");
+  });
+});
+
+describe("completing a session", () => {
+  it("runs the base seeds in their existing order, English, before the new fixtures", () => {
+    expect(BASE_SEED_STEPS).toEqual([
+      "seed.mjs",
+      "qualify-fields.mjs",
+      "seed-content.mjs",
+      "requirements/seed-projects.mjs",
+      "requirements/seed-estimates.mjs",
+    ]);
+  });
+
+  it.each([
+    [[], "Usage"],
+    [["/s", "--language"], "Usage"],
+    [["/s", "--seed", "--inventory"], "Usage"],
+    [["/s", "extra"], "Usage"],
+    [["/s", "--language", "fr"], "Unsupported"],
+  ])("refuses malformed arguments %j", async (args, message) => {
+    await expect(fixturesMain(args)).rejects.toThrow(message);
+  });
+
+  it("refuses an unsupported language before any seed runs", async () => {
+    const run = vi.fn();
+    await expect(
+      prepareRelease1Fixtures("/s", { language: "fr", seed: true, run }),
+    ).rejects.toThrow("Unsupported");
+    expect(run).not.toHaveBeenCalled();
   });
 });

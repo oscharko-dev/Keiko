@@ -181,29 +181,35 @@ it.each([
         run: async (context, specifications) => {
           const chat = await prepareModelFreeChat(context, actor, administration);
           expect(chat.jiraAdministrationEnabled === true).toBe(administration);
-          for (const specification of specifications) {
-            expect(specification).toBe(dispatched++);
-            const result = await dispatchQualification(
-              context,
-              chat,
-              { tool: "jira.projects", identity: "GET /rest/api/2/project" },
-              {},
-            );
-            expect(result.dispatch.kind).toBe("settled");
-            expect(result.dispatch.result).toMatchObject({
-              status: "completed",
-              data: {
-                outcome: "succeeded",
-                items: [{ id: "10000", key: "KEIKO", name: "Synthetic project" }],
-              },
-            });
-            expect(result.dispatch.receipt).toMatchObject({
-              effectStarted: true,
-              budgetDisposition: "committed",
-            });
-            expect(result.mutation).toBe(false);
-            expect(result.journal).toBeUndefined();
-          }
+          // Sequential on purpose: the dispatch order is asserted, so the calls chain instead of
+          // awaiting inside a loop.
+          await specifications.reduce(
+            (previous, specification) =>
+              previous.then(async () => {
+                expect(specification).toBe(dispatched++);
+                const result = await dispatchQualification(
+                  context,
+                  chat,
+                  { tool: "jira.projects", identity: "GET /rest/api/2/project" },
+                  {},
+                );
+                expect(result.dispatch.kind).toBe("settled");
+                expect(result.dispatch.result).toMatchObject({
+                  status: "completed",
+                  data: {
+                    outcome: "succeeded",
+                    items: [{ id: "10000", key: "KEIKO", name: "Synthetic project" }],
+                  },
+                });
+                expect(result.dispatch.receipt).toMatchObject({
+                  effectStarted: true,
+                  budgetDisposition: "committed",
+                });
+                expect(result.mutation).toBe(false);
+                expect(result.journal).toBeUndefined();
+              }),
+            Promise.resolve(),
+          );
           expect(
             context.deps.store
               .listMessages(chat.id)
