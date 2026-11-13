@@ -9445,6 +9445,12 @@
               "required": false
             },
             {
+              "name": "reconnect",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "rememberedApprovalCount",
               "type": "integer",
               "dataClass": "count",
@@ -9571,7 +9577,61 @@
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
             {
+              "name": "approvalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "channelUnavailableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "count",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "inactivityCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "invalidClockCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "lifetimeCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "lifetimeInsufficientCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "proofMalformedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "proofMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "proofUnavailableCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
@@ -9579,6 +9639,24 @@
             {
               "name": "reason",
               "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "secretMismatchCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "sessionUnregisteredCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "windowClosed",
+              "type": "boolean",
               "dataClass": "closed-enum",
               "required": true
             }
@@ -9712,6 +9790,12 @@
               "name": "expiredSessionCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "reconnect",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             }
           ],

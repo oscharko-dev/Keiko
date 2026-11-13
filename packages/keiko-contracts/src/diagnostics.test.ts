@@ -50,6 +50,7 @@ import {
   isClientDiagnosticLossCount,
   isClientStageIngestRequest,
   isLinuxGatewayDiagnosticKind,
+  isServerInstanceId,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
   type ClientGitRetryOperation,
@@ -2648,5 +2649,26 @@ describe("coding request timeout evidence (#4109)", () => {
     ).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { kind: "other" }))).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { errorKind: "timeout" }))).toBe(false);
+  });
+});
+
+describe("server instance identity (#4370)", () => {
+  it.each(["a".repeat(32), "0123456789abcdef".repeat(2)])("accepts %s", (value) => {
+    expect(isServerInstanceId(value)).toBe(true);
+  });
+
+  it.each([
+    undefined,
+    null,
+    42,
+    "",
+    "A".repeat(32),
+    "a".repeat(31),
+    "a".repeat(33),
+    `${"a".repeat(32)}\n`,
+    `${"a".repeat(31)}g`,
+    ["a".repeat(32)],
+  ])("refuses a value outside the closed shape: %s", (value) => {
+    expect(isServerInstanceId(value)).toBe(false);
   });
 });

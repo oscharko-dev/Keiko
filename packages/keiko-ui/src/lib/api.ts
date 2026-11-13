@@ -161,6 +161,7 @@ import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/cod
 import {
   isActivityLogReadinessSnapshot,
   isMemoryReadinessSnapshot,
+  isServerInstanceId,
   classifyInvalidActivityLogReadiness,
   type ClientModuleLoadFailure,
   type HealthDiagnosticsInvalidReason,
@@ -434,12 +435,17 @@ export async function fetchHealth(correlationId?: string): Promise<HealthSnapsho
       readonly memory?: unknown;
     }
   >("/api/health", undefined, undefined, correlationId);
-  const { diagnostics, memory, ...health } = response;
-  let snapshot: HealthSnapshot = health;
-  if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...health, diagnostics };
+  const { diagnostics, memory, instanceId, ...health } = response;
+  // The server instance identity is kept only in its closed shape; anything else is dropped (#4370).
+  let snapshot: HealthSnapshot = isServerInstanceId(instanceId)
+    ? { ...health, instanceId }
+    : health;
+  // Both diagnostics branches build on `snapshot`, not `health`: rebuilding from `health` would drop
+  // the instance identity from every real response, which always carries diagnostics (#4370).
+  if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...snapshot, diagnostics };
   else if (diagnostics !== undefined)
     snapshot = {
-      ...health,
+      ...snapshot,
       diagnosticsInvalid: true,
       diagnosticsInvalidReason: classifyInvalidActivityLogReadiness(diagnostics),
     };

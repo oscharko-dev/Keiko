@@ -470,3 +470,15 @@ in the Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.7m)**
 three records were taken from this run; its fallback-font captures were discarded and the 14
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
+
+## Browser restart notice wording — 2026-11-13 (#4370)
+
+The notice that tells a person Keiko was restarted added messages to both optional catalogs (the
+full text and a short visible line for the compact header), and the
+health reader in `api.ts` now keeps the server instance identity only in its closed shape, so the
+freshness gate rejected three source digests. The complete original nine-case producer ran in the
+Linux arm64 gates container (Node 24.18.0, existing Chromium cache mounted read-only): **9 passed
+(1.8m)**, and `npm run check:update-ui-evidence` passes. Only the three source digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No record binds capture bytes. No updater
+behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.

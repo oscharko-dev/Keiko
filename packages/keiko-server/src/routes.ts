@@ -4,6 +4,7 @@ import {
   handleCancelJiraHumanInput,
 } from "./atlassian/jiraHumanInputRoutes.js";
 import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
+import { SERVER_INSTANCE_ID } from "./server-instance.js";
 import { handleCancelDesktopChat } from "./chat-approval-continuation.js";
 import {
   handleListMarkdownSkills,
@@ -503,6 +504,7 @@ function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
     diagnostics: currentActivityLogReadiness(),
     ...(deps.memoryReadiness === undefined ? {} : { memory: deps.memoryReadiness }),
     ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
+    instanceId: SERVER_INSTANCE_ID,
   };
   return { status: 200, body };
 }
