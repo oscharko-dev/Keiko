@@ -693,6 +693,15 @@ export async function createLimitRunContext(live, handles, options, intent, sign
   return ctx;
 }
 
+/** One closed verdict per step: names and statuses only, never a detail or a path. */
+export function printLimitVerdict(intent, status) {
+  const steps = (intent.state.orchestrator?.results ?? []).map(({ step, status: verdict }) => ({
+    step,
+    status: verdict,
+  }));
+  console.log(JSON.stringify({ operation: "jira-browser-limit-run", status, steps }));
+}
+
 async function main(argv) {
   const options = limitRunArguments(argv);
   const session = loadSession(options.sessionDir);
@@ -739,12 +748,7 @@ async function main(argv) {
         releaseLane();
       }
       if (status === "unverified") process.exitCode = 1;
-      // One closed verdict per step: names and statuses only, never a detail or a path.
-      const steps = (intent.state.orchestrator?.results ?? []).map(({ step, status: verdict }) => ({
-        step,
-        status: verdict,
-      }));
-      console.log(JSON.stringify({ operation: "jira-browser-limit-run", status, steps }));
+      printLimitVerdict(intent, status);
     },
   );
 }

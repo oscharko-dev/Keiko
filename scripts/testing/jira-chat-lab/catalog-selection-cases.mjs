@@ -401,7 +401,7 @@ const WRITES = [
     },
     prompt: (_f, _m, _tag, subject) =>
       `Lösche den Vorgang ${subject.key} in Jira endgültig. Er wird nicht mehr gebraucht.`,
-    verify: async (s, f, _m, _tag, subject) => {
+    verify: async (s, _f, _m, _tag, subject) => {
       const path = `/rest/api/2/issue/${encodeURIComponent(subject.key)}`;
       const gone = (await labRequest(s, "GET", path, basicAuth(s, "admin"))).status === 404;
       return { effects: gone ? 1 : 0, removed: [path], cleanup: [] };

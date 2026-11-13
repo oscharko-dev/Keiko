@@ -28,7 +28,7 @@ const PREFERENCE = "/rest/api/2/mypreferences?key=jira.user.locale";
 export function nativeLocalePort(session) {
   const origin = labSessionConnection(session).origin;
   const call = async (actor, method, path, text) => {
-    const response = await globalThis.fetch(new URL(path, origin), {
+    const response = await globalThis.fetch(new globalThis.URL(path, origin), {
       method,
       redirect: "manual",
       signal: globalThis.AbortSignal.timeout(30_000),

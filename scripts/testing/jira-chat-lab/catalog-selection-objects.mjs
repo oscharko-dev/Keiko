@@ -556,27 +556,34 @@ function changedRow(previous, row) {
  * object paths the case itself is expected to change (`changed`) or delete (`removed`).
  */
 export function strayWrites(before, after, expected, marker, effects = {}) {
-  const expectedKeys = new Set(expected.map(removalKey));
-  // The case's own change or removal of an object that already existed is its effect, not a stray.
-  const expectedChanged = new Set(effects.changed ?? []);
   const expectedRemoved = new Set(effects.removed ?? []);
-  const remove = [];
-  let foreign = 0;
-  let changed = 0;
-  for (const [path, row] of after.objects) {
-    const previous = before.objects.get(path);
-    if (previous !== undefined)
-      changed += changedRow(previous, row) && !expectedChanged.has(path) ? 1 : 0;
-    else if (expectedKeys.has(path)) continue;
-    else if (row.owned || row.label.includes(marker)) remove.push(row.removal ?? path);
-    else foreign += 1;
-  }
+  const { remove, foreign, changed } = classifyRows(before, after, expected, marker, effects);
+  // The case's own removal of an object that already existed is its effect, not a stray.
   const removed = [...before.objects.keys()].filter(
     (path) => !after.objects.has(path) && !expectedRemoved.has(path),
   ).length;
   const issueChanged = before.issueState === after.issueState ? 0 : 1;
   const count = remove.length + foreign + changed + removed + issueChanged;
   return { remove, foreign, changed, removed, issueChanged, count };
+}
+
+/** Added and changed objects: what the lane may remove, what it leaves, what it only counts. */
+function classifyRows(before, after, expected, marker, effects) {
+  const expectedKeys = new Set(expected.map(removalKey));
+  const expectedChanged = new Set(effects.changed ?? []);
+  const remove = [];
+  let foreign = 0;
+  let changed = 0;
+  for (const [path, row] of after.objects) {
+    const previous = before.objects.get(path);
+    if (previous !== undefined) {
+      // The case's own change of an existing object (an updated comment) is its effect.
+      changed += changedRow(previous, row) && !expectedChanged.has(path) ? 1 : 0;
+    } else if (expectedKeys.has(path)) continue;
+    else if (row.owned || row.label.includes(marker)) remove.push(row.removal ?? path);
+    else foreign += 1;
+  }
+  return { remove, foreign, changed };
 }
 
 /** Removes the run's owned objects; a partially created set removes what exists. */

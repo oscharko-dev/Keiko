@@ -86,15 +86,10 @@ async function requiredFields(session, fixture) {
  * the inventory is how a run learns what its lab lacks.
  */
 export async function fixtureInventory(session) {
-  const auth = basicAuth(session, "admin");
   const fixture = readJson(join(session.directory, "fixture.json"));
   if (fixture === undefined) return { baseSeed: false };
   const required = await requiredFields(session, fixture);
-  const projects = readJson(join(session.directory, "requirements-truth.json"))?.projects ?? {};
-  const largest = projects.large === undefined ? 0 : await jqlTotal(session, auth, projects.large);
-  const mix = readJson(join(session.directory, "estimate-mix-truth.json"));
-  const parent = readJson(join(session.directory, "parent-fields-truth.json"));
-  const language = readJson(join(session.directory, "language.json"));
+  const largest = await largestProjectIssues(session);
   return {
     baseSeed: true,
     restrictedSecondIdentity: await restrictedIdentity(session, fixture),
@@ -103,9 +98,24 @@ export async function fixtureInventory(session) {
     paginationIssues: largest,
     paginationPagesOf100: Math.ceil(largest / PAGINATION_PAGE_SIZE),
     paginationMoreThanThreePages: largest > 3 * PAGINATION_PAGE_SIZE,
-    estimateMixTypes: mix === undefined ? 0 : Object.keys(mix.types).length,
-    parentFieldsSideBySideTypes: parent?.sideBySideTypes?.length ?? 0,
-    language: language?.locale ?? "en_US",
+    ...receiptFacts(session),
+  };
+}
+
+/** The issue count of the large report project, the lab's pagination volume. */
+async function largestProjectIssues(session) {
+  const projects = readJson(join(session.directory, "requirements-truth.json"))?.projects ?? {};
+  if (projects.large === undefined) return 0;
+  return jqlTotal(session, basicAuth(session, "admin"), projects.large);
+}
+
+/** What the private receipts of the three new fixtures record, without reading Jira again. */
+function receiptFacts(session) {
+  const read = (name) => readJson(join(session.directory, name));
+  return {
+    estimateMixTypes: Object.keys(read("estimate-mix-truth.json")?.types ?? {}).length,
+    parentFieldsSideBySideTypes: read("parent-fields-truth.json")?.sideBySideTypes?.length ?? 0,
+    language: read("language.json")?.locale ?? "en_US",
   };
 }
 

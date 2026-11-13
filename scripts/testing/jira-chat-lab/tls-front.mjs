@@ -35,16 +35,17 @@ const PRIVATE_ADDRESS_FILE = "private-address";
 export function validatePrivateAddress(value) {
   const address = String(value ?? "");
   const kind = isIP(address);
-  const octets = kind === 4 ? address.split(".").map(Number) : [];
-  const [first = -1, second = -1] = octets;
-  const private4 =
-    first === 10 ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168) ||
-    (first === 169 && second === 254);
+  const private4 = kind === 4 && isPrivateIpv4(address.split(".").map(Number));
   const private6 = kind === 6 && /^f[cd][0-9a-f]{2}:/iu.test(address);
   if (!private4 && !private6) throw new TypeError("Lab private address must be a private-class IP");
   return address;
+}
+
+/** RFC 1918 and link-local IPv4: 10/8, 172.16/12, 192.168/16, 169.254/16. */
+function isPrivateIpv4([first, second]) {
+  if (first === 10) return true;
+  if (first === 172) return second >= 16 && second <= 31;
+  return (first === 192 && second === 168) || (first === 169 && second === 254);
 }
 
 /** The Host header values the front accepts: loopback and, when set, the private address. */

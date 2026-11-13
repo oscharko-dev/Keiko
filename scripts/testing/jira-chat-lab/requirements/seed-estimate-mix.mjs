@@ -203,30 +203,41 @@ export async function readMixTruth(jira, projectKey, ids) {
   }
 }
 
+/** One type's truth: refuses a screen or a population that is not what the plan describes. */
+function typeTruth({ type, shape, offered, row, expected }) {
+  const estimated = shape === "story-points" ? row.pointsHeld : row.secondsHeld;
+  if (JSON.stringify(offered) !== JSON.stringify(shape === "none" ? [] : [shape]))
+    throw new TypeError(`The ${type} screen does not offer exactly its ${shape} estimate`);
+  if (row.issues !== expected.issues || estimated !== expected.estimated)
+    throw new TypeError(`Jira does not hold the planned ${type} population`);
+  const applicable = shape !== "none";
+  return {
+    shape,
+    issues: row.issues,
+    estimated,
+    unestimated: applicable ? row.issues - estimated : 0,
+    notApplicable: applicable ? 0 : row.issues,
+    ...(shape === "story-points" ? { points: row.points } : {}),
+    ...(shape === "time-tracking" ? { seconds: row.seconds } : {}),
+  };
+}
+
+const EMPTY_ROW = { issues: 0, pointsHeld: 0, secondsHeld: 0, points: 0, seconds: 0 };
+
 /** The truth file: offered fields per type beside what Jira holds, graded against the plan. */
 export function mixTruth({ plan, offered, held, ids }) {
   const expected = expectedByType(plan);
   const types = Object.fromEntries(
-    Object.entries(SHAPES).map(([type, shape]) => {
-      const row = held[type] ?? { issues: 0, pointsHeld: 0, secondsHeld: 0, points: 0, seconds: 0 };
-      const estimated = shape === "story-points" ? row.pointsHeld : row.secondsHeld;
-      if (JSON.stringify(offered[type]) !== JSON.stringify(shape === "none" ? [] : [shape]))
-        throw new TypeError(`The ${type} screen does not offer exactly its ${shape} estimate`);
-      if (row.issues !== expected[type].issues || estimated !== expected[type].estimated)
-        throw new TypeError(`Jira does not hold the planned ${type} population`);
-      return [
+    Object.entries(SHAPES).map(([type, shape]) => [
+      type,
+      typeTruth({
         type,
-        {
-          shape,
-          issues: row.issues,
-          estimated,
-          unestimated: shape === "none" ? 0 : row.issues - estimated,
-          notApplicable: shape === "none" ? row.issues : 0,
-          ...(shape === "story-points" ? { points: row.points } : {}),
-          ...(shape === "time-tracking" ? { seconds: row.seconds } : {}),
-        },
-      ];
-    }),
+        shape,
+        offered: offered[type],
+        row: held[type] ?? EMPTY_ROW,
+        expected: expected[type],
+      }),
+    ]),
   );
   return {
     schemaVersion: 1,
