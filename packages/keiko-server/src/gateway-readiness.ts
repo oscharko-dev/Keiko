@@ -3538,7 +3538,17 @@ async function runStartupConversationWalk(
 ): Promise<void> {
   const visited = new Set<string>();
   try {
-    while (await advanceStartupWalk(deps, holder, correlationId, recheck, walk, visited)) {
+    // One model at a time is the point of the walk: the next check starts only after a definitive refusal.
+    while (
+      await /* NOSONAR typescript:S9382 -- sequential by design (#4351). */ advanceStartupWalk(
+        deps,
+        holder,
+        correlationId,
+        recheck,
+        walk,
+        visited,
+      )
+    ) {
       // One election step per iteration; the step decides whether the walk goes on.
     }
   } catch (error) {

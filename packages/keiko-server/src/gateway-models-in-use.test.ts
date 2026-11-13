@@ -185,7 +185,7 @@ it("adds no request on a page load or a model list read", async () => {
     expect(result).toMatchObject({ status: 200 });
   }
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
-  expect(gateway.requests.length).toBe(before);
+  expect(gateway.requests).toHaveLength(before);
 });
 
 it("adds no request when a person sends to or regenerates with an unselected, unchecked model", async () => {
@@ -196,7 +196,7 @@ it("adds no request when a person sends to or regenerates with an unselected, un
   await awaitInitializedConversationReadiness(deps, CHAT_B, "corr-send-b");
   await awaitInitializedConversationReadiness(deps, CHAT_B, "corr-regenerate-b");
   await awaitAnyInitializedConversationReadyChatModel(deps, CHAT_B, "corr-create-b");
-  expect(gateway.requests.length).toBe(before);
+  expect(gateway.requests).toHaveLength(before);
   expect(currentConversationReady(deps, CHAT_B)).toBe(false);
 });
 
@@ -330,5 +330,5 @@ it("refuses a selection without a model id and ignores a model the gateway does 
   expect(
     await handleGatewaySelectionCheck(selectionRequest({ modelId: "not-listed" }), deps),
   ).toMatchObject({ status: 200, body: { state: "unchecked" } });
-  expect(gateway.requests.length).toBe(before);
+  expect(gateway.requests).toHaveLength(before);
 });

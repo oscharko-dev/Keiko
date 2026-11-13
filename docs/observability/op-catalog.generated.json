@@ -120829,14 +120829,14 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3630",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3640",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3788",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3798",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
