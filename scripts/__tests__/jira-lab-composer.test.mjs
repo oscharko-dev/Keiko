@@ -1,7 +1,7 @@
 // The Composer lane (#4369): graders and journeys in both directions, through the real entry points,
 // over an in-memory Jira and a stub model. No live Jira, no model, no Knowledge Pod.
 import { Buffer } from "node:buffer";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   COMPOSER_JOURNEYS,
   COMPOSER_JOURNEY_IDS,
@@ -35,7 +35,6 @@ import {
 } from "../testing/jira-chat-lab/requirements/composer-templates.mjs";
 import { SCENARIOS } from "../testing/jira-chat-lab/requirements/catalog.mjs";
 import { evidenceLines, scenarioVerdict } from "../testing/jira-chat-lab/requirements/coverage.mjs";
-import { JOURNEYS } from "../testing/jira-chat-lab/requirements/journey-checks.mjs";
 import { turnIssues } from "../testing/jira-chat-lab/requirements/oracles.mjs";
 
 const LINK = "customfield_10109";
@@ -1037,7 +1036,7 @@ describe("C05 re-run (a Task) and C06 modes (a Bug)", () => {
   });
 });
 
-describe("C07 reports run the real S10 grader, S11 unchanged", () => {
+describe("C07 reports run the real S10 and S11 graders", () => {
   const CATEGORY = { "To Do": "new", Done: "done" };
   const rpt = (key, type, status, extra = {}) => ({
     key,
@@ -1054,48 +1053,82 @@ describe("C07 reports run the real S10 grader, S11 unchanged", () => {
     rpt("RPT-3", "Task", "Done", { [LINK]: "RPT-1", customfield_10111: 3 }),
   ];
   const FIELDS = { epicLink: LINK, storyPoints: "customfield_10111" };
-  const run = (answer) => {
-    const ctx = lane({});
-    ctx.truth = { fieldIds: FIELDS, issues: [] };
-    ctx.refusals = () => 0;
-    ctx.search = async (query) => (/project = RPT/u.test(query) ? world : []);
-    ctx.turn = async () => ({
-      answer,
-      toolExchanges: [],
-      failure: undefined,
-      durationMs: 1000,
-      toolCalls: 0,
-      approvals: { writes: 0 },
-    });
-    ctx.deselectSkill = async () => undefined;
-    return { ctx, check: COMPOSER_JOURNEYS.C07(ctx, undefined) };
-  };
-  const GOOD = [
+  const GOOD_S10 = [
     "ANZAHL;Epic;To Do;1",
     "ANZAHL;Task;Done;1",
     "EPIC;RPT-1;1;1",
     "SCHÄTZUNG;3;3;0",
   ].join("\n");
+  // The seeded deviations of the small S11 fixture of the scorecard tests, and the tool's report.
+  const DEVIATING = [
+    { key: "RPT-1", deviations: ["summary", "section:Abgrenzung"] },
+    { key: "RPT-3", deviations: ["parent"] },
+  ];
+  const ENTRIES = [
+    { key: "RPT-1", ruleIds: ["template.summary", "template.section.abgrenzung"], fieldIds: [] },
+    { key: "RPT-3", ruleIds: ["required-field-empty"], fieldIds: [FIELDS.epicLink] },
+  ];
+  const report = {
+    call: { id: "call-1", name: "jira_report", arguments: { projectKey: "RPT" } },
+    result: {
+      toolRef: { canonicalId: "keiko.jira.report", contractVersion: 1 },
+      status: "completed",
+      data: {
+        outcome: "succeeded",
+        status: "complete",
+        report: { compliance: { deviations: { total: ENTRIES.length, items: ENTRIES } } },
+      },
+    },
+  };
+  const S11_ANSWER =
+    "RPT-1: Zusammenfassung ohne [LH-xxx]-Präfix; Abschnitt Abgrenzung fehlt\nRPT-3: kein Epic zugeordnet";
+  /** A Jira-Pod-only Chat for the report project: S10 and S11 answer by their own prompt. */
+  const run = ({ s10 = GOOD_S10, s11 = S11_ANSWER, exchanges = [report] } = {}) => {
+    const ctx = lane({});
+    ctx.truth = { fieldIds: FIELDS, issues: DEVIATING };
+    ctx.refusals = () => 0;
+    ctx.search = async (query) => (/project = RPT/u.test(query) ? world : []);
+    ctx.deselectSkill = async () => undefined;
+    ctx.turn = async (_chat, content) => {
+      const compliance = /Strukturvorgabe/u.test(content);
+      return {
+        answer: compliance ? s11 : s10,
+        toolExchanges: compliance ? exchanges : [],
+        failure: undefined,
+        durationMs: 1000,
+        toolCalls: 0,
+        approvals: { writes: 0 },
+      };
+    };
+    return { ctx, check: COMPOSER_JOURNEYS.C07(ctx, undefined) };
+  };
 
-  it("grades S10 by its own oracle, green for the exact answer and red for a wrong figure", async () => {
-    const s11 = vi
-      .spyOn(JOURNEYS, "S11")
-      .mockResolvedValue({ status: "green", covers: ["deviating-issues"], detail: "ok" });
-    const green = await run(GOOD).check;
-    expect(green.covers).toEqual(
+  it("is green when the exact S10 figures and the described S11 deviations are given", async () => {
+    const { ctx, check } = run();
+    const result = await check;
+    expect(result.covers).toEqual(
       expect.arrayContaining([
         "counts-by-type-status",
         "per-epic-progress",
         "estimate-totals",
         "deviating-issues",
+        "deviation-detail",
       ]),
     );
-    expect(green.detail).toContain("S10 progress report: green");
-    const red = await run(GOOD.replace("SCHÄTZUNG;3;3;0", "SCHÄTZUNG;9;9;0")).check;
-    expect(red.status).toBe("red");
-    s11.mockResolvedValue({ status: "red", covers: [], detail: "bad" });
-    expect((await run(GOOD).check).status).toBe("red");
-    s11.mockRestore();
+    expect(result.detail).toContain("S10 progress report: green");
+    expect(result.detail).toContain("S11 compliance report: green");
+    expect(ctx.calls.fresh).toHaveLength(2);
+  });
+
+  it("is red when S10's figure is wrong, or S11 leaves a deviation undescribed or the tool report absent", async () => {
+    expect(
+      (await run({ s10: GOOD_S10.replace("SCHÄTZUNG;3;3;0", "SCHÄTZUNG;9;9;0") }).check).status,
+    ).toBe("red");
+    const lazy = await run({ s11: "RPT-1\nRPT-3" }).check;
+    expect(lazy.status).toBe("red");
+    expect(lazy.detail).toContain("S11 compliance report: red");
+    const noTool = await run({ exchanges: [] }).check;
+    expect(noTool.detail).toContain("S11 compliance report: unverified");
   });
 });
 
