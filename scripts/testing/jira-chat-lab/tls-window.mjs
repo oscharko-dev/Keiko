@@ -43,7 +43,8 @@ export async function renewTlsWindow(
 ) {
   const tlsDirectory = join(session.directory, "secrets", "tls");
   const before = remainingOf(tlsDirectory, remaining);
-  if (before >= minimumSeconds) return { renewed: false, remainingBefore: before, remainingAfter: before };
+  if (before >= minimumSeconds)
+    return { renewed: false, remainingBefore: before, remainingAfter: before };
   const renewed = await exclusive(
     session.directory,
     async () => remainingOf(tlsDirectory, remaining) < minimumSeconds,

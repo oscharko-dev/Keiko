@@ -1,20 +1,30 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { join } from "node:path";
 import { labSessionConnection } from "./lab-client.mjs";
+import { readLabPrivateAddress } from "./tls-front.mjs";
 
 const execute = promisify(execFile);
 
-function publishedPort(container, inside, outside) {
+/** The loopback binding, plus the one recorded private address when the session has one (#4369). */
+function publishedPort(container, inside, outside, privateAddress) {
   const published = Object.fromEntries(
     Object.entries(container.NetworkSettings.Ports).filter(([, bindings]) => bindings !== null),
   );
-  assert.deepEqual(published, {
-    [`${inside}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: String(outside) }],
-  });
+  const byAddress = (left, right) => left.HostIp.localeCompare(right.HostIp);
+  const expected = ["127.0.0.1", ...(privateAddress === undefined ? [] : [privateAddress])]
+    .map((HostIp) => ({ HostIp, HostPort: String(outside) }))
+    .sort(byAddress);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(published).map(([key, list]) => [key, [...list].sort(byAddress)]),
+    ),
+    { [`${inside}/tcp`]: expected },
+  );
 }
 
-export function validateServices(session, containers) {
+export function validateServices(session, containers, privateAddress = undefined) {
   assert.match(session.project, /^keiko-jira-4081-[a-z0-9-]{1,32}$/u);
   const selected = labSessionConnection(session);
   const services = {};
@@ -30,7 +40,7 @@ export function validateServices(session, containers) {
   assert.equal(Object.keys(services).length, 3);
   assert.equal(services.jira.Config.Image, selected.jiraImage);
   publishedPort(services.jira, 8080, selected.httpPort);
-  publishedPort(services.tls, selected.httpsPort, selected.httpsPort);
+  publishedPort(services.tls, selected.httpsPort, selected.httpsPort, privateAddress);
   assert.deepEqual(services.tls.Config.Cmd, [
     "node",
     "/opt/tls-front.mjs",
@@ -38,6 +48,7 @@ export function validateServices(session, containers) {
     String(selected.httpsPort),
     "8080",
     "compose",
+    ...(privateAddress === undefined ? [] : [privateAddress]),
   ]);
   return services;
 }
@@ -83,7 +94,11 @@ export async function inspectServices(session) {
     await labDocker(["ps", "-q", "--filter", `label=com.docker.compose.project=${session.project}`])
   ).split("\n");
   assert.equal(ids.length, 3);
-  const services = validateServices(session, JSON.parse(await labDocker(["inspect", ...ids])));
+  const services = validateServices(
+    session,
+    JSON.parse(await labDocker(["inspect", ...ids])),
+    readLabPrivateAddress(join(session.directory, "secrets", "tls")),
+  );
   const images = JSON.parse(
     await labDocker(["image", "inspect", labSessionConnection(session).jiraImage]),
   );

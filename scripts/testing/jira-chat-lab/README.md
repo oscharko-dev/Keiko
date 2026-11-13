@@ -1371,3 +1371,74 @@ results in `browser-limit-followup.pending.json`. The earlier `ac4-hierarchy` or
 unexpected, so do not run the limit run's hierarchy step against a project that holds these Stories.
 Hermetic tests: `scripts/__tests__/jira-lab-story-bulk.test.mjs`, `jira-lab-story-templates.test.mjs`,
 `jira-lab-coding-jira.test.mjs` and `jira-lab-limit-followup.test.mjs`; they are not live acceptance.
+
+## Release 1 lab: fixtures, German session, private address, renewal (#4369)
+
+**Which fixtures a fresh session holds.** `node release-1-fixtures.mjs <session> --inventory` reads them
+natively and prints closed facts; a missing fixture reads `false` or `0`, never an error.
+
+| Need of the Release 1 walk                                          | Provided by                                                                                      | Inventory fact                                     |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| A restricted second identity (reads `ISOLATED`, refused on `KEIKO`) | `seed.mjs` (restricted PAT) and `seed-permissions.mjs`                                           | `restrictedSecondIdentity`                         |
+| A required custom field (`Keiko required text`)                     | `qualify-fields.mjs`                                                                             | `requiredCustomFieldOnCreate`                      |
+| The required field on a transition screen (Done)                    | `qualify-fields.mjs`                                                                             | `requiredFieldOnTransitionScreen`                  |
+| Pagination volume beyond three pages of 100                         | `LRG` of `requirements/seed-projects.mjs` (2,490 issues) and the 21 issues of `seed-content.mjs` | `paginationIssues`, `paginationMoreThanThreePages` |
+| A project whose issue types differ in their estimate field          | `requirements/seed-estimate-mix.mjs` (`EST`)                                                     | `estimateMixTypes`                                 |
+| Epic Link and Parent Link side by side                              | `requirements/seed-parent-fields.mjs` (`PAR`)                                                    | `parentFieldsSideBySideTypes`                      |
+| A German-language Jira                                              | `seed-language.mjs`                                                                              | `language`                                         |
+
+`node release-1-fixtures.mjs <session> [--language de]` completes a seeded session with the last three in
+the one order that works and prints the inventory. Seed first (`seed.mjs`, `qualify-fields.mjs`,
+`seed-content.mjs`, `requirements/seed-projects.mjs`, `requirements/seed-estimates.mjs`).
+
+- **`EST` (estimate mix).** A project created from the Scrum template through REST offers Story Points on
+  Epic and Story only, through the field's own Jira Software context. The seed adds Story Points to the
+  default screen and time tracking to the Bug screen alone, so one project holds three shapes: Epic and
+  Story carry Story Points, Bug carries Original Estimate, Task and Sub-task carry no estimate field.
+  `<session>/estimate-mix-truth.json` holds, per type, what Jira's create metadata offers and the
+  `estimated`, `unestimated` (offered but empty) and `notApplicable` counts, read back natively. A report
+  that stops at the first issue of a type without the field, or that counts "not applicable" as
+  unestimated, is graded against it.
+- **`PAR` (parent fields).** Epic Link (Jira Software) and Parent Link (Advanced Roadmaps,
+  `com.atlassian.jpo:jpo-custom-field-parent`) are found by schema type and offered together on Epic,
+  Story, Task and Sub-task; Bug keeps Epic Link only. An instance without the Parent Link type fails the
+  seed closed: the lab never stands in for it with a text field of the same name.
+- **German session.** Jira Data Center localizes per user, and Keiko acts as the lab actor whose token it
+  holds. `seed-language.mjs <session> de` sets `de_DE` for every actor except the administrator through
+  `PUT /rest/api/2/mypreferences?key=jira.user.locale` (the body is the bare locale text) and proves it
+  by native reads: statuses read `Zu erledigen`, `In Arbeit`, `Fertig`. `en` restores the default. The
+  administrator stays English because the lab's administration automation drives labelled English pages,
+  and the German locale is applied last: `qualify-fields.mjs` failed on localized names (observed
+  2026-11-13). The report counts by status and the JQL by issue type name must work in this session.
+- **HTTPS front on a private address.** `KEIKO_JIRA_LAB_PRIVATE_ADDRESS=<private IP>` at
+  `session.mjs init` records one RFC 1918, link-local or unique-local address. The certificate then names
+  it, the Host guard accepts it and `compose.private.yaml` publishes the TLS port on it beside loopback, so
+  a private-class Jira URL can be walked live and a Windows guest reaches the lab without a tunnel.
+  Loopback, wildcard and public addresses are refused; without the variable nothing changes.
+
+**Renewal and isolation.** Every run starts with `prepareLabRun`: the license window (`ensureLicenseWindow`
+restarts the owned lab), the Personal Access Tokens (`ensureFixtureToken`) and the TLS certificate
+(`tls-window.mjs` runs the owned session's `start`, which regenerates the certificate generation and
+recreates only the TLS front) are renewed by the run itself, at a boundary where no other lane uses Jira.
+The limit run additionally checks the license window before every step (`ctx.checkLicense`). The lab sets
+`KEIKO_STATE_DIR` to `<session>/chat-read-logs` for its process and every child beside `KEIKO_MEMORY_DIR`,
+so no diagnostics writer falls back to `<cwd>/.keiko`.
+
+**Selection lane.** `catalog-selection.mjs` holds a case for `jira.update-comment`, `jira.get-comment`,
+`jira.create-issue-link`, `jira.link-types`, `jira.users`, `jira.myself`, `jira.fields`,
+`jira.priorities`, `jira.statuses`, `jira.resolutions`, `jira.project-statuses` and `jira.delete-issue`, all
+on lab-owned objects (a comment the api actor owns, and a fresh issue for each delete attempt). The report
+and `latest.md` carry a `jira.describe` line counting, per valid turn, the catalog's `invalid-arguments`
+refusals of the model's selection call, which the gateway-level refusal count never sees. Run new cases
+alone and repeat them: `node catalog-selection.mjs <session> <model> --only <ids> --repeat 3`.
+
+**Oracles.** Every report grader reads numbers and rows through `requirements/answer-cells.mjs`
+(German `1.170`, `;`, TAB and Markdown rows). S16 names the failed check (`summary`, `label` or `section`)
+with a count of issues each. S17 grades the interruption `unverified` when the 1,800 s lab limit ended the
+turn, like the refresh part.
+
+**Limit run, Release 1 steps.** `node browser-limit-run.mjs <session> <model> <embedding> <permitted-token>
+<denied-token> <LIMn> --steps release-1` runs templates and probes, the bulk write with deliberate
+violations and the kill at about 40 %, the hierarchy with relations, the report compared with JQL, and the
+English and German card checks, and leaves out the sprint-at-scale package (Agile child). It prints one
+closed verdict per step.

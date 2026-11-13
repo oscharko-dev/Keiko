@@ -28,4 +28,3 @@ export function cellsOf(line) {
   const cells = text.split(/[;\t|]/u).map((cell) => cell.trim().replaceAll(/\*\*|\x60/gu, ""));
   return cells.length > 1 ? cells : undefined;
 }
-

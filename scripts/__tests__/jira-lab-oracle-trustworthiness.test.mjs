@@ -51,7 +51,10 @@ describe("report answer reader shared by every report grader", () => {
       ["a wrong count", "VORLAGENLÜCKE;Story;1.171\nVORLAGENLÜCKE;Bug;4"],
       ["a decimal count", "VORLAGENLÜCKE;Story;1170,5\nVORLAGENLÜCKE;Bug;4"],
       ["a missing type", "VORLAGENLÜCKE;Story;1.170"],
-      ["a repeated type", "VORLAGENLÜCKE;Story;1.170\nVORLAGENLÜCKE;Story;1.170\nVORLAGENLÜCKE;Bug;4"],
+      [
+        "a repeated type",
+        "VORLAGENLÜCKE;Story;1.170\nVORLAGENLÜCKE;Story;1.170\nVORLAGENLÜCKE;Bug;4",
+      ],
       ["a zero count", "VORLAGENLÜCKE;Story;0\nVORLAGENLÜCKE;Bug;4"],
     ])("grades %s as wrong", (_name, answer) => {
       expect(templateGapsLabelled(answer, without)).toBe(false);
@@ -92,8 +95,9 @@ describe("report answer reader shared by every report grader", () => {
     });
     it("still refuses a wrong reason in TAB format", () => {
       expect(
-        grade("SCHÄTZUNG\tNICHT_VERFÜGBAR\tambiguous-field\nSCOPE-LÜCKE\tSCHÄTZUNG\tfield-not-found")
-          .ok,
+        grade(
+          "SCHÄTZUNG\tNICHT_VERFÜGBAR\tambiguous-field\nSCOPE-LÜCKE\tSCHÄTZUNG\tfield-not-found",
+        ).ok,
       ).toBe(false);
     });
   });

@@ -99,7 +99,9 @@ if (action === "init") {
           KEIKO_JIRA_LAB_STATE_DIR: directory,
           KEIKO_JIRA_LAB_HTTP_PORT: String(session.httpPort),
           KEIKO_JIRA_LAB_HTTPS_PORT: String(session.httpsPort),
-          ...(privateAddress === undefined ? {} : { KEIKO_JIRA_LAB_PRIVATE_ADDRESS: privateAddress }),
+          ...(privateAddress === undefined
+            ? {}
+            : { KEIKO_JIRA_LAB_PRIVATE_ADDRESS: privateAddress }),
           KEIKO_JIRA_LAB_JIRA_VERSION: session.jiraVersion,
           KEIKO_JIRA_LAB_JIRA_SHA256: session.jiraImageDigest,
         },

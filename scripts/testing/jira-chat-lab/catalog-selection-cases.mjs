@@ -384,14 +384,9 @@ const WRITES = [
     },
     // Restores the original text, so every round starts from the same comment.
     restore: async (s, f) => {
-      await checked(
-        s,
-        "catalog-selection-fixture",
-        "PUT",
-        commentPath(f),
-        basicAuth(s, "admin"),
-        { body: f.selection.commentBody },
-      );
+      await checked(s, "catalog-selection-fixture", "PUT", commentPath(f), basicAuth(s, "admin"), {
+        body: f.selection.commentBody,
+      });
     },
   },
   {
