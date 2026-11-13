@@ -7,6 +7,7 @@ import {
   PORTABLE_SETUP_NOTICE,
   runDetachedAlert,
   runDetachedWindowsAlert,
+  runDetachedWindowsBox,
 } from "./portable-launch-notifier.js";
 
 const UI_LAUNCH = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
@@ -455,28 +456,31 @@ describe("notifyPortableSetupStarted", () => {
     );
 
     expect(reported).toEqual(["keiko portable launch: the setup notice could not be shown\n"]);
+    // the shared alert path keeps its security refusal line; the second line names the notice
     expect(events.map((event) => [event.op, event.extra?.surface])).toEqual([
-      ["security.windows-portable-alert.system-root-refused", "portable-setup-notice"],
+      ["security.windows-portable-alert.system-root-refused", "portable-failure-alert"],
+      ["portable.windows-alert.spawn-failed", "portable-setup-notice"],
     ]);
+    expect(events[1]?.extra?.failureKind).toBe("WindowsSystemDirectoryError");
   });
 });
 
-describe("runDetachedWindowsAlert as a setup notice", () => {
+describe("runDetachedWindowsBox as a setup notice", () => {
   it("shows an information box titled Keiko, never the could-not-start error box", () => {
     const commands: string[] = [];
 
-    runDetachedWindowsAlert(
+    runDetachedWindowsBox(
+      "setup-notice",
       PORTABLE_SETUP_NOTICE,
       { SystemRoot: String.raw`D:\Windows` },
-      (_command, args) => {
-        commands.push(args.at(-1) ?? "");
-        return { on: (): void => undefined, unref: (): void => undefined };
+      {
+        spawnFn: (_command, args) => {
+          commands.push(args.at(-1) ?? "");
+          return { on: (): void => undefined, unref: (): void => undefined };
+        },
+        identityCheck: () => true,
+        existsAsFile: () => true,
       },
-      () => undefined,
-      () => true,
-      undefined,
-      () => true,
-      "setup-notice",
     );
 
     expect(commands).toEqual([

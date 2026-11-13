@@ -209,11 +209,38 @@ export function runDetachedWindowsAlert(
   identityCheck?: WindowsSystemDirectoryIdentityCheck,
   securityLogSink?: SecurityLogSink,
   existsAsFile?: WindowsBinaryExistsCheck,
-  kind: WindowsAlertKind = "failure",
 ): void {
-  const log: WindowsAlertLog = { kind, sink: securityLogSink };
-  const system = resolveWindowsAlertSystem(env, identityCheck, existsAsFile, log);
-  const child = spawnWindowsAlertChild(message, env, system, spawnFn, log);
+  runDetachedWindowsBox("failure", message, env, {
+    spawnFn,
+    reportAlertFailure,
+    identityCheck,
+    securityLogSink,
+    existsAsFile,
+  });
+}
+
+export interface DetachedWindowsBoxOptions {
+  readonly spawnFn?: DetachedAlertSpawn | undefined;
+  readonly reportAlertFailure?: ((line: string) => void) | undefined;
+  readonly identityCheck?: WindowsSystemDirectoryIdentityCheck | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
+}
+
+/**
+ * The one detached Windows message box behind both uses: the failure alert and the setup notice.
+ * Exported for its direct tests; production callers go through the two notify functions.
+ */
+export function runDetachedWindowsBox(
+  kind: WindowsAlertKind,
+  message: string,
+  env: EnvSource,
+  options: DetachedWindowsBoxOptions = {},
+): void {
+  const reportAlertFailure = options.reportAlertFailure ?? defaultAlertFailureReport;
+  const log: WindowsAlertLog = { kind, sink: options.securityLogSink };
+  const system = resolveWindowsAlertSystem(env, options.identityCheck, options.existsAsFile, log);
+  const child = spawnWindowsAlertChild(message, env, system, options.spawnFn ?? spawn, log);
   child.on("error", (error) => {
     logWindowsAlertSpawnFailure(error, log);
     reportAlertFailure(kind === "failure" ? ALERT_FAILURE_LINE : NOTICE_FAILURE_LINE);
@@ -243,7 +270,10 @@ function resolveWindowsAlertSystem(
       command: resolveWindowsPowerShellExecutable(env, existsAsFile, identityCheck),
     };
   } catch (error) {
-    emitCliWindowsSystemFailure(error, log.sink, WINDOWS_ALERT_SURFACE[log.kind]);
+    // The refusal belongs to the alert path both boxes share and keeps its security line; a setup
+    // notice adds its own line so the refusal can be told from a failed launch.
+    emitCliWindowsSystemFailure(error, log.sink, "portable-failure-alert");
+    if (log.kind === "setup-notice") logWindowsAlertSpawnFailure(error, log);
     throw error;
   }
 }
@@ -396,16 +426,12 @@ function showWindowsSetupNotice(
   const runWindowsAlert =
     deps.runWindowsAlert ??
     ((alertMessage: string, notifyEnv: EnvSource): void => {
-      runDetachedWindowsAlert(
-        alertMessage,
-        notifyEnv,
-        undefined,
+      runDetachedWindowsBox("setup-notice", alertMessage, notifyEnv, {
         reportAlertFailure,
-        deps.windowsSystemDirectoryIdentity,
-        deps.securityLogSink,
-        deps.windowsBinaryExists,
-        "setup-notice",
-      );
+        identityCheck: deps.windowsSystemDirectoryIdentity,
+        securityLogSink: deps.securityLogSink,
+        existsAsFile: deps.windowsBinaryExists,
+      });
     });
   runWindowsAlert(PORTABLE_SETUP_NOTICE, env);
 }

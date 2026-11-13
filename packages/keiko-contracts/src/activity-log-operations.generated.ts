@@ -42926,7 +42926,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["portable-failure-alert", "portable-setup-notice"],
+        values: ["portable-failure-alert"],
       },
       failureKind: {
         type: "string",
@@ -42964,7 +42964,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["portable-failure-alert", "portable-setup-notice"],
+        values: ["portable-failure-alert"],
       },
       failureKind: {
         type: "string",

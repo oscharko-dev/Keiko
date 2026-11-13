@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e1cdc747f2432a4e4a4eb515ae7b9b167349e920afa7d4c9608364d461d0c626",
+    "catalogDigest": "6bf32e1318b687e9dab8b35c6f717b57b337a782d5cd4bc45dd26ec1ad0e2626",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38816,7 +38816,7 @@
         "proofIds": ["portable.setup-notice.requested.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/portable-launch-notifier.ts:72",
-        "emitterSites": ["packages/keiko-cli/src/portable-launch-notifier.ts:306"]
+        "emitterSites": ["packages/keiko-cli/src/portable-launch-notifier.ts:336"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38856,7 +38856,7 @@
         "proofIds": ["portable.windows-alert.spawn-failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/portable-launch-notifier.ts:39",
-        "emitterSites": ["packages/keiko-cli/src/portable-launch-notifier.ts:295"]
+        "emitterSites": ["packages/keiko-cli/src/portable-launch-notifier.ts:325"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44430,8 +44430,8 @@
           }
         },
         "proofIds": ["security.windows-launcher.system-binary-missing.emitted-line"],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:127",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:216"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:126",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:214"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44470,8 +44470,8 @@
           }
         },
         "proofIds": ["security.windows-launcher.system-root-refused.emitted-line"],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:99",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:165"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:98",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:164"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44510,8 +44510,8 @@
           }
         },
         "proofIds": ["security.windows-lifecycle-opener.system-binary-missing.emitted-line"],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:148",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:247"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:147",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:244"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44550,8 +44550,8 @@
           }
         },
         "proofIds": ["security.windows-lifecycle-opener.system-root-refused.emitted-line"],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:120",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:196"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:119",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:194"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44662,7 +44662,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["portable-failure-alert", "portable-setup-notice"]
+            "values": ["portable-failure-alert"]
           },
           "failureKind": {
             "type": "string",
@@ -44673,8 +44673,8 @@
         },
         "op": "security.windows-portable-alert.system-binary-missing",
         "proofIds": ["security.windows-portable-alert.system-binary-missing.emitted-line"],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:141",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:237"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:140",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:234"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44703,7 +44703,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["portable-failure-alert", "portable-setup-notice"]
+            "values": ["portable-failure-alert"]
           },
           "failureKind": {
             "type": "string",
@@ -44713,8 +44713,8 @@
           }
         },
         "proofIds": ["security.windows-portable-alert.system-root-refused.emitted-line"],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:113",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:186"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:112",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:184"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44755,8 +44755,8 @@
         "proofIds": [
           "security.windows-portable-legacy-launcher.system-binary-missing.emitted-line"
         ],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:134",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:226"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:133",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:224"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44795,8 +44795,8 @@
           }
         },
         "proofIds": ["security.windows-portable-legacy-launcher.system-root-refused.emitted-line"],
-        "registrationSite": "packages/keiko-cli/src/security-log.ts:106",
-        "emitterSites": ["packages/keiko-cli/src/security-log.ts:175"]
+        "registrationSite": "packages/keiko-cli/src/security-log.ts:105",
+        "emitterSites": ["packages/keiko-cli/src/security-log.ts:174"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -117326,49 +117326,49 @@
     {
       "op": "security.windows-launcher.system-binary-missing",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:129",
+      "site": "packages/keiko-cli/src/security-log.ts:128",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-launcher.system-root-refused",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:101",
+      "site": "packages/keiko-cli/src/security-log.ts:100",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-lifecycle-opener.system-binary-missing",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:150",
+      "site": "packages/keiko-cli/src/security-log.ts:149",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-lifecycle-opener.system-root-refused",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:122",
+      "site": "packages/keiko-cli/src/security-log.ts:121",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-alert.system-binary-missing",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:144",
+      "site": "packages/keiko-cli/src/security-log.ts:143",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-alert.system-root-refused",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:115",
+      "site": "packages/keiko-cli/src/security-log.ts:114",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-legacy-launcher.system-binary-missing",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:136",
+      "site": "packages/keiko-cli/src/security-log.ts:135",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-legacy-launcher.system-root-refused",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/security-log.ts:108",
+      "site": "packages/keiko-cli/src/security-log.ts:107",
       "package": "keiko-cli"
     },
     {
