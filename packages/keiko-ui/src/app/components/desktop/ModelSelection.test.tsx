@@ -1130,7 +1130,14 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     readonly stage: (name: string) => Promise<void>;
   }
 
+  function sendControl(): HTMLElement {
+    return screen.getByRole("button", { name: "Send message" });
+  }
+
   async function composerRig(): Promise<ComposerRig> {
+    // A send with a staged document imports the extraction module on first use; load it before the
+    // composer is used, so the wait below measures the product's own steps and not a cold import.
+    await import("./hooks/documentContext");
     documentCapableCatalog();
     const user = userEvent.setup();
     const sessionRef: SessionRef = { current: undefined };
@@ -1142,8 +1149,13 @@ describe("first use of an unchecked model on Send (#4351)", () => {
       sessionRef,
       box,
       send: async (how): Promise<void> => {
-        if (how === "button")
-          await user.click(screen.getByRole("button", { name: "Send message" }));
+        // The composer accepts a Send only once it reports itself ready (model catalog loaded, no
+        // skill or scope still resolving): its send control then stops being aria-disabled. A press
+        // before that is inert by design, so the press waits for the state the product exposes.
+        await waitFor(() => {
+          expect(sendControl()).toHaveAttribute("aria-disabled", "false");
+        });
+        if (how === "button") await user.click(sendControl());
         else await user.keyboard("{Enter}");
       },
       stage: async (name): Promise<void> => {
@@ -1180,12 +1192,20 @@ describe("first use of an unchecked model on Send (#4351)", () => {
   // The positive control of every "nothing was sent" claim: once the model is ready, a second Send
   // goes out exactly once and carries the CURRENT draft and attachments. Had the first Send gone out
   // with its old text, it would still be in flight, block this one, and the content would be old.
+  //
+  // Once a Send is accepted the composer swaps the send control's accessible name for the running
+  // label until the request goes out (the document context of staged attachments is built first), so
+  // a second press is refused by the product and no control named "Send message" exists. The press is
+  // therefore repeated only while the control is offered AND enabled, and otherwise the wait is on
+  // the request itself, the observable the product ends in. It is never repeated into a Send in flight.
   async function sendAgainAndReadTheOne(
     rig: ComposerRig,
     spies: { readonly sent: () => number; readonly inputs: () => readonly unknown[] },
   ): Promise<SentInput> {
     await waitFor(async () => {
-      await rig.send("button");
+      const control = screen.queryByRole("button", { name: "Send message" });
+      if (spies.sent() === 0 && control?.getAttribute("aria-disabled") === "false")
+        await rig.send("button");
       expect(spies.sent()).toBe(1);
     });
     return spies.inputs()[0] as SentInput;
