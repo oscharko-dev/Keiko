@@ -98,12 +98,17 @@ function vaultEnvelopeErrorKind(
   return fallback;
 }
 
-function safeErrorProperty(error: unknown, property: string): unknown {
+function safeErrorProperty(error: unknown, property: "cause" | "stack"): unknown {
   if ((typeof error !== "object" || error === null) && typeof error !== "function") {
     return undefined;
   }
   try {
-    return Reflect.get(error, property);
+    switch (property) {
+      case "cause":
+        return "cause" in error ? error.cause : undefined;
+      case "stack":
+        return "stack" in error ? error.stack : undefined;
+    }
   } catch {
     return undefined;
   }
