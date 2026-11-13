@@ -792,6 +792,17 @@ False is preserved as a real value. These endpoints add no authentication except
 atomic-error rule, and an uncertain invocation is never replayed. They do not fetch metric contents
 or start reindex, snapshot or upgrade jobs.
 
+The entity-property read tools (`*-property-keys` and `*-property` for board, sprint, comment,
+dashboard item, issue, issue type, project and user) are plain reads without a write guard. All
+sixteen are built by one descriptor builder from one entity table, so each requires exactly the
+identity that entity names, and the user tools require exactly one of `username` and `userKey`. A
+call without that identity is refused before any request as `invalid-arguments` with
+`catalogReason=invalid-shape` and the missing names in `missingRequired`, and the correction the
+model receives in the next round names the same properties. A refused `jira.issue-property-keys` in
+the selection run of 2026-11-12 was this refusal and not a descriptor defect (#4357 AC4): the model
+sent no `issueIdOrKey` while the same tool completed 82 times in the lab logs. A class pin holds the
+invariant for all sixteen tools.
+
 Entity-property set and delete actions use the same high-risk authority, reviewed action digest
 and durable journal. The input reuses the existing complete typed JSON Pointer projection:
 set requires a target value and exactly one reviewed prior value or explicit expected absence;
