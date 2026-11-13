@@ -17,6 +17,10 @@ export const CONNECTED_SERVER_INSTANCE_STORAGE_KEY = "keiko.connected-server-ins
 // Blocked tab storage is an ordinary state (a restricted profile), but never a silent one: it is
 // reported once per page, body-free, and the ordinary wording shows instead of a restart claim.
 let storageFailureReported = false;
+// An unreadable confirmation is reported once per outage: the refresh timer ticks every 30 s, and a
+// server that stays unreachable must not become a report per tick. The next confirmation that works
+// ends the outage, so a later failure is reported again.
+let confirmationFailureReported = false;
 
 function reportStorageFailure(error: unknown): void {
   if (storageFailureReported) return;
@@ -26,9 +30,10 @@ function reportStorageFailure(error: unknown): void {
   });
 }
 
-/** Test seam: the once-per-page report resets with the module state between cases. */
-export function resetServerRestartStorageReport(): void {
+/** Test seam: the once-per-page and once-per-outage reports reset between cases. */
+export function resetServerRestartReports(): void {
   storageFailureReported = false;
+  confirmationFailureReported = false;
 }
 
 function tabStorage(): Storage | undefined {
@@ -66,11 +71,16 @@ export async function noteConnectedServerInstance(
   if (instance === undefined) return;
   if (confirmActive !== undefined) {
     try {
-      if (!(await confirmActive())) return;
+      const active = await confirmActive();
+      confirmationFailureReported = false;
+      if (!active) return;
     } catch (error) {
-      reportClientDiagnostic("The connected session could not be confirmed.", {
-        errorKind: bffRequestErrorKind(error),
-      });
+      if (!confirmationFailureReported) {
+        confirmationFailureReported = true;
+        reportClientDiagnostic("The connected session could not be confirmed.", {
+          errorKind: bffRequestErrorKind(error),
+        });
+      }
       return;
     }
   }
