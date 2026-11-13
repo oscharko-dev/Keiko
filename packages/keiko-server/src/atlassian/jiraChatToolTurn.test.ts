@@ -77,6 +77,7 @@ import {
 import { field, multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
 import {
   omittedReportFindingKeys,
+  rawReportKeys,
   reportCoverageMismatches,
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
@@ -104,6 +105,7 @@ vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
   return {
     ...actual,
     omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys),
+    rawReportKeys: vi.fn(actual.rawReportKeys),
     reportCoverageMismatches: vi.fn(actual.reportCoverageMismatches),
     unsupportedIssueKeys: vi.fn(actual.unsupportedIssueKeys),
   };
@@ -1547,6 +1549,46 @@ describe.each([false, true])(
       });
       expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
         /LH-0|RPT-/u,
+      );
+    });
+  },
+);
+
+// #4355: a report answer that prints the report's internal result keys ("issuesChecked: 33") gets
+// ONE further round asking for plain language; the model writes the final answer, and neither the
+// keys nor their values reach the Activity Log (the detection is proven in
+// chat-tool-report-coverage.test.ts; this fixture scripts one comment call, not a report result).
+describe.each([false, true])(
+  "an answer that prints the report's internal result keys (stream=%s)",
+  (stream) => {
+    it("gets one round asking for plain language, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      vi.mocked(rawReportKeys).mockReturnValueOnce(["issuesChecked", "issuesJudged"]);
+      const f = fixture();
+      const ctx = sendContext(f, `raw-report-key-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await awaitReadGrantedForWrite(f);
+      await pending;
+
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("prints 2 internal result key(s)");
+      expect(correction(f.calls[2])).toContain("issuesChecked, issuesJudged");
+      expect(correction(f.calls[3])).not.toContain("internal result key(s)");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "raw-report-key",
+        rawReportKeyCount: 2,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
+        /issuesChecked|issuesJudged/u,
       );
     });
   },

@@ -1002,9 +1002,8 @@ describe("supplemental turn evidence for entailment", () => {
     judge: (input): Promise<EntailmentVerdict> => {
       seen.push(input);
       const figure = /\d+/u.exec(input.claimText)?.[0] ?? "";
-      return Promise.resolve(
-        input.excerptText.includes(`: ${figure}`) ? "supported" : "unsupported",
-      );
+      const read = `${input.excerptText}\n${input.turnEvidenceText ?? ""}`;
+      return Promise.resolve(read.includes(`: ${figure}`) ? "supported" : "unsupported");
     },
   });
   const withReport = { ...DEFAULT_ENTAILMENT_OPTIONS, supplementalEvidence: REPORT };
@@ -1027,9 +1026,10 @@ describe("supplemental turn evidence for entailment", () => {
       withReport,
     );
     expect(result).toMatchObject({ judgedClaims: 1, unentailed: [] });
-    expect(seen[0]?.excerptText).toContain("Issues checked: 33");
-    expect(seen[0]?.excerptText).not.toContain("Epics in scope");
-    expect(seen[0]?.excerptText).toContain("The requirements document lists five requirements.");
+    // The report lines travel as their own input, never merged into the cited excerpt.
+    expect(seen[0]?.turnEvidenceText).toContain("Issues checked: 33");
+    expect(seen[0]?.turnEvidenceText).not.toContain("Epics in scope");
+    expect(seen[0]?.excerptText).toBe("The requirements document lists five requirements.");
   });
 
   it("still flags a figure the report did not compute", async () => {
@@ -1061,6 +1061,7 @@ describe("supplemental turn evidence for entailment", () => {
       { ...DEFAULT_ENTAILMENT_OPTIONS, supplementalEvidence: [] },
     );
     expect(seen[0]?.excerptText).toBe("The requirements document lists five requirements.");
+    expect(seen[0]).not.toHaveProperty("turnEvidenceText");
   });
 });
 

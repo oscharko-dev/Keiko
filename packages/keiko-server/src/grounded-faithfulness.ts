@@ -1074,6 +1074,10 @@ export type EntailmentVerdict = "supported" | "unsupported" | "unavailable";
 export interface EntailmentJudgeInput {
   readonly claimText: string;
   readonly excerptText: string;
+  // Figures Keiko computed from Jira data in this turn (a Jira report). They are NOT part of any
+  // cited document: the judge reads them labelled by origin, and they can support only a statement
+  // about the Jira result, never one about what a document says (#4355).
+  readonly turnEvidenceText?: string;
 }
 
 /**
@@ -1402,13 +1406,13 @@ interface EntailmentClaimEvidence {
   readonly excerptText: string | undefined;
   // Characters of the text that are rendering frame rather than excerpt (numeric blocks only).
   readonly framingChars?: number;
-  // Turn-owned evidence that no citation named: it is judged but never reported as a cited path.
-  readonly supplemental?: true;
 }
 
 interface EntailmentClaim {
   readonly claimText: string;
   readonly evidence: readonly EntailmentClaimEvidence[];
+  // The turn's own lines that share a figure or word with the claim; see EntailmentJudgeInput.
+  readonly turnEvidenceText?: string;
   readonly hidesProse?: true;
 }
 
@@ -1462,6 +1466,7 @@ function collectExcerptText(
 interface JudgeableClaim {
   readonly claimText: string;
   readonly excerptText: string;
+  readonly turnEvidenceText?: string;
   readonly citedPaths: readonly string[];
 }
 
@@ -1483,11 +1488,8 @@ function judgeableClaimFor(
   return {
     claimText: claim.claimText,
     excerptText,
-    citedPaths: [
-      ...new Set(
-        claim.evidence.filter((item) => item.supplemental !== true).map((item) => item.citedPath),
-      ),
-    ],
+    ...(claim.turnEvidenceText === undefined ? {} : { turnEvidenceText: claim.turnEvidenceText }),
+    citedPaths: [...new Set(claim.evidence.map((item) => item.citedPath))],
   };
 }
 
@@ -1496,7 +1498,14 @@ async function verdictForJudgeableClaim(
   judge: EntailmentJudge,
   signal: AbortSignal | undefined,
 ): Promise<EntailmentVerdict> {
-  return judge.judge({ claimText: claim.claimText, excerptText: claim.excerptText }, signal);
+  return judge.judge(
+    {
+      claimText: claim.claimText,
+      excerptText: claim.excerptText,
+      ...(claim.turnEvidenceText === undefined ? {} : { turnEvidenceText: claim.turnEvidenceText }),
+    },
+    signal,
+  );
 }
 
 /**
@@ -1533,7 +1542,6 @@ interface ScheduledClaim {
   readonly verdict: Promise<EntailmentVerdict>;
 }
 
-const SUPPLEMENTAL_HEADER = "Figures Keiko computed for the Jira report of this turn:";
 const EVIDENCE_TOKEN = /[\p{L}\p{N}][\p{L}\p{N}_-]*/gu;
 
 function evidenceTokens(text: string): ReadonlySet<string> {
@@ -1563,41 +1571,34 @@ function supplementalLinesFor(
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const picked: string[] = [];
-  let size = SUPPLEMENTAL_HEADER.length + 1;
+  let size = 0;
   for (const { line } of scored) {
     if (size + line.length + 1 > maxChars) continue;
     picked.push(line);
     size += line.length + 1;
   }
-  return picked.length === 0 ? undefined : [SUPPLEMENTAL_HEADER, ...picked].join("\n");
+  return picked.length === 0 ? undefined : picked.join("\n");
 }
 
-/** The turn's own evidence joins every claim whose citations leave room for one more item. */
+/**
+ * The turn's own evidence reaches the judge beside a claim, labelled by its origin and never merged
+ * into the cited excerpts. A claim that hides prose or has no readable cited excerpt gets none, so
+ * the turn's evidence never stands in for evidence that is missing.
+ */
 function withSupplementalEvidence(
   claims: readonly EntailmentClaim[],
   lines: readonly string[] | undefined,
   maxChars: number,
 ): readonly EntailmentClaim[] {
   if (lines === undefined || lines.length === 0) return claims;
-  // A claim whose own cited excerpt could not be read stays undecidable: the turn's evidence never
-  // stands in for evidence that is missing.
-  const joinable = (claim: EntailmentClaim): boolean =>
+  const readable = (claim: EntailmentClaim): boolean =>
     claim.hidesProse !== true &&
-    claim.evidence.length < ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM &&
     claim.evidence.every((entry) => (entry.excerptText?.trim().length ?? 0) > 0);
   return claims.map((claim) => {
-    const text = joinable(claim)
+    const turnEvidenceText = readable(claim)
       ? supplementalLinesFor(claim.claimText, lines, maxChars)
       : undefined;
-    return text === undefined
-      ? claim
-      : {
-          ...claim,
-          evidence: [
-            ...claim.evidence,
-            { citedPath: "turn-evidence", excerptText: text, supplemental: true as const },
-          ],
-        };
+    return turnEvidenceText === undefined ? claim : { ...claim, turnEvidenceText };
   });
 }
 
