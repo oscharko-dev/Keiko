@@ -18,7 +18,7 @@
       }
     },
     "keiko-cli": {
-      "files": 66,
+      "files": 67,
       "uncoveredFiles": 0,
       "uncoveredLines": 419,
       "totalLines": 5836,
@@ -246,7 +246,7 @@
       }
     },
     "keiko-security": {
-      "files": 53,
+      "files": 56,
       "uncoveredFiles": 0,
       "uncoveredLines": 18,
       "totalLines": 887,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1196,
+      "files": 1200,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,

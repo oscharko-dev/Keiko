@@ -85,6 +85,19 @@ it("retains an actual native permission refusal after cancellation", async () =>
   expect(jiraReportFailure("permission-denied", true)).toBe("permission");
   expect(f.http).toHaveBeenCalledTimes(1);
 });
+// #4353: the report read has its own mapping onto closed words; the identity decision of a Data
+// Center 401 must reach it, so a refusal nobody could verify is not reported as a rejected token.
+it.each([
+  ["unconfirmed", "auth-unverified", "auth-unverified"],
+  ["confirmed", "permission-denied", "permission"],
+] as const)("maps a report 401 with identity decision %s", async (authentication, reason, word) => {
+  const f = fixture();
+  f.http.mockImplementation(() =>
+    Promise.resolve({ ...response({}, 401), authentication } as ReturnType<typeof response>),
+  );
+  expect(await f.reader.getRecord("search")).toEqual({ ok: false, reason });
+  expect(jiraReportFailure(reason, true)).toBe(word);
+});
 it("retains a completed native page after cancellation instead of discarding observed evidence", async () => {
   const f = fixture();
   const body = { startAt: 200, total: 201, issues: [{ id: "10201", key: "SYN-201" }] };

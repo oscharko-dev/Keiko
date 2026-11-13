@@ -44,7 +44,7 @@ const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
   deadline: "this turn reached its time limit",
   "authority-invalid": "the Chat's mode, sources or connection changed",
   "authentication-failed":
-    "Jira authentication failed. Open the Knowledge Pods hub and verify the connection again",
+    "Jira authentication failed. The token may have expired or been revoked: open the Knowledge Pods hub, replace the token and verify the connection",
   "tool-failure": "a tool call could not be settled",
   "output-exhausted": "the model ran out of output budget",
   "context-overflow": "the conversation no longer fits the model's context window",

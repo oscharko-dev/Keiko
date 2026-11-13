@@ -446,6 +446,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "send-failure-skipped-draft",
   "send-failure-skipped-unproven",
   "send-cancel-requested",
+  "send-refused-while-running",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",
@@ -619,15 +620,50 @@ export interface ClientEditorLineEnding {
 const EDITOR_LINE_ENDINGS: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDINGS);
 const EDITOR_LINE_ENDING_SOURCES: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDING_SOURCES);
 
-function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
-  const report = value.editorLineEnding;
+// A closed report of exactly two closed-vocabulary fields, under a correlation id.
+type ClosedField = readonly [name: string, allowed: ReadonlySet<unknown>];
+function hasValidClosedPairReport(
+  value: Record<string, unknown>,
+  key: string,
+  fields: readonly [ClosedField, ClosedField],
+): boolean {
+  const report = value[key];
   if (report === undefined) return true;
   if (!isRecord(report) || !isActivityLogCorrelationId(value.correlationId)) return false;
   return (
-    Object.keys(report).length === 2 &&
-    EDITOR_LINE_ENDINGS.has(report.lineEnding) &&
-    EDITOR_LINE_ENDING_SOURCES.has(report.source)
+    Object.keys(report).length === fields.length &&
+    fields.every(([name, allowed]) => allowed.has(report[name]))
   );
+}
+
+function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
+  return hasValidClosedPairReport(value, "editorLineEnding", [
+    ["lineEnding", EDITOR_LINE_ENDINGS],
+    ["source", EDITOR_LINE_ENDING_SOURCES],
+  ]);
+}
+
+// #4371: a Knowledge Pod catalog refresh that outlasted the picker's patience, or that a later
+// refresh superseded. Routine evidence, closed outcome and closed duration bucket only: the picker
+// keeps its last good snapshot meanwhile, so this is how a slow BFF answer stays reconstructable.
+export const CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES = ["ok", "failed", "superseded"] as const;
+export const CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS = ["1s-5s", "5s-10s", "10s-plus"] as const;
+export interface ClientKnowledgeCatalogRefresh {
+  readonly outcome: (typeof CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES)[number];
+  readonly duration: (typeof CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS)[number];
+}
+const KNOWLEDGE_CATALOG_REFRESH_OUTCOMES: ReadonlySet<unknown> = new Set(
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES,
+);
+const KNOWLEDGE_CATALOG_REFRESH_DURATIONS: ReadonlySet<unknown> = new Set(
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS,
+);
+
+function hasValidKnowledgeCatalogRefreshContext(value: Record<string, unknown>): boolean {
+  return hasValidClosedPairReport(value, "knowledgeCatalogRefresh", [
+    ["outcome", KNOWLEDGE_CATALOG_REFRESH_OUTCOMES],
+    ["duration", KNOWLEDGE_CATALOG_REFRESH_DURATIONS],
+  ]);
 }
 
 function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
@@ -644,7 +680,12 @@ function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
   );
 }
 
-export interface ClientDiagnosticIngestRequest {
+// The catalog-refresh report rides beside the other closed reports (#4371).
+interface ClientKnowledgeCatalogRefreshReport {
+  readonly knowledgeCatalogRefresh?: ClientKnowledgeCatalogRefresh | undefined;
+}
+
+export interface ClientDiagnosticIngestRequest extends ClientKnowledgeCatalogRefreshReport {
   readonly message: string;
   readonly clientTs: string;
   readonly readyState?: ClientDiagnosticReadyState | undefined;
@@ -919,6 +960,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "filesScopeDecision",
   "updateNotice",
   "editorLineEnding",
+  "knowledgeCatalogRefresh",
   "codingRunRestore",
   "codingWorkbenchInteraction",
   "codingRequestTimeout",
@@ -1015,7 +1057,8 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
     hasValidGitContext(value) &&
     hasValidHealthDiagnostic(value) &&
     hasValidUpdateNoticeContext(value) &&
-    hasValidEditorLineEndingContext(value)
+    hasValidEditorLineEndingContext(value) &&
+    hasValidKnowledgeCatalogRefreshContext(value)
   );
 }
 
@@ -2832,6 +2875,27 @@ export function isServerInstanceId(value: unknown): value is string {
   return typeof value === "string" && SERVER_INSTANCE_ID_PATTERN.test(value);
 }
 
+/**
+ * How the credential vaults this server opened from a key file are kept on Windows (#4358,
+ * ADR-0182 D5). Closed; absent on other platforms and before any vault key was read.
+ *   attested    key file and directory are private to the current account.
+ *   protected   the directory was not private and Keiko made it private; the key was not readable.
+ *   exposed     a key file was readable by another account before Keiko protected it: stored
+ *               secrets, such as a Jira token, should be replaced.
+ *   unattested  Windows could not be asked; nothing is known. Never the same as `attested`.
+ */
+export const CREDENTIAL_CUSTODY_STATES = [
+  "attested",
+  "protected",
+  "exposed",
+  "unattested",
+] as const;
+export type CredentialCustodyState = (typeof CREDENTIAL_CUSTODY_STATES)[number];
+
+export function isCredentialCustodyState(value: unknown): value is CredentialCustodyState {
+  return (CREDENTIAL_CUSTODY_STATES as readonly unknown[]).includes(value);
+}
+
 /** The `GET /api/health` body. Readiness projections are additive; `status` stays server liveness. */
 export interface HealthResponse {
   readonly status: "ok";
@@ -2845,6 +2909,8 @@ export interface HealthResponse {
    * while connected recognize a restart; it is not a credential and grants nothing.
    */
   readonly instanceId?: string;
+  /** Credential custody on Windows; see {@link CredentialCustodyState}. */
+  readonly credentialCustody?: CredentialCustodyState;
 }
 
 const READINESS_STATE_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_STATES);

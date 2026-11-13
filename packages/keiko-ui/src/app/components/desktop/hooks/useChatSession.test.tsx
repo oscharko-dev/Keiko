@@ -7370,6 +7370,22 @@ describe("ungrounded streaming refusal recovery", () => {
     }
   });
 
+  it("keeps the Chat and its typed draft after a Jira authentication failure so the person can reconnect", async () => {
+    const { result } = await streamingSession();
+    const refusal = new ApiError("JIRA_AUTHENTICATION_FAILED", "Private provider detail", 409);
+    refusal.correlationId = "jira-auth-draft";
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(refusal);
+    act(() => result.current.setDraft("Private draft canary"));
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(result.current.draft).toBe("Private draft canary");
+    expect(result.current.activeChat?.id).toBe("chat-1");
+    expect(result.current.error).toContain("JIRA_AUTHENTICATION_FAILED");
+    expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+  });
+
   it("keeps an admitted streaming turn in progress without an error banner or replay", async () => {
     const { result } = await streamingSession();
     vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(

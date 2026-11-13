@@ -11,7 +11,8 @@ import { fetchHealth } from "./api";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 
-const STORAGE_KEY = "keiko.connected-server-instance";
+/** The tab-storage key of the remembered server instance; exported so tests wait on its write. */
+export const CONNECTED_SERVER_INSTANCE_STORAGE_KEY = "keiko.connected-server-instance";
 
 // Blocked tab storage is an ordinary state (a restricted profile), but never a silent one: it is
 // reported once per page, body-free, and the ordinary wording shows instead of a restart claim.
@@ -51,12 +52,30 @@ async function currentInstance(): Promise<string | undefined> {
   }
 }
 
-/** Remember which server process this tab was connected to; call while the session is valid. */
-export async function noteConnectedServerInstance(): Promise<void> {
+/**
+ * Remember which server process this tab was connected to. The identity is read first, then, when the
+ * caller cannot vouch that the session was just observed active (a refresh timer, which can fire after
+ * a restart nothing has inspected yet), `confirmActive` is asked and the identity is kept only when the
+ * session is still valid. Recording the new process while the session is gone would erase the
+ * evidence of the restart (#4370). A confirmation that cannot be read keeps the previous identity.
+ */
+export async function noteConnectedServerInstance(
+  confirmActive?: () => Promise<boolean>,
+): Promise<void> {
   const instance = await currentInstance();
   if (instance === undefined) return;
+  if (confirmActive !== undefined) {
+    try {
+      if (!(await confirmActive())) return;
+    } catch (error) {
+      reportClientDiagnostic("The connected session could not be confirmed.", {
+        errorKind: bffRequestErrorKind(error),
+      });
+      return;
+    }
+  }
   try {
-    tabStorage()?.setItem(STORAGE_KEY, instance);
+    tabStorage()?.setItem(CONNECTED_SERVER_INSTANCE_STORAGE_KEY, instance);
   } catch (error) {
     reportStorageFailure(error);
   }
@@ -66,7 +85,7 @@ export async function noteConnectedServerInstance(): Promise<void> {
 export async function sessionEndedByRestart(): Promise<boolean> {
   let remembered: string | null | undefined;
   try {
-    remembered = tabStorage()?.getItem(STORAGE_KEY);
+    remembered = tabStorage()?.getItem(CONNECTED_SERVER_INSTANCE_STORAGE_KEY);
   } catch (error) {
     reportStorageFailure(error);
     return false;

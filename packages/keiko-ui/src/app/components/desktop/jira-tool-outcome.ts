@@ -1008,6 +1008,7 @@ const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   "catalog:invalid-arguments": "chat.jira.catalog.invalidArguments",
   "source-changed": "chat.jira.outcome.failure.sourceChanged",
   "auth-failed": "chat.jira.outcome.failure.auth",
+  "auth-unverified": "chat.jira.outcome.failure.authUnverified",
   "permission-denied": "chat.jira.outcome.failure.permission",
   forbidden: "chat.jira.outcome.failure.permission",
   "not-found": "chat.jira.outcome.failure.notFound",

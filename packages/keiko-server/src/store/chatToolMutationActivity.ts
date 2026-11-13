@@ -17,6 +17,7 @@ const REFUSAL_REASONS = [
   "effect-denied",
   "cancelled",
   "auth-failed",
+  "auth-unverified",
   "permission-denied",
   "not-found",
   "rate-limited",

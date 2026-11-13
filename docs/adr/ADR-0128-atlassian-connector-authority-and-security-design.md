@@ -645,21 +645,125 @@ purpose explicitly and omit the observed-request handler; the existing verificat
 the result once. This classification does not depend on a possibly stale metadata snapshot.
 This does not introduce credential polling.
 
-The retained native API also documents 401 for missing WebSudo or view permission on specific
-server-owned GET identities, including workflow-scheme and screen observations. Jira 11.3's
-`ScreensResource` additionally documents administrator-permission 401 responses for exactly
-`POST /screens/{screenId}/tabs` and `PUT`/`DELETE /screens/{screenId}/tabs/{tabId}`
-([native screen resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/ScreensResource.html)).
-Only those enumerated method/path identities await one bounded
-same-target `myself` read before deciding whether the credential failed. The original status and
+Jira Data Center answers 401 for a missing WebSudo, administrator or view permission as well as for
+a failed authentication. The retained native API documents this on workflow-scheme, screen, cluster,
+index-snapshot, user-column and issue-link resources, and the lab observed it on
+`GET /project/{key}/role` (#4353), which no list contained. The model reaches about 450 operations
+through discovery, so a hand-maintained list of ambiguous routes is incomplete by construction and
+has been removed. The structural rule is: a 401 from any request to the instance, read or write,
+except the identity route itself (`GET /rest/api/2/myself`), is decided by one bounded
+same-target `myself` read, and the credential is discarded only when that identity read itself
+answers 401 (or reports the anonymous user). A 401 from the identity route stays definitive, and
+requests outside the saved instance origin and context path are not classified. The original status and
 synchronous response acknowledgement remain unchanged. The identity read retains ordinary saved
 target admission, the original authority guard, signal, remaining deadline and captured credential
-generation/verification revision; it neither retries nor begins connection verification. A current,
+generation/verification revision; it neither retries nor begins connection verification. The cost is
+one bounded probe per 401. A current,
 active identity adds the closed port observation `authentication: "confirmed"`, which classifies
 the original 401 as an operation permission denial without granting authority or changing stored
-compatibility. An explicit authentication failure still invalidates through the existing custody
+compatibility; a write is never retried and never borrows another route's facts. An explicit
+authentication failure still invalidates through the existing custody
 owner. Timeout, malformed data, revoked authority, cancellation or stale observations are not proof
-of credential failure. Upstream JSON cannot supply this port-owned observation.
+of credential failure. Upstream JSON cannot supply this port-owned observation. The earlier
+expectations are unchanged: 401 means unauthenticated and 403 means a missing permission (#4305,
+#4306, #4309), and an administrative 401 of a screen or workflow resource cannot revoke a valid
+credential (#4314 AC6); only the mechanism moved from route lists to the identity read.
+
+One owner wraps every credential-bearing port: the ordinary read/body ports and the PAT port of the
+private-session owner (`createJiraPrivatePorts`, used by Chat and the coding-runtime Jira MCP) all
+pass through the same observed wrapper, and all of them pin the credential generation and
+verification revision by value, so a caller mutating its metadata object cannot move what a port
+observes. The private owner's PAT port today reads only the identity route, which stays definitive;
+the wrapper is there so that a later PAT route cannot become a second, unobserved path. Session
+ports (login, WebSudo, logout) never use it, because a session 401 says nothing about the token.
+
+The identity read has three closed outcomes. `confirmed` keeps the credential and reports the 401
+as a permission denial. `rejected` (the identity read itself answered 401 or the anonymous user) discards
+the credential. Everything else is `inconclusive`: a timeout, a refused deadline, throttling, a
+server error, a redirect, non-JSON data, an inactive identity, a caller cancellation, a stale
+observation (the credential changed meanwhile) and any exception thrown out of the probe port. An
+inconclusive 401 is returned as `authentication: "unconfirmed"`, the request is refused with the
+closed write-failure reason `auth-unverified`, the credential is kept and the Hub still shows its
+verified state. The person reads that Jira could not be verified right now and to try again; it
+never claims an expired token and carries no host or identity. A probe exception is reported once
+through the diagnostic port with its class and frames. A positive identity read is reused for the
+same credential generation and verification revision for a fixed ten seconds
+(`JIRA_IDENTITY_PROBE_WINDOW_MS`), which bounds a tool loop of permission 401s to one identity read
+per window; a rejected or inconclusive result is never cached and a new generation or revision never
+inherits a window. `atlassian.connection.checked` carries the closed `decision`
+(`identity-route`, `probe`, `probe-window`) and `routeClass` (`identity`, `other`) so a discard
+decided by the probe is distinguishable from the identity route's own 401, and the closed outcome
+`probe-inconclusive` records an unsettled probe.
+
+Only a 401 that Jira itself authored can show a rejected token. Jira behind a corporate single
+sign-on proxy answers 401 for every request, `myself` included, once the proxy session ends, and a
+captcha or login lock adds `X-Authentication-Denied-Reason`; neither may cost a person their token.
+The transport (`httpAuthenticationFailure.ts`, used by both HTTP ports and the response observer)
+therefore derives a closed fact from the response headers, never exposing a value:
+`authenticationFailure` is `jira`, `denied` or `foreign`. Observed on the laboratory Jira Data
+Center 10.3 with read-only requests (no person's credential involved): a request with an unknown
+bearer token, which is also how Jira sees an expired or a revoked personal access token, and a
+request without credentials both answer 401 with `X-AREQUESTID`, `X-AUSERNAME: anonymous`,
+`WWW-Authenticate: OAuth realm=…`, a JSON content type and the body
+`{"message":"Client must be authenticated to access this resource.","status-code":401,"sub-code":-1}`,
+and no `X-Authentication-Denied-Reason`. The marker is therefore: Jira's request id plus the
+anonymous-user marker and no denial reason is `jira`; a denial reason is `denied`; everything else
+is `foreign`. A personal access token created for a throwaway test and then revoked through Jira's own token
+endpoint, and another one whose expiry was moved into the past by editing the expiry column of its
+own row in the laboratory database (a day-long token cannot age in a test), both answer exactly as
+an unknown token does: 401 with `X-AREQUESTID`, `X-AUSERNAME: anonymous`,
+`WWW-Authenticate: OAuth realm=…`, a JSON body with exactly the keys `message`, `status-code` and
+`sub-code`, and no `X-Authentication-Denied-Reason` and no `X-Seraph-LoginReason`; a valid token
+answers 200 with `X-Seraph-LoginReason: OK` and a named `X-AUSERNAME`. So the marker holds for all
+three kinds of dead token. Not observed: the captcha header on a live Jira (it would have meant
+locking a laboratory account), so `denied` rests on Jira's documented behavior and is pinned as a
+fixture only. Only `jira`
+discards a credential, on the identity route and for the identity read alike. `denied` and
+`foreign` leave the credential and the Pod untouched and return the unconfirmed outcome, so the
+person reads the retry wording, never an expired token. An anonymous 200 that Jira served and the
+transport rewrites into a 401 keeps the three markers, so it stays Jira-authored.
+
+The explicit connection check in Settings follows the same rule. On Data Center a 401 that Jira
+did not author ends the verification as the closed status `auth-unverified` ("could not confirm"):
+the Pod keeps its previous status, generation and compatibility facts, nothing is invalidated, and
+replacing the token stays possible at any time; only a Jira-authored 401 is the definitive
+`auth-failed`. The shared identity read has its own bounded deadline
+(`JIRA_IDENTITY_PROBE_DEADLINE_MS`) and a count of the callers waiting on it: a caller that
+cancels or runs out of time leaves it to the others, and it is torn down only when every caller has
+given up. A waiter's `probe-shared` line carries the cause the shared read ended with and a
+parent correlation to the caller that started it. In the Confluence comment lane an unconfirmed
+401 stops the run like the item path; a confirmed one is a missing permission and degrades to a
+page without comments, exactly like a 403.
+
+The decision reaches every read, not only the write executor. The single status-to-reason owner for
+reads (`failureReasonForResponse`, used by the live search, the sync adapters and the report read)
+maps a 401 with `confirmed` to `permission-denied` and with `unconfirmed` to the closed reason
+`auth-unverified`; a 401 without a decision (Cloud, or the identity request itself) remains
+`auth-failed`. At most one identity read is in flight per credential generation and revision;
+concurrent 401s share its result (`decision: probe-shared`), and a positive result is reused for
+the fixed window. An inconclusive read records its closed `probeCause` (`timeout`, `network`,
+`http-429`, `http-4xx`, `http-5xx`, `redirect`, `invalid-body`, `foreign-401`, `captcha`, `stale`,
+`cancelled-or-expired`, `probe-error`) on the registered operation. On a non-identity route the
+original response is acknowledged first and its body is consumed before the identity read starts, so
+body consumption before the invalidation is inherent to the probe path; the invalidation never
+precedes the acknowledgement on any route class.
+
+The public Pod view carries the closed state `compatibilityFacts: "missing"` when a verified Pod has
+no retained compatibility facts (a record from before they existed). The Pod card then tells the
+person that verifying the connection again obtains them and that no permission is added; no version
+or capability fact ever reaches the view.
+
+Refusals at the connection are readable and name the remedy (#4353), in English and German. A
+rejected token yields the closed `JIRA_AUTHENTICATION_FAILED` Chat refusal, which says that the
+token may have expired or been revoked, names replacing the token on the Jira Pod in the Knowledge
+Pods hub, and states that the Chat and its draft are kept; the Pod dialog and the Chat's Pod
+selection give the same remedy. A release below Data Center 10.3.0 is refused as
+`unsupported-version` before the identity request, and the message names the 10.3.0 floor and
+upgrading or choosing another instance. A certificate failure names the documented
+`KEIKO_CA_BUNDLE_PATH` trust path and never suggests disabling verification. A Pod switch, Pod
+deletion, token replacement, authentication failure, disconnect, mode change and expired authority
+each invalidate pending work and current grants through the existing lifecycle owners; a remote
+effect that already completed is not undone, and no invalidation retries remotely.
 
 Screen-tab create, rename and delete remain high-risk actions in the existing authority and
 approval pipeline. Admission binds the current screen ID/name and the complete tab snapshot;
@@ -674,8 +778,8 @@ checks the complete mutation identity before returning that outcome; a changed i
 write, attachment retirement or dispatch still requires a current turn. A replay returns the
 stored outcome and replay marker, without reconstructing private resource receipts from journal
 fields. The native documented 400 refusals, delete-only 412,
-and positively classified administrator 401 settle as rejected only with the existing
-structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
+and positively classified administrator 401 on the screen-tab writes settle as rejected only with
+the existing structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
 bulk-operation rule is widened.
 
 Application monitoring, in-product diagnostics and JMX exposure changes are high-risk actions

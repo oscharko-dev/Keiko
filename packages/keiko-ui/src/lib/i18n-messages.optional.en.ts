@@ -2199,8 +2199,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.state.excluded": "Excluded",
   "chat.jira.outcome.rule.parent-type-mismatch":
     "The parent must have an allowed issue type ({subject}).",
+  "chat.jira.outcome.failure.authUnverified":
+    "Jira could not be verified right now, so this request was not sent on. The connection is unchanged. Try again in a moment.",
   "chat.jira.outcome.failure.auth":
-    "Verify the Jira Pod connection and its credentials before trying again.",
+    "Jira rejected the token. It may have expired or been revoked. Replace it on the Jira Pod, verify the connection and try again.",
   "chat.jira.outcome.failure.requirementUntraced":
     "The draft does not name the requirement it implements. Reference its requirement ID from the Knowledge Pod. Nothing was created in Jira.",
   "chat.jira.outcome.failure.requirementCriteria":
@@ -4428,6 +4430,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.send.noModel": "No model available",
   "chat.send.connecting": "Connecting to gateway",
   "chat.send.cancel": "Cancel response",
+  "chat.send.running": "Send is unavailable while a response is running",
+  "chat.send.runningHint":
+    "Your next message can be sent when this response is complete, or cancel the response first.",
   "chat.send.statusQueued": "Submitting your message…",
   "chat.send.statusContacting": "Preparing response…",
   "chat.send.statusAwaitingDecision": "Waiting for your decision",
@@ -5269,7 +5274,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.verify.ok.label": "Connection verified",
   "atlassianConnectors.verify.ok.copy": "The credential authenticated successfully.",
   "atlassianConnectors.verify.auth-failed.label": "Authentication failed",
-  "atlassianConnectors.verify.auth-failed.copy": "Check the account and token, then verify again.",
+  "atlassianConnectors.verify.auth-failed.copy":
+    "The token was rejected. It may have expired or been revoked. Create a new token in Jira, replace it here, then verify again.",
+  "atlassianConnectors.verify.auth-unverified.label": "Could not confirm",
+  "atlassianConnectors.verify.auth-unverified.copy":
+    "The answer did not come from Jira itself, for example because a sign-in proxy or a security check answered. The token was not rejected and nothing was changed. Sign in again or try again later; you can replace the token at any time.",
   "atlassianConnectors.verify.forbidden.label": "Access forbidden",
   "atlassianConnectors.verify.forbidden.copy":
     "Atlassian denied access. Check the account permissions and any site or license restrictions, then verify again.",
@@ -5287,10 +5296,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The address returned no valid Atlassian JSON response. Check the address and login gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Unsupported Jira version",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Jira reported an unsupported deployment or release, or inconsistent version details. Check the address and REST v2 access to Jira Server or Data Center 10.3 or later, then verify again.",
+    "Keiko requires Jira Data Center 10.3.0 or later. Jira reported an older or unsupported release, or inconsistent version details. Upgrade Jira to 10.3.0 or later, or enter the address of a supported instance, then verify again.",
   "atlassianConnectors.verify.tls-failed.label": "Certificate verification failed",
   "atlassianConnectors.verify.tls-failed.copy":
-    "Check the certificate validity, hostname and trusted certificate authority.",
+    "Keiko does not trust this certificate. Check its validity and hostname. For a private certificate authority, set KEIKO_CA_BUNDLE_PATH to its PEM file and restart Keiko, then verify again. Never turn certificate verification off.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence space keys",
   "atlassianConnectors.scope.confluencePlaceholder": "e.g. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira project keys",
@@ -5332,6 +5341,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.sync.change.failedItems": "Failed",
   "atlassianConnectors.sync.change.deniedItems": "Denied",
   "atlassianConnectors.sync.degradedTitle": "Some items could not be synced",
+  "atlassianConnectors.sync.reason.auth-unverified":
+    "Jira could not be verified right now. The connection is unchanged. Try again in a moment.",
   "atlassianConnectors.sync.reason.auth-failed":
     "Authentication failed. Re-verify the connector credential.",
   "atlassianConnectors.sync.reason.permission-denied":
@@ -5485,6 +5496,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.result.succeededTarget": "Result: {target}",
   "atlassianConnectors.result.failedTitle": "Action failed",
   "atlassianConnectors.result.reason.auth-failed": "Authentication failed.",
+  "atlassianConnectors.result.reason.auth-unverified":
+    "Jira could not be verified right now. The connection is unchanged. Try again in a moment.",
+  "atlassianConnectors.live.compatibilityMissing":
+    "This Jira Pod has no retained compatibility details yet. Verify the connection again to obtain them; no permission is added.",
   "atlassianConnectors.result.reason.permission-denied": "Permission denied.",
   "atlassianConnectors.result.reason.not-found": "The target no longer exists.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian rate-limited the request.",

@@ -795,7 +795,43 @@ it("explains a refused Jira read without claiming that it completed", () => {
   );
   expect(screen.getByText("Could not complete", { exact: true })).toBeVisible();
   expect(
-    screen.getByText("Verify the Jira Pod connection and its credentials before trying again."),
+    screen.getByText(
+      "Jira rejected the token. It may have expired or been revoked. Replace it on the Jira Pod, verify the connection and try again.",
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText("Completed", { exact: true })).toBeNull();
+  expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();
+});
+
+it("explains an unverifiable Jira authentication as retryable, not as an expired token (#4353)", () => {
+  const data = { outcome: "failed", reason: "auth-unverified" };
+  const failed = resultExchange("jira_search", data);
+  if (failed.result === undefined) throw new TypeError("Missing result fixture");
+  render(
+    <JiraChatTools
+      transcript={{
+        schemaVersion: 1,
+        exchanges: [
+          {
+            ...failed,
+            result: {
+              ...failed.result,
+              status: "failed",
+              reason: "provider-reported-error",
+              data,
+              page: null,
+            },
+          },
+        ],
+      }}
+      turnState="completed"
+    />,
+  );
+  expect(screen.getByText("Could not complete", { exact: true })).toBeVisible();
+  expect(
+    screen.getByText(
+      "Jira could not be verified right now, so this request was not sent on. The connection is unchanged. Try again in a moment.",
+    ),
   ).toBeVisible();
   expect(screen.queryByText("Completed", { exact: true })).toBeNull();
   expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();

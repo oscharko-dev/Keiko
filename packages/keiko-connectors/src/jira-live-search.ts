@@ -126,6 +126,7 @@ export interface JiraLiveSearchInput {
 export type JiraLiveSearchFailureReason = Extract<
   AtlassianSyncFailureReason,
   | "auth-failed"
+  | "auth-unverified"
   | "permission-denied"
   | "rate-limited"
   | "timeout"
