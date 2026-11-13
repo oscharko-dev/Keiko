@@ -67,6 +67,73 @@ describe("readWindowsProcessCommandLine", () => {
     ).toBe(COMMAND_LINE);
   });
 
+  // #4358, measured on Windows: the host start was waited out, yet every read still timed out,
+  // because loading the CIM cmdlets was counted inside the query's 3 s. The host below models that:
+  // whatever the program does after its start marker runs under the program's own watchdog.
+  function emulatedHost(times: {
+    readonly hostStartMs: number;
+    readonly moduleLoadMs: number;
+    readonly queryMs: number;
+  }): WindowsProgramRunner {
+    return (_command, args, options) => {
+      const program = Buffer.from(args.at(-1) ?? "", "base64").toString("utf16le");
+      const marker = program.indexOf(WINDOWS_PROGRAM_STARTED_MARKER);
+      const load = program.indexOf("Import-Module CimCmdlets");
+      const loadedBeforeMarker = load !== -1 && load < marker;
+      const workLimit = Number(/CancellationTokenSource\]::new\((\d+)\)/u.exec(program)?.[1]);
+      const beforeMarker = times.hostStartMs + (loadedBeforeMarker ? times.moduleLoadMs : 0);
+      const work = times.queryMs + (loadedBeforeMarker ? 0 : times.moduleLoadMs);
+      if (options.timeout < beforeMarker) {
+        return { error: timedOut(), status: null, stdout: "", stderr: "" };
+      }
+      if (work > workLimit) return { status: 0xffffffff, stdout: STARTED, stderr: "" };
+      return { status: 0, stdout: `${STARTED}${COMMAND_LINE}`, stderr: "" };
+    };
+  }
+
+  function readOn(runner: WindowsProgramRunner): string | undefined {
+    return readWindowsProcessCommandLine(4711, { resolvePowerShell: () => POWERSHELL, runner });
+  }
+
+  it("answers when the module loads slowly and the query is fast", () => {
+    expect(readOn(emulatedHost({ hostStartMs: 8_000, moduleLoadMs: 6_000, queryMs: 300 }))).toBe(
+      COMMAND_LINE,
+    );
+  });
+
+  it("stays fail closed when the query itself is slow, whatever the module took", () => {
+    const events: SecurityLogEvent[] = [];
+    const line = readWindowsProcessCommandLine(4711, {
+      resolvePowerShell: () => POWERSHELL,
+      runner: emulatedHost({ hostStartMs: 500, moduleLoadMs: 100, queryMs: 5_000 }),
+      securityLogSink: { write: (event): void => void events.push(event) },
+    });
+    expect(line).toBeUndefined();
+    expect(events[0]?.extra).toMatchObject({
+      program: "process-identity",
+      outcome: "work-timeout",
+    });
+  });
+
+  it("stays fail closed when host start and module load exceed the host start allowance", () => {
+    expect(
+      readOn(emulatedHost({ hostStartMs: 40_000, moduleLoadMs: 30_000, queryMs: 100 })),
+    ).toBeUndefined();
+  });
+
+  it("loads the module before the start marker and gives it no input", () => {
+    let call: Parameters<WindowsProgramRunner> | undefined;
+    read({ stdout: STARTED }, (seen) => {
+      call = seen;
+    });
+    const lines = Buffer.from(call?.[1].at(-1) ?? "", "base64")
+      .toString("utf16le")
+      .split("\n");
+    expect(lines[0]).toBe("Import-Module CimCmdlets -ErrorAction Stop");
+    expect(lines[1]).toContain(WINDOWS_PROGRAM_STARTED_MARKER);
+    expect(lines[2]).toBe("$keikoWatchdog = [Threading.CancellationTokenSource]::new(3000)");
+  });
+
   it("keeps the query's own 3 s limit inside the program", () => {
     let call: Parameters<WindowsProgramRunner> | undefined;
     read({ stdout: STARTED }, (seen) => {

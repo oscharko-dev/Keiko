@@ -71,6 +71,18 @@ describe("boundedPowerShellProgram", () => {
     expect(lines[2]).not.toContain("{");
   });
 
+  it("runs a host preparation before the start marker, outside the work limit", () => {
+    const lines = boundedPowerShellProgram("PROGRAM-BODY", 3_000, "PREPARE-HOST").split("\n");
+    expect(lines[0]).toBe("PREPARE-HOST");
+    expect(lines[1]).toContain(WINDOWS_PROGRAM_STARTED_MARKER);
+    expect(lines[2]).toBe("$keikoWatchdog = [Threading.CancellationTokenSource]::new(3000)");
+    expect(lines[4]).toBe("PROGRAM-BODY");
+    // Without one, the program is unchanged: the marker stays its first statement.
+    expect(boundedPowerShellProgram("PROGRAM-BODY", 3_000).startsWith("[Console]::Out.Write")).toBe(
+      true,
+    );
+  });
+
   it.each([0, -1, 1.5, Number.NaN, 600_001])("refuses the work limit %s", (limit) => {
     expect(() => boundedPowerShellProgram("exit 0", limit)).toThrow(TypeError);
   });

@@ -154,12 +154,20 @@ export class WindowsProgramWorkTimeoutError extends Error {
  * process's own `Kill`, so it fires on a thread-pool thread even while the program is blocked in a
  * system call. `workTimeoutMs` is a number Keiko chose, never caller data.
  */
-export function boundedPowerShellProgram(source: string, workTimeoutMs: number): string {
+export function boundedPowerShellProgram(
+  source: string,
+  workTimeoutMs: number,
+  preparation?: string,
+): string {
   if (!Number.isSafeInteger(workTimeoutMs) || workTimeoutMs < 1) {
     throw new TypeError("work timeout must be a positive integer");
   }
   if (workTimeoutMs > MAX_WORK_TIMEOUT_MS) throw new TypeError("work timeout is too large");
-  return `[Console]::Out.Write('${WINDOWS_PROGRAM_STARTED_MARKER}' + [char]10); [Console]::Out.Flush()
+  // Host preparation (loading a module the program needs) runs BEFORE the start marker: it is part
+  // of the host coming up and is bounded by the host start allowance, not by the work limit. It is
+  // a fixed statement Keiko chose, never caller data, and it receives no input.
+  const prepared = preparation === undefined ? "" : `${preparation}\n`;
+  return `${prepared}[Console]::Out.Write('${WINDOWS_PROGRAM_STARTED_MARKER}' + [char]10); [Console]::Out.Flush()
 $keikoWatchdog = [Threading.CancellationTokenSource]::new(${String(workTimeoutMs)})
 $null = $keikoWatchdog.Token.Register([Action][Delegate]::CreateDelegate([Action], [Diagnostics.Process]::GetCurrentProcess(), 'Kill'))
 ${source}`;
@@ -175,6 +183,11 @@ export interface BoundedPowerShellRun {
   readonly executable: string;
   /** The fixed program text, without the framing `boundedPowerShellProgram` adds. */
   readonly source: string;
+  /**
+   * A fixed statement that prepares the host for the program (for example loading a module) and
+   * runs before the start marker, under the host start allowance. It must not read the input.
+   */
+  readonly preparation?: string | undefined;
   readonly input: string;
   readonly workTimeoutMs: number;
   /** Bound on the program's own output; the start marker is accounted for separately. */
@@ -289,7 +302,9 @@ export function runBoundedPowerShellProgram(run: BoundedPowerShellRun): BoundedP
       "-NoProfile",
       "-NonInteractive",
       "-EncodedCommand",
-      encodePowerShellProgram(boundedPowerShellProgram(run.source, run.workTimeoutMs)),
+      encodePowerShellProgram(
+        boundedPowerShellProgram(run.source, run.workTimeoutMs, run.preparation),
+      ),
     ],
     {
       encoding: "utf8",

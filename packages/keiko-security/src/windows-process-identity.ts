@@ -23,6 +23,13 @@ export const WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS = 3_000;
 export const WINDOWS_PROCESS_IDENTITY_MAX_OUTPUT_BYTES = 3 * 32_768;
 const MAX_PID = 0xffff_fffc;
 
+// Loading the CIM cmdlets is the host getting ready, not the query: under x64 emulation it alone
+// took longer than the query's 3 s limit, so every read ran into the limit although the query is
+// quick (measured 2026-11-13 on the Windows cross-test machine). It therefore runs before the start
+// marker, under the host start allowance; the limit bounds the query alone. A module that cannot be
+// loaded ends the program before the marker, which is a failed run: nothing was learned.
+const PREPARATION = "Import-Module CimCmdlets -ErrorAction Stop";
+
 // The pid arrives as one decimal line on standard input and is checked again here, so nothing is
 // ever interpolated into this fixed program. A process that does not exist answers with no output.
 const QUERY = String.raw`
@@ -46,6 +53,7 @@ function queryCommandLine(pid: number, options: WindowsProcessIdentityOptions): 
     program: "process-identity",
     executable: options.resolvePowerShell?.() ?? resolveWindowsPowerShellExecutable(),
     source: QUERY,
+    preparation: PREPARATION,
     input: `${String(pid)}\n`,
     workTimeoutMs: WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS,
     maxOutputBytes: WINDOWS_PROCESS_IDENTITY_MAX_OUTPUT_BYTES,
