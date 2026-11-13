@@ -196,9 +196,11 @@ describe("an Epic-scoped report (#4356)", () => {
   });
 
   it("reads by parent alone only when the readable field list has no Epic Link field", async () => {
-    const children = issues.map((issue) =>
-      issue.epic === undefined ? issue : { ...issue, epic: undefined, parent: issue.epic },
-    );
+    // On this instance the members are children of the Epic: no `epic` key, a `parent` instead.
+    const children = issues.map((issue): FixtureIssue => {
+      const { epic, ...rest } = issue;
+      return epic === undefined ? issue : { ...rest, parent: epic };
+    });
     const dropped = fieldEdit((items) => {
       items.splice(
         items.findIndex((item) => item.id === "customfield_10014"),
