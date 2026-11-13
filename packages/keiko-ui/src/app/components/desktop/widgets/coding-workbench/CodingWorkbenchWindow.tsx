@@ -1214,7 +1214,8 @@ function useCodingModelSelection(
       null;
     if (next !== state.selectedModelId) {
       setHumanSelectedId(null);
-      actions.setSelectedModel(next);
+      // The window's own choice, not a person's pick: it is read with `check=use` (#4351).
+      actions.adoptModel(next);
     }
   }, [
     actions,

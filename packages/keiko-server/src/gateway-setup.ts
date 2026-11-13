@@ -3147,7 +3147,7 @@ function allProbesFailedError(failures: readonly ProbeFailureEvidence[]): Error 
   // Every probe ended without a verdict (an overloaded or unreachable gateway): the aggregate says
   // so, so a walk over the catalog does not take a lone 503 for a rejection (#4351).
   if (worst === undefined)
-    return failures.length > 0 && failures.every(isUnverifiedSmokeFailure)
+    return failures.length > 0 && failures.every(isModelLevelNoVerdict)
       ? Object.assign(error, { noVerdict: true })
       : error;
   return Object.assign(error, {
@@ -3211,6 +3211,18 @@ function isUnverifiedSmokeFailure(evidence: ProbeFailureEvidence): boolean {
   const { code, httpStatus } = evidence;
   if (code === ERROR_CODES.RATE_LIMIT || code === ERROR_CODES.CANCELLED) return true;
   if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return true;
+  return httpStatus !== undefined && transientGatewayStatus(httpStatus);
+}
+
+// A failure that says nothing about a model while the gateway itself answers (#4351): the model's
+// own completion timed out, the gateway rate-limited it, or an overloaded gateway answered with a
+// transient status. A refused connection, an unknown host, a TLS or proxy failure is not that: the
+// gateway was never reached, so no model has been judged and nothing may be saved from it.
+function isModelLevelNoVerdict(evidence: ProbeFailureEvidence): boolean {
+  const { code, httpStatus } = evidence;
+  if (code === ERROR_CODES.RATE_LIMIT || code === ERROR_CODES.CANCELLED) return true;
+  if (code === ERROR_CODES.TIMEOUT) return true;
+  if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return false;
   return httpStatus !== undefined && transientGatewayStatus(httpStatus);
 }
 
@@ -6951,6 +6963,15 @@ function definitiveGatewaySetupFailure(error: unknown): boolean {
 // configured as listed and unverified, with no inference request: its first explicit selection
 // checks it, and a rejection surfaces there. Rejected candidates of the walk are dropped, exactly
 // as the full round drops them.
+// The gateway lists wildcard route patterns only: nothing a person could select or Keiko could
+// check. It fails setup with its own readable reason instead of the generic smoke-test refusal.
+class WildcardOnlyDiscoveryError extends Error {
+  public constructor() {
+    super("the gateway lists only wildcard route patterns");
+    this.name = "WildcardOnlyDiscoveryError";
+  }
+}
+
 async function admitChatCandidates(
   input: SetupVerificationInput,
   candidateModels: SetupCandidateModels,
@@ -6970,7 +6991,10 @@ async function admitChatCandidates(
     : [];
   // Nothing but wildcard patterns was listed: there is no model to test, and the tester is never
   // called with an empty list. This is the same refusal an all-rejected gateway gives.
-  if (ids.length === 0 && wildcardIds.length > 0) throw allProbesFailedError([]);
+  if (ids.length === 0 && wildcardIds.length > 0) {
+    reportWildcardRoutesDropped(input.diagnostics, input.correlationId, wildcardIds.length);
+    throw new WildcardOnlyDiscoveryError();
+  }
   if (!discovered || ids.length <= 1 || asserted.length >= ids.length) {
     return chatAdmissionFromTest(await input.tester(candidateConfig, ids), [], wildcardIds, ids);
   }
@@ -7008,10 +7032,11 @@ async function walkChatCandidates(
       // A cancelled request is the caller's decision, not a verdict; a refused credential is the
       // gateway's answer to every model.
       input.signal?.throwIfAborted();
-      if (definitiveGatewaySetupFailure(error)) throw error;
-      // One rule for every failure without a verdict, thrown or by status (a timeout, a rate limit,
-      // an overloaded or unreachable gateway): it is no rejection. The model stays configured as
-      // unverified and the walk stops, so no other model is loaded on that gateway.
+      if (definitiveGatewaySetupFailure(error) || gatewayNotReached(error)) throw error;
+      // One rule for every failure without a verdict on a gateway that answers, thrown or by
+      // status (a timeout of the completion, a rate limit, an overloaded gateway): it is no
+      // rejection. The model stays configured as unverified and the walk stops, so no other model
+      // is loaded on that gateway.
       if (setupFailureWithoutVerdict(error))
         return withoutVerdictAdmission(
           input,
@@ -7030,12 +7055,21 @@ async function walkChatCandidates(
   throw lastError;
 }
 
+function setupFailureEvidence(error: unknown): ProbeFailureEvidence {
+  return { code: setupErrorCode(error), httpStatus: setupHttpStatus(error) };
+}
+
 function setupFailureWithoutVerdict(error: unknown): boolean {
   if (error instanceof Error && "noVerdict" in error && error.noVerdict === true) return true;
-  return isUnverifiedSmokeFailure({
-    code: setupErrorCode(error),
-    httpStatus: setupHttpStatus(error),
-  });
+  return isModelLevelNoVerdict(setupFailureEvidence(error));
+}
+
+// A failure to reach the gateway at all (a refused connection, an unknown host, a TLS or proxy
+// fault, a reset) is not a verdict about a model: the walk rethrows it, so the existing fallback
+// across base URLs and the deferred temporary admission decide, and nothing is saved from it.
+function gatewayNotReached(error: unknown): boolean {
+  const evidence = setupFailureEvidence(error);
+  return isUnverifiedSmokeFailure(evidence) && !isModelLevelNoVerdict(evidence);
 }
 
 function withoutVerdictAdmission(
@@ -7482,6 +7516,26 @@ function reportUnusableDiscoveredModels(
   });
 }
 
+// Discovered wildcard route patterns (`openai/*`) name no model: they are dropped by their shape
+// and never sent a request. Body-free: the count only, never a pattern.
+function reportWildcardRoutesDropped(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  count: number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.discovery",
+    errorClass: "GatewayDiscoveryWildcardRoutes",
+    message:
+      "Setup dropped discovered wildcard route patterns by their shape; no request was sent for them.",
+    code: "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
+    droppedWildcardRouteCount: count,
+  });
+}
+
 // Chat counterpart of `reportUnusableDiscoveredModels`, emitted separately because the chat smoke
 // test itself decides whether setup fails closed (an all-rejected gateway throws before this point
 // is ever reached) — see `verifySetupCandidate`. Body-free: counts only, never a model id (#3591).
@@ -7494,17 +7548,7 @@ function reportChatSmokeAdmission(
   // Wildcard patterns were dropped by their shape, not answered and rejected: they have their own line.
   const dropped = chatAdmission.droppedModelIds.length - chatAdmission.wildcardRouteCount;
   if (chatAdmission.wildcardRouteCount > 0)
-    emitServerDiagnostic(diagnostics, {
-      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-      timestamp: new Date().toISOString(),
-      operation: "POST /api/gateway/setup",
-      source: "gateway-setup.discovery",
-      errorClass: "GatewayDiscoveryWildcardRoutes",
-      message:
-        "Setup dropped discovered wildcard route patterns by their shape; no request was sent for them.",
-      code: "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
-      droppedWildcardRouteCount: chatAdmission.wildcardRouteCount,
-    });
+    reportWildcardRoutesDropped(diagnostics, correlationId, chatAdmission.wildcardRouteCount);
   if (unverified === 0 && dropped === 0) return;
   emitServerDiagnostic(diagnostics, {
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
@@ -7909,6 +7953,8 @@ const SETUP_CANDIDATE_AUTH_FAILURE =
   "The provider rejected the credential. Check the API key, endpoint URL, and project/model access.";
 const SETUP_CANDIDATE_RATE_LIMIT_FAILURE =
   "The provider rate-limited setup verification. Wait briefly and retry.";
+const SETUP_CANDIDATE_WILDCARD_ONLY_FAILURE =
+  "The gateway lists only wildcard route patterns (such as openai/*), which name no model Keiko can check. Enter a chat-capable model or deployment name and retry.";
 const SETUP_CANDIDATE_MODEL_FAILURE =
   "The provider endpoint responded, but no discovered model accepted the chat smoke test. Enter a chat-capable model or deployment name and retry.";
 
@@ -8694,9 +8740,15 @@ function temporaryAdmissionOrFailure(
   return setupFailureResult(candidateFailureMessages(failures), request.correlationId);
 }
 
+function candidateErrorMessage(error: unknown): string {
+  return error instanceof WildcardOnlyDiscoveryError
+    ? SETUP_CANDIDATE_WILDCARD_ONLY_FAILURE
+    : setupCandidateError(error);
+}
+
 function candidateFailureMessages(failures: readonly SetupCandidateFailure[]): readonly string[] {
   return failures.map(
-    (failure, index) => `candidate ${String(index + 1)}: ${setupCandidateError(failure.error)}`,
+    (failure, index) => `candidate ${String(index + 1)}: ${candidateErrorMessage(failure.error)}`,
   );
 }
 

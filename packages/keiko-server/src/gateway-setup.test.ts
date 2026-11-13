@@ -2298,6 +2298,87 @@ describe("handleGatewaySetup", () => {
     },
   );
 
+  // A failure to reach the gateway at all is no verdict about a model: it never saves an unverified
+  // default (that would persist a gateway nothing answered on), and the rest of the listing is not
+  // probed either.
+  it.each([
+    ["a refused connection", "ECONNREFUSED"],
+    ["an unknown host", "ENOTFOUND"],
+    ["a TLS failure", ERROR_CODES.TLS_CA_FAILURE],
+    ["an unreachable proxy", ERROR_CODES.PROXY_UNREACHABLE],
+  ])(
+    "fails closed and saves nothing when the gateway is not reached (%s) (#4351)",
+    async (_name, code) => {
+      const uiDir = await tempDir("keiko-gw-ui-unreached-");
+      const evidenceDir = await tempDir("keiko-gw-ev-unreached-");
+      const calls: string[] = [];
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (config, modelIds) => {
+          calls.push(`${config.providers[0]?.baseUrl ?? ""}|${modelIds.join(",")}`);
+          return Promise.reject(Object.assign(new Error("not reached"), { code }));
+        },
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(502);
+      expect(deps.gatewayConfig?.present()).toBe(false);
+      // Every base URL was tried with the default only; no other model was ever probed.
+      expect(calls.length).toBeGreaterThan(1);
+      expect(calls.every((call) => call.endsWith("|slow-default"))).toBe(true);
+      deps.store.close();
+    },
+  );
+
+  it.each([
+    ["a refused connection", "ECONNREFUSED"],
+    ["a socket timeout", "ETIMEDOUT"],
+  ])(
+    "falls back to the next base URL when the first is not reached (%s) and verifies the default there (#4351)",
+    async (_name, code) => {
+      const uiDir = await tempDir("keiko-gw-ui-url-fallback-");
+      const evidenceDir = await tempDir("keiko-gw-ev-url-fallback-");
+      const calls: string[] = [];
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (config, modelIds) => {
+          const baseUrl = config.providers[0]?.baseUrl ?? "";
+          calls.push(`${baseUrl}|${modelIds.join(",")}`);
+          return baseUrl.endsWith("/v1")
+            ? Promise.resolve([...modelIds])
+            : Promise.reject(Object.assign(new Error("not reached"), { code }));
+        },
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      // The first URL got the default only and was abandoned; the second one verified the default,
+      // and the answer there is a real verdict, not an unverified keep.
+      expect(calls[0]).toMatch(/^https:\/\/llm-gateway\.example\.com\/?\|slow-default$/);
+      expect(calls.at(-1)).toMatch(/\/v1\|slow-default$/);
+      expect(
+        (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds ??
+          [],
+      ).not.toContain("slow-default");
+      expect(requiredGatewayConfig(deps).providers[0]?.baseUrl).toMatch(/\/v1$/);
+      deps.store.close();
+    },
+  );
+
   it("drops a discovered wildcard route by its shape, with its own diagnostic and no request (#4351)", async () => {
     const uiDir = await tempDir("keiko-gw-ui-wildcard-");
     const evidenceDir = await tempDir("keiko-gw-ev-wildcard-");
@@ -2344,11 +2425,13 @@ describe("handleGatewaySetup", () => {
     const uiDir = await tempDir("keiko-gw-ui-wildcard-only-");
     const evidenceDir = await tempDir("keiko-gw-ev-wildcard-only-");
     const calls: (readonly string[])[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
       gatewayModelDiscovery: () => Promise.resolve(["openai/*", "anthropic/*"]),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
       gatewaySetupTester: (_config, modelIds) => {
@@ -2362,6 +2445,13 @@ describe("handleGatewaySetup", () => {
     );
     expect(calls).toEqual([]);
     expect(result.status).toBe(502);
+    // The failure says why, in its own words, not as a generic smoke-test refusal ...
+    expect(JSON.stringify(result.body)).toContain("only wildcard route patterns");
+    expect(JSON.stringify(result.body)).not.toContain("chat smoke test");
+    // ... and the drop is on record even though setup failed before any admission.
+    expect(
+      diagnostics.find((record) => record.code === "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED"),
+    ).toMatchObject({ droppedWildcardRouteCount: 2 });
     expect(deps.gatewayConfig?.present()).toBe(false);
     deps.store.close();
   });

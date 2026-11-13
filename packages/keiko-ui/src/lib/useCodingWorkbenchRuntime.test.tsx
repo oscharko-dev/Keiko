@@ -611,6 +611,30 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
+  it("reads an adopted model passively (check=use) and a picked model explicitly (check=1)", async () => {
+    installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+    const profile = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile);
+    profile.mockResolvedValue({ status: "unavailable", reason: "conversation-not-ready" } as never);
+    const activeWorkspace = workspace();
+    const view = renderHook(() =>
+      useCodingWorkbenchRuntime({
+        workspace: activeWorkspace,
+        initialRequestedMode: "governed-assist",
+      }),
+    );
+    await waitFor(() => expect(profile).toHaveBeenCalled());
+    profile.mockClear();
+    act(() => view.result.current.actions.adoptModel("saved-model"));
+    await waitFor(() => expect(profile).toHaveBeenCalled());
+    // The window's own adoption of a saved model asks the server to check nothing.
+    expect(profile.mock.calls.every((call) => call[2] === "use")).toBe(true);
+    profile.mockClear();
+    act(() => view.result.current.actions.setSelectedModel("picked-model"));
+    await waitFor(() => expect(profile).toHaveBeenCalled());
+    expect(profile.mock.calls.some((call) => call[2] === true)).toBe(true);
+    view.unmount();
+  });
+
   it("starts nothing when the checked model is refused, and leaves the source's reason on screen", async () => {
     installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
     const profile = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile);
@@ -700,12 +724,56 @@ describe("useCodingWorkbenchRuntime", () => {
       return { view, first };
     }
 
-    it("makes a second Start during the wait a no-op", async () => {
+    it("answers a second Start during the wait with the checking reason and repeats nothing", async () => {
       const { view, first } = await pendingStart();
       const reads = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length;
       await view.result.current.actions.start("again", { projectMemoryEnabled: false });
       expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length).toBe(reads);
       expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+      // Not silently: the person is told that the model is still being checked.
+      await waitFor(() =>
+        expect(view.result.current.state.mutation.error).toMatchObject({
+          code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+          modelRefusalReason: "model-verification-pending",
+        }),
+      );
+      view.unmount();
+      await first;
+    });
+
+    it("keeps waiting when the same model is picked again, and asks nothing more", async () => {
+      const { view, first } = await pendingStart();
+      let settled = false;
+      void first.then(() => {
+        settled = true;
+      });
+      const reads = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length;
+      act(() => view.result.current.actions.setSelectedModel("model-redacted"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 60));
+      expect(settled).toBe(false);
+      expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length).toBe(reads);
+      view.unmount();
+      await first;
+    });
+
+    it("ends the wait when the runtime preference changes", async () => {
+      const { view, first } = await pendingStart();
+      act(() => view.result.current.actions.setRuntimePreference("codex-subscription"));
+      await first;
+      expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+      view.unmount();
+    });
+
+    it("keeps waiting when the window adopts another model: adoption is no pick", async () => {
+      const { view, first } = await pendingStart();
+      let settled = false;
+      void first.then(() => {
+        settled = true;
+      });
+      act(() => view.result.current.actions.adoptModel("adopted-model"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 60));
+      expect(settled).toBe(false);
+      expect(view.result.current.state.selectedModelId).toBe("adopted-model");
       view.unmount();
       await first;
     });

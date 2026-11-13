@@ -95,8 +95,13 @@ profile with `check=use` (the model in use only) while a pick or Start reads wit
 without a verdict may be repeated by a pick or the next Send after the not-ready cooldown has passed; an
 explicit Settings verification that answers definitively ends the walk's pause. Gateway Setup keeps
 the full round for explicitly named deployments; for a discovered listing a candidate the walk
-rejects is dropped, a wildcard route pattern is dropped by its shape, and listed models no request
-reached are configured and reported unverified. A connection is the provider entry
+rejects is dropped, a wildcard route pattern is dropped by its shape (a listing of nothing else fails
+with its own reason), a default without a verdict from a gateway that answers (a timeout of its
+completion, a rate limit, an overloaded status) is kept unverified and ends the walk, a failure to
+reach the gateway at all (refused connection, unknown host, TLS or proxy fault) is no verdict and
+takes the existing base-URL fallback and deferred admission without saving anything, and listed models
+no request reached are configured and reported unverified. A window's own adoption of a saved or
+elected model reads with `check=use`; only a person's pick sends `check=1`. A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
 interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.

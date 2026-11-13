@@ -14,6 +14,7 @@ import type {
   CodingWorkbenchRuntimeForkRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
+  CodingWorkbenchClientError,
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
@@ -55,7 +56,13 @@ export interface CodingWorkbenchRuntimeActions extends RuntimeMutationActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
   readonly setAgent: (agent: CodingWorkbenchAgent) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
+  /** The person's own pick: the one model whose check the server is asked to run (`check=1`). */
   readonly setSelectedModel: (modelId: string | null) => void;
+  /**
+   * The window's own choice of a model (the operator's saved one, or the elected default): it is
+   * read with `check=use` like any other passive read and never aborts a Start that is waiting.
+   */
+  readonly adoptModel: (modelId: string | null) => void;
   readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
   readonly prepareCodexSetup?: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshProfile: () => Promise<void>;
@@ -78,6 +85,15 @@ interface RuntimeActionInput {
 // source's readable reason on screen and starts nothing.
 const START_MODEL_CHECK_POLL_MS = 5_000;
 const START_MODEL_CHECK_MAX_WAIT_MS = 600_000;
+
+// The answer to a Start pressed while the first one still waits for its model's check: the same
+// closed refusal the server gives for a model whose verification is pending.
+const MODEL_STILL_CHECKING: CodingWorkbenchClientError = {
+  code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+  message: "The selected model is still being checked.",
+  retryable: true,
+  modelRefusalReason: "model-verification-pending",
+};
 
 function sourceNeedsModelCheck(state: CodingWorkbenchRuntimeState): boolean {
   const value = state.source.value;
@@ -162,13 +178,18 @@ async function startAfterModelCheck(
     readonly refreshSource: RuntimeResources["refreshSource"];
     readonly start: RuntimeMutationActions["start"];
     readonly intent: CodingWorkbenchModelIntent;
+    readonly dispatch: Dispatch<CodingWorkbenchRuntimeStateAction>;
   },
   taskIntent: string,
   options: CodingWorkbenchStartOptions,
 ): Promise<void> {
   const { stateRef, refreshSource, start, intent } = input;
-  // A second Start while the first one is checking its model is a no-op.
-  if (intent.startWait !== null) return;
+  // A second Start while the first one is checking its model does not repeat the check; it says
+  // that the model is still being checked.
+  if (intent.startWait !== null) {
+    input.dispatch({ kind: "mutation-failed", error: MODEL_STILL_CHECKING });
+    return;
+  }
   if (!sourceNeedsModelCheck(stateRef.current)) {
     await start(taskIntent, options);
     return;
@@ -180,6 +201,9 @@ async function startAfterModelCheck(
     ready = await waitForModelCheck(stateRef, refreshSource, controller.signal);
   } finally {
     if (intent.startWait === controller) intent.startWait = null;
+    // The "still being checked" answer to a second Start belongs to this wait only.
+    if (stateRef.current.mutation.error?.modelRefusalReason === "model-verification-pending")
+      input.dispatch({ kind: "mutation-complete" });
   }
   // The window closed or the model changed during the wait: nothing starts.
   if (ready && !controller.signal.aborted) await start(taskIntent, options);
@@ -221,20 +245,27 @@ function createCodingWorkbenchRuntimeActions({
     setAgent: (agent) => dispatch({ kind: "select-agent", agent }),
     setRuntimePreference: (preference): void => {
       if (stateRef.current.runtimePreference === preference) return;
+      // Another runtime preference is another source: the wait of a Start for the old one ends.
+      intent.current.startWait?.abort();
       profileSequence.current += 1;
       sourceSequence.current += 1;
       dispatch({ kind: "select-runtime-preference", preference });
     },
     setSelectedModel: (modelId): void => {
-      // A new model ends the wait of a Start that was checking the old one.
-      intent.current.startWait?.abort();
+      // The same model picked again changes nothing, so a Start that waits on it keeps waiting and
+      // the explicit check is asked for only when no Start already runs it.
       if (modelId !== null && stateRef.current.selectedModelId === modelId) {
-        // The same model picked again: nothing changes, so the explicit check is asked for here.
-        void refreshSource(false, undefined, true);
+        if (intent.current.startWait === null) void refreshSource(false, undefined, true);
         return;
       }
+      // Another model ends the wait of a Start that was checking the old one.
+      intent.current.startWait?.abort();
       // The next source read for this model is the person's pick; every other read is passive.
       intent.current.pickedModelId = modelId;
+      dispatch({ kind: "select-model", modelId });
+    },
+    adoptModel: (modelId): void => {
+      if (stateRef.current.selectedModelId === modelId) return;
       dispatch({ kind: "select-model", modelId });
     },
     setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
@@ -245,7 +276,7 @@ function createCodingWorkbenchRuntimeActions({
     refreshRun,
     start: (taskIntent, options) =>
       startAfterModelCheck(
-        { stateRef, refreshSource, start, intent: intent.current },
+        { stateRef, refreshSource, start, intent: intent.current, dispatch },
         taskIntent,
         options,
       ),

@@ -1241,9 +1241,13 @@ in use; a pick or Start reads with `check=1`. A check that ended without a verdi
 again by a pick or the next Send, only after the existing not-ready cooldown has passed; a definitive refusal
 stays refused. Gateway Setup keeps the full verification round for explicitly named deployments;
 for a discovered listing, a candidate the walk reaches and the gateway rejects is dropped, a wildcard
-route pattern is dropped by its shape without a request, a default that got no verdict is kept
-unverified and the walk stops, and the listed models no request reached are configured and reported
-as unverified. `gateway.readiness.scope` records how many models were listed and checked and why,
+route pattern is dropped by its shape without a request (a listing of nothing else fails with its own
+reason), a default that got no verdict from a gateway that answers (a timeout of its completion, a rate
+limit, an overloaded status) is kept unverified and the walk stops, a failure to reach the gateway at
+all (refused connection, unknown host, TLS or proxy fault) is no verdict and takes the existing
+base-URL fallback and deferred admission without saving anything, and the listed models no request
+reached are configured and reported as unverified. A window's own adoption of a saved or elected
+model is read with `check=use`; only a person's pick sends `check=1`. `gateway.readiness.scope` records how many models were listed and checked and why,
 only for a check that actually sent a request; `gateway.readiness.selection` records the outcome of
 every pick under its own correlation id; and `gateway.readiness.automatic.started` carries the
 closed `checkReason` (`startup`, `fallback`, `selection`). Nothing renews or recovers a model on a

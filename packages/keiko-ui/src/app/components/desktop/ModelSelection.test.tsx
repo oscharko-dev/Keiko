@@ -1078,4 +1078,247 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     });
     expect(start).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------------------------
+  // The entry points a person actually uses: the real composer (button and Enter) with the real
+  // hook, not a call into an internal function.
+  // -------------------------------------------------------------------------------------------
+
+  interface SessionRef {
+    current: ChatSessionApi | undefined;
+  }
+
+  function RealComposer({ sessionRef }: { readonly sessionRef?: SessionRef }): ReactNode {
+    const session = useChatSession();
+    if (sessionRef !== undefined) sessionRef.current = session;
+    return (
+      <ChatSessionProvider value={session}>
+        <ChatWindow />
+      </ChatSessionProvider>
+    );
+  }
+
+  it.each(["button", "Enter"] as const)(
+    "erases nothing and sends nothing when the person typed during the check (%s)",
+    async (how) => {
+      const check = deferredCheck();
+      const start = vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+      const spies = sendSpies();
+      const user = userEvent.setup();
+      render(<RealComposer />);
+      const box = await screen.findByRole("textbox", { name: "Chat message" });
+      await user.type(box, "hello");
+      if (how === "button") await user.click(screen.getByRole("button", { name: "Send message" }));
+      else await user.keyboard("{Enter}");
+      await waitFor(() => {
+        expect(start).toHaveBeenCalledTimes(1);
+      });
+      await user.type(box, " and more");
+      await act(async () => {
+        check.resolve({ state: "ready" });
+        await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      });
+      // The text typed during the wait is neither erased nor lost, and the old text is not sent.
+      expect(spies.sent()).toBe(0);
+      const typed = screen.getByRole("textbox", { name: "Chat message" });
+      expect(typed).toHaveTextContent("hello");
+      expect(typed).toHaveTextContent("and more");
+    },
+  );
+
+  it("does not send an attachment the person removed during the check", async () => {
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [
+        chatModel("model-a"),
+        {
+          ...chatModel("model-unchecked"),
+          conversationReady: undefined,
+          supportsDocumentInput: true,
+        },
+      ],
+    });
+    const check = deferredCheck();
+    const start = vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const spies = sendSpies();
+    const user = userEvent.setup();
+    const sessionRef: SessionRef = { current: undefined };
+    render(<RealComposer sessionRef={sessionRef} />);
+    const box = await screen.findByRole("textbox", { name: "Chat message" });
+    await user.type(box, "hello");
+    await act(async () => {
+      const added = await sessionRef.current?.addPendingAttachment(
+        new File(["report"], "report.txt", { type: "text/plain" }),
+      );
+      expect(added?.ok).toBe(true);
+    });
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => {
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+    await user.click(await screen.findByRole("button", { name: "Remove attachment report.txt" }));
+    await act(async () => {
+      check.resolve({ state: "ready" });
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    expect(spies.sent()).toBe(0);
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent("hello");
+  });
+
+  function persistChatSelection(initial: string): void {
+    vi.spyOn(api, "fetchChats").mockResolvedValue({
+      chats: [makeHookChat({ selectedModel: initial })],
+    });
+    vi.spyOn(api, "updateChat").mockImplementation((_id, patch) =>
+      Promise.resolve(
+        chatResponse(makeHookChat({ selectedModel: patch.selectedModel ?? initial })),
+      ),
+    );
+  }
+
+  it("does not tell a Send after a model switch that the other model is still being checked", async () => {
+    persistChatSelection("model-unchecked");
+    const check = deferredCheck();
+    vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(api.startChatModelSelectionCheck).toHaveBeenCalledTimes(1);
+    });
+    act(() => view.result.current.setSelectedModel("model-a"));
+    // The send that goes out never settles in this double: it is started, not awaited.
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    expect(view.result.current.error).not.toBe("MODEL_CHECKING");
+    await waitFor(() => {
+      expect(spies.sent()).toBe(1);
+    });
+    check.resolve({ state: "ready" });
+  });
+
+  it("removes the 'still being checked' notice when the check it described has ended", async () => {
+    persistChatSelection("model-unchecked");
+    const check = deferredCheck();
+    vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(api.startChatModelSelectionCheck).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+    expect(view.result.current.error).toBe("MODEL_CHECKING");
+    // The person leaves for another model: the wait ends and the notice goes with it.
+    act(() => view.result.current.setSelectedModel("model-a"));
+    check.resolve({ state: "ready" });
+    await waitFor(() => {
+      expect(view.result.current.error).toBeUndefined();
+    });
+  });
+
+  it.each([
+    ["not-ready", "refused", "MODEL_NOT_READY"],
+    ["not-ready", "cooldown", "MODEL_CHECK_COOLDOWN"],
+    ["unchecked", "cooldown", "MODEL_CHECK_COOLDOWN"],
+  ] as const)(
+    "shows at once why a picked model that answered %s with outcome %s is not usable",
+    async (state, outcome, expectedError) => {
+      persistChatSelection("model-a");
+      vi.spyOn(api, "startChatModelSelectionCheck").mockResolvedValue(
+        outcome === "cooldown" ? { state, outcome } : { state },
+      );
+      const view = await bootChatHook();
+      act(() => view.result.current.setSelectedModel("model-unchecked"));
+      await waitFor(() => {
+        expect(view.result.current.error).toBe(expectedError);
+      });
+      // A cooldown is read before the state, so an "unchecked" state never waits for a check that
+      // was never started.
+      expect(api.fetchModels).not.toHaveBeenCalledWith(
+        expect.any(String),
+        false,
+        expect.objectContaining({ waitForStartup: true }),
+      );
+    },
+  );
+
+  it("holds a spoken final that arrives during the check as not sent, and keeps the typed draft", async () => {
+    const check = deferredCheck();
+    vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("typed draft"));
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(api.startChatModelSelectionCheck).toHaveBeenCalledTimes(1);
+    });
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await view.result.current.sendMessage({
+        text: "spoken final",
+        reportOutcome: true,
+        clientTurnId: "turn-1",
+      });
+    });
+    // The Voice dialogue treats anything but "completed" as a failed delivery and keeps the
+    // transcript for retry; nothing is dropped and the typed draft is untouched.
+    expect(outcome).toEqual({ status: "not-sent" });
+    expect(spies.sent()).toBe(0);
+    expect(view.result.current.draft).toBe("typed draft");
+    check.resolve({ state: "not-ready" });
+  });
+
+  it("does not hold a queued canonical Voice send behind the check; the queue owns its retry", async () => {
+    const check = deferredCheck();
+    vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("typed draft"));
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(api.startChatModelSelectionCheck).toHaveBeenCalledTimes(1);
+    });
+    const chat = view.result.current.activeChat;
+    expect(chat).toBeDefined();
+    await act(async () => {
+      void view.result.current.sendMessage({
+        text: "queued spoken final",
+        reportOutcome: true,
+        clientTurnId: "turn-queued",
+        canonicalVoiceTarget: {
+          chat: chat as Chat,
+          project: { path: "/repo" },
+          modelId: "model-unchecked",
+          attachments: [],
+          memory: { context: { userId: "local-operator", conversationId: (chat as Chat).id } },
+        },
+      });
+      await Promise.resolve();
+    });
+    // Not answered "checking": the queue's own bounded, non-terminal retry decides, so a refusal is
+    // never a lost transcript.
+    expect(view.result.current.error).not.toBe("MODEL_CHECKING");
+    await waitFor(() => {
+      expect(spies.sent()).toBe(1);
+    });
+    check.resolve({ state: "not-ready" });
+  });
 });

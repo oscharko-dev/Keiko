@@ -737,7 +737,7 @@ it("names a recheck the cooldown withheld with its own closed outcome", async ()
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });
   await settle(150);
-  await handleGatewaySelectionCheck(
+  const answer = await handleGatewaySelectionCheck(
     { ...selectionRequest({ modelId: CHAT_A }), correlationId: "corr-pick-cooldown" },
     deps,
   );
@@ -745,6 +745,9 @@ it("names a recheck the cooldown withheld with its own closed outcome", async ()
     (line) => line.correlationId === "corr-pick-cooldown",
   );
   expect(outcome?.extra?.outcome).toBe("cooldown");
+  // The state that comes with a cooldown is the model's last answer, never "checking": the browser
+  // reads the outcome first and shows the cooldown reason at once.
+  expect(answer.body).toMatchObject({ modelId: CHAT_A, outcome: "cooldown", state: "not-ready" });
 });
 
 it("reports a failing startup walk under the configuration request's correlation id", async () => {
