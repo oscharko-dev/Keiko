@@ -5232,6 +5232,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.verify.auth-failed.label": "Authentication failed",
   "atlassianConnectors.verify.auth-failed.copy":
     "The token was rejected. It may have expired or been revoked. Create a new token in Jira, replace it here, then verify again.",
+  "atlassianConnectors.verify.auth-unverified.label": "Could not confirm",
+  "atlassianConnectors.verify.auth-unverified.copy":
+    "The answer did not come from Jira itself, for example because a sign-in proxy or a security check answered. The token was not rejected and nothing was changed. Sign in again or try again later; you can replace the token at any time.",
   "atlassianConnectors.verify.forbidden.label": "Access forbidden",
   "atlassianConnectors.verify.forbidden.copy":
     "Atlassian denied access. Check the account permissions and any site or license restrictions, then verify again.",

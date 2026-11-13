@@ -462,6 +462,9 @@ export const ATLASSIAN_CONNECTOR_AUTH_SCHEMES: readonly AtlassianConnectorAuthSc
 export type AtlassianConnectionVerificationStatus =
   | "ok"
   | "auth-failed"
+  // A 401 that Jira itself did not author (a sign-in proxy, a captcha check): the token is neither
+  // confirmed nor rejected, so nothing is invalidated and the Pod keeps its previous state.
+  | "auth-unverified"
   | "forbidden"
   | "unreachable"
   | "timeout"
@@ -474,6 +477,7 @@ export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConne
   Object.freeze([
     "ok",
     "auth-failed",
+    "auth-unverified",
     "forbidden",
     "unreachable",
     "timeout",

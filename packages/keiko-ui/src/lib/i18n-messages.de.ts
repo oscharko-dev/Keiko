@@ -546,7 +546,7 @@ export const DE_MESSAGES = {
   "chat.error.jiraAuthentication.message":
     "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
   "chat.error.jiraAuthentication.remediation":
-    "Öffne den Knowledge Pods Hub, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+    "Öffnen Sie den Knowledge Pods Hub, ersetzen Sie das Token am Jira Pod und verifizieren Sie die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfen Sie vor einer weiteren Änderung den Stand in Jira.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",

@@ -430,6 +430,42 @@ describe("fetchItem — page bodies, comments, and the failure matrix", () => {
     expect(await fetchPage(http, "13")).toEqual({ kind: "fatal", reason: "auth-failed" });
   });
 
+  // #4353: the comment lane must not swallow an unsettled 401 as a silent omission. An unconfirmed
+  // one stops the run like the item path; a confirmed one is a missing permission and degrades
+  // exactly like a 403 (the page stays citable without comments).
+  it.each([
+    ["unconfirmed", { kind: "fatal", reason: "auth-unverified" }],
+    ["confirmed", "page-without-comments"],
+  ] as const)(
+    "maps a 401 with identity decision %s on the footer-comments fetch",
+    async (authentication, expected) => {
+      const http = createInMemoryConfluenceFixture({
+        baseUrl: BASE_URL,
+        spaces: [space("ENG", "100", [fixturePage(14, { comments: ["<p>never served</p>"] })])],
+        override: (request) => {
+          if (new URL(request.url).pathname.endsWith("/footer-comments")) {
+            return {
+              kind: "response",
+              status: 401,
+              authentication,
+              bodyText: "",
+              bodyBytes: 0,
+              truncated: false,
+            };
+          }
+          return undefined;
+        },
+      });
+      const outcome = await fetchPage(http, "14");
+      if (expected === "page-without-comments") {
+        expect(outcome.kind).toBe("item");
+        if (outcome.kind === "item") expect(outcome.item.contentHtml).not.toContain("never served");
+      } else {
+        expect(outcome).toEqual(expected);
+      }
+    },
+  );
+
   // KEIKO-0467 (audit remediation): the flat `COMPOSED_HTML_ENVELOPE_BYTES = 1_024` allowance
   // reservation under-counted this page's real envelope cost — a 500-char CJK title alone composes
   // to 1_500 UTF-8 bytes, well past the flat guess once the rest of the envelope is added. With

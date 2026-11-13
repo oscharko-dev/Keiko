@@ -24,6 +24,26 @@ describe("Jira Pod terminology (#4353)", () => {
     const hyphenated = files.filter((file) => /Jira-Pods?\b/u.test(readFileSync(file, "utf8")));
     expect(hyphenated.map((file) => file.slice(file.indexOf("src/")))).toEqual([]);
   });
+  it("addresses the reader as Sie in every German message of the connection refusals (#4353)", () => {
+    const keys = [
+      "chat.jira.outcome.failure.auth",
+      "chat.jira.outcome.failure.authUnverified",
+      "atlassianConnectors.result.reason.auth-unverified",
+      "atlassianConnectors.sync.reason.auth-unverified",
+      "atlassianConnectors.verify.auth-failed.copy",
+      "atlassianConnectors.verify.auth-unverified.copy",
+      "atlassianConnectors.verify.unsupported-version.copy",
+      "atlassianConnectors.verify.tls-failed.copy",
+      "atlassianConnectors.live.compatibilityMissing",
+    ] as const;
+    for (const key of keys) {
+      const text = OPTIONAL_WIDGET_DE_MESSAGES[key];
+      expect(text, key).not.toMatch(/\b(?:du|dein\w*|dir|dich)\b/iu);
+      expect(text, key).not.toMatch(
+        /\b(?:Versuche|Prüfe|Verifiziere|Ersetze|Erstelle|Öffne|Setze)\b/u,
+      );
+    }
+  });
   it("gives every closed auth-unverified message in both languages and none of them names a host or identity", () => {
     for (const catalog of [OPTIONAL_WIDGET_EN_MESSAGES, OPTIONAL_WIDGET_DE_MESSAGES]) {
       for (const key of [

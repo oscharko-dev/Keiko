@@ -12,9 +12,11 @@ import {
   executeAtlassianWriteRequest,
 } from "@oscharko-dev/keiko-connectors";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import {
   ambiguousJiraAuthenticationResponse,
+  JIRA_IDENTITY_PROBE_DEADLINE_MS,
   JIRA_IDENTITY_PROBE_WINDOW_MS,
   withJiraAuthenticationObservation,
 } from "./jiraAuthenticationObservation.js";
@@ -230,6 +232,15 @@ it.each([
   // ambiguous. There is no list any more; the identity read decides every route. This test, with
   // "#4316: index/summary still discards an invalid credential", still catches the incident: a
   // dead credential is discarded on each of these routes.
+  //
+  // Old pin, verbatim (the assertions that changed are the two marked):
+  //   it.each([... "project", "issuetypescheme/1", ..., "myself"])(
+  //     "keeps ordinary401 invalidation on %s without a probe", async (path) => {
+  //       const f = fixture(() => response({}, 401));
+  //       await f.deps.httpBodyPortFactory(f.metadata)(request(path));
+  //       expect(f.urls).toEqual([request(path).url]);            // changed: now plus the identity read
+  //       expect(f.invalidated).toEqual([2]);                       // kept
+  //     });
   "keeps ordinary401 invalidation on %s once the identity probe also answers 401",
   async (path) => {
     const f = fixture(() => response({}, 401));
@@ -253,6 +264,14 @@ it.each([
   // borrowed for a write on the same path, or a refused write would be misread. Writes are never
   // replayed and never borrow a read's facts; the identity read alone decides, and this test
   // asserts exactly that (two requests, the write sent once, an invalid credential discarded).
+  //
+  // Old pin, verbatim:
+  //   "does not classify a %s write as an ambiguous administrator read", async (path) => {
+  //     const f = fixture(() => response({}, 401));
+  //     await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "PUT", bodyJson: "{}" });
+  //     expect(f.urls).toHaveLength(1);                             // changed: now the write plus one identity read
+  //     expect(f.invalidated).toEqual([2]);                         // kept
+  //   }
   "decides a %s write 401 by the identity probe and never replays the write",
   async (path) => {
     const f = fixture(() => response({}, 401));
@@ -339,7 +358,17 @@ it.each(["revision", "generation"] as const)(
     expect(f.current().generation).toBe(change === "generation" ? 2 : 1);
   },
 );
-it("uses the remaining original time and tears down the identity request on cancellation", async () => {
+// Deliberate reversal (#4353 audit round 3, point 3). The old pin read
+//   it("uses the remaining original time and tears down the identity request on cancellation", ...)
+//   expect(budgets).toEqual([1000, JIRA_IDENTITY_PROBE_DEADLINE_MS]);
+// and guarded one incident: an identity read that outlives its caller's time and cancellation. The
+// shared identity read now has its own bounded deadline (JIRA_IDENTITY_PROBE_DEADLINE_MS), so the
+// first number is unchanged and the second is the flight's deadline. Cancellation still tears the
+// identity request down when every caller has given up (asserted below and in "tears the flight
+// down only when every caller has given up"), and the caller's own result never outlives its
+// deadline ("does not probe without remaining original time", "cannot attach positive identity
+// evidence after the request became expired").
+it("gives the shared identity read its own deadline and tears it down when its only caller cancels", async () => {
   const controller = new AbortController();
   let now = 1000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -1459,4 +1488,161 @@ it("reports a probe exception once through the diagnostic port with the closed s
     message: "server-operation-failed",
   });
   expect(JSON.stringify(probeRecords)).not.toMatch(/https:|synthetic-credential/u);
+});
+
+// #4353 audit round 3, points 3 and 4: the shared identity read belongs to the flight.
+function myselfCount(f: Fixture): number {
+  return f.urls.filter((url) => url.endsWith("/myself")).length;
+}
+function gate(): { readonly open: () => void; readonly passed: Promise<void> } {
+  let open: () => void = () => undefined;
+  const passed = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, passed };
+}
+it("lets a waiter joining a flight whose first caller aborts still get the probe's real result", async () => {
+  const controller = new AbortController();
+  const held = gate();
+  const f: Fixture = fixture(async (index) => {
+    if (f.urls[index]?.endsWith("/myself") === true) {
+      await held.passed;
+      return response(IDENTITY);
+    }
+    return response({}, 401);
+  });
+  const http = f.deps.httpBodyPortFactory(f.metadata, "flight-leader");
+  const joiner = f.deps.httpBodyPortFactory(f.metadata, "flight-joiner");
+  const first = http({ ...request("a/1"), signal: controller.signal });
+  await vi.waitFor(() => {
+    expect(myselfCount(f)).toBe(1);
+  });
+  const second = joiner(request("a/2"));
+  await vi.waitFor(() => {
+    expect(f.urls.filter((url) => url.endsWith("a/2"))).toHaveLength(1);
+  });
+  controller.abort();
+  held.open();
+  const [aborted, waiter] = await Promise.all([first, second]);
+  expect(aborted).toMatchObject({ status: 401, authentication: "unconfirmed" });
+  // The probe was not torn down by the first caller: the waiter reads its real, positive result.
+  expect(waiter).toMatchObject({ status: 401, authentication: "confirmed" });
+  expect(myselfCount(f)).toBe(1);
+  expect(f.invalidated).toEqual([]);
+});
+it("tears the flight down only when every caller has given up", async () => {
+  const first = new AbortController();
+  const second = new AbortController();
+  let probeSignal: AbortSignal | null | undefined;
+  const held = gate();
+  const f: Fixture = fixture(async (index, init) => {
+    if (f.urls[index]?.endsWith("/myself") === true) {
+      probeSignal = init?.signal;
+      await held.passed;
+      throw new DOMException("aborted", "AbortError");
+    }
+    return response({}, 401);
+  });
+  const calls = [first, second].map((controller, index) =>
+    f.deps.httpBodyPortFactory(
+      f.metadata,
+      `giveup-${String(index)}`,
+    )({
+      ...request(`g/${String(index)}`),
+      signal: controller.signal,
+    }),
+  );
+  await vi.waitFor(() => {
+    expect(myselfCount(f)).toBe(1);
+  });
+  first.abort();
+  expect(probeSignal?.aborted).toBe(false);
+  second.abort();
+  await vi.waitFor(() => {
+    expect(probeSignal?.aborted).toBe(true);
+  });
+  held.open();
+  for (const result of await Promise.all(calls))
+    expect(result).toMatchObject({ authentication: "unconfirmed" });
+  expect(f.invalidated).toEqual([]);
+});
+it("never hands the result of a flight to a rotated credential", async () => {
+  const held = gate();
+  const f: Fixture = fixture(async (index) => {
+    if (f.urls[index]?.endsWith("/myself") === true && myselfCount(f) === 1) {
+      await held.passed;
+      return response(IDENTITY);
+    }
+    return f.urls[index]?.endsWith("/myself") === true ? response(IDENTITY) : response({}, 401);
+  });
+  const old = f.deps.httpBodyPortFactory(f.metadata, "old-generation")(request("a/1"));
+  await vi.waitFor(() => {
+    expect(myselfCount(f)).toBe(1);
+  });
+  f.deps.custody.updateLivePod(f.metadata.authRef, {
+    expectedGeneration: 1,
+    apiToken: ["replacement", "synthetic", "credential"].join("-"),
+  });
+  const ticket = f.deps.custody.beginVerification(f.metadata.authRef);
+  if (ticket === undefined) throw new TypeError("Missing verification ticket");
+  f.deps.custody.finishVerification(f.metadata.authRef, 2, ticket.revision, "ok");
+  const fresh = await f.deps.httpBodyPortFactory(f.current(), "new-generation")(request("a/2"));
+  // The rotated credential is probed itself, never served the old flight's answer.
+  expect(myselfCount(f)).toBe(2);
+  expect(fresh).toMatchObject({ authentication: "confirmed" });
+  held.open();
+  expect(await old).toMatchObject({ status: 401, authentication: "unconfirmed" });
+});
+it("dispatches a new probe after an inconclusive flight and after a finished one", async () => {
+  const f: Fixture = fixture((index) =>
+    f.urls[index]?.endsWith("/myself") === true ? response({}, 503) : response({}, 401),
+  );
+  const http = f.deps.httpBodyPortFactory(f.metadata, "after-flight");
+  await Promise.all([http(request("a/1")), http(request("a/2"))]);
+  const during = myselfCount(f);
+  expect(during).toBe(1);
+  await http(request("a/3"));
+  expect(myselfCount(f)).toBe(2);
+});
+it("explains a shared result with its cause and a link to the caller that started the flight", async () => {
+  const held = gate();
+  const f: Fixture = fixture(async (index) => {
+    if (f.urls[index]?.endsWith("/myself") === true) {
+      await held.passed;
+      return response({}, 429);
+    }
+    return response({}, 401);
+  });
+  const calls = ["leader", "second", "third"].map((id) =>
+    f.deps.httpBodyPortFactory(f.metadata, id)(request(`s/${id}`)),
+  );
+  await vi.waitFor(() => {
+    expect(myselfCount(f)).toBe(1);
+  });
+  // Let every caller join before the one probe answers.
+  await vi.waitFor(() => {
+    expect(f.urls.filter((url) => url.includes("/s/"))).toHaveLength(3);
+  });
+  held.open();
+  await Promise.all(calls);
+  const records = f.events
+    .filter((event) => event.op === "atlassian.connection.checked")
+    .map(
+      (event) =>
+        JSON.parse(formatActivityLogProofLine(event)) as Record<string, unknown> & {
+          readonly extra?: Record<string, unknown>;
+        },
+    );
+  const field = (record: Record<string, unknown>, name: string): unknown =>
+    record[name] ?? (record.extra as Record<string, unknown> | undefined)?.[name];
+  const leader = records.find((record) => field(record, "decision") === "probe");
+  const shared = records.filter((record) => field(record, "decision") === "probe-shared");
+  expect(field(leader ?? {}, "outcome")).toBe("probe-inconclusive");
+  expect(field(leader ?? {}, "probeCause")).toBe("http-429");
+  expect(shared).toHaveLength(2);
+  for (const record of shared) {
+    expect(field(record, "probeCause")).toBe("http-429");
+    expect(field(record, "parentCorrelationId")).toBe(field(leader ?? {}, "correlationId"));
+    expect(field(record, "correlationId")).not.toBe(field(leader ?? {}, "correlationId"));
+  }
 });

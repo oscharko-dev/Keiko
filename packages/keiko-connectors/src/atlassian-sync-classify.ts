@@ -116,9 +116,20 @@ export function failureReasonForStatus(status: number): AtlassianSyncFailureReas
 export function failureReasonForResponse(
   result: Pick<Extract<AtlassianHttpBodyResult, { kind: "response" }>, "status" | "authentication">,
 ): AtlassianSyncFailureReason {
-  if (result.status === 401 && result.authentication === "confirmed") return "permission-denied";
-  if (result.status === 401 && result.authentication === "unconfirmed") return "auth-unverified";
-  return failureReasonForStatus(result.status);
+  return identityDecisionReason(result) ?? failureReasonForStatus(result.status);
+}
+
+/**
+ * The single three-way mapping of a Data Center 401's identity decision, shared by every read and
+ * the write executor so they cannot drift: `confirmed` is a missing permission, `unconfirmed` is
+ * unproven authentication, no decision means the caller maps the status itself.
+ */
+export function identityDecisionReason(
+  result: Pick<Extract<AtlassianHttpBodyResult, { kind: "response" }>, "status" | "authentication">,
+): "permission-denied" | "auth-unverified" | undefined {
+  if (result.status !== 401) return undefined;
+  if (result.authentication === "confirmed") return "permission-denied";
+  return result.authentication === "unconfirmed" ? "auth-unverified" : undefined;
 }
 
 export type AtlassianItemFailure =

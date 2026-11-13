@@ -37,6 +37,7 @@ import {
 import {
   ambiguousJiraAuthenticationResponse,
   currentJiraAuthenticationObservation,
+  JIRA_IDENTITY_PROBE_DEADLINE_MS,
   JIRA_IDENTITY_PROBE_WINDOW_MS,
   withJiraAuthenticationObservation,
   type JiraIdentityProbeOutcome,
@@ -322,7 +323,7 @@ interface CredentialTransportOwner {
   /** Credential generation and revision -> end of the short window a positive identity read holds. */
   readonly positiveProbes: Map<string, number>;
   /** One identity read in flight per credential generation and revision; callers share it. */
-  readonly inflightProbes: Map<string, Promise<JiraIdentityProbeOutcome>>;
+  readonly inflightProbes: Map<string, ProbeFlight>;
 }
 
 function probeKey(metadata: AtlassianCredentialMetadata): string {
@@ -390,6 +391,21 @@ function observedIdentityPort(
   };
 }
 
+interface ProbeResult {
+  readonly outcome: JiraIdentityProbeOutcome;
+  readonly cause?: ProbeCause;
+}
+
+/** One shared identity read: its own deadline and abort, a ref count of the callers waiting on it. */
+interface ProbeFlight {
+  readonly promise: Promise<ProbeResult>;
+  /** The correlation of the caller that started it; sharers link their line to it. */
+  readonly correlationId: string;
+  readonly controller: AbortController;
+  participants: number;
+  gaveUp: number;
+}
+
 async function readIdentity(
   context: {
     readonly owner: CredentialTransportOwner;
@@ -398,13 +414,12 @@ async function readIdentity(
     readonly key: string;
     readonly identity: ObservedIdentityPort;
   },
-  deadlineAt: number,
-  signal: AbortSignal | undefined,
-): Promise<JiraIdentityProbeOutcome> {
+  signal: AbortSignal,
+): Promise<ProbeResult> {
   const { owner, metadata, correlationId, key, identity } = context;
   identity.reset();
   const status = await verifyJiraDataCenterIdentity(identity.port, metadata.baseUrl, {
-    deadlineAt,
+    deadlineAt: Date.now() + JIRA_IDENTITY_PROBE_DEADLINE_MS,
     signal,
   });
   const check = (outcome: "ok" | "probe-inconclusive", detail: ConnectionCheckDetail): void => {
@@ -421,7 +436,7 @@ async function readIdentity(
   if (status === "ok") {
     check("ok", PROBE_DETAIL);
     rememberPositiveProbe(owner, key);
-    return "confirmed";
+    return { outcome: "confirmed" };
   }
   // Only a 401 Jira itself authored shows a rejected token; a proxy's or a captcha's does not.
   const answered = identity.last();
@@ -431,10 +446,49 @@ async function readIdentity(
     answered.authenticationFailure === "jira"
   ) {
     observedAuthentication(owner, metadata, correlationId, PROBE_DETAIL)(401, "jira");
-    return "rejected";
+    return { outcome: "rejected" };
   }
-  check("probe-inconclusive", { ...PROBE_DETAIL, probeCause: probeCauseOf(answered) });
-  return "inconclusive";
+  const cause = probeCauseOf(answered);
+  check("probe-inconclusive", { ...PROBE_DETAIL, probeCause: cause });
+  return { outcome: "inconclusive", cause };
+}
+
+/** A caller that gives up (cancelled or past its own deadline) leaves the flight to the others. */
+function attachToFlight(flight: ProbeFlight, caller: AbortSignal): void {
+  flight.participants += 1;
+  const giveUp = (): void => {
+    flight.gaveUp += 1;
+    if (flight.gaveUp >= flight.participants) flight.controller.abort();
+  };
+  if (caller.aborted) giveUp();
+  else caller.addEventListener("abort", giveUp, { once: true });
+}
+
+function callerSignal(deadlineAt: number, signal: AbortSignal | undefined): AbortSignal {
+  const deadline = AbortSignal.timeout(Math.max(0, Math.floor(deadlineAt - Date.now())));
+  return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
+}
+
+/** Waits for the flight, but never past the caller's own cancellation or deadline. */
+function waitForFlight(flight: ProbeFlight, caller: AbortSignal): Promise<ProbeResult> {
+  if (caller.aborted)
+    return Promise.resolve({ outcome: "inconclusive", cause: "cancelled-or-expired" });
+  return new Promise<ProbeResult>((resolve, reject) => {
+    const gone = (): void => {
+      resolve({ outcome: "inconclusive", cause: "cancelled-or-expired" });
+    };
+    caller.addEventListener("abort", gone, { once: true });
+    flight.promise.then(
+      (result) => {
+        caller.removeEventListener("abort", gone);
+        resolve(result);
+      },
+      (error: unknown) => {
+        caller.removeEventListener("abort", gone);
+        reject(error instanceof Error ? error : new Error("identity read failed"));
+      },
+    );
+  });
 }
 
 function identityObservation(
@@ -460,35 +514,30 @@ function identityObservation(
       });
       return "confirmed";
     }
+    const caller = callerSignal(deadlineAt, signal);
     // One probe in flight per credential generation and revision: concurrent 401s share it.
     const shared = owner.inflightProbes.get(key);
-    if (shared !== undefined) return shareProbe(owner, correlationId, shared);
-    const flight = readIdentity(context, deadlineAt, signal);
-    owner.inflightProbes.set(key, flight);
-    try {
-      return await flight;
-    } finally {
-      owner.inflightProbes.delete(key);
+    if (shared !== undefined) {
+      attachToFlight(shared, caller);
+      return shareProbe(owner, correlationId, shared, await waitForFlight(shared, caller));
     }
+    const controller = new AbortController();
+    const flight: ProbeFlight = {
+      // The flight leaves the table the moment its probe ends, before any waiter continues, so a
+      // later 401 never inherits a finished (possibly inconclusive) result.
+      promise: readIdentity(context, controller.signal).finally(() => {
+        if (owner.inflightProbes.get(key)?.controller === controller)
+          owner.inflightProbes.delete(key);
+      }),
+      correlationId,
+      controller,
+      participants: 0,
+      gaveUp: 0,
+    };
+    owner.inflightProbes.set(key, flight);
+    attachToFlight(flight, caller);
+    return (await waitForFlight(flight, caller)).outcome;
   };
-}
-
-async function shareProbe(
-  owner: CredentialTransportOwner,
-  correlationId: string,
-  flight: Promise<JiraIdentityProbeOutcome>,
-): Promise<JiraIdentityProbeOutcome> {
-  const outcome = await flight;
-  recordConnectionCheck(
-    owner.options,
-    correlationId,
-    outcome === "confirmed" ? "ok" : outcome === "rejected" ? "auth-failed" : "probe-inconclusive",
-    undefined,
-    "request",
-    undefined,
-    { decision: "probe-shared", routeClass: "other" },
-  );
-  return outcome;
 }
 
 function rememberPositiveProbe(owner: CredentialTransportOwner, key: string): void {
@@ -497,6 +546,35 @@ function rememberPositiveProbe(owner: CredentialTransportOwner, key: string): vo
     if (until <= now) owner.positiveProbes.delete(stored);
   }
   owner.positiveProbes.set(key, now + JIRA_IDENTITY_PROBE_WINDOW_MS);
+}
+
+function shareProbe(
+  owner: CredentialTransportOwner,
+  correlationId: string,
+  flight: ProbeFlight,
+  result: ProbeResult,
+): JiraIdentityProbeOutcome {
+  recordConnectionCheck(
+    owner.options,
+    correlationId,
+    result.outcome === "confirmed"
+      ? "ok"
+      : result.outcome === "rejected"
+        ? "auth-failed"
+        : "probe-inconclusive",
+    undefined,
+    "request",
+    undefined,
+    {
+      decision: "probe-shared",
+      routeClass: "other",
+      ...(result.cause === undefined ? {} : { probeCause: result.cause }),
+      ...(flight.correlationId === correlationId
+        ? {}
+        : { parentCorrelationId: flight.correlationId }),
+    },
+  );
+  return result.outcome;
 }
 
 function observedPort<

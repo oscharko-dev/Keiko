@@ -2333,9 +2333,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.rule.parent-type-mismatch":
     "Das übergeordnete Issue muss einen erlaubten Vorgangstyp haben ({subject}).",
   "chat.jira.outcome.failure.authUnverified":
-    "Jira konnte gerade nicht geprüft werden, deshalb wurde diese Anfrage nicht weitergegeben. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
+    "Jira konnte gerade nicht geprüft werden, deshalb wurde diese Anfrage nicht weitergegeben. Die Verbindung bleibt unverändert. Versuchen Sie es gleich noch einmal.",
   "chat.jira.outcome.failure.auth":
-    "Jira hat das Token abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Ersetze es am Jira Pod, verifiziere die Verbindung und versuche es erneut.",
+    "Jira hat das Token abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Ersetzen Sie es am Jira Pod, verifizieren Sie die Verbindung und versuchen Sie es erneut.",
   "chat.jira.outcome.failure.permission":
     "Prüfe die Berechtigung des Jira-Kontos für das angeforderte Projekt und die Aktion.",
   "chat.jira.outcome.failure.notFound":
@@ -5484,7 +5484,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
   "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
   "atlassianConnectors.verify.auth-failed.copy":
-    "Das Token wurde abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Erstelle in Jira ein neues Token, ersetze es hier und verifiziere erneut.",
+    "Das Token wurde abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Erstellen Sie in Jira ein neues Token, ersetzen Sie es hier und verifizieren Sie erneut.",
+  "atlassianConnectors.verify.auth-unverified.label": "Nicht bestätigt",
+  "atlassianConnectors.verify.auth-unverified.copy":
+    "Die Antwort stammt nicht von Jira selbst, zum Beispiel weil ein Anmelde-Proxy oder eine Sicherheitsprüfung geantwortet hat. Das Token wurde nicht abgelehnt und nichts wurde geändert. Melden Sie sich erneut an oder versuchen Sie es später noch einmal; das Token können Sie jederzeit ersetzen.",
   "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
   "atlassianConnectors.verify.forbidden.copy":
     "Atlassian hat den Zugriff verweigert. Prüfe die Kontoberechtigungen sowie Einschränkungen der Website oder Lizenz. Prüfe die Verbindung danach erneut.",
@@ -5502,10 +5505,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Keiko benötigt Jira Data Center ab Version 10.3.0. Jira meldet eine ältere oder nicht unterstützte Version oder widersprüchliche Versionsangaben. Aktualisiere Jira auf 10.3.0 oder neuer oder gib die Adresse einer unterstützten Instanz ein und verifiziere erneut.",
+    "Keiko benötigt Jira Data Center ab Version 10.3.0. Jira meldet eine ältere oder nicht unterstützte Version oder widersprüchliche Versionsangaben. Aktualisieren Sie Jira auf 10.3.0 oder neuer oder geben Sie die Adresse einer unterstützten Instanz ein und verifizieren Sie erneut.",
   "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
   "atlassianConnectors.verify.tls-failed.copy":
-    "Keiko vertraut diesem Zertifikat nicht. Prüfe Gültigkeit und Hostname. Setze bei einer privaten Zertifizierungsstelle KEIKO_CA_BUNDLE_PATH auf deren PEM-Datei, starte Keiko neu und verifiziere erneut. Schalte die Zertifikatsprüfung niemals ab.",
+    "Keiko vertraut diesem Zertifikat nicht. Prüfen Sie Gültigkeit und Hostname. Setzen Sie bei einer privaten Zertifizierungsstelle KEIKO_CA_BUNDLE_PATH auf deren PEM-Datei, starten Sie Keiko neu und verifizieren Sie erneut. Schalten Sie die Zertifikatsprüfung niemals ab.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
   "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",
@@ -5549,7 +5552,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.sync.change.deniedItems": "Verweigert",
   "atlassianConnectors.sync.degradedTitle": "Einige Elemente konnten nicht synchronisiert werden",
   "atlassianConnectors.sync.reason.auth-unverified":
-    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
+    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuchen Sie es gleich noch einmal.",
   "atlassianConnectors.sync.reason.auth-failed":
     "Authentifizierung fehlgeschlagen. Prüfen Sie die Connector-Anmeldeinformation erneut.",
   "atlassianConnectors.sync.reason.permission-denied":
@@ -5709,9 +5712,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.result.failedTitle": "Aktion fehlgeschlagen",
   "atlassianConnectors.result.reason.auth-failed": "Authentifizierung fehlgeschlagen.",
   "atlassianConnectors.result.reason.auth-unverified":
-    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
+    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuchen Sie es gleich noch einmal.",
   "atlassianConnectors.live.compatibilityMissing":
-    "Für diesen Jira Pod sind noch keine Kompatibilitätsangaben gespeichert. Verifiziere die Verbindung erneut, um sie zu erhalten; es wird keine Berechtigung hinzugefügt.",
+    "Für diesen Jira Pod sind noch keine Kompatibilitätsangaben gespeichert. Verifizieren Sie die Verbindung erneut, um sie zu erhalten; es wird keine Berechtigung hinzugefügt.",
   "atlassianConnectors.result.reason.permission-denied": "Berechtigung verweigert.",
   "atlassianConnectors.result.reason.not-found": "Das Ziel existiert nicht mehr.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian hat die Anfrage gedrosselt.",

@@ -38,6 +38,7 @@ import {
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
 import {
   asRecord,
+  identityDecisionReason,
   parseAtlassianJsonValue,
   parseJsonArray,
   parseJsonObjectOrArray,
@@ -174,9 +175,7 @@ function classifyTransport(
 function failureReason(
   result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
 ): AtlassianConnectorWriteFailureReason {
-  if (result.status === 401 && result.authentication === "confirmed") return "permission-denied";
-  if (result.status === 401 && result.authentication === "unconfirmed") return "auth-unverified";
-  return failureReasonForWriteStatus(result.status);
+  return identityDecisionReason(result) ?? failureReasonForWriteStatus(result.status);
 }
 
 function classifyFailure(

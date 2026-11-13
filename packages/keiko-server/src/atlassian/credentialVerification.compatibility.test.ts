@@ -70,6 +70,8 @@ function probeResponse(
   return {
     kind: "response",
     status,
+    // A 401 that Jira itself authored: the only kind that rejects a token.
+    ...(status === 401 ? { authenticationFailure: "jira" as const } : {}),
     bodyText,
     bodyBytes: Buffer.byteLength(bodyText),
     truncated: false,
@@ -239,7 +241,9 @@ describe("Jira compatibility through stored credential verification", () => {
           return Promise.resolve(
             new Response(JSON.stringify(body), {
               status: 200,
-              headers: url.endsWith("/myself") ? { "X-AUSERNAME": "anonymous" } : {},
+              headers: url.endsWith("/myself")
+                ? { "X-AUSERNAME": "anonymous", "X-AREQUESTID": "synthetic-request" }
+                : {},
             }),
           );
         },
@@ -274,6 +278,47 @@ describe("Jira compatibility through stored credential verification", () => {
     });
     expect(JSON.stringify(unverified)).not.toContain("compatibilityFacts");
   });
+
+  it.each(["foreign", "denied"] as const)(
+    "an explicit verification meeting a %s 401 neither rejects nor invalidates the Pod (#4353)",
+    async (origin) => {
+      const f = fixture([11, 3, 13]);
+      expect(await verifyStoredCredential(f.deps, f.metadata, CORRELATION_ID)).toBe("ok");
+      const before = currentMetadata(f);
+      assert(before.deployment === "data-center" && before.livePod?.compatibility !== undefined);
+      // A single sign-in proxy or a captcha check answers instead of Jira.
+      const proxied = withPort(f, () =>
+        Promise.resolve({
+          kind: "response",
+          status: 401,
+          authenticationFailure: origin,
+          bodyText: "<html>sign in</html>",
+          bodyBytes: 20,
+          truncated: false,
+        }),
+      );
+      expect(await verifyStoredCredential(proxied, before, CORRELATION_ID)).toBe("auth-unverified");
+      const after = currentMetadata(f);
+      assert(after.deployment === "data-center" && after.livePod !== undefined);
+      // Nothing was invalidated: same generation, still verified, facts retained, not in progress.
+      expect(after.generation).toBe(before.generation);
+      expect(after.livePod).toMatchObject({
+        verificationStatus: "ok",
+        verificationInProgress: false,
+        compatibility: before.livePod.compatibility,
+      });
+      expect(f.events.at(-1)?.extra).toMatchObject({
+        outcome: "auth-unverified",
+        verificationState: "applied",
+      });
+      // There is always a way out: the token can be replaced at once.
+      const rotated = f.deps.custody.updateLivePod(after.authRef, {
+        expectedGeneration: after.generation,
+        apiToken: ["replacement", "synthetic", "credential"].join("-"),
+      });
+      expect(rotated.generation).toBe((after.generation ?? 1) + 1);
+    },
+  );
 
   it("clears successful facts when a recheck throws", async () => {
     const f = fixture();

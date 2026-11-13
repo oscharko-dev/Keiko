@@ -393,8 +393,10 @@ function collectCommentBodies(
 
 interface CommentFetchOutcome {
   readonly bodies: readonly string[];
-  // Only 'auth-failed' propagates — the header contract makes 401 fatal for every lane, comment
-  // lane included (KEIKO-0453). Other comment-lane failures still degrade to a page-without-
+  // Only an authentication stop propagates — the header contract makes 401 fatal for every lane,
+  // comment lane included (KEIKO-0453): `auth-failed`, and `auth-unverified` (a 401 the server's
+  // identity read could not settle, #4353), which stops the run without blaming the token. Other
+  // comment-lane failures, a missing permission included, still degrade to a page-without-
   // comments so the page body remains citable.
   readonly fatalReason: AtlassianSyncFailureReason | undefined;
 }
@@ -419,7 +421,10 @@ async function fetchCommentBodies(
     if (!collectCommentBodies(results, bodies, allowance)) return false;
     return pages < MAX_COMMENT_PAGES_PER_ITEM;
   });
-  const fatalReason = !walk.ok && walk.reason === "auth-failed" ? walk.reason : undefined;
+  const fatalReason =
+    !walk.ok && (walk.reason === "auth-failed" || walk.reason === "auth-unverified")
+      ? walk.reason
+      : undefined;
   return { bodies, fatalReason };
 }
 

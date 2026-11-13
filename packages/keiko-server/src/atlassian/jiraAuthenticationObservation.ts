@@ -108,6 +108,12 @@ function withinOriginalRequest(deadline: number, signal: AbortSignal | undefined
 export const JIRA_IDENTITY_PROBE_WINDOW_MS = 10_000;
 
 /**
+ * The bounded deadline of one shared identity read. It belongs to the flight, not to the caller
+ * that started it: a caller that gives up never shortens what the others wait for.
+ */
+export const JIRA_IDENTITY_PROBE_DEADLINE_MS = 10_000;
+
+/**
  * Closed outcome of the same-generation identity read that decides a 401: `confirmed` keeps the
  * credential, `rejected` means the identity read itself answered 401 (the owner has discarded the
  * credential), `inconclusive` is everything else (timeout, throttling, server error, redirect,

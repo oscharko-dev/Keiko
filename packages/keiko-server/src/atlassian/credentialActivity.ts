@@ -108,6 +108,7 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
       values: [
         "ok",
         "auth-failed",
+        "auth-unverified",
         "forbidden",
         "unreachable",
         "timeout",
@@ -211,6 +212,8 @@ export interface ConnectionCheckDetail {
   readonly decision: "identity-route" | "probe" | "probe-window" | "probe-shared";
   readonly routeClass: "identity" | "other";
   readonly probeCause?: ProbeCause;
+  /** The correlation of the caller whose identity read this line shares. */
+  readonly parentCorrelationId?: string;
 }
 
 export function recordConnectionCheck(
@@ -226,17 +229,18 @@ export function recordConnectionCheck(
   jiraCompatibility?: "verified" | "unverified",
   detail?: ConnectionCheckDetail,
 ): void {
+  const { parentCorrelationId, ...fields } = detail ?? {};
   try {
     deps.activityLog?.write(
       activityLogEvent(
         ATLASSIAN_CONNECTION_CHECKED_OPERATION,
-        { correlationId },
+        { correlationId, ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }) },
         {
           action: result === "sync-unsupported" ? "sync" : source,
           outcome: result,
           ...(verificationState === undefined ? {} : { verificationState }),
           ...(jiraCompatibility === undefined ? {} : { jiraCompatibility }),
-          ...detail,
+          ...fields,
           ...(jiraCompatibility === "verified" ? { restApi: "v2", agileApi: "unverified" } : {}),
           completeness: "complete",
           loss: "none",

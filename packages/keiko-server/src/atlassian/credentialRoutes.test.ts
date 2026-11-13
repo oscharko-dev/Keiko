@@ -189,6 +189,8 @@ function jiraProbeResponse(
   return {
     kind: "response",
     status,
+    // A 401 that Jira itself authored: the only kind that rejects a token.
+    ...(status === 401 ? { authenticationFailure: "jira" as const } : {}),
     bodyText,
     bodyBytes: Buffer.byteLength(bodyText),
     truncated: false,
@@ -494,6 +496,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      releaseVerification: (): boolean => false,
       observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
@@ -569,6 +572,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      releaseVerification: (): boolean => false,
       observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError(failure.code);
@@ -638,6 +642,7 @@ describe("Atlassian credential route in-memory failure handling", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      releaseVerification: (): boolean => false,
       observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
@@ -1669,7 +1674,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
       .list()
       .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
     if (credential === undefined) throw new Error("Expected synthetic credential");
-    fakePortResult = { kind: "response", status: 401 };
+    fakePortResult = { kind: "response", status: 401, authenticationFailure: "jira" };
     await rebuild({ ...wiring, httpBodyPortFactory: fakeHttpBodyPortFactory() });
     const grant = retainedChatReadGrant(bound);
     const failed = await verifyCredentialRequest(credential.authRef);

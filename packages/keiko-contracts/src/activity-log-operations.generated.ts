@@ -958,6 +958,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "ok",
           "auth-failed",
+          "auth-unverified",
           "forbidden",
           "unreachable",
           "timeout",
