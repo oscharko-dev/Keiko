@@ -5480,6 +5480,54 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [selectionUnavailable, refuseHeldSelection],
   );
 
+  // #4351: pressing Send on a model nobody checked is the first use that checks it. The check shows
+  // the model as "being checked", the message goes out when the model answers, and a refusal or a
+  // failure shows its reason instead; the draft stays untouched either way. True: the send may go on.
+  const passFirstUseCheck = useCallback(
+    async (
+      options: SendMessageOptions | undefined,
+      chatId: string,
+      selectedModel: SendAdmissionSnapshot["selectedModel"],
+      modelId: string,
+    ): Promise<boolean> => {
+      const controller = new AbortController();
+      firstUseCheckRef.current = controller;
+      const admitted: SendAdmissionSnapshot = {
+        chatId,
+        selectedModel,
+        draftRevision: draftRevisionRef.current,
+        attachmentKey: attachmentSetKey(pendingAttachmentsRef.current),
+      };
+      let outcome: ModelCheckOutcome;
+      try {
+        outcome = await checkModelBeforeSend(modelId, setState, setError, controller.signal);
+      } finally {
+        if (firstUseCheckRef.current === controller) firstUseCheckRef.current = null;
+        // The "being checked" notice belongs to this wait only: once it ends it must not stay.
+        setError((current) => (current === MODEL_CHECKING_ERROR ? undefined : current));
+      }
+      if (outcome !== "ready") return false;
+      // The message goes out only if the chat, the selected model, the staged attachments and
+      // (for a send that clears the composer) the draft are still what they were when it was
+      // admitted; otherwise nothing is sent and nothing is cleared, and the person sends again
+      // from where they now are.
+      return (
+        !controller.signal.aborted &&
+        sendAdmissionUnchanged(
+          admitted,
+          {
+            chatId: activeChatIdRef.current,
+            selectedModel: latestSelectedModelRef.current,
+            draftRevision: draftRevisionRef.current,
+            attachmentKey: attachmentSetKey(pendingAttachmentsRef.current),
+          },
+          clearsComposerDraft(options),
+        )
+      );
+    },
+    [],
+  );
+
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
       // A Send while the first-use check of the model runs is told why, not silently dropped.
@@ -5504,44 +5552,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return { status: "not-sent" };
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
-      // #4351: pressing Send on a model nobody checked is the first use that checks it. The check
-      // shows the model as "being checked", the message goes out when the model answers, and a
-      // refusal or a failure shows its reason instead; the draft stays untouched either way.
-      if (canonicalTarget === undefined && modelNeedsFirstUseCheck(state.models, modelId)) {
-        const controller = new AbortController();
-        firstUseCheckRef.current = controller;
-        const admitted: SendAdmissionSnapshot = {
-          chatId: chat.id,
-          selectedModel: state.selectedModel,
-          draftRevision: draftRevisionRef.current,
-          attachmentKey: attachmentSetKey(pendingAttachmentsRef.current),
-        };
-        let outcome: ModelCheckOutcome;
-        try {
-          outcome = await checkModelBeforeSend(modelId, setState, setError, controller.signal);
-        } finally {
-          if (firstUseCheckRef.current === controller) firstUseCheckRef.current = null;
-          // The "being checked" notice belongs to this wait only: once it ends it must not stay.
-          setError((current) => (current === MODEL_CHECKING_ERROR ? undefined : current));
-        }
-        if (outcome !== "ready") return { status: "not-sent" };
-        // The message goes out only if the chat, the selected model, the staged attachments and
-        // (for a send that clears the composer) the draft are still what they were when it was
-        // admitted; otherwise nothing is sent and nothing is cleared, and the person sends again
-        // from where they now are.
-        const unchanged =
-          !controller.signal.aborted &&
-          sendAdmissionUnchanged(
-            admitted,
-            {
-              chatId: activeChatIdRef.current,
-              selectedModel: latestSelectedModelRef.current,
-              draftRevision: draftRevisionRef.current,
-              attachmentKey: attachmentSetKey(pendingAttachmentsRef.current),
-            },
-            clearsComposerDraft(options),
-          );
-        if (!unchanged) return { status: "not-sent" };
+      // #4351: pressing Send on a model nobody checked is the first use that checks it.
+      if (
+        canonicalTarget === undefined &&
+        modelNeedsFirstUseCheck(state.models, modelId) &&
+        !(await passFirstUseCheck(options, chat.id, state.selectedModel, modelId))
+      ) {
+        return { status: "not-sent" };
       }
       if (skillSelectionBlocksSend(markdownSkill, chat.id, canonicalTarget)) {
         setError(SKILL_SELECTION_UNAVAILABLE_ERROR);
@@ -5656,6 +5673,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       markdownSkill,
       selectionUnavailable,
       presentSendAdmissionRefusal,
+      passFirstUseCheck,
       state.activeChat,
       state.selectedModel,
       state.models,

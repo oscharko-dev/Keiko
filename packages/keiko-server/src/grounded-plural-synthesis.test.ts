@@ -89,6 +89,7 @@ function capturingTurn(
       return Promise.resolve(ANSWER);
     },
     readOnlySynthesisRequest,
+    reportEvidence: [],
     hasUsableObservation: (): boolean => true,
     onTranscript: unexpectedTurnOperation,
     meter: (model): ModelPort => model,

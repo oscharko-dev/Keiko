@@ -5230,6 +5230,12 @@
               "required": false
             },
             {
+              "name": "rawReportKeyCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "settledExchangeCount",
               "type": "integer",
               "dataClass": "count",

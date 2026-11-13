@@ -2,12 +2,12 @@ import {
   AtlassianCredentialCustodyError,
   atlassianAuthorizationHeaderValue,
   jiraPropertyPathKey,
+  type AtlassianAuthenticationFailure,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpRequest,
   type JiraHumanInputHttpRequest,
 } from "@oscharko-dev/keiko-connectors";
-import type { AtlassianAuthenticationFailure } from "@oscharko-dev/keiko-connectors";
 import { classifyAuthenticationFailure } from "./httpAuthenticationFailure.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { directoryAccessHeaders } from "./httpDirectoryAccess.js";

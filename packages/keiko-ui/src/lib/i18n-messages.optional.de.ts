@@ -2544,6 +2544,34 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Aktion hat begonnen. Warte auf ihr Ergebnis, bevor du einen weiteren Schreibzugriff startest.",
   "chat.jira.outcome.issues": "Jira-Vorgänge",
   "chat.jira.outcome.problems": "Was Jira gemeldet hat",
+  "chat.jira.outcome.itemOrdinal": "Eintrag {position}",
+  "chat.jira.outcome.draftProblem.draft-shape":
+    "Der Entwurf hat kein lesbares Format. Bitten Sie Keiko, die Vorgänge neu zu entwerfen.",
+  "chat.jira.outcome.draftProblem.items-missing":
+    "Der Entwurf enthält keine Vorgänge. Bitten Sie Keiko, die anzulegenden Vorgänge zu nennen.",
+  "chat.jira.outcome.draftProblem.item-shape":
+    "Eintrag {position} enthält Angaben, die Keiko nicht lesen kann. Bitten Sie Keiko, diesen Vorgang neu zu formulieren.",
+  "chat.jira.outcome.draftProblem.item-ref":
+    "Eintrag {position} hat keinen verwendbaren Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen kurzen Namen zu geben.",
+  "chat.jira.outcome.draftProblem.item-ids":
+    "Eintrag {position} hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wählen Sie Projekt und Vorgangstyp erneut aus.",
+  "chat.jira.outcome.draftProblem.item-fields":
+    "Eintrag {position} braucht eine Zusammenfassung und darf kein anderes Projekt oder keinen anderen Vorgangstyp nennen. Bitten Sie Keiko, die Felder zu vervollständigen.",
+  "chat.jira.outcome.draftProblem.item-parent":
+    "Eintrag {position} hat einen übergeordneten Vorgang, den Keiko nicht lesen kann. Bitten Sie Keiko, den übergeordneten Vorgang erneut zu nennen.",
+  "chat.jira.outcome.draftProblem.item-links":
+    "Eintrag {position} hat eine Verknüpfung, die Keiko nicht lesen kann. Bitten Sie Keiko, Verknüpfungstyp, Richtung und Ziel erneut zu nennen.",
+  "chat.jira.outcome.draftProblem.item-requirements":
+    "Eintrag {position} hat Anforderungsverweise, die Keiko nicht lesen kann. Bitten Sie Keiko, sie erneut aufzulisten.",
+  "chat.jira.outcome.draftProblem.ref-duplicate":
+    "Zwei Vorgänge haben denselben Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen Namen zu geben.",
+  "chat.jira.outcome.draftProblem.ref-self":
+    "Eintrag {position} nennt sich selbst als übergeordneten Vorgang oder Verknüpfungsziel. Bitten Sie Keiko, auf einen anderen Vorgang zu verweisen.",
+  "chat.jira.outcome.draftProblem.ref-unknown":
+    "Eintrag {position} verweist auf einen Vorgang, der nicht im Entwurf steht. Fügen Sie ihn dem Entwurf hinzu oder nennen Sie einen vorhandenen Vorgangsschlüssel.",
+  "chat.jira.outcome.draftProblem.ref-cycle":
+    "Die Beziehungen zwischen übergeordneten Vorgängen und Verknüpfungen bilden einen Kreis. Bitten Sie Keiko, jeden übergeordneten Vorgang so zu wählen, dass er nicht von seinem Unterpunkt abhängt.",
+  "chat.jira.outcome.itemUnlisted": "Eintrag, der nicht in Ihrer Anfrage stand",
   "chat.jira.outcome.more": "und {count} weitere",
   "chat.jira.outcome.newTab": "(öffnet Jira in einem neuen Tab)",
   "chat.jira.outcome.validation.required-field": "Ein Pflichtfeld in Jira fehlte.",

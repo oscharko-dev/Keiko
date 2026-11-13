@@ -333,6 +333,26 @@ describe("recordChatToolTurnCorrected", () => {
     expect(line).not.toMatch(/message-private-id|LH-0|RPT-/u);
   });
 
+  it("counts the internal report keys an answer printed, never naming them", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnCorrected(logs, {
+      correlationId: "turn-raw-report-key-proof",
+      messageId: "message-private-id",
+      settledExchangeCount: 3,
+      correctionKind: "raw-report-key",
+      rawReportKeyCount: 2,
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+    expect(event).toMatchObject({
+      correlationId: "turn-raw-report-key-proof",
+      level: "warn",
+      extra: { correctionKind: "raw-report-key", rawReportKeyCount: 2, settledExchangeCount: 3 },
+    });
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-turn.corrected.line", line);
+    expect(line).not.toMatch(/message-private-id|issuesChecked|issuesJudged/u);
+  });
+
   it("counts the issue keys an answer named without a tool result, never naming them", () => {
     const logs = createBufferedServerLogSink();
     recordChatToolTurnCorrected(logs, {

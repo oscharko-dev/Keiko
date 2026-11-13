@@ -350,6 +350,7 @@ function probeCauseOf(last: AtlassianHttpBodyResult | undefined): ProbeCause {
 }
 
 const PROBE_DETAIL = { decision: "probe", routeClass: "other" } as const;
+const IDENTITY_ROUTE_DETAIL = { decision: "identity-route", routeClass: "identity" } as const;
 
 interface ObservedIdentityPort {
   readonly port: AtlassianHttpBodyPort;
@@ -390,6 +391,13 @@ function observedIdentityPort(
     },
   };
 }
+
+/** How a waiter's line names the shared result: the same closed outcomes the leader records. */
+const SHARED_CHECK_OUTCOME = {
+  confirmed: "ok",
+  rejected: "auth-failed",
+  inconclusive: "probe-inconclusive",
+} as const satisfies Record<JiraIdentityProbeOutcome, string>;
 
 interface ProbeResult {
   readonly outcome: JiraIdentityProbeOutcome;
@@ -557,11 +565,7 @@ function shareProbe(
   recordConnectionCheck(
     owner.options,
     correlationId,
-    result.outcome === "confirmed"
-      ? "ok"
-      : result.outcome === "rejected"
-        ? "auth-failed"
-        : "probe-inconclusive",
+    SHARED_CHECK_OUTCOME[result.outcome],
     undefined,
     "request",
     undefined,
@@ -661,7 +665,7 @@ function observedAuthentication(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
-  detail: ConnectionCheckDetail = { decision: "identity-route", routeClass: "identity" },
+  detail: ConnectionCheckDetail = IDENTITY_ROUTE_DETAIL,
 ): (status: number, failure?: AtlassianAuthenticationFailure) => void {
   if (metadata.deployment !== "data-center" || metadata.livePod === undefined)
     return (): void => undefined;
