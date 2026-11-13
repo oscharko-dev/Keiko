@@ -125,6 +125,107 @@ describe("external JSON Schema catalog dialect", () => {
     expect(mismatch?.unexpectedPropertyCount).toBe(1);
     expect(JSON.stringify(mismatch)).not.toContain("private-extra");
   });
+  // #4357: the guarded Jira writes. A first-error account named `expectedValueNodes` as simply
+  // missing although the rule is "exactly one of expectedValueNodes and expectAbsent", and named
+  // `expectAbsent` as invalid without saying that only `true` is accepted.
+  describe("rules a model must satisfy", () => {
+    const setProperty = compileExternalCatalogSchema({
+      type: "object",
+      additionalProperties: false,
+      required: ["propertyKey", "valueNodes"],
+      properties: {
+        propertyKey: { type: "string" },
+        valueNodes: { type: "array", items: { type: "string" } },
+        expectedValueNodes: { type: "array", items: { type: "string" } },
+        expectAbsent: { type: "boolean", enum: [true] },
+      },
+      allOf: [{ oneOf: [{ required: ["expectedValueNodes"] }, { required: ["expectAbsent"] }] }],
+    });
+    const remoteLink = compileExternalCatalogSchema({
+      type: "object",
+      additionalProperties: false,
+      required: ["issueIdOrKey", "value"],
+      properties: {
+        issueIdOrKey: { type: "string" },
+        value: { type: "string" },
+        expected: { type: "string" },
+        expectAbsent: { const: true },
+      },
+      oneOf: [
+        { required: ["expectAbsent"], not: { required: ["expected"] } },
+        { required: ["expected"], not: { required: ["expectAbsent"] } },
+      ],
+    });
+    it("names the exclusive choice when neither or both review forms are supplied", () => {
+      const neither = describeCatalogSchemaMismatch(setProperty, {
+        propertyKey: "k",
+        valueNodes: [],
+      });
+      expect(neither?.choice).toEqual({
+        kind: "exactly-one",
+        alternatives: [["expectedValueNodes"], ["expectAbsent"]],
+      });
+      const both = describeCatalogSchemaMismatch(setProperty, {
+        propertyKey: "k",
+        valueNodes: [],
+        expectedValueNodes: [],
+        expectAbsent: true,
+      });
+      expect(both?.choice?.kind).toBe("exactly-one");
+      expect(
+        describeCatalogSchemaMismatch(setProperty, {
+          propertyKey: "k",
+          valueNodes: [],
+          expectAbsent: true,
+        }),
+      ).toBeUndefined();
+    });
+    it("states the only value a constant or enumerated property accepts, never the rejected one", () => {
+      const refused = describeCatalogSchemaMismatch(remoteLink, {
+        issueIdOrKey: "PRIVATE-1",
+        value: "private-value",
+        expectAbsent: false,
+      });
+      expect(refused?.invalidPaths).toEqual(["expectAbsent"]);
+      expect(refused?.allowed).toEqual({ path: "expectAbsent", values: [true] });
+      const enumerated = describeCatalogSchemaMismatch(setProperty, {
+        propertyKey: "k",
+        valueNodes: [],
+        expectAbsent: false,
+      });
+      expect(enumerated?.allowed).toEqual({ path: "expectAbsent", values: [true] });
+      expect(JSON.stringify(refused)).not.toContain("private");
+    });
+    it("names the declared properties when the value carries one the closed schema does not, never the extra key", () => {
+      const mismatch = describeCatalogSchemaMismatch(remoteLink, {
+        issueIdOrKey: "a",
+        value: "b",
+        expectAbsent: true,
+        "private-extra-key": 1,
+      });
+      expect(mismatch?.unexpectedPropertyCount).toBe(1);
+      // Compiled schemas carry canonically ordered keys, so the account is deterministic.
+      expect(mismatch?.declaredProperties).toEqual([
+        "expectAbsent",
+        "expected",
+        "issueIdOrKey",
+        "value",
+      ]);
+      expect(JSON.stringify(mismatch)).not.toContain("private-extra");
+    });
+    it("marks an external schema's optional properties and leaves a managed schema unmarked", () => {
+      expect(
+        describeCatalogSchemaMismatch(remoteLink, { issueIdOrKey: "a" })?.optionalProperties,
+      ).toBe(true);
+      const managed = compileCatalogSchema({
+        type: "object",
+        required: ["name"],
+        additionalProperties: false,
+        properties: { name: { type: "string" } },
+      });
+      expect(describeCatalogSchemaMismatch(managed, {})?.optionalProperties).toBeUndefined();
+    });
+  });
   it("validates identically when many schemas share one compiler across references and dialects", () => {
     const build = (index: number, dialect: string): Record<string, unknown> => ({
       $schema: dialect,
