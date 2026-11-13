@@ -8,7 +8,7 @@
 // with Chromium, and the server's loopback port free. The run needs no model and little CPU.
 //
 //   node scripts/qualify-browser-session-run.mjs --out <directory> [--minutes 125] [--port 32610]
-//        [--schedule 4,11,19,26,31,38,47,55,63,70,78,86,93,101,109,117,124] [--prepare]
+//        [--schedule 4,11,19,26,31,38,47,55,63,70,78,86,93,101,109,117,125] [--prepare]
 //
 // `--prepare` runs the three build steps first; `--smoke` (with a short `--minutes` and `--schedule`)
 // only exercises the harness and is never qualification evidence. The schedule is minutes after pairing; it must contain
@@ -33,7 +33,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MINUTE_MS = 60_000;
 const IDLE_LIFETIME_MIN = 30;
-const DEFAULT_SCHEDULE = [4, 11, 19, 26, 31, 38, 47, 55, 63, 70, 78, 86, 93, 101, 109, 117, 124];
+export const DEFAULT_SCHEDULE = [
+  4, 11, 19, 26, 31, 38, 47, 55, 63, 70, 78, 86, 93, 101, 109, 117, 125,
+];
 const SECRET_ENV = "KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET";
 const INSPECT_PATH = "/api/coding-workbench/app-session/browser";
 
@@ -42,7 +44,8 @@ function argument(name, fallback) {
   return index === -1 ? fallback : process.argv[index + 1];
 }
 const out = resolve(argument("out", ""));
-const minutes = Number(argument("minutes", "125"));
+export const DEFAULT_MINUTES = 125;
+const minutes = Number(argument("minutes", String(DEFAULT_MINUTES)));
 const port = Number(argument("port", "32610"));
 const schedule = argument("schedule", DEFAULT_SCHEDULE.join(",")).split(",").map(Number);
 

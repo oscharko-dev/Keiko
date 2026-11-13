@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { judge, validateSchedule } from "../qualify-browser-session-run.mjs";
+import {
+  DEFAULT_MINUTES,
+  DEFAULT_SCHEDULE,
+  judge,
+  validateSchedule,
+} from "../qualify-browser-session-run.mjs";
 
 describe("the two-hour browser session run (#4370 AC2)", () => {
-  const good = [4, 11, 19, 26, 31, 38, 47, 55, 63, 70, 78, 86, 93, 101, 109, 117, 124];
+  const good = [4, 11, 19, 26, 31, 38, 47, 55, 63, 70, 78, 86, 93, 101, 109, 117, 125];
+
+  // The unattended run starts with these defaults; a default pair that its own validation refuses
+  // cost a launch ("the schedule ends before the run does") before any browser started.
+  it("accepts its own default schedule for its default duration, which is at least two hours", () => {
+    expect(DEFAULT_MINUTES).toBeGreaterThanOrEqual(120);
+    expect(validateSchedule([...DEFAULT_SCHEDULE], DEFAULT_MINUTES)).toBeUndefined();
+  });
 
   it("requires the incident's 26 and 31 minute reloads and refuses a gap at the idle lifetime", () => {
-    expect(validateSchedule(good, 124)).toBeUndefined();
+    expect(validateSchedule(good, 125)).toBeUndefined();
     expect(
       validateSchedule(
         good.filter((point) => point !== 26),
