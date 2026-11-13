@@ -30,8 +30,8 @@ describe("formatUserError", () => {
         );
         expect(notice.remediation).toBe(
           locale === "en"
-            ? "Open the Knowledge Pods Hub, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira."
-            : "Öffne den Knowledge Pods Hub, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+            ? "Open the Local Knowledge window, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira."
+            : "Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
         );
         const restored = toUserErrorNotice(
           formatUserError(error, "Could not send message."),
