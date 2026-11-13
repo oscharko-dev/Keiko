@@ -7,6 +7,8 @@ import { JiraChatTools } from "./JiraChatTools";
 import { jiraToolOutcomeView } from "./jira-tool-outcome";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
 
 function draft(
   name: string,
@@ -335,6 +337,68 @@ describe("Jira draft results as the production draft tool reports them", () => {
     ).toBeVisible();
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  // The expired and revoked approvals get their closed reason and hint in #4354 (closed reason
+  // `expired` end to end); this case is proven after merging child/4354-approval-and-project-message.
+  it.todo("tells the person what to do after an expired approval (waits for #4354)");
+  it.todo("tells the person what to do after a revoked approval (waits for #4354)");
+
+  // #4355 AC6: every text added for the results exists in both languages with the same placeholders.
+  it("has an English and a German text, with the same placeholders, for every added result text", () => {
+    const keys = [
+      "chat.jira.outcome.itemOrdinal",
+      "chat.jira.outcome.itemUnlisted",
+      ...JIRA_DRAFT_PROBLEMS.map((problem) => `chat.jira.outcome.draftProblem.${problem}`),
+    ] as const;
+    const placeholders = (text: string): string[] => text.match(/\{\w+\}/gu)?.sort() ?? [];
+    for (const key of keys) {
+      const en = (OPTIONAL_WIDGET_EN_MESSAGES as Readonly<Record<string, string>>)[key];
+      const de = (OPTIONAL_WIDGET_DE_MESSAGES as Readonly<Record<string, string>>)[key];
+      expect(en, key).toBeTruthy();
+      expect(de, key).toBeTruthy();
+      expect(de, key).not.toBe(en);
+      expect(placeholders(de ?? ""), key).toEqual(placeholders(en ?? ""));
+    }
+  });
+
+  it.each(["en", "de"] as const)(
+    "passes the accessibility check with item names in %s",
+    async (locale) => {
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const { container } = render(
+        <I18nProvider>
+          <JiraChatTools
+            transcript={{
+              schemaVersion: 1,
+              exchanges: [
+                draft(
+                  "jira_draft",
+                  {
+                    outcome: "partial",
+                    items: [
+                      { ref: "a", state: "failed", validation: "required-field" },
+                      { ref: "b", state: "failed", validation: "required-field" },
+                      { ref: "ghost", state: "failed", validation: "required-field" },
+                    ],
+                  },
+                  {
+                    items: [
+                      { ref: "a", fields: { summary: "Pay" } },
+                      { ref: "b", fields: {} },
+                    ],
+                  },
+                ),
+              ],
+            }}
+            turnState="completed"
+          />
+        </I18nProvider>,
+      );
+      expect(container.textContent).not.toMatch(/chat\.jira\./u);
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
 
   it("ignores a draft problem code outside the closed vocabulary", async () => {
     await show(
