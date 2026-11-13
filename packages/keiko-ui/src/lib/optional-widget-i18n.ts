@@ -123,6 +123,12 @@ export function presentChatSessionError(
       return t("attachment.cleanupDeferred");
     case "skill-selection-unavailable":
       return t("chat.skills.requestError");
+    case "model-not-ready":
+      return t("chat.error.modelNotReady");
+    case "model-check-cooldown":
+      return t("chat.error.modelCheckCooldown");
+    case "model-checking":
+      return t("chat.error.modelChecking");
     case "message":
       return presentation.message;
   }

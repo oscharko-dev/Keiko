@@ -315,6 +315,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     setAgent: vi.fn(),
     setRuntimePreference: vi.fn(),
     setSelectedModel: vi.fn(),
+    adoptModel: vi.fn(),
     setReasoningEffort: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
@@ -5115,8 +5116,8 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       { ...MODEL_B, conversationReady: true },
     ];
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+    expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
+    expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
   });
 
   it("preserves a saved unknown choice ahead of a freshly healthy fallback", () => {
@@ -5124,8 +5125,8 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     chatCatalogMock.models = [MODEL_A, { ...MODEL_B, conversationReady: undefined }];
     try {
       const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
     } finally {
       window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
     }
@@ -5141,12 +5142,12 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
     runtimeHookMock.mockReturnValue({ state, actions: liveActions });
     const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+    expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
     const user = userEvent.setup();
     await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
     expect(screen.queryByRole("option", { name: "model-b" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
-    vi.mocked(liveActions.setSelectedModel).mockClear();
+    vi.mocked(liveActions.adoptModel).mockClear();
     chatCatalogMock.models = [
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: true },
@@ -5154,7 +5155,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
     expect(screen.getByRole("option", { name: "model-b" })).toBeInTheDocument();
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
   });
 
   it("restores the saved choice after all refuted coding models recover", () => {
@@ -5168,15 +5169,15 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     });
     const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
     try {
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
-      vi.mocked(liveActions.setSelectedModel).mockClear();
+      expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
+      vi.mocked(liveActions.adoptModel).mockClear();
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: null }),
         actions: liveActions,
       });
       chatCatalogMock.models = [{ ...MODEL_B, conversationReady: true }];
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
     } finally {
       window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
     }
@@ -5209,7 +5210,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledOnce();
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
   });
 
   it("withholds Start for a selection the server observed failing", async () => {
@@ -5247,21 +5248,21 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
     // Baseline: the mocked state already matches the catalog, so there is nothing to reconcile.
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
 
     // The refresh goes pending: the shared catalog reports an empty list, exactly as it does
     // while the fetch is in flight. The operator's choice must not be wiped by this alone.
     chatCatalogMock.models = [];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
 
     // The refresh succeeds and returns the SAME models: the selection must still be there,
     // rather than falling back to models[0] because the mid-refresh empty list already cleared it.
     chatCatalogMock.models = [MODEL_A, MODEL_B];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
   });
 
@@ -5276,11 +5277,11 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
     chatCatalogMock.models = [MODEL_A];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
     chatCatalogMock.models = [MODEL_A, MODEL_B];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
   });
 
@@ -5313,7 +5314,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       correlationId: "actual-catalog-123",
     };
     const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_A.id);
   });
 
   // #3905 AC4: a human choice whose forced tool-call proof lapsed, or was withdrawn because the
@@ -5347,7 +5348,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     it("keeps the choice pending instead of replacing it with the first ready model", () => {
       present(renewing());
       const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+      expect(liveActions.adoptModel).not.toHaveBeenCalled();
     });
 
     it("keeps it through the renewal and offers it again once the proof is fresh", () => {
@@ -5365,7 +5366,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         correlationId: "renewal-catalog-456",
       };
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+      expect(liveActions.adoptModel).not.toHaveBeenCalled();
     });
 
     it("withholds Start while the choice is pending", async () => {
@@ -5406,7 +5407,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     ])("still falls back from $title even when it is flagged", ({ patch }) => {
       present(renewing(patch));
       const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
+      expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_A.id);
     });
 
     it("records the pending choice as held, never as refused, then as restored", () => {
@@ -5441,15 +5442,15 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const special = { ...MODEL_A, id: "dotsocr" };
     chatCatalogMock.models = [special, MODEL_B];
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith(special.id);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_B.id);
+    expect(liveActions.adoptModel).not.toHaveBeenCalledWith(special.id);
   });
 
   it("prefers a gateway-declared chat model among ready candidates", () => {
     const declared = { ...MODEL_B, chatModeDeclared: true };
     chatCatalogMock.models = [MODEL_A, declared];
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_B.id);
   });
 
   it("records actual Workbench catalog and held/restored selection without raw identifiers", () => {
@@ -5550,7 +5551,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       const liveActions = actions();
       runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
       const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+      expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_B.id);
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: MODEL_B.id }),
         actions: liveActions,
@@ -5579,14 +5580,14 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       });
       observeCatalog([MODEL_A], "origin-fallback-123");
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenLastCalledWith(MODEL_A.id);
+      expect(liveActions.adoptModel).toHaveBeenLastCalledWith(MODEL_A.id);
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: MODEL_A.id }),
         actions: liveActions,
       });
       observeCatalog([MODEL_B], "origin-reelected-123");
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenLastCalledWith(MODEL_B.id);
+      expect(liveActions.adoptModel).toHaveBeenLastCalledWith(MODEL_B.id);
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: MODEL_B.id }),
         actions: liveActions,
@@ -5643,8 +5644,11 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       chatCatalogMock.models = [MODEL_A, MODEL_B];
       const liveActions = renderWorkbench(liveState());
 
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
+      // The window's own adoption of the saved model is not a person's pick: it must never reach
+      // `setSelectedModel`, whose next read asks the server to check that model (#4351).
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
     });
 
     it("falls back to the current default when the saved model is no longer offered", () => {
@@ -5652,7 +5656,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       chatCatalogMock.models = [MODEL_A, MODEL_B];
       const liveActions = renderWorkbench(liveState());
 
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
       expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBe("retired-model");
     });
 
@@ -5680,7 +5684,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     chatCatalogMock.models = [MODEL_A];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+    expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
   });
 
   // A catalog that answers with models but no coding-capable one is conclusive: the stale choice
@@ -5695,7 +5699,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     chatCatalogMock.models = [{ ...MODEL_A, id: "model-no-tools", toolCalling: false }];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
   });
 
   // PR #3625 review: an empty catalog a SUCCESSFUL refresh settled on is conclusive — the gateway
@@ -5711,7 +5715,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     catalogRefreshMock.settled = true;
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
     expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
   });
 });
