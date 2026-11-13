@@ -4602,10 +4602,10 @@ async function jiraTemplateRefusal(
 
 /**
  * The runtime's decoded MCP arguments as plain JSON. They were parsed from the request body, so
- * the round trip cannot fail; a value that is not an object is left unchecked.
+ * the copy cannot fail; a value that is not an object is left unchecked.
  */
 function jsonArguments(value: Readonly<Record<string, unknown>>): CatalogJsonObject | undefined {
-  const copy: unknown = JSON.parse(JSON.stringify(value));
+  const copy: unknown = structuredClone(value);
   return typeof copy === "object" && copy !== null && !Array.isArray(copy)
     ? (copy as CatalogJsonObject)
     : undefined;

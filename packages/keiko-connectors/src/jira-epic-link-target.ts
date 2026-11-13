@@ -16,7 +16,7 @@ import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/
  * (single write, bulk create, draft dry run) is checked by the same owner.
  */
 const EPIC_LINK_FIELD_TYPE = "com.pyxis.greenhopper.jira:gh-epic-link";
-const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d{1,10}$/u;
+const ISSUE_KEY = /^[A-Za-z]\w*-\d{1,10}$/u;
 const CUSTOM_FIELD = /^customfield_\d{1,32}$/u;
 // The agile request is built on first use: building it opens a bounded timeout phase, and a write
 // that never sets an Epic Link must not open one.
