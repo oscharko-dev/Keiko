@@ -14,6 +14,7 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
 }));
 import { COMPOSER_SCENARIOS } from "../testing/jira-chat-lab/requirements/composer-catalog.mjs";
 import {
+  assertComposerLanguageFit,
   composerGroups,
   composerSelectionOf,
   composerTruth,
@@ -57,6 +58,28 @@ describe("types and modes", () => {
     });
     expect(() => composerSelectionOf({ types: "task,subtask" })).toThrow("--types names subtask");
     expect(() => composerSelectionOf({ modes: "everything" })).toThrow("--modes names everything");
+  });
+});
+
+describe("a German-language session", () => {
+  it("runs everything on an English session and only S10 of C07 on a German one", () => {
+    expect(() => assertComposerLanguageFit("admin", ["C01", "C02"], {})).not.toThrow();
+    expect(() => assertComposerLanguageFit("api", ["C07"], { parts: ["s10"] })).not.toThrow();
+    for (const [ids, selection] of [
+      [["C01"], {}],
+      [["C07"], {}],
+      [["C07"], { parts: ["s10", "s11"] }],
+      [["C07", "C08"], { parts: ["s10"] }],
+    ])
+      expect(() => assertComposerLanguageFit("api", ids, selection)).toThrow("German-language");
+  });
+
+  it("is checked by the scorecard before any journey runs", () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, "../testing/jira-chat-lab/requirements/scorecard.mjs"),
+      "utf8",
+    );
+    expect(source).toContain("assertComposerLanguageFit(");
   });
 });
 

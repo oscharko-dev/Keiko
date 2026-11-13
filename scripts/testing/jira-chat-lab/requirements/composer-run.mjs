@@ -70,6 +70,24 @@ export function composerTruth(truth, ids) {
   };
 }
 
+/**
+ * The Composer graders compare English issue type names, so every journey except the S10 report runs
+ * on an English session. A German session (the oracles then read as the localized actor) only takes
+ * `C07 --parts s10`, the proof that the report matches its readback in German.
+ */
+export function assertComposerLanguageFit(reader, ids, selection) {
+  if (reader === "admin") return;
+  const onlyS10 =
+    ids.length === 1 &&
+    ids[0] === "C07" &&
+    selection.parts?.length === 1 &&
+    selection.parts[0] === "s10";
+  if (!onlyS10)
+    throw new TypeError(
+      "This session is German-language: the Composer journeys grade English issue type names. Run them on an English session; a German one takes only --only C07 --parts s10",
+    );
+}
+
 /** The report directory of a model: its id, made safe, so two models never share a report. */
 export function reportDirectoryName(model) {
   const safe = String(model ?? "no-model")

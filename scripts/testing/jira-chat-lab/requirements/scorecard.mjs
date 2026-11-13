@@ -32,6 +32,7 @@ import { SCENARIOS } from "./catalog.mjs";
 import { COMPOSER_SCENARIOS } from "./composer-catalog.mjs";
 import { COMPOSER_JOURNEY_IDS } from "./composer.mjs";
 import {
+  assertComposerLanguageFit,
   composerGroups,
   composerSelectionOf,
   composerTruth,
@@ -44,7 +45,7 @@ import { ensureLicenseWindow } from "./license-window.mjs";
 import { registerLane } from "./lab-lanes.mjs";
 import { scenarioVerdict } from "./coverage.mjs";
 import { scorecardMarkdown } from "./scorecard-markdown.mjs";
-import { JOURNEY_IDS, runJourneys } from "./journeys.mjs";
+import { JOURNEY_IDS, oracleReader, runJourneys } from "./journeys.mjs";
 import { PROBES } from "./probes.mjs";
 import { TREND_HEADER, countStatuses, trendLine } from "./repeat.mjs";
 import { gradeException } from "./validity.mjs";
@@ -81,6 +82,12 @@ const composer = values.set === "composer";
 const catalog = composer ? COMPOSER_SCENARIOS : SCENARIOS;
 const scenarios = selectedScenarios(catalog, values.only, values.set);
 const composerSelection = composerSelectionOf(values);
+if (composer)
+  assertComposerLanguageFit(
+    oracleReader(session),
+    scenarios.map((scenario) => scenario.id),
+    composerSelection,
+  );
 // `--rehearse` runs every journey of the selected Composer scenarios with an empty model turn.
 if (values.rehearse && (!composer || values.model))
   throw new TypeError("--rehearse needs --set composer and takes no --model: it runs no model");
