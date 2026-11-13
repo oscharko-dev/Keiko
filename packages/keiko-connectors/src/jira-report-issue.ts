@@ -33,6 +33,14 @@ export interface JiraReportFieldPlan {
   /** Requested fields omitted or unreadable in a hit; neither proves an empty value. */
   readonly omittedFields: Set<string>;
   readonly estimateFieldId: string | undefined;
+  /** The other estimate field the search also reads; a hit that omits it simply holds no value. */
+  readonly alternateEstimateFieldId: string | undefined;
+  /**
+   * Issue types whose create screen was read and does not carry the estimate field while another
+   * type's does. A hit of such a type that lacks the field is an unestimated issue of a type that
+   * has no estimate, not a field Jira withheld.
+   */
+  readonly estimateNotApplicableTypes: ReadonlySet<string>;
   readonly requirementIds: ReadonlySet<string>;
   readonly requiredByType: ReadonlyMap<string, readonly string[]>;
   readonly checker: JiraReportComplianceChecker | undefined;
@@ -139,12 +147,39 @@ function linkedKeysOf(fields: Record<string, unknown>): readonly string[] {
 function estimateOf(
   fields: Record<string, unknown>,
   plan: JiraReportFieldPlan,
+  typeId: string,
 ): number | undefined {
-  // An explicit null is unestimated; a requested field Jira withholds is unreadable evidence.
+  // An explicit null is unestimated; a requested field Jira withholds is unreadable evidence. A
+  // field the issue's type does not have at all is neither: that issue is simply unestimated.
   if (plan.estimateFieldId === undefined) return undefined;
-  if (!Object.hasOwn(fields, plan.estimateFieldId)) plan.omittedFields.add(plan.estimateFieldId);
+  if (!Object.hasOwn(fields, plan.estimateFieldId)) {
+    if (plan.estimateNotApplicableTypes.has(typeId)) return undefined;
+    plan.omittedFields.add(plan.estimateFieldId);
+  }
   const value = fields[plan.estimateFieldId];
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+/** A type the metadata says has no estimate field, and a hit that indeed holds no value for it. */
+function notCarried(
+  fields: Record<string, unknown>,
+  plan: JiraReportFieldPlan,
+  typeId: string,
+): boolean {
+  return (
+    plan.estimateFieldId !== undefined &&
+    plan.estimateNotApplicableTypes.has(typeId) &&
+    !Object.hasOwn(fields, plan.estimateFieldId)
+  );
+}
+function alternateOf(
+  fields: Record<string, unknown>,
+  plan: JiraReportFieldPlan,
+): { readonly alternateEstimate: number } | Record<string, never> {
+  const id = plan.alternateEstimateFieldId;
+  const value = id === undefined ? undefined : fields[id];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? { alternateEstimate: value }
+    : {};
 }
 function unusableEstimate(
   fields: Record<string, unknown>,
@@ -327,7 +362,7 @@ export async function parseJiraReportIssue(
   const identity = identityOf(value);
   if (identity === undefined) return undefined;
   const { key, fields, typeName, typeId, subtask } = identity;
-  const estimate = estimateOf(fields, plan);
+  const estimate = estimateOf(fields, plan, typeId);
   if (unusableEstimate(fields, plan.estimateFieldId, estimate)) return undefined;
   const status = reference(fields.status);
   const statusCategory = category(status);
@@ -348,6 +383,8 @@ export async function parseJiraReportIssue(
     assigned: assignedOf(fields, plan),
     dueDate: stringOf(fields.duedate, 32),
     estimate,
+    ...(notCarried(fields, plan, typeId) ? { estimateNotCarried: true as const } : {}),
+    ...alternateOf(fields, plan),
     deviations: dedupeDeviations([
       ...requiredDeviations(fields, typeId, plan),
       ...(checkerUnavailable ? [] : checked),

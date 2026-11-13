@@ -4614,6 +4614,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.model.unavailable": "Modellliste nicht verfügbar",
   "chat.model.noEligible": "Kein dialogfähiges Modell",
   "chat.model.change": "Modell wechseln",
+  "chat.model.checking": "{model} wird geprüft…",
+  "chat.model.notReady":
+    "{model} ist nicht bereit. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle.",
   "chat.noModelAlert":
     "Derzeit ist kein dialogfähiges Modell verfügbar. Prüfe den Gateway- und Modellstatus in den Einstellungen.",
   "chat.loadingGateway": "Verbindung zum Gateway wird hergestellt…",
@@ -4622,6 +4625,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.send.noModel": "Kein Modell verfügbar",
   "chat.send.connecting": "Gateway wird verbunden",
   "chat.send.cancel": "Antwort abbrechen",
+  "chat.send.running": "Senden ist nicht möglich, solange eine Antwort läuft",
+  "chat.send.runningHint":
+    "Deine nächste Nachricht kann gesendet werden, sobald diese Antwort fertig ist – oder brich die Antwort zuerst ab.",
   "chat.send.statusQueued": "Nachricht wird gesendet…",
   "chat.send.statusContacting": "Antwort wird vorbereitet…",
   "chat.send.statusAwaitingDecision": "Deine Entscheidung steht aus",
@@ -4636,6 +4642,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.voice.batchFinish": "Sprechen beenden",
   "chat.voice.batchMode":
     "Digital Twin: Sprich, um Keiko zu unterbrechen, oder nutze die Taste Unterbrechen.",
+  "chat.error.modelCheckCooldown":
+    "Das gewählte Modell hat vor einem Moment nicht geantwortet. Warte kurz und versuche es erneut, oder wähle ein anderes Modell.",
+  "chat.error.modelChecking":
+    "Das gewählte Modell wird noch geprüft. Warte, bis es antwortet, und sende dann erneut.",
+  "chat.error.modelNotReady":
+    "Das gewählte Modell hat seine Prüfung nicht bestanden, deshalb wurde nichts gesendet. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle und versuche es erneut.",
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",

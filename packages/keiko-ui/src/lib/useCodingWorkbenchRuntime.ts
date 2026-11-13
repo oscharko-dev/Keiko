@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState, type RefObject } from "react";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimePreference,
@@ -17,6 +17,7 @@ import {
 } from "./coding-workbench-runtime-hooks";
 import {
   useCodingWorkbenchRuntimeActions,
+  type CodingWorkbenchModelIntent,
   type CodingWorkbenchRuntimeActions,
 } from "./coding-workbench-runtime-actions";
 import {
@@ -48,6 +49,19 @@ export interface UseCodingWorkbenchRuntimeResult {
 // task-submitted event (and any later question signal) never reaches the timeline.
 export const STREAMABLE_RUNTIME_STATES = STREAMABLE_CODING_WORKBENCH_RUNTIME_STATES;
 
+// What the window itself owns about the model check: the person's pick, and a Start's wait.
+// Closing the window ends the wait of a Start that is checking its model.
+function useModelIntent(): RefObject<CodingWorkbenchModelIntent> {
+  const intent = useRef<CodingWorkbenchModelIntent>({ pickedModelId: null, startWait: null });
+  useEffect(
+    () => (): void => {
+      intent.current.startWait?.abort();
+    },
+    [],
+  );
+  return intent;
+}
+
 export function useCodingWorkbenchRuntime(
   input: UseCodingWorkbenchRuntimeInput,
 ): UseCodingWorkbenchRuntimeResult {
@@ -68,7 +82,8 @@ export function useCodingWorkbenchRuntime(
     dispatch,
   });
   useCodingWorkbenchPairingEffect(dispatch);
-  useCodingWorkbenchRuntimeRefreshEffects({ state, ...resources });
+  const intent = useModelIntent();
+  useCodingWorkbenchRuntimeRefreshEffects({ state, ...resources, intent });
   useCodingWorkbenchWorkspaceEffect({
     activeBinding,
     activeInstance,
@@ -87,6 +102,12 @@ export function useCodingWorkbenchRuntime(
     setStreamEpoch,
   });
 
-  const actions = useCodingWorkbenchRuntimeActions({ stateRef, dispatch, resources, mutations });
+  const actions = useCodingWorkbenchRuntimeActions({
+    stateRef,
+    dispatch,
+    resources,
+    mutations,
+    intent,
+  });
   return { state, actions };
 }

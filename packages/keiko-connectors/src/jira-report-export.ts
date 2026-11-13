@@ -7,8 +7,10 @@ import type {
   JiraReport,
   JiraReportContainer,
   JiraReportProgress,
+  JiraReportRequirementCoverage,
   JiraReportRow,
 } from "./jira-report-types.js";
+import { jiraReportDataText, jiraReportWikiPlainText } from "./jira-report-data-text.js";
 import { jiraReportEstimateSummary } from "./jira-report-figures.js";
 
 /** Columns of the CSV export. A parser needs nothing but this list and RFC 4180. */
@@ -31,6 +33,9 @@ export const JIRA_REPORT_CSV_COLUMNS = [
   "itemsDone",
   "summary",
 ] as const;
+
+/** The index of the `summary` column, where an uncovered derived requirement states its name. */
+const CSV_SUMMARY_COLUMN = 16;
 
 const FORMULA_START = /^[=+\-@\t\r]/u;
 
@@ -70,34 +75,53 @@ function issueRow(row: JiraReportRow): string {
     issue.summary,
   ]);
 }
+function coveredRow(item: JiraReportRequirementCoverage, kind: string): string {
+  return csvRow([
+    kind,
+    item.id,
+    undefined,
+    undefined,
+    undefined,
+    "covered",
+    undefined,
+    item.coveredBy.join(";"),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    item.itemCount,
+    item.done,
+    undefined,
+  ]);
+}
+function uncoveredRow(id: string, kind: string, name: string | undefined): string {
+  return csvRow([
+    kind,
+    id,
+    undefined,
+    undefined,
+    undefined,
+    "uncovered",
+    ...Array.from({ length: CSV_SUMMARY_COLUMN - 6 }, () => undefined),
+    name,
+  ]);
+}
+/** Derived units are rows of their own kind, so a spreadsheet never mixes them into the headline. */
 function requirementRows(report: JiraReport): readonly string[] {
   const requirements = report.coverage.requirements;
   if (requirements === undefined) return [];
+  const { derived } = requirements;
   return [
-    ...requirements.items.map((item) =>
-      csvRow([
-        "requirement",
-        item.id,
-        undefined,
-        undefined,
-        undefined,
-        "covered",
-        undefined,
-        item.coveredBy.join(";"),
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        item.itemCount,
-        item.done,
-        undefined,
-      ]),
-    ),
+    ...requirements.items.map((item) => coveredRow(item, "requirement")),
     ...requirements.uncovered.map((id) =>
-      csvRow(["requirement", id, undefined, undefined, undefined, "uncovered"]),
+      uncoveredRow(id, "requirement", requirements.uncoveredLabels[id]),
     ),
+    ...(derived?.items.map((item) => coveredRow(item, "derived-requirement")) ?? []),
+    ...(derived?.uncovered.map((id) =>
+      uncoveredRow(id, "derived-requirement", derived.names[id]),
+    ) ?? []),
   ];
 }
 // Spreadsheet programs read a UTF-8 CSV as text in their own code page without this mark.
@@ -177,12 +201,15 @@ function progressRow(label: string, progress: JiraReportProgress): readonly (str
 }
 const PROGRESS_HEADER = ["", "Issues", "To do", "In progress", "Done", "No category", "Done"];
 
+/** A field name in the Markdown export: neutralised, quoted and escaped like every Jira text there. */
+const markdownLabel = (name: string): string => `"${markdownText(jiraReportDataText(name))}"`;
+
 function progressSection(report: JiraReport): string {
   const { project, byType, unassigned, overdue } = report.progress;
   return [
     "## Progress\n",
     table(PROGRESS_HEADER, [progressRow("Project", project)]),
-    `${jiraReportEstimateSummary(report)}.\n`,
+    `${jiraReportEstimateSummary(report, markdownLabel)}.\n`,
     `Open issues without an assignee: ${String(unassigned)}. Open issues past their due date on ${report.scope.asOf} (${report.scope.timeZone}): ${String(overdue)}.\n`,
     "### By issue type and status\n",
     table(
@@ -257,6 +284,25 @@ const INFERRED_PARENT_NOTE =
   "_Not verified: the parent relation comes from a custom field whose role Jira does not state; name it in parentFieldIds to confirm it._\n";
 const REQUIREMENT_REFERENCE_NOTE =
   "Requirement coverage counts textual references in the issues read. Source revisions and requirement satisfaction are not verified.";
+function derivedSection(
+  derived: NonNullable<NonNullable<JiraReport["coverage"]["requirements"]>["derived"]>,
+): readonly string[] {
+  return [
+    "### Derived requirements\n",
+    `${String(derived.covered)} of ${String(derived.declared)} units Keiko derived from statements without an identifier are named by an issue. They are not counted above.\n`,
+    table(
+      ["Derived requirement", "Statement", "Named by"],
+      [
+        ...derived.items.map((item) => [
+          item.id,
+          markdownText(derived.names[item.id] ?? ""),
+          item.coveredBy.join(", "),
+        ]),
+        ...derived.uncovered.map((id) => [id, markdownText(derived.names[id] ?? ""), ""]),
+      ],
+    ),
+  ];
+}
 function coverageSection(report: JiraReport): string {
   const { coverage } = report;
   const lines = [
@@ -287,8 +333,14 @@ function coverageSection(report: JiraReport): string {
         ]),
       ),
       "### Requirements without an issue\n",
-      listOf(requirements.uncovered),
+      listOf(
+        requirements.uncovered.map((id) => {
+          const label = requirements.uncoveredLabels[id];
+          return label === undefined ? id : `${id} (${markdownText(label)})`;
+        }),
+      ),
     );
+  if (requirements?.derived !== undefined) lines.push(...derivedSection(requirements.derived));
   return lines.join("\n");
 }
 function scopeText(report: JiraReport): string {
@@ -346,7 +398,13 @@ function readText(report: JiraReport): string {
   const total = issuesTotal === undefined ? " of an unknown total" : ` of ${String(issuesTotal)}`;
   return `${String(issuesRead)}${total}`;
 }
-/** Numbers and issue keys only, so the text is safe in a Jira comment and cannot carry markup. */
+/** A field name in a Jira comment: letters, digits and spaces only, since Jira renders the comment as wiki markup. */
+const wikiLabel = (name: string): string => `"${jiraReportWikiPlainText(name)}"`;
+
+/**
+ * Numbers, issue keys and field names reduced to plain letters and digits, so the text is safe in a
+ * Jira comment, which Jira renders as wiki markup, and cannot carry markup, an image or a link.
+ */
 export function jiraReportCommentText(report: JiraReport): string {
   const { project, unassigned, overdue } = report.progress;
   const { compliance, coverage } = report;
@@ -354,7 +412,7 @@ export function jiraReportCommentText(report: JiraReport): string {
     `Keiko Jira report ${report.scope.projectKey ?? ""} (${stateText(report)}), digest ${report.digest}`,
     `Issues read: ${readText(report)}`,
     `Progress: ${String(project.total)} issues, ${String(project.new)} to do, ${String(project.indeterminate)} in progress, ${String(project.done)} done (${String(project.donePercent)}%), ${String(project.noCategory)} without category`,
-    jiraReportEstimateSummary(report),
+    jiraReportEstimateSummary(report, wikiLabel),
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
     `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesJudged)} issues deviate (${String(compliance.deviationCount)} deviations)`,
     `Required-field rules: ${compliance.requiredFieldRules}. Template checker: ${compliance.checker}.`,
@@ -377,6 +435,11 @@ export function jiraReportCommentText(report: JiraReport): string {
           `Requirements named by an issue: ${String(coverage.requirements.covered)} of ${String(coverage.requirements.declared)}`,
           REQUIREMENT_REFERENCE_NOTE,
           keyList("Requirements without an issue", coverage.requirements.uncovered),
+          ...(coverage.requirements.derived === undefined
+            ? []
+            : [
+                `Derived requirements named by an issue: ${String(coverage.requirements.derived.covered)} of ${String(coverage.requirements.derived.declared)}`,
+              ]),
         ]),
   ];
   return lines.join("\n").slice(0, COMMENT_MAX_CHARS);

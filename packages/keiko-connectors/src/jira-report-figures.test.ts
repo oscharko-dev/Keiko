@@ -115,3 +115,31 @@ describe("the figures a weaker model quotes instead of computing (#4181)", () =>
     expect(record(paged.data.section).items).toHaveLength(1);
   });
 });
+
+describe("an incomplete report says so before any figure (#4356)", () => {
+  it("opens an incomplete report with the scope gap and leaves a complete one unchanged", async () => {
+    const complete = await figuresOf(30);
+    expect(complete.text).not.toMatch(/INCOMPLETE/u);
+    const incomplete: JiraReport = {
+      ...complete.report,
+      completeness: {
+        complete: false,
+        reason: "read-failed",
+        failure: "permission",
+        issuesRead: 37,
+        issuesTotal: 181,
+        pageCount: 1,
+      },
+    };
+    const [first, second] = jiraReportFigures(incomplete).split("\n");
+    expect(first).toBe(
+      "INCOMPLETE REPORT: 37 of 181 issues were read (Jira withheld a field the report needs). Every figure below describes only the issues read, not the whole scope.",
+    );
+    expect(second).toMatch(/^Issues in the report:/u);
+    const unknown = jiraReportFigures({
+      ...incomplete,
+      completeness: { ...incomplete.completeness, issuesTotal: undefined },
+    });
+    expect(unknown).toContain("37 of an unknown number of issues were read");
+  });
+});

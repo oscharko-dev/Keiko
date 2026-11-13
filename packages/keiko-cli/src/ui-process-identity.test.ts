@@ -89,7 +89,20 @@ describe("default live identity readers", () => {
     );
     expect(source).not.toMatch(/spawnSync\(\s*"(?:ps|powershell\.exe)"/u);
     expect(source).toContain('"/bin/ps"');
-    expect(source).toContain("resolveWindowsPowerShellExecutable");
+    // The Windows read moved to its owner in keiko-security (#4358). The pin moves with it: this
+    // module names no PowerShell at all, and the owner still resolves the inbox PowerShell by
+    // identity and never spawns it by a PATH basename.
+    expect(source).toContain("readWindowsProcessCommandLine");
+    expect(source).not.toContain("powershell");
+    const owner = readFileSync(
+      fileURLToPath(
+        new URL("../../keiko-security/src/windows-process-identity.ts", import.meta.url),
+      ),
+      "utf8",
+    );
+    expect(owner).toContain("resolveWindowsPowerShellExecutable");
+    expect(owner).not.toMatch(/spawnSync\(\s*"(?:ps|powershell\.exe)"/u);
+    expect(owner).not.toMatch(/["'`]powershell(?:\.exe)?["'`]/iu);
   });
 
   it.skipIf(process.platform === "win32")(

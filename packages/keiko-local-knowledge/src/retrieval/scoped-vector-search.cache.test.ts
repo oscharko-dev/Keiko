@@ -34,6 +34,7 @@ import {
   type KnowledgeStoreKeyProvider,
 } from "../store.js";
 import { searchVectorsForScope } from "./scoped-vector-search.js";
+import { DEFAULT_EMBEDDING } from "../_support.js";
 import { scriptedAdapter, seedCapsuleWithVectors } from "./_support.js";
 
 const FIXED_KEY = new Uint8Array(32).fill(7);
@@ -335,5 +336,65 @@ describe("per-Pod identity refusal preserves connection proof", () => {
     );
     expect(accepted.references.length).toBeGreaterThan(0);
     expect(request).toHaveBeenCalledTimes(probeCalls + 1);
+  });
+});
+
+// #4351: Keiko no longer probes every listed embedding alias at startup, so a Pod bound to an alias
+// that is not the one in use is proven where it is used: its first query embedding is preceded by
+// the identity proof of the alias the Pod itself stores, never of another alias.
+describe("a Pod's stored embedding alias is proven before its first query embedding (#4351)", () => {
+  it("sends the identity probe first and embeds the query only after it", async () => {
+    const opened = openEncryptedStore(freshDbPath());
+    const identity = { ...DEFAULT_EMBEDDING, modelId: "stored-alias-not-in-use" };
+    const seeded = await seedCapsuleWithVectors(opened.store, {
+      capsuleId: "cap-stored-alias",
+      identity,
+    });
+    const inner = scriptedAdapter({ identity });
+    const inputs: string[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...inner,
+      request: async (request) => {
+        inputs.push(request.input);
+        return inner.request(request);
+      },
+    };
+    const outcome = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "stored alias question",
+      { topK: 10 },
+    );
+    expect(outcome.references.length).toBeGreaterThan(0);
+    const firstQuery = inputs.findIndex((input) => input.includes("stored alias question"));
+    expect(firstQuery).toBeGreaterThan(0);
+    expect(inputs.slice(0, firstQuery).length).toBeGreaterThan(0);
+  });
+
+  it("embeds no query when the stored alias does not prove itself", async () => {
+    const opened = openEncryptedStore(freshDbPath());
+    const identity = { ...DEFAULT_EMBEDDING, modelId: "stored-alias-gone" };
+    const seeded = await seedCapsuleWithVectors(opened.store, {
+      capsuleId: "cap-stored-alias-gone",
+      identity,
+    });
+    const inputs: string[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...scriptedAdapter({ identity }),
+      request: (request) => {
+        inputs.push(request.input);
+        return Promise.resolve({ ok: false, kind: "wrong-header" } as const);
+      },
+    };
+    const outcome = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "stored alias question",
+      { topK: 10 },
+    );
+    expect(outcome.references).toHaveLength(0);
+    expect(inputs.some((input) => input.includes("stored alias question"))).toBe(false);
   });
 });

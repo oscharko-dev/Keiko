@@ -137,21 +137,29 @@ function expectRepairIssuedCookies(observation: ReloadObservation, remainingMs: 
   }
 }
 
+/** Pairs a fresh browser; when pairing fails its request context is disposed here, not leaked. */
 async function pair(app: Fixture): Promise<{ browser: APIRequestContext; proof: string }> {
   const browser = await openBrowser(app.origin);
-  const paired = await browser.post(`${app.origin}${PREFIX}/pair`, {
-    data: fakePairingRequestBody(),
-  });
-  expect(paired.status()).toBe(200);
-  return { browser, proof: proofOf(await browser.storageState()) };
+  try {
+    const paired = await browser.post(`${app.origin}${PREFIX}/pair`, {
+      data: fakePairingRequestBody(),
+    });
+    expect(paired.status()).toBe(200);
+    return { browser, proof: proofOf(await browser.storageState()) };
+  } catch (error) {
+    await browser.dispose();
+    throw error;
+  }
 }
 
 it("keeps the session valid for 120 minutes with reloads at 26 and 31 minutes after pairing", async () => {
   let now = 0;
   const app = await fixture(() => now);
-  const { proof, browser: pairedBrowser } = await pair(app);
-  let browser = pairedBrowser;
+  let browser: APIRequestContext | undefined;
   try {
+    const paired = await pair(app);
+    const { proof } = paired;
+    browser = paired.browser;
     // The incident's grounded Chat turn: an operation held from shortly after pairing for ~24 min.
     now = 32_000;
     const release = app.registry.beginOperation(proof);
@@ -169,7 +177,7 @@ it("keeps the session valid for 120 minutes with reloads at 26 and 31 minutes af
     }
     expect(app.registry.sessionCount()).toBe(1);
   } finally {
-    await browser.dispose();
+    await browser?.dispose();
     await app.close();
   }
 });
@@ -177,11 +185,12 @@ it("keeps the session valid for 120 minutes with reloads at 26 and 31 minutes af
 it("keeps a session whose operation runs the whole 120 minutes valid across reloads", async () => {
   let now = 0;
   const app = await fixture(() => now);
-  const { proof, browser: pairedBrowser } = await pair(app);
-  let browser = pairedBrowser;
+  let browser: APIRequestContext | undefined;
   let release: (() => void) | undefined;
   try {
-    release = app.registry.beginOperation(proof);
+    const paired = await pair(app);
+    browser = paired.browser;
+    release = app.registry.beginOperation(paired.proof);
     expect(release).toBeDefined();
     for (const minute of [26, 31, 61, 91, 120]) {
       now = minute * MINUTE_MS;
@@ -199,7 +208,7 @@ it("keeps a session whose operation runs the whole 120 minutes valid across relo
     expectRepairIssuedCookies(reloaded.observation, ABSOLUTE_LIFETIME_MS - now);
   } finally {
     release?.();
-    await browser.dispose();
+    await browser?.dispose();
     await app.close();
   }
 });
@@ -207,16 +216,16 @@ it("keeps a session whose operation runs the whole 120 minutes valid across relo
 it("refuses, with no cookie, a reload after 31 idle minutes (negative control for the boundary)", async () => {
   let now = 0;
   const app = await fixture(() => now);
-  const { browser: paired } = await pair(app);
-  let browser = paired;
+  let browser: APIRequestContext | undefined;
   try {
+    browser = (await pair(app)).browser;
     now = 31 * MINUTE_MS;
     const reloaded = await reload(app, browser);
     browser = reloaded.browser;
     expect(reloaded.observation.status).toBe(200);
     expect(reloaded.observation.projections).toHaveLength(0);
   } finally {
-    await browser.dispose();
+    await browser?.dispose();
     await app.close();
   }
 });

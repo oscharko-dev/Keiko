@@ -30,6 +30,7 @@ import {
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { currentWindowsVaultCustody } from "@oscharko-dev/keiko-security";
 import {
   KEIKO_UI_LAUNCH_ID_ENV,
   isKeikoUiLaunchId,
@@ -153,7 +154,7 @@ import {
 } from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
-import { handleGatewayReadiness } from "./gateway-readiness.js";
+import { handleGatewayReadiness, handleGatewaySelectionCheck } from "./gateway-readiness.js";
 import { handleApplyGatewayVerifiedCapabilities, handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
@@ -498,6 +499,9 @@ export interface RouteDefinition {
 // reason codes and a count — so a health probe never discloses a path or an error message.
 function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const launchId = deps.env[KEIKO_UI_LAUNCH_ID_ENV];
+  // #4358: how the credential vaults opened so far are kept on Windows. A closed value; absent on
+  // other platforms and before a vault key was read from its key file.
+  const credentialCustody = currentWindowsVaultCustody();
   const body: HealthResponse = {
     status: "ok",
     version: SDK_VERSION,
@@ -505,6 +509,7 @@ function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
     ...(deps.memoryReadiness === undefined ? {} : { memory: deps.memoryReadiness }),
     ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
     instanceId: SERVER_INSTANCE_ID,
+    ...(credentialCustody === undefined ? {} : { credentialCustody }),
   };
   return { status: 200, body };
 }
@@ -1793,6 +1798,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
   ...JIRA_REPORT_ROUTE_GROUP,
   ...JIRA_DRAFT_ROUTE_GROUP,
+  // #4351: a person's explicit pick of a chat model starts the one check of that model.
+  {
+    method: "POST",
+    pattern: "/api/gateway/readiness/selection",
+    handler: handleGatewaySelectionCheck,
+  },
 ];
 
 interface PreparedRoute {

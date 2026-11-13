@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0ad97bab742497c52de67b448514b27ff4e4c834e6e0372347d7ae3815d4cc9c"
+    "catalogDigest": "1af4d5fbf7be4de489aa72ce041bf63fb14134368b74da40a2abe836882486f5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 695,
-    "proofCount": 718,
-    "resolvedProofCount": 718,
-    "failureClassCount": 401,
+    "operationCount": 700,
+    "proofCount": 723,
+    "resolvedProofCount": 723,
+    "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -225,6 +225,7 @@
         "client.git-operation.settled",
         "client.jira-fields.presented",
         "client.jira-result.presented",
+        "client.knowledge-catalog.refreshed",
         "client.knowledge-catalog.unavailable",
         "client.markdown.layout",
         "client.scope.notice",
@@ -306,6 +307,8 @@
         "gateway.readiness.compatibility-retry.failed",
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
+        "gateway.readiness.scope",
+        "gateway.readiness.selection",
         "gateway.readiness.started",
         "gateway.reasoning-history",
         "gateway.reranker.setup.resolved",
@@ -838,6 +841,7 @@
         "security.keychain.withheld",
         "security.log.sink-failed",
         "security.portable-tree-attestation.failed",
+        "security.vault.custody",
         "security.vault.entries-delete-failed",
         "security.vault.entries-deleted",
         "security.vault.entries-merge-failed",
@@ -856,6 +860,7 @@
         "security.windows-portable-alert.system-root-refused",
         "security.windows-portable-legacy-launcher.system-binary-missing",
         "security.windows-portable-legacy-launcher.system-root-refused",
+        "security.windows-program.run",
         "security.windows-shortcut.system-binary-missing",
         "security.windows-shortcut.system-root-refused",
         "sqlite.state-path.refused",
@@ -928,6 +933,7 @@
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
     "client-update-notice": ["client-diagnostics.dependency-failure"],
+    "client-knowledge-catalog-refresh": ["client-diagnostics.dependency-failure"],
     "client-editor-line-ending": ["client-diagnostics.dependency-failure"],
     "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
@@ -1279,6 +1285,7 @@
     "windows-authenticode-system-binary": ["runtime-packages.rejection"],
     "windows-local-volume": ["runtime-packages.rejection"],
     "windows-owner-private": ["runtime-packages.rejection"],
+    "windows-program-latency": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-binary": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-root": ["runtime-packages.rejection"],
     "windows-system-binary-unavailable": ["runtime-packages.dependency-failure"],
@@ -1523,7 +1530,8 @@
     ],
     "cli.lifecycle.health.decision": [
       "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
-      "packages/keiko-cli/src/lifecycle-health-owner.test.ts"
+      "packages/keiko-cli/src/lifecycle-health-owner.test.ts",
+      "packages/keiko-cli/src/lifecycle-start-window.test.ts"
     ],
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
@@ -1623,6 +1631,9 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.jira-result.presented.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.knowledge-catalog.refreshed.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.knowledge-catalog.unavailable.line": [
@@ -2378,6 +2389,8 @@
       "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts",
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
+    "gateway.readiness.scope.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
+    "gateway.readiness.selection.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.reasoning-history.lifecycle": [
       "packages/keiko-model-gateway/src/reasoning-history.test.ts"
@@ -3104,6 +3117,9 @@
     "security.portable-tree-attestation.failed.driver": [
       "packages/keiko-security/src/portable-tree-attestation.test.ts"
     ],
+    "security.vault.custody.decision": [
+      "packages/keiko-security/src/windows-vault-custody.test.ts"
+    ],
     "security.vault.entries-delete-failed.count": [
       "packages/keiko-security/src/secret-vault.test.ts"
     ],
@@ -3149,6 +3165,9 @@
     ],
     "security.windows-portable-legacy-launcher.system-root-refused.emitted-line": [
       "packages/keiko-cli/src/security-log.activity-log-proof.test.ts"
+    ],
+    "security.windows-program.run.outcome": [
+      "packages/keiko-security/src/windows-powershell-program.test.ts"
     ],
     "security.windows-shortcut.system-binary-missing.mode": [
       "packages/keiko-security/src/windows-shortcuts.test.ts"

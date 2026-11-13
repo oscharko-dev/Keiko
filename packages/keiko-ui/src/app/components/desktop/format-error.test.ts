@@ -47,6 +47,59 @@ describe("formatUserError", () => {
       }
     },
   );
+  // The server's English text is a fallback for other clients: the UI reads these closed codes
+  // through the catalogs, so a German clerk reads German and the next step (#4371).
+  it.each(
+    (["en", "de"] as const).flatMap((locale) =>
+      (
+        [
+          "KNOWLEDGE_POD_UNAVAILABLE",
+          "KNOWLEDGE_STORE_UNAVAILABLE",
+          "JIRA_POD_UNAVAILABLE",
+          "JIRA_POD_VERIFICATION_REQUIRED",
+          "JIRA_POD_CONNECTION_CHANGED",
+        ] as const
+      ).map((code) => [locale, code] as const),
+    ),
+  )("shows %s %s from the catalog, with a title and a next step", async (locale, code) => {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    try {
+      const serverText = "Server English fallback text that must not be shown";
+      const error = new ApiError(code, serverText, 409);
+      const notice = toUserErrorNotice(error, "Could not send message.");
+
+      expect(notice.message).not.toBe(serverText);
+      expect(notice.title).not.toBe("Request failed");
+      expect(notice.remediation).toBeDefined();
+      expect(formatUserError(error, "fallback")).toBe(`${notice.message} (${code})`);
+      if (locale === "de") {
+        expect(`${notice.title} ${notice.message}`).toMatch(/[äöüÄÖÜ]|nicht|Wähle|Prüfe|Versuche/u);
+      }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+  it("falls back to the server's text for a refusal code the catalogs do not know", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const error = new ApiError("JIRA_POD_SOMETHING_NEW", "Plain server text.", 409);
+      const notice = toUserErrorNotice(error, "Could not send message.");
+
+      expect(notice.message).toBe("Plain server text.");
+      expect(notice.title).toBe("Request failed");
+      expect(notice.remediation).toBeUndefined();
+      expect(formatUserError(error, "fallback")).toBe(
+        "Plain server text. (JIRA_POD_SOMETHING_NEW)",
+      );
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+
   it.each(["en", "de"] as const)(
     "explains unavailable Chat capabilities without service-specific checks in %s",
     async (locale) => {
