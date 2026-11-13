@@ -242,7 +242,8 @@ start proofs again and fetch the release (appendix E).
 `windows-x64-SHA256SUMS.txt` from the public GitHub release of the given tag, compares the digest
 and extracts to `C:\keiko\<tag>\extracted\Keiko`. For v1.4.0 the verified digest is
 `ba6ae83c7655b69e1266beaeb9ce2eef6babffda1b4820a25a463ae5e5f22b76`. Never install from a shared
-folder of a working tree; the machine tests what a customer downloads.
+folder of a working tree; the release proof tests what a customer downloads. The developer loop
+below is the one deliberate exception.
 
 The archive carries its own pinned x64 Node under `runtime\node`, the `app\` tree and the
 `Keiko.exe` launcher; see the
@@ -324,27 +325,103 @@ host was opened or restarted.
 This proof ends at "the guest reaches the lab Jira over HTTPS with verification enabled". Connecting
 a Jira Pod and running Jira journeys is #4358; the lab scripts are not run in the guest.
 
-## Bringing a build of the current `dev` into the guest
+## Running the current development state: two developer loops
 
-No release exists for a change under test, so build the same artifact the release workflow stages.
-This path is documented but was not exercised while setting up the machine.
+The owner's task for this machine is to run the state of the source branch
+`feat/jira-pod-release-1` (a moving branch; it equalled `dev` when this was set up) on both the
+Windows guest and the Mac, with an update loop measured in minutes. Both loops are one command on
+the host. The scripts live outside the repository, next to the other helpers of this machine; their
+full text is in appendices G to K so the loops can be rebuilt. This lifts "never from a working
+tree" for the developer loop only; the customer-shaped path below and the release proof above still
+use the artifacts a customer receives.
 
-1. Dispatch the unsigned evaluation staging build from the branch under test:
-   `gh workflow run portable-assets.yml --ref <branch> -f evaluation_build=true`. It stages the
-   `windows-x64` target in the artifact `portable-stage-windows-x64-evaluation-unsigned` and is never
-   assembled into a release. The workflow's own smoke runs on the staged tree.
-2. Download it on the host: `gh run download <run-id> -n portable-stage-windows-x64-evaluation-unsigned`.
-3. Copy the staged tree into the guest over the loopback SSH port (`scp -r -P 2222`), into a new
-   directory under `C:\keiko\dev-<short-sha>`. Record the commit, the run id and the digest of every
-   top-level file; the evaluation artifact has no release signature, so the digest list is the only
-   identity.
-4. Start it exactly like the release: `Keiko.exe` for the x64 leg, `C:\tools\node-arm64\node.exe
-app\dist\cli\index.js start` for the ARM64 leg.
+### Windows guest: `keiko-win-dev-loop [<branch|commit>] [--clean]`
 
-A change that only needs the server, not the packaged launcher, can also run from a working tree
-built on the host and packed with `npm pack`, installed in the guest with the x64 Node's npm. This
-is the developer path; the evaluation staging build above is the one that matches what a customer
-runs.
+One command takes a branch or a commit (default `origin/feat/jira-pod-release-1`) and ends with
+Keiko running in the guest on that commit. It prints the commit, a verification of what runs in the
+guest, the time of every phase and the elapsed time.
+
+1. **Worktree.** A dedicated detached worktree of the repository is fetched and moved to the commit.
+   `npm ci` runs only when `package-lock.json` changed (about 6 seconds with a warm npm cache).
+2. **Build and pack, on the host.** `npm run build`, `prepare:bin`, `build:ui`, the two `prune:*`
+   steps and `npm pack --ignore-scripts`: the `prepack` of the root package minus its release gates
+   (arch checks, package-surface and manifest checks, release-impact), which CI runs on the pull
+   request. About 45 seconds in total. Every heavy host step goes through the machine guard
+   `heavy-slot.sh`, so at most two heavy jobs run at once. `--clean` runs `npm run clean` first.
+3. **Copy.** The tarball (about 35 MB, named by the short commit) goes over the loopback SSH port.
+4. **Install in the guest.** The tarball bundles every dependency, so extracting it with `tar` into
+   `C:\keiko\dev\<commit>\node_modules\@oscharko-dev\keiko` is the whole installation: about 20 to 60
+   seconds. `npm install` of the same file took **11 minutes** in this guest (13,807 small files
+   written by an emulated x64 Node under Defender) and is not used. The script stops the earlier dev
+   install first and keeps the new and the previous one.
+5. **Start.** `keiko start --start-timeout 240` runs in the interactive session through a scheduled
+   task that starts in the user profile (the default 20-second window and a `System32` working
+   directory both fail here, see the start proofs). Edge then opens the UI on the loopback URL.
+6. **Verification printed at the end.** `/api/health` (`status`, `version`, `launchId`,
+   `readiness`) and the command line of the process that listens on port 1983. That command line
+   must contain the commit-named install directory, otherwise the script exits with an error.
+
+`/api/health` carries no commit or build identity: `version` is the compile-time constant `1.4.0`
+for every commit, and the `launchId` changes with every start. The commit-named install directory of
+the listener is therefore the proof of which build runs. The packed tarball is not byte-reproducible
+either: two builds of the same commit produced different SHA-256 values, so the tarball digest
+identifies a run, not a commit.
+
+#### Measured on 2026-11-13
+
+| Run | Commit                                                              | Elapsed | Phases (seconds)                                                                        |
+| --- | ------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------- |
+| 1   | `c8c716131228` (branch head at that time), `npm install` in guest   | 14m02s  | deps 6, build 33, pack 12, ship 11, **install 688**, start 63, browser 8, verify 15     |
+| 2   | `1f2707acd97f` (newer: the head of #4383, a lab-only change)        | 5m37s   | build 31, pack 12, ship 14, install 56, **start 192**, browser 10, verify 14            |
+| 3   | `1f2707acd97f` again                                                | 4m34s   | build 29, pack 12, ship 13, install 41, start 151, browser 8, verify 12                 |
+| 4   | `940d0b4bb7c6` (branch head after the merge of #4383), guest booted | 10m55s  | build 31, pack 12, guest boot 51, ship 38, install 309, start 192, browser 8, verify 12 |
+
+Run 1 used `npm install`; runs 2 to 4 use `tar`. Runs 2 and 3 are the steady state with a running
+guest: **about 4.5 to 5.5 minutes**. Run 4's longer install (309 s) came right after a guest boot, when Defender is busy; the cause
+was not analyzed further. The host part (checkout, build, pack) is
+under a minute; what remains is the guest: the UI start dominates at 150 to 190 seconds, because
+the UI process runs several PowerShell identity checks at startup and each costs 13 to 20 seconds
+under x64 emulation (see the start proofs). The loop proves a new commit reaches the guest and
+starts there: run 1 to run 2 changed the commit, the install directory and the `launchId`, and the
+guest's `/api/health` stayed `ok` / `ready`.
+
+### Mac: `keiko-mac-dev [up|stop|status] [<branch|commit>]`
+
+One dedicated checkout, a detached worktree that follows `origin/feat/jira-pod-release-1`. `up`
+fetches the branch, moves the checkout to its head, runs `npm ci` only when the lockfile changed and
+starts Keiko with `npm run dev:start -- --no-open` (the repository's own dev starter, which builds
+first) on `127.0.0.1:1990`, with `KEIKO_STATE_DIR` in a private directory outside the checkout and
+`KEIKO_OS_KEYCHAIN=off` so no keychain dialog can appear. It prints the commit, `/api/health` and the
+elapsed time. `stop` runs `npm run dev:stop`; no instance is left running.
+
+Measured on 2026-11-13: first run on `940d0b4bb7c6` **31 seconds** (including `npm ci`), a repeat run
+through the machine guard **11 seconds**; `/api/health` returned `ok` / `ready` on
+`http://127.0.0.1:1990`, then `stop` and the port was closed.
+
+## The customer-shaped path, exercised
+
+The path documented before (`portable-assets.yml` with `evaluation_build=true`) was run once on
+2026-11-13 against `feat/jira-pod-release-1` (`c8c716131228`):
+
+| Step                                                                          | Time                                                                   | Result                                                                                       |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `gh workflow run portable-assets.yml --ref <branch> -f evaluation_build=true` | 15 min 18 s until the `windows-x64` artifact existed (run 15 min 22 s) | All four stage jobs green; artifact `portable-stage-windows-x64-evaluation-unsigned`, 622 MB |
+| `gh run download <run-id> -n portable-stage-windows-x64-evaluation-unsigned`  | 2 min                                                                  | 952 MB: `keiko-windows-x64.zip`, `keiko-windows-x64-setup.exe`, `payload/`, `evidence/`      |
+| Copy the zip and `evidence/SHA256SUMS.txt` into the guest                     | 7 s                                                                    | Digest matches the staged `SHA256SUMS.txt`                                                   |
+| Verify and extract (`Expand-Archive`)                                         | 5 min 48 s                                                             | Slow: tens of thousands of small files under Defender                                        |
+| Start `Keiko.exe`                                                             | refused after 70 s                                                     | `keiko portable setup: Windows managed root must be on a local volume`                       |
+
+`Keiko.exe` does not start in the x64 leg for the same reason as with v1.4.0: the local-volume check
+has a fixed 10-second limit and emulated PowerShell needs 13 to 20 seconds. That is a finding for
+#4358, not a defect of this machine; it was not worked around. Total from dispatch to the refusal:
+about 24 minutes, of which CI is 15. The `keiko-windows-x64-setup.exe` companion was not run: it
+delegates to the same managed-install check. After a start proof the extracted tree is deleted
+again.
+
+The machine guard (`heavy-slot.sh`, at most two heavy jobs at a time) was added to both scripts after
+run 4. The Mac command passed it (11 seconds, above). A complete governed run of the Windows loop is
+still to be recorded: it was cut short because the host needed the guest's memory for a lab
+measurement; its first host step only reached "waiting for a free slot".
 
 ## Operating limits and findings
 
@@ -357,6 +434,17 @@ runs.
   released v1.4.0 build, while `("win32", "x64")` resolves `win32-x64`; the ANN search reports
   `runtime-unavailable` for an unknown target. The ARM64-Node leg therefore cannot carry a Knowledge
   Pod; this was verified against the shipped manifest, not by creating a Pod in the UI.
+- **No build identity in `/api/health`.** `version` is the compile-time constant for every commit and
+  only `launchId` changes. The developer loop therefore proves the commit by the install directory
+  of the listening process. A commit or build id in the health response would make this a one-line
+  check; that is a product question for #4358, not changed here.
+- **The packed tarball is not byte-reproducible.** Two builds of one commit gave different SHA-256
+  values; use the commit, not the tarball digest, as identity.
+- **`npm install` of the packed tarball is the wrong install in this guest** (11 minutes against
+  about 20 seconds for extracting it); the tarball bundles every dependency.
+- **Memory.** Guest (16 GB) plus a local-model lab measurement plus Docker exceeds the host's memory.
+  Stop the guest when it is not in use (`utmctl stop <machine> --request`, which can take several
+  minutes under memory pressure) and run heavy host steps through the machine guard.
 - **Edition.** The guest is Windows 11 IoT Enterprise LTSC 2024 (24H2 servicing), not Windows 11
   Enterprise 26H2. Quote that edition in every result.
 - **Host load.** Shut the guest down (`utmctl stop <machine> --request`) when it is not in use.
@@ -378,8 +466,9 @@ runs.
 
 ## Appendix: scripts
 
-The helper files are small enough to keep here. Placeholders in angle brackets or `@@…@@` are filled
-in on the host and are never committed.
+The helper files are small enough to keep here. Placeholders in angle brackets (including the
+directory and key defaults at the top of the two host scripts) or `@@…@@` are filled in on the host
+and are never committed.
 
 ### A. `Autounattend.xml`
 
@@ -634,4 +723,254 @@ https
     console.log(process.arch, "ERR", e.code);
     process.exit(1);
   });
+```
+
+### G. `keiko-win-dev-loop` (host)
+
+```bash
+#!/bin/bash
+# keiko-win-dev-loop [<branch|commit>] [--clean]
+# Builds a branch or commit on this Mac, packs it with `npm pack`, copies the tarball into the Windows
+# guest over the loopback SSH port, installs it there with the x64 Node, starts it with
+# `keiko start --start-timeout 240` in the interactive session and opens the UI in Edge.
+# Ends by printing the commit, a verification of what runs in the guest and the elapsed time.
+# Default ref: origin/feat/jira-pod-release-1. --clean runs `npm run clean` first (fresh dist).
+set -euo pipefail
+
+HOME_DIR="<helper-dir>"
+SRC="${KEIKO_SRC_REPO:-<repo-checkout>}"       # repository that owns the worktree
+WT="${KEIKO_WIN_LOOP_WT:-$HOME_DIR/work/keiko-win-loop}"
+VM="${KEIKO_WIN_VM:-keiko-win11-arm64}"
+KEY="<ssh-private-key>"
+PORT=2222
+GUEST_USER="$(sed -n 's/^user=//p' "$HOME_DIR/guest-credential")"
+SSHO=(-i "$KEY" -p "$PORT" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+# Heavy host work goes through the machine guard: at most two heavy jobs at a time.
+HEAVY="${KEIKO_HEAVY_SLOT:-<machine-guard>/heavy-slot.sh}"
+heavy() { local what="$1"; shift; if [ -x "$HEAVY" ]; then "$HEAVY" "4374-$what" -- "$@"; else "$@"; fi; }
+ssh_g() { ssh "${SSHO[@]}" "$GUEST_USER@127.0.0.1" "$@"; }
+scp_g() { scp -q -i "$KEY" -P "$PORT" -o BatchMode=yes "$@"; }
+
+REF="origin/feat/jira-pod-release-1"; CLEAN=0
+for a in "$@"; do case "$a" in --clean) CLEAN=1;; *) REF="$a";; esac; done
+
+declare -a PHASES
+T0=$(date +%s); TP=$T0
+phase() { local now; now=$(date +%s); PHASES+=("$1=$((now - TP))s"); TP=$now; }
+fmt() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
+log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+
+# 1. worktree at the requested commit
+[ -d "$WT/.git" ] || [ -f "$WT/.git" ] || git -C "$SRC" worktree add --detach "$WT" HEAD >/dev/null
+git -C "$WT" fetch --quiet origin
+if git -C "$WT" rev-parse --verify --quiet "origin/$REF^{commit}" >/dev/null; then REF="origin/$REF"; fi
+SHA="$(git -C "$WT" rev-parse --verify "$REF^{commit}")"
+SHORT="${SHA:0:12}"
+SUBJECT="$(git -C "$WT" log -1 --format=%s "$SHA")"
+git -C "$WT" checkout --quiet --detach "$SHA"
+log "commit $SHORT  $SUBJECT"
+phase checkout
+
+# 2. dependencies only when the lockfile changed
+LOCK_NOW="$(shasum -a 256 "$WT/package-lock.json" | cut -d' ' -f1)"
+LOCK_MARK="$WT/.keiko-loop-lock"
+if [ ! -d "$WT/node_modules" ] || [ "$(cat "$LOCK_MARK" 2>/dev/null || true)" != "$LOCK_NOW" ]; then
+  log "npm ci (lockfile changed or first run)"
+  heavy win-npm-ci bash -c 'cd "$1" && npm ci --no-audit --no-fund --loglevel=error' _ "$WT"
+  echo "$LOCK_NOW" > "$LOCK_MARK"
+fi
+phase deps
+
+# 3. build, then pack without the release gates (CI is the arbiter; the loop only needs the artifact)
+log "build"
+heavy win-build bash -c '
+  set -euo pipefail
+  cd "$1"
+  [ "$2" = 1 ] && npm run --silent clean
+  npm run --silent build
+  npm run --silent prepare:bin
+  npm run --silent build:ui
+  npm run --silent prune:package-build-artifacts
+  npm run --silent prune:package-native-optionals
+' _ "$WT" "$CLEAN"
+phase build
+
+log "npm pack"
+OUT="<packs-dir>"; mkdir -p "$OUT"
+TGZ_SRC="$(heavy win-pack bash -c 'cd "$1" && npm pack --ignore-scripts --silent --pack-destination "$2" | tail -1' _ "$WT" "$OUT")"
+TGZ="$OUT/$SHORT.tgz"
+mv -f "$OUT/$TGZ_SRC" "$TGZ"
+TGZ_SHA="$(shasum -a 256 "$TGZ" | cut -d' ' -f1)"
+find "$OUT" -name '*.tgz' ! -name "$SHORT.tgz" -mtime +1 -delete
+phase pack
+
+# 4. guest up?
+if [ "$(utmctl status "$VM" 2>/dev/null)" != "started" ]; then
+  log "starting guest $VM"
+  utmctl start "$VM" >/dev/null
+fi
+for _ in $(seq 1 60); do ssh_g hostname >/dev/null 2>&1 && break; sleep 5; done
+ssh_g hostname >/dev/null 2>&1 || { echo "guest not reachable over 127.0.0.1:$PORT" >&2; exit 1; }
+phase guest
+
+# 5. ship + install
+log "copy $(du -h "$TGZ" | cut -f1) into the guest"
+ssh_g 'New-Item -ItemType Directory -Force -Path C:\keiko\dev, C:\ProgramData\keiko-setup | Out-Null' >/dev/null
+scp_g "$TGZ" "$GUEST_USER@127.0.0.1:C:/keiko/dev/$SHORT.tgz"
+scp_g "$HOME_DIR/guest/keiko-dev-install.ps1" "$HOME_DIR/guest/keiko-dev-start.cmd" "$HOME_DIR/guest/open-browser.cmd" \
+  "$GUEST_USER@127.0.0.1:C:/ProgramData/keiko-setup/"
+phase ship
+log "install in the guest (x64 Node)"
+ssh_g "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ProgramData\\keiko-setup\\keiko-dev-install.ps1 -Id $SHORT" | tail -2
+phase install
+
+# 6. start in the interactive session
+log "start (keiko start --start-timeout 240)"
+ssh_g "Remove-Item C:\\ProgramData\\keiko-setup\\dev-start.log -ErrorAction SilentlyContinue
+schtasks /create /tn KeikoDevStart /tr \"C:\\ProgramData\\keiko-setup\\keiko-dev-start.cmd $SHORT\" /sc once /st 23:59 /it /ru $GUEST_USER /f | Out-Null
+schtasks /run /tn KeikoDevStart | Out-Null" >/dev/null
+for _ in $(seq 1 60); do
+  R="$(ssh_g 'if (Test-Path C:\ProgramData\keiko-setup\dev-start.log) { Get-Content C:\ProgramData\keiko-setup\dev-start.log -Raw }' 2>/dev/null || true)"
+  case "$R" in *exit=*) break;; esac; sleep 5
+done
+case "$R" in *"exit=0"*) ;; *) echo "start failed:"; echo "$R" | tail -6; exit 2;; esac
+phase start
+
+# 7. browser (Edge policy values keep the first-run overlay away)
+ssh_g 'reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG_DWORD /d 1 /f | Out-Null
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v BrowserSignin /t REG_DWORD /d 0 /f | Out-Null
+taskkill /F /IM msedge.exe 2>$null | Out-Null' >/dev/null || true
+ssh_g "schtasks /create /tn KeikoDevBrowser /tr \"C:\\ProgramData\\keiko-setup\\open-browser.cmd http://127.0.0.1:1983/\" /sc once /st 23:59 /it /ru $GUEST_USER /f | Out-Null; schtasks /run /tn KeikoDevBrowser | Out-Null" >/dev/null
+phase browser
+
+# 8. what actually runs in the guest
+VERIFY="$(ssh_g '$h = curl.exe -s -m 30 http://127.0.0.1:1983/api/health | ConvertFrom-Json
+$pidx = (Get-NetTCPConnection -LocalPort 1983 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
+$cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$pidx").CommandLine
+"health=$($h.status) version=$($h.version) launchId=$($h.launchId) readiness=$($h.diagnostics.readiness)"
+"listener=$cmd"')"
+phase verify
+
+END=$(date +%s)
+echo
+echo "commit      $SHA"
+echo "subject     $SUBJECT"
+echo "tarball     $SHORT.tgz  sha256 $TGZ_SHA"
+echo "$VERIFY" | sed 's/^/guest       /'
+case "$VERIFY" in *"\\keiko\\dev\\$SHORT\\"*) echo "guest       listener runs from the install of $SHORT";; *) echo "guest       WARNING: listener is not the install of $SHORT"; exit 3;; esac
+echo "phases      ${PHASES[*]}"
+echo "elapsed     $(fmt $((END - T0)))"
+```
+
+### H. `keiko-dev-install.ps1` (guest)
+
+```powershell
+# Installs a packed Keiko build (C:\keiko\dev\<Id>.tgz) into its own directory,
+# after stopping any earlier dev install. Keeps the new and the previous install only.
+param([Parameter(Mandatory = $true)][string]$Id)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$root = 'C:\keiko\dev'
+$env:Path = 'C:\tools\node-x64;' + $env:Path
+Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+  $cli = Join-Path $_.FullName 'node_modules\@oscharko-dev\keiko\dist\cli\index.js'
+  if (Test-Path $cli) { & node $cli stop 2>&1 | Out-Null }
+}
+Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:\tools\node-*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+$pkg = Join-Path $root "$Id\node_modules\@oscharko-dev\keiko"
+if (Test-Path (Join-Path $root $Id)) { Remove-Item -Recurse -Force (Join-Path $root $Id) }
+New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+# The packed tarball bundles every dependency, so extracting it is the whole install; `npm install`
+# of the same file needed 11 minutes in this guest, `tar` needs about 20 seconds.
+& tar.exe -xzf (Join-Path $root "$Id.tgz") -C $pkg --strip-components=1
+if ($LASTEXITCODE -ne 0) { throw "tar failed ($LASTEXITCODE)" }
+if (-not (Test-Path (Join-Path $pkg 'dist\cli\index.js'))) { throw 'dist\cli\index.js missing after extraction' }
+Set-Content -Path (Join-Path $root 'current.txt') -Value $Id -Encoding ascii
+Get-ChildItem $root -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip 2 | Remove-Item -Recurse -Force
+Get-ChildItem $root -Filter *.tgz | Sort-Object LastWriteTime -Descending | Select-Object -Skip 2 | Remove-Item -Force
+"installed $Id"
+```
+
+### I. `keiko-dev-start.cmd` (guest)
+
+```bat
+@echo off
+rem Starts the dev install %1 in the interactive session (a scheduled task starts in System32, which breaks `keiko start`).
+cd /d "%USERPROFILE%"
+set PATH=C:\tools\node-x64;%PATH%
+set OUT=C:\ProgramData\keiko-setup\dev-start.log
+node "C:\keiko\dev\%1\node_modules\@oscharko-dev\keiko\dist\cli\index.js" start --start-timeout 240 > "%OUT%" 2>&1
+echo exit=%ERRORLEVEL% >> "%OUT%"
+```
+
+### J. `open-browser.cmd` (guest)
+
+```bat
+@echo off
+rem Opens the default browser (Edge) on the local Keiko URL in the interactive session.
+start "" "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --new-window --no-first-run --hide-crash-restore-bubble %1
+```
+
+### K. `keiko-mac-dev` (host)
+
+```bash
+#!/bin/bash
+# keiko-mac-dev [up|stop|status] [<branch|commit>]
+# One dedicated checkout that follows origin/feat/jira-pod-release-1 (detached at the fetched commit).
+# `up` (default) updates it, installs dependencies only when the lockfile changed, builds it and starts
+# Keiko with `npm run dev:start` on a loopback port. `stop` stops that instance; leave none running.
+set -euo pipefail
+
+CO="${KEIKO_MAC_CHECKOUT:-<mac-checkout>}"
+SRC="${KEIKO_SRC_REPO:-<repo-checkout>}"
+STATE="${KEIKO_MAC_STATE:-<mac-state-dir>}"
+PORT="${KEIKO_MAC_PORT:-1990}"
+CMD="${1:-up}"; shift || true
+REF="${1:-origin/feat/jira-pod-release-1}"
+
+HEAVY="${KEIKO_HEAVY_SLOT:-<machine-guard>/heavy-slot.sh}"
+heavy() { local what="$1"; shift; if [ -x "$HEAVY" ]; then "$HEAVY" "4374-$what" -- "$@"; else "$@"; fi; }
+fmt() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
+log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+export KEIKO_STATE_DIR="$STATE" KEIKO_DEV_UI_PORT="$PORT" KEIKO_OS_KEYCHAIN=off
+
+case "$CMD" in
+  stop)
+    [ -d "$CO" ] && (cd "$CO" && npm run --silent dev:stop) || true
+    echo "stopped (port $PORT)"; exit 0;;
+  status)
+    curl -s -m 5 "http://127.0.0.1:$PORT/api/health" || echo "not running on 127.0.0.1:$PORT"; echo; exit 0;;
+  up) ;;
+  *) echo "usage: keiko-mac-dev [up|stop|status] [<branch|commit>]" >&2; exit 64;;
+esac
+
+T0=$(date +%s)
+mkdir -p "$STATE"
+[ -e "$CO/.git" ] || git -C "$SRC" worktree add --detach "$CO" HEAD >/dev/null
+git -C "$CO" fetch --quiet origin
+if git -C "$CO" rev-parse --verify --quiet "origin/$REF^{commit}" >/dev/null; then REF="origin/$REF"; fi
+SHA="$(git -C "$CO" rev-parse --verify "$REF^{commit}")"
+SUBJECT="$(git -C "$CO" log -1 --format=%s "$SHA")"
+(cd "$CO" && npm run --silent dev:stop >/dev/null 2>&1 || true)
+git -C "$CO" checkout --quiet --detach "$SHA"
+log "commit ${SHA:0:12}  $SUBJECT"
+
+LOCK_NOW="$(shasum -a 256 "$CO/package-lock.json" | cut -d' ' -f1)"
+if [ ! -d "$CO/node_modules" ] || [ "$(cat "$CO/.keiko-loop-lock" 2>/dev/null || true)" != "$LOCK_NOW" ]; then
+  log "npm ci (lockfile changed or first run)"
+  heavy mac-npm-ci bash -c 'cd "$1" && npm ci --no-audit --no-fund --loglevel=error' _ "$CO"
+  echo "$LOCK_NOW" > "$CO/.keiko-loop-lock"
+fi
+
+log "build and start on 127.0.0.1:$PORT (npm run dev:start -- --no-open)"
+heavy mac-build-start bash -c 'cd "$1" && npm run --silent dev:start -- --no-open' _ "$CO"
+
+HEALTH="$(curl -s -m 20 "http://127.0.0.1:$PORT/api/health")"
+echo
+echo "commit      $SHA"
+echo "subject     $SUBJECT"
+echo "health      $HEALTH"
+echo "url         http://127.0.0.1:$PORT  (state $STATE)"
+echo "elapsed     $(fmt $(($(date +%s) - T0)))"
+echo "stop with   keiko-mac-dev stop"
 ```
