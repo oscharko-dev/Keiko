@@ -1071,7 +1071,7 @@ describe("first use of an unchecked model on Send (#4351)", () => {
       void view.result.current.sendMessage();
       await Promise.resolve();
     });
-    expect(start.mock.calls.length).toBe(calls);
+    expect(start.mock.calls).toHaveLength(calls);
   });
 
   it("starts no check for a model that already answered", async () => {
