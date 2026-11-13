@@ -103,6 +103,24 @@ describe("review runtime Activity Log proofs", () => {
     });
   });
 
+  // R4130-057: a stop whose shutdown failed still closes the instance and says so at `warn`.
+  it("proves review.run.runtime-stopped for a stop that failed", () => {
+    const capture = captureActivityLog();
+    logReviewRuntimeStopped(capture.sink, CORRELATION, {
+      instanceId: INSTANCE,
+      trigger: "idle",
+      idleDurationMs: 300_000,
+      runCount: 1,
+      stopFailed: true,
+    });
+    const [event] = capture.events;
+    if (event === undefined) throw new TypeError("expected one event");
+    expect(event.level).toBe("warn");
+    expect(
+      expectActivityLogProof("review.run.runtime-stopped.line", formatActivityLogProofLine(event)),
+    ).toMatchObject({ trigger: "idle", stopFailed: true });
+  });
+
   it("proves review.run.runtime-stopped for an instance that could not start (R4130-019)", () => {
     const line = onlyLine((sink) => {
       logReviewRuntimeStopped(sink, CORRELATION, {

@@ -42060,6 +42060,12 @@
               "required": false
             },
             {
+              "name": "stopFailed",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "trigger",
               "type": "string",
               "dataClass": "closed-enum",

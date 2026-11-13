@@ -249,17 +249,18 @@ describe("createReviewRuntimeService", () => {
     // The quarantined instance ends on its own idle stop, armed when its review ended.
     expect(timers).toHaveLength(2);
     timers[0]?.();
+    // The stop line is the last step of the stop, so it is the condition to wait for.
     await vi.waitFor(() => {
-      expect(subject.instanceCount()).toBe(1);
+      const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
+      expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
     });
+    expect(subject.instanceCount()).toBe(1);
     expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
-    const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
-    expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
   });
 
   // #4130: every part of a review in several parts is its own session, and on macOS each session
   // leaves its instance holding a recovery-required run. The third part within the idle period
-  // found the quarantine taken and was refused (`quarantine-limit`), so the review settled
+  // found the quarantine taken and was refused (start failure `quarantine-limit`), so the review settled
   // `incomplete/model-failed` with its remaining parts unreviewed (development iteration 7, first
   // review, part 4 of 4). The older quarantined instance is now ended to make room.
   it("ends the quarantined instance when the serving one has to be set aside too", async () => {
@@ -301,9 +302,10 @@ describe("createReviewRuntimeService", () => {
     expect(stopped.every((event) => event.extra?.runCount === 1)).toBe(true);
   });
 
-  // The bound of #4136 stays: a quarantined instance that cannot be ended is never joined by a
-  // second one. The session is refused, and both the refusal and its cause are recorded.
-  it("refuses a session when the quarantined instance cannot be ended", async () => {
+  // R4130-057: a shutdown that threw left its instance out of both maps and open, so nothing
+  // could ever close it, and every second session was refused. An instance taken out of the maps
+  // is now always closed and always gets its stop line.
+  it("closes a quarantined instance whose shutdown fails and keeps serving sessions", async () => {
     const { repo, base, head } = headRepository();
     const stuck: ScriptedReviewRun = {
       reports: [],
@@ -318,30 +320,73 @@ describe("createReviewRuntimeService", () => {
       },
     };
     const { subject, compose, observed, log } = service(stuck, { diagnostics });
+    const instanceCounts: number[] = [];
 
-    await subject.run(request(repo, base, head));
-    await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
-    const third = await subject.run(
-      request(repo, base, head, { reviewRunId: "review-run-3", correlationId: "corr-review-3" }),
+    for (const part of [1, 2, 3, 4, 5]) {
+      const result = await subject.run(
+        request(repo, base, head, {
+          reviewRunId: `review-run-${String(part)}`,
+          correlationId: `corr-part-${String(part)}`,
+        }),
+      );
+      expect(result, `part ${String(part)}`).toMatchObject({ ok: true, outcome: "completed" });
+      instanceCounts.push(subject.instanceCount());
+    }
+
+    expect(instanceCounts).toEqual([1, 2, 2, 2, 2]);
+    expect(compose).toHaveBeenCalledTimes(5);
+    // Every composition but the serving and the quarantined one is closed: none is left untracked.
+    expect(observed).toMatchObject({ shutdowns: 3, closes: 3 });
+    const stopped = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(stopped.map((event) => event.correlationId)).toEqual([
+      "corr-part-3",
+      "corr-part-4",
+      "corr-part-5",
+    ]);
+    for (const event of stopped) {
+      expect(event).toMatchObject({
+        level: "warn",
+        extra: { trigger: "quarantine-replaced", stopFailed: true, runCount: 1 },
+      });
+    }
+    expect(records.map((record) => [record.operation, record.correlationId])).toEqual([
+      ["review.run.runtime-stop", "corr-part-3"],
+      ["review.run.runtime-stop", "corr-part-4"],
+      ["review.run.runtime-stop", "corr-part-5"],
+    ]);
+  });
+
+  // R4130-057, the idle path: the timer's stop had no handler for a rejected shutdown, and the
+  // instance stayed open and untracked.
+  it("closes an idle instance whose shutdown fails", async () => {
+    const { repo, base, head } = headRepository();
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (record): void => {
+        records.push(record);
+      },
+    };
+    const { subject, observed, log, timers } = service(
+      { reports: [], shutdownFails: true },
+      { diagnostics },
     );
 
-    expect(third).toEqual({ ok: false, reason: "runtime-unavailable", rules: "absent" });
-    expect(compose).toHaveBeenCalledTimes(2);
-    expect(observed.starts).toHaveLength(2);
-    expect(subject.instanceCount()).toBeLessThanOrEqual(2);
-    // R4130-019: the refusal names its cause under the review's correlation.
-    const failed = log.events.filter((event) => event.op === "review.run.runtime-stopped");
-    expect(failed).toHaveLength(1);
-    expect(failed[0]).toMatchObject({
-      correlationId: "corr-review-3",
+    await subject.run(request(repo, base, head));
+    expect(subject.instanceCount()).toBe(1);
+    timers.at(-1)?.();
+
+    await vi.waitFor(() => {
+      expect(log.events.some((event) => event.op === "review.run.runtime-stopped")).toBe(true);
+    });
+    expect(subject.instanceCount()).toBe(0);
+    expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
+    const stopped = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0]).toMatchObject({
       level: "warn",
-      extra: { trigger: "start-failed", startFailure: "quarantine-limit", runCount: 0 },
+      extra: { trigger: "idle", stopFailed: true, runCount: 1 },
     });
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      operation: "review.run.runtime-stop",
-      correlationId: "corr-review-3",
-    });
+    expect(records.map((record) => record.operation)).toEqual(["review.run.runtime-stop"]);
   });
 
   it("unbinds the review worktree after the run and reuses the instance for the next review", async () => {
@@ -375,12 +420,13 @@ describe("createReviewRuntimeService", () => {
     await subject.run(request(repo, base, head));
     expect(timers).toHaveLength(1);
     timers[0]?.();
+    // The stop line is the last step of the stop, so it is the condition to wait for.
     await vi.waitFor(() => {
-      expect(subject.instanceCount()).toBe(0);
+      const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
+      expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
     });
+    expect(subject.instanceCount()).toBe(0);
     expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
-    const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
-    expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
   });
 
   // Security review of #4135, finding 5: an idle stop that fell while a later review held the

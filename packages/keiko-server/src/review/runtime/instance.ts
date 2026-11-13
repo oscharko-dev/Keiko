@@ -275,19 +275,11 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
 
   /**
    * Ends the repository's quarantined instance now, because the serving instance needs its place
-   * (#4130). It serves no review, so this is its idle stop brought forward. `false` when it could
-   * not be ended; the failure is on the diagnostic sink.
+   * (#4130). It serves no review, so this is its idle stop brought forward.
    */
-  public async endQuarantined(key: string, correlationId?: string): Promise<boolean> {
+  public async endQuarantined(key: string, correlationId?: string): Promise<void> {
     const live = this.quarantined.get(key);
-    if (live === undefined) return true;
-    try {
-      await this.stopLive(key, live, "quarantine-replaced", correlationId);
-      return true;
-    } catch (error) {
-      reportReviewFailure("review.run.runtime-stop", correlationId, error, this.deps.diagnostics);
-      return false;
-    }
+    if (live !== undefined) await this.stopLive(key, live, "quarantine-replaced", correlationId);
   }
 
   public start(
@@ -327,7 +319,7 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
   }
 
   /** Names why no instance could be started, under the review's correlation (R4130-019). */
-  public startFailed(
+  private startFailed(
     instanceId: string,
     startFailure: ReviewRuntimeStartFailure,
     correlationId: string | undefined,
@@ -364,6 +356,10 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
    * Stops exactly `live`. The repository's serving instance is left alone while a review holds or
    * is about to use it; a quarantined instance serves no review, so a review of the same
    * repository never defers its idle stop.
+   *
+   * An instance this method takes out of the maps is always closed and always gets its stop line
+   * (R4130-057): a shutdown that failed left it open, untracked and unreachable for any later stop.
+   * This method never rejects, so the idle timer's call needs no handler.
    */
   private async stopLive(
     key: string,
@@ -378,14 +374,35 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
       this.instances.delete(key);
     }
     this.clearTimer(live.timer);
-    await live.composition.controlPlane.orchestrator.shutdown(correlationId);
-    live.composition.close();
+    const ended = await this.endComposition(live, correlationId);
     logReviewRuntimeStopped(this.deps.activityLog, correlationId, {
       instanceId: live.composition.instanceId,
       trigger,
       idleDurationMs: this.now() - live.idleSince,
       runCount: live.runCount,
+      ...(ended ? {} : { stopFailed: true }),
     });
+  }
+
+  /**
+   * Shuts the instance's orchestrator down and closes its composition. A failure of either goes to
+   * the diagnostic sink and never keeps the other from running. `false` when one of them failed.
+   */
+  private async endComposition(live: LiveInstance, correlationId?: string): Promise<boolean> {
+    let ended = true;
+    try {
+      await live.composition.controlPlane.orchestrator.shutdown(correlationId);
+    } catch (error) {
+      ended = false;
+      reportReviewFailure("review.run.runtime-stop", correlationId, error, this.deps.diagnostics);
+    }
+    try {
+      live.composition.close();
+    } catch (error) {
+      ended = false;
+      reportReviewFailure("review.run.runtime-stop", correlationId, error, this.deps.diagnostics);
+    }
+    return ended;
   }
 
   private clearTimer(handle: unknown): void {
@@ -415,12 +432,7 @@ interface ServiceContext {
     placement?: ReviewRuntimePlacement,
   ): LiveInstance | undefined;
   quarantine(key: string, live: LiveInstance): void;
-  endQuarantined(key: string, correlationId?: string): Promise<boolean>;
-  startFailed(
-    instanceId: string,
-    startFailure: ReviewRuntimeStartFailure,
-    correlationId: string | undefined,
-  ): void;
+  endQuarantined(key: string, correlationId?: string): Promise<void>;
   arm(key: string, live: LiveInstance): void;
 }
 
@@ -434,8 +446,8 @@ interface ServiceContext {
  * At most one quarantined instance per repository. When one is already quarantined, it is ended
  * first (#4130): every part of a review in several parts is its own session, so on macOS each part
  * leaves its instance holding such a run, and the third part within the idle period found the
- * place taken and was refused. Only a quarantined instance that cannot be ended still refuses the
- * session (`undefined`, `quarantine-limit`), so the instances never grow without bound.
+ * place taken and was refused. Ending an instance always closes it, also when its shutdown failed
+ * (R4130-057), so the place is free afterwards and the instances never grow without bound.
  */
 async function acquireInstance(
   context: ServiceContext,
@@ -445,10 +457,7 @@ async function acquireInstance(
   const live = context.instances.get(key);
   if (live === undefined) return context.start(key, request.correlationId);
   if (!live.composition.controlPlane.orchestrator.hasLiveRun()) return live;
-  if (!(await context.endQuarantined(key, request.correlationId))) {
-    context.startFailed(randomUUID(), "quarantine-limit", request.correlationId);
-    return undefined;
-  }
+  await context.endQuarantined(key, request.correlationId);
   context.quarantine(key, live);
   return context.start(key, request.correlationId, "beside-quarantined");
 }

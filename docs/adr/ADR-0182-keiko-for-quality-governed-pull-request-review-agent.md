@@ -377,13 +377,14 @@ own session, and on macOS every session leaves its instance holding such a run, 
 fresh instance per part. Before this rule a part that needed a second quarantined instance was
 refused. In the first review of development iteration 7 (58 files in four parts) the fourth part
 started 4 minutes after the second had ended, found the second part's instance still quarantined
-and was refused, and the review lost that part. Only a quarantined instance that cannot be ended
-still refuses the session as `runtime-unavailable` (`quarantine-limit`), with the failed stop on
-the diagnostic sink (`review.run.runtime-stop`): the first part's refusal settles the review
-`skipped/model-unavailable`, a later part's `incomplete/model-failed`.
+and was refused, and the review lost that part. Ending an instance always closes its composition
+and always writes its stop line, also when its shutdown or the close fails (R4130-057): the line
+then carries `stopFailed` at `warn` and the error goes to the diagnostic sink as
+`review.run.runtime-stop`. The place is therefore free afterwards, no session is refused for it, and
+no composition is left open and untracked. The same holds for the idle stop and the shutdown.
 Every instance that cannot be started is logged as `review.run.runtime-stopped` with trigger
 `start-failed` under the review's correlation and a closed `startFailure`: the coding runtime's
-activation reason, `host-unavailable`, or `quarantine-limit` (R4130-019). An out-of-range
+activation reason or `host-unavailable` (R4130-019). An out-of-range
 `KEIKO_REVIEW_RUN_MAX_*` value leaves the review runtime and the review run service uncomposed
 with one `review.runtime.budget` diagnostic; it never fails server start (R4130-018).
 The

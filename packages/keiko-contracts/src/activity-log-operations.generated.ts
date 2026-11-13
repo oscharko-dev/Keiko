@@ -34950,8 +34950,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "loopback-unavailable",
           "runtime-unqualified",
           "host-unavailable",
-          "quarantine-limit",
         ],
+      },
+      stopFailed: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
       },
     },
     causal: "correlation",

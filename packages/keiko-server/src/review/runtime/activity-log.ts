@@ -39,8 +39,7 @@ export type ReviewRuntimeStopTrigger = (typeof REVIEW_RUNTIME_STOP_TRIGGERS)[num
 
 /**
  * Why a review instance could not be started (R4130-019): the activation's closed unavailable
- * reason, a runtime host that could not be created, or a repository whose one quarantined instance
- * could not be ended to make room for the next (`quarantine-limit`).
+ * reason, or a runtime host that could not be created.
  */
 const REVIEW_RUNTIME_START_FAILURES = [
   "runtime-disabled",
@@ -53,7 +52,6 @@ const REVIEW_RUNTIME_START_FAILURES = [
   "loopback-unavailable",
   "runtime-unqualified",
   "host-unavailable",
-  "quarantine-limit",
 ] as const;
 export type ReviewRuntimeStartFailure = (typeof REVIEW_RUNTIME_START_FAILURES)[number];
 
@@ -128,6 +126,9 @@ const REVIEW_RUN_RUNTIME_STOPPED = defineActivityLogOperation({
       required: false,
       values: REVIEW_RUNTIME_START_FAILURES,
     },
+    // R4130-057: present (`true`) only when the instance's shutdown or the close of its composition
+    // failed. The instance is closed and untracked all the same; the diagnostic names the error.
+    stopFailed: { type: "boolean", dataClass: "closed-enum", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -372,6 +373,8 @@ export interface ReviewRuntimeStoppedLine {
   readonly runCount: number;
   /** Only with `start-failed`: why the instance could not be started. */
   readonly startFailure?: ReviewRuntimeStartFailure | undefined;
+  /** Only `true`: the shutdown or the close of the composition failed (R4130-057). */
+  readonly stopFailed?: true | undefined;
 }
 
 export function logReviewRuntimeStopped(
@@ -383,7 +386,7 @@ export function logReviewRuntimeStopped(
     activityLogEvent(
       REVIEW_RUN_RUNTIME_STOPPED,
       {
-        level: line.trigger === "start-failed" ? "warn" : "info",
+        level: line.trigger === "start-failed" || line.stopFailed === true ? "warn" : "info",
         correlationId: correlationIdOrUnknown(correlationId),
       },
       {
@@ -392,6 +395,7 @@ export function logReviewRuntimeStopped(
         idleDurationMs: Math.max(0, Math.round(line.idleDurationMs)),
         runCount: line.runCount,
         ...(line.startFailure === undefined ? {} : { startFailure: line.startFailure }),
+        ...(line.stopFailed === true ? { stopFailed: true } : {}),
       },
     ),
   );
