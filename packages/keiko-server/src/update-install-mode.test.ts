@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { CommandDeniedError, DEFAULT_SANDBOX_POLICY, runCommand } from "@oscharko-dev/keiko-tools";
 import { portablePackageLayout } from "./update-portable-windows-generation.js";
 import {
@@ -804,4 +811,40 @@ it("a resolved canonical macOS target never erases a forbidden original alias", 
   expect(
     registeredMacMode("/Applications/Other.app", "valid", "/Applications/Keiko.app").status,
   ).toBe("unsupported");
+});
+
+// #4351: the Windows release layout refused its local-volume check at every start and the refusal
+// went to no sink, so the ledger counted three `port-unwired` losses and every support export read
+// "degraded (activity-log-loss)". Every server-side detection reaches the process sink instead.
+describe("the Windows local-volume refusal of the portable install-mode detection", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetServerLogger();
+    resetActivityLogLossCountersForTests();
+  });
+
+  it("is written to the process Activity Log and never lost as an unwired port", () => {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    resetActivityLogLossCountersForTests();
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const installRoot = "/Users/alice/Applications/Keiko";
+    const mode = detectUpdateInstallMode(
+      facts({
+        packageRoot: `${installRoot}/app`,
+        packageManagerHint: undefined,
+        installScope: "local",
+        portableStateDir: PORTABLE_STATE_DIR,
+      }),
+      {},
+      fakeFiles({
+        [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
+      }),
+    );
+    expect(mode).toMatchObject({ status: "unsupported", reason: "portable-registration-invalid" });
+    expect(activityLogLossCounters()["port-unwired"]).toBe(0);
+    expect(logs.events.map((event) => event.op)).toContain(
+      "security.windows-local-volume.refused",
+    );
+  });
 });
