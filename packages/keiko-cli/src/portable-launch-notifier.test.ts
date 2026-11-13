@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { createCliSecurityLogSink } from "./security-log.js";
 import {
+  type DetachedWindowsBoxOptions,
   notifyPortableLaunchFailure,
   notifyPortableSetupStarted,
   PORTABLE_SETUP_NOTICE,
+  PORTABLE_SETUP_NOTICE_DE,
   runDetachedAlert,
   runDetachedWindowsAlert,
   runDetachedWindowsBox,
@@ -396,7 +398,8 @@ describe("notifyPortableSetupStarted", () => {
       level: "info",
       extra: { surface: "portable-setup-notice" },
     });
-    expect(JSON.stringify(events[0])).not.toContain("being set up");
+    // neither a text nor the language enters the line
+    expect(JSON.stringify(events[0])).not.toMatch(/being set up|eingerichtet|"de"|"en"/u);
   });
 
   it.each([
@@ -466,26 +469,60 @@ describe("notifyPortableSetupStarted", () => {
 });
 
 describe("runDetachedWindowsBox as a setup notice", () => {
-  it("shows an information box titled Keiko, never the could-not-start error box", () => {
-    const commands: string[] = [];
+  const spawned = (): {
+    readonly args: (readonly string[])[];
+    readonly options: DetachedWindowsBoxOptions;
+  } => {
+    const args: (readonly string[])[] = [];
+    const options: DetachedWindowsBoxOptions = {
+      spawnFn: (_command, argv) => {
+        args.push(argv);
+        return { on: (): void => undefined, unref: (): void => undefined };
+      },
+      identityCheck: () => true,
+      existsAsFile: () => true,
+    };
+    return { args, options };
+  };
+
+  it("shows an information box titled Keiko whose text follows the Windows display language", () => {
+    const { args, options } = spawned();
 
     runDetachedWindowsBox(
-      "setup-notice",
-      PORTABLE_SETUP_NOTICE,
+      { kind: "setup-notice" },
       { SystemRoot: String.raw`D:\Windows` },
-      {
-        spawnFn: (_command, args) => {
-          commands.push(args.at(-1) ?? "");
-          return { on: (): void => undefined, unref: (): void => undefined };
-        },
-        identityCheck: () => true,
-        existsAsFile: () => true,
-      },
+      options,
     );
 
-    expect(commands).toEqual([
+    expect(PORTABLE_SETUP_NOTICE_DE).toBe(
+      "Keiko wird eingerichtet. Der erste Start kann einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist.",
+    );
+    // The command reaches PowerShell as one plain argument after -Command: Node hands Windows a
+    // UTF-16 command line, so the umlaut arrives intact. No -EncodedCommand is involved.
+    expect(args).toHaveLength(1);
+    expect(args[0]?.at(-2)).toBe("-Command");
+    expect(args[0]).not.toContain("-EncodedCommand");
+    expect(args[0]?.at(-1)).toBe(
       "Add-Type -AssemblyName PresentationFramework; " +
-        `[System.Windows.MessageBox]::Show('${PORTABLE_SETUP_NOTICE}', 'Keiko', 'OK', 'Information') | Out-Null`,
-    ]);
+        "$keikoText = if ((Get-UICulture).TwoLetterISOLanguageName -eq 'de') " +
+        `{ '${PORTABLE_SETUP_NOTICE_DE}' } else { '${PORTABLE_SETUP_NOTICE}' }; ` +
+        "[System.Windows.MessageBox]::Show($keikoText, 'Keiko', 'OK', 'Information') | Out-Null",
+    );
+  });
+
+  it("leaves the failure alert's command exactly as it was", () => {
+    const { args, options } = spawned();
+
+    runDetachedWindowsBox(
+      { kind: "failure", message: "can't start\r\nbecause" },
+      { SystemRoot: String.raw`D:\Windows` },
+      options,
+    );
+
+    expect(args[0]?.at(-1)).toBe(
+      "Add-Type -AssemblyName PresentationFramework; " +
+        "[System.Windows.MessageBox]::Show('can''t startbecause', " +
+        "'Keiko could not start', 'OK', 'Error') | Out-Null",
+    );
   });
 });

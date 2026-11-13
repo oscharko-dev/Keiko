@@ -26,7 +26,8 @@ aborted.
 
 Not a failure: on the first installation, a double-click shows one information box titled `Keiko`
 ("Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is
-ready."). The launcher has no window of its own, and the setup copies and attests the whole
+ready."; with a German Windows display language: "Keiko wird eingerichtet. Der erste Start kann
+einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist."). The launcher has no window of its own, and the setup copies and attests the whole
 installation while the virus scanner reads every new file, so minutes can pass before the browser
 opens. The box appears once, when that first installation begins; it does not appear for a start of
 the installed copy or for an upgrade, and it never updates. A setup that fails afterwards shows one

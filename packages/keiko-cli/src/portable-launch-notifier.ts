@@ -93,17 +93,16 @@ const SETUP_NOTICE_REQUESTED_OPERATION = defineActivityLogOperation({
 });
 
 /** What the alert is for; it selects the box's title and icon and the surface a failure names. */
-export type WindowsAlertKind = "failure" | "setup-notice";
+type WindowsAlertKind = WindowsBox["kind"];
 
 const WINDOWS_ALERT_SURFACE = {
   failure: "portable-failure-alert",
   "setup-notice": "portable-setup-notice",
 } as const;
 
-const WINDOWS_ALERT_BOX = {
-  failure: "'Keiko could not start', 'OK', 'Error'",
-  "setup-notice": "'Keiko', 'OK', 'Information'",
-} as const;
+/** What a box shows: the failure alert carries the recorded reason, the setup notice its fixed text. */
+export type WindowsBox =
+  { readonly kind: "failure"; readonly message: string } | { readonly kind: "setup-notice" };
 
 /**
  * Shown once when the Windows launcher begins a first installation under a double-click. It names
@@ -112,6 +111,14 @@ const WINDOWS_ALERT_BOX = {
  */
 export const PORTABLE_SETUP_NOTICE =
   "Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is ready.";
+
+/**
+ * The same notice for a German Windows display language, in the product catalog's informal
+ * address. It is the first thing Keiko shows a person, and the alert path has no catalog: the box's
+ * own command picks one of these two fixed texts.
+ */
+export const PORTABLE_SETUP_NOTICE_DE =
+  "Keiko wird eingerichtet. Der erste Start kann einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist.";
 
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
 export type PortableSetupNoticeFn = (env: EnvSource) => void;
@@ -193,11 +200,26 @@ function powershellSingleQuoted(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function windowsAlertCommand(message: string, kind: WindowsAlertKind): string {
-  const text = powershellSingleQuoted(displayableAlertMessage(message));
+function windowsAlertCommand(box: WindowsBox): string {
+  if (box.kind === "setup-notice") return windowsSetupNoticeCommand();
+  const text = powershellSingleQuoted(displayableAlertMessage(box.message));
   return [
     "Add-Type -AssemblyName PresentationFramework",
-    `[System.Windows.MessageBox]::Show(${text}, ${WINDOWS_ALERT_BOX[kind]}) | Out-Null`,
+    `[System.Windows.MessageBox]::Show(${text}, 'Keiko could not start', 'OK', 'Error') | Out-Null`,
+  ].join("; ");
+}
+
+// The text follows the Windows display language, decided inside the box's own command: no second
+// process and no caller data. Both texts are fixed constants and pass the same quoting; the command
+// is one plain -Command argument, which Node hands to Windows as UTF-16, so the umlaut arrives
+// intact.
+function windowsSetupNoticeCommand(): string {
+  const german = powershellSingleQuoted(displayableAlertMessage(PORTABLE_SETUP_NOTICE_DE));
+  const english = powershellSingleQuoted(displayableAlertMessage(PORTABLE_SETUP_NOTICE));
+  return [
+    "Add-Type -AssemblyName PresentationFramework",
+    `$keikoText = if ((Get-UICulture).TwoLetterISOLanguageName -eq 'de') { ${german} } else { ${english} }`,
+    "[System.Windows.MessageBox]::Show($keikoText, 'Keiko', 'OK', 'Information') | Out-Null",
   ].join("; ");
 }
 
@@ -210,7 +232,7 @@ export function runDetachedWindowsAlert(
   securityLogSink?: SecurityLogSink,
   existsAsFile?: WindowsBinaryExistsCheck,
 ): void {
-  runDetachedWindowsBox("failure", message, env, {
+  runDetachedWindowsBox({ kind: "failure", message }, env, {
     spawnFn,
     reportAlertFailure,
     identityCheck,
@@ -232,18 +254,17 @@ export interface DetachedWindowsBoxOptions {
  * Exported for its direct tests; production callers go through the two notify functions.
  */
 export function runDetachedWindowsBox(
-  kind: WindowsAlertKind,
-  message: string,
+  box: WindowsBox,
   env: EnvSource,
   options: DetachedWindowsBoxOptions = {},
 ): void {
   const reportAlertFailure = options.reportAlertFailure ?? defaultAlertFailureReport;
-  const log: WindowsAlertLog = { kind, sink: options.securityLogSink };
+  const log: WindowsAlertLog = { kind: box.kind, sink: options.securityLogSink };
   const system = resolveWindowsAlertSystem(env, options.identityCheck, options.existsAsFile, log);
-  const child = spawnWindowsAlertChild(message, env, system, options.spawnFn ?? spawn, log);
+  const child = spawnWindowsAlertChild(box, env, system, options.spawnFn ?? spawn, log);
   child.on("error", (error) => {
     logWindowsAlertSpawnFailure(error, log);
-    reportAlertFailure(kind === "failure" ? ALERT_FAILURE_LINE : NOTICE_FAILURE_LINE);
+    reportAlertFailure(box.kind === "failure" ? ALERT_FAILURE_LINE : NOTICE_FAILURE_LINE);
   });
   child.unref();
 }
@@ -279,7 +300,7 @@ function resolveWindowsAlertSystem(
 }
 
 function spawnWindowsAlertChild(
-  message: string,
+  box: WindowsBox,
   env: EnvSource,
   system: WindowsAlertSystem,
   spawnFn: DetachedAlertSpawn,
@@ -298,7 +319,7 @@ function spawnWindowsAlertChild(
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        windowsAlertCommand(message, log.kind),
+        windowsAlertCommand(box),
       ],
       {
         detached: true,
@@ -425,14 +446,15 @@ function showWindowsSetupNotice(
 ): void {
   const runWindowsAlert =
     deps.runWindowsAlert ??
-    ((alertMessage: string, notifyEnv: EnvSource): void => {
-      runDetachedWindowsBox("setup-notice", alertMessage, notifyEnv, {
+    ((_english: string, notifyEnv: EnvSource): void => {
+      runDetachedWindowsBox({ kind: "setup-notice" }, notifyEnv, {
         reportAlertFailure,
         identityCheck: deps.windowsSystemDirectoryIdentity,
         securityLogSink: deps.securityLogSink,
         existsAsFile: deps.windowsBinaryExists,
       });
     });
+  // The seam receives the English text; the real box picks the language itself (see its command).
   runWindowsAlert(PORTABLE_SETUP_NOTICE, env);
 }
 
