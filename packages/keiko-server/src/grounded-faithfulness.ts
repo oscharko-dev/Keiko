@@ -1107,6 +1107,11 @@ export interface EntailmentOptions {
   // (surfaced as the entailment-unavailable marker) — so a slow model degrades the answer instead of
   // stacking `maxClaims` sequential judge timeouts into minutes of tail latency.
   readonly maxTotalMs: number;
+  // Lines of evidence the turn itself produced beside the cited excerpts, such as the figures Keiko
+  // computed for a Jira report. The lines that share figures or words with a claim are one more
+  // item the judge reads for that claim; it is never an exemption: a claim that neither the cited
+  // excerpts nor these lines support stays unsupported (#4355). Absent for a turn without one.
+  readonly supplementalEvidence?: readonly string[];
 }
 
 // One claim may cite several evidence items ("[1, 7, 8]"). `maxExcerptChars` bounds EACH item (the
@@ -1397,6 +1402,8 @@ interface EntailmentClaimEvidence {
   readonly excerptText: string | undefined;
   // Characters of the text that are rendering frame rather than excerpt (numeric blocks only).
   readonly framingChars?: number;
+  // Turn-owned evidence that no citation named: it is judged but never reported as a cited path.
+  readonly supplemental?: true;
 }
 
 interface EntailmentClaim {
@@ -1476,7 +1483,11 @@ function judgeableClaimFor(
   return {
     claimText: claim.claimText,
     excerptText,
-    citedPaths: [...new Set(claim.evidence.map((item) => item.citedPath))],
+    citedPaths: [
+      ...new Set(
+        claim.evidence.filter((item) => item.supplemental !== true).map((item) => item.citedPath),
+      ),
+    ],
   };
 }
 
@@ -1522,6 +1533,73 @@ interface ScheduledClaim {
   readonly verdict: Promise<EntailmentVerdict>;
 }
 
+const EVIDENCE_TOKEN = /[\p{L}\p{N}][\p{L}\p{N}_-]*/gu;
+
+function evidenceTokens(text: string): ReadonlySet<string> {
+  return new Set(
+    (text.toLowerCase().match(EVIDENCE_TOKEN) ?? []).filter(
+      (token) => token.length >= 3 || /\d/u.test(token),
+    ),
+  );
+}
+
+/** The turn's evidence lines that share a figure or a word with the claim, best match first. */
+function supplementalLinesFor(
+  claimText: string,
+  lines: readonly string[],
+  maxChars: number,
+): string | undefined {
+  const claim = evidenceTokens(claimText);
+  const scored = lines
+    .map((line, index) => ({
+      line,
+      index,
+      score: [...evidenceTokens(line)].reduce(
+        (sum, token) => sum + (claim.has(token) ? (/\d/u.test(token) ? 3 : 1) : 0),
+        0,
+      ),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const picked: string[] = [];
+  let size = 0;
+  for (const { line } of scored) {
+    if (size + line.length + 1 > maxChars) continue;
+    picked.push(line);
+    size += line.length + 1;
+  }
+  return picked.length === 0 ? undefined : picked.join("\n");
+}
+
+/** The turn's own evidence joins every claim whose citations leave room for one more item. */
+function withSupplementalEvidence(
+  claims: readonly EntailmentClaim[],
+  lines: readonly string[] | undefined,
+  maxChars: number,
+): readonly EntailmentClaim[] {
+  if (lines === undefined || lines.length === 0) return claims;
+  // A claim whose own cited excerpt could not be read stays undecidable: the turn's evidence never
+  // stands in for evidence that is missing.
+  const joinable = (claim: EntailmentClaim): boolean =>
+    claim.hidesProse !== true &&
+    claim.evidence.length < ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM &&
+    claim.evidence.every((entry) => (entry.excerptText?.trim().length ?? 0) > 0);
+  return claims.map((claim) => {
+    const text = joinable(claim)
+      ? supplementalLinesFor(claim.claimText, lines, maxChars)
+      : undefined;
+    return text === undefined
+      ? claim
+      : {
+          ...claim,
+          evidence: [
+            ...claim.evidence,
+            { citedPath: "turn-evidence", excerptText: text, supplemental: true as const },
+          ],
+        };
+  });
+}
+
 function scheduleClaimJudges(
   claims: readonly EntailmentClaim[],
   judge: EntailmentJudge,
@@ -1563,7 +1641,11 @@ async function reconcileEntailmentClaims(
   const unentailed: UnentailedClaim[] = [];
   const hiddenProseClaims = claims.filter((claim) => claim.hidesProse === true).length;
   const scheduledClaims = scheduleClaimJudges(
-    claims.filter((claim) => claim.hidesProse !== true),
+    withSupplementalEvidence(
+      claims.filter((claim) => claim.hidesProse !== true),
+      options.supplementalEvidence,
+      options.maxExcerptChars,
+    ),
     judge,
     boundedOptions,
     budget.signal,
