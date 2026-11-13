@@ -708,13 +708,32 @@ request without credentials both answer 401 with `X-AREQUESTID`, `X-AUSERNAME: a
 `{"message":"Client must be authenticated to access this resource.","status-code":401,"sub-code":-1}`,
 and no `X-Authentication-Denied-Reason`. The marker is therefore: Jira's request id plus the
 anonymous-user marker and no denial reason is `jira`; a denial reason is `denied`; everything else
-is `foreign`. Not observed (it would have needed a personal access token created and revoked in a
-laboratory session owned by another run): the exact bytes of a separately revoked or expired token,
-and the captcha header on a live Jira; those two rest on the documented behavior. Only `jira`
+is `foreign`. A personal access token created for a throwaway test and then revoked through Jira's own token
+endpoint, and another one whose expiry was moved into the past by editing the expiry column of its
+own row in the laboratory database (a day-long token cannot age in a test), both answer exactly as
+an unknown token does: 401 with `X-AREQUESTID`, `X-AUSERNAME: anonymous`,
+`WWW-Authenticate: OAuth realm=…`, a JSON body with exactly the keys `message`, `status-code` and
+`sub-code`, and no `X-Authentication-Denied-Reason` and no `X-Seraph-LoginReason`; a valid token
+answers 200 with `X-Seraph-LoginReason: OK` and a named `X-AUSERNAME`. So the marker holds for all
+three kinds of dead token. Not observed: the captcha header on a live Jira (it would have meant
+locking a laboratory account), so `denied` rests on Jira's documented behavior and is pinned as a
+fixture only. Only `jira`
 discards a credential, on the identity route and for the identity read alike. `denied` and
 `foreign` leave the credential and the Pod untouched and return the unconfirmed outcome, so the
 person reads the retry wording, never an expired token. An anonymous 200 that Jira served and the
 transport rewrites into a 401 keeps the three markers, so it stays Jira-authored.
+
+The explicit connection check in Settings follows the same rule. On Data Center a 401 that Jira
+did not author ends the verification as the closed status `auth-unverified` ("could not confirm"):
+the Pod keeps its previous status, generation and compatibility facts, nothing is invalidated, and
+replacing the token stays possible at any time; only a Jira-authored 401 is the definitive
+`auth-failed`. The shared identity read has its own bounded deadline
+(`JIRA_IDENTITY_PROBE_DEADLINE_MS`) and a count of the callers waiting on it: a caller that
+cancels or runs out of time leaves it to the others, and it is torn down only when every caller has
+given up. A waiter's `probe-shared` line carries the cause the shared read ended with and a
+parent correlation to the caller that started it. In the Confluence comment lane an unconfirmed
+401 stops the run like the item path; a confirmed one is a missing permission and degrades to a
+page without comments, exactly like a 403.
 
 The decision reaches every read, not only the write executor. The single status-to-reason owner for
 reads (`failureReasonForResponse`, used by the live search, the sync adapters and the report read)
