@@ -54,6 +54,8 @@ interface Options {
   readonly withheldEstimateTypes?: readonly string[];
   /** The create screens of these types lack the field, but the hits still carry their values. */
   readonly screenLacksTypes?: readonly string[];
+  /** The instance's own name of the native time estimate in its field list (absent: not listed). */
+  readonly timeEstimateName?: string;
   /** Every create-metadata request answers with this HTTP status (the metadata read fails). */
   readonly createMetaStatus?: number;
   /** The fields a withheld hit leaves out (default: the configured field and time tracking). */
@@ -89,11 +91,29 @@ function transport(
     return rewritten(url, await base(request), options);
   };
 }
+function withTimeEstimateName(
+  answer: Extract<AtlassianHttpBodyResult, { readonly kind: "response" }>,
+  name: string,
+): AtlassianHttpBodyResult {
+  const items = JSON.parse(answer.bodyText) as Record<string, unknown>[];
+  items.push({
+    id: "timeoriginalestimate",
+    name,
+    schema: { type: "number", system: "timeoriginalestimate" },
+  });
+  return response(items);
+}
 function rewritten(
   url: URL,
   answer: AtlassianHttpBodyResult,
   options: Options,
 ): AtlassianHttpBodyResult {
+  if (
+    url.pathname.endsWith("/field") &&
+    options.timeEstimateName !== undefined &&
+    answer.kind === "response"
+  )
+    return withTimeEstimateName(answer, options.timeEstimateName);
   if (url.pathname.includes("/createmeta/") && options.createMetaStatus !== undefined)
     return { ...response({}), status: options.createMetaStatus };
   if (answer.kind !== "response" || answer.status !== 200) return answer;
@@ -751,7 +771,7 @@ describe("the estimate figure never says zero while another estimate field holds
       unestimated: withoutPoints.length - heldBy(withoutPoints, "seconds"),
     });
     expect(figures(h)).toContain(
-      'The configured estimation field "Story Points" holds no value on any issue in this scope, so "Original time estimate" is used instead; per-type estimate applicability is not evaluated for "Original time estimate".',
+      'The configured estimation field "Story Points" holds no value on any issue in this scope, so "Original time estimate (timeoriginalestimate)" is used instead; per-type estimate applicability is not evaluated for "Original time estimate (timeoriginalestimate)".',
     );
     expect(figures(h)).toContain("Estimate in hours (total;done;remaining):");
     expect(h.activity.at(-1)).toMatchObject({ estimateSource: "time-tracking-fallback" });
@@ -795,7 +815,7 @@ describe("the estimate figure never says zero while another estimate field holds
     expect(scopeOf(h)).not.toHaveProperty("estimateConfigured");
     expect(estimateOf(h)).toMatchObject({ total: sumOf(project, "points") });
     expect(figures(h)).toContain(
-      '"Original time estimate" also holds a value on 42 issues, 53.5 hours in total; the figures above are "Story Points".',
+      '"Original time estimate (timeoriginalestimate)" also holds a value on 42 issues, 53.5 hours in total; the figures above are "Story Points".',
     );
   });
 
@@ -896,5 +916,53 @@ describe("the estimate figure never says zero while another estimate field holds
     expect(note).not.toContain("---");
     // The Markdown export keeps the name but escapes it like every Jira text there.
     expect(exportJiraReport(h.stored, "markdown").content).toContain('"\\*bold\\*');
+  });
+
+  it.each([
+    ["Original Estimate", "an English instance"],
+    ["Ursprüngliche Schätzung", "a German instance"],
+  ])("names the time estimate by the instance's own name, %s (%s)", async (name) => {
+    const fallback = await run({ issues: withoutPoints, timeEstimateName: name });
+    expect(scopeOf(fallback)).toMatchObject({
+      estimateSource: "time-tracking-fallback",
+      estimateFieldName: name,
+    });
+    const note = figures(fallback).find((line) =>
+      line.startsWith("The configured estimation field"),
+    );
+    expect(note).toContain(
+      `so "${name}" is used instead; per-type estimate applicability is not evaluated for "${name}".`,
+    );
+    expect(figures(fallback)).toContain(`Estimate field: "${name}"`);
+    if (fallback.stored === undefined) throw new Error("Missing report");
+    // Every sink uses the same name: the Markdown export, the Jira comment, never a label of ours.
+    for (const text of [
+      exportJiraReport(fallback.stored, "markdown").content,
+      jiraReportCommentText(fallback.stored),
+    ]) {
+      expect(text).toContain(`"${name}"`);
+      expect(text).not.toContain("Original time estimate");
+    }
+    // Accompanied by the other field: the same name beside the configured Story Points.
+    const both = await run({ issues: project, timeEstimateName: name });
+    expect(scopeOf(both)).toMatchObject({
+      estimateAlso: { fieldId: "timeoriginalestimate", fieldName: name },
+    });
+    expect(figures(both)).toContain(
+      `"${name}" also holds a value on 42 issues, 53.5 hours in total; the figures above are "Story Points".`,
+    );
+    expect(JSON.stringify(fallback.activity)).not.toContain(name);
+  });
+
+  it("falls back to our English label with the field id beside it when the instance gives no name", async () => {
+    const h = await run({ issues: withoutPoints });
+    expect(scopeOf(h)).toMatchObject({
+      estimateFieldName: "Original time estimate (timeoriginalestimate)",
+    });
+    expect(figures(h)).toContain('Estimate field: "Original time estimate (timeoriginalestimate)"');
+    if (h.stored === undefined) throw new Error("Missing report");
+    expect(jiraReportCommentText(h.stored)).toContain(
+      '"Original time estimate timeoriginalestimate"',
+    );
   });
 });
