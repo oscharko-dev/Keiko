@@ -70,7 +70,9 @@ import {
 // #3591: raised from 30s so an unconfigured provider's default already tolerates the field
 // customer's slow LiteLLM/vLLM proxy instead of relying solely on the gateway's own silence/budget
 // floors (resilience.ts) to compensate for a too-short default.
-const DEFAULT_TIMEOUT_MS = 120_000;
+/** The provider timeout a configuration gets when it names none: the conversational default. */
+export const DEFAULT_PROVIDER_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = DEFAULT_PROVIDER_TIMEOUT_MS;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 // KEIKO-0572: exported so gateway-setup.ts / grounded-retrieval-eval.ts can import the shared

@@ -1014,6 +1014,27 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   an identical payload is ambiguous and refused. Chat's split persisted tool pairs may be restored
   only against the exact saved group, including its original prose and parallel calls; fitting old
   tool observations does not change the response identity. Runtime echoes never populate this state.
+- **Detected, not configured (amended 2026-11-14, #4351).** A deployment with no `reasoningHistory`
+  or `reasoningContinuation` setting is not left to fail. When a provider answers a tool-turn
+  continuation with an HTTP 400 that the gateway attributes to no other cause (not a context
+  overflow, an admission refusal, an exhausted output budget, an empty answer or a rejected tool-call
+  shape), and the current turn holds the retained reasoning of every assistant message, the gateway
+  retries that one model request once with the current turn's reasoning restored. The retry is the
+  closed steered-repair reason `reasoning-restore-repair` on `gateway.retry.scheduled`, counted
+  against attempts and spend like every discarded attempt; it repeats the model request only (a tool
+  that already ran is never executed again, a write is never replayed), and a stream is retried only
+  before its first chunk. Only a successful retry teaches anything: the deployment is then remembered
+  as wanting its reasoning back and behaves as `"current-turn"` from the next request on. A second
+  rejection surfaces the original error and learns nothing. To make the retry possible, the reasoning
+  of a tool-calling response is now kept for the CURRENT turn even without a setting (same caps, TTL,
+  redaction and binding to the trusted session, provider configuration and generation, memory only);
+  a request of a new turn drops it, and it is kept beyond the turn only for a configured or learned
+  deployment. The learned fact is one content-free flag per deployment fingerprint, lives with the
+  gateway instance (so it is gone with a configuration generation change), is never persisted and is
+  never logged beyond the closed `gateway.reasoning-history` state `learned`. An explicit provider
+  setting always wins. Settings > Models shows the fact as "Returns its reasoning on tool turns:
+  detected". This replaces the earlier statement that providers omit prior reasoning unless a setting
+  says otherwise; no alias name decides anything.
   Provider prompt admission and the token counter include the same reasoning projection as transport.
   Same-generation context-window refinements join state, including in-flight writers; actual
   generation changes start independent state (old admitted references stay pinned). Missing required

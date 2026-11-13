@@ -220,8 +220,8 @@
     "de": "Zugriff auf die Zwischenablage fehlgeschlagen. Wähle die Berichtdetails aus und kopiere sie manuell."
   },
   "settings.models.checkingReadiness": {
-    "en": "Checking {mode} readiness...",
-    "de": "Bereitschaftsprüfung läuft ({mode})…"
+    "en": "Checking {mode} readiness... A model that is slow to load can take several minutes; the check keeps running until it answers.",
+    "de": "Bereitschaftsprüfung läuft ({mode})… Ein Modell, das langsam lädt, braucht mehrere Minuten; die Prüfung läuft weiter, bis es antwortet."
   },
   "settings.models.readinessModeDeep": {
     "en": "deep",
@@ -322,6 +322,10 @@
   "settings.models.capabilitySummary": {
     "en": "tools {tools} · structured {structured} · {costClass}/{latencyClass}",
     "de": "Tools {tools} · strukturiert {structured} · {costClass}/{latencyClass}"
+  },
+  "settings.models.reasoningOnToolTurnsDetected": {
+    "en": "Returns its reasoning on tool turns: detected",
+    "de": "Liefert sein Reasoning bei Tool-Runden zurück: erkannt"
   },
   "settings.models.yes": {
     "en": "yes",

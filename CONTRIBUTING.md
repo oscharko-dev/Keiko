@@ -255,6 +255,23 @@ state. `model-verification-pending` means that a configuration-owned check of th
 running; `tool-calling-unverified` records an unknown tool capability without dispatching a probe.
 See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
+The tool-calling check runs in two steps (#4351, owner decision 2026-11-13): first as production works, the
+tool offered and no forced `tool_choice`; only a model that called no tool is asked once more with the
+forced named call. It ends in one of six closed outcomes (`called-unforced`, `called-only-forced`,
+`forced-refused`, `no-call`, `tools-refused`, `inconclusive`), recorded as `toolCallingOutcome` on the
+existing readiness completion lines and told in plain words in the tool-calling evidence of
+Settings > Models. A forced call the provider refuses (a thinking mode answers HTTP 400 to
+`tool_choice`) is never a verdict that the model cannot call tools. A check a person starts in
+Settings waits at least the interactive silence floor for a slow model when the provider timeout is the
+conversational default (a timeout an operator set stays as configured); it is bounded, cancelled when
+the request closes, shown on the start line as `chatProbeTimeoutMs` and announced as still running; no
+conversation turn is affected. Every tool definition leaves the gateway as a plain object schema (no
+`oneOf`, `anyOf`, `allOf`, `enum`, `const` or `not` at the top level; the alternatives are named in the
+description), and Keiko's own validation keeps using the original schema; a hermetic walk over every
+registered tool definition fails on any other construct. The meter read of a Chat's context window
+sends its probe only for a model a person has used. Operator procedure:
+[`docs/troubleshooting/model-does-not-call-tools.md`](docs/troubleshooting/model-does-not-call-tools.md).
+
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
 `resultScopeDigest`, and connected/local-knowledge/Git-change source counts. Send and PATCH
@@ -759,6 +776,14 @@ protocol state. `gateway.reasoning-history` records only closed state and counts
 enters evidence, logs, history exports or repository files. Identifying echoed reasoning requires
 the runtime to preserve part types: reasoning already relabelled as ordinary text cannot be identified from
 the wire body. ADR-0137 D8 records the pinned runtime's interrupted-reasoning qualification limit.
+A deployment with no such setting is detected, not configured (#4351): an unattributed HTTP 400 on a
+tool-turn continuation is answered once with the current turn's retained reasoning restored (the closed
+retry reason `reasoning-restore-repair`; the model request only, never a re-run tool, never a replayed
+write; a stream only before its first chunk); only a successful retry marks the deployment as wanting
+its reasoning back, held in memory for the gateway instance (gone with a generation change, never
+persisted or logged beyond the closed state `learned`) and shown in Settings > Models; a second
+rejection surfaces the original error; an explicit setting always wins; the current turn's reasoning
+is kept in memory for this purpose only and dropped when the turn ends.
 
 For the authenticated native Coding path, the separate explicit provider policy
 `reasoningContinuation: "required-with-tools"` uses the existing native session as the sole

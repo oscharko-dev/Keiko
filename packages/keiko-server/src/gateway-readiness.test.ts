@@ -1,22 +1,29 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createDefaultChatCapability,
+  DEFAULT_PROVIDER_TIMEOUT_MS,
+  type GatewayConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   EMBEDDING_EVIDENCE_PATTERN,
+  EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
   TESTED_CONTEXT_TOKENS_PATTERN,
   WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
   handleGatewayReadiness,
   initializeConfiguredEmbeddingReadiness,
   longContextTokens,
+  probeProvider,
   runGatewayReadiness,
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
@@ -1233,6 +1240,140 @@ describe("gateway readiness route", () => {
     expect(toolProbe?.status).toBe("unsupported");
     expect(config.capabilities?.[0]?.toolCalling).toBe(false);
     expect(observedToolCalling).toBe(false);
+    deps.store.close();
+  });
+
+  // #4351 (owner decision 2): a provider that refuses the forced call (a thinking mode answers 400 to
+  // tool_choice) never gets the model marked unable to call tools, and the report says so plainly.
+  it("reports a refused forced call as not a verdict and leaves the durable capability alone", async () => {
+    const config = gatewayConfig("reasoning-test");
+    let observedToolCalling: boolean | undefined;
+    const fetchImpl = vi.fn((_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        tool_choice?: unknown;
+      };
+      return Promise.resolve(
+        body.tool_choice === undefined
+          ? jsonResponse(chatPayload("I would answer in words."))
+          : jsonResponse({ error: { message: "tool_choice not allowed" } }, 400),
+      );
+    }) as unknown as typeof fetch;
+    const logged: { readonly op: string; readonly extra?: Record<string, unknown> }[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      activityLog: {
+        write: (event): void => {
+          logged.push(event as unknown as (typeof logged)[number]);
+        },
+      },
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: (_modelId, fields) => {
+          observedToolCalling = fields.toolCalling;
+        },
+        clearVerifiedCapability: () => false,
+      },
+    };
+    const report = await runGatewayReadiness(
+      { modelId: "reasoning-test", options: { probes: ["tool_calling"] } },
+      deps,
+      "corr-forced-refused",
+      "settings",
+    );
+    // The closed outcome is on the existing completion line, body-free.
+    expect(logged.find((event) => event.op === "gateway.readiness.completed")?.extra).toMatchObject(
+      { toolCallingOutcome: "forced-refused" },
+    );
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    const probe = report.probes.find((entry) => entry.name === "tool_calling");
+    expect(probe).toMatchObject({ status: "failed", toolCallingOutcome: "forced-refused" });
+    expect(probe?.evidence).toContain("not a verdict");
+    expect(observedToolCalling).toBeUndefined();
+    deps.store.close();
+  });
+
+  // #4351 (item D): a check a person started in Settings waits for a model that may still be loading.
+  it("lifts only the conversational default of an explicit check, never a timeout an operator set", () => {
+    const [base] = gatewayConfig().providers;
+    if (base === undefined) throw new TypeError("expected a provider");
+    const provider = { ...base, timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS };
+    expect(probeProvider(provider, "chat", undefined).timeoutMs).toBe(
+      EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
+    );
+    // A deliberately configured timeout, shorter or longer, is kept exactly.
+    expect(probeProvider({ ...provider, timeoutMs: 30_000 }, "chat", undefined).timeoutMs).toBe(
+      30_000,
+    );
+    expect(probeProvider({ ...provider, timeoutMs: 900_000 }, "chat", undefined).timeoutMs).toBe(
+      900_000,
+    );
+  });
+
+  it("records the bound an explicit check really ran under on its start line", async () => {
+    const logged: { readonly op: string; readonly extra?: Record<string, unknown> }[] = [];
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("upstream gone")) as typeof fetch;
+    const configured = gatewayConfig();
+    const defaulted: GatewayConfig = {
+      ...configured,
+      providers: configured.providers.map((provider) => ({
+        ...provider,
+        timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
+      })),
+    };
+    const deps: UiHandlerDeps = {
+      ...depsWith(defaulted, fetchImpl),
+      activityLog: {
+        write: (event): void => {
+          logged.push(event as unknown as (typeof logged)[number]);
+        },
+      },
+    };
+    await runGatewayReadiness({ options: { probes: ["chat"] } }, deps, "corr-explicit", "settings");
+    expect(logged.find((event) => event.op === "gateway.readiness.started")?.extra).toMatchObject({
+      chatProbeTimeoutMs: EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
+    });
+    deps.store.close();
+  });
+
+  it("ends an explicit check when the person leaves: closing the request cancels it", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const fetchImpl = ((_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        seenSignal = init?.signal ?? undefined;
+        seenSignal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      })) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const res = Object.assign(new EventEmitter(), {
+      writableEnded: false,
+      destroyed: false,
+      closed: false,
+    }) as unknown as RouteContext["res"];
+    // A request whose body arrived completely, as a real one does once it has been read.
+    const req = Object.assign(
+      Readable.from([Buffer.from(JSON.stringify({ options: { probes: ["chat"] } }), "utf8")]),
+      { complete: true },
+    ) as unknown as IncomingMessage;
+    const running = handleGatewayReadiness({ ...ctx({}), req, res }, deps).catch(
+      (error: unknown) => error,
+    );
+    await vi.waitFor(() => {
+      expect(seenSignal).toBeDefined();
+    });
+    expect(seenSignal?.aborted).toBe(false);
+    res.emit("close");
+    // The check settles because the person left; it did not wait out its bound.
+    await running;
+    expect(seenSignal?.aborted).toBe(true);
     deps.store.close();
   });
 

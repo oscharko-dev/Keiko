@@ -39,7 +39,11 @@ import { logChatScopeUpdate } from "./chat-scope-update-log.js";
 import { jiraChatPatchFields, jiraChatUpdateOptions } from "./atlassian/jiraChatBindingPatch.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
+import {
+  currentConversationReadinessObservation,
+  currentGatewayConfig,
+  currentGroundingLimits,
+} from "./deps.js";
 import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   UiStoreError,
@@ -1668,11 +1672,13 @@ async function contextStatusWithMeasuredWindow(
   correlationId: string | undefined,
 ): Promise<ChatContextStatusWire> {
   const status = readChatContextStatus(deps, chatId, modelId, correlationId);
-  const probe = discoverAssumedContextWindow(
-    deps,
-    modelId,
-    correlationId ?? UNKNOWN_CORRELATION_ID,
-  );
+  // A read never loads a model (#4351): the probe is a streamed completion, so it runs only for a
+  // model a person has used (a positive current observation). Any other model reports the window it
+  // is planned with and dispatches nothing; the first overflow still teaches the real window.
+  const probe =
+    currentConversationReadinessObservation(deps, modelId) === true
+      ? discoverAssumedContextWindow(deps, modelId, correlationId ?? UNKNOWN_CORRELATION_ID)
+      : Promise.resolve();
   // A provider-reported window is re-checked in the background; only an assumed one delays.
   if (status.contextWindowAssumed === true) {
     let timer: NodeJS.Timeout | undefined;

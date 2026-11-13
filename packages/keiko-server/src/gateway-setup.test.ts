@@ -8987,6 +8987,10 @@ describe("handleGatewaySetup", () => {
         "gpt-oss-120b",
         "phi-4",
         "gpt-oss-120b",
+        // The tool-calling check offers the tool first and, for a model that called none, asks once
+        // more with the forced call (#4351): the plain answers here make it a fourth request each.
+        "phi-4",
+        "gpt-oss-120b",
       ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "phi-4",
@@ -9068,6 +9072,8 @@ describe("handleGatewaySetup", () => {
         // A generic incompatible-model 400 is terminal; only an explicit optional-field
         // rejection may trigger the compatibility retry.
         "gpt-5.4",
+        "gpt-5.4",
+        // A model that called no tool in the offered request is asked once more, forced (#4351).
         "gpt-5.4",
       ]);
       expect(seen.every((call) => call.firstRole === "system")).toBe(true);
@@ -9691,9 +9697,10 @@ describe("handleGatewaySetup", () => {
         expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
         expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(!explicit);
         // #4351: explicitly named deployments are all verified; a discovered listing verifies only
-        // the model that becomes the default (three requests), the rest enters as listed.
+        // the model that becomes the default (four requests: the tool-calling check asks a second,
+        // forced time of a model that called no tool), the rest enters as listed.
         const verified = verifiedLiteLlmModels(explicit);
-        expect(seenModels).toEqual([...verified, ...verified, ...verified]);
+        expect(seenModels).toEqual([...verified, ...verified, ...verified, ...verified]);
         expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual(
           verified,
         );
@@ -10123,9 +10130,11 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      // #4351: only the model that becomes the default is verified (three requests); the second
-      // listed chat model is configured as listed and unverified and receives none.
+      // #4351: only the model that becomes the default is verified (four requests: the tool-calling
+      // check asks a second, forced time of a model that called no tool); the second listed chat
+      // model is configured as listed and unverified and receives none.
       expect(seenModels).toEqual([
+        "example-chat-model-large",
         "example-chat-model-large",
         "example-chat-model-large",
         "example-chat-model-large",

@@ -23948,6 +23948,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolCallingOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "called-unforced",
+          "called-only-forced",
+          "forced-refused",
+          "no-call",
+          "tools-refused",
+          "inconclusive",
+        ],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -24375,6 +24388,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolCallingOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "called-unforced",
+          "called-only-forced",
+          "forced-refused",
+          "no-call",
+          "tools-refused",
+          "inconclusive",
+        ],
+      },
       embeddingModelIdDigest: {
         type: "string",
         dataClass: "digest",
@@ -24573,7 +24599,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["restored", "retained", "unavailable", "capacity-exceeded"],
+        values: ["restored", "retained", "unavailable", "capacity-exceeded", "learned"],
       },
       messageCount: {
         type: "integer",
@@ -24874,7 +24900,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["retryable-error", "output-exhausted-repair", "empty-answer-repair"],
+        values: [
+          "retryable-error",
+          "output-exhausted-repair",
+          "empty-answer-repair",
+          "reasoning-restore-repair",
+        ],
       },
       httpStatus: {
         type: "integer",

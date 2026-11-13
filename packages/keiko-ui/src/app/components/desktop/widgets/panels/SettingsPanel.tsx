@@ -787,6 +787,13 @@ function ReadinessReportCopyButton({
   );
 }
 
+// What Keiko learned about this deployment (#4351), shown so an operator can see it.
+function ReasoningOnToolTurnsNote({ model }: { readonly model: ModelCapability }): ReactNode {
+  const t = useTranslate();
+  if (model.reasoningOnToolTurns !== "detected") return null;
+  return <div className="ml-url mono">{t("settings.models.reasoningOnToolTurnsDetected")}</div>;
+}
+
 function ReadinessSummary({
   model,
   state,
@@ -974,6 +981,7 @@ function ModelCapabilityRow({
             latencyClass: model.latencyClass,
           })}
         </div>
+        <ReasoningOnToolTurnsNote model={model} />
         <ReadinessSummary
           model={model}
           state={readiness}

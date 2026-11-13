@@ -22,6 +22,7 @@ import {
   ContextOverflowError,
   GatewayError,
   ProviderEmptyAnswerError,
+  ProviderError,
   ProviderOutputExhaustedError,
   TransportError,
   UnknownModelError,
@@ -67,6 +68,7 @@ import {
   type RetryLogLabels,
   type RetryPolicy,
   type RetryRepairReason,
+  type SteeredAnswerRepairReason,
   type RetryResume,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
@@ -780,13 +782,42 @@ function callRetryConfig(
   outageWindowMs: number,
   elapsedMs = 0,
   answerRepair?: GatewayCallRequest["answerRepair"],
+  restoreRepair?: (error: Error) => boolean,
 ): RetryConfig {
   const windowMs = outageWindowMs > 0 ? Math.max(1, outageWindowMs - elapsedMs) : 0;
   return {
     ...codingWorkbenchRetryConfig(provider, windowMs),
     jitterProviderCooldown: true,
-    ...(answerRepair === "steered" ? { repair: steeredAnswerRepair } : {}),
+    ...(answerRepair === "steered"
+      ? {
+          repair: (error: Error): RetryRepairReason | undefined =>
+            steeredAnswerRepair(error) ??
+            (restoreRepair?.(error) === true ? "reasoning-restore-repair" : undefined),
+        }
+      : {}),
   };
+}
+
+// The error a failed call surfaces: after a reasoning-restore retry, a second HTTP 400 surfaces the
+// ORIGINAL rejection, not the retried attempt's (#4351). Any other failure surfaces as itself.
+function surfacedFailure(state: OutputRepairState, error: unknown): unknown {
+  return state.restoreFailure !== undefined &&
+    error instanceof Error &&
+    isUnattributedRejection(error)
+    ? state.restoreFailure
+    : error;
+}
+
+// A request rejection the gateway attributes to no other known cause: a plain HTTP 400 that is not a
+// context overflow, an admission refusal, an exhausted output budget, an empty answer or a rejected
+// tool-call shape (each of those is its own error class with its own handling).
+function isUnattributedRejection(error: Error): boolean {
+  return (
+    error instanceof ProviderError &&
+    error.httpStatus === 400 &&
+    !(error instanceof ProviderOutputExhaustedError) &&
+    !(error instanceof ProviderEmptyAnswerError)
+  );
 }
 
 // The call's conversation with its observer (#3873 review): one per call, shared by its admission
@@ -979,12 +1010,14 @@ function streamStartupRetryConfig(
   state: PreparedStream,
   admission: () => CircuitBreakerAdmission,
   budget: { readonly remainingMs: number; readonly elapsedMs: number },
+  restoreRepair?: (error: Error) => boolean,
 ): RetryConfig {
   const config = callRetryConfig(
     state.route.provider,
     state.outageWindowMs,
     budget.elapsedMs,
     state.prepared.answerRepair,
+    restoreRepair,
   );
   const probeEndsCall = config.retryWindowMs === undefined;
   return {
@@ -999,7 +1032,7 @@ function streamStartupRetryConfig(
 // The one steered repair of an answer the model could not use (#3873, F17, F23): the correction the
 // retry loop granted and the failure the repaired attempt corrects.
 interface SteeredRepair {
-  readonly reason: RetryRepairReason;
+  readonly reason: SteeredCorrectionReason;
   readonly failure: Error;
 }
 
@@ -1020,6 +1053,9 @@ function claimCorrectionAdmission(state: CorrectionAdmission): boolean {
 // Shared by the buffered attempt state and the prepared stream, and read once the call settles.
 interface OutputRepairState {
   steered?: SteeredRepair | undefined;
+  // The rejection a reasoning-restore retry answers (#4351): the retried attempt's own failure never
+  // replaces it, so a second rejection surfaces this original error.
+  restoreFailure?: Error | undefined;
 }
 
 interface BufferedChatAttempt {
@@ -1058,8 +1094,11 @@ export const OUTPUT_EXHAUSTED_REPAIR_MESSAGE =
 export const EMPTY_ANSWER_REPAIR_MESSAGE =
   "Your previous answer ended after reasoning without a tool call or a final answer. Call the next tool now, or give the final answer; keep any reasoning to a few sentences.";
 
+// The repairs that send a correction; the reasoning restore (#4351) sends the same request again.
+type SteeredCorrectionReason = SteeredAnswerRepairReason;
+
 // The one correction each steered repair sends.
-const REPAIR_MESSAGES: Readonly<Record<RetryRepairReason, string>> = {
+const REPAIR_MESSAGES: Readonly<Record<SteeredCorrectionReason, string>> = {
   "output-exhausted-repair": OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
   "empty-answer-repair": EMPTY_ANSWER_REPAIR_MESSAGE,
 };
@@ -1068,7 +1107,7 @@ const REPAIR_MESSAGES: Readonly<Record<RetryRepairReason, string>> = {
 // one correction at a time, and never the failed answer's reasoning quoted back.
 function steeredRepairRequest(
   original: GatewayCallRequest,
-  reason: RetryRepairReason,
+  reason: SteeredCorrectionReason,
 ): GatewayCallRequest {
   return {
     ...original,
@@ -1378,6 +1417,8 @@ export class Gateway {
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly reasoningHistory: GatewayReasoningHistory;
+  // Rejections a reasoning-restore retry was granted for (#4351); read as the retried attempt prepares.
+  private readonly restoreGrants = new WeakSet<Error>();
   private readonly breakers = new Map<string, CircuitBreaker>();
   private readonly log: ModelGatewayLogSink;
   private readonly parentCorrelations = new Map<string, string>();
@@ -1404,6 +1445,45 @@ export class Gateway {
     this.onContextWindowReported = deps.onContextWindowReported;
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
     this.logConfigResolved();
+  }
+
+  // The retry's eligibility is decided where the rejection is seen (#4351): a plain, unattributed
+  // HTTP 400, on a deployment with no reasoning setting and nothing learned, whose current turn holds
+  // retained reasoning for every assistant message. Anything else keeps its own handling.
+  private reasoningRestoreRepair(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): (error: Error) => boolean {
+    return (error): boolean => {
+      const granted =
+        isUnattributedRejection(error) &&
+        this.reasoningHistory.canRestoreCurrentTurn(request, provider);
+      if (granted) this.restoreGrants.add(error);
+      return granted;
+    };
+  }
+
+  private restoredRequest(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): GatewayCallRequest {
+    return this.reasoningHistory.restoreCurrentTurn(request, provider);
+  }
+
+  // Only a retry that succeeded teaches anything: the deployment rejected the continuation without its
+  // reasoning and accepted it with it. A failed retry changes nothing.
+  private learnFromRestore(
+    state: OutputRepairState,
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): void {
+    if (state.restoreFailure !== undefined) this.reasoningHistory.learn(request, provider);
+  }
+
+  /** Whether Keiko learned that this deployment returns its reasoning on tool turns (#4351). */
+  learnedReasoningOnToolTurns(modelId: string): boolean {
+    const provider = this.providers.get(modelId);
+    return provider !== undefined && this.reasoningHistory.isLearned(provider);
   }
 
   private prepareRequest(
@@ -1518,18 +1598,23 @@ export class Gateway {
     try {
       result = await executeWithRetry(
         this.invokeBufferedAttempt.bind(this, attempt),
-        callRetryConfig(route.provider, this.outageWindowMs(request), 0, request.answerRepair),
+        callRetryConfig(
+          route.provider,
+          this.outageWindowMs(request),
+          0,
+          request.answerRepair,
+          this.reasoningRestoreRepair(request, route.provider),
+        ),
         this.clock,
         request.cancellationSignal,
         this.random,
         this.retryLogContext(route, ids, attempt.announcer),
       );
     } catch (error) {
-      attachOutputRepair(error, attempt.state);
-      this.settleFailedCall(ids, route, elapsed(), error);
-      throw error;
+      throw this.settleBufferedFailure(attempt.state, ids, route, elapsed(), error);
     }
     const forwardsReasoning = this.forwardsReasoning(request);
+    this.learnFromRestore(attempt.state, request, route.provider);
     this.reasoningHistory.remember(request, route.provider, result);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
@@ -1539,6 +1624,21 @@ export class Gateway {
       ),
       attempt.state.discarded,
     );
+  }
+
+  // A failed buffered call settles its evidence and returns the error the caller should see: after a
+  // reasoning-restore retry, a second rejection is the ORIGINAL one (#4351).
+  private settleBufferedFailure(
+    state: OutputRepairState,
+    ids: CallIds,
+    route: RoutedCall,
+    durationMs: number,
+    error: unknown,
+  ): unknown {
+    const surfaced = surfacedFailure(state, error);
+    attachOutputRepair(surfaced, state);
+    this.settleFailedCall(ids, route, durationMs, surfaced);
+    return surfaced;
   }
 
   private async invokeBufferedAttempt(
@@ -1575,6 +1675,12 @@ export class Gateway {
   private prepareBufferedAttempt(attempt: BufferedChatAttempt, previousError?: Error): void {
     attempt.state.repair = undefined;
     attempt.state.correctionPending = false;
+    if (previousError !== undefined && this.restoreGrants.has(previousError)) {
+      attempt.state.request = this.restoredRequest(attempt.originalRequest, attempt.route.provider);
+      attempt.state.restoreFailure = previousError;
+      attempt.state.correctionPending = true;
+      return;
+    }
     const granted = grantedRepair(attempt.originalRequest, previousError);
     if (granted !== undefined) {
       attempt.state.request = steeredRepairRequest(attempt.originalRequest, granted.reason);
@@ -1606,7 +1712,11 @@ export class Gateway {
     attempts.correctionPending = false;
     tallyDiscardedAttempt(attempts.discarded, previousError);
     const granted = grantedRepair(state.prepared, previousError);
-    if (granted !== undefined) {
+    if (previousError !== undefined && this.restoreGrants.has(previousError)) {
+      state.outputRepair.restoreFailure = previousError;
+      attempts.request = this.restoredRequest(state.prepared, state.route.provider);
+      attempts.correctionPending = true;
+    } else if (granted !== undefined) {
       state.outputRepair.steered = granted;
       attempts.request = steeredRepairRequest(state.prepared, granted.reason);
       attempts.correctionPending = true;
@@ -1751,8 +1861,9 @@ export class Gateway {
       settled = true;
     } catch (error) {
       settled = true;
-      attachOutputRepair(error, state.outputRepair);
-      this.failStream(ids, route, chunkCount, elapsed(), error);
+      const surfaced = surfacedFailure(state.outputRepair, error);
+      attachOutputRepair(surfaced, state.outputRepair);
+      this.failStream(ids, route, chunkCount, elapsed(), surfaced);
     } finally {
       admission.settle("non-provider-fault");
       // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
@@ -1789,6 +1900,7 @@ export class Gateway {
     forwardsReasoning: boolean,
     start: number,
   ): GatewayStreamChunk {
+    this.learnFromRestore(state.outputRepair, state.prepared, state.route.provider);
     this.reasoningHistory.remember(state.prepared, state.route.provider, response);
     return this.enrichDone(
       withDiscardedUsage(
@@ -2159,7 +2271,12 @@ export class Gateway {
         return this.openStreamAttempt(state, current, remainingMs, admission);
       },
       // A catalog rejection is retried only with its schema correction, never replayed as it was.
-      streamStartupRetryConfig(state, () => admission, budget),
+      streamStartupRetryConfig(
+        state,
+        () => admission,
+        budget,
+        this.reasoningRestoreRepair(state.prepared, state.route.provider),
+      ),
       this.clock,
       request.cancellationSignal,
       this.random,

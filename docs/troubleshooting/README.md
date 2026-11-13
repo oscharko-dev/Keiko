@@ -54,6 +54,11 @@ LiteLLM production-gateway issues are covered in the dedicated
 `x-litellm-key` authentication, `PROXY_BLOCKED_BY_POLICY` on a local proxy, `max_tokens`
 rejections on reasoning aliases, and truncated discovery on large multi-team proxies.
 
+A newly added model that does not call tools, a tool turn that ends with an HTTP 400 after the first
+tool, or a tool the provider refuses for its schema are covered in
+[A new model does not call tools](model-does-not-call-tools.md), including the closed outcomes of
+the tool-calling check and how to read them.
+
 Whisper dictation failures after a successful microphone capture are covered in
 [Dictation through LiteLLM](voice-dictation-litellm.md), including browser codec compatibility
 and the body-free STT dispatch/completion diagnostics.

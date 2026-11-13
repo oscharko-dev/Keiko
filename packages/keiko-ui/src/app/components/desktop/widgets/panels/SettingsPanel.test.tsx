@@ -267,6 +267,19 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-type");
   });
 
+  // #4351: what Keiko learned about a deployment is visible to the operator, in plain words.
+  it("shows that Keiko detected a model returning its reasoning on tool turns", async () => {
+    primeFetches([
+      { ...chatCapability("test-chat-reasoning"), reasoningOnToolTurns: "detected" as const },
+      chatCapability("test-chat-plain"),
+    ]);
+    render(<SettingsPanel />);
+    // Exactly one of the two models carries the learned fact.
+    expect(
+      await screen.findAllByText("Returns its reasoning on tool turns: detected"),
+    ).toHaveLength(1);
+  });
+
   it("restores the server-observed ready state when Settings is reopened", async () => {
     primeFetches([{ ...chatCapability("test-chat-ready"), conversationReady: true }]);
     render(<SettingsPanel />);

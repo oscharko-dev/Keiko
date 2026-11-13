@@ -244,7 +244,12 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["retryable-error", "output-exhausted-repair", "empty-answer-repair"],
+      values: [
+        "retryable-error",
+        "output-exhausted-repair",
+        "empty-answer-repair",
+        "reasoning-restore-repair",
+      ],
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
@@ -433,7 +438,12 @@ export interface RetryConfig {
  * its output budget (#3873, F17) and one that ended after reasoning without a tool call or any text
  * (#3873, F23). The reason names the correction the caller sends and is what the scheduled line says.
  */
-export type RetryRepairReason = "output-exhausted-repair" | "empty-answer-repair";
+export type RetryRepairReason =
+  | "output-exhausted-repair"
+  | "empty-answer-repair"
+  // #4351: a provider rejected the next tool round for want of the previous assistant reasoning; the
+  // one retry restores the current turn's reasoning and sends no correction.
+  | "reasoning-restore-repair";
 
 /**
  * An attempt that already ran outside the loop and failed (#3873, F17, option iii): the loop
@@ -456,6 +466,9 @@ export interface RetryResume {
 // The reason a further attempt was scheduled, on the scheduled line.
 type RetryScheduledReason = "retryable-error" | RetryRepairReason;
 
+/** The repairs that send a correction to the model (the reasoning restore of #4351 sends none). */
+export type SteeredAnswerRepairReason = Exclude<RetryRepairReason, "reasoning-restore-repair">;
+
 // The gateway's own repair of an answer the model could not use: one that exhausted its output
 // budget (#3873, F17), and one that ended after reasoning without a tool call or any text (F23) —
 // an empty answer that carried no reasoning is the model's final word and gets none (#3610).
@@ -463,7 +476,7 @@ type RetryScheduledReason = "retryable-error" | RetryRepairReason;
 // attempt, once, and only on a call whose retry configuration carries it (`RetryConfig.repair`).
 // The single classification every path consults: the buffered attempt, the streamed startup, and
 // the stream resumed after forwarded reasoning.
-export function steeredAnswerRepair(error: Error): RetryRepairReason | undefined {
+export function steeredAnswerRepair(error: Error): SteeredAnswerRepairReason | undefined {
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted-repair";
   return error instanceof ProviderEmptyAnswerError && error.afterReasoning
     ? "empty-answer-repair"
