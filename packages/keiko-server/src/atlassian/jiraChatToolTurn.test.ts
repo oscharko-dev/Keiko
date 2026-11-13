@@ -17,6 +17,7 @@ import { logKnowledgeCoverage, knowledgeTurnCoverage } from "../chat-tool-knowle
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createJiraDraftBatchExecutor, type JiraDraftBatchContext } from "./jiraDraftBatchTool.js";
 import { draftTool } from "./jiraChatCatalogRuntime.js";
@@ -4785,4 +4786,89 @@ describe("held approval worker timers", () => {
       }
     },
   );
+});
+
+// #4354 AC4: an approval nobody decided expires after ATLASSIAN_ACTION_APPROVAL_TTL_MS. The model
+// and the person were told it was declined, and a draft sent with its items inline left the Chat
+// with no open draft to resubmit. Every assertion goes through the real turn, route and stores.
+describe("an expired write approval says that it expired and keeps the draft (#4354 AC4)", () => {
+  async function expireInlineDraft(): Promise<{
+    readonly f: ReturnType<typeof fixture>;
+    readonly next: (arguments_: Record<string, unknown>) => void;
+  }> {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let arguments_: Record<string, unknown> = DRAFT_ARGUMENTS;
+    const f = fixture(true, undefined, true, false, () => arguments_);
+    const pending = send(f, "expiry-first");
+    void pending.catch(() => undefined);
+    await awaitPendingConsent(f);
+    await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1000);
+    expect((await pending).status).toBe(200);
+    return {
+      f,
+      next: (value): void => {
+        arguments_ = value;
+      },
+    };
+  }
+
+  it("shows the card as expired, tells the model so, and writes nothing", async () => {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    cleanups.push(() => {
+      resetServerLogger();
+      return Promise.resolve();
+    });
+    const { f } = await expireInlineDraft();
+    const lines = logs.events
+      .filter((event) => event.op === "atlassian.jira-draft")
+      .map((event) => event.extra);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: "held", newDraft: true, itemCount: 3 }),
+        expect.objectContaining({ phase: "refused", refusal: "approval-expired", itemCount: 3 }),
+      ]),
+    );
+    expect(JSON.stringify(lines)).not.toMatch(/Epic|Story|Loose|epic|SYN-/u);
+    expect(consentState(f)).toBe("expired");
+    const toolResult = f.calls[1]?.messages.find((message) => message.role === "tool")?.content;
+    expect(toolResult).toMatch(/expired/iu);
+    expect(toolResult).not.toMatch(/declin|reject/iu);
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+  });
+
+  it("keeps the inline draft as the Chat's open draft and names it for the resubmission", async () => {
+    const { f } = await expireInlineDraft();
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    expect(draft?.items.map((item) => item.ref)).toEqual(["epic", "story", "loose"]);
+    const toolResult = f.calls[1]?.messages.find((message) => message.role === "tool")?.content;
+    expect(toolResult).toContain(draft?.id);
+    expect(toolResult).toContain(draft?.digest);
+  });
+
+  it("creates the issues exactly once when the open draft is resubmitted and approved", async () => {
+    const { f, next } = await expireInlineDraft();
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    if (draft === undefined) throw new Error("Missing open draft");
+    next({ draftId: draft.id, draftDigest: draft.digest });
+    // The clock stays where the expiry left it: a second turn is a later turn of the same Chat.
+    const second = send(f, "expiry-second");
+    void second.catch(() => undefined);
+    const secondApproval = (): ChatToolWriteApprovalView | undefined =>
+      f.deps.store.listMessages(f.chatId).filter((message) => message.role === "user")[1]
+        ?.toolTranscript?.exchanges[0]?.approval;
+    await vi.waitFor(() => {
+      expect(secondApproval()?.state).toBe("pending");
+    });
+    const approval = secondApproval();
+    if (approval === undefined) throw new Error("Missing resubmitted approval");
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(f.jira.posts().map((post) => post.fields)).toMatchObject([
+      { summary: "Epic" },
+      { summary: "Story" },
+      { summary: "Loose" },
+    ]);
+  });
 });

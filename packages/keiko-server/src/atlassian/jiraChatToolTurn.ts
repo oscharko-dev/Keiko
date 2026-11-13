@@ -13,8 +13,15 @@ import {
   type JiraAttachmentPreview,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { parseJiraAttachmentArguments, parseJiraDraft } from "@oscharko-dev/keiko-connectors";
+import {
+  connectionFingerprint,
+  parseJiraAttachmentArguments,
+  parseJiraDraft,
+  type StagedJiraDraftItem,
+} from "@oscharko-dev/keiko-connectors";
 import { chatDraftArguments } from "./jiraChatDraftArguments.js";
+import type { HeldJiraDraft } from "./jiraApprovalExpiry.js";
+import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import {
   jiraChatAttachmentLimit,
   previewJiraChatAttachment,
@@ -131,7 +138,10 @@ function draftRequirementsCheck(
 
 type ReviewAction = Pick<JiraChatCatalogAction, "actionId" | "argumentsDigest">;
 export type JiraChatTurnReviewPorts = Required<
-  Pick<JiraChatAdmissionOptions, "preflightWrite" | "attachmentPreview" | "draftItemRefs">
+  Pick<
+    JiraChatAdmissionOptions,
+    "preflightWrite" | "attachmentPreview" | "draftItemRefs" | "holdDraft"
+  >
 > &
   Pick<JiraChatAdmissionOptions, "sourcePreparation">;
 interface JiraChatTurnReviewAccess {
@@ -156,6 +166,83 @@ function proposedWriteArguments(
     : undefined;
 }
 
+const sameItems = (left: unknown, right: unknown): boolean =>
+  sha256Hex(canonicalise(left)) === sha256Hex(canonicalise(right));
+
+/**
+ * The draft this write sends stays the Chat's open draft while its approval is pending (#4354 AC4):
+ * a staged draft already is one, and inline items are kept in the existing draft store, once. If
+ * the approval then expires, the model resubmits the draft by reference instead of drafting anew.
+ */
+function holdOpenDraft(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): HeldJiraDraft | undefined {
+  const store = options.deps.jiraDraftStore;
+  const args = proposedWriteArguments(access, action);
+  if (action.tool !== "jira.draft" || store === undefined || args === undefined) return undefined;
+  const resolved = chatDraftArguments(store, context.chatId, args);
+  if (!resolved.ok) return undefined;
+  if (resolved.staged)
+    return typeof args.draftId === "string"
+      ? heldOf(store.peek(args.draftId, context.chatId))
+      : undefined;
+  return holdInlineItems(options, store, resolved.arguments.items, context);
+}
+
+function holdInlineItems(
+  options: JiraChatTurnOptions,
+  store: NonNullable<UiHandlerDeps["jiraDraftStore"]>,
+  items: unknown,
+  context: JiraChatCatalogContext,
+): HeldJiraDraft | undefined {
+  const open = store.latest(context.chatId);
+  if (open !== undefined && sameItems(open.items, items)) return heldOf(open);
+  const current = resolveCurrentJiraChatAuthority(
+    options.deps,
+    context.chatId,
+    context.authorityReference,
+    new Date().toISOString(),
+    context.correlationId,
+  );
+  if (!current.ok || !Array.isArray(items)) return undefined;
+  const { credential } = current;
+  const appended = store.append(
+    context.chatId,
+    undefined,
+    connectionFingerprint({
+      baseUrl: credential.baseUrl,
+      identity: `${credential.authRef}:${String(credential.generation)}`,
+    }),
+    items as readonly StagedJiraDraftItem[],
+  );
+  if (!appended.ok) return undefined;
+  recordJiraDraftActivity(options.deps.activityLog, context.correlationId, {
+    phase: "held",
+    newDraft: true,
+    pageItemCount: 0,
+    itemCount: appended.draft.items.length,
+    pageCount: appended.draft.pageCount,
+    byteCount: appended.draft.bytes,
+    unresolvedRefCount: 0,
+    violationCount: 0,
+    durationMs: 0,
+  });
+  return heldOf(appended.draft);
+}
+
+function heldOf(
+  draft:
+    | { readonly id: string; readonly digest: string; readonly items: readonly unknown[] }
+    | undefined,
+): HeldJiraDraft | undefined {
+  return draft === undefined
+    ? undefined
+    : { id: draft.id, digest: draft.digest, itemCount: draft.items.length };
+}
+
 /** The same Jira review owners serve a Jira-only turn and a turn with other connected sources. */
 export function createJiraChatTurnReviewPorts(
   options: JiraChatTurnOptions,
@@ -170,6 +257,7 @@ export function createJiraChatTurnReviewPorts(
       untracedAdvice: draftUntracedAdvice(options.deps, options.openTrace),
     }),
     attachmentPreview: (action) => reviewedAttachment(options, access, action),
+    holdDraft: (action, context) => holdOpenDraft(options, access, action, context),
     draftItemRefs: (action): readonly string[] | undefined => {
       const args = proposedWriteArguments(access, action);
       if (args === undefined || !access.reviewableWrite(action)) return undefined;

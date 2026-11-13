@@ -163,7 +163,8 @@ export type ChatToolWriteApprovalAdmission =
     }
   | {
       readonly kind: "denied";
-      readonly reason: "authority-denied" | "invalid" | "rejected" | "capacity-exhausted";
+      readonly reason:
+        "authority-denied" | "invalid" | "rejected" | "expired" | "capacity-exhausted";
     };
 type ApprovalRegistry = UiHandlerDeps["atlassianActionApprovalRegistry"];
 
@@ -320,9 +321,14 @@ function currentRetainedApproval(
     return denyChatToolWriteApproval("authority-denied", chatId, correlationId);
   }
   const state = retained.approval.state;
-  return state === "pending" || state === "approved" || state === "claimed"
-    ? { kind: state === "pending" ? "review-required" : state, approval: retained.approval }
-    : denyChatToolWriteApproval("rejected", chatId, correlationId);
+  if (state === "pending" || state === "approved" || state === "claimed")
+    return { kind: state === "pending" ? "review-required" : state, approval: retained.approval };
+  // An approval nobody decided before its deadline is not a declined one (#4354 AC4).
+  return denyChatToolWriteApproval(
+    state === "expired" ? "expired" : "rejected",
+    chatId,
+    correlationId,
+  );
 }
 
 /** Source owners revalidate authority when reserving each invocation against the shared budget. */

@@ -405,6 +405,7 @@ export {
 } from "./jira-draft-stage-tool.js";
 export { withJiraCreateMetadataMemo, type JiraDraftReadCounts } from "./jira-draft-read-memo.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
+export { connectionFingerprint } from "./jira-report-tool.js";
 export type {
   JiraReportActivity,
   JiraReportRequirementIds,

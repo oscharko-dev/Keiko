@@ -59,6 +59,8 @@ import {
   requestCatalogWriteApproval,
 } from "./jiraChatCatalogWrite.js";
 import type { ChatWriteApprovalClaim } from "./chatWriteApprovalState.js";
+import { jiraApprovalExpiredResult, type HeldJiraDraft } from "./jiraApprovalExpiry.js";
+import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import {
   JIRA_CATALOG_DISCOVERY_TOOLS,
   type JiraCatalogDiscoveryToolName,
@@ -311,6 +313,15 @@ export interface JiraChatAdmissionOptions {
     /** The requirement trace prepared for exactly this action, which its write receives too. */
     trace: JiraTraceRequest | undefined,
   ) => Promise<CatalogJsonObject | undefined>;
+  /**
+   * Runs after the preflight and before a human is asked: keeps the draft this write sends as the
+   * Chat's open draft (the existing draft store), so an approval that expires leaves something to
+   * resubmit (#4354 AC4). Absent or undefined for a write that is no draft.
+   */
+  readonly holdDraft?: (
+    action: JiraChatCatalogAction,
+    context: JiraChatCatalogContext,
+  ) => HeldJiraDraft | undefined;
   /** The file a `jira.attach` approval shows the human; absent when it cannot be reviewed (#4176). */
   readonly attachmentPreview?: (
     action: JiraChatCatalogAction,
@@ -456,7 +467,36 @@ async function requestWriteStage(
   context: JiraChatCatalogContext,
 ): Promise<void> {
   await refuseByPreflight(options, action, context);
-  await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+  const held = options.holdDraft?.(action, context);
+  const wait = await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+  if (wait === "expired") {
+    recordJiraDraftActivity(undefined, context.correlationId, {
+      phase: "refused",
+      refusal: "approval-expired",
+      newDraft: false,
+      pageItemCount: 0,
+      itemCount: held?.itemCount ?? 0,
+      pageCount: 0,
+      byteCount: 0,
+      unresolvedRefCount: 0,
+      violationCount: 0,
+      durationMs: 0,
+    });
+    throw expiredApprovalFault(action, held);
+  }
+}
+
+/** An approval that ran out is reported as that, with the draft to ask again with (#4354 AC4). */
+function expiredApprovalFault(
+  action: JiraChatCatalogAction,
+  held: HeldJiraDraft | undefined,
+): CatalogDispatchFault {
+  const binding = jiraOperationBindingForTool(action.tool);
+  requireDispatch(binding !== undefined, "failed", "provider-reported-error");
+  return new CatalogDispatchFault("failed", "provider-reported-error", undefined, {
+    ...jiraApprovalExpiredResult(held),
+    operationBinding: { ...binding },
+  });
 }
 
 async function requestConsent(
