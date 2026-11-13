@@ -272,7 +272,7 @@ export const JIRA_OUTCOME_ITEMS_SHOWN = 5;
  * open in the card and the rest behind a disclosure; this many keys of a compact result are
  * expanded from its ranges.
  */
-export const JIRA_OUTCOME_WRITE_ITEMS_SHOWN = 60;
+const JIRA_OUTCOME_WRITE_ITEMS_SHOWN = 60;
 const JIRA_OUTCOME_KEYS_LISTED = 500;
 const KEY_LISTING_WRITE_TOOLS: ReadonlySet<string> = new Set(["jira_draft"]);
 const JIRA_OUTCOME_PROBLEMS_SHOWN = 20;
