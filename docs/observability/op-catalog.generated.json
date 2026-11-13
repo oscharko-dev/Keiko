@@ -118795,7 +118795,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:421",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:423",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
