@@ -46,6 +46,7 @@ const DESCRIPTION =
   "While status is reading, call again with only the reportId. " +
   "A call without a section returns the summary and report.figures; a call that names a section returns only that page, not the summary. " +
   "Page a list with reportId, section and startAt (0, then the returned nextStartAt; maxResults up to 100; report every deviation). " +
+  "A call that names a reportId takes only reportId, section, startAt and maxResults: never repeat projectKey, jql or epicKey there, or it is refused. " +
   "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them. " +
   "A refusal names invalidArguments or a message.";
 

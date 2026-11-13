@@ -505,6 +505,24 @@ describe("arguments", () => {
     expect(h.activity).toMatchObject([{ phase: "refused", refusal: "invalid-input" }]);
   });
 
+  it("tells a call that repeats the scope beside a reportId what to leave out (#4356)", async () => {
+    const h = harness({ issues: syntheticProject(10) });
+    const first = await h.run({ projectKey: "REP" });
+    for (const scope of [{ projectKey: "REP" }, { jql: "project = REP" }, { epicKey: "REP-1" }]) {
+      const refused = await h.run({ reportId: idOf(first), section: "epics", ...scope });
+      expect(refused.isError).toBe(true);
+      expect(refused.data.reason).toBe("invalid-input");
+      expect(refused.data.invalidArguments).toEqual([Object.keys(scope)[0]]);
+      expect(refused.data.message).toBe(
+        "A call that names a reportId takes only reportId, section, startAt and maxResults. Leave out projectKey, jql and epicKey: the report already has its scope.",
+      );
+    }
+    // Another invalid argument beside a reportId gets no scope hint.
+    const other = await h.run({ reportId: idOf(first), section: "nope" });
+    expect(other.data.invalidArguments).toEqual(["section"]);
+    expect(other.data.message).toBeUndefined();
+  });
+
   it("names the arguments a refused call has to fix, never their values (#4181)", async () => {
     const h = harness({ issues: syntheticProject(10) });
     const result = await h.run({ projectKey: "REP", section: "nope", model: "claims numbers" });

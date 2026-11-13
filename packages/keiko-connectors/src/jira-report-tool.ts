@@ -377,6 +377,19 @@ function admission(
   return session.busy ? "report-busy" : session;
 }
 
+const CONTINUATION_HINT =
+  "A call that names a reportId takes only reportId, section, startAt and maxResults. Leave out projectKey, jql and epicKey: the report already has its scope.";
+/** A scope repeated beside a reportId is the one mistake a model can fix without asking anyone. */
+function continuationHint(
+  rawArgs: CatalogJsonObject,
+  invalid: readonly string[],
+): string | undefined {
+  return rawArgs.reportId !== undefined && invalid.some((name) => CONTINUATION_SCOPE.has(name))
+    ? CONTINUATION_HINT
+    : undefined;
+}
+const CONTINUATION_SCOPE: ReadonlySet<string> = new Set(["projectKey", "jql", "epicKey"]);
+
 /** `jira.report`: start a report, resume one that is still reading, or page a finished one. */
 export async function executeJiraReportTool<Context extends ManagedMcpInvocationContext>(
   rawArgs: CatalogJsonObject,
@@ -386,8 +399,17 @@ export async function executeJiraReportTool<Context extends ManagedMcpInvocation
 ): Promise<ManagedMcpToolResult> {
   const startedAt = (deps.now ?? Date.now)();
   const args = parseJiraReportArgs(rawArgs);
-  if (args === undefined)
-    return refuse(deps, context, "invalid-input", startedAt, invalidJiraReportArguments(rawArgs));
+  if (args === undefined) {
+    const invalid = invalidJiraReportArguments(rawArgs);
+    return refuse(
+      deps,
+      context,
+      "invalid-input",
+      startedAt,
+      invalid,
+      continuationHint(rawArgs, invalid),
+    );
+  }
   if (connection.deployment !== "data-center")
     return refuse(deps, context, "unsupported-deployment", startedAt);
   const owner = deps.owner(context);
