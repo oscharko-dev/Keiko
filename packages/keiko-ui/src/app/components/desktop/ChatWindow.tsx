@@ -117,6 +117,7 @@ import {
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { FileIcon } from "./widgets/shared/projectTree";
 import {
+  isInFlight,
   type AttachmentRejectionReason,
   type ChatSessionApi,
   type PendingAttachment,
@@ -230,6 +231,7 @@ const CloseIcon = Icons.close;
 const MicIcon = Icons.mic;
 const CubeIcon = Icons.cube;
 const ArrowUpIcon = Icons.arrowUp;
+const StopIcon = Icons.stop;
 const SparkIcon = Icons.spark;
 const BrainIcon = Icons.brain;
 
@@ -2411,9 +2413,28 @@ function cancelComposerSend(event: SyntheticEvent, cancelSend: () => void): void
   });
 }
 
-// Extracted from ComposerBar (SonarCloud S3776) — the primary action button, which flips between
-// "cancel in-flight send" and "submit" (Issue #152). Same markup/behavior, now isolated so the
-// sending/type/data-tip branching lives in one small component instead of inline in ComposerBar.
+// The stop control while an answer runs. It is its own element, never the Send button re-labelled:
+// a Send that turned into Cancel in place let a double click, or a key press on the still focused
+// button, cancel the answer the first activation had just started. It looks like what it does — a
+// stop square in neutral chrome — and sits beside the inert Send, not in its place.
+function ComposerStopButton({ cancelSend }: { readonly cancelSend: () => void }): ReactNode {
+  const t = useTranslate();
+  return (
+    <button
+      type="button"
+      className="cmp-stop cmp-tip-end"
+      aria-label={t("chat.send.cancel")}
+      data-tip={t("chat.send.cancel")}
+      onClick={(event) => cancelComposerSend(event, cancelSend)}
+    >
+      <StopIcon size={14} />
+    </button>
+  );
+}
+
+// Extracted from ComposerBar (SonarCloud S3776) — the primary action button. While a response runs
+// it stays in place as an inert control (aria-disabled, never a submit) that says why it cannot
+// send; the cancel control is the separate ComposerStopButton (#4371).
 function ComposerSendButton({
   sending,
   cancelSend,
@@ -2430,22 +2451,21 @@ function ComposerSendButton({
   readonly sendDescribedBy: string | undefined;
 }): ReactNode {
   const t = useTranslate();
-  // Issue #152 — while a send is in flight the primary action button
-  // flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
-  // submits the surrounding form; onClick calls cancelSend which is a
-  // safe no-op when the status is already terminal.
   if (sending) {
     return (
-      <button
-        type="button"
-        className="cmp-send cmp-send-cancel cmp-tip-end"
-        data-on
-        aria-label={t("chat.send.cancel")}
-        data-tip={t("chat.send.cancel")}
-        onClick={(event) => cancelComposerSend(event, cancelSend)}
-      >
-        <CloseIcon size={16} />
-      </button>
+      <>
+        <ComposerStopButton cancelSend={cancelSend} />
+        <button
+          type="button"
+          className="cmp-send cmp-tip-end"
+          data-on={false}
+          data-tip={t("chat.send.running")}
+          aria-disabled
+          aria-label={t("chat.send.running")}
+        >
+          <ArrowUpIcon size={16} />
+        </button>
+      </>
     );
   }
   return (
@@ -2672,9 +2692,18 @@ function sendLifecycleStatusLabel(status: SendStatus, t: I18nTranslate): string 
 // role="status" + aria-live="polite" so screen-reader users hear transitions
 // without interruption. Hidden when there is nothing to say (idle/completed/
 // failed — the error string carries its own role="alert").
-function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
+function SendLifecycleStatus({
+  status,
+  draftWaiting = false,
+}: {
+  readonly status: SendStatus;
+  /** A next message is typed while the answer runs: say why it is not sent (#4371). */
+  readonly draftWaiting?: boolean;
+}): ReactNode {
   const t = useTranslate();
-  const label = sendLifecycleStatusLabel(status, t);
+  const base = sendLifecycleStatusLabel(status, t);
+  const label =
+    draftWaiting && isInFlight(status) ? `${base} ${t("chat.send.runningHint")}`.trim() : base;
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -2907,17 +2936,21 @@ function composerDictationVisibility(
 function ComposerStatusRow({
   voiceDialogActive,
   sendStatus,
+  draftWaiting,
   voiceDictationVisible,
   dictation,
 }: {
   readonly voiceDialogActive: boolean;
   readonly sendStatus: SendStatus;
+  readonly draftWaiting: boolean;
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
 }): ReactNode {
   return (
     <>
-      {voiceDialogActive ? null : <SendLifecycleStatus status={sendStatus} />}
+      {voiceDialogActive ? null : (
+        <SendLifecycleStatus status={sendStatus} draftWaiting={draftWaiting} />
+      )}
       {!voiceDialogActive && voiceDictationVisible ? (
         <VoiceDictationComposerStatus error={dictation.error} emptyResult={dictation.emptyResult} />
       ) : null}
@@ -3887,6 +3920,7 @@ function ComposerCoreImpl({
               <ComposerStatusRow
                 voiceDialogActive={voiceDialogActive}
                 sendStatus={sendStatus}
+                draftWaiting={draft.trim().length > 0}
                 voiceDictationVisible={voiceDictationVisible}
                 dictation={dictation}
               />
@@ -4414,15 +4448,17 @@ interface KnowledgeScopeChoices {
   readonly catalogEmpty: boolean;
 }
 
-// While a deliberate refresh resolves, no cached pod reads as selectable: only the bound scope
-// stays visible (by name and real state) as a disabled row.
+// While a refresh has nothing to show (the first load, or after a failed one) no pod reads as
+// selectable: only the bound scope stays visible (by name and real state) as a disabled row. A
+// refresh that still holds a good snapshot keeps the known pods listed and selectable.
 function knowledgeScopeChoices(
   chat: Chat,
   catalog: KnowledgeCatalog,
   t: I18nTranslate,
   lk: LocalKnowledgeTranslate,
 ): KnowledgeScopeChoices {
-  const { capsules, capsuleSets, loading, loadError } = catalog;
+  const { capsules, capsuleSets, loadError } = catalog;
+  const loading = catalog.loading && !catalog.refreshing;
   const readyCapsules = loading ? [] : capsules.filter(isReadyCapsule);
   const selectableSets = loading ? [] : capsuleSets.filter(isSelectableGroundingCapsuleSet);
   const capsuleSetChoices = capsuleSetOptions(chat, selectableSets, t, lk);
@@ -4468,7 +4504,9 @@ function LocalKnowledgeScopeControl({
 }): ReactNode {
   const t = useTranslate();
   const lk = useLocalKnowledgeTranslate();
-  const { loading, refresh, refreshOnPickerOpen } = catalog;
+  const { refresh, refreshOnPickerOpen } = catalog;
+  // A refresh that still serves the last good snapshot neither hides nor disables the picker.
+  const loading = catalog.loading && !catalog.refreshing;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -4593,7 +4631,7 @@ function ChatScopeHeaderImpl({
         chat={chat}
         onDisconnect={onChatChanged}
         labels={connectorScopeLabels(catalog, t)}
-        labelsSettled={!catalog.loading && catalog.loadError === null}
+        labelsSettled={(!catalog.loading || catalog.refreshing) && catalog.loadError === null}
       />
       {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
           Chat" action renders here, alongside the grounding scope control, so its current /

@@ -308,6 +308,79 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     expect(cancelSend).toHaveBeenCalledOnce();
   });
 
+  it("keeps Send inert and visibly distinct from the stop control while a response runs (#4371)", async () => {
+    const cancelSend = vi.fn();
+    const sendMessage = vi.fn();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        models: [chatModelCapability("example-chat-model")],
+        messages: [userMessage("hi")],
+        draft: "next prompt",
+        sendStatus: "streaming",
+        sending: true,
+        cancelSend,
+        sendMessage,
+      }),
+    );
+    const user = userEvent.setup();
+    const stop = screen.getByRole("button", { name: "Cancel response" });
+    const inertSend = screen.getByRole("button", {
+      name: "Send is unavailable while a response is running",
+    });
+
+    // Two separate elements: the stop control is not the Send button re-labelled.
+    expect(stop).not.toBe(inertSend);
+    expect(stop).not.toHaveClass("cmp-send");
+    expect(inertSend).toHaveClass("cmp-send");
+    expect(inertSend).toHaveAttribute("aria-disabled", "true");
+    expect(inertSend).toHaveAttribute("type", "button");
+
+    // A double click, or a key press, on the place Send occupied cannot cancel or submit.
+    await user.dblClick(inertSend);
+    inertSend.focus();
+    await user.keyboard("{Enter}{ }");
+    expect(cancelSend).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    // Only the stop control cancels.
+    await user.click(stop);
+    expect(cancelSend).toHaveBeenCalledOnce();
+  });
+
+  it("says why a typed next message is not sent while a response runs (#4371)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        models: [chatModelCapability("example-chat-model")],
+        messages: [userMessage("hi")],
+        draft: "next prompt",
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    const status = document.querySelector('[data-send-status="streaming"]');
+    expect(status).toHaveTextContent(
+      "Receiving response… Your next message can be sent when this response is complete, or cancel the response first.",
+    );
+  });
+
+  it("keeps the running reason out of the status while no draft waits (#4371)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        models: [chatModelCapability("example-chat-model")],
+        messages: [userMessage("hi")],
+        draft: "",
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    const status = document.querySelector('[data-send-status="streaming"]');
+    expect(status).toHaveTextContent("Receiving response…");
+    expect(status).not.toHaveTextContent("next message");
+  });
+
   it("falls back to the Send button when sending=false", () => {
     renderWindow(
       makeSession({

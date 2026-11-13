@@ -51,8 +51,13 @@ export interface KnowledgeCatalogSnapshot {
 export interface KnowledgeCatalog {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
-  /** A deliberate (foreground) refresh is resolving; options must not read as current meanwhile. */
+  /** A deliberate (foreground) refresh is resolving. */
   readonly loading: boolean;
+  /**
+   * `loading`, while the last good snapshot is still being served: the known pods stay listed and
+   * selectable, and only a refresh with nothing to show (first load, or after a failure) hides them.
+   */
+  readonly refreshing: boolean;
   /** The last foreground load's failure, `null` when it succeeded or a refresh is resolving. */
   readonly loadError: unknown;
   /** A deliberate refresh (the retry action). */
@@ -284,6 +289,25 @@ function pageIsVisible(): boolean {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
 }
 
+// A refresh that outlasts this is reported (body-free): the picker no longer waits on it, but the
+// time the BFF took to answer stays reconstructable.
+const SLOW_REFRESH_REPORT_MS = 1_000;
+const SLOW_REFRESH_BUCKETS_MS: readonly (readonly [number, string])[] = [
+  [10_000, "10s-plus"],
+  [5_000, "5s-10s"],
+  [SLOW_REFRESH_REPORT_MS, "1s-5s"],
+];
+
+function reportSlowRefresh(startedAt: number, next: KnowledgeCatalogSnapshot): void {
+  const elapsed = Date.now() - startedAt;
+  const bucket = SLOW_REFRESH_BUCKETS_MS.find(([floor]) => elapsed >= floor)?.[1];
+  if (bucket === undefined) return;
+  const outcome = next.loadError === null ? "ok" : "failed";
+  reportClientDiagnostic(
+    `Keiko knowledge catalog refresh settled slowly (outcome=${outcome}, duration=${bucket}).`,
+  );
+}
+
 // A transient background failure must not blank a catalog the person is already using.
 function keepLastGoodSnapshot(
   previous: KnowledgeCatalogSnapshot,
@@ -310,6 +334,7 @@ function usePickerOpenRefresh(loadedAt: number, refresh: () => void): () => void
 interface CatalogSnapshotState {
   readonly snapshot: KnowledgeCatalogSnapshot;
   readonly loading: boolean;
+  readonly refreshing: boolean;
   readonly refresh: () => void;
   readonly refreshOnPickerOpen: () => void;
   readonly refreshInBackground: (maxAgeMs: number) => void;
@@ -330,8 +355,10 @@ function useCatalogSnapshotState(): CatalogSnapshotState {
     requestGenerationRef.current += 1;
     const requestGeneration = requestGenerationRef.current;
     setLoading(true);
+    const startedAt = Date.now();
     void load().then((next) => {
       if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) return;
+      reportSlowRefresh(startedAt, next);
       setSnapshot(next);
       setLoading(false);
     });
@@ -365,7 +392,9 @@ function useCatalogSnapshotState(): CatalogSnapshotState {
 
   const refreshOnPickerOpen = usePickerOpenRefresh(snapshot.loadedAt, refresh);
 
-  return { snapshot, loading, refresh, refreshOnPickerOpen, refreshInBackground };
+  // Only a good snapshot may keep standing in for the refresh: a failed one lists nothing.
+  const refreshing = loading && snapshot.loadedAt > 0 && snapshot.loadError === null;
+  return { snapshot, loading, refreshing, refresh, refreshOnPickerOpen, refreshInBackground };
 }
 
 function scheduleRecoveryRefreshes(refresh: (maxAgeMs: number) => void): () => void {
@@ -462,7 +491,7 @@ function useCatalogAvailabilityDiagnostic(
 export function useKnowledgeCatalog(
   boundScopes: readonly ChatLocalKnowledgeScope[],
 ): KnowledgeCatalog {
-  const { snapshot, loading, refresh, refreshOnPickerOpen, refreshInBackground } =
+  const { snapshot, loading, refreshing, refresh, refreshOnPickerOpen, refreshInBackground } =
     useCatalogSnapshotState();
   const availability = useMemo(
     () => boundScopeAvailability(boundScopes, snapshot),
@@ -476,6 +505,7 @@ export function useKnowledgeCatalog(
     capsules: snapshot.capsules,
     capsuleSets: snapshot.capsuleSets,
     loading,
+    refreshing,
     // A refresh in flight clears the previous failure, exactly as it clears the previous options.
     loadError: loading ? null : snapshot.loadError,
     refresh,

@@ -2762,6 +2762,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-mode[data-tip]::after,
 .cmp-model[data-tip]::after,
 .cmp-send[data-tip]::after,
+.cmp-stop[data-tip]::after,
 .cmp-icon[data-tip]::after,
 .ui-tip[data-tip]::after {
   content: attr(data-tip);
@@ -2884,6 +2885,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-model[data-tip]:focus-within::after,
 .cmp-send[data-tip]:hover::after,
 .cmp-send[data-tip]:focus-visible::after,
+.cmp-stop[data-tip]:hover::after,
+.cmp-stop[data-tip]:focus-visible::after,
 .cmp-icon[data-tip]:hover::after,
 .cmp-icon[data-tip]:focus-visible::after,
 .ui-tip[data-tip]:hover::after,
@@ -19813,7 +19816,8 @@ button.figma-view-preview {
    with zero rules and rendered in the identical accent look as Send; only the
    icon differed. Neutral chrome separates "stop" from "go"; hover tints toward
    --danger inside the existing palette. Specificity (0,3,0) beats the accent
-   .cmp-send[data-on="true"] rule (0,2,0). */
+   .cmp-send[data-on="true"] rule (0,2,0). The Coding Workbench composer still uses it;
+   the Chat composer's separate stop control is .cmp-stop (#4371). */
 .cmp-send.cmp-send-cancel[data-on] {
   background: var(--surface-elevated);
   color: var(--button-secondary-text);
@@ -19823,6 +19827,33 @@ button.figma-view-preview {
   color: var(--feedback-danger);
   background: color-mix(in oklab, var(--feedback-danger) 12%, var(--surface-elevated));
   border-color: color-mix(in oklab, var(--feedback-danger) 60%, var(--border-strong));
+}
+/* #4371 — the stop control is its own element beside the inert Send, never Send re-styled in
+   place: neutral chrome and a stop square say "stop"; the hover tints toward --feedback-danger.
+   While a response runs the Send keeps its place, dimmed and inert (aria-disabled). */
+.cmp-stop {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--surface-elevated);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--border-strong);
+}
+.cmp-stop:hover {
+  color: var(--feedback-danger);
+  background: color-mix(in oklab, var(--feedback-danger) 12%, var(--surface-elevated));
+  border-color: color-mix(in oklab, var(--feedback-danger) 60%, var(--border-strong));
+}
+.cmp-stop:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmp-send[aria-disabled="true"] {
+  cursor: not-allowed;
 }
 
 /* ==== uiux-fix F050: palette entry, QI empty-state inset, shell transitions, light FAB shadow ==== */

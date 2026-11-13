@@ -1916,6 +1916,42 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeVisible();
   });
 
+  it("keeps the known Knowledge Pods listed and selectable while a reopen refresh is pending", async () => {
+    const user = userEvent.setup();
+    const podId = makeCapsuleId("cap-known");
+    const knownPod = {
+      id: podId,
+      displayName: "Known requirements",
+      lifecycleState: "ready" as const,
+      sourceCount: 1,
+      updatedAt: 1,
+    };
+    let settleRefresh: (response: { capsules: (typeof knownPod)[] }) => void = () => undefined;
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [knownPod] }).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settleRefresh = resolve;
+      }),
+    );
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    await openCombobox(user, "Grounding mode");
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
+
+    // The refresh has not answered: the last good snapshot is still on offer.
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Known requirements" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toBeEnabled();
+
+    await act(async () => {
+      settleRefresh({ capsules: [knownPod] });
+    });
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Known requirements" })).toBeEnabled();
+  });
+
   it("clears stale options on a reopen failure and recovers on the next reopen", async () => {
     const user = userEvent.setup();
     const staleCapsuleId = makeCapsuleId("cap-failed-refresh");

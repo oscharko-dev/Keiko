@@ -473,6 +473,98 @@ describe("useKnowledgeCatalog recovery", () => {
   });
 });
 
+describe("useKnowledgeCatalog refresh keeps the last good snapshot", () => {
+  it("keeps the known pods while a foreground refresh is pending", async () => {
+    vi.useFakeTimers();
+    let settle: (response: CapsulesResponse) => void = () => undefined;
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [wireCapsule("cap-1", "test", "ready")] });
+    const unbound: readonly ChatLocalKnowledgeScope[] = [];
+    const { result } = renderHook(() => useKnowledgeCatalog(unbound));
+    await flush();
+    fetchCapsulesMock.mockReturnValueOnce(
+      new Promise<CapsulesResponse>((resolve) => {
+        settle = resolve;
+      }),
+    );
+
+    act(() => {
+      result.current.refresh();
+    });
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.refreshing).toBe(true);
+    expect(result.current.capsules.map((capsule) => capsule.displayName)).toEqual(["test"]);
+
+    await act(async () => {
+      settle({ capsules: [wireCapsule("cap-2", "fresh", "ready")] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.refreshing).toBe(false);
+    expect(result.current.capsules.map((capsule) => capsule.displayName)).toEqual(["fresh"]);
+  });
+
+  it("has nothing to keep during the first load or after a failed load", async () => {
+    vi.useFakeTimers();
+    fetchCapsulesMock.mockRejectedValueOnce(new Error("offline"));
+    const unbound: readonly ChatLocalKnowledgeScope[] = [];
+    const { result } = renderHook(() => useKnowledgeCatalog(unbound));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.refreshing).toBe(false);
+    await flush();
+    expect(result.current.loadError).toBeInstanceOf(Error);
+
+    act(() => {
+      result.current.refresh();
+    });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.refreshing).toBe(false);
+    await flush();
+  });
+
+  it("reports a slow refresh with a closed duration bucket and no pod data", async () => {
+    vi.useFakeTimers();
+    let settle: (response: CapsulesResponse) => void = () => undefined;
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [wireCapsule("cap-1", "secret", "ready")],
+    });
+    const unbound: readonly ChatLocalKnowledgeScope[] = [];
+    const { result } = renderHook(() => useKnowledgeCatalog(unbound));
+    await flush();
+    fetchCapsulesMock.mockReturnValueOnce(
+      new Promise<CapsulesResponse>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    act(() => {
+      result.current.refresh();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+      settle({ capsules: [wireCapsule("cap-1", "secret", "ready")] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const slow = diagnostics.filter((entry) => entry.message.includes("settled slowly"));
+    expect(slow.map((entry) => entry.message)).toEqual([
+      "Keiko knowledge catalog refresh settled slowly (outcome=ok, duration=5s-10s).",
+    ]);
+  });
+
+  it("stays silent for a refresh that answers promptly", async () => {
+    vi.useFakeTimers();
+    const unbound: readonly ChatLocalKnowledgeScope[] = [];
+    const { result } = renderHook(() => useKnowledgeCatalog(unbound));
+    await flush();
+    await act(async () => {
+      result.current.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(diagnostics.some((entry) => entry.message.includes("settled slowly"))).toBe(false);
+  });
+});
+
 describe("useKnowledgeCatalog malformed response", () => {
   it("settles loading with a retryable error when the catalog response is malformed", async () => {
     vi.useFakeTimers();

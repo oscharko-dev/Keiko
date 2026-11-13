@@ -4618,6 +4618,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.send.noModel": "Kein Modell verfügbar",
   "chat.send.connecting": "Gateway wird verbunden",
   "chat.send.cancel": "Antwort abbrechen",
+  "chat.send.running": "Senden ist nicht möglich, solange eine Antwort läuft",
+  "chat.send.runningHint":
+    "Deine nächste Nachricht kann gesendet werden, sobald diese Antwort fertig ist – oder brich die Antwort zuerst ab.",
   "chat.send.statusQueued": "Nachricht wird gesendet…",
   "chat.send.statusContacting": "Antwort wird vorbereitet…",
   "chat.send.statusAwaitingDecision": "Deine Entscheidung steht aus",
