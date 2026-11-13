@@ -175,6 +175,7 @@ describe("the requirement list Keiko hands jira.report", () => {
     expect(chatReportRequirementIds(f.deps, context(f))).toEqual({
       ok: true,
       ids: ["LH-001", "LH-002", "LH-003", "FR-001", "FR-002"],
+      labels: {},
     });
   });
 
@@ -184,10 +185,13 @@ describe("the requirement list Keiko hands jira.report", () => {
     const detected = await detectedUnits(f);
 
     expect(detected.map((unit) => unit.idOrigin)).toEqual(["explicit", "explicit", "derived"]);
-    expect(chatReportRequirementIds(f.deps, context(f))).toEqual({
-      ok: true,
-      ids: detected.map((unit) => unit.id),
-    });
+    const listed = chatReportRequirementIds(f.deps, context(f));
+    expect(listed).toMatchObject({ ok: true, ids: detected.map((unit) => unit.id) });
+    // Only the derived handle is named; it carries its section and the start of its statement.
+    expect(Object.keys(listed.ok ? (listed.labels ?? {}) : {})).toEqual([detected[2]?.id]);
+    expect(listed.ok ? listed.labels?.[detected[2]?.id ?? ""] : undefined).toMatch(
+      /^Ohne Kennung: Das Portal muss Belege/u,
+    );
   });
 
   it("lists a Pod whose requirements all carry derived handles", async () => {
@@ -196,10 +200,11 @@ describe("the requirement list Keiko hands jira.report", () => {
     const detected = await detectedUnits(f);
 
     expect(detected.map((unit) => unit.idOrigin)).toEqual(["derived"]);
-    expect(chatReportRequirementIds(f.deps, context(f))).toEqual({
-      ok: true,
-      ids: [detected[0]?.id],
-    });
+    const listed = chatReportRequirementIds(f.deps, context(f));
+    expect(listed).toMatchObject({ ok: true, ids: [detected[0]?.id] });
+    expect(listed.ok ? listed.labels?.[detected[0]?.id ?? ""] : undefined).toContain(
+      "Das Portal muss Belege",
+    );
   });
 
   it("keeps the same denominator and uncovered requirement as the explicit-id control in the automatic report", async () => {
@@ -213,11 +218,16 @@ describe("the requirement list Keiko hands jira.report", () => {
     const automatic = await coverage(f, issues, { requirementsFromPods: true });
     const control = await coverage(f, issues, { requirementIds: [explicit, derived] });
 
-    expect(automatic).toEqual(control);
-    expect(automatic).toEqual([
-      expect.objectContaining({ id: explicit, covered: true, coveredBy: ["SYN-1"] }),
-      { id: derived, covered: false },
-    ]);
+    // The denominator and every covered state stay those of the explicit-id control; the automatic
+    // report additionally names the uncovered derived handle.
+    const unnamed = automatic.map((item) => {
+      const { label: _label, ...rest } = item as Record<string, unknown>;
+      return rest;
+    });
+    expect(unnamed).toEqual(control);
+    expect(automatic[0]).toMatchObject({ id: explicit, covered: true, coveredBy: ["SYN-1"] });
+    expect(automatic[1]).toMatchObject({ id: derived, covered: false });
+    expect((automatic[1] as { label?: string }).label).toContain("Das Portal muss Belege");
   });
 
   it("covers the derived requirement once an issue carries its production trace", async () => {

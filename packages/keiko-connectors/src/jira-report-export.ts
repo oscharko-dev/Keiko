@@ -32,6 +32,9 @@ export const JIRA_REPORT_CSV_COLUMNS = [
   "summary",
 ] as const;
 
+/** The index of the `summary` column, where an uncovered derived requirement states its name. */
+const CSV_SUMMARY_COLUMN = 16;
+
 const FORMULA_START = /^[=+\-@\t\r]/u;
 
 /** RFC 4180 quoting; a cell a spreadsheet would execute as a formula gains a leading apostrophe. */
@@ -96,7 +99,16 @@ function requirementRows(report: JiraReport): readonly string[] {
       ]),
     ),
     ...requirements.uncovered.map((id) =>
-      csvRow(["requirement", id, undefined, undefined, undefined, "uncovered"]),
+      csvRow([
+        "requirement",
+        id,
+        undefined,
+        undefined,
+        undefined,
+        "uncovered",
+        ...Array.from({ length: CSV_SUMMARY_COLUMN - 6 }, () => undefined),
+        requirements.uncoveredLabels[id],
+      ]),
     ),
   ];
 }
@@ -287,7 +299,12 @@ function coverageSection(report: JiraReport): string {
         ]),
       ),
       "### Requirements without an issue\n",
-      listOf(requirements.uncovered),
+      listOf(
+        requirements.uncovered.map((id) => {
+          const label = requirements.uncoveredLabels[id];
+          return label === undefined ? id : `${id} (${markdownText(label)})`;
+        }),
+      ),
     );
   return lines.join("\n");
 }

@@ -116,7 +116,13 @@ function requirementItems(report: JiraReport): readonly CatalogJsonObject[] {
       done: item.done,
       byType: typeItems(item.byType),
     })),
-    ...requirements.uncovered.map((id) => ({ id, covered: false })),
+    ...requirements.uncovered.map((id) => ({
+      id,
+      covered: false,
+      ...(Object.hasOwn(requirements.uncoveredLabels, id)
+        ? { label: requirements.uncoveredLabels[id] ?? "" }
+        : {}),
+    })),
   ];
 }
 function requirementsSummary(report: JiraReport): CatalogJsonValue {

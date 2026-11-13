@@ -22,11 +22,18 @@ export { reportJql, stripJqlOrdering } from "./jira-report-jql.js";
 export interface JiraReportRequest {
   readonly projectKey: string | undefined;
   readonly jql: string | undefined;
+  /**
+   * An Epic whose members and their sub-tasks form the scope. Keiko composes the JQL from it and
+   * states the clause it composed in the report's scope; it narrows the scope further, never widens.
+   */
+  readonly epicKey?: string | undefined;
   readonly estimateFieldId: string | undefined;
   /** The date overdue is judged against (UTC); the date of the first call when absent. */
   readonly asOf: string | undefined;
   readonly parentFieldIds: readonly string[];
   readonly requirementIds: readonly string[];
+  /** Readable names Keiko listed for derived requirement identifiers; see `JiraReportRequirementIds`. */
+  readonly requirementLabels?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface JiraReportSession {
@@ -37,7 +44,8 @@ export interface JiraReportSession {
   readonly fingerprint: string;
   readonly request: JiraReportRequest;
   scope: JiraReportScope;
-  readonly jql: string;
+  /** The effective query; an Epic scope replaces it with the composed clause once resolved. */
+  jql: string;
   readonly startedAt: number;
   phase: "new" | "reading" | "finished";
   busy: boolean;
@@ -129,6 +137,20 @@ export function jiraReportProposalCost(plan: JiraReportFieldPlan, key: string): 
   );
 }
 
+function initialScope(request: JiraReportRequest, now: number): JiraReportScope {
+  return {
+    ...(request.projectKey === undefined ? {} : { projectKey: request.projectKey }),
+    ...(request.epicKey === undefined ? {} : { epicKey: request.epicKey }),
+    jql: request.jql === undefined ? "" : (jqlClause(request.jql) ?? ""),
+    ...(request.estimateFieldId === undefined ? {} : { estimateFieldId: request.estimateFieldId }),
+    estimateUnit: "unavailable",
+    estimateSource: "unavailable",
+    estimateUnavailableReason: "metadata-unavailable",
+    asOf: request.asOf ?? new Date(now).toISOString().slice(0, 10),
+    timeZone: "UTC",
+  };
+}
+
 export function createJiraReportSession(input: {
   readonly id: string;
   readonly owner: string;
@@ -142,18 +164,7 @@ export function createJiraReportSession(input: {
     owner: input.owner,
     fingerprint: input.fingerprint,
     request,
-    scope: {
-      ...(request.projectKey === undefined ? {} : { projectKey: request.projectKey }),
-      jql: request.jql === undefined ? "" : (jqlClause(request.jql) ?? ""),
-      ...(request.estimateFieldId === undefined
-        ? {}
-        : { estimateFieldId: request.estimateFieldId }),
-      estimateUnit: "unavailable",
-      estimateSource: "unavailable",
-      estimateUnavailableReason: "metadata-unavailable",
-      asOf: request.asOf ?? new Date(input.now).toISOString().slice(0, 10),
-      timeZone: "UTC",
-    },
+    scope: initialScope(request, input.now),
     jql: reportJql(request.projectKey, request.jql),
     startedAt: input.now,
     phase: "new",

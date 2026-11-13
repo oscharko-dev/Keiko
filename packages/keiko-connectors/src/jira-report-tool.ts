@@ -58,7 +58,7 @@ export interface JiraReportActivity {
   readonly reason?: JiraReportIncompleteReason;
   readonly failure?: JiraReportFailureReason;
   readonly refusal?: JiraReportRefusal;
-  readonly scopeKind: "project" | "jql" | "project-jql" | "report";
+  readonly scopeKind: "project" | "jql" | "project-jql" | "epic" | "report";
   readonly continued: boolean;
   readonly issuesRead: number;
   readonly issuesTotal?: number;
@@ -89,7 +89,15 @@ export interface JiraReportSectionPageActivity {
  * refusal carries a sentence in plain words that tells the model what to do instead.
  */
 export type JiraReportRequirementIds =
-  | { readonly ok: true; readonly ids: readonly string[] }
+  | {
+      readonly ok: true;
+      readonly ids: readonly string[];
+      /**
+       * Readable names of the identifiers Keiko derived for statements without one, so an
+       * uncovered `DRV-` handle can be read as what it is. Keiko lists them; a model never names them.
+       */
+      readonly labels?: Readonly<Record<string, string>> | undefined;
+    }
   | { readonly ok: false; readonly message: string };
 
 export interface JiraReportToolDeps<Context extends ManagedMcpInvocationContext> {
@@ -114,7 +122,8 @@ export function connectionFingerprint(connection: JiraManagedConnection): string
   );
 }
 function scopeKind(session: JiraReportSession): JiraReportActivity["scopeKind"] {
-  const { projectKey, jql } = session.request;
+  const { projectKey, jql, epicKey } = session.request;
+  if (epicKey !== undefined) return "epic";
   if (projectKey !== undefined && jql !== undefined) return "project-jql";
   return projectKey === undefined ? "jql" : "project";
 }
@@ -339,7 +348,14 @@ function withPodRequirements<Context extends ManagedMcpInvocationContext>(
   const valid = listed.ids.filter((id) => isJiraReportRequirementId(id));
   const ids = [...new Set([...args.request.requirementIds, ...valid])].sort(compareCodePoints);
   return ids.length <= JIRA_REPORT_REQUIREMENT_ID_MAX
-    ? { ok: true, request: { ...args.request, requirementIds: ids } }
+    ? {
+        ok: true,
+        request: {
+          ...args.request,
+          requirementIds: ids,
+          ...(listed.labels === undefined ? {} : { requirementLabels: listed.labels }),
+        },
+      }
     : { ok: false, message: REQUIREMENTS_UNAVAILABLE };
 }
 

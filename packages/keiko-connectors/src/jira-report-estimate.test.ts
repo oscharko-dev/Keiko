@@ -51,7 +51,12 @@ interface Options {
   /** Hits at or after this issue number are the ones that withhold it (default: every hit). */
   readonly withheldFromIssue?: number;
 }
-const TYPE_ID: Readonly<Record<string, string>> = { Epic: "10", Story: "11", Bug: "12", "Sub-task": "13" };
+const TYPE_ID: Readonly<Record<string, string>> = {
+  Epic: "10",
+  Story: "11",
+  Bug: "12",
+  "Sub-task": "13",
+};
 function boardPage(url: URL, options: Options): AtlassianHttpBodyResult {
   if (url.searchParams.get("projectKeyOrId") !== "REP") return { ...response({}), status: 404 };
   if (options.boardStatus !== undefined) return { ...response({}), status: options.boardStatus };
@@ -73,7 +78,8 @@ function transport(
     if (board !== undefined) return response(options.configurations?.[board] ?? CONFIG);
     const answer = await base(request);
     if (answer.kind !== "response" || answer.status !== 200) return answer;
-    if (url.pathname.includes("/createmeta/REP/issuetypes/")) return createMetaOf(url, answer, options);
+    if (url.pathname.includes("/createmeta/REP/issuetypes/"))
+      return createMetaOf(url, answer, options);
     if (url.pathname.endsWith("/search")) return searchOf(answer, options);
     return answer;
   };
@@ -102,13 +108,14 @@ function searchOf(
   };
   for (const issue of body.issues) {
     const typeId = String(record(issue.fields.issuetype).id);
-    const number = Number(String(issue.key).slice("REP-".length));
-    if ((options.withoutEstimateTypes ?? []).includes(typeId)) delete issue.fields[POINTS];
+    const number = Number(issue.key.slice("REP-".length));
+    if ((options.withoutEstimateTypes ?? []).includes(typeId))
+      Reflect.deleteProperty(issue.fields, POINTS);
     if (
       (options.withheldEstimateTypes ?? []).includes(typeId) &&
       number >= (options.withheldFromIssue ?? 0)
     )
-      delete issue.fields[POINTS];
+      Reflect.deleteProperty(issue.fields, POINTS);
   }
   return response(body);
 }
@@ -537,14 +544,19 @@ describe("an issue type that does not carry the estimate field (#4356)", () => {
   });
 
   it("keeps a measured zero and an explicit null apart from a type without the field", async () => {
+    const template = (type: FixtureIssue["type"]): FixtureIssue => {
+      const found = syntheticProject(8).find((item) => item.type === type);
+      if (found === undefined) throw new Error(`The fixture has no ${type}`);
+      return found;
+    };
     const story = (key: string, points: number | undefined): FixtureIssue => ({
-      ...syntheticProject(8).find((item) => item.type === "Story")!,
+      ...template("Story"),
       key,
       category: "indeterminate",
       status: "Working",
       ...(points === undefined ? {} : { points }),
     });
-    const bug = { ...syntheticProject(8).find((item) => item.type === "Bug")!, key: "REP-12" };
+    const bug = { ...template("Bug"), key: "REP-12" };
     const h = await run({
       issues: [story("REP-10", 0), story("REP-11", undefined), bug],
       withoutEstimateTypes: [BUG],

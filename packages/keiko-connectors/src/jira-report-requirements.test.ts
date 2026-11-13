@@ -4,6 +4,7 @@ import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/
 import { syntheticProject } from "./jira-report.fixture.js";
 import { harness, idOf, record } from "./jira-report.harness.js";
 import type { JiraReportRequirementIds } from "./jira-report-tool.js";
+import { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
 
 const LISTED = (ids: readonly string[]): JiraReportRequirementIds => ({ ok: true, ids });
 
@@ -130,5 +131,47 @@ describe("requirements listed by Keiko (requirementsFromPods, #4181)", () => {
     const first = await h.run({ projectKey: "REP", requirementsFromPods: true });
     await h.run({ reportId: idOf(first), section: "requirements" });
     expect(calls).toBe(1);
+  });
+});
+
+describe("an uncovered derived requirement is named readably (#4356)", () => {
+  const LABEL = "Ausgangslage: Das Portal soll Belege ermöglichen";
+  const listed = (): JiraReportRequirementIds => ({
+    ok: true,
+    ids: ["DRV-ABCDEFGH", "REQ-005", "REQ-999"],
+    labels: { "DRV-ABCDEFGH": LABEL },
+  });
+
+  it("states the statement beside the handle in the figures, the section page, the export and the card data", async () => {
+    const h = harness({ issues: syntheticProject(60) }, { requirements: listed });
+    const result = await h.run({ projectKey: "REP", requirementsFromPods: true });
+    const report = record(result.data.report);
+    const lines = String(report.figures).split("\n");
+    expect(lines).toContain("Requirements named by an issue: 1 of 3");
+    expect(lines).toContain(`DRV-ABCDEFGH;${LABEL}`);
+    expect(lines).toContain("REQ-999;");
+    const page = await h.run({ reportId: idOf(result), section: "requirements" });
+    expect(requirementItems(page.data)).toContainEqual({
+      id: "DRV-ABCDEFGH",
+      covered: false,
+      label: LABEL,
+    });
+    expect(requirementItems(page.data)).toContainEqual({ id: "REQ-999", covered: false });
+    const stored = h.session(idOf(result));
+    if (stored === undefined) throw new Error("Missing report");
+    expect(exportJiraReport(stored, "markdown").content).toContain(`DRV-ABCDEFGH (${LABEL})`);
+    expect(exportJiraReport(stored, "csv").content).toContain(`requirement,DRV-ABCDEFGH`);
+    expect(exportJiraReport(stored, "csv").content).toContain(LABEL);
+    // A Jira comment carries identifiers and numbers only, never text from a document.
+    expect(jiraReportCommentText(stored)).not.toContain("Portal");
+  });
+
+  it("leaves a report without derived handles unchanged", async () => {
+    const h = harness(
+      { issues: syntheticProject(60) },
+      { requirements: () => ({ ok: true, ids: ["REQ-005", "REQ-999"] }) },
+    );
+    const result = await h.run({ projectKey: "REP", requirementsFromPods: true });
+    expect(String(record(result.data.report).figures)).toContain("REQ-999;");
   });
 });

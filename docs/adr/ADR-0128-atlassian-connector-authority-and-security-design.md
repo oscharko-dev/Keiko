@@ -1674,13 +1674,54 @@ configuration cannot be read, the report selects a unique numeric Story Points f
 project's screens, then screen-backed `timetracking` as `timeoriginalestimate` in seconds.
 A global field name alone does not establish applicability. Without an applicable field, or when
 the board inventory exceeds its bound, the report records a closed unavailability reason and
-`estimate: null`, never invented zero totals or an invented unestimated-issue count. Cancellation
+`estimate: null` and per-type `estimated`/`unestimated` of `null`, never invented zero totals or an
+invented unestimated-issue count (#4356: with a selected field, `unestimated` counts every issue
+without a numeric estimate, an issue of a type that carries no estimate field included; the project
+figure and the per-type counts use that one test and sum). Cancellation
 and denied effect admission still stop the read. A JQL-only scope without a project preserves the
 original-time-estimate default in seconds. The summary and card name the selected field; model
 figures, exports and the report comment disclose unavailable estimates. The existing
 `atlassian.jira-report` line records `estimateSource` (`explicit-field`, `board-configuration`,
 `project-screen`, `time-tracking`, `unavailable`) and an optional closed
 `estimateUnavailableReason`, with no field id or display name.
+
+**Complete and truthful reports (#4356, 2026-11-13).** Four rules keep a figure from
+overstating what Jira allowed Keiko to read.
+(1) *Estimate applicability.* The report requests the selected estimate field for every hit, but
+Jira leaves a field out of a hit for two different reasons: the issue's type does not have it at
+all, or the account may not see it. The first is an unestimated issue; only the second makes the
+read incomplete (`omittedFields`, reason `read-failed`, failure `permission`; an unreadable
+estimate never becomes a complete zero, an explicit `null` stays unestimated and a numeric zero is
+a measured zero). Keiko decides from the create metadata it already reads per issue type
+(`estimateByType`): a hit that lacks the field is exempt only when that type's create screen was
+read and does not list the field while another type's does. A field no screen lists, such as an
+explicit `estimateFieldId` unknown to the metadata, exempts no type, and a type whose screen could
+not be read is never exempt. Only the independently measured prefix is kept when a later page
+withholds the field.
+(2) *An incomplete report says so first.* `report.figures` of an incomplete report opens with one
+`INCOMPLETE REPORT: <read> of <total> issues were read (<closed cause>)` line that states every
+figure below covers only the issues read; a complete report is unchanged. The export, comment
+and card already carry the status; an unavailable estimate stays `unavailable`, never zero.
+(3) *Epic scope.* `epicKey` is an additive scope (activity `scopeKind` `epic`), combinable with
+`projectKey` and `jql`, which it never widens. Keiko reads the Epic's members (`key = E OR "Epic
+Link" = E OR parent = E`; an instance that answers 400 for the `Epic Link` clause is read by
+`parent` alone), takes the members that can hold sub-tasks, and composes the reconcilable clause
+`<members clause> OR parent in (<member keys>)`, stated as `scope.jql`; no single JQL clause names
+the sub-tasks of an Epic's members, so a member list is part of the clause. An Epic that is not
+visible fails as `not-found`, one whose clause would exceed 3000 characters (or 1000 members) as
+`bounds-exceeded`; neither becomes an empty or silently narrowed scope.
+(4) *Derived requirement handles are named.* A `DRV-` handle is detected from a statement without
+an identifier, so a context sentence that contains an obligation phrase can become one and then
+reads as the one uncovered requirement. The denominator keeps them (an issue can name a derived
+handle through its trace footer or `keiko-req-` label), and Keiko lists a readable name for every
+derived handle it hands the report (`labels`: section and the start of the statement, redacted
+like other model-visible content). The uncovered handle then reads `id;statement` in
+`report.figures`, `label` in the requirement section page, in the Markdown export and in the CSV
+`summary` column; the Jira comment still carries identifiers only.
+Known limits: derived ids are salted by the document's identity, so the same text in two formats
+gets two derived ids (explicit ids are identical); a statement cell without a modal verb yields no
+unit for a row without an identifier; an Epic report does not follow sub-tasks of sub-tasks;
+board and sprint scope belong to the Agile surface and no history is invented.
 
 `requirementsFromPods: true` makes Keiko list the requirement identifiers of the Chat's
 Knowledge Pods itself (the read `knowledge.requirements` serves; stable derived `DRV-` handles are

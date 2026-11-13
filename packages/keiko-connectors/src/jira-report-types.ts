@@ -194,6 +194,8 @@ export interface JiraReportCompleteness {
 
 export interface JiraReportScope {
   readonly projectKey?: string;
+  /** The Epic a report was scoped to; its composed clause is part of `jql`. */
+  readonly epicKey?: string;
   readonly jql: string;
   readonly estimateFieldId?: string;
   readonly estimateFieldName?: string;
@@ -283,6 +285,12 @@ export interface JiraReport {
           readonly covered: number;
           readonly items: readonly JiraReportRequirementCoverage[];
           readonly uncovered: readonly string[];
+          /**
+           * A readable name per uncovered identifier Keiko derived for a statement without one.
+           * A derived handle is not a requirement a person wrote down by number: the name tells a
+           * lead whether it is a real requirement or a context sentence the detector took for one.
+           */
+          readonly uncoveredLabels: Readonly<Record<string, string>>;
         }
       | undefined;
   };

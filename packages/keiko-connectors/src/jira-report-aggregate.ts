@@ -29,6 +29,7 @@ export interface JiraReportInput {
   readonly requiredFieldRules: JiraReport["compliance"]["requiredFieldRules"];
   readonly checker: JiraReport["compliance"]["checker"];
   readonly declaredRequirements: readonly string[];
+  readonly requirementLabels: Readonly<Record<string, string>>;
   readonly now: Date;
 }
 
@@ -385,6 +386,7 @@ function requirementsOf(
   graph: Graph,
   issues: readonly JiraReportIssue[],
   declared: readonly string[],
+  labels: Readonly<Record<string, string>>,
   estimatesAvailable: boolean,
 ): JiraReport["coverage"]["requirements"] {
   if (declared.length === 0) return undefined;
@@ -416,7 +418,13 @@ function requirementsOf(
       byType: byTypeOf(traced, estimatesAvailable),
     });
   }
-  return { declared: ids.length, covered: items.length, items, uncovered };
+  const uncoveredLabels = Object.fromEntries(
+    uncovered.flatMap((id): [string, string][] => {
+      const label = Object.hasOwn(labels, id) ? labels[id] : undefined;
+      return label === undefined ? [] : [[id, label]];
+    }),
+  );
+  return { declared: ids.length, covered: items.length, items, uncovered, uncoveredLabels };
 }
 
 function classOf(graph: Graph, issue: JiraReportIssue): JiraReportIssueClass {
@@ -486,7 +494,13 @@ export function buildJiraReport(input: JiraReportInput): JiraReport {
         )
         .map((issue) => issue.key),
       orphans: rows.filter((row) => row.classification === "orphan").map((row) => row.issue.key),
-      requirements: requirementsOf(graph, issues, input.declaredRequirements, estimatesAvailable),
+      requirements: requirementsOf(
+        graph,
+        issues,
+        input.declaredRequirements,
+        input.requirementLabels,
+        estimatesAvailable,
+      ),
     },
     rows,
   });

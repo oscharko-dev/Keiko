@@ -49,6 +49,7 @@ export function isJiraReportRequirementId(value: string): boolean {
 const SCOPE_KEYS: ReadonlySet<string> = new Set([
   "projectKey",
   "jql",
+  "epicKey",
   "estimateFieldId",
   "asOf",
   "parentFieldIds",
@@ -79,6 +80,7 @@ function optionalField(value: unknown): string | undefined | null {
 interface ReportScope {
   readonly projectKey: string | undefined;
   readonly jql: string | undefined;
+  readonly epicKey: string | undefined;
 }
 function optionalProject(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
@@ -95,12 +97,13 @@ function optionalClause(value: unknown): string | undefined | null {
 }
 function scopeOf(args: CatalogJsonObject): ReportScope | undefined {
   const project = optionalProject(args.projectKey);
+  const epic = optionalProject(args.epicKey);
   const clause = optionalClause(args.jql);
-  if (project === null || clause === null) return undefined;
-  // A clause that was only ordering adds no scope; without a project nothing would be left.
+  if (project === null || epic === null || clause === null) return undefined;
+  // A clause that was only ordering adds no scope; without a project or Epic nothing would be left.
   const effective = clause === undefined || clause.length === 0 ? undefined : clause;
-  if (project === undefined && effective === undefined) return undefined;
-  return { projectKey: project, jql: effective };
+  if (project === undefined && effective === undefined && epic === undefined) return undefined;
+  return { projectKey: project, jql: effective, epicKey: epic };
 }
 function optionalDate(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
@@ -185,6 +188,7 @@ function continuation(args: CatalogJsonObject): JiraReportArgs | undefined {
 
 const ARGUMENT_CHECKS: Readonly<Record<string, (value: unknown) => boolean>> = {
   projectKey: (value) => optionalProject(value) !== null,
+  epicKey: (value) => optionalProject(value) !== null,
   jql: (value) => optionalClause(value) !== null,
   estimateFieldId: (value) => optionalField(value) !== null,
   asOf: (value) => optionalDate(value) !== null,

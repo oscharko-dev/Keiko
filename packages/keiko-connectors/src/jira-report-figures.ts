@@ -9,6 +9,34 @@ const ESTIMATE_REASONS: Readonly<Record<JiraReportEstimateUnavailableReason, str
   "ambiguous-field": "the project has conflicting estimate fields",
   "metadata-unavailable": "the project's estimate configuration could not be read",
 };
+const INCOMPLETE_CAUSES = {
+  "read-failed": "Jira stopped answering the read",
+  "scope-changed": "the scope changed while it was read",
+  "memory-budget": "the report reached its size limit",
+  "issue-too-large": "an issue was too large to read",
+  "template-unreadable": "the template library could not be read",
+} as const;
+const FAILURE_CAUSES = {
+  permission: "Jira withheld a field the report needs",
+  auth: "Jira refused the credential",
+  "rate-limited": "Jira limited the request rate",
+  timeout: "Jira did not answer in time",
+} as const;
+function incompleteCause(report: JiraReport): string {
+  const { reason, failure } = report.completeness;
+  const named =
+    failure === undefined ? undefined : (FAILURE_CAUSES as Record<string, string>)[failure];
+  return named ?? INCOMPLETE_CAUSES[reason ?? "read-failed"];
+}
+/** The first line of an incomplete report; absent for a complete one. */
+function incompleteLines(report: JiraReport): readonly string[] {
+  const { complete, issuesRead, issuesTotal } = report.completeness;
+  if (complete) return [];
+  const total = issuesTotal === undefined ? "an unknown number of" : String(issuesTotal);
+  return [
+    `INCOMPLETE REPORT: ${String(issuesRead)} of ${total} issues were read (${incompleteCause(report)}). Every figure below describes only the issues read, not the whole scope.`,
+  ];
+}
 export function jiraReportEstimateSummary(report: JiraReport): string {
   const estimate = report.progress.project.estimate;
   if (estimate === null)
@@ -120,11 +148,34 @@ function fixedBytes(lines: readonly string[]): number {
  * line states exactly what the report holds (#4181). A list longer than the line cap or than the
  * encoded size the tool result allows one string says how many entries it left out.
  */
+const REQUIREMENTS_HEAD =
+  "Requirements without an issue (id;statement Keiko derived it from, empty for a numbered one):";
+/**
+ * What the requirement coverage says in plain lines, so a model never reads a `DRV-` handle as a
+ * requirement a person numbered: an uncovered derived one carries the statement Keiko derived it from.
+ */
+function requirementLines(report: JiraReport): {
+  readonly summary: readonly string[];
+  readonly uncovered: readonly string[];
+} {
+  const requirements = report.coverage.requirements;
+  if (requirements === undefined) return { summary: [], uncovered: [] };
+  return {
+    summary: [
+      `Requirements named by an issue: ${String(requirements.covered)} of ${String(requirements.declared)}`,
+    ],
+    uncovered: requirements.uncovered.map((id) =>
+      line([id, requirements.uncoveredLabels[id] ?? ""]),
+    ),
+  };
+}
 export function jiraReportFigures(report: JiraReport): string {
   const { project, byStatus } = report.progress;
   const inScope = report.epics.filter((item) => !item.external);
   const outside = report.epics.filter((item) => item.external);
+  const requirements = requirementLines(report);
   const head = [
+    ...incompleteLines(report),
     `Issues in the report: ${String(project.total)}; done: ${String(project.done)}`,
     "Issues per type and status (type;status;issues):",
   ];
@@ -133,8 +184,16 @@ export function jiraReportFigures(report: JiraReport): string {
     "Containers outside the scope that hold issues of it (key;type;issues in it;of which done):";
   const estimate = estimateLines(report);
   const fit = fitter(
-    FIGURES_BYTES_MAX - fixedBytes([...head, epicsHead, outsideHead, ...estimate]),
-    outside.length === 0 ? 2 : 3,
+    FIGURES_BYTES_MAX -
+      fixedBytes([
+        ...head,
+        epicsHead,
+        outsideHead,
+        REQUIREMENTS_HEAD,
+        ...estimate,
+        ...requirements.summary,
+      ]),
+    (outside.length === 0 ? 2 : 3) + (requirements.uncovered.length === 0 ? 0 : 1),
   );
   const statuses = fit(
     byStatus.map((item) => line([item.typeName, item.statusName, item.total])),
@@ -142,6 +201,7 @@ export function jiraReportFigures(report: JiraReport): string {
   );
   const epics = fit(containerLines(inScope), "epics");
   const external = fit(containerLines(outside), "epics");
+  const uncovered = fit(requirements.uncovered, "requirements");
   const lines = [
     ...head,
     ...statuses.lines,
@@ -151,6 +211,10 @@ export function jiraReportFigures(report: JiraReport): string {
     ...epics.more,
     ...(outside.length === 0 ? [] : [outsideHead, ...external.lines, ...external.more]),
     ...estimate,
+    ...requirements.summary,
+    ...(uncovered.lines.length === 0
+      ? []
+      : [REQUIREMENTS_HEAD, ...uncovered.lines, ...uncovered.more]),
   ];
   return lines.join("\n");
 }

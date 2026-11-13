@@ -1708,7 +1708,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["project", "jql", "project-jql", "report"],
+        values: ["project", "jql", "project-jql", "epic", "report"],
       },
       continued: {
         type: "boolean",

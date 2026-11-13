@@ -12,6 +12,8 @@ import {
   retractRejectedParents,
   type JiraReportFieldPlan,
 } from "./jira-report-issue.js";
+import { resolveJiraReportEpicScope } from "./jira-report-epic.js";
+import { reportJql, jqlClause } from "./jira-report-jql.js";
 import { fetchJiraReportPage } from "./jira-report-page.js";
 import { resolveJiraReportEstimate } from "./jira-report-estimate.js";
 import {
@@ -80,10 +82,7 @@ function fieldPlan(
     parentProposals: new Map(),
     omittedFields: new Set(),
     estimateFieldId: session.scope.estimateFieldId,
-    estimateNotApplicableTypes: estimateNotApplicableTypes(
-      required,
-      session.scope.estimateFieldId,
-    ),
+    estimateNotApplicableTypes: estimateNotApplicableTypes(required, session.scope.estimateFieldId),
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
     checker,
@@ -121,6 +120,7 @@ function reportInput(
         : (session.required?.state ?? "unavailable"),
     checker: session.checker,
     declaredRequirements: request.requirementIds,
+    requirementLabels: request.requirementLabels ?? {},
     now: new Date(deps.now()),
   };
 }
@@ -178,6 +178,21 @@ function initializationProblem(
     return required.reason ?? "unavailable";
   return undefined;
 }
+/** Composes the Epic scope into the effective query; its failure is an initialization problem. */
+async function resolveEpic(
+  session: JiraReportSession,
+  http: JiraReportHttp,
+): Promise<JiraReportFailure | undefined> {
+  const { epicKey, projectKey, jql } = session.request;
+  if (epicKey === undefined) return undefined;
+  const epic = await resolveJiraReportEpicScope(http, epicKey);
+  if (epic.kind === "failed") return epic.reason;
+  const caller = jql === undefined ? "" : (jqlClause(jql) ?? "");
+  const clause = caller.length === 0 ? epic.clause : `(${caller}) AND (${epic.clause})`;
+  session.jql = reportJql(projectKey, clause);
+  session.scope = { ...session.scope, jql: clause };
+  return undefined;
+}
 async function initialize(
   session: JiraReportSession,
   deps: JiraReportReadDeps,
@@ -190,7 +205,8 @@ async function initialize(
       : await loadRequiredFields(http, session.request.projectKey);
   session.hierarchy = hierarchy;
   session.required = required;
-  const problem = initializationProblem(session, hierarchy, required);
+  const problem =
+    initializationProblem(session, hierarchy, required) ?? (await resolveEpic(session, http));
   if (problem !== undefined) {
     // The next call asks again; a second failure ends the report instead of degrading it silently.
     session.failure = jiraReportFailure(problem, false);
