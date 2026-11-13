@@ -912,8 +912,14 @@ describe("runLifecycleCli", () => {
       /\\system32\\windowspowershell\\v1\.0\\powershell\.exe$/u,
     );
     expect(win.args).not.toContain(url);
-    const encoded = win.args.at(-1) ?? "";
-    expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(`Start-Process '${url}'`);
+    const program = Buffer.from(win.args.at(-1) ?? "", "base64")
+      .toString("utf16le")
+      .split("\n");
+    // #4358: the opener announces its first statement and bounds `Start-Process` from there; the
+    // caller waits for the host start allowance plus that limit, not for 5 s in total.
+    expect(program.at(-1)).toBe(`Start-Process '${url}'`);
+    expect(program[1]).toBe("$keikoWatchdog = [Threading.CancellationTokenSource]::new(5000)");
+    expect(win.timeoutMs).toBe(65_000);
     expect(resolveExternalOpener(url, "darwin")).toEqual({ command: "open", args: [url] });
     expect(resolveExternalOpener(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
   });

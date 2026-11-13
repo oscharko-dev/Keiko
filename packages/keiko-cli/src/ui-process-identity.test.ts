@@ -89,7 +89,9 @@ describe("default live identity readers", () => {
     );
     expect(source).not.toMatch(/spawnSync\(\s*"(?:ps|powershell\.exe)"/u);
     expect(source).toContain('"/bin/ps"');
-    expect(source).toContain("resolveWindowsPowerShellExecutable");
+    // The Windows read is owned by keiko-security, which resolves the inbox PowerShell by identity.
+    expect(source).toContain("readWindowsProcessCommandLine");
+    expect(source).not.toContain("powershell");
   });
 
   it.skipIf(process.platform === "win32")(

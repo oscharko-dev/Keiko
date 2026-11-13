@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0ad97bab742497c52de67b448514b27ff4e4c834e6e0372347d7ae3815d4cc9c"
+    "catalogDigest": "32b1ccdac8080d011a8102eb15d2515d1db1afded1bf73d801219db7da46fbfd"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 695,
-    "proofCount": 718,
-    "resolvedProofCount": 718,
-    "failureClassCount": 401,
+    "operationCount": 697,
+    "proofCount": 720,
+    "resolvedProofCount": 720,
+    "failureClassCount": 402,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -838,6 +838,7 @@
         "security.keychain.withheld",
         "security.log.sink-failed",
         "security.portable-tree-attestation.failed",
+        "security.vault.custody",
         "security.vault.entries-delete-failed",
         "security.vault.entries-deleted",
         "security.vault.entries-merge-failed",
@@ -856,6 +857,7 @@
         "security.windows-portable-alert.system-root-refused",
         "security.windows-portable-legacy-launcher.system-binary-missing",
         "security.windows-portable-legacy-launcher.system-root-refused",
+        "security.windows-program.run",
         "security.windows-shortcut.system-binary-missing",
         "security.windows-shortcut.system-root-refused",
         "sqlite.state-path.refused",
@@ -1279,6 +1281,7 @@
     "windows-authenticode-system-binary": ["runtime-packages.rejection"],
     "windows-local-volume": ["runtime-packages.rejection"],
     "windows-owner-private": ["runtime-packages.rejection"],
+    "windows-program-latency": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-binary": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-root": ["runtime-packages.rejection"],
     "windows-system-binary-unavailable": ["runtime-packages.dependency-failure"],
@@ -1523,7 +1526,8 @@
     ],
     "cli.lifecycle.health.decision": [
       "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
-      "packages/keiko-cli/src/lifecycle-health-owner.test.ts"
+      "packages/keiko-cli/src/lifecycle-health-owner.test.ts",
+      "packages/keiko-cli/src/lifecycle-start-window.test.ts"
     ],
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
@@ -3104,6 +3108,9 @@
     "security.portable-tree-attestation.failed.driver": [
       "packages/keiko-security/src/portable-tree-attestation.test.ts"
     ],
+    "security.vault.custody.decision": [
+      "packages/keiko-security/src/windows-vault-custody.test.ts"
+    ],
     "security.vault.entries-delete-failed.count": [
       "packages/keiko-security/src/secret-vault.test.ts"
     ],
@@ -3149,6 +3156,9 @@
     ],
     "security.windows-portable-legacy-launcher.system-root-refused.emitted-line": [
       "packages/keiko-cli/src/security-log.activity-log-proof.test.ts"
+    ],
+    "security.windows-program.run.outcome": [
+      "packages/keiko-security/src/windows-powershell-program.test.ts"
     ],
     "security.windows-shortcut.system-binary-missing.mode": [
       "packages/keiko-security/src/windows-shortcuts.test.ts"

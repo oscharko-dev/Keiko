@@ -25,6 +25,7 @@ import { execFileSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   openSync,
@@ -72,6 +73,10 @@ import {
   startSecurityLogTimer,
   type SecurityLogSink,
 } from "./log-port.js";
+import {
+  attestWindowsVaultCustody,
+  type WindowsVaultCustodyPorts,
+} from "./windows-vault-custody.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
@@ -382,6 +387,14 @@ export interface ResolveLocalVaultKeyOptions {
    * Omitted or `undefined` keeps this resolver exactly as silent as before.
    */
   readonly sink?: SecurityLogSink | undefined;
+  /**
+   * Test seam for the Windows custody attestation of the keyfile tier (#4358). On Windows the key
+   * file and its directory are attested as private to the current principal before the key is
+   * used (windows-vault-custody.ts); `platform` lets a test on another host exercise that path
+   * with injected inspection and protection. Production callers pass none.
+   */
+  readonly windowsCustody?:
+    (WindowsVaultCustodyPorts & { readonly platform?: NodeJS.Platform | undefined }) | undefined;
 }
 
 export interface LocalSecretVault {
@@ -573,20 +586,47 @@ function generateKeychainKey(
   }
 }
 
-function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
-  const keyfile = resolve(vaultDir, keyfileName);
+function keyFromKeyfile(options: ResolveLocalVaultKeyOptions): Buffer {
+  const keyfile = resolve(options.vaultDir, options.keyfileName);
   // Refuse to read or write the key through a symlinked path segment so a hostile symlink cannot
   // redirect key material outside the hardened vault directory.
   assertNoSymlinkedPathSegments(keyfile);
   ensureDirHardened(dirname(keyfile));
   assertNoSymlinkedPathSegments(keyfile);
-  if (existsSync(keyfile)) {
-    return decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
+  let created: Buffer | undefined;
+  if (!existsSync(keyfile)) {
+    created = randomBytes(KEY_BYTES);
+    writeDurableTextFile(keyfile, created.toString("base64"), FILE_MODE);
+    chmodIfPresent(keyfile, FILE_MODE);
   }
-  const key = randomBytes(KEY_BYTES);
-  writeDurableTextFile(keyfile, key.toString("base64"), FILE_MODE);
-  chmodIfPresent(keyfile, FILE_MODE);
-  return key;
+  if ((options.windowsCustody?.platform ?? process.platform) === "win32") {
+    return readWindowsAttestedKey(keyfile, options);
+  }
+  return created ?? decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
+}
+
+// Windows has no mode bits: 0o700/0o600 above change nothing there. The key is therefore read
+// from ONE open descriptor whose identity the attestation is bound to, after the key file and its
+// directory were attested (and, when needed, made) private to the current principal (#4358). A
+// refusal throws before the key is read; an inspection that cannot run is recorded and claims
+// nothing (windows-vault-custody.ts).
+function readWindowsAttestedKey(keyfile: string, options: ResolveLocalVaultKeyOptions): Buffer {
+  const fd = openSync(keyfile, "r");
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    attestWindowsVaultCustody(
+      {
+        directory: dirname(keyfile),
+        keyfile,
+        keyfileIdentity: { dev: stat.dev, ino: stat.ino },
+        sink: options.sink,
+      },
+      options.windowsCustody,
+    );
+    return decodeKeyOrThrow(readFileSync(fd, "utf8").trim());
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function emitKeyResolutionFailed(sink: SecurityLogSink | undefined, error: unknown): void {
@@ -627,7 +667,7 @@ function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLoc
     createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink, options.env);
   const fromKeychain = keychainAccess();
   if (fromKeychain !== undefined) return { key: fromKeychain, source: "keychain" };
-  return { key: keyFromKeyfile(options.vaultDir, options.keyfileName), source: "keyfile" };
+  return { key: keyFromKeyfile(options), source: "keyfile" };
 }
 
 function assertNoSymlinkedPathSegments(resolvedPath: string): void {

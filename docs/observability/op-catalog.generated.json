@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0ad97bab742497c52de67b448514b27ff4e4c834e6e0372347d7ae3815d4cc9c",
+    "catalogDigest": "32b1ccdac8080d011a8102eb15d2515d1db1afded1bf73d801219db7da46fbfd",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4949,8 +4949,14 @@
               "process-exited",
               "health-timeout",
               "identity-mismatch",
-              "spawn-refused"
+              "spawn-refused",
+              "state-dir-unavailable"
             ]
+          },
+          "lifeSigns": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           },
           "launchBound": {
             "type": "boolean",
@@ -4964,8 +4970,8 @@
         "failureClasses": ["process-startup"],
         "proofIds": ["cli.lifecycle.health.decision"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:11",
-        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:54"]
+        "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:16",
+        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:70"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39870,8 +39876,8 @@
         "failureClasses": ["process-stall", "memory-pressure"],
         "proofIds": ["process.heartbeat.resources", "process.heartbeat.event-loop"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:91",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1277"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:92",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1278"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39999,8 +40005,8 @@
         "failureClasses": ["process-startup", "install-mode-probe-failed"],
         "proofIds": ["process.started.runtime", "process.started.configuration"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:119",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1402"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:120",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1403"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43724,6 +43730,66 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "security.vault.custody",
+        "category": "security",
+        "owner": "keiko-security",
+        "emitter": "windows-vault-custody.emitCustody",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["attested", "protected", "unattested", "refused"]
+          },
+          "target": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["none", "directory", "keyfile", "both"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "none",
+              "inspection-unavailable",
+              "protect-failed",
+              "unavailable",
+              "replaced",
+              "not-regular-file",
+              "not-directory",
+              "malformed-descriptor",
+              "foreign-owner",
+              "null-dacl",
+              "foreign-write",
+              "foreign-access",
+              "unsupported-ace"
+            ]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["security-vault-key-resolution"],
+        "proofIds": ["security.vault.custody.decision"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-security/src/windows-vault-custody.ts:59",
+        "emitterSites": ["packages/keiko-security/src/windows-vault-custody.ts:247"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "category": "security",
         "owner": "keiko-security",
         "causal": "correlation",
@@ -43771,8 +43837,8 @@
         },
         "failureClasses": ["security-vault-delete"],
         "proofIds": ["security.vault.entries-delete-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:280",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:944"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:285",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:984"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43804,8 +43870,8 @@
         "failureClasses": ["security-vault-delete"],
         "proofIds": ["security.vault.entries-deleted.count"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:264",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:924"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:269",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:964"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43857,8 +43923,8 @@
         },
         "failureClasses": ["security-vault-write"],
         "proofIds": ["security.vault.entries-merge-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:292",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:971"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:297",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1011"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43890,8 +43956,8 @@
         "failureClasses": ["security-vault-write"],
         "proofIds": ["security.vault.entries-merged.count"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:248",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:909"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:253",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:949"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43943,8 +44009,8 @@
         },
         "failureClasses": ["security-vault-rollback"],
         "proofIds": ["security.vault.entries-rollback-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:316",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1152"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:321",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1192"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43991,8 +44057,8 @@
         },
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.key-resolution-failed.evidence"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:239",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:595"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:244",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:635"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44025,8 +44091,8 @@
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.key-resolved.source"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:216",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:618"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:221",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:658"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44078,8 +44144,8 @@
         },
         "failureClasses": ["security-vault-read"],
         "proofIds": ["security.vault.shard-unreadable.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:304",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1067"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:309",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1107"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44269,7 +44335,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["input", "resolve", "verify"]
+            "values": ["input", "resolve", "host-start", "verify"]
           }
         },
         "causal": "none",
@@ -44278,8 +44344,8 @@
         "failureClasses": ["windows-local-volume"],
         "proofIds": ["security.windows-local-volume.refused.phase"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:23",
-        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:178"]
+        "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:30",
+        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:153"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44320,8 +44386,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/windows-owner-private.ts:41",
         "emitterSites": [
-          "packages/keiko-security/src/windows-owner-private.ts:280",
-          "packages/keiko-security/src/windows-owner-private.ts:388"
+          "packages/keiko-security/src/windows-owner-private.ts:294",
+          "packages/keiko-security/src/windows-owner-private.ts:402"
         ]
       },
       {
@@ -44485,6 +44551,46 @@
         "proofIds": ["security.windows-portable-legacy-launcher.system-root-refused.emitted-line"],
         "registrationSite": "packages/keiko-cli/src/security-log.ts:105",
         "emitterSites": ["packages/keiko-cli/src/security-log.ts:174"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "security.windows-program.run",
+        "category": "diagnostic",
+        "owner": "keiko-security",
+        "emitter": "windows-powershell-program.emitProgramRun",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "program": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["local-volume", "owner-private", "process-identity"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["completed", "host-start-timeout", "work-timeout", "unavailable"]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["windows-program-latency"],
+        "proofIds": ["security.windows-program.run.outcome"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-security/src/windows-powershell-program.ts:104",
+        "emitterSites": ["packages/keiko-security/src/windows-powershell-program.ts:239"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -49558,8 +49664,8 @@
         "failureClasses": ["legacy-update-audit-import"],
         "proofIds": ["update.runtime.legacy-import-deferred.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:219",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1693"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:220",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1697"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -60232,7 +60338,7 @@
         "requiredProductSurfaces": ["keiko-security"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": [],
+          "state": ["security.vault.custody"],
           "end": ["security.vault.key-resolved"],
           "failure": ["security.vault.key-resolution-failed"],
           "loss": []
@@ -60243,11 +60349,12 @@
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
+          "security.vault.custody",
           "security.vault.key-resolution-failed",
           "security.vault.key-resolved"
         ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["security.vault.key-resolved"],
+        "requiredResourceOperations": ["security.vault.custody", "security.vault.key-resolved"],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -61688,6 +61795,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "windows-program-latency",
+        "requiredProductSurfaces": ["keiko-security"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["security.windows-program.run"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": [],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["security.windows-program.run"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["security.windows-program.run"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "windows-shortcut-system-binary",
         "requiredProductSurfaces": ["keiko-security"],
         "requiredLifecycleOperations": {
@@ -62075,8 +62203,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 401,
-      "completeClassCount": 401,
+      "supportedClassCount": 402,
+      "completeClassCount": 402,
       "completeness": "complete",
       "classes": [
         {
@@ -105926,6 +106054,12 @@
                   "required": true
                 },
                 {
+                  "name": "lifeSigns",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -105938,7 +106072,7 @@
                   "required": true
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -107968,15 +108102,19 @@
           "failureClass": "security-vault-key-resolution",
           "requirementContract": "security-vault-key-resolution",
           "productSurfaces": ["keiko-security"],
-          "lifecycleTransitions": ["end", "failure"],
+          "lifecycleTransitions": ["end", "failure", "state"],
           "lifecycleOperations": {
             "start": [],
-            "state": [],
+            "state": ["security.vault.custody"],
             "end": ["security.vault.key-resolved"],
             "failure": ["security.vault.key-resolution-failed"],
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "security.vault.custody",
+              "mode": "none"
+            },
             {
               "op": "security.vault.key-resolution-failed",
               "mode": "correlation"
@@ -107987,9 +108125,45 @@
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["security.vault.key-resolved"],
+          "resourceSignals": ["security.vault.custody", "security.vault.key-resolved"],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "security.vault.custody",
+              "owner": "keiko-security",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "target",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.vault.custody.decision"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "security.vault.key-resolution-failed",
               "owner": "keiko-security",
@@ -115051,6 +115225,62 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "windows-program-latency",
+          "requirementContract": "windows-program-latency",
+          "productSurfaces": ["keiko-security"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["security.windows-program.run"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "security.windows-program.run",
+              "mode": "none"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["security.windows-program.run"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "security.windows-program.run",
+              "owner": "keiko-security",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "program",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.windows-program.run.outcome"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "windows-shortcut-system-binary",
           "requirementContract": "windows-shortcut-system-binary",
           "productSurfaces": ["keiko-security"],
@@ -116512,7 +116742,7 @@
     {
       "op": "cli.lifecycle.health",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/lifecycle-health-activity.ts:14",
+      "site": "packages/keiko-cli/src/lifecycle-health-activity.ts:19",
       "package": "keiko-cli"
     },
     {
@@ -116590,13 +116820,13 @@
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:94",
+      "site": "packages/keiko-cli/src/ui.ts:95",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:122",
+      "site": "packages/keiko-cli/src/ui.ts:123",
       "package": "keiko-cli"
     },
     {
@@ -116710,7 +116940,7 @@
     {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui.ts:222",
+      "site": "packages/keiko-cli/src/ui.ts:223",
       "package": "keiko-cli"
     },
     {
@@ -117962,63 +118192,75 @@
       "package": "keiko-security"
     },
     {
+      "op": "security.vault.custody",
+      "category": "security",
+      "site": "packages/keiko-security/src/windows-vault-custody.ts:62",
+      "package": "keiko-security"
+    },
+    {
       "op": "security.vault.entries-delete-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:282",
+      "site": "packages/keiko-security/src/secret-vault.ts:287",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-deleted",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:267",
+      "site": "packages/keiko-security/src/secret-vault.ts:272",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merge-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:294",
+      "site": "packages/keiko-security/src/secret-vault.ts:299",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merged",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:251",
+      "site": "packages/keiko-security/src/secret-vault.ts:256",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-rollback-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:318",
+      "site": "packages/keiko-security/src/secret-vault.ts:323",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolution-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:241",
+      "site": "packages/keiko-security/src/secret-vault.ts:246",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:219",
+      "site": "packages/keiko-security/src/secret-vault.ts:224",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:306",
+      "site": "packages/keiko-security/src/secret-vault.ts:311",
       "package": "keiko-security"
     },
     {
       "op": "security.windows-local-volume.refused",
       "category": "security",
-      "site": "packages/keiko-security/src/windows-local-volume.ts:26",
+      "site": "packages/keiko-security/src/windows-local-volume.ts:33",
       "package": "keiko-security"
     },
     {
       "op": "security.windows-owner-private.refused",
       "category": "security",
       "site": "packages/keiko-security/src/windows-owner-private.ts:44",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.windows-program.run",
+      "category": "diagnostic",
+      "site": "packages/keiko-security/src/windows-powershell-program.ts:107",
       "package": "keiko-security"
     },
     {
@@ -123765,6 +124007,7 @@
     "security.keychain.withheld",
     "security.log.sink-failed",
     "security.portable-tree-attestation.failed",
+    "security.vault.custody",
     "security.vault.entries-delete-failed",
     "security.vault.entries-deleted",
     "security.vault.entries-merge-failed",
@@ -123783,6 +124026,7 @@
     "security.windows-portable-alert.system-root-refused",
     "security.windows-portable-legacy-launcher.system-binary-missing",
     "security.windows-portable-legacy-launcher.system-root-refused",
+    "security.windows-program.run",
     "security.windows-shortcut.system-binary-missing",
     "security.windows-shortcut.system-root-refused",
     "server-log.initialize",

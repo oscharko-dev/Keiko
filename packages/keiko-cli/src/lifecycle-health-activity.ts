@@ -6,7 +6,12 @@ import {
 import { emitSecurityLogEvent, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 export type LifecycleHealthOutcome =
-  "healthy" | "process-exited" | "health-timeout" | "identity-mismatch" | "spawn-refused";
+  | "healthy"
+  | "process-exited"
+  | "health-timeout"
+  | "identity-mismatch"
+  | "spawn-refused"
+  | "state-dir-unavailable";
 
 const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -26,8 +31,17 @@ const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["healthy", "process-exited", "health-timeout", "identity-mismatch", "spawn-refused"],
+      values: [
+        "healthy",
+        "process-exited",
+        "health-timeout",
+        "identity-mismatch",
+        "spawn-refused",
+        "state-dir-unavailable",
+      ],
     },
+    // How often the starting UI process's sign of life restarted the start window (#4358).
+    lifeSigns: { type: "integer", dataClass: "count", required: false },
     launchBound: { type: "boolean", dataClass: "closed-enum", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -45,10 +59,12 @@ export function emitLifecycleHealth(
   phase: "start" | "tracked",
   outcome: LifecycleHealthOutcome,
   launchBound: boolean,
+  lifeSigns?: number,
 ): void {
   let errorKind: ActivityLogErrorKind = "unavailable";
   if (outcome === "health-timeout") errorKind = "timeout";
   if (outcome === "identity-mismatch") errorKind = "conflict";
+  if (outcome === "state-dir-unavailable") errorKind = "permission-denied";
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
@@ -57,7 +73,14 @@ export function emitLifecycleHealth(
         level: outcome === "healthy" ? "info" : "warn",
         ...(outcome === "healthy" ? {} : { errorKind }),
       },
-      { phase, outcome, launchBound, completeness: "complete", loss: "none" },
+      {
+        phase,
+        outcome,
+        launchBound,
+        completeness: "complete",
+        loss: "none",
+        ...(lifeSigns === undefined ? {} : { lifeSigns }),
+      },
     ),
   );
 }

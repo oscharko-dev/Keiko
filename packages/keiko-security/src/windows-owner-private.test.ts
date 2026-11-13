@@ -12,6 +12,7 @@ import {
   type WindowsOwnerPrivateFacts,
 } from "./windows-owner-private.js";
 import type { WindowsLocalVolumeRunner } from "./windows-local-volume.js";
+import { WINDOWS_PROGRAM_STARTED_MARKER } from "./windows-powershell-program.js";
 import type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
 import {
   expectActivityLogProof,
@@ -37,7 +38,10 @@ function runner(
     calls.push({ command, args, input: options.input, env: options.env });
     return {
       status: overrides.status ?? 0,
-      stdout,
+      // A PowerShell program announces its first statement; whoami and icacls do not.
+      stdout: args.includes("-EncodedCommand")
+        ? `${WINDOWS_PROGRAM_STARTED_MARKER}\n${stdout}`
+        : stdout,
       stderr: overrides.stderr ?? "",
       error: overrides.error,
     };

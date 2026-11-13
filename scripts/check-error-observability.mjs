@@ -125,6 +125,12 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "Pure bounded JSON syntax validation returns unavailable data. Write transport, sync classification, and Jira/Confluence sync adapters propagate malformed-payload. Existing action/live-search and SyncRun owners project atlassian.action.outcome; real transition, live-search, both provider metadata and item-sync regressions reconstruct failures. Managed Jira arrays delegate to mcp.managed.lifecycle, proven through the real gateway/binder/SDK with malformed JSON. This replaces the retired legacy parseJsonRecord catch; no generic parser exemption.",
     "packages/keiko-connectors/src/atlassian-verification-probe.ts:parseAtlassianVerificationProbe":
       "Pure bounded remote-JSON validation returns the closed invalid-response outcome, never remote text or a parser diagnostic. The credential route owns atlassian.connection.checked; the real Cloud client/route integration asserts exactly one registered invalid-response event for Jira and Confluence HTML responses.",
+    "packages/keiko-cli/src/ui-startup-progress.ts:beginUiStartupProgress":
+      "The starting UI process's sign of life is an optional report that can only make its launcher wait longer. When its record or worker cannot be created the start proceeds without it; the UI process has no activity-log writer yet at this point, and the launcher's cli.lifecycle.health line carries lifeSigns, where 0 shows a start that never reported.",
+    "packages/keiko-cli/src/ui-startup-progress.ts:write":
+      "A sign-of-life record that cannot be written ends the optional report for this start. It runs inside bounded security programs through the program observer and must never change their outcome; the launcher's cli.lifecycle.health lifeSigns count shows the missing records.",
+    "packages/keiko-cli/src/ui-startup-progress.ts:readRecord":
+      "Read-only predicate polled twice a second by the waiting launcher: no record, a link at the record's name and a non-regular file all return no sign of life, which keeps the unchanged start window. The start outcome and its lifeSigns count are recorded by the owning cli.lifecycle.health line.",
     "packages/keiko-cli/src/ui.ts:prepareUiProcessScope":
       "Native identity refusal precedes all durable writers. Fixed content-free CLI stderr reports the refusal and startup returns before constructing state; actual absent-port and SQLite controls verify this boundary.",
     "packages/keiko-security/src/native-process-scope.ts:retirePort":

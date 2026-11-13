@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 401,
-  "completeClassCount": 401,
+  "supportedClassCount": 402,
+  "completeClassCount": 402,
   "completeness": "complete",
   "classes": [
     {
@@ -43472,6 +43472,12 @@
               "required": true
             },
             {
+              "name": "lifeSigns",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
@@ -43484,7 +43490,7 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -45511,15 +45517,19 @@
       "failureClass": "security-vault-key-resolution",
       "requirementContract": "security-vault-key-resolution",
       "productSurfaces": ["keiko-security"],
-      "lifecycleTransitions": ["end", "failure"],
+      "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["security.vault.custody"],
         "end": ["security.vault.key-resolved"],
         "failure": ["security.vault.key-resolution-failed"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "security.vault.custody",
+          "mode": "none"
+        },
         {
           "op": "security.vault.key-resolution-failed",
           "mode": "correlation"
@@ -45530,9 +45540,45 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["security.vault.key-resolved"],
+      "resourceSignals": ["security.vault.custody", "security.vault.key-resolved"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "security.vault.custody",
+          "owner": "keiko-security",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "target",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["security.vault.custody.decision"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "security.vault.key-resolution-failed",
           "owner": "keiko-security",
@@ -52574,6 +52620,62 @@
             "causeChain": false
           },
           "proofIds": ["security.windows-owner-private.refused.phase"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "windows-program-latency",
+      "requirementContract": "windows-program-latency",
+      "productSurfaces": ["keiko-security"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["security.windows-program.run"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "security.windows-program.run",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["security.windows-program.run"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "security.windows-program.run",
+          "owner": "keiko-security",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "program",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["security.windows-program.run.outcome"],
           "replayReferences": [],
           "missingObligations": []
         }

@@ -161,12 +161,16 @@ describe("UI startup launch-bound health admission", () => {
     expect(
       expectActivityLogProof("cli.lifecycle.health.decision", formatActivityLogProofLine(event)),
     ).toMatchObject({ phase: "start", outcome: "healthy", launchBound: true });
+    // The exact, closed field set of a start decision. `lifeSigns` is the registered count of how
+    // often the starting UI process's sign of life restarted the window (#4358): a number, 0 here.
     expect(Object.keys(event.extra ?? {}).sort()).toEqual([
       "completeness",
       "launchBound",
+      "lifeSigns",
       "loss",
       "outcome",
       "phase",
     ]);
+    expect(event.extra?.lifeSigns).toBe(0);
   });
 });

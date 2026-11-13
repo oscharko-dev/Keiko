@@ -507,12 +507,6 @@
     },
     {
       "path": "packages/keiko-cli/src/ui-process-identity.ts",
-      "owner": "readWindowsCommandLine",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/ui-process-identity.ts",
       "owner": "runPs",
       "kind": "unregistered-catch",
       "count": 1

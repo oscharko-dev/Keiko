@@ -59,7 +59,8 @@ import {
 // ui.ts on every `keiko` invocation, and this one eager import accounted for most of
 // the measured ~410ms per-command module-loading tax (`keiko --version` included).
 // Only type imports may reference the package at module scope here.
-import { loadServer as loadServerModule } from "./lazy-modules.js";
+import { loadSecurity, loadServer as loadServerModule } from "./lazy-modules.js";
+import { beginUiStartupProgress, type UiStartupProgress } from "./ui-startup-progress.js";
 import {
   processExitingActivityLogEvent,
   processFatalActivityLogEvent,
@@ -1645,6 +1646,9 @@ async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promi
     installModeProbe: deps.installModeProbe,
     onHeartbeat: input.hooks.onHeartbeat,
   });
+  // The server listens and has answered its own start-up probes: the launcher's health check takes
+  // over from the sign of life.
+  endStartupProgress();
   const activity: WaitForShutdownActivity = {
     activityLog,
     startedAt,
@@ -1992,8 +1996,10 @@ export async function runUiCli(
     return reExec;
   }
   prepareUiInstallLayoutEvidence(cwd, effectiveEnv, deps);
+  await beginStartupProgress(cwd, effectiveEnv, parsed, deps);
   const staticRoot = deps.staticRoot ?? defaultStaticRoot(cwd);
   if (!ensureStaticRoot(staticRoot, io)) {
+    endStartupProgress();
     return 1;
   }
   const cspRuntime = await createLiveCspSource(
@@ -2018,7 +2024,39 @@ export async function runUiCli(
     );
   } finally {
     cspRuntime.dispose();
+    endStartupProgress();
   }
+}
+
+// #4358: while this process loads its code and initialises, it tells the launcher that waits on it
+// that it is working (ui-startup-progress.ts), and how long a bounded Windows program may keep it
+// silent. Only a launched UI reports: the launcher supplied the launch id it waits on.
+let startupProgress: UiStartupProgress | undefined;
+
+async function beginStartupProgress(
+  cwd: string,
+  env: EnvSource,
+  parsed: UiCliArgs,
+  deps: UiCliDeps,
+): Promise<void> {
+  const launchId = parsed.launchId ?? env[KEIKO_UI_LAUNCH_ID_ENV];
+  if (deps.createServer !== undefined || launchId === undefined) return;
+  const progress = beginUiStartupProgress(resolveRuntimeStateDir(cwd, env), launchId);
+  startupProgress = progress;
+  const { setWindowsProgramObserver } = await loadSecurity();
+  setWindowsProgramObserver((boundMs) => {
+    progress.announce(boundMs);
+  });
+}
+
+function endStartupProgress(): void {
+  const progress = startupProgress;
+  if (progress === undefined) return;
+  startupProgress = undefined;
+  progress.stop();
+  void loadSecurity().then(({ setWindowsProgramObserver }) => {
+    setWindowsProgramObserver(undefined);
+  });
 }
 
 function prepareUiProcessScope(parsed: UiCliArgs, io: CliIo): boolean {

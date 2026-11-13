@@ -15,6 +15,7 @@ import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from ".
 import {
   evaluateWindowsSecurityDescriptor,
   type WindowsDescriptorPrincipal,
+  type WindowsForeignAccess,
   type WindowsOwnerPrivateRefusal,
 } from "./windows-security-descriptor.js";
 import {
@@ -24,9 +25,8 @@ import {
 import type { WindowsLocalVolumeRunner } from "./windows-local-volume.js";
 import {
   commandOutputText,
-  encodePowerShellProgram,
   kernel32PInvokePrelude,
-  trustedPowerShellEnvironment,
+  runBoundedPowerShellProgram,
 } from "./windows-powershell-program.js";
 
 export const WINDOWS_OWNER_PRIVATE_TIMEOUT_MS = 20_000;
@@ -90,7 +90,12 @@ export type WindowsOwnerPrivateVerdict =
   | { readonly kind: "owner-private" }
   | {
       readonly kind: "refused";
-      readonly reason: WindowsOwnerPrivateRefusal | "unavailable" | "not-regular-file" | "replaced";
+      readonly reason:
+        | WindowsOwnerPrivateRefusal
+        | "unavailable"
+        | "not-regular-file"
+        | "not-directory"
+        | "replaced";
     };
 
 export interface WindowsOwnerPrivateOptions {
@@ -114,6 +119,10 @@ export interface WindowsOwnerPrivateProtectOptions {
 
 // Paths arrive as Base64 lines on standard input, so no path is ever interpolated into this fixed
 // program. Failures are reported as a bare "E|<index>": no exception text leaves the program.
+// The handle is opened without following a reparse point (FILE_FLAG_OPEN_REPARSE_POINT) and with
+// FILE_FLAG_BACKUP_SEMANTICS, which Windows requires to open a DIRECTORY at all (#4358: the secret
+// vault's directory is inspected too). The flag grants nothing by itself: it only bypasses access
+// checks for a token whose backup privilege is ENABLED, and no Keiko process enables it.
 const QUERY = String.raw`
 try {
 ${kernel32PInvokePrelude("KeikoOwnerPrivate")}  $null = pinvoke 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) @([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr])
@@ -134,7 +143,7 @@ while ($true) {
   try {
     $p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line))
     if ($p.StartsWith('\\') -or $p.StartsWith('//')) { throw 'unsupported' }
-    $h = $create.Invoke($null, @($p, [uint32]0x20080, [uint32]7, [IntPtr]::Zero, [uint32]3, [uint32]0x00200000, [IntPtr]::Zero))
+    $h = $create.Invoke($null, @($p, [uint32]0x20080, [uint32]7, [IntPtr]::Zero, [uint32]3, [uint32]0x02200000, [IntPtr]::Zero))
     if ($h.IsInvalid) { throw 'open' }
     try {
       $buf = [Runtime.InteropServices.Marshal]::AllocHGlobal(52)
@@ -233,28 +242,28 @@ function runQuery(
   paths: readonly string[],
   executable: string,
   runner: WindowsLocalVolumeRunner,
+  securityLogSink: SecurityLogSink | undefined,
 ): string {
   const input = paths.map((path) => `${Buffer.from(path, "utf8").toString("base64")}\n`).join("");
-  const result = runner(
+  // The limit bounds the inspection's own work; the host start is bounded separately (#4358).
+  const result = runBoundedPowerShellProgram({
+    program: "owner-private",
     executable,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellProgram(QUERY)],
-    {
-      encoding: "utf8",
-      env: trustedPowerShellEnvironment(executable),
-      input: `${input}\n`,
-      maxBuffer: MAX_LINE_BYTES * (paths.length + 1),
-      shell: false,
-      timeout: WINDOWS_OWNER_PRIVATE_TIMEOUT_MS,
-      windowsHide: true,
-    },
-  );
+    source: QUERY,
+    input: `${input}\n`,
+    workTimeoutMs: WINDOWS_OWNER_PRIVATE_TIMEOUT_MS,
+    maxOutputBytes: MAX_LINE_BYTES * (paths.length + 1),
+    runner,
+    securityLogSink,
+  });
   const failed = [
+    !result.started,
     result.error !== undefined,
     result.status !== 0,
-    commandOutputText(result.stderr) !== "",
+    result.stderr !== "",
   ];
   if (failed.some(Boolean)) throw new Error("windows-owner-private-unavailable");
-  return commandOutputText(result.stdout);
+  return result.stdout;
 }
 
 /**
@@ -272,7 +281,12 @@ export function inspectWindowsOwnerPrivateFiles(
     phase = "resolve";
     const executable = options.resolvePowerShell?.() ?? resolveWindowsPowerShellExecutable();
     phase = "inspect";
-    const stdout = runQuery(paths, executable, options.runner ?? spawnSync);
+    const stdout = runQuery(
+      paths,
+      executable,
+      options.runner ?? spawnSync,
+      options.securityLogSink,
+    );
     return parseInspection(stdout, paths.length);
   } catch (error) {
     emitSecurityLogEvent(
@@ -398,12 +412,14 @@ function changeWindowsDacl(
 /**
  * The verdict for one file the caller has OPENED: its own descriptor must be the very object that
  * was inspected (same volume serial and file index), a regular file and not a reparse point, and
- * its security descriptor must satisfy the owner-private policy.
+ * its security descriptor must satisfy the owner-private policy. `foreignAccess` selects the
+ * integrity policy (default) or the confidentiality policy of secret material.
  */
 export function windowsOwnerPrivateVerdict(
   facts: WindowsOwnerPrivateFacts,
   principal: WindowsDescriptorPrincipal,
   opened: WindowsOpenedFileIdentity,
+  foreignAccess: WindowsForeignAccess = "read",
 ): WindowsOwnerPrivateVerdict {
   if (facts.kind === "unavailable") return { kind: "refused", reason: "unavailable" };
   const linkOrDirectory = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
@@ -413,5 +429,28 @@ export function windowsOwnerPrivateVerdict(
   if (facts.volumeSerial !== opened.dev || facts.fileIndex !== opened.ino) {
     return { kind: "refused", reason: "replaced" };
   }
-  return evaluateWindowsSecurityDescriptor(facts.descriptor, principal);
+  return evaluateWindowsSecurityDescriptor(facts.descriptor, principal, foreignAccess);
+}
+
+/**
+ * The verdict for one DIRECTORY (#4358: the secret vault's directory). Node cannot hold a directory
+ * descriptor open on Windows, so the caller passes the identity it read from the path with
+ * `lstatSync(path, { bigint: true })` AFTER the inspection: the inspected object must still be the
+ * one at that path, a real directory and not a reparse point.
+ */
+export function windowsOwnerPrivateDirectoryVerdict(
+  facts: WindowsOwnerPrivateFacts,
+  principal: WindowsDescriptorPrincipal,
+  current: WindowsOpenedFileIdentity,
+  foreignAccess: WindowsForeignAccess = "read",
+): WindowsOwnerPrivateVerdict {
+  if (facts.kind === "unavailable") return { kind: "refused", reason: "unavailable" };
+  const directory = (facts.attributes & FILE_ATTRIBUTE_DIRECTORY) !== 0;
+  if (!directory || (facts.attributes & FILE_ATTRIBUTE_REPARSE_POINT) !== 0) {
+    return { kind: "refused", reason: "not-directory" };
+  }
+  if (facts.volumeSerial !== current.dev || facts.fileIndex !== current.ino) {
+    return { kind: "refused", reason: "replaced" };
+  }
+  return evaluateWindowsSecurityDescriptor(facts.descriptor, principal, foreignAccess);
 }

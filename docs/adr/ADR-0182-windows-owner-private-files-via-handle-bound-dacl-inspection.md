@@ -91,6 +91,70 @@ state directory, inheritably, at launch, and a protected child does not inherit 
 run on Windows then ended before its first turn (`runtime-reap-unproven` after an unexpected
 exit). A hand-over that fails refuses the prepare.
 
+### D5 — The secret vault's key file and directory are attested, under a confidentiality policy
+
+Amended 2026-11-13 (#4358, epic #4351). On POSIX the secret vault's directory is `0o700` and its key
+file `0o600`. On Windows those modes change nothing, and until this amendment the custody of the key
+file was only reported as inherited from the platform, so "not readable by another Windows user"
+could not be claimed.
+
+When the vault resolves its key from the key file on Windows, it now opens the key file once, has
+D1's inspection report the directory and that file, and reads the key from the same descriptor
+(`windows-vault-custody.ts`, called from `secret-vault.ts`). Two things differ from D1:
+
+- **Policy.** D1 is an integrity policy: nobody else may change the object, reading it is not
+  refused. Secret material needs confidentiality: `evaluateWindowsSecurityDescriptor(…, "none")`
+  refuses any allow ACE for a principal other than the token user, SYSTEM and Administrators,
+  whatever it grants (`foreign-access`), and reads inherit-only ACEs too, because they decide who
+  reaches what is later created below the directory. SYSTEM and Administrators are accepted
+  as owner for any process, not only an elevated one: the DACL rule already trusts both with full
+  control, and a key file created by one elevated run must not lock the same person out afterwards.
+- **Directory.** The inspection opens its handles with `FILE_FLAG_BACKUP_SEMANTICS`, which Windows
+  requires to open a directory. The flag grants nothing by itself: it bypasses access checks only
+  for a token whose backup privilege is enabled, and no Keiko process enables it. The directory is
+  bound to the identity at its path after the inspection; a reparse point is refused.
+
+Outcomes, each one body-free `security.vault.custody` line:
+
+| Outcome      | Meaning                                                                                                                                                              |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attested`   | Both objects are private as found.                                                                                                                                   |
+| `protected`  | One was not. Keiko gave it D4's protected owner-only DACL (inheritable on the directory) and it then attested.                                                        |
+| `refused`    | An object is not private and could not be made private, was replaced, or is not a regular file or directory. The key is not read; the vault fails closed.             |
+| `unattested` | The inspection itself could not run (PowerShell blocked or unavailable). Nothing is known and nothing is claimed; the vault keeps working as it did before (`warn`). |
+
+`unattested` deliberately does not fail closed, unlike D3. D3 refuses optional operator inputs;
+refusing here would take every stored credential away from a host that worked before this
+amendment, only because it blocks PowerShell P/Invoke. Such a host keeps the earlier
+platform-inherited custody, visibly, and the claim is made only where the attestation ran. A
+repair that cannot be verified afterwards is refused: the object was seen reachable by another
+principal.
+
+A Windows credential-store tier (DPAPI or the Credential Manager) is not part of this decision.
+
+### D6 — A fixed program is bounded twice: host start, and its own work
+
+Amended 2026-11-13 (#4358). Every fixed program ran under one limit that covered both the inbox
+PowerShell host coming up and the program's work (10 s for the local-volume check, 20 s for this
+inspection, 3 s for the launcher's process-identity read, 5 s for the browser opener). The host
+start is the larger and the less predictable part: 0.2 to 2 s on the qualified native host, 6.5 to
+20 s measured under x64 emulation on Windows on ARM. A limit sized for the work therefore refused a
+correct local disk (`Keiko.exe` did not start), left `keiko stop` unable to confirm the process it
+was about to end, and reported a failed browser hand-off, whenever the host was slow.
+
+`windows-powershell-program.ts` is the one owner of both bounds:
+
+- The work keeps the caller's limit, unchanged, counted from the program's first statement and
+  enforced inside the program by a watchdog that ends the process. A stalled volume or file query
+  is cut off exactly as early as before.
+- The host start has its own allowance of 60 s, three times the slowest start measured. It only
+  bounds a host that never reaches the program.
+- A run without the program's start marker never executed the program and is a failed run.
+
+The verdict stays fail closed in every case. The two failures are told apart: the local-volume
+refusal carries the phase `host-start` and no longer says the volume is not local, and a slow or
+timed-out program is one `security.windows-program.run` line with its duration.
+
 ## Consequences
 
 - MCP, native plugins, remote skills, global configuration and external instruction sources become
@@ -108,3 +172,8 @@ exit). A hand-over that fails refuses the prepare.
   explicit and closed.
 - Other owner-trust checks (trusted toolchain executables, Keiko-created state reported as
   `platform-inherited`) are unchanged by this decision and keep their current Windows behaviour.
+- Each vault whose key comes from the key file costs one inspection per process on Windows (D5),
+  at the time the key is first used; a repair adds the write processes of D4 once.
+- A host with a slow PowerShell start waits longer for a verdict instead of receiving a wrong one
+  (D6). The longest a single program can block its caller is the host start allowance plus the
+  program's own limit.

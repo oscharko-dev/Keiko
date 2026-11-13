@@ -176,13 +176,21 @@ that Keiko UI is not running.
 **Root Cause**
 
 The lifecycle command spawns the UI process and polls
-`http://127.0.0.1:<port>/api/health` until either the configured start
-timeout elapses or the child process exits. The error is emitted when the
-child process started but never returned a healthy response inside the
-configured timeout window (default 20 seconds via `KEIKO_START_TIMEOUT_SECS`).
-The two common causes are an immediate process crash (`process-exited`),
-recorded in the Activity Log as `process.fatal`, and a slow start on cold
-caches where the default timeout is too tight (`health-timeout`).
+`http://127.0.0.1:<port>/api/health` until the child process answers, exits,
+or shows no sign of life for the start window (default 20 seconds via
+`KEIKO_START_TIMEOUT_SECS`). The window bounds silence, not the whole start:
+while the UI process loads its code and initialises it records that it is
+working, and every record restarts the window. A first start after an
+installation or update can therefore take minutes (code loading under a virus
+scanner) and still succeed; `keiko start` then prints
+`Keiko is still starting.` once. A start that still shows life after fifteen
+minutes without becoming healthy is ended as well.
+
+The error is emitted when the child process exited (`process-exited`,
+recorded in the Activity Log as `process.fatal`) or went quiet for a whole
+window (`health-timeout`). The `cli.lifecycle.health` line carries `lifeSigns`,
+the number of times a sign of life restarted the window: `0` means the UI
+process never reported, a larger number that it worked and then stopped.
 
 **Diagnostic Steps**
 
@@ -212,9 +220,16 @@ than a process crash.
 - If the Activity Log contains `process.fatal`, address the underlying
   error it classifies (typically a port conflict or a Node.js version
   outside the [supported runtime range](../../package.json)).
-- If the foreground UI starts cleanly, raise the start timeout for slow
-  hosts by exporting `KEIKO_START_TIMEOUT_SECS=60` before invoking
-  `keiko start` or `npm run keiko:start`.
+- If the foreground UI starts cleanly and `lifeSigns` is `0`, the UI process
+  could not record its sign of life (the state directory was not writable for
+  it). Raise the window for that host by exporting
+  `KEIKO_START_TIMEOUT_SECS=60` before invoking `keiko start` or
+  `npm run keiko:start`, and check the state directory's permissions.
+- `keiko start: cannot create the Keiko state directory in the current working
+directory` means Keiko was started from a folder the account cannot write to,
+  for example `C:\Windows\System32` from a scheduled task or a shortcut
+  without a "Start in" folder. Start it from a folder you own, or pass
+  `--state-dir` with a folder inside your home folder.
 
 ---
 
