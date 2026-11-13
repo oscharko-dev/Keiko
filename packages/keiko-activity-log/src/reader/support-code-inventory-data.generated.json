@@ -1373,6 +1373,7 @@
     "keiko-server/atlassian/jiraAgilePlanningDescriptors",
     "keiko-server/atlassian/jiraAnonymizationUnlockDescriptors",
     "keiko-server/atlassian/jiraApplicationSettingsDescriptors",
+    "keiko-server/atlassian/jiraApprovalExpiry",
     "keiko-server/atlassian/jiraAssetDescriptors",
     "keiko-server/atlassian/jiraAttachmentContentPolicy",
     "keiko-server/atlassian/jiraAttachmentMarkupText",
