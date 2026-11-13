@@ -178,8 +178,8 @@ for activity-log, cli, quality-intelligence, security, tool-catalog, tools and u
 require-safety-comment-for-type-assertion became active for memory-capture, memory-consolidation,
 memory-retrieval, verification and workflows, and no-reflect-get for verification (#3933). On 2026-11-10 no-chained-type-assertions and no-array-filter-map became active for
 sandbox (#3933), and no-chained-type-assertions became active for harness and model-gateway
-(#3933). On 2026-11-11 no-reflect-get became active for cli and tools, and then for security and ui
-(#3933). The engine refuses an active
+(#3933). On 2026-11-11 no-reflect-get became active for cli and tools, and then for security and ui,
+and no-chained-type-assertions became active for evaluations (#3933). The engine refuses an active
 scope without files on the real repository. A hermetic test fixture writes its policy with only the
 scopes its own files certainly fall in.
 

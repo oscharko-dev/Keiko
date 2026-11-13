@@ -62,7 +62,8 @@
         "package:@oscharko-dev/keiko-ui",
         "package:@oscharko-dev/keiko-sandbox",
         "package:@oscharko-dev/keiko-harness",
-        "package:@oscharko-dev/keiko-model-gateway"
+        "package:@oscharko-dev/keiko-model-gateway",
+        "package:@oscharko-dev/keiko-evaluations"
       ]
     },
     {
