@@ -1006,6 +1006,12 @@ from `keiko status`. `keiko support analyze <report.json> --json` shows the line
 `error` line with `unsafe-target` is the refused outcome); the line's `target` and `reason` are not
 projected.
 
+The workspace shows a notice for `exposed` and `unattested`. The state is kept for the lifetime of
+the server process only: `exposed` is reported by the start that found and protected the key file.
+After a restart the key file is private and the state is `attested`, so a person who did not see
+the notice or `keiko status` during that run does not learn of the exposure from them. The lasting
+record is the Activity Log line `security.vault.custody` with `outcome: exposed`.
+
 **Resolution**
 
 - `exposed`: replace the stored tokens (disconnect and reconnect the Jira Pod with a new token),
