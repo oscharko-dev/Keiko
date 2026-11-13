@@ -168,7 +168,7 @@ async function composerFixture(ctx) {
   return { epic, task, epicLink };
 }
 
-const templatesOf = (ctx, fixture, options) =>
+const templatesOf = (_ctx, fixture, options) =>
   composerTemplates(PROJECT, fixture.epicLink, options);
 
 /** One fresh composer Chat and one turn; the issues of the type before/after are read from Jira. */

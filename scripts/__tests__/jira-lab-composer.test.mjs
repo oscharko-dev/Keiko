@@ -374,7 +374,7 @@ function lane({ act, templates = [] } = {}) {
         ),
       );
     },
-    http: async (name, _path, body) => {
+    http: async (name) => {
       calls.http.push(name);
       if (name === "template-import")
         return { skill: { id: `s${calls.http.length}`, revision: 1, digest: "d" } };
@@ -570,7 +570,7 @@ describe("C06 modes and C07 reports reuse the document lane's graders", () => {
   it("passes a plain request, never a requirement, to the three mode runs", async () => {
     const prompts = [];
     const ctx = lane({
-      act: ({ content, add, options }) => {
+      act: ({ content }) => {
         prompts.push(content);
         return { writes: 0, toolExchanges: [] };
       },
