@@ -4,6 +4,7 @@
 // followed were graded as product failures. The states are closed, the wait for health is bounded,
 // a journey that meets a down Jira is `invalid` (`lab-outage`), and before a restart destroys them
 // the container's last log lines and its exit/OOM state are kept in the session directory.
+import { Buffer } from "node:buffer";
 import { mkdirSync, readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
@@ -48,10 +49,18 @@ export async function labJiraState(session, { request = labRequest, now = Date.n
       LICENSE_MEDIA,
     );
   } catch (error) {
-    if (!isConnectionFailure(error)) throw error;
-    // An answer that is not JSON is Jira's startup page: reachable, but not ready.
-    return { state: /not JSON/u.test(String(error?.message)) ? "starting" : "unreachable" };
+    return stateOfFailure(error);
   }
+  return stateOfAnswer(result, now);
+}
+
+function stateOfFailure(error) {
+  if (!isConnectionFailure(error)) throw error;
+  // An answer that is not JSON is Jira's startup page: reachable, but not ready.
+  return { state: /not JSON/u.test(String(error?.message)) ? "starting" : "unreachable" };
+}
+
+function stateOfAnswer(result, now) {
   if (result.status === 503 || result.status === 404) return { state: "starting" };
   if (result.status !== 200) throw new TypeError("The laboratory license read was refused");
   const license = result.value;
@@ -61,17 +70,26 @@ export async function labJiraState(session, { request = labRequest, now = Date.n
 }
 
 /** Polls until Jira answers with a license reading, within the bound; otherwise a lab outage. */
-export async function waitForJiraHealth(
-  session,
-  {
+const WAIT_DEFAULTS = {
+  boundMs: HEALTH_WAIT_MS,
+  pollMs: POLL_MS,
+  sleep: delay,
+  now: Date.now,
+  onDown: () => undefined,
+};
+
+export async function waitForJiraHealth(session, options = {}) {
+  const {
     probe = labJiraState,
-    boundMs = HEALTH_WAIT_MS,
-    pollMs = POLL_MS,
-    sleep = delay,
-    now = Date.now,
-    onDown = () => undefined,
-  } = {},
-) {
+    boundMs,
+    pollMs,
+    sleep,
+    now,
+    onDown,
+  } = {
+    ...WAIT_DEFAULTS,
+    ...options,
+  };
   const deadline = now() + boundMs;
   let announced = false;
   for (;;) {

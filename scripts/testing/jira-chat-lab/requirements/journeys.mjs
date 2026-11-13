@@ -615,17 +615,8 @@ async function gradedRun({
  * Runs every selected journey `repeat` times, each in a fresh Chat, and returns the checks keyed
  * by scenario: the single run itself for `repeat` 1, otherwise the aggregate over the runs.
  */
-export async function runJourneys({
-  session,
-  directory,
-  modelId,
-  embeddingModelId,
-  truth,
-  ids,
-  repeat = 1,
-  readiness = modelUnavailable,
-  labState = labJiraState,
-}) {
+export async function runJourneys(options) {
+  const { session, modelId, embeddingModelId, repeat = 1 } = options;
   if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 20) {
     throw new TypeError("Invalid journey repeat count");
   }
@@ -636,50 +627,76 @@ export async function runJourneys({
     embeddingModelId,
     modelRetries: 1,
     retainState: true,
-    run: async (live) => {
-      const ctx = journeyContext(live, session, truth);
-      const capsuleId = await prepareDataPod(ctx);
-      // S14 replaces the specification with its next version; it runs last and restores version 1.
-      ctx.replaceSpecification = async (version) => {
-        writeSpecification(ctx, version);
-        await indexPod(ctx, capsuleId);
-      };
-      // S03 puts the specification into the Pod as one office format; S18 and S19 need further Chats.
-      ctx.useSpecificationFormat = async (format) => {
-        writeSpecificationAs(ctx, format);
-        await indexPod(ctx, capsuleId);
-      };
-      ctx.freshChat = async (toolMode) =>
-        (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
-      const ordered = [...ids.filter((id) => id !== "S14"), ...ids.filter((id) => id === "S14")];
-      // A Jira that stays down past the bound ends this journey as a lab outage, not the whole run.
-      let outage;
-      await eachJourneyInLicenseWindow(
-        ordered,
-        async (minimumSeconds) => {
-          outage = undefined;
-          try {
-            await ensureLicenseWindow(session, directory, minimumSeconds);
-          } catch (error) {
-            if (!(error instanceof LabOutageError)) throw error;
-            outage = error;
-          }
-        },
-        async (id) => {
-          if (outage !== undefined) {
-            checks[id] = invalidCheck("lab-outage", outage.message);
-            return;
-          }
-          const runs = await sequentially(
-            Array.from({ length: repeat }, (_, i) => i + 1),
-            (run) => timedRun({ ctx, session, modelId, capsuleId, id, readiness, labState }, run),
-          );
-          checks[id] = repeat === 1 ? runs[0] : aggregateRuns(runs);
-        },
-      );
-    },
+    run: (live) => runLane(live, options, checks),
   });
   return checks;
+}
+
+/** The Knowledge Pod lane: the corpus, its Pod and the structure skill, as every journey had them. */
+async function prepareDocumentLane(ctx, session, modelId) {
+  const capsuleId = await prepareDataPod(ctx);
+  // S14 replaces the specification with its next version; it runs last and restores version 1.
+  ctx.replaceSpecification = async (version) => {
+    writeSpecification(ctx, version);
+    await indexPod(ctx, capsuleId);
+  };
+  // S03 puts the specification into the Pod as one office format; S18 and S19 need further Chats.
+  ctx.useSpecificationFormat = async (format) => {
+    writeSpecificationAs(ctx, format);
+    await indexPod(ctx, capsuleId);
+  };
+  ctx.freshChat = async (toolMode) =>
+    (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
+  return capsuleId;
+}
+
+/** The ordered ids; S14 replaces the shared specification, so it always runs last. */
+const journeyOrder = (ids) => [
+  ...ids.filter((id) => id !== "S14"),
+  ...ids.filter((id) => id === "S14"),
+];
+
+async function runLane(live, options, checks) {
+  const { session, directory, modelId, truth, ids, repeat = 1 } = options;
+  const ctx = journeyContext(live, session, truth);
+  const capsuleId = await prepareDocumentLane(ctx, session, modelId);
+  const guard = licenseGuard(session, directory);
+  const run = { ctx, session, modelId, capsuleId };
+  const ports = {
+    readiness: options.readiness ?? modelUnavailable,
+    labState: options.labState ?? labJiraState,
+  };
+  await eachJourneyInLicenseWindow(journeyOrder(ids), guard.ensure, async (id) => {
+    if (guard.outage() !== undefined) {
+      checks[id] = invalidCheck("lab-outage", guard.outage().message);
+      return;
+    }
+    const runs = await sequentially(
+      Array.from({ length: repeat }, (_, i) => i + 1),
+      (number) => timedRun({ ...run, id, ...ports }, number),
+    );
+    checks[id] = repeat === 1 ? runs[0] : aggregateRuns(runs);
+  });
+}
+
+/**
+ * The license window before each journey. A Jira that stays down past the bound ends that journey
+ * as a lab outage (`outage()`), not the whole run; any other failure still stops the run.
+ */
+function licenseGuard(session, directory) {
+  let outage;
+  return {
+    outage: () => outage,
+    ensure: async (minimumSeconds) => {
+      outage = undefined;
+      try {
+        await ensureLicenseWindow(session, directory, minimumSeconds);
+      } catch (error) {
+        if (!(error instanceof LabOutageError)) throw error;
+        outage = error;
+      }
+    },
+  };
 }
 
 async function timedRun(args, run) {
