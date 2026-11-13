@@ -32,6 +32,31 @@ export interface CatalogSchemaMismatch {
    * lists never repeat a path, so this counts genuinely different violations, not repeated items.
    */
   readonly droppedPathCount: number;
+  /**
+   * Set only for an external JSON Schema, whose `required` list alone says what is mandatory: the
+   * managed-runtime dialect's rule that every declared property is required does not hold there.
+   */
+  readonly optionalProperties?: true;
+  /**
+   * A top-level `oneOf` or `anyOf` of required-property branches the value did not satisfy: the
+   * rule the model must meet, which a first-error account cannot state. Each alternative lists the
+   * property names that branch requires, taken from the schema.
+   */
+  readonly choice?: {
+    readonly kind: "exactly-one" | "at-least-one";
+    readonly alternatives: readonly (readonly string[])[];
+  };
+  /**
+   * Root-level property names the closed schema declares, set only with `unexpectedPropertyCount`
+   * from an external schema: the account of what to keep when a value carried one it does not. The
+   * names come from the schema, never from the value.
+   */
+  readonly declaredProperties?: readonly string[];
+  /** The values a `const` or `enum` property accepts, from the schema; never the rejected value. */
+  readonly allowed?: {
+    readonly path: string;
+    readonly values: readonly (string | number | boolean | null)[];
+  };
 }
 
 /**

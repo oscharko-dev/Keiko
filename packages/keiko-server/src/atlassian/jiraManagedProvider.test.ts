@@ -200,18 +200,30 @@ it("advertises all canonical write declarations only with a server mutation exec
   expect(connection).not.toHaveBeenCalled();
   expect(executeMutation).not.toHaveBeenCalled();
 });
-it("steers a model that is asked about many issues to jira.report, whose input names no field to guess", () => {
+it("points figures across many issues to jira.report without attracting every project question to it (#4357)", () => {
   const provider = createJiraProviderForCatalog(vi.fn(), [
     "jira.search",
+    "jira.search-post",
     "jira.issue",
     "jira.report",
   ]);
   const describe = (name: string): string =>
     provider.tools().find((tool) => tool.name === name)?.descriptor.description ?? "";
-  expect(describe("jira.search")).toContain("jira.report");
-  expect(describe("jira.issue")).toContain("jira.report");
+  // The pointer stays, narrowed to what the report computes: a model must not page or loop for totals.
+  // The old incident: models paged search results or read issues one by one to total a project.
+  // These descriptors must keep sending such totals to the report; the behavioural proof is the
+  // S10 case of the Jira lab on the integrated head (the project-statuses case stays separate).
+  for (const name of ["jira.search", "jira.search-post", "jira.issue"]) {
+    expect(describe(name), name).toMatch(/across many issues come from jira\.report/u);
+    expect(describe(name), name).toMatch(/not from (paging results|reading issues one by one)/u);
+  }
+  expect(describe("jira.search")).toMatch(/progress, estimates and template compliance/iu);
   const report = provider.tools().find((tool) => tool.name === "jira.report");
-  expect(report?.descriptor.description).toMatch(/not jira\.search or jira\.issue/u);
+  // Both attempts of the selection lane asked for project statuses and were answered by the report.
+  expect(report?.descriptor.description).not.toMatch(
+    /not jira\.search|whole project|any question/u,
+  );
+  expect(report?.descriptor.description).toMatch(/^Deterministic Jira report computed by Keiko/u);
   expect(report?.descriptor.description).toContain("requirementsFromPods");
   expect(report?.descriptor.description).toContain("report.figures");
   expect(JSON.stringify(report?.descriptor.inputSchema)).toContain("requirementsFromPods");
