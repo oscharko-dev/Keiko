@@ -803,6 +803,19 @@ function ReasoningOnToolTurnsNote({ model }: { readonly model: ModelCapability }
   return <div className="ml-url mono">{t("settings.models.reasoningOnToolTurnsDetected")}</div>;
 }
 
+// The first probe issue and, for a model admitted with a limit, the closed tool-calling note.
+function ReadinessNotes({ report }: { readonly report: GatewayReadinessReport }): ReactNode {
+  const t = useTranslate();
+  const warning = firstActionableProbeMessage(report);
+  const toolNote = toolCallingNote(report, t);
+  return (
+    <>
+      {warning === undefined ? null : <div className="ml-rwarn">{warning}</div>}
+      {toolNote === undefined ? null : <div className="ml-rwarn">{toolNote}</div>}
+    </>
+  );
+}
+
 function ReadinessSummary({
   model,
   state,
@@ -837,8 +850,6 @@ function ReadinessSummary({
   }
   const report = state.report;
   const workingToday = probePassed(report, "chat");
-  const warning = firstActionableProbeMessage(report);
-  const toolNote = toolCallingNote(report, t);
   return (
     <div className="ml-readiness">
       <div className="ml-rrow">
@@ -885,8 +896,7 @@ function ReadinessSummary({
               </span>
             ) : null}
           </div>
-          {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
-          {toolNote !== undefined ? <div className="ml-rwarn">{toolNote}</div> : null}
+          <ReadinessNotes report={report} />
           <CapabilityDisagreementActions
             model={model}
             report={report}

@@ -748,16 +748,13 @@ function logAutomaticReadinessCompleted(
   correlationId: string,
   report: GatewayReadinessReport,
 ): void {
-  logAutomaticReadinessOutcome(
-    deps,
-    correlationId,
-    report.modelId,
-    report.overallStatus,
-    report.probes.length,
-    inconclusiveProbeCount(report),
-    report.verifiedCapabilities.testedContextTokens,
-    toolCallingOutcomeOf(report),
-  );
+  logAutomaticReadinessOutcome(deps, correlationId, report.modelId, {
+    overallStatus: report.overallStatus,
+    probeCount: report.probes.length,
+    inconclusiveProbes: inconclusiveProbeCount(report),
+    verifiedContextTokens: report.verifiedCapabilities.testedContextTokens,
+    toolCallingOutcome: toolCallingOutcomeOf(report),
+  });
 }
 
 function toolCallingOutcomeOf(
@@ -810,16 +807,27 @@ function logAutomaticReadinessJoined(
   );
 }
 
+interface AutomaticReadinessOutcome {
+  readonly overallStatus: GatewayReadinessReport["overallStatus"];
+  readonly probeCount: number;
+  readonly inconclusiveProbes: number;
+  readonly verifiedContextTokens?: number | undefined;
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
+}
+
 function logAutomaticReadinessOutcome(
   deps: UiHandlerDeps,
   correlationId: string,
   modelId: string,
-  overallStatus: GatewayReadinessReport["overallStatus"],
-  probeCount: number,
-  inconclusiveProbes: number,
-  verifiedContextTokens?: number,
-  toolCallingOutcome?: GatewayToolCallingOutcome,
+  outcome: AutomaticReadinessOutcome,
 ): void {
+  const {
+    overallStatus,
+    probeCount,
+    inconclusiveProbes,
+    verifiedContextTokens,
+    toolCallingOutcome,
+  } = outcome;
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
@@ -1154,14 +1162,11 @@ function reserveEmbeddingProbe(
       passed = checked?.ok === true;
     } finally {
       if (automatic)
-        logAutomaticReadinessOutcome(
-          deps,
-          correlationId,
-          provider.modelId,
-          passed ? "ready" : "failed",
-          1,
-          inconclusive ? 1 : 0,
-        );
+        logAutomaticReadinessOutcome(deps, correlationId, provider.modelId, {
+          overallStatus: passed ? "ready" : "failed",
+          probeCount: 1,
+          inconclusiveProbes: inconclusive ? 1 : 0,
+        });
     }
   };
 }
@@ -4054,14 +4059,11 @@ async function observeOnDemandProbe(
     );
   } finally {
     recordConversationCheckVerdict(deps, modelId, outcome);
-    logAutomaticReadinessOutcome(
-      deps,
-      probeCorrelationId,
-      modelId,
-      outcome.overallStatus,
-      1,
-      outcome.inconclusiveProbes,
-    );
+    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, {
+      overallStatus: outcome.overallStatus,
+      probeCount: 1,
+      inconclusiveProbes: outcome.inconclusiveProbes,
+    });
   }
 }
 

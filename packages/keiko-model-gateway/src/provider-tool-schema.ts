@@ -241,13 +241,10 @@ export function providerToolSchema(schema: JsonObject, description: string): Pro
     ),
     ...folded.forbidden.slice(0, MAX_SENTENCE_SETS).map((sets) => forbiddenSentence(sets)),
   ].join(" ");
-  return {
-    parameters,
-    description:
-      sentences.length === 0
-        ? description
-        : description.length > 0
-          ? `${description} ${sentences}`
-          : sentences,
-  };
+  return { parameters, description: describedWith(description, sentences) };
+}
+
+function describedWith(description: string, sentences: string): string {
+  if (sentences.length === 0) return description;
+  return description.length > 0 ? `${description} ${sentences}` : sentences;
 }
