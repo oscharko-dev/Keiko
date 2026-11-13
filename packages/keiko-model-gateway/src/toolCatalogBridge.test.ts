@@ -1560,6 +1560,15 @@ describe("native tool advertisement bridge: call batches", () => {
     );
     expect(opsOf(events)).not.toContain("gateway.tool-catalog.native-passthrough");
   });
+
+  it("refuses a native call whose arguments are not an object", () => {
+    const { bridge, events } = nativeBridge();
+    const call = Object.assign(nativeCall("read", "call-1"), { arguments: ["fixture.txt"] });
+    expect(() => bridge.bindCalls([call])).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments" }),
+    );
+    expect(opsOf(events)).not.toContain("gateway.tool-catalog.native-passthrough");
+  });
 });
 
 describe("native tool advertisement bridge: assistant-text tool calls", () => {
