@@ -4600,16 +4600,15 @@ async function jiraTemplateRefusal(
     : deps.jiraWritePreflight({ tool: mutation.toolName, arguments: args });
 }
 
-/** The runtime's decoded MCP arguments as plain JSON; a value that is not JSON is left unchecked. */
+/**
+ * The runtime's decoded MCP arguments as plain JSON. They were parsed from the request body, so
+ * the round trip cannot fail; a value that is not an object is left unchecked.
+ */
 function jsonArguments(value: Readonly<Record<string, unknown>>): CatalogJsonObject | undefined {
-  try {
-    const copy: unknown = JSON.parse(JSON.stringify(value));
-    return typeof copy === "object" && copy !== null && !Array.isArray(copy)
-      ? (copy as CatalogJsonObject)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const copy: unknown = JSON.parse(JSON.stringify(value));
+  return typeof copy === "object" && copy !== null && !Array.isArray(copy)
+    ? (copy as CatalogJsonObject)
+    : undefined;
 }
 
 /**

@@ -183,6 +183,7 @@ function database(): {
 type RemoteMode =
   | "confirmed"
   | "readback-denied"
+  | "issue-gone-after-write"
   | "lost-response"
   | "jira-error-document"
   | "html-error-page"
@@ -290,6 +291,9 @@ async function fixtureReadResult(
 ): Promise<ReturnType<typeof fixtureRead>> {
   if (mode === "readback-denied" && writes > 0) return response({}, 403);
   const path = new URL(url).pathname;
+  // The deleted issue: after the DELETE, a read of any issue is a 404, as Jira answers for a gone one.
+  if (mode === "issue-gone-after-write" && writes > 0 && path.includes("/rest/api/2/issue/"))
+    return response({ errorMessages: ["Issue Does Not Exist"], errors: {} }, 404);
   if (operation === "jira.set-instance-base-url" && path.endsWith("/serverInfo")) {
     const observed = await lifecycle.read(url);
     if (observed === undefined)
@@ -1044,6 +1048,21 @@ it.each(SINGLE_MUTATIONS)(
     }
   },
 );
+// #4354, owner decision 2026-11-13: a 404 read-back of the issue after Jira accepted this very
+// DELETE is the deletion confirmed; the lab session saw it settle as "may not have been applied".
+it("settles an accepted jira.delete-issue as succeeded when the read-back finds the issue gone", async () => {
+  const operation = "jira.delete-issue";
+  const f = await fixture(
+    "issue-gone-after-write",
+    undefined,
+    operation,
+    reviewedAuthority(operation),
+  );
+  expect(await f.invoke(operation)).toMatchObject({
+    kind: "settled",
+    result: { status: "completed", data: { outcome: "succeeded" } },
+  });
+});
 it.each(SINGLE_MUTATIONS)(
   "keeps %s unconfirmed when readback is denied and blocks further writes",
   async (operation) => {

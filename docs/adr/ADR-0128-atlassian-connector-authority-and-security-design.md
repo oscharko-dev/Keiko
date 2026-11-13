@@ -892,6 +892,12 @@ uses only an existing configured application link, never an arbitrary model URL 
 Issue/project deletion evaluates surviving required parent/link/issue-picker references through
 the existing formal-impact owner, refusing an unresolved global population. Deleted objects' own
 summary/labels are not fabricated surviving post-states; archive does not invent a field migration.
+An issue deletion is the one lifecycle effect whose own read-back can confirm it (owner decision
+2026-11-13, #4354): when Jira's 2xx answer to this very DELETE was observed and the reviewed issue
+then reads as 404, the deletion is `succeeded`. A DELETE whose response was not observed (timeout,
+lost connection) never reaches the read-back and stays unconfirmed, because a 404 alone can also mean
+"not visible to this account"; any other read-back failure stays unconfirmed, and a refused DELETE
+stays failed. Archive, restore and subtask reordering keep their unconfirmed outcome.
 Project restore acknowledgement does not start a second reindex effect. Configuration observations
 alone still cannot establish effective access or full global consequences.
 

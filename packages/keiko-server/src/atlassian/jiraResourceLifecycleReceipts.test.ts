@@ -35,7 +35,23 @@ describe("strict issue/project lifecycle receipts", () => {
       Object.keys(JIRA_RESOURCE_LIFECYCLE_RECEIPTS).sort(),
     );
   });
-  it.each(CASES)(
+  it("confirms an issue deletion, and only with a receipt that states the issue is gone", () => {
+    const selected = CASES.find(({ name }) => name === "jira.delete-issue");
+    if (selected === undefined) throw new TypeError("Missing delete case");
+    expect(
+      validJiraMutationAttempt({ ok: true, receipt: selected.receipt }, selected.name),
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(
+      validJiraMutationAttempt(
+        { ok: true, receipt: { ...selected.receipt, issuePresent: true } },
+        selected.name,
+      ),
+    ).toMatchObject({ ok: false });
+  });
+  // Every other lifecycle operation keeps refusing a completed-effect claim (ADR-0128).
+  it.each(CASES.filter(({ name }) => name !== "jira.delete-issue"))(
     "retains $name known context while refusing completed-effect claims",
     ({ name, receipt }) => {
       expect(validJiraResourceLifecycleReceipt(receipt, name)).toBe(true);
