@@ -33,6 +33,9 @@ describe("the rehearsal's context replaces only the model", () => {
     });
     expect((await ctx.freshChat("supervised-coding")).id).toBe("rehearsal-2");
     expect(ctx.composerSelection).toEqual({ types: ["task"] });
+    // Chats that exist nowhere cannot be read back: no stored message, no reload failure.
+    expect(await ctx.storedAnswer({ id: "rehearsal-1" })).toBeUndefined();
+    expect(await ctx.reloadChat({ id: "rehearsal-1" })).toBe(2);
     expect(ctx.http).toBe("kept");
   });
 });
