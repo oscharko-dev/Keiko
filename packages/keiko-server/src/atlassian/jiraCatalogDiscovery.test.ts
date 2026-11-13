@@ -551,14 +551,17 @@ describe("finding an operation in ordinary words (#4357)", () => {
     const discover = restricted.find((tool) => tool.name === "jira.discover");
     const describeTool = restricted.find((tool) => tool.name === "jira.describe");
     if (discover === undefined || describeTool === undefined) throw new TypeError("Missing tools");
-    for (const query of ["who am I", "watch issue", "delete issue", "project statuses"]) {
-      const found = await discover.execute({ query, maxResults: 100 }, f.context);
+    const queries = ["who am I", "watch issue", "delete issue", "project statuses"];
+    const results = await Promise.all(
+      queries.map((query) => discover.execute({ query, maxResults: 100 }, f.context)),
+    );
+    results.forEach((found, index) => {
       const names = (found.data.items as readonly { tool: string }[]).map((item) => item.tool);
       expect(
         names.every((name) => name === "jira.projects"),
-        query,
+        queries[index],
       ).toBe(true);
-    }
+    });
     await expect(
       describeTool.execute({ identities: ["jira.myself"] }, f.context),
     ).resolves.toMatchObject({ isError: true });
