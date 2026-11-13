@@ -24,6 +24,15 @@ installed version, either nothing else happens at all, or one of four native dia
 A related report: the setup companion stays alive as a background process after the CLI phase is
 aborted.
 
+Not a failure: on the first installation, a double-click shows one information box titled `Keiko`
+("Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is
+ready."; with a German Windows display language: "Keiko wird eingerichtet. Der erste Start kann
+einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist."). The launcher has no window of its own, and the setup copies and attests the whole
+installation while the virus scanner reads every new file, so minutes can pass before the browser
+opens. The box appears once, when that first installation begins; it does not appear for a start of
+the installed copy or for an upgrade, and it never updates. A setup that fails afterwards shows one
+of the dialogs above. The Activity Log records the request as `portable.setup-notice.requested`.
+
 **Root Cause**
 
 `Keiko.exe` is a thin native launcher built as a `/SUBSYSTEM:WINDOWS` binary that spawns the
@@ -79,12 +88,20 @@ Get-Item .\runtime\node\node.exe, .\app\dist\cli\index.js | Format-List FullName
 .\Keiko.exe
 
 # 4) What did the managed install record?
+#    A portable install puts no `keiko` command on PATH: run the bundled Node against the CLI,
+#    from the folder that holds Keiko.exe (the extracted folder, or the installed copy).
 Get-Content $env:USERPROFILE\.keiko\portable-install-state.json
-keiko support export --state-dir $env:USERPROFILE\.keiko
+.\runtime\node\node.exe .\app\dist\cli\index.js support export --state-dir $env:USERPROFILE\.keiko
 $report = (Get-ChildItem $env:USERPROFILE\.keiko\support-reports\keiko-support-v1-*.json |
   Sort-Object LastWriteTime)[-1].FullName
-keiko support analyze $report --clusters
+.\runtime\node\node.exe .\app\dist\cli\index.js support analyze $report --clusters
 ```
+
+Wherever this page writes `keiko <command>` (`keiko stop`, `keiko status`), a portable install
+means `.\runtime\node\node.exe .\app\dist\cli\index.js <command>` run from the folder that holds
+`Keiko.exe`: the extracted folder, or the installed copy under `%LOCALAPPDATA%\Programs\Keiko`. The
+launcher runs the CLI the same way, and no `keiko` command is registered on PATH. An npm install
+uses `npx keiko <command>` instead.
 
 If step 1 reports a version below 0.3.6, the flash-and-exit is the known launcher defect (entry 1),
 regardless of what the other steps show. If step 2 shows a missing or zero-length file, the
