@@ -136,6 +136,8 @@ describe("the catalog", () => {
       "C05",
       "C06",
       "C07",
+      "C08",
+      "C09",
     ]);
     expect(COMPOSER_JOURNEY_IDS).toEqual(COMPOSER_SCENARIOS.map((entry) => entry.id));
     const ids = SCENARIOS.map((entry) => entry.id);
@@ -622,9 +624,10 @@ function lane({ act, library = [], selection } = {}) {
     },
     turn: async (chat, content, options) => {
       calls.turns.push({ chat, content });
+      // Jira is observed when the approval is asked, before the turn's effect happens.
+      const observed = await options?.observeBeforeApproval?.();
       const played = (await act({ chat, content, options, ctx, add, store })) ?? {};
       const writes = played.writes ?? 0;
-      const observed = writes > 0 ? await options?.observeBeforeApproval?.() : undefined;
       return {
         answer: played.answer ?? "",
         toolExchanges: played.toolExchanges ?? [],
