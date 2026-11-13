@@ -40,22 +40,118 @@ const ISSUE_OBJECTS = [
   /\bfehlermeldung(?:en)?\b/iu,
 ] as const;
 /** Something else was made: a summary, a report, a list, a comment, a text, an analysis. */
-const NOT_AN_ISSUE = [
-  /(?<!\p{L})(?:summar(?:y|ies)|overviews?|reports?|lists?|comments?|notes?|files?|texts?)(?!\p{L})/iu,
-  /(?<!\p{L})(?:documents?|drafts?|plans?|tables?|analys[ei]s|results?|answers?)(?!\p{L})/iu,
-  /(?<!\p{L})(?:übersicht(?:en)?|uebersicht(?:en)?|tabellen?|berichte?n?|listen?|zusammenfassung(?:en)?)(?!\p{L})/iu,
-  /(?<!\p{L})(?:kommentare?n?|notizen|notiz|dateien|datei|dokumente?n?|entw(?:ü|ue)rfe?n?)(?!\p{L})/iu,
-  /(?<!\p{L})(?:texte?n?|auswertung(?:en)?|analysen?|ergebnis(?:se)?n?|antwort(?:en)?)(?!\p{L})/iu,
-] as const;
+const NOT_AN_ISSUE_WORDS: ReadonlySet<string> = new Set([
+  "summary",
+  "summaries",
+  "overview",
+  "overviews",
+  "report",
+  "reports",
+  "list",
+  "lists",
+  "comment",
+  "comments",
+  "note",
+  "notes",
+  "file",
+  "files",
+  "text",
+  "texts",
+  "document",
+  "documents",
+  "draft",
+  "drafts",
+  "plan",
+  "plans",
+  "table",
+  "tables",
+  "analysis",
+  "analyses",
+  "result",
+  "results",
+  "answer",
+  "answers",
+  "übersicht",
+  "übersichten",
+  "uebersicht",
+  "uebersichten",
+  "tabelle",
+  "tabellen",
+  "bericht",
+  "berichte",
+  "berichten",
+  "liste",
+  "listen",
+  "zusammenfassung",
+  "zusammenfassungen",
+  "kommentar",
+  "kommentare",
+  "kommentaren",
+  "notiz",
+  "notizen",
+  "datei",
+  "dateien",
+  "dokument",
+  "dokumente",
+  "dokumenten",
+  "entwurf",
+  "entwürfe",
+  "entwuerfe",
+  "entwürfen",
+  "texte",
+  "texten",
+  "auswertung",
+  "auswertungen",
+  "analyse",
+  "analysen",
+  "ergebnis",
+  "ergebnisse",
+  "ergebnissen",
+  "antwort",
+  "antworten",
+]);
+
+function makesSomethingElse(window: string): boolean {
+  return (window.toLowerCase().match(/\p{L}+/gu) ?? []).some((word) =>
+    NOT_AN_ISSUE_WORDS.has(word),
+  );
+}
 const WINDOW_CHARS = 60;
 /** How many words after an active creation verb the created object may stand ("I created the 3 tasks"). */
 const OBJECT_WORDS_MAX = 4;
 /** Words and phrases that make a sentence a refusal, a question, a plan or a condition. */
 const NEGATING_WORDS: ReadonlySet<string> = new Set([
-  ...["not", "never", "no", "cannot", "can't", "couldn't", "wasn't", "weren't", "won't"],
-  ...["would", "will", "should", "shall", "if", "unable", "from"],
-  ...["nicht", "kein", "keine", "konnte", "könnte", "werde", "würde", "wuerde", "soll"],
-  ...["sollte", "falls", "wenn", "noch", "aus", "anhand"],
+  "not",
+  "never",
+  "no",
+  "cannot",
+  "can't",
+  "couldn't",
+  "wasn't",
+  "weren't",
+  "won't",
+  "would",
+  "will",
+  "should",
+  "shall",
+  "if",
+  "unable",
+  "from",
+  "nicht",
+  "kein",
+  "keine",
+  "konnte",
+  "könnte",
+  "werde",
+  "würde",
+  "wuerde",
+  "soll",
+  "sollte",
+  "falls",
+  "wenn",
+  "noch",
+  "aus",
+  "anhand",
 ]);
 const NEGATING_PHRASES = ["could not", "based on", "out of"] as const;
 /** Third-person or dated history: who created it and when, or a quoted Created field. */
@@ -98,10 +194,7 @@ function createsAnIssue(sentence: string): boolean {
     const match = pattern.exec(sentence);
     if (match === null) return false;
     const window = objectWindow(sentence, match, object);
-    return (
-      !NOT_AN_ISSUE.some((other) => other.test(window)) &&
-      ISSUE_OBJECTS.some((noun) => noun.test(window))
-    );
+    return !makesSomethingElse(window) && ISSUE_OBJECTS.some((noun) => noun.test(window));
   });
 }
 
