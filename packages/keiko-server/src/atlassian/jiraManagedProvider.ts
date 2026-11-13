@@ -116,6 +116,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
+  jiraOperationInReleaseScope,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -128,7 +129,7 @@ import type {
   ManagedMcpToolDeclaration,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { recordJiraProviderCall } from "./jiraOperationActivity.js";
+import { recordJiraProviderCall, recordJiraReleaseScopeRefusal } from "./jiraOperationActivity.js";
 import {
   compileExternalCatalogSchema,
   createToolDescriptor,
@@ -664,11 +665,15 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          recordJiraProviderCall(
-            args[1].correlationId,
-            operation,
-            result.isError === true ? "failed" : "completed",
-          );
+          if (result.isError === true && !jiraOperationInReleaseScope(operation))
+            // The release switch refused it: the one line names that, not a generic tool failure.
+            recordJiraReleaseScopeRefusal(args[1].correlationId, operation);
+          else
+            recordJiraProviderCall(
+              args[1].correlationId,
+              operation,
+              result.isError === true ? "failed" : "completed",
+            );
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },

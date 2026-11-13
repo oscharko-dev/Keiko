@@ -10,6 +10,7 @@ import {
 import { recordJiraHumanInput } from "../atlassian/credentialActivity.js";
 import { createJiraPrivateLifetime } from "../atlassian/httpPrivateIdentity.js";
 import {
+  jiraOperationInReleaseScope,
   jiraRequiredConnectorScope,
   JIRA_MANAGED_ACTION_TYPES,
   JIRA_MUTATION_OPERATIONS,
@@ -49,6 +50,7 @@ import { createMcpRelayEndpoint, ManagedMcpError } from "@oscharko-dev/keiko-mcp
 
 import type { AtlassianConnectorCredentialDeps } from "../atlassian/credentialRoutes.js";
 import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import { recordJiraReleaseScopeRefusal } from "../atlassian/jiraOperationActivity.js";
 import { recordJiraReportActivity } from "../atlassian/jiraReportActivity.js";
 import {
   jiraAttemptToolResult,
@@ -330,7 +332,8 @@ function preflightRefusal(
   operation: JiraMutationOperation,
   checked: Extract<Awaited<ReturnType<typeof checkJiraManagedMutation>>, { ok: false }>,
 ): string {
-  if (checked.violations !== undefined)
+  if (!jiraOperationInReleaseScope(operation)) recordJiraReleaseScopeRefusal(runId, operation);
+  else if (checked.violations !== undefined)
     recordJiraTemplateRefusal(runId, {
       operation,
       stage: "pre-approval",

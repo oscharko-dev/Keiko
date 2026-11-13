@@ -207,7 +207,7 @@ import {
   type JiraIssueLinkPlan,
   type JiraIssueLinkRequest,
 } from "./jira-issue-links.js";
-import { dispatchFailure } from "./jira-mutation-failure.js";
+import { dispatchFailure, type JiraHttpFailure } from "./jira-mutation-failure.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { executeJiraProjectMutation, isJiraProjectMutation } from "./jira-managed-projects.js";
 import {
@@ -417,15 +417,30 @@ export function requestFor(
       ...(upload === undefined ? {} : { upload }),
     });
 }
+/**
+ * KEIKO-0814: a transition Jira listed a moment ago and now refuses has moved with the workflow
+ * between the listing and the write. Jira answers 404, or 400 with only a general message (a 400
+ * that names fields is a refused field value and stays one).
+ */
+function transitionMovedAway(response: JiraHttpFailure): boolean {
+  return (
+    response.httpStatus === 404 ||
+    (response.httpStatus === 400 && response.remote?.fieldErrors === undefined)
+  );
+}
 async function statusMutation(
   request: JiraMutationRequest,
   path: string,
   method: "POST" | "PUT",
   body: Readonly<Record<string, unknown>>,
   metadata: readonly JiraFieldMetadata[] = [],
+  transition = false,
 ): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
-  if (!response.ok) return dispatchFailure(response, metadata);
+  if (!response.ok)
+    return transition && transitionMovedAway(response)
+      ? { ok: false, reason: "invalid-transition" }
+      : dispatchFailure(response, metadata);
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
 function isCreateRoutingField(id: string): boolean {
@@ -995,7 +1010,14 @@ async function fieldMutation(
   const formatting = { ...descriptionMetric(policy), ...descriptionMetric(validated) };
   if (!onlyLinkCalls) {
     const body = { fields: validated.fields, update, ...target.body };
-    const sent = await statusMutation(request, target.path, target.method, body, metadata.fields);
+    const sent = await statusMutation(
+      request,
+      target.path,
+      target.method,
+      body,
+      metadata.fields,
+      purpose === "transition",
+    );
     if (!sent.ok) return withDescriptionFormatting(sent, formatting);
   }
   const attempt = await completeJiraLinkedMutation(
@@ -1499,7 +1521,11 @@ async function draftItemEpicFailure(
   const input = draftItemInput(item, keys, undefined);
   if (!input.ok) return undefined;
   const prepared = draftItemCreateFields(item, input.fields, metadata, undefined);
-  return prepared.ok ? (await epicLinkTargetRefusal(request, prepared.fields))?.detail : undefined;
+  // The parent relation of an item that names a ref of this draft holds a stand-in key here.
+  const local = new Set(item.parent?.ref === undefined ? [] : [item.parent.fieldId]);
+  return prepared.ok
+    ? (await epicLinkTargetRefusal(request, prepared.fields, local))?.detail
+    : undefined;
 }
 const draftTypeKey = (item: JiraDraftItem): string => `${item.projectId}/${item.issueTypeId}`;
 /** The create fields of each issue type a draft uses, so its size costs no further read. */
@@ -2130,7 +2156,10 @@ export async function checkJiraManagedMutationTemplates(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraTemplateGateResult> {
-  const attempt = await checkedAttempt(operation, source, context, connection);
+  // Template rules only: no Epic Link target check runs here (it needs the invocation's agile
+  // request, which this entry does not install). A draft item's Epic Link is judged by
+  // `jiraDraftFieldRefusals`, which knows which relations are only stand-ins for other items.
+  const attempt = await checkedAttemptInner(operation, source, context, connection);
   if (attempt.ok) return { ok: true };
   // A Jira that cannot be read is told apart from a pass, so a caller can stop reading it.
   if (attempt.violations === undefined)

@@ -130,8 +130,10 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
       reason: "field-validation",
       detail: { fieldId: "customfield_10014", validation: "invalid-epic-link" },
     });
-    expect(JSON.stringify(result)).toContain("not an Epic");
-    expect(JSON.stringify(result)).toContain(TASK);
+    // Both halves of the wording: the target may be no Epic, or an issue this account cannot see.
+    expect(JSON.stringify(result)).toContain(
+      `${TASK} is not an Epic, or this account cannot see it, so it cannot be the Epic Link`,
+    );
     expect(jira.writes()).toBe(0);
   });
 
@@ -149,7 +151,7 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
       fields: { customfield_10014: TASK },
     });
     expect(result).toMatchObject({ ok: false, reason: "field-validation" });
-    expect(JSON.stringify(result)).toContain("not an Epic");
+    expect(JSON.stringify(result)).toContain("or this account cannot see it");
     expect(jira.writes()).toBe(0);
   });
 
@@ -197,11 +199,13 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
         { reconcile: false },
       );
       expect(refusals.refusals).toHaveLength(1);
-      expect(JSON.stringify(refusals.refusals[0])).toContain("not an Epic");
+      expect(JSON.stringify(refusals.refusals[0])).toContain(
+        `${TASK} is not an Epic, or this account cannot see it`,
+      );
       expect(jira.writes()).toBe(0);
     });
 
-    it("is not refused when its Epic Link points to an Epic, or to another item of the draft", async () => {
+    it("is not refused when its Epic Link points to an Epic", async () => {
       const jira = remote();
       const toEpic = await jiraDraftFieldRefusals(
         draftOf(DRAFT_ITEM(EPIC)),
@@ -210,14 +214,47 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
         { reconcile: false },
       );
       expect(toEpic.refusals).toEqual([]);
-      const other = { ...DRAFT_ITEM("DRAFT-1"), ref: "b", parent: undefined };
-      const toItem = await jiraDraftFieldRefusals(
-        draftOf(DRAFT_ITEM(EPIC), other),
+    });
+
+    // The stand-in key of a relation inside the draft is never looked up: it is decided by what the
+    // item says (it names the ref of another item), not by how a key looks.
+    it("is not refused when its parent relation names the ref of an Epic item of the same draft", async () => {
+      const jira = remote();
+      const epicItem = {
+        ref: "epic",
+        projectId: "10000",
+        issueTypeId: "3",
+        fields: { summary: "An epic of this draft", customfield_10000: "x" },
+      };
+      const child = {
+        ...DRAFT_ITEM(EPIC),
+        ref: "child",
+        fields: { summary: "A story under that epic", customfield_10000: "x" },
+        parent: { fieldId: "customfield_10014", ref: "epic" },
+      };
+      const refusals = await jiraDraftFieldRefusals(
+        draftOf(epicItem, child),
         jira.context,
         jira.connection,
         { reconcile: false },
       );
-      expect(toItem.refusals).toEqual([]);
+      expect(refusals.refusals).toEqual([]);
+      const urls = jira.http.mock.calls.map(([request]) => new URL(request.url).pathname);
+      expect(urls.some((path) => path.includes("/rest/agile/1.0/epic/"))).toBe(false);
+    });
+
+    // A project with the key DRAFT can exist: its issue DRAFT-1 is a real issue like any other, and
+    // when it is a Task it is refused, whatever the stand-in key a draft uses for its own relations.
+    it("refuses an Epic Link to a real issue DRAFT-1 that is a Task", async () => {
+      const jira = remote();
+      const refusals = await jiraDraftFieldRefusals(
+        draftOf(DRAFT_ITEM("DRAFT-1")),
+        jira.context,
+        jira.connection,
+        { reconcile: false },
+      );
+      expect(refusals.refusals).toHaveLength(1);
+      expect(JSON.stringify(refusals.refusals[0])).toContain("not an Epic");
     });
 
     it("reads the field list and each target once, however many items name it", async () => {

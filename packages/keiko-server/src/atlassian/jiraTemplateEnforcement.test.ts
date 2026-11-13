@@ -1479,21 +1479,29 @@ describe("the dry run before approval", () => {
       });
 
       // A 5xx is read again with backoff, once for the whole series: a dry run that cannot read Jira
-      // decides nothing, it never reads again per stage or per item (#4354).
+      // decides nothing, it never reads again per stage or per item (#4354). The backoff timer is
+      // driven by the test, so the series runs without waiting for it.
       it("leaves the decision to the write when Jira answers 503, after one retry series", async () => {
-        const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
-          metadataFails: 503,
-        });
-        expect(await f.run()).toBeUndefined();
-        const reads = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
-        // One series of five attempts on the one metadata read; no later stage reads it again.
-        expect(reads).toEqual(
-          Array.from(
-            { length: 5 },
-            () => "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001",
-          ),
-        );
-      }, 30_000);
+        vi.useFakeTimers({ toFake: ["setTimeout"] });
+        try {
+          const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
+            metadataFails: 503,
+          });
+          const run = f.run();
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(await run).toBeUndefined();
+          const reads = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
+          // One series of five attempts on the one metadata read; no later stage reads it again.
+          expect(reads).toEqual(
+            Array.from(
+              { length: 5 },
+              () => "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001",
+            ),
+          );
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
   });
 

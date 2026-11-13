@@ -307,20 +307,20 @@ tier, and one disposition per mode. This is the normative mapping from ADR-0128 
 [ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md),
 restated:
 
-| Action                | Provider   | Connector scope        | Risk   | Ask for approval | Supervised workspace | Full access |
-| --------------------- | ---------- | ---------------------- | ------ | ---------------- | -------------------- | ----------- |
-| `sync-space`          | Confluence | `knowledge-base.read`  | low    | review-required  | review-required      | allowed     |
-| `sync-project`        | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
-| `search-issues-live`  | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
-| `create-issue`        | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
-| `update-issue-fields` | Jira       | `issue-tracker.write`  | medium | review-required  | review-required      | allowed     |
-| `transition-issue`    | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
-| `add-issue-comment`   | Jira       | `issue-tracker.write`  | low    | review-required  | review-required      | allowed     |
-| `create-page`         | Confluence | `knowledge-base.write` | high   | review-required  | review-required      | allowed     |
-| `update-page`         | Confluence | `knowledge-base.write` | medium | review-required  | review-required      | allowed     |
-| `add-page-comment`    | Confluence | `knowledge-base.write` | low    | review-required  | review-required      | allowed     |
+| Action                          | Provider   | Connector scope        | Risk   | Ask for approval | Supervised workspace | Full access |
+| ------------------------------- | ---------- | ---------------------- | ------ | ---------------- | -------------------- | ----------- |
+| `sync-space`                    | Confluence | `knowledge-base.read`  | low    | review-required  | review-required      | allowed     |
+| `sync-project`                  | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
+| `search-issues-live`            | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
+| `create-issue` (retired)        | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
+| `update-issue-fields` (retired) | Jira       | `issue-tracker.write`  | medium | review-required  | review-required      | allowed     |
+| `transition-issue` (retired)    | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
+| `add-issue-comment` (retired)   | Jira       | `issue-tracker.write`  | low    | review-required  | review-required      | allowed     |
+| `create-page`                   | Confluence | `knowledge-base.write` | high   | review-required  | review-required      | allowed     |
+| `update-page`                   | Confluence | `knowledge-base.write` | medium | review-required  | review-required      | allowed     |
+| `add-page-comment`              | Confluence | `knowledge-base.write` | low    | review-required  | review-required      | allowed     |
 
-The four Jira write rows (`create-issue`, `update-issue-fields`, `transition-issue`,
+The four rows marked retired (`create-issue`, `update-issue-fields`, `transition-issue`,
 `add-issue-comment`) are the policy classes of the governed Jira tools. Sent to the actions route
 directly they are retired: the route answers `denied` with the reason `connector-write-denied` in every mode,
 before any approval or request (#4354). Jira writes go through the governed Jira tools, which stand

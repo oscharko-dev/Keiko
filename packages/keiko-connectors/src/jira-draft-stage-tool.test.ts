@@ -59,12 +59,16 @@ function template(...frontMatter: readonly string[]): JiraIssueTemplate {
   if (!result.ok) throw new Error("fixture template must parse");
   return result.template;
 }
+type ExtraRoute = (path: string) => ReturnType<typeof response> | undefined;
 function connection(
   templates?: JiraIssueTemplateSet,
   fields: readonly unknown[] = CREATE_FIELDS,
+  extraRoute?: ExtraRoute,
 ): Parameters<typeof executeJiraDraftStageTool>[2] {
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
+    const extra = extraRoute?.(path);
+    if (extra !== undefined) return Promise.resolve(extra);
     if (path.endsWith("/project/10000"))
       return Promise.resolve(response({ id: "10000", key: "SYN" }));
     if (path.endsWith("/issuetype/10001"))
@@ -116,6 +120,7 @@ function harness(
     args: CatalogJsonObject,
     owner?: string,
     fields?: readonly unknown[],
+    extraRoute?: ExtraRoute,
   ) => ReturnType<typeof executeJiraDraftStageTool>;
 } {
   const store = createJiraDraftStore(storeOptions);
@@ -128,8 +133,8 @@ function harness(
   return {
     activity,
     deps: base,
-    stage: (args, owner = "chat-1", fields) =>
-      executeJiraDraftStageTool(args, CONTEXT, connection(templates, fields), {
+    stage: (args, owner = "chat-1", fields, extraRoute) =>
+      executeJiraDraftStageTool(args, CONTEXT, connection(templates, fields, extraRoute), {
         ...base,
         owner: () => owner,
       }),
@@ -585,6 +590,63 @@ describe("jira.draft-stage (#4178)", () => {
     });
     const staged = await h.stage(pageOf("one"));
     expect(staged.data).toMatchObject({ newDraft: true, itemCount: 1 });
+  });
+
+  // #4354: an Epic Link to an issue that is not an Epic is refused while the item is written, by the
+  // stage tool itself: before any review card, with nothing staged. The template dry run never
+  // decides it (it has no agile request); the field check does, and this pins that they agree.
+  describe("an item whose Epic Link points to a Task (#4354)", () => {
+    const EPIC_LINK_FIELD = {
+      ...field("customfield_10014", "any"),
+      schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+    };
+    const route: ExtraRoute = (path) => {
+      if (path.endsWith("/rest/api/2/field"))
+        return response([
+          { id: "customfield_10014", name: "Epic Link", schema: EPIC_LINK_FIELD.schema },
+        ]);
+      if (path.endsWith("/rest/agile/1.0/epic/SYN-9")) return response({ key: "SYN-9" });
+      if (path.includes("/rest/agile/1.0/epic/"))
+        return response({ errorMessages: ["Epic does not exist"] }, 404);
+      return undefined;
+    };
+    const withEpic = (key: string): CatalogJsonObject =>
+      ({
+        items: [
+          item("story", {
+            fields: {
+              summary: "A story",
+              description: "h2. Acceptance criteria\n* ok",
+              customfield_10014: key,
+            },
+          }),
+        ],
+      }) as unknown as CatalogJsonObject;
+    const fields = [...CREATE_FIELDS, EPIC_LINK_FIELD];
+
+    it("is refused by the stage tool, naming the field, and nothing is staged", async () => {
+      const h = harness();
+      const result = await h.stage(withEpic("SYN-5"), "chat-1", fields, route);
+      expect(result).toMatchObject({
+        isError: true,
+        data: {
+          outcome: "rejected",
+          reason: "field-validation",
+          ref: "story",
+          fieldId: "customfield_10014",
+          validation: "invalid-epic-link",
+        },
+      });
+      expect(h.deps.store.size()).toBe(0);
+      expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "invalid-fields" });
+    });
+
+    it("is staged when the Epic Link points to an Epic", async () => {
+      const h = harness();
+      const result = await h.stage(withEpic("SYN-9"), "chat-1", fields, route);
+      expect(result.data).toMatchObject({ newDraft: true, itemCount: 1 });
+      expect(h.deps.store.size()).toBe(1);
+    });
   });
 
   describe("a template that requires a link (parentLink)", () => {

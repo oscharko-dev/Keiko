@@ -37,6 +37,7 @@ function template(...rules: readonly string[]): JiraIssueTemplate {
 function run(
   args: CatalogJsonObject,
   templates: readonly JiraIssueTemplate[],
+  transitionAnswer?: { readonly status: number; readonly body: unknown },
 ): {
   readonly result: ReturnType<typeof executeJiraManagedMutation>;
   readonly writes: () => number;
@@ -54,6 +55,12 @@ function run(
   };
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
+    if (
+      request.method === "POST" &&
+      transitionAnswer !== undefined &&
+      path.endsWith("/transitions")
+    )
+      return Promise.resolve(response(transitionAnswer.body, transitionAnswer.status));
     if (request.method !== "GET")
       return Promise.resolve(fixtureWrite(path, request.bodyJson, state, request.upload));
     if (path.endsWith("/transitions"))
@@ -125,12 +132,32 @@ describe("the fields a transition carries (#4354)", () => {
     expect(jira.writes()).toBe(1);
   });
 
-  // KEIKO-0814 on the managed path: the transition id is checked against what Jira lists for the
-  // issue right now, so a step that vanished, or never existed, is refused and nothing is sent.
+  // The transition id is checked against what Jira lists for the issue right now, so a step that
+  // vanished, or never existed, is refused before any write (the listing side of KEIKO-0814).
   it("refuses a transition id Jira no longer lists as invalid-transition, before any effect", async () => {
     const jira = run({ ...TRANSITION, transitionId: "99" }, GOVERNING);
     expect(await jira.result).toMatchObject({ ok: false, reason: "invalid-transition" });
     expect(jira.writes()).toBe(0);
+  });
+
+  // KEIKO-0814 on the managed path, the case the retired legacy action pinned: Jira listed the id,
+  // then the workflow moved and the POST is refused. The model gets the typed outcome and one POST
+  // was sent, never a generic status failure and never a second attempt.
+  it.each([
+    [404, { errorMessages: ["Issue Does Not Exist"], errors: {} }],
+    [400, { errorMessages: ["Transition id '31' is not valid for this issue."], errors: {} }],
+  ])("maps a %i on the POST of a listed transition to invalid-transition", async (status, body) => {
+    const jira = run(TRANSITION, [], { status, body });
+    expect(await jira.result).toMatchObject({ ok: false, reason: "invalid-transition" });
+    expect(jira.writes()).toBe(1);
+  });
+
+  it("keeps a 400 that names a refused field a field refusal, not a moved workflow", async () => {
+    const jira = run(TRANSITION, [], {
+      status: 400,
+      body: { errorMessages: [], errors: { summary: "Summary is too long" } },
+    });
+    expect(await jira.result).toMatchObject({ ok: false, reason: "field-validation" });
   });
 
   // The invariant of the retired legacy action's "hostile issue key" test, on the managed path: a

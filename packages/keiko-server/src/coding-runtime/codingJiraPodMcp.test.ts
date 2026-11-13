@@ -1153,6 +1153,31 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       }
     });
 
+    it("logs an attachment call the release switch refuses before any card, as one closed line", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness();
+        const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.attach",
+          arguments: { issueKey: "SYN-1", fileName: "private-report.txt" },
+        });
+        expect(refusal).toContain('"reason":"unavailable"');
+        const events = sink.events.filter(({ op }) => op.startsWith("jira.operation."));
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({
+          operation: "jira.attach",
+          stage: "release-scope",
+          outcome: "refused",
+          reason: "unavailable",
+        });
+        expect(sink.lines().join("\n")).not.toContain("private-report");
+        expect(writes(h)).toBe(0);
+      } finally {
+        resetServerLogger();
+      }
+    });
+
     it("leaves a conforming write, and a write no template governs, to the human's card", async () => {
       const governed = harness({ template: EDIT_TEMPLATE });
       await expect(

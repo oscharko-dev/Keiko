@@ -35,6 +35,7 @@ import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gatewa
 import {
   JIRA_MUTATION_OPERATIONS,
   jiraOperationInReleaseScope,
+  parseJiraIssueTemplate,
   jiraRequiredConnectorScope,
   type JiraMutationOperation,
   type JiraLivePodMetadata,
@@ -554,6 +555,7 @@ async function fixture(
   afterAcknowledgement?: "binding-revoked" | "cancelled",
   initialOperation?: JiraMutationOperation,
   authoritySelection: FixtureAuthoritySelection = {},
+  templates?: () => ReturnType<typeof integrationTemplates>,
 ): Promise<{
   invoke: (
     operation: JiraMutationOperation,
@@ -695,7 +697,7 @@ async function fixture(
         deployment: "data-center",
         baseUrl: BASE_URL,
         issueTemplates: (): ReturnType<typeof integrationTemplates> =>
-          integrationTemplates(initialOperation),
+          templates?.() ?? integrationTemplates(initialOperation),
       },
     });
   };
@@ -713,7 +715,7 @@ async function fixture(
       }),
       emailTemplates: emailTemplateFixtureAdmission(),
       issueTemplates: (): ReturnType<typeof integrationTemplates> =>
-        integrationTemplates(initialOperation),
+        templates?.() ?? integrationTemplates(initialOperation),
       attachmentSource: (): ReturnType<JiraAttachmentSource> => {
         const sha256 = createHash("sha256").update(ATTACHED).digest("hex");
         return Promise.resolve({
@@ -1062,6 +1064,72 @@ it("settles an accepted jira.delete-issue as succeeded when the read-back finds 
     kind: "settled",
     result: { status: "completed", data: { outcome: "succeeded" } },
   });
+});
+// #4354 (AC7): an edit is judged by what it touches. The synthetic issue SYN-1 already breaks the
+// summary rule of its type; an edit that does not touch the summary goes through, the model is told
+// in the result, and the log has the notice, all from the one real executor run.
+function brokenSummaryRule(): ReturnType<typeof integrationTemplates> {
+  const parsed = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Task",
+      "activateOn: [edit]",
+      "summaryMinLength: 40",
+      "---",
+      "# Task",
+    ].join("\n"),
+  );
+  if (!parsed.ok) throw new TypeError("Expected a parseable template");
+  return { templates: [parsed.template], unreadable: 0 };
+}
+const NOTICE = [{ ruleId: "summary-too-short", template: "SYN/Task" }] as const;
+it.each([
+  ["jira.edit", { issueKey: "SYN-1", fields: { labels: ["noted"] } }],
+  [
+    "jira.transition",
+    { issueKey: "SYN-1", transitionId: "31", fields: { customfield_10000: "Required" } },
+  ],
+] as const)(
+  "names the rule an untouched field already broke as a notice on %s, in the result and the log",
+  async (operation, args) => {
+    const f = await fixture("confirmed", undefined, operation, {}, brokenSummaryRule);
+    const outcome = await f.invoke(operation, args);
+    expect(f.writes()).toBe(1);
+    expect(outcome).toMatchObject({
+      kind: "settled",
+      result: {
+        data: {
+          outcome: "succeeded",
+          guidance: expect.stringContaining("already broke these template rules"),
+          templateNotices: [expect.objectContaining(NOTICE[0])],
+        },
+      },
+    });
+    const notices = f.logs.events.filter(
+      (event) => event.op === "jira.template.admission" && event.extra?.stage === "notice",
+    );
+    expect(notices).toHaveLength(1);
+    const line = expectRegisteredActivityLogLine(
+      "jira.template.admission",
+      formatActivityLogProofLine(notices[0] ?? {}),
+    );
+    expect(line).toMatchObject({ stage: "notice", operation: expect.any(String) });
+    expect(f.logs.lines().join()).not.toMatch(/Original|SYN-1|noted/u);
+  },
+);
+it("sends an edit of a conforming issue without any notice", async () => {
+  const f = await fixture("confirmed", undefined, "jira.edit");
+  const outcome = await f.invoke("jira.edit", { issueKey: "SYN-1", fields: { labels: ["noted"] } });
+  expect(outcome).toMatchObject({ kind: "settled", result: { data: { outcome: "succeeded" } } });
+  expect(JSON.stringify(outcome)).not.toContain("templateNotices");
+  expect(
+    f.logs.events.some(
+      (event) => event.op === "jira.template.admission" && event.extra?.stage === "notice",
+    ),
+  ).toBe(false);
 });
 it.each(SINGLE_MUTATIONS)(
   "keeps %s unconfirmed when readback is denied and blocks further writes",

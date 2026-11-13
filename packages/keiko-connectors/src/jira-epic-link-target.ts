@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraAgileRequest } from "./jira-agile-request.js";
-import { JIRA_DRAFT_STAND_IN_KEY } from "./jira-draft.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -27,6 +26,7 @@ interface EpicCheck {
   readonly targets: Map<string, Promise<boolean>>;
 }
 const AGILE = new AsyncLocalStorage<EpicCheck>();
+const NO_LOCAL_FIELDS: ReadonlySet<string> = new Set();
 
 /** Runs one admission or write with the invocation's agile request available to its checks. */
 export function withJiraEpicLinkTargetCheck<T>(
@@ -65,17 +65,23 @@ function candidateKeys(fields: Readonly<Record<string, unknown>>): boolean {
  * The refusal for an Epic Link whose target the instance does not know as an Epic, or undefined:
  * no Epic Link among the fields, no agile request on this invocation, or an epic endpoint that
  * cannot be read (an unreadable check proves nothing, so Jira decides). Reads only.
+ *
+ * `localFieldIds` names the fields whose value is only a stand-in for another item of the same
+ * draft, which has no key yet: that relation is judged when the item exists. It is decided by what
+ * the item says (it names a ref of its draft), never by how a key looks, so a real issue of any
+ * key is checked.
  */
 export async function epicLinkTargetRefusal(
   request: JiraMutationRequest,
   fields: Readonly<Record<string, unknown>>,
+  localFieldIds: ReadonlySet<string> = NO_LOCAL_FIELDS,
 ): Promise<Refusal | undefined> {
   const check = AGILE.getStore();
   if (check === undefined || !candidateKeys(fields)) return undefined;
   check.fieldId ??= epicLinkFieldId(request);
   const fieldId = await check.fieldId;
   const target = fieldId === undefined ? undefined : fields[fieldId];
-  if (fieldId === undefined || typeof target !== "string" || target === JIRA_DRAFT_STAND_IN_KEY)
+  if (fieldId === undefined || typeof target !== "string" || localFieldIds.has(fieldId))
     return undefined;
   if (!(await isUnknownEpic(check, target))) return undefined;
   return {
