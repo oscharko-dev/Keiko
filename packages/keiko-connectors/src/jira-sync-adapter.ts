@@ -49,7 +49,6 @@ import {
   isSafeJiraProjectKey,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
-import type { AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 import {
   asArray,
   asRecord,
@@ -57,7 +56,7 @@ import {
   atlassianApiEndpointsFor,
   atlassianApiUrl,
   classifyListResult,
-  failureReasonForResponse,
+  classifyItemFailureResponse,
   parseJsonRecord,
   type AtlassianApiEndpoints,
 } from "./atlassian-sync-classify.js";
@@ -443,20 +442,6 @@ type IssueFetchResult =
   | { readonly kind: "skipped"; readonly reason: AtlassianSyncFailureReason }
   | { readonly kind: "fatal"; readonly reason: AtlassianSyncFailureReason };
 
-// A 401 the server's identity read left unconfirmed is a fatal stop that does not blame the
-// token; a confirmed one is this item's missing permission (#4353). Cloud sync never carries a
-// decision, so its 401 stays an authentication failure.
-function classifyIssueFailureStatus(
-  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
-): IssueFetchResult {
-  if (result.status === 401 && result.authentication === "unconfirmed")
-    return { kind: "fatal", reason: "auth-unverified" };
-  if (result.status === 401 && result.authentication !== "confirmed")
-    return { kind: "fatal", reason: "auth-failed" };
-  if (result.status === 404) return { kind: "missing" };
-  return { kind: "skipped", reason: failureReasonForResponse(result) };
-}
-
 async function fetchIssuePayload(
   context: AtlassianSyncFetchContext,
   endpoints: AtlassianApiEndpoints,
@@ -471,7 +456,7 @@ async function fetchIssuePayload(
   if (result.kind === "timeout") return { kind: "skipped", reason: "timeout" };
   if (result.kind === "network-error") return { kind: "skipped", reason: "unavailable" };
   if (result.status < 200 || result.status >= 300) {
-    return classifyIssueFailureStatus(result);
+    return classifyItemFailureResponse(result);
   }
   // A truncated issue payload can never be indexed faithfully (mid-JSON truncation is malformed
   // by construction): skipped with bounds-exceeded, the run continues.

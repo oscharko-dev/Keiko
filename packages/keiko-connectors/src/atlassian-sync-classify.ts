@@ -121,6 +121,28 @@ export function failureReasonForResponse(
   return failureReasonForStatus(result.status);
 }
 
+export type AtlassianItemFailure =
+  | { readonly kind: "missing" }
+  | { readonly kind: "skipped"; readonly reason: AtlassianSyncFailureReason }
+  | { readonly kind: "fatal"; readonly reason: AtlassianSyncFailureReason };
+
+/**
+ * One per-item failure classification for every sync adapter (#4353). A 401 the server's identity
+ * read left unconfirmed is a fatal stop that does not blame the token; a confirmed one is this
+ * item's missing permission. Cloud sync never carries a decision, so its 401 stays an
+ * authentication failure. A 404 is a missing item; everything else is skipped by status.
+ */
+export function classifyItemFailureResponse(
+  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
+): AtlassianItemFailure {
+  if (result.status === 401 && result.authentication === "unconfirmed")
+    return { kind: "fatal", reason: "auth-unverified" };
+  if (result.status === 401 && result.authentication !== "confirmed")
+    return { kind: "fatal", reason: "auth-failed" };
+  if (result.status === 404) return { kind: "missing" };
+  return { kind: "skipped", reason: failureReasonForResponse(result) };
+}
+
 // Truncation on a JSON/list response is a byte-coverage failure, never parseable content:
 // clamped below the requested cap means the run budget ran out (`bounds-exceeded`); reaching the
 // requested cap means the payload itself overflows the list cap (`malformed-payload`).

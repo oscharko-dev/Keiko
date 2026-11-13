@@ -33,7 +33,6 @@ import {
   isSafeConfluenceSpaceKey,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
-import type { AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 import {
   asArray,
   asRecord,
@@ -41,7 +40,7 @@ import {
   atlassianApiEndpointsFor,
   atlassianApiUrl,
   classifyListResult,
-  failureReasonForResponse,
+  classifyItemFailureResponse,
   parseJsonRecord,
   type AtlassianApiEndpoints,
 } from "./atlassian-sync-classify.js";
@@ -328,20 +327,6 @@ type PageFetchResult =
   | { readonly kind: "skipped"; readonly reason: AtlassianSyncFailureReason }
   | { readonly kind: "fatal"; readonly reason: AtlassianSyncFailureReason };
 
-// A 401 the server's identity read left unconfirmed is a fatal stop that does not blame the
-// token; a confirmed one is this item's missing permission (#4353). Cloud sync never carries a
-// decision, so its 401 stays an authentication failure.
-function classifyPageFailureStatus(
-  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
-): PageFetchResult {
-  if (result.status === 401 && result.authentication === "unconfirmed")
-    return { kind: "fatal", reason: "auth-unverified" };
-  if (result.status === 401 && result.authentication !== "confirmed")
-    return { kind: "fatal", reason: "auth-failed" };
-  if (result.status === 404) return { kind: "missing" };
-  return { kind: "skipped", reason: failureReasonForResponse(result) };
-}
-
 function parsePagePayload(bodyText: string, pageId: string): PageFetchResult {
   const record = parseJsonRecord(bodyText);
   const storageBody = record === undefined ? undefined : storageBodyOf(record);
@@ -372,7 +357,7 @@ async function fetchPagePayload(
   if (result.kind === "timeout") return { kind: "skipped", reason: "timeout" };
   if (result.kind === "network-error") return { kind: "skipped", reason: "unavailable" };
   if (result.status < 200 || result.status >= 300) {
-    return classifyPageFailureStatus(result);
+    return classifyItemFailureResponse(result);
   }
   // A truncated page body can never be indexed (mid-tag truncation is malformed by construction):
   // the page is skipped with `bounds-exceeded`, the run continues (the AC's oversized-page case).
