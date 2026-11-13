@@ -350,6 +350,7 @@ function probeCauseOf(last: AtlassianHttpBodyResult | undefined): ProbeCause {
 }
 
 const PROBE_DETAIL = { decision: "probe", routeClass: "other" } as const;
+const IDENTITY_ROUTE_DETAIL = { decision: "identity-route", routeClass: "identity" } as const;
 
 interface ObservedIdentityPort {
   readonly port: AtlassianHttpBodyPort;
@@ -664,7 +665,7 @@ function observedAuthentication(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
-  detail: ConnectionCheckDetail = { decision: "identity-route", routeClass: "identity" },
+  detail: ConnectionCheckDetail = IDENTITY_ROUTE_DETAIL,
 ): (status: number, failure?: AtlassianAuthenticationFailure) => void {
   if (metadata.deployment !== "data-center" || metadata.livePod === undefined)
     return (): void => undefined;
