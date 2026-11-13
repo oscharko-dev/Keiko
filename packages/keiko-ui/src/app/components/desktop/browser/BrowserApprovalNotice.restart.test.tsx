@@ -142,6 +142,16 @@ describe("after Keiko restarted (#4370)", () => {
     expect(vi.mocked(restart.noteConnectedServerInstance).mock.calls.length).toBeGreaterThan(
       initial,
     );
+    // The timer's tick asks the live session before it records; the first call, made right after
+    // an active read, needs none (#4370).
+    const calls = vi.mocked(restart.noteConnectedServerInstance).mock.calls;
+    expect(calls[0]?.[0]).toBeUndefined();
+    const confirm = calls.at(-1)?.[0];
+    expect(typeof confirm).toBe("function");
+    expect(await confirm?.()).toBe(true);
+    active = false;
+    expect(await confirm?.()).toBe(false);
+    active = true;
     const afterFirst = vi.mocked(restart.noteConnectedServerInstance).mock.calls.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
