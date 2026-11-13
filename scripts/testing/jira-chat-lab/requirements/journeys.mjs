@@ -19,6 +19,7 @@ import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { chatReadLogDirectory, jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
 import { eachJourneyInLicenseWindow, ensureLicenseWindow } from "./license-window.mjs";
+import { LabOutageError, labJiraState } from "./lab-health.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
 import { WORK_PROJECT, clearWorkProject } from "./work-project-reset.mjs";
 import { basicAuth, labRequest } from "../lab-client.mjs";
@@ -579,7 +580,19 @@ export async function modelUnavailable(ctx, session, modelId) {
 }
 
 /** One graded run: readiness first, then the journey re-graded against its gateway evidence. */
-async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
+async function gradedRun({
+  ctx,
+  session,
+  modelId,
+  capsuleId,
+  id,
+  readiness,
+  labState = labJiraState,
+}) {
+  // A journey that starts while the lab's own Jira is down is invalid with that cause, never red.
+  const before = await labState(session);
+  if (before.state !== "licensed")
+    return invalidCheck("lab-outage", `the laboratory Jira was ${before.state} before the journey`);
   const refused = await readiness(ctx, session, modelId);
   if (refused !== undefined) {
     if (refused.unavailable)
@@ -593,7 +606,9 @@ async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
   const check = await runJourney({ ctx, session, modelId, capsuleId, id });
   const logRoot = chatReadLogDirectory(session);
   const failures = readGatewayFailures(logRoot, { fromMs, toMs: Date.now(), pid: process.pid });
-  return classifyJourney(check, failures, gatewayEvidenceTrusted(logRoot, failures));
+  // A failed journey is re-read against the lab's own Jira: an outage during it is the lab's.
+  const after = check.status === "green" ? undefined : (await labState(session)).state;
+  return classifyJourney(check, failures, gatewayEvidenceTrusted(logRoot, failures), after);
 }
 
 /**
@@ -609,6 +624,7 @@ export async function runJourneys({
   ids,
   repeat = 1,
   readiness = modelUnavailable,
+  labState = labJiraState,
 }) {
   if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 20) {
     throw new TypeError("Invalid journey repeat count");
@@ -636,13 +652,27 @@ export async function runJourneys({
       ctx.freshChat = async (toolMode) =>
         (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
       const ordered = [...ids.filter((id) => id !== "S14"), ...ids.filter((id) => id === "S14")];
+      // A Jira that stays down past the bound ends this journey as a lab outage, not the whole run.
+      let outage;
       await eachJourneyInLicenseWindow(
         ordered,
-        (minimumSeconds) => ensureLicenseWindow(session, directory, minimumSeconds),
+        async (minimumSeconds) => {
+          outage = undefined;
+          try {
+            await ensureLicenseWindow(session, directory, minimumSeconds);
+          } catch (error) {
+            if (!(error instanceof LabOutageError)) throw error;
+            outage = error;
+          }
+        },
         async (id) => {
+          if (outage !== undefined) {
+            checks[id] = invalidCheck("lab-outage", outage.message);
+            return;
+          }
           const runs = await sequentially(
             Array.from({ length: repeat }, (_, i) => i + 1),
-            (run) => timedRun({ ctx, session, modelId, capsuleId, id, readiness }, run),
+            (run) => timedRun({ ctx, session, modelId, capsuleId, id, readiness, labState }, run),
           );
           checks[id] = repeat === 1 ? runs[0] : aggregateRuns(runs);
         },

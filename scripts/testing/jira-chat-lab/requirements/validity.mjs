@@ -8,6 +8,7 @@ import { join } from "node:path";
 /** The closed reasons a check is invalid, or red because the product route failed. */
 const INVALID_REASONS = Object.freeze([
   "lab-error",
+  "lab-outage",
   "model-unavailable",
   "gateway-failure",
   "insufficient-valid-runs",
@@ -234,8 +235,15 @@ const failedWithoutEvidence = (check, evidenceTrusted) =>
  *    (`evidenceTrusted` false) and that carries a failure is invalid: no evidence is not evidence of no outage.
  *  - A failed call that was not retried (a limit such as context overflow) stays as graded.
  */
-export function classifyJourney(check, failures, evidenceTrusted = true) {
+export function classifyJourney(check, failures, evidenceTrusted = true, labState = undefined) {
   if (check.status === "green" || check.status === "invalid") return check;
+  // The lab's own Jira was down while the journey ran: no verdict about the product (#4369).
+  if (labState !== undefined && labState !== "licensed")
+    return invalidCheck(
+      "lab-outage",
+      `${check.detail ?? ""}; the laboratory Jira was ${labState}`,
+      check,
+    );
   const counts = `${failures.outages} infrastructure failures, ${failures.circuit} circuit events`;
   if (showsOutage(failures) || isTransportFailure(check.turnFailure ?? check.failure)) {
     return invalidCheck("gateway-failure", `${check.detail ?? ""}; ${counts}`, check);

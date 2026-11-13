@@ -30,6 +30,11 @@ vi.mock("node:timers/promises", () => ({
 vi.mock("../testing/jira-chat-lab/requirements/work-project-lock.mjs", () => ({
   withWorkProjectLock: async (_directory, _id, run) => run(),
 }));
+// The journeys now read the lab's own Jira before and after a run (#4369); these tests have none.
+vi.mock("../testing/jira-chat-lab/requirements/lab-health.mjs", async (original) => ({
+  ...(await original()),
+  labJiraState: async () => ({ state: "licensed", remaining: 9999 }),
+}));
 vi.mock("../testing/jira-chat-lab/requirements/license-window.mjs", () => ({
   ensureLicenseWindow: async () => undefined,
   eachJourneyInLicenseWindow: (ids, _window, run) =>
@@ -198,6 +203,35 @@ describe("requirements lab turn-limit provenance", () => {
     const turn = await observedTurn({ readiness: undefined });
     expect(turn).toMatchObject({ status: "invalid", reason: "lab-error" });
     expect(fixture.sends).toBe(0);
+  });
+
+  describe("the lab's own Jira being down (#4369)", () => {
+    const down = (state) => ({ state });
+    const up = { state: "licensed", remaining: 9000 };
+
+    it("a journey that starts while Jira is down is invalid lab-outage and sends nothing", async () => {
+      for (const state of ["unreachable", "starting", "expired"]) {
+        fixture.sends = 0;
+        const turn = await observedTurn({ labState: async () => down(state) });
+        expect(turn).toMatchObject({ status: "invalid", reason: "lab-outage" });
+        expect(turn.detail).toContain(state);
+        expect(fixture.sends).toBe(0);
+      }
+    });
+
+    it("a failed journey during which Jira went down is invalid, not red", async () => {
+      fixture.mode = "product-failure";
+      const readings = [up, down("unreachable")];
+      const turn = await observedTurn({ labState: async () => readings.shift() });
+      expect(turn).toMatchObject({ status: "invalid", reason: "lab-outage" });
+      expect(fixture.sends).toBe(1);
+    });
+
+    it("a failed journey with a healthy Jira keeps its own verdict", async () => {
+      fixture.mode = "product-failure";
+      const turn = await observedTurn({ labState: async () => up });
+      expect(turn.reason).not.toBe("lab-outage");
+    });
   });
 
   it("invalidates S14 and starts no further run when the specification restore fails", async () => {
