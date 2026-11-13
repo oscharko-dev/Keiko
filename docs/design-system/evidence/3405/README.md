@@ -156,6 +156,22 @@ ran on the combined sources in the Linux gates container (`--init`, Node 24.18.0
 fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
 
+Integrating the Jira connection and credentials work (#4353) on the Release 1 integration branch
+changed the core message catalogs (the Jira authentication notice) next to the Chat shell repair, so
+the freshness gate rejected their digests. On 2026-11-13 (UTC) the complete original nine-case
+producer ran on the combined sources in the Linux gates container (`--init`, Node 24.18.0):
+**9 passed (1.8m)**, and `npm run check:update-ui-evidence` passes. Only the three records were kept;
+its fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
+behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+The readable Jira result rows, the approval preview and the refusal hints of the results work (#4355)
+added catalog keys to both optional catalogs, so the freshness gate rejected their digests. On
+2026-11-13 (UTC) the complete original nine-case producer ran on the merged sources in the Linux
+gates container (`--init`, Node 24.18.0): **9 passed**, and `npm run check:update-ui-evidence`
+passes. Only the three records were kept; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -553,3 +569,51 @@ The last round of the same change (the Start bound to its model, its plain "mode
 in both Workbench catalogs, and the clearer not-verified wording of the Gateway Setup notice in both
 core catalogs) moved the catalog digests once more; the producer was rerun on 2026-11-13 the same way
 (Linux gates container, `--init`, Node 24.18.0, 9 passed in 1.7m) and only the three records were kept.
+
+## Jira connection refusal wording — 2026-11-13 (#4353)
+
+The expired-token, unsupported-release and certificate refusals now name their remedy in both core
+and optional catalogs, so the freshness gate rejected the four catalog digests. The complete
+original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0): **9 passed
+(1.9m)**, including the real BFF stop and restart. Only the four catalog digests and `generatedAt`
+in the three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.
+
+## Jira connection refusal wording, second pass — 2026-11-13 (#4353)
+
+The new `auth-unverified` refusal, the missing-compatibility notice and the single German spelling
+"Jira Pod" changed the optional catalogs again, so the freshness gate rejected the catalog digests.
+The complete original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0):
+**9 passed (1.7m)**. Only the catalog digests and `generatedAt` in the three records were taken from
+this run; its fallback-font captures were discarded and the 14 committed captures are unchanged. No
+updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
+evidence.
+
+## Jira connection refusal wording, third pass — 2026-11-13 (#4353)
+
+The sync-failure reason `auth-unverified` and its messages changed both optional catalogs once
+more, so the freshness gate rejected their digests. The complete original nine-case producer ran in
+the Linux arm64 gates container (Node 24.18.0): **9 passed (1.7m)**. Only the catalog digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
+numerical ceiling changed. This remains updater fixture evidence.
+
+## Jira connection verification wording, fourth pass — 2026-11-13 (#4353)
+
+The verification status `auth-unverified` ("could not confirm") and the single German form of
+address "Sie" changed both catalogs again, so the freshness gate rejected their digests. The
+complete original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0): **9
+passed (1.6m)**. Only the catalog digests and `generatedAt` in the three records were taken from
+this run; its fallback-font captures were discarded and the 14 committed captures are unchanged. No
+updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
+evidence.
+
+## Jira connection German wording, informal address — 2026-11-13 (#4353)
+
+The German connection-refusal messages now address the person informally, like their neighbours, so
+the freshness gate rejected the two German catalog digests. The complete original nine-case producer
+ran in the Linux arm64 gates container (Node 24.18.0): all nine passed. Only the catalog digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
+numerical ceiling changed. This remains updater fixture evidence.

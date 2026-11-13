@@ -4,7 +4,10 @@ import {
   type JiraDraftProblem,
   type JiraDraftStore,
 } from "@oscharko-dev/keiko-connectors";
-import type { JiraDraftRefusalReason } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraDraftProblemCode,
+  JiraDraftRefusalReason,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 /**
@@ -93,6 +96,23 @@ export function jiraDraftProblemGuidance(
 }
 
 /**
+ * What a refused draft reports about its problem: the model's guidance sentence, and the closed
+ * problem code and 1-based item the person's card turns into one localized sentence (#4355). The
+ * assignment checks that every problem the draft check can name is a code the contract declares.
+ */
+export function draftProblemData(
+  problem: JiraDraftProblem,
+  item: number | undefined,
+): CatalogJsonObject {
+  const draftProblem: JiraDraftProblemCode = problem;
+  return {
+    guidance: jiraDraftProblemGuidance(problem, item),
+    draftProblem,
+    ...(item === undefined ? {} : { draftItem: item }),
+  };
+}
+
+/**
  * The structured refusal the model corrects. An invalid draft carries the fixed sentence for its
  * closed problem and item number, so the model learns what to correct; it never echoes a field
  * value, key or text of the draft.
@@ -104,9 +124,7 @@ export function draftRefusalData(
     outcome: "rejected",
     reason: "field-validation",
     draftRefusal: refusal.reason,
-    ...(refusal.problem === undefined
-      ? {}
-      : { guidance: jiraDraftProblemGuidance(refusal.problem, refusal.item) }),
+    ...(refusal.problem === undefined ? {} : draftProblemData(refusal.problem, refusal.item)),
     items: [],
   };
 }

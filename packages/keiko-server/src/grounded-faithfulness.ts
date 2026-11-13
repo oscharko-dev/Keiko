@@ -1074,6 +1074,10 @@ export type EntailmentVerdict = "supported" | "unsupported" | "unavailable";
 export interface EntailmentJudgeInput {
   readonly claimText: string;
   readonly excerptText: string;
+  // Figures Keiko computed from Jira data in this turn (a Jira report). They are NOT part of any
+  // cited document: the judge reads them labelled by origin, and they can support only a statement
+  // about the Jira result, never one about what a document says (#4355).
+  readonly turnEvidenceText?: string;
 }
 
 /**
@@ -1107,6 +1111,11 @@ export interface EntailmentOptions {
   // (surfaced as the entailment-unavailable marker) — so a slow model degrades the answer instead of
   // stacking `maxClaims` sequential judge timeouts into minutes of tail latency.
   readonly maxTotalMs: number;
+  // Lines of evidence the turn itself produced beside the cited excerpts, such as the figures Keiko
+  // computed for a Jira report. The lines that share figures or words with a claim are one more
+  // item the judge reads for that claim; it is never an exemption: a claim that neither the cited
+  // excerpts nor these lines support stays unsupported (#4355). Absent for a turn without one.
+  readonly supplementalEvidence?: readonly string[];
 }
 
 // One claim may cite several evidence items ("[1, 7, 8]"). `maxExcerptChars` bounds EACH item (the
@@ -1402,6 +1411,8 @@ interface EntailmentClaimEvidence {
 interface EntailmentClaim {
   readonly claimText: string;
   readonly evidence: readonly EntailmentClaimEvidence[];
+  // The turn's own lines that share a figure or word with the claim; see EntailmentJudgeInput.
+  readonly turnEvidenceText?: string;
   readonly hidesProse?: true;
 }
 
@@ -1455,6 +1466,7 @@ function collectExcerptText(
 interface JudgeableClaim {
   readonly claimText: string;
   readonly excerptText: string;
+  readonly turnEvidenceText?: string;
   readonly citedPaths: readonly string[];
 }
 
@@ -1476,6 +1488,7 @@ function judgeableClaimFor(
   return {
     claimText: claim.claimText,
     excerptText,
+    ...(claim.turnEvidenceText === undefined ? {} : { turnEvidenceText: claim.turnEvidenceText }),
     citedPaths: [...new Set(claim.evidence.map((item) => item.citedPath))],
   };
 }
@@ -1485,7 +1498,14 @@ async function verdictForJudgeableClaim(
   judge: EntailmentJudge,
   signal: AbortSignal | undefined,
 ): Promise<EntailmentVerdict> {
-  return judge.judge({ claimText: claim.claimText, excerptText: claim.excerptText }, signal);
+  return judge.judge(
+    {
+      claimText: claim.claimText,
+      excerptText: claim.excerptText,
+      ...(claim.turnEvidenceText === undefined ? {} : { turnEvidenceText: claim.turnEvidenceText }),
+    },
+    signal,
+  );
 }
 
 /**
@@ -1520,6 +1540,69 @@ export function createEntailmentExecutionBudget(
 interface ScheduledClaim {
   readonly claim: JudgeableClaim;
   readonly verdict: Promise<EntailmentVerdict>;
+}
+
+const EVIDENCE_TOKEN = /[\p{L}\p{N}][\p{L}\p{N}_-]*/gu;
+
+function evidenceTokens(text: string): ReadonlySet<string> {
+  return new Set(
+    (text.toLowerCase().match(EVIDENCE_TOKEN) ?? []).filter(
+      (token) => token.length >= 3 || /\d/u.test(token),
+    ),
+  );
+}
+
+/** A shared figure outweighs a shared word. */
+function sharedTokenScore(claim: ReadonlySet<string>, line: string): number {
+  let score = 0;
+  for (const token of evidenceTokens(line)) {
+    if (!claim.has(token)) continue;
+    score += /\d/u.test(token) ? 3 : 1;
+  }
+  return score;
+}
+
+/** The turn's evidence lines that share a figure or a word with the claim, best match first. */
+function supplementalLinesFor(
+  claimText: string,
+  lines: readonly string[],
+  maxChars: number,
+): string | undefined {
+  const claim = evidenceTokens(claimText);
+  const scored = lines
+    .map((line, index) => ({ line, index, score: sharedTokenScore(claim, line) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const picked: string[] = [];
+  let size = 0;
+  for (const { line } of scored) {
+    if (size + line.length + 1 > maxChars) continue;
+    picked.push(line);
+    size += line.length + 1;
+  }
+  return picked.length === 0 ? undefined : picked.join("\n");
+}
+
+/**
+ * The turn's own evidence reaches the judge beside a claim, labelled by its origin and never merged
+ * into the cited excerpts. A claim that hides prose or has no readable cited excerpt gets none, so
+ * the turn's evidence never stands in for evidence that is missing.
+ */
+function withSupplementalEvidence(
+  claims: readonly EntailmentClaim[],
+  lines: readonly string[] | undefined,
+  maxChars: number,
+): readonly EntailmentClaim[] {
+  if (lines === undefined || lines.length === 0) return claims;
+  const readable = (claim: EntailmentClaim): boolean =>
+    claim.hidesProse !== true &&
+    claim.evidence.every((entry) => (entry.excerptText?.trim().length ?? 0) > 0);
+  return claims.map((claim) => {
+    const turnEvidenceText = readable(claim)
+      ? supplementalLinesFor(claim.claimText, lines, maxChars)
+      : undefined;
+    return turnEvidenceText === undefined ? claim : { ...claim, turnEvidenceText };
+  });
 }
 
 function scheduleClaimJudges(
@@ -1563,7 +1646,11 @@ async function reconcileEntailmentClaims(
   const unentailed: UnentailedClaim[] = [];
   const hiddenProseClaims = claims.filter((claim) => claim.hidesProse === true).length;
   const scheduledClaims = scheduleClaimJudges(
-    claims.filter((claim) => claim.hidesProse !== true),
+    withSupplementalEvidence(
+      claims.filter((claim) => claim.hidesProse !== true),
+      options.supplementalEvidence,
+      options.maxExcerptChars,
+    ),
     judge,
     boundedOptions,
     budget.signal,

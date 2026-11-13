@@ -976,7 +976,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "filePreview.lang.text": "text",
   "filePreview.lang.binary": "binär",
   "atlassianConnectors.live.rename": "Pod umbenennen",
-  "atlassianConnectors.live.renameTitle": "Jira-Pod umbenennen",
+  "atlassianConnectors.live.renameTitle": "Jira Pod umbenennen",
   "atlassianConnectors.live.rotateTitle": "Jira-Token ersetzen",
   "atlassianConnectors.live.replaceToken": "Token ersetzen",
   "atlassianConnectors.live.newToken": "Neues API-Token",
@@ -998,7 +998,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.live.remove": "Pod entfernen",
   "atlassianConnectors.live.keep": "Pod behalten",
   "atlassianConnectors.live.removeConfirm":
-    "Diesen Jira-Pod und sein Token entfernen? Verbundene Chats werden getrennt.",
+    "Diesen Jira Pod und sein Token entfernen? Verbundene Chats werden getrennt.",
   "atlassianConnectors.live.patHint":
     "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Es wird nie wieder angezeigt.",
   "atlassianConnectors.live.displayNamePlaceholder": "z. B. Jira Data Center",
@@ -2332,8 +2332,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.state.excluded": "Ausgeschlossen",
   "chat.jira.outcome.rule.parent-type-mismatch":
     "Das übergeordnete Issue muss einen erlaubten Vorgangstyp haben ({subject}).",
+  "chat.jira.outcome.failure.authUnverified":
+    "Jira konnte gerade nicht geprüft werden, deshalb wurde diese Anfrage nicht weitergegeben. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
   "chat.jira.outcome.failure.auth":
-    "Prüfe die Verbindung des Jira-Pods und seine Zugangsdaten, bevor du es erneut versuchst.",
+    "Jira hat das Token abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Ersetze es am Jira Pod, verifiziere die Verbindung und versuche es erneut.",
   "chat.jira.outcome.failure.permission":
     "Prüfe die Berechtigung des Jira-Kontos für das angeforderte Projekt und die Aktion.",
   "chat.jira.outcome.failure.notFound":
@@ -2502,30 +2504,30 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.write.pendingHelp":
     "Es liegt kein abschließendes Ergebnis vor. Das bestätigt keine laufende Ausführung. Die Aktion wird nicht automatisch wiederholt.",
 
-  "atlassianConnectors.live.empty": "Noch keine Jira-Pods.",
+  "atlassianConnectors.live.empty": "Noch keine Jira Pods.",
   "chat.jira.podUnavailable": "Aktueller Pod nicht verfügbar",
   "chat.jira.verifyRequired": "Verifikation erforderlich",
   "chat.jira.addToWorkspace": "Zum Arbeitsbereich hinzufügen",
   "chat.jira.workspaceHint":
-    "Ziehe diesen Jira-Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
-  "chat.jira.liveReady": "Verifizierter Jira-Pod",
+    "Ziehe diesen Jira Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
+  "chat.jira.liveReady": "Verifizierter Jira Pod",
   "chat.jira.liveUnavailable":
-    "Jira-Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",
+    "Jira Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",
   "chat.connectors.title": "Konnektoren",
   "chat.connectors.active": "Konnektoren: {count} aktiv",
   "chat.connectors.mcp": "MCP-Server",
-  "chat.connectors.jira": "Jira-Pods",
+  "chat.connectors.jira": "Jira Pods",
   "chat.connectors.jiraAdministration": "Jira-Instanz administrieren",
   "chat.connectors.jiraAdministrationHelp":
     "Änderungen an gemeinsamer Jira-Konfiguration, etwa Masken und Monitoring, für diesen ausgewählten Pod gesondert erlauben. Gewöhnliche Jira-Schreibaktionen folgen weiterhin dem gewählten Modus. Vollzugriff aktiviert die Instanzverwaltung nicht; Jiras eigene Berechtigungen gelten weiterhin.",
   "chat.connectors.manage": "Verwalten",
   "chat.connectors.noServers": "Keine MCP-Server eingerichtet",
-  "chat.connectors.noPods": "Noch keine Jira-Pods",
+  "chat.connectors.noPods": "Noch keine Jira Pods",
   "chat.connectors.attention": "Prüfen",
   "chat.connectors.access": "Zugriff",
   "chat.connectors.failed": "Nicht gespeichert. Bitte erneut versuchen.",
   "atlassianConnectors.live.title": "Jira Live-Pods",
-  "atlassianConnectors.live.add": "Jira-Pod erstellen",
+  "atlassianConnectors.live.add": "Jira Pod erstellen",
   "chat.mcp.tool": "MCP-Aktion",
   "chat.mcp.writeApproval.title": "MCP-Aktion freigeben",
   "chat.mcp.write.notDispatched": "Nicht an den MCP-Server gesendet",
@@ -2542,6 +2544,34 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Aktion hat begonnen. Warte auf ihr Ergebnis, bevor du einen weiteren Schreibzugriff startest.",
   "chat.jira.outcome.issues": "Jira-Vorgänge",
   "chat.jira.outcome.problems": "Was Jira gemeldet hat",
+  "chat.jira.outcome.itemOrdinal": "Eintrag {position}",
+  "chat.jira.outcome.draftProblem.draft-shape":
+    "Der Entwurf hat kein lesbares Format. Bitten Sie Keiko, die Vorgänge neu zu entwerfen.",
+  "chat.jira.outcome.draftProblem.items-missing":
+    "Der Entwurf enthält keine Vorgänge. Bitten Sie Keiko, die anzulegenden Vorgänge zu nennen.",
+  "chat.jira.outcome.draftProblem.item-shape":
+    "Eintrag {position} enthält Angaben, die Keiko nicht lesen kann. Bitten Sie Keiko, diesen Vorgang neu zu formulieren.",
+  "chat.jira.outcome.draftProblem.item-ref":
+    "Eintrag {position} hat keinen verwendbaren Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen kurzen Namen zu geben.",
+  "chat.jira.outcome.draftProblem.item-ids":
+    "Eintrag {position} hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wählen Sie Projekt und Vorgangstyp erneut aus.",
+  "chat.jira.outcome.draftProblem.item-fields":
+    "Eintrag {position} braucht eine Zusammenfassung und darf kein anderes Projekt oder keinen anderen Vorgangstyp nennen. Bitten Sie Keiko, die Felder zu vervollständigen.",
+  "chat.jira.outcome.draftProblem.item-parent":
+    "Eintrag {position} hat einen übergeordneten Vorgang, den Keiko nicht lesen kann. Bitten Sie Keiko, den übergeordneten Vorgang erneut zu nennen.",
+  "chat.jira.outcome.draftProblem.item-links":
+    "Eintrag {position} hat eine Verknüpfung, die Keiko nicht lesen kann. Bitten Sie Keiko, Verknüpfungstyp, Richtung und Ziel erneut zu nennen.",
+  "chat.jira.outcome.draftProblem.item-requirements":
+    "Eintrag {position} hat Anforderungsverweise, die Keiko nicht lesen kann. Bitten Sie Keiko, sie erneut aufzulisten.",
+  "chat.jira.outcome.draftProblem.ref-duplicate":
+    "Zwei Vorgänge haben denselben Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen Namen zu geben.",
+  "chat.jira.outcome.draftProblem.ref-self":
+    "Eintrag {position} nennt sich selbst als übergeordneten Vorgang oder Verknüpfungsziel. Bitten Sie Keiko, auf einen anderen Vorgang zu verweisen.",
+  "chat.jira.outcome.draftProblem.ref-unknown":
+    "Eintrag {position} verweist auf einen Vorgang, der nicht im Entwurf steht. Fügen Sie ihn dem Entwurf hinzu oder nennen Sie einen vorhandenen Vorgangsschlüssel.",
+  "chat.jira.outcome.draftProblem.ref-cycle":
+    "Die Beziehungen zwischen übergeordneten Vorgängen und Verknüpfungen bilden einen Kreis. Bitten Sie Keiko, jeden übergeordneten Vorgang so zu wählen, dass er nicht von seinem Unterpunkt abhängt.",
+  "chat.jira.outcome.itemUnlisted": "Eintrag, der nicht in Ihrer Anfrage stand",
   "chat.jira.outcome.more": "und {count} weitere",
   "chat.jira.outcome.newTab": "(öffnet Jira in einem neuen Tab)",
   "chat.jira.outcome.validation.required-field": "Ein Pflichtfeld in Jira fehlte.",
@@ -2741,9 +2771,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
 
   "chat.skills.jira.title": "Jira-Vorlagen",
   "chat.skills.jira.description": "Gelten automatisch für jede Jira-Änderung durch Keiko.",
-  "chat.skills.jira.pod": "Jira-Pod",
+  "chat.skills.jira.pod": "Jira Pod",
   "chat.skills.jira.podRequired":
-    "Verbinde einen bereiten Jira-Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
+    "Verbinde einen bereiten Jira Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
   "chat.skills.jira.empty": "Noch keine Vorlagen. Erstelle eine aus einem Jira-Projekt.",
   "chat.skills.jira.invalid": "Muss korrigiert werden",
   "chat.skills.jira.checking": "Wird mit Jira abgeglichen …",
@@ -4190,7 +4220,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.segment.tools": "Werkzeugdefinitionen",
   "chat.context.connectors": "Konnektoren",
   "chat.context.connector.mcp": "MCP-Server",
-  "chat.context.connector.jira": "Jira-Pod",
+  "chat.context.connector.jira": "Jira Pod",
   "chat.context.connector.knowledge": "Knowledge Pods",
   "chat.context.connector.idle": "Nicht verbunden",
   "chat.context.connector.tools": "{count} Werkzeuge",
@@ -5498,7 +5528,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
   "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
   "atlassianConnectors.verify.auth-failed.copy":
-    "Prüfe das Konto und das Token. Prüfe die Verbindung danach erneut.",
+    "Das Token wurde abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Erstelle in Jira ein neues Token, ersetze es hier und verifiziere erneut.",
+  "atlassianConnectors.verify.auth-unverified.label": "Nicht bestätigt",
+  "atlassianConnectors.verify.auth-unverified.copy":
+    "Die Antwort stammt nicht von Jira selbst, zum Beispiel weil ein Anmelde-Proxy oder eine Sicherheitsprüfung geantwortet hat. Das Token wurde nicht abgelehnt und nichts wurde geändert. Melde dich erneut an oder versuche es später noch einmal; das Token kannst du jederzeit ersetzen.",
   "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
   "atlassianConnectors.verify.forbidden.copy":
     "Atlassian hat den Zugriff verweigert. Prüfe die Kontoberechtigungen sowie Einschränkungen der Website oder Lizenz. Prüfe die Verbindung danach erneut.",
@@ -5516,10 +5549,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Jira meldet eine nicht unterstützte Bereitstellung oder Version oder widersprüchliche Versionsangaben. Prüfe die Adresse und den REST-v2-Zugriff auf Jira Server oder Data Center ab Version 10.3 und verifiziere erneut.",
+    "Keiko benötigt Jira Data Center ab Version 10.3.0. Jira meldet eine ältere oder nicht unterstützte Version oder widersprüchliche Versionsangaben. Aktualisiere Jira auf 10.3.0 oder neuer oder gib die Adresse einer unterstützten Instanz ein und verifiziere erneut.",
   "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
   "atlassianConnectors.verify.tls-failed.copy":
-    "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
+    "Keiko vertraut diesem Zertifikat nicht. Prüfe Gültigkeit und Hostname. Setze bei einer privaten Zertifizierungsstelle KEIKO_CA_BUNDLE_PATH auf deren PEM-Datei, starte Keiko neu und verifiziere erneut. Schalte die Zertifikatsprüfung niemals ab.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
   "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",
@@ -5562,6 +5595,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.sync.change.failedItems": "Fehlgeschlagen",
   "atlassianConnectors.sync.change.deniedItems": "Verweigert",
   "atlassianConnectors.sync.degradedTitle": "Einige Elemente konnten nicht synchronisiert werden",
+  "atlassianConnectors.sync.reason.auth-unverified":
+    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
   "atlassianConnectors.sync.reason.auth-failed":
     "Authentifizierung fehlgeschlagen. Prüfen Sie die Connector-Anmeldeinformation erneut.",
   "atlassianConnectors.sync.reason.permission-denied":
@@ -5720,6 +5755,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.result.succeededTarget": "Ergebnis: {target}",
   "atlassianConnectors.result.failedTitle": "Aktion fehlgeschlagen",
   "atlassianConnectors.result.reason.auth-failed": "Authentifizierung fehlgeschlagen.",
+  "atlassianConnectors.result.reason.auth-unverified":
+    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
+  "atlassianConnectors.live.compatibilityMissing":
+    "Für diesen Jira Pod sind noch keine Kompatibilitätsangaben gespeichert. Verifiziere die Verbindung erneut, um sie zu erhalten; es wird keine Berechtigung hinzugefügt.",
   "atlassianConnectors.result.reason.permission-denied": "Berechtigung verweigert.",
   "atlassianConnectors.result.reason.not-found": "Das Ziel existiert nicht mehr.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian hat die Anfrage gedrosselt.",

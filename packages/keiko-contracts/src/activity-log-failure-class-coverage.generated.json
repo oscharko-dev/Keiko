@@ -3215,6 +3215,12 @@
               "required": false
             },
             {
+              "name": "decision",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "jiraCompatibility",
               "type": "string",
               "dataClass": "closed-enum",
@@ -3227,7 +3233,19 @@
               "required": true
             },
             {
+              "name": "probeCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "restApi",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "routeClass",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
@@ -5207,6 +5225,12 @@
             },
             {
               "name": "pendingKnowledgePageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "rawReportKeyCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
