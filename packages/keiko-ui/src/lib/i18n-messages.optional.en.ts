@@ -2613,6 +2613,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.finding.unknown-link-type": "Link type {subject} does not exist.",
   "chat.skills.jira.finding.unknown-transition-target":
     "{subject} is not a status of the project. A transition name or id cannot be checked here.",
+  "chat.skills.jira.finding.wrong-parent-field":
+    "The parent field does not link this issue type to its parent here: {subject}. Writes it governs cannot satisfy it.",
   "chat.skills.jira.projectKey": "Project key",
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",

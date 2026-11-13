@@ -298,7 +298,14 @@ function mergedCatalog(
   ...lists: readonly (readonly JiraFieldCatalogEntry[])[]
 ): readonly JiraFieldCatalogEntry[] {
   const known = new Map<string, JiraFieldCatalogEntry>();
-  for (const entry of lists.flat()) known.set(entry.id, { id: entry.id, name: entry.name });
+  for (const entry of lists.flat()) {
+    const schemaCustom = "schemaCustom" in entry ? entry.schemaCustom : undefined;
+    known.set(entry.id, {
+      id: entry.id,
+      name: entry.name,
+      ...(typeof schemaCustom === "string" ? { schemaCustom } : {}),
+    });
+  }
   return [...known.values()];
 }
 
@@ -340,7 +347,15 @@ function fieldCatalogValues(items: readonly unknown[]): readonly JiraFieldCatalo
   return items.flatMap((item): readonly JiraFieldCatalogEntry[] => {
     const record = asRecord(item);
     return typeof record?.id === "string" && typeof record.name === "string"
-      ? [{ id: record.id, name: record.name }]
+      ? [
+          {
+            id: record.id,
+            name: record.name,
+            ...(typeof asRecord(record.schema)?.custom === "string"
+              ? { schemaCustom: String(asRecord(record.schema)?.custom) }
+              : {}),
+          },
+        ]
       : [];
   });
 }

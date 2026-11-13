@@ -2770,6 +2770,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.finding.unknown-link-type": "Der Verknüpfungstyp {subject} existiert nicht.",
   "chat.skills.jira.finding.unknown-transition-target":
     "{subject} ist kein Status des Projekts. Ein Übergangsname oder eine ID lässt sich hier nicht prüfen.",
+  "chat.skills.jira.finding.wrong-parent-field":
+    "Das Eltern-Feld verknüpft diesen Vorgangstyp hier nicht mit seinem Elternvorgang: {subject}. Davon betroffene Schreibvorgänge lassen sich nicht erfüllen.",
   "chat.skills.jira.projectKey": "Projektschlüssel",
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",

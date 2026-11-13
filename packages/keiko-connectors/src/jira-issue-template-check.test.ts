@@ -621,6 +621,79 @@ describe("validateJiraIssueTemplateAgainstInstance", () => {
   });
 });
 
+// #4354 AC2: a Task or Sub-task template names the field that links it to its parent; the instance
+// decides which field that is. A Parent Link on a Task (customfield_10101 in the customer's Jira)
+// matched "Jira" although the Task-to-Epic relation is the Epic Link (customfield_10109).
+describe("the parent relation of a template's issue type (#4354)", () => {
+  const RELATIONS: readonly JiraFieldCatalogEntry[] = [
+    { id: "summary", name: "Summary" },
+    { id: "parent", name: "Parent" },
+    {
+      id: "customfield_10109",
+      name: "Epic Link",
+      schemaCustom: "com.pyxis.greenhopper.jira:gh-epic-link",
+    },
+    {
+      id: "customfield_10101",
+      name: "Parent Link",
+      schemaCustom: "com.atlassian.jpo:jpo-custom-field-parent",
+    },
+  ];
+  const instance = {
+    fields: RELATIONS,
+    project: {
+      key: "ABC",
+      issueTypes: [
+        { id: "1", name: "Task", subtask: false },
+        { id: "2", name: "Sub-task", subtask: true },
+        { id: "3", name: "Epic", subtask: false },
+      ],
+    },
+  };
+  const findings = (issueType: string, field: string): readonly string[] =>
+    validateJiraIssueTemplateAgainstInstance(
+      { ...parsed([`parentField: ${field}`], "# T"), issueType },
+      instance,
+    ).map((finding) => `${finding.code}:${finding.subject}`);
+
+  it("flags a Task template whose parent field is the Parent Link, naming the Epic Link", () => {
+    expect(findings("Task", "customfield_10101")).toEqual([
+      "wrong-parent-field:customfield_10101 instead of Epic Link (customfield_10109)",
+    ]);
+  });
+  it("accepts the Epic Link on a Task and the system parent on a Sub-task", () => {
+    expect(findings("Task", "customfield_10109")).toEqual([]);
+    expect(findings("Task", "Epic Link")).toEqual([]);
+    expect(findings("Sub-task", "parent")).toEqual([]);
+  });
+  it("flags an Epic Link or a Parent Link on a Sub-task, naming the system parent", () => {
+    expect(findings("Sub-task", "customfield_10109")).toEqual([
+      "wrong-parent-field:customfield_10109 instead of Parent (parent)",
+    ]);
+    expect(findings("Sub-task", "customfield_10101")).toEqual([
+      "wrong-parent-field:customfield_10101 instead of Parent (parent)",
+    ]);
+  });
+  it("leaves an Epic alone: it is linked to an initiative by the Parent Link", () => {
+    expect(findings("Epic", "customfield_10101")).toEqual([]);
+  });
+  it("says nothing about the relation when the project or the field kinds are not known", () => {
+    const codes = (
+      template: JiraIssueTemplate,
+      facts: Parameters<typeof validateJiraIssueTemplateAgainstInstance>[1],
+    ): readonly string[] =>
+      validateJiraIssueTemplateAgainstInstance(template, facts).map((finding) => finding.code);
+    const bare = { ...parsed(["parentField: customfield_10101"], "# T"), issueType: "Task" };
+    expect(codes(bare, { fields: RELATIONS })).not.toContain("wrong-parent-field");
+    expect(
+      codes(bare, {
+        fields: [{ id: "customfield_10101", name: "Parent Link" }],
+        project: instance.project,
+      }),
+    ).not.toContain("wrong-parent-field");
+  });
+});
+
 describe("native description rendering contract", () => {
   const required = parsed([], "## Criteria\n## Source\n");
 

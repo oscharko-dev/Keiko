@@ -22,6 +22,7 @@ export const JIRA_TEMPLATE_FINDING_CODES = [
   "ambiguous-field",
   "unknown-link-type",
   "unknown-transition-target",
+  "wrong-parent-field",
 ] as const;
 export type JiraTemplateFindingCode = (typeof JIRA_TEMPLATE_FINDING_CODES)[number];
 

@@ -38,6 +38,8 @@ export interface JiraTemplateSubject {
 export interface JiraFieldCatalogEntry {
   readonly id: string;
   readonly name: string;
+  /** Jira's custom field type (`schema.custom`) when the instance declares one; never an identity. */
+  readonly schemaCustom?: string;
 }
 
 /** A Jira summary and a label are at most 255 characters; a longer text never reaches a pattern. */
@@ -403,6 +405,7 @@ export const JIRA_TEMPLATE_FINDING_CODES = [
   "ambiguous-field",
   "unknown-link-type",
   "unknown-transition-target",
+  "wrong-parent-field",
 ] as const;
 export type JiraTemplateFindingCode = (typeof JIRA_TEMPLATE_FINDING_CODES)[number];
 export interface JiraTemplateFinding {
@@ -422,7 +425,12 @@ export interface JiraTemplateInstanceMetadata {
   /** The project as the instance reports it; absent when the project key is unknown. */
   readonly project?: {
     readonly key: string;
-    readonly issueTypes: readonly { readonly id: string; readonly name: string }[];
+    readonly issueTypes: readonly {
+      readonly id: string;
+      readonly name: string;
+      /** Jira's own flag for a sub-task type; absent when the instance did not state it. */
+      readonly subtask?: boolean;
+    }[];
   };
   /** Status names of the project's workflows, for transition targets. */
   readonly statuses?: readonly string[];
@@ -500,7 +508,64 @@ export function validateJiraIssueTemplateAgainstInstance(
     ...linkFindings(template, instance),
     ...transitionFindings(template, instance),
     ...parentTypeFindings(template, instance),
+    ...parentRelationFindings(template, instance),
   ];
+}
+
+const EPIC_LINK_TYPE = "com.pyxis.greenhopper.jira:gh-epic-link";
+const PARENT_LINK_TYPE = "com.atlassian.jpo:jpo-custom-field-parent";
+const SYSTEM_PARENT = "parent";
+
+function declaredIssueType(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): { readonly name: string; readonly subtask: boolean } | undefined {
+  const found = instance.project?.issueTypes.find(
+    (type) => type.id === template.issueType || same(type.name, template.issueType),
+  );
+  return found?.subtask === undefined ? undefined : { name: found.name, subtask: found.subtask };
+}
+
+/**
+ * What the instance says about the parent relation of the template's own issue type: a sub-task is
+ * linked to its parent by the system `parent` field, a task or story to its epic by the Epic Link,
+ * and only an Epic is linked to an initiative by the Parent Link. A template whose parent field is
+ * a relation field known to belong to another kind of issue can never be satisfied: it matched
+ * "Jira" while every write it governs would be refused (#4354). Only a field whose kind the
+ * instance states is judged; an unknown project, type or field kind says nothing.
+ */
+function parentRelationFindings(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): readonly JiraTemplateFinding[] {
+  const reference = template.parent.field;
+  const type = declaredIssueType(template, instance);
+  if (reference === undefined || type === undefined || instance.fields === undefined) return [];
+  const ids = resolveJiraTemplateFieldIds(reference, instance.fields);
+  const named = ids.length === 1 ? instance.fields.find((entry) => entry.id === ids[0]) : undefined;
+  if (named === undefined) return [];
+  const actual = actualParentField(type, instance.fields);
+  if (actual === undefined || named.id === actual.id) return [];
+  const foreign =
+    named.schemaCustom === EPIC_LINK_TYPE || named.schemaCustom === PARENT_LINK_TYPE
+      ? type.subtask || named.schemaCustom === PARENT_LINK_TYPE
+      : false;
+  return foreign
+    ? [
+        {
+          code: "wrong-parent-field",
+          subject: `${reference} instead of ${actual.name} (${actual.id})`,
+        },
+      ]
+    : [];
+}
+function actualParentField(
+  type: { readonly name: string; readonly subtask: boolean },
+  fields: readonly JiraFieldCatalogEntry[],
+): JiraFieldCatalogEntry | undefined {
+  if (type.subtask) return fields.find((entry) => entry.id === SYSTEM_PARENT);
+  if (same(type.name, "epic")) return undefined;
+  return fields.find((entry) => entry.schemaCustom === EPIC_LINK_TYPE);
 }
 
 function parentTypeFindings(
