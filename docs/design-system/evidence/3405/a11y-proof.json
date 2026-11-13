@@ -88,7 +88,7 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "6d8d8f4506bad948c83ba656bb0c886236d6a9eea58e08f90ee3ef136f30d0c2"
+      "sha256": "309e781347c5fd5986a01acfc8fe6287dd58aa382d8ce52b40d3f4e9d87fd94a"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
@@ -96,11 +96,11 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "5beeb13134bd19dcb2dac091ea0bab532f7c553556c08b20e0f4749f47d2fabc"
+      "sha256": "67ec5d9e29c8c65bd4653979d66072c115eafe0cd4a0819086927fd945869648"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "0a2e7d79f9962c04b70567ceecbd968e3ac16d711663f2e78508be7b6e30c428"
+      "sha256": "f06b007b6ec6cb59c2bd959046b6bc060c08c553cf79912cc7a18a362c533d3a"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
