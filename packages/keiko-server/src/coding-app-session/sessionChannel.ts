@@ -24,6 +24,7 @@ import type {
   SessionMint,
   SessionProofObservation,
   SessionProofRefusalReason,
+  SessionProofStanding,
   SessionRegistry,
 } from "./sessionRegistry.js";
 import type { BrowserApprovalService } from "./browserApproval.js";
@@ -46,11 +47,28 @@ export interface CodingAppSessionContentSource {
     | undefined;
 }
 
+/**
+ * How a session issuance relates to the credential the browser presented with it (#4370):
+ * `first-pairing` presented none, `live-credential` still held a registered session,
+ * `after-restart` held one this process never issued while it had issued nothing at all (so it can
+ * only come from an earlier process), `replaced-credential` held one this process no longer knows
+ * (expired, revoked, evicted or rotated away). Evidence only; it grants nothing.
+ */
+export type SessionReconnectKind =
+  "first-pairing" | "live-credential" | "after-restart" | "replaced-credential";
+
+export function classifyReconnect(standing: SessionProofStanding): SessionReconnectKind {
+  if (standing.presented === "registered") return "live-credential";
+  if (standing.presented !== "unregistered") return "first-pairing";
+  return standing.mintedSessionCount === 0 ? "after-restart" : "replaced-credential";
+}
+
 export type CodingAppSessionPairResult =
   | {
       readonly paired: true;
       readonly cookieToken: string;
       readonly capacityDecision?: SessionMint["capacityDecision"];
+      readonly reconnect: SessionReconnectKind;
     }
   | { readonly paired: false };
 
@@ -72,7 +90,8 @@ export type CodingAppSessionEnsureResult =
 
 export interface CodingAppSessionChannel {
   readonly browserApproval?: BrowserApprovalService | undefined;
-  readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
+  /** `presentedProof` is the credential the pairing browser sent, for reconnect evidence only. */
+  readonly pair: (attestation: unknown, presentedProof?: string) => CodingAppSessionPairResult;
   readonly ensureLocalSession: (
     cookieToken: string | undefined,
     observation?: SessionProofObservation,
@@ -94,6 +113,8 @@ export interface CodingAppSessionChannel {
     observation?: SessionProofObservation,
   ) => boolean;
   readonly sessionCount: () => number;
+  /** Reconnect evidence for a presented proof; see `SessionProofStanding`. */
+  readonly proofStanding?: (cookieToken: string | undefined) => SessionProofStanding;
   /**
    * Verify a presented cookie token into its live session, or `undefined` for every invalid,
    * revoked, or expired presentation. This is the read-authority primitive the W1.5 route guard
@@ -434,13 +455,21 @@ function pairSession(
   registry: SessionRegistry,
   pairingPort: SessionPairingPort | undefined,
   attestation: unknown,
+  presentedProof: string | undefined,
 ): CodingAppSessionPairResult {
   if (pairingPort === undefined) return { paired: false };
   if (!isWellFormedSessionPairingAttestation(attestation)) return { paired: false };
   const decision = pairingPort.attest(attestation);
   if (decision.outcome !== "approved") return { paired: false };
+  // Classified before the mint: the mint itself counts as the process's first issuance.
+  const reconnect = classifyReconnect(registry.proofStanding(presentedProof));
   const mint = registry.mint(decision.principalLabel);
-  return { paired: true, cookieToken: mint.cookieToken, capacityDecision: mint.capacityDecision };
+  return {
+    paired: true,
+    cookieToken: mint.cookieToken,
+    capacityDecision: mint.capacityDecision,
+    reconnect,
+  };
 }
 
 function ensureLocalSession(
@@ -503,8 +532,8 @@ export function createCodingAppSessionChannel(
   const admission = makeLiveSubscriptionAdmission();
   return {
     browserApproval: deps.browserApproval,
-    pair: (attestation: unknown): CodingAppSessionPairResult =>
-      pairSession(registry, pairingPort, attestation),
+    pair: (attestation: unknown, presentedProof?: string): CodingAppSessionPairResult =>
+      pairSession(registry, pairingPort, attestation, presentedProof),
     ensureLocalSession: (cookieToken, observation): CodingAppSessionEnsureResult => {
       return ensureLocalSession(registry, cookieToken, observation);
     },
@@ -522,6 +551,7 @@ export function createCodingAppSessionChannel(
       return true;
     },
     sessionCount: (): number => registry.sessionCount(),
+    proofStanding: (cookieToken): SessionProofStanding => registry.proofStanding(cookieToken),
     verifySession: (cookieToken, observation): AppSession | undefined =>
       registry.verify(cookieToken, observation),
     inspectOperationCount: (cookieToken, observation): number | undefined =>

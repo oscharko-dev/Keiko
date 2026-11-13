@@ -7,6 +7,7 @@ import {
 import { createFakeSessionPairingPort, fakePairingRequestBody } from "./_support.js";
 import {
   CODING_APP_SESSION_MAX_LIVE_STREAMS,
+  classifyReconnect,
   createCodingAppSessionChannel,
   type CodingAppSessionContentSource,
 } from "./sessionChannel.js";
@@ -493,4 +494,34 @@ it("revokes a replacement that loses its last full second during rotation", () =
   });
   expect(fixture.channel.rotate(fixture.token)).toEqual({ rotated: false });
   expect(fixture.channel.snapshot(replacement).content).toBeNull();
+});
+
+describe("classifyReconnect (#4370)", () => {
+  it("separates a restart from an ordinary replacement and a first pairing", () => {
+    expect(classifyReconnect({ presented: "absent", mintedSessionCount: 0 })).toBe("first-pairing");
+    expect(classifyReconnect({ presented: "malformed", mintedSessionCount: 3 })).toBe(
+      "first-pairing",
+    );
+    expect(classifyReconnect({ presented: "registered", mintedSessionCount: 1 })).toBe(
+      "live-credential",
+    );
+    expect(classifyReconnect({ presented: "unregistered", mintedSessionCount: 0 })).toBe(
+      "after-restart",
+    );
+    expect(classifyReconnect({ presented: "unregistered", mintedSessionCount: 1 })).toBe(
+      "replaced-credential",
+    );
+  });
+
+  it("classifies before the pairing's own mint counts as the process's first issuance", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const foreign = `sess_${"d".repeat(24)}.secret`;
+    const first = channel.pair(fakePairingRequestBody(), foreign);
+    const second = channel.pair(fakePairingRequestBody(), foreign);
+    expect(first.paired && first.reconnect).toBe("after-restart");
+    expect(second.paired && second.reconnect).toBe("replaced-credential");
+  });
 });

@@ -111,7 +111,23 @@ export interface SessionRegistry {
   readonly revokeApproval: (approvalId: string) => number;
   /** Share an expiry observed by the browser-approval owner with every associated live session. */
   readonly expireApprovalsAt: (observedAtMs: number) => number;
+  /** Valid sessions only: an expired entry that nothing has swept yet is not counted. */
   readonly sessionCount: () => number;
+  /**
+   * Non-touching, non-logging classification of a presented proof, for reconnect evidence. It
+   * verifies nothing and exposes no session state beyond whether the proof's session is registered.
+   */
+  readonly proofStanding: (cookieToken: string | undefined) => SessionProofStanding;
+}
+
+/**
+ * What a registry knows about a proof a browser presented, without verifying its secret.
+ * `unregistered` after `mintedSessionCount === 0` can only be a credential from another process.
+ */
+export interface SessionProofStanding {
+  readonly presented: "absent" | "malformed" | "registered" | "unregistered";
+  /** Sessions this process has minted since it started (rotation excluded). */
+  readonly mintedSessionCount: number;
 }
 
 /** Browser identity approval caps session validity; it grants no task or autonomy authority. */
@@ -158,6 +174,7 @@ interface RegistryState {
   readonly activityLog?: ServerLogSink | undefined;
   readonly observeApprovalExpiry?: ((observedAtMs: number) => void) | undefined;
   readonly sessions: Map<string, StoredSession>;
+  mintedSessionCount: number;
   readonly now: () => number;
   readonly idleTtlMs: number;
   readonly absoluteTtlMs: number;
@@ -279,7 +296,7 @@ function recordProofRefusal(
       {
         reason,
         registered,
-        sessionCount: state.sessions.size,
+        sessionCount: countValidSessions(state),
         purpose: observation.purpose ?? "verification",
         ...(observation.presentedProofCount === undefined
           ? {}
@@ -315,7 +332,7 @@ function recordObservedExpiry(
     activityLogEvent(
       EXPIRY_OPERATION,
       { level: "info", correlationId: UNKNOWN_CORRELATION_ID },
-      { expiredSessionCount, sessionCount: state.sessions.size, reason },
+      { expiredSessionCount, sessionCount: countValidSessions(state), reason },
     ),
   );
 }
@@ -360,6 +377,17 @@ function isExpired(state: RegistryState, stored: StoredSession, nowMs: number): 
     nowMs - stored.issuedAtMs >= state.absoluteTtlMs ||
     (stored.activeOperationCount === 0 && nowMs - stored.lastSeenAtMs >= state.idleTtlMs)
   );
+}
+
+/**
+ * Sessions that would still verify now. The map also holds expired entries until something observes
+ * them, so its size overstates how many browsers can act; every logged and reported count uses this.
+ */
+function countValidSessions(state: RegistryState): number {
+  const nowMs = state.now();
+  let valid = 0;
+  for (const stored of state.sessions.values()) if (!isExpired(state, stored, nowMs)) valid += 1;
+  return valid;
 }
 
 function approvalExpired(stored: StoredSession, nowMs: number): boolean {
@@ -436,6 +464,7 @@ function mintSession(
   const issuedAtMs = state.now();
   assertApprovalBinding(approval, issuedAtMs);
   const capacityDecision = evictOldestIfFull(state);
+  state.mintedSessionCount += 1;
   return {
     ...storeSession(state, {
       sessionId: state.mintSessionId(),
@@ -527,6 +556,20 @@ function verifyForCookieRepair(
   );
 }
 
+function proofStanding(
+  state: RegistryState,
+  cookieToken: string | undefined,
+): SessionProofStanding {
+  const mintedSessionCount = state.mintedSessionCount;
+  if (cookieToken === undefined) return { presented: "absent", mintedSessionCount };
+  const parsed = parseCookieToken(cookieToken);
+  if (parsed === undefined) return { presented: "malformed", mintedSessionCount };
+  return {
+    presented: state.sessions.has(parsed.sessionId) ? "registered" : "unregistered",
+    mintedSessionCount,
+  };
+}
+
 function inspectOwnedSession(state: RegistryState, sessionId: string): AppSession | undefined {
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
@@ -596,6 +639,7 @@ function beginSessionOperation(
 function createRegistryState(deps: SessionRegistryDeps): RegistryState {
   return {
     sessions: new Map<string, StoredSession>(),
+    mintedSessionCount: 0,
     activityLog: deps.activityLog,
     observeApprovalExpiry: deps.observeApprovalExpiry,
     now: deps.now ?? Date.now,
@@ -649,7 +693,8 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
     revokeApproval: (approvalId: string): number => revokeApprovalSessions(state, approvalId),
     expireApprovalsAt: (observedAtMs: number): number =>
       expireApprovalSessions(state, observedAtMs),
-    sessionCount: (): number => state.sessions.size,
+    sessionCount: (): number => countValidSessions(state),
+    proofStanding: (cookieToken): SessionProofStanding => proofStanding(state, cookieToken),
   };
 }
 

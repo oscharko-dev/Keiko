@@ -377,3 +377,62 @@ it("keeps the browser credential and its lease when rotation evidence cannot be 
   release?.();
   expect(registry.inspectOperationCount(mint.cookieToken)).toBe(0);
 });
+
+describe("valid session count and proof standing (#4370)", () => {
+  it("counts only sessions that would still verify, not expired entries nothing has swept", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100 });
+    registry.mint("a");
+    registry.mint("b");
+    expect(registry.sessionCount()).toBe(2);
+    clock.advance(101);
+    // Nothing verified the entries, so they are still stored, but neither can act any more.
+    expect(registry.sessionCount()).toBe(0);
+    const live = registry.mint("c");
+    expect(registry.sessionCount()).toBe(1);
+    expect(registry.inspect(live.cookieToken)).toBeDefined();
+  });
+
+  it("logs the valid count on a refusal and on an observed expiry", () => {
+    const clock = fixedClock(0);
+    const sink = createBufferedServerLogSink();
+    const registry = createSessionRegistry({
+      now: clock.now,
+      idleTtlMs: 100,
+      activityLog: sink,
+    });
+    const stale = registry.mint("stale");
+    clock.advance(50);
+    registry.mint("fresh-1");
+    clock.advance(60);
+    registry.mint("fresh-2");
+    expect(registry.verify(stale.cookieToken)).toBeUndefined();
+    const refusal = sink.events.find((event) => event.op === "coding-app-session.proof.refused");
+    expect(refusal?.extra?.sessionCount).toBe(2);
+  });
+
+  it("classifies a presented proof without verifying or touching anything", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100 });
+    expect(registry.proofStanding(undefined)).toEqual({
+      presented: "absent",
+      mintedSessionCount: 0,
+    });
+    expect(registry.proofStanding("nonsense").presented).toBe("malformed");
+    const foreign = `sess_${"f".repeat(24)}.secret`;
+    expect(registry.proofStanding(foreign)).toEqual({
+      presented: "unregistered",
+      mintedSessionCount: 0,
+    });
+    const mint = registry.mint("p");
+    expect(registry.proofStanding(mint.cookieToken)).toEqual({
+      presented: "registered",
+      mintedSessionCount: 1,
+    });
+    // A wrong secret is still `registered`: standing says whose session it names, nothing more.
+    const wrong = `${mint.session.sessionId}.wrong`;
+    expect(registry.proofStanding(wrong).presented).toBe("registered");
+    clock.advance(1_000);
+    expect(registry.proofStanding(mint.cookieToken).presented).toBe("registered");
+  });
+});

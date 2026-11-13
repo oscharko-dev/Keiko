@@ -360,10 +360,17 @@ A refused `local-session` cookie repair (an unpaired browser, a stale cookie or 
 an ordinary state of a page load) returns the content-free acknowledgement with HTTP 200 and no
 cookie, never a 401 that would surface as a browser console error on every unpaired load. The
 existing Activity Log records `coding-app-session.local-session.denied` with the single closed
-reason `authority-unavailable` and the aggregate `count`, at warning level when the pairing-denial threshold is reached, at most once per minute per composed server. It contains no
-identity, cookie or caller-provided content. A missing, malformed, foreign or wrong proof and an
-absent channel are caller-controlled: any page that reaches the loopback server can repeat them
-without limit, so they never write a line per request and remain only in that aggregate. A refusal
+reason `authority-unavailable`, the window `count` and a closed reason histogram, one integer per
+refusal reason (`approval`, `inactivity`, `invalid-clock`, `lifetime`, `proof-malformed`,
+`proof-missing`, `secret-mismatch`, `session-unregistered`, `lifetime-insufficient`,
+`proof-unavailable`, `channel-unavailable`). It is written at most twice per minute per composed
+server: a warning alert when the pairing-denial threshold is reached (`windowClosed` false) and a
+summary when the window closes (`windowClosed` true; information below the threshold), so a single
+refusal below the threshold is counted under its reason instead of leaving no line (#4370). The
+histogram total equals `count`. It contains no identity, cookie or caller-provided content. A
+missing, malformed, foreign or wrong proof and an absent channel are caller-controlled: any page that
+reaches the loopback server can repeat them without limit, so they never write a line per request and
+remain only in that aggregate. A refusal
 only a registered session's holder can reach is recorded for its request:
 `coding-app-session.proof.refused` names the closed expiry reason (`approval`, `inactivity`,
 `invalid-clock`, `lifetime`) once, because the expiry removes the session, and
@@ -371,8 +378,18 @@ only a registered session's holder can reach is recorded for its request:
 second of the absolute lifetime) with count one. These lines carry only the request correlation,
 closed purpose, registered flag and counts (including presented/distinct cookie counts where
 available).
-They expose no bearer, session identity or personal content. Repeated observations of the same
-HTTP request reuse its canonical generated correlation. These diagnostics do not widen authority
+They expose no bearer, session identity or personal content. Every `sessionCount` the registry and
+the approval log report counts only sessions that would still verify; expired entries that nothing has
+swept yet are not counted (#4370). Repeated observations of the same
+HTTP request reuse its canonical generated correlation.
+
+Reconnect evidence (#4370): `coding-app-session.paired` and the `prove` action of
+`coding-app-session.browser-approval.state` record a closed `reconnect` class that relates the
+issuance to the credential the browser presented. `first-pairing` presented none; `live-credential`
+still held a registered session; `after-restart` held a session this process never issued while it had
+issued none at all, so it can only come from an earlier process; `replaced-credential` held one this
+process no longer knows (expired, revoked, evicted or rotated away). The class is computed by a
+non-touching registry lookup of the session id before the mint, verifies no secret and grants nothing. These diagnostics do not widen authority
 or refresh rejected proofs. Pairing acknowledgement semantics remain unchanged.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation

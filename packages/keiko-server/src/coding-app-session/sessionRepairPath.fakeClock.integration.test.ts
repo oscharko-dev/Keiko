@@ -149,7 +149,8 @@ async function pair(app: Fixture): Promise<{ browser: APIRequestContext; proof: 
 it("keeps the session valid for 120 minutes with reloads at 26 and 31 minutes after pairing", async () => {
   let now = 0;
   const app = await fixture(() => now);
-  let { browser, proof } = await pair(app);
+  const { proof, browser: pairedBrowser } = await pair(app);
+  let browser = pairedBrowser;
   try {
     // The incident's grounded Chat turn: an operation held from shortly after pairing for ~24 min.
     now = 32_000;
@@ -176,7 +177,8 @@ it("keeps the session valid for 120 minutes with reloads at 26 and 31 minutes af
 it("keeps a session whose operation runs the whole 120 minutes valid across reloads", async () => {
   let now = 0;
   const app = await fixture(() => now);
-  let { browser, proof } = await pair(app);
+  const { proof, browser: pairedBrowser } = await pair(app);
+  let browser = pairedBrowser;
   let release: (() => void) | undefined;
   try {
     release = app.registry.beginOperation(proof);
@@ -188,7 +190,7 @@ it("keeps a session whose operation runs the whole 120 minutes valid across relo
       expectRepairIssuedCookies(reloaded.observation, ABSOLUTE_LIFETIME_MS - now);
       await expectAuthenticated(browser, app.origin);
     }
-    release();
+    release?.();
     release = undefined;
     // The release restarts the idle window from the release time, so a reload two minutes later holds.
     now += 2 * MINUTE_MS;
