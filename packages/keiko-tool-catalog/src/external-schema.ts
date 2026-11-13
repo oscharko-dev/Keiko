@@ -142,7 +142,7 @@ export function externalCatalogSchemaMismatch(
 ): CatalogSchemaMismatch | undefined {
   const validate = validationFor(schema);
   if (validate(value)) return undefined;
-  return mismatchDetail(validate.errors?.[0]);
+  return mismatchDetail(schema, validate.errors ?? []);
 }
 function missingRequired(error: ErrorObject | undefined, path: string): string | undefined {
   if (error?.keyword !== "required" || typeof error.params.missingProperty !== "string")
@@ -150,14 +150,112 @@ function missingRequired(error: ErrorObject | undefined, path: string): string |
   const property = error.params.missingProperty;
   return path === "$" ? property : `${path}.${property}`;
 }
-function mismatchDetail(error: ErrorObject | undefined): CatalogSchemaMismatch {
+const MAX_CHOICE_BRANCHES = 8;
+const MAX_ALLOWED_VALUES = 8;
+const MAX_ALLOWED_STRING = 64;
+type Allowed = NonNullable<CatalogSchemaMismatch["allowed"]>;
+type Choice = NonNullable<CatalogSchemaMismatch["choice"]>;
+
+function isObjectNode(
+  node: CatalogJsonValue | undefined,
+): node is Readonly<Record<string, CatalogJsonValue>> {
+  return typeof node === "object" && node !== null && !Array.isArray(node);
+}
+function schemaAt(root: CatalogJsonValue, schemaPath: string): CatalogJsonValue | undefined {
+  if (!schemaPath.startsWith("#/")) return undefined;
+  let node: CatalogJsonValue | undefined = root;
+  for (const segment of schemaPath.slice(2).split("/")) {
+    const key = segment.replaceAll("~1", "/").replaceAll("~0", "~");
+    if (Array.isArray(node)) node = (node as readonly CatalogJsonValue[])[Number(key)];
+    else if (isObjectNode(node)) node = Object.hasOwn(node, key) ? node[key] : undefined;
+    else return undefined;
+  }
+  return node;
+}
+function branchRequirements(branch: CatalogJsonValue | undefined): readonly string[] | undefined {
+  if (!isObjectNode(branch)) return undefined;
+  const required = branch.required;
+  return Array.isArray(required) &&
+    required.length > 0 &&
+    required.every((name) => typeof name === "string")
+    ? required
+    : undefined;
+}
+/** Keywords inside a branch that say the choice itself, not a value, is what failed. */
+const CHOICE_SHAPE_KEYWORDS = new Set(["required", "additionalProperties", "not"]);
+/**
+ * Whether the first error is the choice failing: the `oneOf`/`anyOf` error itself, or a missing,
+ * undeclared or excluded property inside one of its branches. An invalid VALUE inside a branch
+ * (a type, constant, length) is the failure there, and the first error already names its path.
+ */
+function choiceIsTheFailure(first: ErrorObject | undefined, choice: ErrorObject): boolean {
+  if (first === undefined || first === choice) return true;
+  return (
+    first.schemaPath.startsWith(`${choice.schemaPath}/`) && CHOICE_SHAPE_KEYWORDS.has(first.keyword)
+  );
+}
+/** The top-level alternatives of a failed `oneOf`/`anyOf`, only when every branch names its properties. */
+function choiceOf(schema: CatalogJsonObject, errors: readonly ErrorObject[]): Choice | undefined {
+  const error = errors.find(
+    (entry) =>
+      (entry.keyword === "oneOf" || entry.keyword === "anyOf") && entry.instancePath === "",
+  );
+  const branches = error === undefined ? undefined : schemaAt(schema, error.schemaPath);
+  if (error === undefined || !Array.isArray(branches) || branches.length > MAX_CHOICE_BRANCHES)
+    return undefined;
+  if (!choiceIsTheFailure(errors[0], error)) return undefined;
+  const alternatives = branches.map((branch) => branchRequirements(branch as CatalogJsonValue));
+  if (alternatives.length === 0 || alternatives.some((names) => names === undefined))
+    return undefined;
+  return {
+    kind: error.keyword === "oneOf" ? "exactly-one" : "at-least-one",
+    alternatives: alternatives as readonly (readonly string[])[],
+  };
+}
+/** The schema's own constant or enumerated values for the failing property. */
+function allowedOf(error: ErrorObject | undefined, path: string): Allowed | undefined {
+  if (error?.keyword !== "const" && error?.keyword !== "enum") return undefined;
+  const declared: unknown =
+    error.keyword === "const" ? [error.params.allowedValue] : error.params.allowedValues;
+  if (!Array.isArray(declared) || declared.length === 0 || declared.length > MAX_ALLOWED_VALUES)
+    return undefined;
+  const values = declared.filter(
+    (entry): entry is string | number | boolean | null =>
+      entry === null ||
+      typeof entry === "boolean" ||
+      typeof entry === "number" ||
+      (typeof entry === "string" && entry.length <= MAX_ALLOWED_STRING),
+  );
+  return values.length === declared.length ? { path, values } : undefined;
+}
+const MAX_DECLARED_PROPERTIES = 16;
+/** Root property names of a closed schema; nested closed objects are not named. */
+function declaredOf(schema: CatalogJsonObject, error: ErrorObject | undefined): readonly string[] {
+  if (error?.keyword !== "additionalProperties" || error.instancePath !== "") return [];
+  const properties = schema.properties;
+  if (!isObjectNode(properties)) return [];
+  const names = Object.keys(properties);
+  return names.length <= MAX_DECLARED_PROPERTIES ? names : [];
+}
+function mismatchDetail(
+  schema: CatalogJsonObject,
+  errors: readonly ErrorObject[],
+): CatalogSchemaMismatch {
+  const error = errors[0];
   const path = error === undefined ? "$" : declaredPath(error);
   const missing = missingRequired(error, path);
   const extra = error?.keyword === "additionalProperties";
+  const choice = choiceOf(schema, errors);
+  const allowed = allowedOf(error, path);
+  const declared = declaredOf(schema, error);
   return {
     missingRequired: missing === undefined ? [] : [missing],
     invalidPaths: missing !== undefined || extra ? [] : [path],
     unexpectedPropertyCount: extra ? 1 : 0,
     droppedPathCount: 0,
+    optionalProperties: true,
+    ...(declared.length === 0 ? {} : { declaredProperties: declared }),
+    ...(choice === undefined ? {} : { choice }),
+    ...(allowed === undefined ? {} : { allowed }),
   };
 }

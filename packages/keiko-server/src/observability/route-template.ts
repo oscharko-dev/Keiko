@@ -87,7 +87,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
     "remediation remotes rename repair replace-apply replace-preview report repository " +
     "repositories request research resolve resume retrieve retry revert review " +
     "review-description review-items review-queue revoke root roots rotate runs runtime " +
-    "schedules scopes screens screenshot search select semantic-tokens session sessions set " +
+    "schedules scopes screens screenshot search select selection semantic-tokens session sessions set " +
     "settings setup sign-out skill skills snapshot snapshots snippets sources speak stack " +
     "stage staging state status stop stream structured summary switch sync-jobs takeover " +
     "task-workspaces telemetry terminal test-generation token tombstones tool traceability " +

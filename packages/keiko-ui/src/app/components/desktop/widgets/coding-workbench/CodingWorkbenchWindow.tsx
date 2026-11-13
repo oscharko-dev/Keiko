@@ -1145,8 +1145,9 @@ function selectedConversationReadiness(
   };
 }
 
-// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model whose
-// answer expired or that nobody checked yet is usable, because its run's start checks it first.
+// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model that
+// nobody checked yet is usable: the pick itself asks the server to check that one model (the
+// profile read with `check=1`), and a run's start joins that check instead of starting another.
 function isUsableSelectedCodingModel(selected: ModelCapability | undefined): boolean {
   return selected !== undefined && isCodingWorkbenchModel(selected);
 }
@@ -1213,7 +1214,8 @@ function useCodingModelSelection(
       null;
     if (next !== state.selectedModelId) {
       setHumanSelectedId(null);
-      actions.setSelectedModel(next);
+      // The window's own choice, not a person's pick: it is read with `check=use` (#4351).
+      actions.adoptModel(next);
     }
   }, [
     actions,

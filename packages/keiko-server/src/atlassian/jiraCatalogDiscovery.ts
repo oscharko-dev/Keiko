@@ -109,6 +109,45 @@ export function jiraToolsForIdentities(identities: readonly string[]): readonly 
   });
 }
 
+/**
+ * The registry identity each requested entry names. An entry is either an exact identity or the
+ * name of an operation this same provider lists: the `tool` field jira.discover returns beside
+ * the identity, or the dotted registry name (`jira.priorities`) that Keiko's own tool descriptions
+ * and instructions use. Models copy both, and refusing either spent a model round on every first
+ * describe (measured 2026-11-13: 6 of 15 first describes still failed after only the first form was
+ * accepted; each retry differed from the refused call by the separator alone). Only operations the
+ * provider lists are resolved. Neither a URL nor an HTTP request shape is ever resolved. Unknown
+ * entries and an operation named twice (by identity, name or both) yield `undefined`: nothing is
+ * selected.
+ */
+function canonicalIdentities(
+  requested: readonly string[],
+  options: DiscoveryOptions,
+): readonly string[] | undefined {
+  const listed = jiraOperationDefinitions().filter(
+    (definition) => options.tools === undefined || options.tools.has(definition.tool),
+  );
+  const known = new Set(jiraOperationDefinitions().map((definition) => definition.identity));
+  const resolved: string[] = [];
+  for (const entry of requested) {
+    const identity = known.has(entry) ? entry : namedOperation(listed, entry, options)?.identity;
+    if (identity === undefined) return undefined;
+    resolved.push(identity);
+  }
+  return new Set(resolved).size === resolved.length ? resolved : undefined;
+}
+function namedOperation(
+  listed: readonly { readonly identity: string; readonly tool: string }[],
+  entry: string,
+  options: DiscoveryOptions,
+): { readonly identity: string } | undefined {
+  return listed.find(
+    (definition) =>
+      definition.tool === entry ||
+      (options.nativeToolNames !== true && definition.tool.replace(/[.-]/gu, "_") === entry),
+  );
+}
+
 function discover(
   args: CatalogJsonObject,
   context: Context,
@@ -159,7 +198,7 @@ const INVALID_DESCRIPTION = {
   outcome: "failed",
   reason: "invalid-arguments",
   guidance:
-    "Use only exact operation identities returned by jira.discover, each at most once. The current tool selection was not changed.",
+    "Pass only the identity or the tool name that jira.discover returned for an operation, each operation at most once; a name jira.discover did not list is refused. The current tool selection was not changed.",
 } as const;
 
 /** More operations than one tool host or catalog can carry; nothing was selected. */
@@ -195,9 +234,11 @@ async function describe(
   context.signal.throwIfAborted();
   requireDispatch(context.beforeEffect(), "denied", "effect-denied");
   const invalid = discoveryFailure(INVALID_DESCRIPTION);
-  const identities = args.identities;
-  if (!Array.isArray(identities) || !identities.every((identity) => typeof identity === "string"))
+  const requested = args.identities;
+  if (!Array.isArray(requested) || !requested.every((identity) => typeof identity === "string"))
     return invalid;
+  const identities = canonicalIdentities(requested, options);
+  if (identities === undefined) return invalid;
   let tools: readonly string[];
   try {
     tools = jiraToolsForIdentities(identities);
@@ -279,7 +320,7 @@ function discoveryDescriptor(
     toolRef: createToolRef(`keiko.${name}`, 2),
     description: discovery
       ? "List implemented Jira Data Center operations by stable identity. This reads local catalog metadata, not Jira data. Pass a short query of plain words, such as create project or sprint issues, to rank matching operations first; page until the required operation is found, then use jira.describe to load its typed tool."
-      : "Select additional native Jira operation identities returned by jira.discover. Curated Jira tools stay available. Replaces the additional selected tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all additional operations needed together. An empty list clears the additional selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
+      : "Select additional native Jira operations by the identity or the tool name that jira.discover returned (jira.priorities and jira_priorities name the same operation). Curated Jira tools stay available. Replaces the additional selected tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all additional operations needed together. An empty list clears the additional selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
     inputSchema: discovery
       ? object({
           query: text(QUERY_MAX_CHARS),

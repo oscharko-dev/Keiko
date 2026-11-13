@@ -77,6 +77,13 @@ export const JIRA_REPORT_ESTIMATE_SOURCES = [
   "board-configuration",
   "project-screen",
   "time-tracking",
+  /**
+   * The configured field held no value on any issue in scope while another estimate field did, so
+   * the report took that one and says so (#4356): time tracking for a custom board field, or the
+   * project's Story Points field for a time-tracking configuration.
+   */
+  "time-tracking-fallback",
+  "field-fallback",
   "unavailable",
 ] as const;
 export type JiraReportEstimateSource = (typeof JIRA_REPORT_ESTIMATE_SOURCES)[number];

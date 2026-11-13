@@ -58,7 +58,7 @@ export interface JiraReportActivity {
   readonly reason?: JiraReportIncompleteReason;
   readonly failure?: JiraReportFailureReason;
   readonly refusal?: JiraReportRefusal;
-  readonly scopeKind: "project" | "jql" | "project-jql" | "report";
+  readonly scopeKind: "project" | "jql" | "project-jql" | "epic" | "report";
   readonly continued: boolean;
   readonly issuesRead: number;
   readonly issuesTotal?: number;
@@ -89,7 +89,15 @@ export interface JiraReportSectionPageActivity {
  * refusal carries a sentence in plain words that tells the model what to do instead.
  */
 export type JiraReportRequirementIds =
-  | { readonly ok: true; readonly ids: readonly string[] }
+  | {
+      readonly ok: true;
+      readonly ids: readonly string[];
+      /**
+       * Readable names of the identifiers Keiko derived for statements without one, so an
+       * uncovered `DRV-` handle can be read as what it is. Keiko lists them; a model never names them.
+       */
+      readonly labels?: Readonly<Record<string, string>> | undefined;
+    }
   | { readonly ok: false; readonly message: string };
 
 export interface JiraReportToolDeps<Context extends ManagedMcpInvocationContext> {
@@ -114,7 +122,8 @@ export function connectionFingerprint(connection: JiraManagedConnection): string
   );
 }
 function scopeKind(session: JiraReportSession): JiraReportActivity["scopeKind"] {
-  const { projectKey, jql } = session.request;
+  const { projectKey, jql, epicKey } = session.request;
+  if (epicKey !== undefined) return "epic";
   if (projectKey !== undefined && jql !== undefined) return "project-jql";
   return projectKey === undefined ? "jql" : "project";
 }
@@ -129,7 +138,7 @@ function optionalActivity(session: JiraReportSession): Partial<JiraReportActivit
       ? {}
       : { failure: session.failure }),
     ...(total === undefined ? {} : { issuesTotal: total }),
-    estimateSource: session.scope.estimateSource ?? "unavailable",
+    estimateSource: (session.report?.scope ?? session.scope).estimateSource ?? "unavailable",
     ...(session.scope.estimateUnavailableReason === undefined
       ? {}
       : { estimateUnavailableReason: session.scope.estimateUnavailableReason }),
@@ -339,7 +348,14 @@ function withPodRequirements<Context extends ManagedMcpInvocationContext>(
   const valid = listed.ids.filter((id) => isJiraReportRequirementId(id));
   const ids = [...new Set([...args.request.requirementIds, ...valid])].sort(compareCodePoints);
   return ids.length <= JIRA_REPORT_REQUIREMENT_ID_MAX
-    ? { ok: true, request: { ...args.request, requirementIds: ids } }
+    ? {
+        ok: true,
+        request: {
+          ...args.request,
+          requirementIds: ids,
+          ...(listed.labels === undefined ? {} : { requirementLabels: listed.labels }),
+        },
+      }
     : { ok: false, message: REQUIREMENTS_UNAVAILABLE };
 }
 
@@ -361,6 +377,33 @@ function admission(
   return session.busy ? "report-busy" : session;
 }
 
+const CONTINUATION_HINT =
+  "A call that names a reportId takes reportId, section, startAt and maxResults. A repeated projectKey, jql or epicKey must equal the report's own scope and a different one is refused: leave the scope out.";
+const CONTINUATION_SCOPE: ReadonlySet<string> = new Set(["projectKey", "jql", "epicKey"]);
+/** A scope repeated beside a reportId is the one mistake a model can fix without asking anyone. */
+function continuationHint(
+  rawArgs: CatalogJsonObject,
+  invalid: readonly string[],
+): string | undefined {
+  return rawArgs.reportId !== undefined && invalid.some((name) => CONTINUATION_SCOPE.has(name))
+    ? CONTINUATION_HINT
+    : undefined;
+}
+/**
+ * The scope arguments of a continuation that differ from the scope the report was computed for. A
+ * continuation can never change a report's scope: a repeat is accepted only when each argument
+ * equals what the report was started with, character for character, and a scope the report did
+ * not have is a difference too.
+ */
+function scopeDifferences(args: JiraReportArgs, session: JiraReportSession): readonly string[] {
+  if (args.kind !== "continue") return [];
+  const given: Readonly<Record<string, string | undefined>> = session.request.given ?? {};
+  return Object.entries(args.scope)
+    .filter(([key, value]) => given[key] !== value)
+    .map(([key]) => key)
+    .sort(compareCodePoints);
+}
+
 /** `jira.report`: start a report, resume one that is still reading, or page a finished one. */
 export async function executeJiraReportTool<Context extends ManagedMcpInvocationContext>(
   rawArgs: CatalogJsonObject,
@@ -370,8 +413,17 @@ export async function executeJiraReportTool<Context extends ManagedMcpInvocation
 ): Promise<ManagedMcpToolResult> {
   const startedAt = (deps.now ?? Date.now)();
   const args = parseJiraReportArgs(rawArgs);
-  if (args === undefined)
-    return refuse(deps, context, "invalid-input", startedAt, invalidJiraReportArguments(rawArgs));
+  if (args === undefined) {
+    const invalid = invalidJiraReportArguments(rawArgs);
+    return refuse(
+      deps,
+      context,
+      "invalid-input",
+      startedAt,
+      invalid,
+      continuationHint(rawArgs, invalid),
+    );
+  }
   if (connection.deployment !== "data-center")
     return refuse(deps, context, "unsupported-deployment", startedAt);
   const owner = deps.owner(context);
@@ -386,5 +438,8 @@ export async function executeJiraReportTool<Context extends ManagedMcpInvocation
     fingerprint,
   );
   if (typeof admitted === "string") return refuse(deps, context, admitted, startedAt);
+  const different = scopeDifferences(args, admitted);
+  if (different.length > 0)
+    return refuse(deps, context, "invalid-input", startedAt, different, CONTINUATION_HINT);
   return runSession(admitted, args, context, connection, deps);
 }

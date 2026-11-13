@@ -103,7 +103,12 @@ type AcceptedJiraChatAuthority =
       readonly envelope: JiraChatAuthorityEnvelope;
       readonly reference: EditorAgentGovernedAuthorityReference;
     }
-  | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
+  | {
+      readonly ok: false;
+      readonly reason: EditorAgentAuthorityFailureReason;
+      /** The closed readiness that explains the refusal, when the check knows it (#4371). */
+      readonly readiness?: ChatAuthorityReadiness;
+    };
 
 /** Validate a source before the accepted turn atomically retains its complete source set. */
 export function prepareAcceptedJiraChatAuthority(
@@ -113,13 +118,22 @@ export function prepareAcceptedJiraChatAuthority(
   | { readonly ok: true; readonly envelope: JiraChatAuthorityEnvelope }
   | Extract<AcceptedJiraChatAuthority, { ok: false }> {
   const facts = currentFacts(deps, turn.chatId);
-  if (!facts.ok || deps.agentAuthorityRegistry === undefined || !isAcceptedChatToolTurn(deps, turn))
-    return recordChatAuthorityResult(
-      "register",
-      { ok: false, reason: "invalid" },
-      { chatId: turn.chatId },
-      turn.correlationId,
-    );
+  if (
+    !facts.ok ||
+    deps.agentAuthorityRegistry === undefined ||
+    !isAcceptedChatToolTurn(deps, turn)
+  ) {
+    const readiness = facts.ok ? "authority-unavailable" : facts.readiness;
+    return {
+      ...recordChatAuthorityResult(
+        "register",
+        { ok: false, reason: "invalid" },
+        { chatId: turn.chatId, readiness },
+        turn.correlationId,
+      ),
+      readiness,
+    };
+  }
   const ceiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
   return {
     ok: true,
