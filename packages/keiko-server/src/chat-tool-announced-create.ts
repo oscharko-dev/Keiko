@@ -12,27 +12,47 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 const CREATE_TOOLS: ReadonlySet<string> = new Set(["jira_create", "jira_draft"]);
 
 const CREATION = [
-  /\b(?:i|we)(?:'ve|\s+have)?\s+(?:now\s+|just\s+|successfully\s+)?(?:created|opened|added|filed)\b/iu,
-  /\b(?:has|have|was|were)\s+(?:now\s+|successfully\s+)?(?:been\s+)?created\b/iu,
-  /\bsuccessfully\s+created\b/iu,
-  /\b(?:wurde|wurden)\s+(?:\p{L}+\s+)?(?:erfolgreich\s+)?(?:angelegt|erstellt)\b/iu,
-  /\b(?:ich\s+)?habe\b[^.!?\n]{0,60}\b(?:angelegt|erstellt)\b/iu,
-  /\b(?:legte|erstellte)\s+ich\b/iu,
+  /\b(?:i|we)(?:'ve| have) (?:created|opened|added|filed)\b/iu,
+  /\b(?:i|we) (?:created|opened|added|filed)\b/iu,
+  /\bbeen created\b/iu,
+  /\b(?:was|were) created\b/iu,
+  /\bsuccessfully created\b/iu,
+  /\bwurden? (?:\p{L}+ )?(?:angelegt|erstellt)\b/iu,
+  /\bhabe\b[^.!?\n]{0,60}\b(?:angelegt|erstellt)\b/iu,
+  /\b(?:legte|erstellte) ich\b/iu,
 ] as const;
-const ISSUE_OBJECT =
-  /\b(?:epics?|stor(?:y|ies)|tasks?|bugs?|sub-?tasks?|issues?|tickets?|vorg(?:a|ä)ng(?:e|en)?|aufgaben?|fehler(?:meldung(?:en)?)?|teilaufgaben?)\b/iu;
-const NOT_AN_ANNOUNCEMENT =
-  /\?|\b(?:not|never|no|cannot|can't|couldn't|could not|wasn't|weren't|won't|would|will|should|shall|if|unable|from|based on|out of)\b|\b(?:aus|anhand|nicht|kein|keine|konnte|k(?:ö|o)nnte|werde|w(?:ü|ue)rde|soll|sollte|falls|wenn|noch)\b/iu;
-const TEXT_CALL =
-  /\b(?:jira|knowledge)_[a-z][a-z_]*\s*\(|["']name["']\s*:\s*["'](?:jira|knowledge)_[a-z_]+["']|<(?:tool_call|function_call)>/giu;
+const ISSUE_OBJECTS = [
+  /\b(?:epics?|stor(?:y|ies)|tasks?|bugs?|sub-?tasks?|issues?|tickets?)\b/iu,
+  /\b(?:vorg[aä]nge?n?|aufgaben?|fehler(?:meldung(?:en)?)?|teilaufgaben?)\b/iu,
+] as const;
+/** Words and phrases that make a sentence a refusal, a question, a plan or a condition. */
+const NEGATING_WORDS: ReadonlySet<string> = new Set([
+  ...["not", "never", "no", "cannot", "can't", "couldn't", "wasn't", "weren't", "won't"],
+  ...["would", "will", "should", "shall", "if", "unable", "from"],
+  ...["nicht", "kein", "keine", "konnte", "könnte", "werde", "würde", "wuerde", "soll"],
+  ...["sollte", "falls", "wenn", "noch", "aus", "anhand"],
+]);
+const NEGATING_PHRASES = ["could not", "based on", "out of"] as const;
+const TEXT_CALLS = [
+  /\b(?:jira|knowledge)_[a-z][a-z_]*\s*\(/giu,
+  /["']name["']\s*:\s*["'](?:jira|knowledge)_[a-z_]+["']/giu,
+  /<(?:tool_call|function_call)>/giu,
+] as const;
 const SENTENCE_END = /(?<=[.!?])\s+|\n+/u;
 const COUNT_MAX = 99;
 
+function negated(sentence: string): boolean {
+  if (sentence.includes("?")) return true;
+  const lower = sentence.toLowerCase();
+  if (NEGATING_PHRASES.some((phrase) => lower.includes(phrase))) return true;
+  return (lower.match(/[\p{L}']+/gu) ?? []).some((word) => NEGATING_WORDS.has(word));
+}
+
 function announces(sentence: string): boolean {
   return (
-    !NOT_AN_ANNOUNCEMENT.test(sentence) &&
+    !negated(sentence) &&
     CREATION.some((pattern) => pattern.test(sentence)) &&
-    ISSUE_OBJECT.test(sentence)
+    ISSUE_OBJECTS.some((pattern) => pattern.test(sentence))
   );
 }
 
@@ -54,7 +74,8 @@ export function announcedCreateCount(
 
 /** How many tool calls the answer wrote as text; nothing executed them. */
 export function toolCallsWrittenAsText(answer: string): number {
-  return Math.min(COUNT_MAX, answer.match(TEXT_CALL)?.length ?? 0);
+  const found = TEXT_CALLS.reduce((sum, pattern) => sum + (answer.match(pattern)?.length ?? 0), 0);
+  return Math.min(COUNT_MAX, found);
 }
 
 export function announcedCreateCorrection(count: number): string {
