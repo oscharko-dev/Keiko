@@ -2031,6 +2031,8 @@ export {
   JIRA_DRAFT_DIGEST_PATTERN,
   JIRA_DRAFT_REFUSALS,
   type JiraDraftRefusalReason,
+  JIRA_DRAFT_PROBLEMS,
+  type JiraDraftProblemCode,
   JIRA_DRAFT_ITEM_STATES,
   JIRA_DRAFT_REF_PATTERN,
   isJiraDraftRef,
