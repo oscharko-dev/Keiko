@@ -255,9 +255,9 @@ function missingRootRequired(
   const names = required.filter(
     (name): name is string => typeof name === "string" && !Object.hasOwn(value, name),
   );
-  return names.length === 0
-    ? undefined
-    : names.sort(compareStrings).slice(0, MAX_MISSING_ROOT_REQUIRED);
+  if (names.length === 0) return undefined;
+  names.sort(compareStrings);
+  return names.slice(0, MAX_MISSING_ROOT_REQUIRED);
 }
 /** Every missing root property when the schema lists any, else the first error's one name. */
 function missingAccount(
