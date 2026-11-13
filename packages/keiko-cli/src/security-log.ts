@@ -20,6 +20,7 @@ export type CliWindowsSystemSurface =
   | "launcher-install"
   | "legacy-start-menu-cleanup"
   | "portable-failure-alert"
+  | "portable-setup-notice"
   | "start-open-browser";
 
 const WINDOWS_SYSTEM_FAILURE_KIND_FIELD = {
@@ -54,7 +55,7 @@ const WINDOWS_PORTABLE_ALERT_FIELDS = {
     type: "string",
     dataClass: "closed-enum",
     required: true,
-    values: ["portable-failure-alert"],
+    values: ["portable-failure-alert", "portable-setup-notice"],
   },
   failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
 } as const;
@@ -179,6 +180,7 @@ function emitWindowsSystemRootRefusal(
       );
       break;
     case "portable-failure-alert":
+    case "portable-setup-notice":
       emitSecurityLogEvent(
         sink,
         activityLogEvent(
@@ -229,6 +231,7 @@ function emitWindowsSystemBinaryMissing(
       );
       break;
     case "portable-failure-alert":
+    case "portable-setup-notice":
       emitSecurityLogEvent(
         sink,
         activityLogEvent(

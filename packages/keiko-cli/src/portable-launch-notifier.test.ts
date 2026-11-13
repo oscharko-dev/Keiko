@@ -3,6 +3,8 @@ import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { createCliSecurityLogSink } from "./security-log.js";
 import {
   notifyPortableLaunchFailure,
+  notifyPortableSetupStarted,
+  PORTABLE_SETUP_NOTICE,
   runDetachedAlert,
   runDetachedWindowsAlert,
 } from "./portable-launch-notifier.js";
@@ -365,5 +367,121 @@ describe("runDetachedWindowsAlert", () => {
       TEMP: String.raw`D:\Scratch\Temp`,
       TMP: String.raw`D:\Scratch\Tmp`,
     });
+  });
+});
+
+describe("notifyPortableSetupStarted", () => {
+  const env = { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`D:\Windows` };
+
+  it("shows the fixed setup notice for a Windows double-click and records that it was requested", () => {
+    const shown: [string, unknown][] = [];
+    const { sink, events } = recordingSecuritySink();
+
+    notifyPortableSetupStarted(env, {
+      platform: () => "win32",
+      securityLogSink: sink,
+      runWindowsAlert: (message, alertEnv) => {
+        shown.push([message, alertEnv]);
+      },
+    });
+
+    expect(shown).toEqual([[PORTABLE_SETUP_NOTICE, env]]);
+    expect(PORTABLE_SETUP_NOTICE).toBe(
+      "Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is ready.",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "portable.setup-notice.requested",
+      level: "info",
+      extra: { surface: "portable-setup-notice" },
+    });
+    expect(JSON.stringify(events[0])).not.toContain("being set up");
+  });
+
+  it.each([
+    ["no double-click marker", {}, "win32"],
+    ["macOS", env, "darwin"],
+    ["Linux", env, "linux"],
+  ] as const)("stays silent with %s", (_name, launchEnv, platform) => {
+    let shown = false;
+    const { sink, events } = recordingSecuritySink();
+
+    notifyPortableSetupStarted(launchEnv, {
+      platform: () => platform,
+      securityLogSink: sink,
+      runWindowsAlert: () => {
+        shown = true;
+      },
+    });
+
+    expect(shown).toBe(false);
+    expect(events).toEqual([]);
+  });
+
+  it("never fails the launch when the notice cannot be shown, and does not claim it was requested", () => {
+    const reported: string[] = [];
+    const { sink, events } = recordingSecuritySink();
+
+    expect(() => {
+      notifyPortableSetupStarted(env, {
+        platform: () => "win32",
+        securityLogSink: sink,
+        reportAlertFailure: (line) => {
+          reported.push(line);
+        },
+        runWindowsAlert: () => {
+          throw new Error("no PowerShell");
+        },
+      });
+    }).not.toThrow();
+
+    expect(reported).toEqual(["keiko portable launch: the setup notice could not be shown\n"]);
+    expect(events).toEqual([]);
+  });
+
+  it("logs a body-free refusal under the notice's own surface when Windows cannot be resolved", () => {
+    const reported: string[] = [];
+    const { sink, events } = recordingSecuritySink();
+
+    notifyPortableSetupStarted(
+      { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`\\attacker\share` },
+      {
+        platform: () => "win32",
+        securityLogSink: sink,
+        reportAlertFailure: (line) => {
+          reported.push(line);
+        },
+      },
+    );
+
+    expect(reported).toEqual(["keiko portable launch: the setup notice could not be shown\n"]);
+    expect(events.map((event) => [event.op, event.extra?.surface])).toEqual([
+      ["security.windows-portable-alert.system-root-refused", "portable-setup-notice"],
+    ]);
+  });
+});
+
+describe("runDetachedWindowsAlert as a setup notice", () => {
+  it("shows an information box titled Keiko, never the could-not-start error box", () => {
+    const commands: string[] = [];
+
+    runDetachedWindowsAlert(
+      PORTABLE_SETUP_NOTICE,
+      { SystemRoot: String.raw`D:\Windows` },
+      (_command, args) => {
+        commands.push(args.at(-1) ?? "");
+        return { on: (): void => undefined, unref: (): void => undefined };
+      },
+      () => undefined,
+      () => true,
+      undefined,
+      () => true,
+      "setup-notice",
+    );
+
+    expect(commands).toEqual([
+      "Add-Type -AssemblyName PresentationFramework; " +
+        `[System.Windows.MessageBox]::Show('${PORTABLE_SETUP_NOTICE}', 'Keiko', 'OK', 'Information') | Out-Null`,
+    ]);
   });
 });
