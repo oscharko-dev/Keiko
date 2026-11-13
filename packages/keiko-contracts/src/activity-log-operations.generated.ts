@@ -4190,6 +4190,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unsupported-issue-key",
           "knowledge-coverage",
           "raw-report-key",
+          "announced-create",
+          "tool-call-as-text",
         ],
       },
       omittedFindingCount: {
@@ -4208,6 +4210,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       rawReportKeyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      announcementCount: {
         type: "integer",
         dataClass: "count",
         required: false,

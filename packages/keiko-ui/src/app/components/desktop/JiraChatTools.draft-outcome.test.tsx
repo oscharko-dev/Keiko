@@ -307,6 +307,23 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(document.body.textContent).not.toMatch(/chat\.jira\./u);
   });
 
+  it("never says Item 0: without a position the sentence says An item", async () => {
+    await show(
+      draft("jira_draft", {
+        outcome: "rejected",
+        reason: "field-validation",
+        draftProblem: "item-ids",
+        items: [],
+      }),
+    );
+    expect(
+      screen.getByText(
+        "An item has no valid project or issue type. Choose the project and the issue type again.",
+      ),
+    ).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/Item 0|Eintrag 0/u);
+  });
+
   it("shows the draft problem in German and passes the accessibility check", async () => {
     await Promise.all([loadLocaleMessages("de"), loadOptionalWidgetMessages("de")]);
     localStorage.setItem(I18N_STORAGE_KEY, "de");
@@ -348,6 +365,9 @@ describe("Jira draft results as the production draft tool reports them", () => {
     const keys = [
       "chat.jira.outcome.itemOrdinal",
       "chat.jira.outcome.itemUnlisted",
+      "chat.jira.outcome.notCreated",
+      "chat.jira.outcome.draftItem",
+      "chat.jira.outcome.draftItemUnknown",
       ...JIRA_DRAFT_PROBLEMS.map((problem) => `chat.jira.outcome.draftProblem.${problem}`),
     ] as const;
     const placeholders = (text: string): string[] => text.match(/\{\w+\}/gu)?.sort() ?? [];
@@ -416,7 +436,100 @@ describe("Jira draft results as the production draft tool reports them", () => {
     ).toBeVisible();
   });
 
-  it("counts the keys of a compact large-draft result instead of showing nothing", async () => {
+  // #4355 AC1: the card lists every created key with its link, from the stored result alone, so it
+  // does not depend on the model repeating the keys and survives a reload (a remount).
+  const BROWSE = "https://jira.example.test/browse/";
+  const keysOf = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `SYN-${String(index + 1)}`);
+  // A key is "listed with its link" when a link opens under the browse prefix and names that key.
+  const linkedKeys = (): string[] =>
+    screen.getAllByRole("link", { hidden: true }).flatMap((link) => {
+      const href = link.getAttribute("href") ?? "";
+      const key = href.startsWith(BROWSE) ? href.slice(BROWSE.length) : "";
+      return /^SYN-\d+$/u.test(key) && (link.textContent ?? "").includes(key) ? [key] : [];
+    });
+
+  it("lists all 25 created keys with their links, not only the first few", async () => {
+    await show(
+      draft("jira_draft", {
+        outcome: "succeeded",
+        items: keysOf(25).map((key, index) => ({
+          ref: `r${String(index)}`,
+          state: "created",
+          issueKey: key,
+          browseUrl: `${BROWSE}${key}`,
+        })),
+        createdCount: 25,
+      }),
+    );
+    expect(linkedKeys()).toEqual(keysOf(25));
+  });
+
+  it("lists every key of a compact large-draft result with its link", async () => {
+    await show(
+      draft("jira_draft", {
+        outcome: "succeeded",
+        compact: true,
+        items: [],
+        createdRanges: ["SYN-1..SYN-25"],
+        createdCount: 25,
+        browseUrlPrefix: BROWSE,
+      }),
+    );
+    expect(linkedKeys()).toEqual(keysOf(25));
+  });
+
+  it("shows the same keys after a remount from the stored result", async () => {
+    const exchange = draft("jira_draft", {
+      outcome: "succeeded",
+      compact: true,
+      items: [],
+      createdRanges: ["SYN-1..SYN-12,SYN-20"],
+      createdCount: 13,
+      browseUrlPrefix: BROWSE,
+    });
+    await show(exchange);
+    const first = linkedKeys();
+    document.body.innerHTML = "";
+    await show(exchange);
+    expect(linkedKeys()).toEqual(first);
+    expect(first).toEqual([...keysOf(12), "SYN-20"]);
+  });
+
+  it("lists exactly the created keys of a partial draft and names the rest as not created", async () => {
+    await show(
+      draft(
+        "jira_draft",
+        {
+          outcome: "partial",
+          items: [
+            ...keysOf(7).map((key, index) => ({
+              ref: `r${String(index)}`,
+              state: "created",
+              issueKey: key,
+              browseUrl: `${BROWSE}${key}`,
+            })),
+            { ref: "r7", state: "failed", validation: "required-field" },
+            { ref: "r8", state: "skipped", blockedBy: ["r7"] },
+            { ref: "r9", state: "skipped", blockedBy: ["r7"] },
+          ],
+          createdCount: 7,
+          failedCount: 1,
+          skippedCount: 2,
+        },
+        {
+          items: Array.from({ length: 10 }, (_, index) => ({
+            ref: `r${String(index)}`,
+            fields: { summary: `Issue ${String(index + 1)}` },
+          })),
+        },
+      ),
+    );
+    expect(linkedKeys()).toEqual(keysOf(7));
+    expect(screen.getByText("Not created: 3")).toBeVisible();
+  });
+
+  it("lists the keys of a compact large-draft result and counts the keys its ranges could not carry", async () => {
     await show(
       draft("jira_draft", {
         outcome: "succeeded",
@@ -431,12 +544,14 @@ describe("Jira draft results as the production draft tool reports them", () => {
       }),
     );
     const list = screen.getByRole("list", { name: "Jira issues" });
-    expect(within(list).getByRole("link", { name: /SYN-1/u })).toHaveAttribute(
+    expect(within(list).getByRole("link", { name: /^SYN-1\b/u })).toHaveAttribute(
       "href",
       "https://jira.example.test/browse/SYN-1",
     );
-    // 40 + 1 + 3 listed plus 7 unlisted keys, five shown.
-    expect(list).toHaveTextContent("and 46 more");
+    // 40 + 1 + 3 listed keys all stand in the list; the 7 the result could not carry are counted.
+    expect(within(list).getAllByRole("link")).toHaveLength(44);
+    expect(within(list).getByRole("link", { name: /^SYN-62\b/u })).toBeVisible();
+    expect(screen.getByText("and 7 more")).toBeVisible();
   });
 
   it("keeps the read-result schema (items[].key) working", () => {

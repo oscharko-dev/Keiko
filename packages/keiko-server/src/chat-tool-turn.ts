@@ -75,6 +75,12 @@ import {
 import { withNestedCallerAdmission } from "./chat-tool-nested-admission.js";
 import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuation-fit.js";
 import {
+  announcedCreateCorrection,
+  announcedCreateCount,
+  toolCallAsTextCorrection,
+  toolCallsWrittenAsText,
+} from "./chat-tool-announced-create.js";
+import {
   omittedReportFindingKeys,
   rawReportKeyCorrection,
   rawReportKeys,
@@ -169,6 +175,10 @@ type AnswerCorrectionLog =
   | {
       readonly correctionKind: "raw-report-key";
       readonly rawReportKeyCount: number;
+    }
+  | {
+      readonly correctionKind: "announced-create" | "tool-call-as-text";
+      readonly announcementCount: number;
     };
 
 // Local estimates are not provider counts; the margin keeps the gateway's exact admission and its
@@ -1839,12 +1849,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
-    const rawKeys = rawReportKeys(this.settledExchanges, answer.content);
-    if (rawKeys.length > 0)
-      corrections.push({
-        content: rawReportKeyCorrection(rawKeys),
-        log: { correctionKind: "raw-report-key", rawReportKeyCount: rawKeys.length },
-      });
+    corrections.push(...claimedActionCorrections(this.settledExchanges, answer.content));
     const coverage = knowledgeTurnCoverage(this.settledExchanges, {
       incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
     });
@@ -1908,6 +1913,45 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.correction = undefined;
     this.correctionAdmissionPending = false;
   }
+}
+
+/**
+ * What an answer claims that its own turn does not bear out (#4355): a created issue no create call
+ * made, a tool call written as text, and internal report result keys printed as if they were prose.
+ */
+function claimedActionCorrections(
+  exchanges: readonly ChatToolExchange[],
+  answer: string,
+): { readonly content: string; readonly log: AnswerCorrectionLog }[] {
+  const announced = announcedCreateCount(exchanges, answer);
+  const writtenCalls = toolCallsWrittenAsText(answer);
+  const rawKeys = rawReportKeys(exchanges, answer);
+  return [
+    ...(announced === 0
+      ? []
+      : [
+          {
+            content: announcedCreateCorrection(announced),
+            log: { correctionKind: "announced-create", announcementCount: announced } as const,
+          },
+        ]),
+    ...(writtenCalls === 0
+      ? []
+      : [
+          {
+            content: toolCallAsTextCorrection(writtenCalls),
+            log: { correctionKind: "tool-call-as-text", announcementCount: writtenCalls } as const,
+          },
+        ]),
+    ...(rawKeys.length === 0
+      ? []
+      : [
+          {
+            content: rawReportKeyCorrection(rawKeys),
+            log: { correctionKind: "raw-report-key", rawReportKeyCount: rawKeys.length } as const,
+          },
+        ]),
+  ];
 }
 
 const EMPTY_ROUND_CORRECTION =

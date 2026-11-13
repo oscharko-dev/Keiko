@@ -259,6 +259,9 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
               })}
         </p>
       )}
+      {view.notCreatedCount === undefined ? null : (
+        <p>{t("chat.jira.outcome.notCreated", { count: view.notCreatedCount })}</p>
+      )}
       {view.stagedCount === undefined ? null : (
         <p>{t("chat.jira.outcome.staged", { count: view.stagedCount })}</p>
       )}
@@ -274,6 +277,7 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
 function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   const { items, resultsLabel: label } = view;
+  const shown = view.visibleItems ?? JIRA_OUTCOME_ITEMS_SHOWN;
   if (view.overflow === "count") {
     const hidden = Math.max(0, items.length - JIRA_OUTCOME_ITEMS_SHOWN) + view.unlistedItemCount;
     return items.length === 0 ? null : (
@@ -286,16 +290,17 @@ function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): React
   }
   return (
     <>
-      {items.length === 0 ? null : (
-        <JiraResultItems items={items.slice(0, JIRA_OUTCOME_ITEMS_SHOWN)} label={label} />
-      )}
-      {items.length <= JIRA_OUTCOME_ITEMS_SHOWN ? null : (
+      {items.length === 0 ? null : <JiraResultItems items={items.slice(0, shown)} label={label} />}
+      {items.length <= shown ? null : (
         <details className={styles.cmpResultMore}>
-          <summary>
-            {t("chat.jira.outcome.moreResults", { count: items.length - JIRA_OUTCOME_ITEMS_SHOWN })}
-          </summary>
-          <JiraResultItems items={items.slice(JIRA_OUTCOME_ITEMS_SHOWN)} label={label} />
+          <summary>{t("chat.jira.outcome.moreResults", { count: items.length - shown })}</summary>
+          <JiraResultItems items={items.slice(shown)} label={label} />
         </details>
+      )}
+      {view.unlistedItemCount === 0 ? null : (
+        <p className={styles.cmpMoreIssues}>
+          {t("chat.jira.outcome.more", { count: view.unlistedItemCount })}
+        </p>
       )}
     </>
   );
@@ -329,15 +334,31 @@ function JiraProblemList({ view }: { readonly view: JiraToolOutcomeView }): Reac
     </ul>
   );
 }
+/** The problems about one item: their sentence continues after the item's name. */
+const ITEM_DRAFT_PROBLEMS: ReadonlySet<JiraDraftProblemCode> = new Set([
+  "item-shape",
+  "item-ref",
+  "item-ids",
+  "item-fields",
+  "item-parent",
+  "item-links",
+  "item-requirements",
+  "ref-self",
+  "ref-unknown",
+]);
 /** What to change in a refused draft, in one sentence per closed problem. */
 function JiraDraftProblemLine({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   const { draftProblem } = view;
-  return draftProblem === undefined ? null : (
-    <p>
-      {t(DRAFT_PROBLEM_MESSAGES[draftProblem.problem], { position: draftProblem.position ?? 0 })}
-    </p>
-  );
+  if (draftProblem === undefined) return null;
+  const sentence = t(DRAFT_PROBLEM_MESSAGES[draftProblem.problem]);
+  if (!ITEM_DRAFT_PROBLEMS.has(draftProblem.problem)) return <p>{sentence}</p>;
+  // Without a position the sentence says "An item", never "Item 0".
+  const item =
+    draftProblem.position === undefined
+      ? t("chat.jira.outcome.draftItemUnknown")
+      : t("chat.jira.outcome.draftItem", { position: draftProblem.position });
+  return <p>{`${item} ${sentence}`}</p>;
 }
 function JiraRuleList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();

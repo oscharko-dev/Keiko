@@ -991,8 +991,10 @@ describe("Jira tool outcome for a business user (#4173)", () => {
     ).toHaveLength(1);
   });
 
-  it("shows at most five drafted issues and counts the rest", () => {
-    const items = Array.from({ length: 7 }, (_, index) => ({
+  // #4355 AC1 supersedes the former five-row bound: every created key is listed with its link. The
+  // bound that remains keeps the card finite: 60 rows stand open, the rest sit behind a disclosure.
+  it("lists every drafted issue, 60 open and the rest behind a disclosure", () => {
+    const items = Array.from({ length: 70 }, (_, index) => ({
       ref: `item-${String(index)}`,
       state: "created",
       issueKey: `KER-${String(index + 1)}`,
@@ -1011,10 +1013,13 @@ describe("Jira tool outcome for a business user (#4173)", () => {
         turnState="completed"
       />,
     );
-    const list = screen.getByRole("list", { name: "Jira issues" });
-    expect(list).toHaveTextContent("KER-5");
-    expect(list).not.toHaveTextContent("KER-6");
-    expect(list).toHaveTextContent("and 2 more");
+    const lists = screen.getAllByRole("list", { name: "Jira issues", hidden: true });
+    const [open, rest] = lists;
+    expect(open).toHaveTextContent("KER-60");
+    expect(open).not.toHaveTextContent("KER-61");
+    expect(rest).toHaveTextContent("KER-61");
+    expect(rest).toHaveTextContent("KER-70");
+    expect(screen.getByText("Show 10 more results")).toBeVisible();
   });
 });
 

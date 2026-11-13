@@ -81,6 +81,7 @@ import {
   reportCoverageMismatches,
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
+import { chatToolDraftReceipts } from "../chat-tool-receipts.js";
 import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
 import { conversationModelNotReadyResult } from "../conversation-readiness-admission.js";
 import type { ToolCallingReadinessReason } from "../conversation-readiness-error.js";
@@ -371,6 +372,13 @@ function describeFixtureOperation(
     ],
   };
 }
+// A test may script the text of the next FINAL answer (#4355); it is used once.
+const scriptedFinalAnswer = vi.hoisted(() => ({ next: undefined as string | undefined }));
+function finalAnswer(response: NormalizedResponse): NormalizedResponse {
+  const content = scriptedFinalAnswer.next;
+  scriptedFinalAnswer.next = undefined;
+  return content === undefined ? response : { ...response, content };
+}
 function syntheticModel(
   calls: GatewayCallRequest[],
   mutation: Mutation,
@@ -400,7 +408,7 @@ function syntheticModel(
       },
     };
     reservation?.settle(base.usage, true, "observed");
-    if (request.toolCatalog?.kind !== "bound") return base;
+    if (request.toolCatalog?.kind !== "bound") return finalAnswer(base);
     expect(reservation).toBeDefined();
     const tool = request.toolCatalog.projection.tools.find(
       (entry) => entry.toolRef.canonicalId === offeredTool(mutation, draft),
@@ -408,7 +416,7 @@ function syntheticModel(
     if (tool === undefined)
       return describeFixtureOperation(request, base, offeredTool(mutation, draft));
     operationRound++;
-    if (endsTurn(repeatTools, operationRound)) return base;
+    if (endsTurn(repeatTools, operationRound)) return finalAnswer(base);
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     if (typeof mutation === "object") mutation.beforeCall?.();
     return {
@@ -1667,6 +1675,54 @@ describe.each([false, true])(
   },
 );
 
+// #4355 AC4: an answer that announces a created issue while the turn holds no create call, or that
+// writes a tool call as text, gets ONE further round; the model writes the final answer, and the
+// log line carries only the closed kind and a count.
+describe.each([false, true])(
+  "an answer that claims an action no tool performed (stream=%s)",
+  (stream) => {
+    it.each([
+      ["announced-create", "I created the Epic REQ-1 for you.", "created, but this turn called"],
+      ["tool-call-as-text", 'jira_create({"projectId":"10000"})', "written as text"],
+    ] as const)(
+      "gets one round for %s, then the model's new answer stands",
+      async (kind, claim, said) => {
+        vi.mocked(recordChatToolTurnCorrected).mockClear();
+        scriptedFinalAnswer.next = claim;
+        try {
+          const f = fixture();
+          const ctx = sendContext(f, `claimed-${kind}-${String(stream)}`);
+          const pending = stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps);
+          void pending.catch(() => undefined);
+          await awaitReadGrantedForWrite(f);
+          await pending;
+
+          expect(f.calls).toHaveLength(4);
+          const correction = (request: GatewayCallRequest | undefined): string =>
+            JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+          expect(correction(f.calls[2])).toContain(said);
+          expect(correction(f.calls[3])).not.toContain(said);
+          const [user, assistant] = f.deps.store.listMessages(f.chatId);
+          expect(user?.turnState).toBe("completed");
+          expect(assistant?.content).toBe("No Jira projects are visible.");
+          expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+          expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+            correctionKind: kind,
+            announcementCount: 1,
+          });
+          expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
+            /REQ-1|projectId/u,
+          );
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+        }
+      },
+    );
+  },
+);
+
 // S01 of epic #4173: after three refused creates Qwen answered "successfully created … REQ-42". An
 // answer naming issue keys no tool result shows gets ONE further round naming them; the model
 // writes the final answer, and the keys never reach the Activity Log.
@@ -2262,6 +2318,28 @@ it("creates an epic, its task and two sub-tasks under that task from one approve
   const exchange = firstToolExchange(f);
   expect(exchange.mutationOutcome).toBe("succeeded");
   expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":4');
+});
+
+// #4355 AC1: the answer the model wrote repeats none of the created keys, yet the stored transcript
+// of the real turn holds every one of them as a receipt, so the result card (rendered from this
+// stored state alone, also after a reload) lists all of them with their links.
+it("keeps every created key in the stored transcript although the model's answer repeats none", async () => {
+  draftToSend = NESTED_DRAFT_ARGUMENTS;
+  const f = fixture(true, undefined, true, false, true);
+  const pending = handleSendDesktopChat(sendContext(f, "created-keys-stored"), f.deps);
+  void pending.catch(() => undefined);
+  await awaitReadGrantedForWrite(f);
+  await decidePendingWrite(f, "approve");
+  expect((await pending).status).toBe(200);
+  const [, assistant] = f.deps.store.listMessages(f.chatId);
+  expect(assistant?.content).not.toMatch(/SYN-\d+/u);
+  const receipts = chatToolDraftReceipts(firstToolExchange(f)) ?? [];
+  expect(receipts.filter((receipt) => receipt.state === "created").map((r) => r.issueKey)).toEqual([
+    "SYN-1",
+    "SYN-2",
+    "SYN-3",
+    "SYN-4",
+  ]);
 });
 
 // #4178: a hostile client names refs the reviewed draft does not contain. The decision route

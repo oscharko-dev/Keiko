@@ -237,6 +237,8 @@ export interface JiraToolOutcomeView {
   readonly unreadableCount: number;
   readonly stagedCount: number | undefined;
   readonly unresolvedCount: number | undefined;
+  /** Issues of a draft write that were not created (failed, skipped, still pending or excluded). */
+  readonly notCreatedCount?: number;
   readonly problems: readonly JiraOutcomeProblem[];
   /** Absent unless the draft itself was refused; a person reads what to change from it. */
   readonly draftProblem?: JiraOutcomeDraftProblem;
@@ -258,11 +260,21 @@ export interface JiraToolOutcomeView {
    * `disclosure` keeps every item behind a bounded disclosure.
    */
   readonly overflow: "count" | "disclosure";
+  /** How many rows stand open before the rest sit behind a disclosure. */
+  readonly visibleItems?: number;
   /** Issues a compact result counted but did not list; added to the hidden count in `count` mode. */
   readonly unlistedItemCount: number;
 }
 
 export const JIRA_OUTCOME_ITEMS_SHOWN = 5;
+/**
+ * A draft write lists every issue it created, each with its link (#4355): this many rows stand
+ * open in the card and the rest behind a disclosure; this many keys of a compact result are
+ * expanded from its ranges.
+ */
+export const JIRA_OUTCOME_WRITE_ITEMS_SHOWN = 60;
+const JIRA_OUTCOME_KEYS_LISTED = 500;
+const KEY_LISTING_WRITE_TOOLS: ReadonlySet<string> = new Set(["jira_draft"]);
 const JIRA_OUTCOME_PROBLEMS_SHOWN = 20;
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/u;
@@ -850,7 +862,7 @@ function compactKeys(data: UnknownRecord | undefined): ListedKeys {
     const entries = Array.isArray(data[name]) ? (data[name] as unknown[]) : [];
     for (const entry of entries) {
       if (typeof entry !== "string") continue;
-      const parsed = rangeKeys(entry, JIRA_OUTCOME_ITEMS_SHOWN - shown.length);
+      const parsed = rangeKeys(entry, JIRA_OUTCOME_KEYS_LISTED - shown.length);
       shown.push(...parsed.shown);
       count += parsed.count;
     }
@@ -964,6 +976,28 @@ function itemProblemsOf(
   return items.flatMap((entry, index) =>
     problemsOf(record(entry), itemName(entry, index, reviewed)),
   );
+}
+const NOT_CREATED_COUNTS = [
+  "failedCount",
+  "skippedCount",
+  "pendingCount",
+  "excludedCount",
+] as const;
+const NOT_CREATED_STATES: ReadonlySet<unknown> = new Set([
+  "failed",
+  "skipped",
+  "pending",
+  "excluded",
+]);
+/** What a partial draft left uncreated: its own counts, else its rows; none for another tool. */
+function notCreatedOf(tool: string, data: UnknownRecord): number | undefined {
+  if (!KEY_LISTING_WRITE_TOOLS.has(tool)) return undefined;
+  const counts = NOT_CREATED_COUNTS.map((name) => count(data[name]));
+  const rows: readonly unknown[] = Array.isArray(data.items) ? data.items : [];
+  const total = counts.some((value) => value !== undefined)
+    ? counts.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+    : rows.filter((row) => NOT_CREATED_STATES.has(record(row)?.state)).length;
+  return total > 0 ? total : undefined;
 }
 function draftProblemOf(data: UnknownRecord | undefined): JiraOutcomeDraftProblem | undefined {
   const problem = JIRA_DRAFT_PROBLEMS.find((value) => value === data?.draftProblem);
@@ -1507,7 +1541,13 @@ function resultItemsView(
   data: UnknownRecord,
 ): Pick<
   JiraToolOutcomeView,
-  "items" | "resultsLabel" | "overflow" | "unlistedItemCount" | "issues" | "hiddenIssueCount"
+  | "items"
+  | "resultsLabel"
+  | "overflow"
+  | "visibleItems"
+  | "unlistedItemCount"
+  | "issues"
+  | "hiddenIssueCount"
 > {
   const projection = exchange.call.name.startsWith("jira_")
     ? issueProjection(exchange, data)
@@ -1515,10 +1555,12 @@ function resultItemsView(
   const own = outcomeItems(exchange, data);
   const issueList = usesIssueList(exchange.call.name, own, projection);
   const items = issueList ? issueListItems(own, projection) : own;
+  const listsEveryKey = KEY_LISTING_WRITE_TOOLS.has(exchange.call.name);
   return {
     items,
     ...resultsLabelOf(exchange.call.name, issueList),
-    overflow: issueList ? "count" : "disclosure",
+    overflow: issueList && !listsEveryKey ? "count" : "disclosure",
+    ...(listsEveryKey ? { visibleItems: JIRA_OUTCOME_WRITE_ITEMS_SHOWN } : {}),
     unlistedItemCount: issueList
       ? Math.max(0, projection.listed.count - projection.listed.shown.length)
       : 0,
@@ -1532,6 +1574,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   if (knowledge !== undefined) return knowledge;
   const data = storedOutcomeData(exchange);
   const draftProblem = draftProblemOf(data);
+  const notCreatedCount = notCreatedOf(exchange.call.name, data);
   return {
     ...resultItemsView(exchange, data),
     ...pageCounts(data, exchange.call.name, reviewedItems(exchange)),
@@ -1549,6 +1592,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
       ? []
       : itemValidationsOf(data, reviewedItems(exchange)),
     ...(draftProblem === undefined ? {} : { draftProblem }),
+    ...(notCreatedCount === undefined ? {} : { notCreatedCount }),
     // A named draft problem replaces the generic "review the fields" advice.
     failure: draftProblem === undefined ? failureMessage(exchange, data) : undefined,
   };
