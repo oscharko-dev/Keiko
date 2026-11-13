@@ -270,7 +270,13 @@ function credentialsFor(
       fetches.push(init?.method ?? "GET");
       hooks.beforeResponse?.();
       return Promise.resolve(
-        new Response("[]", { status, headers: anonymous ? { "X-AUSERNAME": "anonymous" } : {} }),
+        new Response("[]", {
+          status,
+          headers: {
+            "X-AREQUESTID": "synthetic-request",
+            ...(anonymous || status === 401 ? { "X-AUSERNAME": "anonymous" } : {}),
+          },
+        }),
       );
     },
   });

@@ -20,6 +20,7 @@ import {
 } from "./jiraAuthenticationObservation.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 
 const BASE = "https://jira.example.invalid/context";
 const IDENTITY = { name: "synthetic-user", key: "synthetic-key", active: true };
@@ -119,10 +120,14 @@ function fixture(
   };
   return { deps, urls, events, invalidated, metadata: current(), current };
 }
+// A 401 Jira itself authored carries its request id and the anonymous-user marker (observed on
+// Data Center 10.3: unknown or revoked bearer tokens answer exactly so). Tests that need another
+// origin pass their own headers.
+const JIRA_401_HEADERS = { "X-AREQUESTID": "synthetic-request", "X-AUSERNAME": "anonymous" };
 function response(value: unknown = {}, status = 200, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(value), {
     status,
-    ...(headers === undefined ? {} : { headers }),
+    headers: headers ?? (status === 401 ? JIRA_401_HEADERS : {}),
   });
 }
 function request(path: string = PATHS[0]): AtlassianHttpBodyRequest {
@@ -163,7 +168,10 @@ it.each([401, "anonymous"] as const)(
         ? response({}, 401)
         : failure === 401
           ? response({}, 401)
-          : response(IDENTITY, 200, { "x-ausername": "anonymous" }),
+          : response(IDENTITY, 200, {
+              "x-ausername": "anonymous",
+              "X-AREQUESTID": "synthetic-request",
+            }),
     );
     const result = await f.deps.httpBodyPortFactory(f.metadata)(request());
     expect(result).toMatchObject({ status: 401 });
@@ -216,6 +224,12 @@ it.each([
   "filter/1/columns",
   "user/columns/unknown",
 ])(
+  // Deliberate reversal (#4353). The removed pin "keeps ordinary401 invalidation on %s without a
+  // probe" (#4287 C-series, #4314/#4316) guarded one incident: widening the list of ambiguous
+  // routes beyond what Jira documents would let a dead token survive on a route nobody had proven
+  // ambiguous. There is no list any more; the identity read decides every route. This test, with
+  // "#4316: index/summary still discards an invalid credential", still catches the incident: a
+  // dead credential is discarded on each of these routes.
   "keeps ordinary401 invalidation on %s once the identity probe also answers 401",
   async (path) => {
     const f = fixture(() => response({}, 401));
@@ -233,12 +247,24 @@ it.each([
   "index-snapshot/isRunning",
   "user/columns",
   "index-snapshot",
-])("decides a %s write 401 by the identity probe and never replays the write", async (path) => {
-  const f = fixture(() => response({}, 401));
-  await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "PUT", bodyJson: "{}" });
-  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
-  expect(f.invalidated).toEqual([2]);
-});
+])(
+  // Deliberate reversal (#4353). The removed pin "does not classify a %s write as an ambiguous
+  // administrator read" guarded an incident of the same family: a GET-only ambiguity must not be
+  // borrowed for a write on the same path, or a refused write would be misread. Writes are never
+  // replayed and never borrow a read's facts; the identity read alone decides, and this test
+  // asserts exactly that (two requests, the write sent once, an invalid credential discarded).
+  "decides a %s write 401 by the identity probe and never replays the write",
+  async (path) => {
+    const f = fixture(() => response({}, 401));
+    await f.deps.httpBodyPortFactory(f.metadata)({
+      ...request(path),
+      method: "PUT",
+      bodyJson: "{}",
+    });
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(f.invalidated).toEqual([2]);
+  },
+);
 it("honors authority revocation between the primary response and identity probe", async () => {
   let allowed = true;
   const f = fixture(() => {
@@ -361,6 +387,7 @@ it("also preserves the bounded bodyless request API", async () => {
     kind: "response",
     status: 401,
     authentication: "confirmed",
+    authenticationFailure: "jira",
   });
   expect(f.urls).toHaveLength(2);
   expect(f.current()).toEqual(f.metadata);
@@ -1077,6 +1104,20 @@ const INCONCLUSIVE: readonly Inconclusive[] = [
   { name: "expired deadline", change: "expired" },
   { name: "dispatch refusal during the probe", change: "dispatch-throw" },
 ];
+const PROBE_CAUSES: Readonly<Record<string, string>> = {
+  "403": "http-4xx",
+  "404": "http-4xx",
+  "429": "http-429",
+  "503": "http-5xx",
+  redirect: "redirect",
+  "non-JSON": "invalid-body",
+  "inactive identity": "invalid-body",
+  "network failure": "network",
+  "aborted request": "cancelled-or-expired",
+  "stale observation": "stale",
+  "expired deadline": "cancelled-or-expired",
+  "dispatch refusal during the probe": "probe-error",
+};
 it.each(INCONCLUSIVE)(
   "refuses an inconclusive identity read ($name) as auth-unverified and keeps the credential",
   async (kind) => {
@@ -1118,6 +1159,16 @@ it.each(INCONCLUSIVE)(
       { method: "GET", url: request("project/KER/role").url, expect: "json" },
     );
     expect(outcome).toMatchObject({ ok: false, reason: "auth-unverified", httpStatus: 401 });
+    // The registered line says why the identity read could not settle (closed cause only).
+    const line = f.events
+      .filter((event) => event.op === "atlassian.connection.checked")
+      .map((event) => event.extra)
+      .at(-1);
+    expect(line).toMatchObject({
+      outcome: "probe-inconclusive",
+      probeCause: PROBE_CAUSES[kind.name],
+    });
+    expect(JSON.stringify(line)).not.toMatch(/https:|synthetic-user/u);
   },
 );
 it("keeps a probe that actually answers 401 as the one rejected-token outcome", async () => {
@@ -1250,3 +1301,158 @@ it.each(["project/KER/role", "workflow", "cluster/nodes", "index/summary", "myse
     expect(f.current()).toEqual(f.metadata);
   },
 );
+
+// #4353 audit B: only a 401 that Jira itself authored shows a rejected token. Jira behind a
+// single sign-on proxy answers 401 everywhere, /myself included, once the proxy session ends, and
+// a captcha lock adds X-Authentication-Denied-Reason; neither may cost a person their token.
+const FOREIGN_401 = [
+  ["a single sign-on proxy's HTML 401", { "Content-Type": "text/html" }, "foreign-401"],
+  ["an empty gateway 401", {}, "foreign-401"],
+  [
+    "a Jira 401 that carries a denial reason (captcha challenge)",
+    { ...JIRA_401_HEADERS, "X-Authentication-Denied-Reason": "CAPTCHA_CHALLENGE; login-url=x" },
+    "captcha",
+  ],
+] as const;
+it.each(FOREIGN_401)(
+  "keeps the credential when the identity read answers %s",
+  async (_name, headers, cause) => {
+    const f = fixture((index) =>
+      index === 0
+        ? response({}, 401)
+        : new Response("<html>sign in</html>", { status: 401, headers }),
+    );
+    const result = await f.deps.httpBodyPortFactory(
+      f.metadata,
+      "foreign-probe",
+    )(request("project/KER/role"));
+    expect(result).toMatchObject({ status: 401, authentication: "unconfirmed" });
+    expect(f.invalidated).toEqual([]);
+    expect(f.current()).toEqual(f.metadata);
+    expect(
+      f.events.filter((e) => e.op === "atlassian.connection.checked").map((e) => e.extra),
+    ).toMatchObject([{ outcome: "probe-inconclusive", probeCause: cause, decision: "probe" }]);
+  },
+);
+it.each(FOREIGN_401)(
+  "keeps the credential when the identity route itself answers %s",
+  async (_name, headers, cause) => {
+    const f = fixture(() => new Response("<html>sign in</html>", { status: 401, headers }));
+    const result = await f.deps.httpBodyPortFactory(
+      f.metadata,
+      "foreign-identity",
+    )(request("myself"));
+    expect(result).toMatchObject({ status: 401, authentication: "unconfirmed" });
+    expect(f.urls).toEqual([request("myself").url]);
+    expect(f.invalidated).toEqual([]);
+    expect(f.current()).toEqual(f.metadata);
+    expect(
+      f.events.filter((e) => e.op === "atlassian.connection.checked").map((e) => e.extra),
+    ).toMatchObject([
+      { outcome: "probe-inconclusive", probeCause: cause, decision: "identity-route" },
+    ]);
+  },
+);
+it("still discards on the Jira-authored shape observed for an unknown, expired or revoked token", async () => {
+  const f = fixture(
+    () =>
+      new Response(
+        '{"message":"Client must be authenticated to access this resource.","status-code":401,"sub-code":-1}',
+        { status: 401, headers: { ...JIRA_401_HEADERS, "WWW-Authenticate": "OAuth realm=x" } },
+      ),
+  );
+  await f.deps.httpBodyPortFactory(f.metadata, "jira-authored")(request("myself"));
+  expect(f.invalidated).toEqual([2]);
+});
+it("keeps an anonymous identity answer Jira-authored: the probe still discards", async () => {
+  const f = fixture((index) =>
+    index === 0
+      ? response({}, 401)
+      : response(IDENTITY, 200, {
+          "X-AREQUESTID": "synthetic-request",
+          "X-AUSERNAME": "anonymous",
+        }),
+  );
+  await f.deps.httpBodyPortFactory(f.metadata)(request("project/KER/role"));
+  expect(f.invalidated).toEqual([2]);
+});
+
+// #4353 audit C: concurrent 401s share one identity read per credential generation and revision.
+it.each([
+  ["a throttled Jira (429)", () => response({}, 429)],
+  ["a healthy Jira", () => response(IDENTITY)],
+] as const)("shares one identity read among ten parallel 401s on %s", async (_name, probe) => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = fixture(async (index) => {
+    if (index < 10) return response({}, 401);
+    await gate;
+    return probe();
+  });
+  const http = f.deps.httpBodyPortFactory(f.metadata, "parallel-401");
+  const calls = Array.from({ length: 10 }, (_unused, index) => http(request(`resource/${index}`)));
+  await vi.waitFor(() => {
+    expect(f.urls.filter((url) => url.endsWith("/myself")).length).toBeGreaterThan(0);
+  });
+  release();
+  const results = await Promise.all(calls);
+  expect(f.urls.filter((url) => url.endsWith("/myself"))).toHaveLength(1);
+  const expected = _name.includes("healthy") ? "confirmed" : "unconfirmed";
+  for (const result of results) expect(result).toMatchObject({ authentication: expected });
+  expect(f.invalidated).toEqual([]);
+  expect(
+    f.events
+      .filter((e) => e.op === "atlassian.connection.checked")
+      .map((e) => e.extra?.decision)
+      .filter((decision) => decision === "probe-shared"),
+  ).toHaveLength(9);
+});
+it("lets every sharer see a rejection of the one shared identity read", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = fixture(async (index) => {
+    if (index >= 5) await gate;
+    return response({}, 401);
+  });
+  const http = f.deps.httpBodyPortFactory(f.metadata, "parallel-rejection");
+  const calls = Array.from({ length: 5 }, (_unused, index) => http(request(`resource/${index}`)));
+  await vi.waitFor(() => {
+    expect(f.urls.filter((url) => url.endsWith("/myself")).length).toBe(1);
+  });
+  release();
+  for (const result of await Promise.all(calls))
+    expect(result).not.toHaveProperty("authentication");
+  expect(f.urls.filter((url) => url.endsWith("/myself"))).toHaveLength(1);
+  expect(f.invalidated).toEqual([2]);
+});
+
+// #4353 audit F: the probe exception takes the same closed diagnostic as its siblings.
+it("reports a probe exception once through the diagnostic port with the closed summary", async () => {
+  const record = vi
+    .spyOn(defaultServerDiagnosticSink, "record")
+    .mockImplementation(() => undefined);
+  const f = fixture(() => response({}, 401));
+  let dispatches = 0;
+  await f.deps.httpBodyPortFactory(f.metadata, "probe-diagnostic", {
+    beforeDispatch: () => {
+      dispatches += 1;
+      if (dispatches > 1) throw new AtlassianCredentialCustodyError("credential-changed");
+      return true;
+    },
+  })(request("project/KER/role"));
+  const probeRecords = record.mock.calls
+    .map(([entry]) => entry)
+    .filter((entry) => entry.source === "atlassian.identity-probe");
+  expect(probeRecords).toHaveLength(1);
+  expect(probeRecords[0]).toMatchObject({
+    correlationId: "probe-diagnostic",
+    operation: "atlassian.connection.checked",
+    errorClass: "AtlassianCredentialCustodyError",
+    message: "server-operation-failed",
+  });
+  expect(JSON.stringify(probeRecords)).not.toMatch(/https:|synthetic-credential/u);
+});

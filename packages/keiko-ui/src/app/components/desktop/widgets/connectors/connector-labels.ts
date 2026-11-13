@@ -114,6 +114,7 @@ export function syncStatusBadgeState(status: AtlassianSyncJobStatus): ConnectorB
 
 const SYNC_REASON: Readonly<Record<AtlassianSyncFailureReason, MessageKey>> = {
   "auth-failed": "atlassianConnectors.sync.reason.auth-failed",
+  "auth-unverified": "atlassianConnectors.sync.reason.auth-unverified",
   "permission-denied": "atlassianConnectors.sync.reason.permission-denied",
   "rate-limited": "atlassianConnectors.sync.reason.rate-limited",
   timeout: "atlassianConnectors.sync.reason.timeout",

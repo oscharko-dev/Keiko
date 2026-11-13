@@ -17,6 +17,10 @@
 // validation); `gatewayFetch` itself always issues `redirect: "manual"`, so a 3xx is surfaced,
 // never followed.
 
+import {
+  authenticationMarkerHeaders,
+  classifyAuthenticationFailure,
+} from "./httpAuthenticationFailure.js";
 import { setImmediate as yieldCredentialScan } from "node:timers";
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
@@ -307,7 +311,11 @@ async function authenticatedReadResponse(method: string, response: Response): Pr
     response.headers.get("x-ausername")?.trim().toLowerCase() === "anonymous"
   ) {
     await discardBody(response);
-    return new Response(null, { status: 401 });
+    // Jira itself served this anonymous answer: keep its markers so the 401 stays Jira-authored.
+    return new Response(null, {
+      status: 401,
+      headers: authenticationMarkerHeaders(response.headers),
+    });
   }
   return response;
 }
@@ -349,7 +357,12 @@ export function createGatewayAtlassianHttpPort(
       const response = await authenticatedReadResponse(request.method, upstream);
       await lifecycle.observe(response);
       await discardBody(response);
-      return { kind: "response", status: response.status };
+      const failure = classifyAuthenticationFailure(response.status, response.headers);
+      return {
+        kind: "response",
+        status: response.status,
+        ...(failure === undefined ? {} : { authenticationFailure: failure }),
+      };
     } catch (error) {
       lifecycle.rethrowFailure();
       if (error instanceof AtlassianCredentialCustodyError) throw error;
@@ -905,6 +918,7 @@ async function projectBodyResponse(
   signal: AbortSignal,
 ): Promise<AtlassianHttpBodyResult> {
   const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
+  const failure = classifyAuthenticationFailure(response.status, response.headers);
   const observedBody = await credentialSafeBody(
     await readResponseBody(response, request),
     response.status,
@@ -943,6 +957,7 @@ async function projectBodyResponse(
     bodyBytes: body.bodyBytes,
     truncated: body.truncated,
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    ...(failure === undefined ? {} : { authenticationFailure: failure }),
   };
 }
 function bodyRequestPort(

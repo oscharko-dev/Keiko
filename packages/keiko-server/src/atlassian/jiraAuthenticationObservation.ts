@@ -30,26 +30,36 @@ function canonicalPathSegments(pathname: string, basePath: string): readonly str
   return parts.every(canonicalSegment) ? parts : undefined;
 }
 
-export function ambiguousJiraAuthenticationResponse(
+/** The identity route, any other route of the instance, or nothing this instance owns. */
+export type JiraRouteClass = "identity" | "other";
+
+export function jiraRouteClass(
   metadata: AtlassianCredentialMetadata,
   request: Request,
-): boolean {
+): JiraRouteClass | undefined {
   if (
     metadata.provider !== "jira" ||
     metadata.deployment !== "data-center" ||
     metadata.livePod === undefined
   )
-    return false;
+    return undefined;
   const base = new URL(metadata.baseUrl);
   const target = new URL(request.url);
-  if (target.origin !== base.origin) return false;
+  if (target.origin !== base.origin) return undefined;
   const parts = canonicalPathSegments(target.pathname, base.pathname.replace(/\/$/u, ""));
-  if (parts === undefined || parts.length === 0) return false;
+  if (parts === undefined || parts.length === 0) return undefined;
   const identity =
     request.method === "GET" &&
     parts.length === IDENTITY_SEGMENTS.length &&
     parts.every((part, index) => part === IDENTITY_SEGMENTS[index]);
-  return !identity;
+  return identity ? "identity" : "other";
+}
+
+export function ambiguousJiraAuthenticationResponse(
+  metadata: AtlassianCredentialMetadata,
+  request: Request,
+): boolean {
+  return jiraRouteClass(metadata, request) === "other";
 }
 
 export function currentJiraAuthenticationObservation(
@@ -79,6 +89,17 @@ function ambiguousFailure(
     ambiguousJiraAuthenticationResponse(metadata, request)
   );
 }
+function identityRoute401(
+  metadata: AtlassianCredentialMetadata,
+  request: Request,
+  result: AtlassianHttpResult,
+): boolean {
+  return (
+    result.kind === "response" &&
+    result.status === 401 &&
+    jiraRouteClass(metadata, request) === "identity"
+  );
+}
 function withinOriginalRequest(deadline: number, signal: AbortSignal | undefined): boolean {
   return !signal?.aborted && Date.now() < deadline;
 }
@@ -93,7 +114,8 @@ export const JIRA_IDENTITY_PROBE_WINDOW_MS = 10_000;
  * malformed data, cancellation).
  */
 export type JiraIdentityProbeOutcome = "confirmed" | "rejected" | "inconclusive";
-export type JiraUnsettledProbe = "stale" | "cancelled-or-expired" | "probe-error";
+export type JiraUnsettledProbe =
+  "stale" | "cancelled-or-expired" | "probe-error" | "foreign-401" | "denied-401";
 
 export interface JiraAuthenticationObservationOptions {
   /**
@@ -123,8 +145,15 @@ export function withJiraAuthenticationObservation<
     Object.freeze(request);
     const deadline = Date.now() + Math.min(request.timeoutMs, 60_000);
     const result = await port(request);
-    if (!ambiguousFailure(metadata, request, result)) return result;
     const unconfirmed = { ...result, authentication: "unconfirmed" } as const;
+    if (identityRoute401(metadata, request, result)) {
+      // Only a 401 Jira itself authored rejects the token; the observer already discarded it.
+      const origin = result.kind === "response" ? result.authenticationFailure : undefined;
+      if (origin === "jira") return result;
+      options.onUnsettled?.(origin === "denied" ? "denied-401" : "foreign-401");
+      return unconfirmed;
+    }
+    if (!ambiguousFailure(metadata, request, result)) return result;
     const signal = "signal" in request ? request.signal : undefined;
     if (!probeable(current, deadline, signal, options)) return unconfirmed;
     const outcome = await settledProbe(probe, deadline, signal, options);

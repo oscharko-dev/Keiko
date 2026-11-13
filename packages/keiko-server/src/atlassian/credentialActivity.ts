@@ -126,7 +126,27 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["identity-route", "probe", "probe-window"],
+      values: ["identity-route", "probe", "probe-window", "probe-shared"],
+    },
+    // Why an identity read left a 401 unsettled (outcome `probe-inconclusive`).
+    probeCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "timeout",
+        "network",
+        "http-429",
+        "http-4xx",
+        "http-5xx",
+        "redirect",
+        "invalid-body",
+        "foreign-401",
+        "captcha",
+        "stale",
+        "cancelled-or-expired",
+        "probe-error",
+      ],
     },
     routeClass: {
       type: "string",
@@ -173,9 +193,24 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+export type ProbeCause =
+  | "timeout"
+  | "network"
+  | "http-429"
+  | "http-4xx"
+  | "http-5xx"
+  | "redirect"
+  | "invalid-body"
+  | "foreign-401"
+  | "captcha"
+  | "stale"
+  | "cancelled-or-expired"
+  | "probe-error";
+
 export interface ConnectionCheckDetail {
-  readonly decision: "identity-route" | "probe" | "probe-window";
+  readonly decision: "identity-route" | "probe" | "probe-window" | "probe-shared";
   readonly routeClass: "identity" | "other";
+  readonly probeCause?: ProbeCause;
 }
 
 export function recordConnectionCheck(

@@ -297,6 +297,29 @@ describe("fetchItem — page bodies, comments, and the failure matrix", () => {
     expect(outcome.item.webuiPath).toBeUndefined();
   });
 
+  it.each([
+    ["unconfirmed", { kind: "fatal", reason: "auth-unverified" }],
+    ["confirmed", { kind: "skipped", reason: "permission-denied" }],
+    [undefined, { kind: "fatal", reason: "auth-failed" }],
+  ] as const)(
+    "maps a page 401 with identity decision %s (#4353)",
+    async (authentication, expected) => {
+      const outcome = await fetchPage(
+        () =>
+          Promise.resolve({
+            kind: "response",
+            status: 401,
+            bodyText: "",
+            bodyBytes: 0,
+            truncated: false,
+            ...(authentication === undefined ? {} : { authentication }),
+          }),
+        "9",
+      );
+      expect(outcome).toEqual(expected);
+    },
+  );
+
   it("classifies the per-page failure matrix: 401 fatal, 403 denied, 404 missing, 429 rate-limited, 5xx unavailable, timeout, malformed", async () => {
     const matrix: readonly [Partial<ConfluenceFixturePage>, AtlassianSyncItemFetchOutcome][] = [
       [{ bodyStatus: 401 }, { kind: "fatal", reason: "auth-failed" }],

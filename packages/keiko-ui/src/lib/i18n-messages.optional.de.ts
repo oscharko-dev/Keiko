@@ -5548,6 +5548,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.sync.change.failedItems": "Fehlgeschlagen",
   "atlassianConnectors.sync.change.deniedItems": "Verweigert",
   "atlassianConnectors.sync.degradedTitle": "Einige Elemente konnten nicht synchronisiert werden",
+  "atlassianConnectors.sync.reason.auth-unverified":
+    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
   "atlassianConnectors.sync.reason.auth-failed":
     "Authentifizierung fehlgeschlagen. Prüfen Sie die Connector-Anmeldeinformation erneut.",
   "atlassianConnectors.sync.reason.permission-denied":

@@ -677,6 +677,8 @@ export const ATLASSIAN_SYNC_TERMINAL_STATUSES: readonly AtlassianSyncTerminalSta
 // codes; a raw upstream error message, response body, or URL never enters the contract.
 export type AtlassianSyncFailureReason =
   | "auth-failed"
+  // A 401 whose same-generation identity check could not settle: nothing says the token failed.
+  | "auth-unverified"
   | "permission-denied"
   | "rate-limited"
   | "timeout"
@@ -688,6 +690,7 @@ export type AtlassianSyncFailureReason =
 
 export const ATLASSIAN_SYNC_FAILURE_REASONS: readonly AtlassianSyncFailureReason[] = Object.freeze([
   "auth-failed",
+  "auth-unverified",
   "permission-denied",
   "rate-limited",
   "timeout",

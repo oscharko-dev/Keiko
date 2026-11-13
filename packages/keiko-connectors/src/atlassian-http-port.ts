@@ -33,11 +33,21 @@ export interface AtlassianHttpRequest {
  */
 export type AtlassianAuthenticationObservation = "confirmed" | "unconfirmed";
 
+/**
+ * Closed fact the transport derives from a 401's response headers, never the header values:
+ * `jira` means Jira authored it (its request id and the anonymous user marker, no denial reason),
+ * `denied` means Jira refused the login for another reason (a captcha challenge, a lock), and
+ * `foreign` means something else answered (a single sign-on proxy, a gateway, a load balancer).
+ * Only `jira` can show that the token itself was rejected.
+ */
+export type AtlassianAuthenticationFailure = "jira" | "denied" | "foreign";
+
 export type AtlassianHttpResult =
   | {
       readonly kind: "response";
       readonly status: number;
       readonly authentication?: AtlassianAuthenticationObservation;
+      readonly authenticationFailure?: AtlassianAuthenticationFailure;
     }
   | { readonly kind: "timeout" }
   | { readonly kind: "network-error"; readonly reason?: "tls" };
@@ -124,6 +134,8 @@ export type AtlassianHttpBodyResult =
       readonly status: number;
       /** Server-owned identity proof for a documented ambiguous 401; never upstream content. */
       readonly authentication?: AtlassianAuthenticationObservation;
+      /** Server-owned classification of a 401's origin; see `AtlassianAuthenticationFailure`. */
+      readonly authenticationFailure?: AtlassianAuthenticationFailure;
       // Decoded UTF-8 body read up to `maxBodyBytes`; empty for a fixed archive download.
       // Empty for bodyless responses (e.g. 3xx —
       // which the adapter surfaces and never follows).

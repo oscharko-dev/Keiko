@@ -5294,6 +5294,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.sync.change.failedItems": "Failed",
   "atlassianConnectors.sync.change.deniedItems": "Denied",
   "atlassianConnectors.sync.degradedTitle": "Some items could not be synced",
+  "atlassianConnectors.sync.reason.auth-unverified":
+    "Jira could not be verified right now. The connection is unchanged. Try again in a moment.",
   "atlassianConnectors.sync.reason.auth-failed":
     "Authentication failed. Re-verify the connector credential.",
   "atlassianConnectors.sync.reason.permission-denied":

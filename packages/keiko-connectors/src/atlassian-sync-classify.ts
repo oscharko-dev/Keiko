@@ -106,6 +106,21 @@ export function failureReasonForStatus(status: number): AtlassianSyncFailureReas
   return "unavailable";
 }
 
+/**
+ * The one status-to-reason owner for every read (#4353). A Data Center 401 carries the server's
+ * identity-read decision: `confirmed` means the token is valid, so the 401 was a missing
+ * permission; `unconfirmed` means nothing was settled, so the token is neither blamed nor
+ * discarded. A 401 without a decision (Cloud, or an identity request itself) stays an
+ * authentication failure.
+ */
+export function failureReasonForResponse(
+  result: Pick<Extract<AtlassianHttpBodyResult, { kind: "response" }>, "status" | "authentication">,
+): AtlassianSyncFailureReason {
+  if (result.status === 401 && result.authentication === "confirmed") return "permission-denied";
+  if (result.status === 401 && result.authentication === "unconfirmed") return "auth-unverified";
+  return failureReasonForStatus(result.status);
+}
+
 // Truncation on a JSON/list response is a byte-coverage failure, never parseable content:
 // clamped below the requested cap means the run budget ran out (`bounds-exceeded`); reaching the
 // requested cap means the payload itself overflows the list cap (`malformed-payload`).
@@ -123,7 +138,7 @@ export function classifyListResult(
   if (result.kind === "timeout") return { ok: false, reason: "timeout" };
   if (result.kind === "network-error") return { ok: false, reason: "unavailable" };
   if (result.status < 200 || result.status >= 300) {
-    return { ok: false, reason: failureReasonForStatus(result.status) };
+    return { ok: false, reason: failureReasonForResponse(result) };
   }
   if (result.truncated) {
     return { ok: false, reason: classifyTruncatedList(result, requestedCap) };

@@ -121,6 +121,8 @@ function fakeHttpBodyPortFactory(): (
   };
 }
 
+// What a 401 that Jira itself authored carries (observed on Data Center 10.3, ADR-0128).
+const JIRA_401_HEADERS = { "X-AREQUESTID": "synthetic-request", "X-AUSERNAME": "anonymous" };
 function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHandlerDeps {
   return {
     serverPrincipal: () => activePrincipal,
@@ -849,7 +851,8 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         env: vaultEnv(),
         egress: () => undefined,
         activityLog: sink,
-        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status: 401 })),
+        fetchImpl: (): Promise<Response> =>
+          Promise.resolve(new Response("{}", { status: 401, headers: JIRA_401_HEADERS })),
       });
       await rebuild(real);
       const created = real.custody.create(
@@ -1115,7 +1118,10 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         onLivePodInvalidated: (_podId, generation): void => {
           if (generation !== null) invalidated.push(generation);
         },
-        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status })),
+        fetchImpl: (): Promise<Response> =>
+          Promise.resolve(
+            new Response("{}", { status, headers: status === 401 ? JIRA_401_HEADERS : {} }),
+          ),
       });
       const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
       bindSyntheticTarget(created);
@@ -1171,7 +1177,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
                   },
                   { highWaterMark: 0 },
                 ),
-                { status: 401 },
+                { status: 401, headers: JIRA_401_HEADERS },
               ),
             ),
         });
@@ -1189,8 +1195,10 @@ describe("end-to-end verify through the gateway transport adapter", () => {
           },
         });
         // The identity route is the one definitive 401; any other 401 is decided by the identity
-        // probe after the original response was acknowledged and consumed (#4353): acknowledgement
-        // always comes first and the invalidation never precedes it.
+        // probe, which can only start after the original response body was consumed, so body
+        // consumption before the invalidation is inherent to the probe path (#4353). What never
+        // changes, for every route class, is that the acknowledgement comes first and the
+        // invalidation never precedes it.
         await http({
           method: "GET",
           url: `${metadata.baseUrl}/rest/api/2/${path}`,
@@ -1198,6 +1206,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
           maxBodyBytes: 4096,
         });
         expect(events).toEqual(order);
+        expect(events.indexOf("acknowledged")).toBeLessThan(events.indexOf("invalidated"));
         const lines = persistedActivityLogLines(
           readPersistedActivityLog(configDir),
           "atlassian.connection.checked",
@@ -1237,7 +1246,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         if (newer === undefined) throw new Error("Expected newer verification");
         real.custody.finishVerification(selected.authRef, 1, newer.revision, "ok");
         Object.assign(selected, real.custody.getMetadata(selected.authRef));
-        return Promise.resolve(new Response("{}", { status: 401 }));
+        return Promise.resolve(new Response("{}", { status: 401, headers: JIRA_401_HEADERS }));
       },
     });
     const created = real.custody.create(livePodCreateInput(), "a".repeat(64));

@@ -695,6 +695,40 @@ inherits a window. `atlassian.connection.checked` carries the closed `decision`
 decided by the probe is distinguishable from the identity route's own 401, and the closed outcome
 `probe-inconclusive` records an unsettled probe.
 
+Only a 401 that Jira itself authored can show a rejected token. Jira behind a corporate single
+sign-on proxy answers 401 for every request, `myself` included, once the proxy session ends, and a
+captcha or login lock adds `X-Authentication-Denied-Reason`; neither may cost a person their token.
+The transport (`httpAuthenticationFailure.ts`, used by both HTTP ports and the response observer)
+therefore derives a closed fact from the response headers, never exposing a value:
+`authenticationFailure` is `jira`, `denied` or `foreign`. Observed on the laboratory Jira Data
+Center 10.3 with read-only requests (no person's credential involved): a request with an unknown
+bearer token, which is also how Jira sees an expired or a revoked personal access token, and a
+request without credentials both answer 401 with `X-AREQUESTID`, `X-AUSERNAME: anonymous`,
+`WWW-Authenticate: OAuth realm=…`, a JSON content type and the body
+`{"message":"Client must be authenticated to access this resource.","status-code":401,"sub-code":-1}`,
+and no `X-Authentication-Denied-Reason`. The marker is therefore: Jira's request id plus the
+anonymous-user marker and no denial reason is `jira`; a denial reason is `denied`; everything else
+is `foreign`. Not observed (it would have needed a personal access token created and revoked in a
+laboratory session owned by another run): the exact bytes of a separately revoked or expired token,
+and the captcha header on a live Jira; those two rest on the documented behavior. Only `jira`
+discards a credential, on the identity route and for the identity read alike. `denied` and
+`foreign` leave the credential and the Pod untouched and return the unconfirmed outcome, so the
+person reads the retry wording, never an expired token. An anonymous 200 that Jira served and the
+transport rewrites into a 401 keeps the three markers, so it stays Jira-authored.
+
+The decision reaches every read, not only the write executor. The single status-to-reason owner for
+reads (`failureReasonForResponse`, used by the live search, the sync adapters and the report read)
+maps a 401 with `confirmed` to `permission-denied` and with `unconfirmed` to the closed reason
+`auth-unverified`; a 401 without a decision (Cloud, or the identity request itself) remains
+`auth-failed`. At most one identity read is in flight per credential generation and revision;
+concurrent 401s share its result (`decision: probe-shared`), and a positive result is reused for
+the fixed window. An inconclusive read records its closed `probeCause` (`timeout`, `network`,
+`http-429`, `http-4xx`, `http-5xx`, `redirect`, `invalid-body`, `foreign-401`, `captcha`, `stale`,
+`cancelled-or-expired`, `probe-error`) on the registered operation. On a non-identity route the
+original response is acknowledged first and its body is consumed before the identity read starts, so
+body consumption before the invalidation is inherent to the probe path; the invalidation never
+precedes the acknowledgement on any route class.
+
 The public Pod view carries the closed state `compatibilityFacts: "missing"` when a verified Pod has
 no retained compatibility facts (a record from before they existed). The Pod card then tells the
 person that verifying the connection again obtains them and that no permission is added; no version

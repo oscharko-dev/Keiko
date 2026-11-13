@@ -3233,6 +3233,12 @@
               "required": true
             },
             {
+              "name": "probeCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "restApi",
               "type": "string",
               "dataClass": "closed-enum",
