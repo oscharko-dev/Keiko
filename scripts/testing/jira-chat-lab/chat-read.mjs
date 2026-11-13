@@ -41,6 +41,7 @@ import {
 import { sessionVerificationPort } from "./product-port.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
 import { prepareLabRun } from "./run-preflight.mjs";
+import { seedProductBaseline } from "./requirements/baseline-templates.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 import { createOwnedLiveChatProcess, runOwnedLiveChatLifecycle } from "./owned-live-chat.mjs";
 
@@ -804,6 +805,14 @@ async function withOwnedLiveChat(options) {
     run: async () => {
       await controller.start();
       await context.pair();
+      await seedProductBaseline({
+        origin: context.live.origin,
+        cookie: context.live.cookie,
+        root,
+        session: options.session,
+        baselineTemplates: options.baselineTemplates,
+        jsonRequest,
+      });
       await options.run(context.live);
       assert.notEqual(process.exitCode, 1);
     },
@@ -827,6 +836,7 @@ export async function withLiveChat({
   modelRetries,
   embeddingModelId,
   ownedChild = false,
+  baselineTemplates = true,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
   return withLabProduct({
@@ -842,18 +852,26 @@ export async function withLiveChat({
     ownedChild,
     modelRetries,
     embeddingModelId,
+    baselineTemplates,
     prepareModel: (root) =>
       prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId }),
   });
 }
 
 /** Same paired server/vault/transport as the Chat lab, with no provider or model probe. */
-export async function withModelFreeJira({ session, run, stateReady, decorateAtlassianHttp }) {
+export async function withModelFreeJira({
+  session,
+  run,
+  stateReady,
+  decorateAtlassianHttp,
+  baselineTemplates = true,
+}) {
   return withLabProduct({
     session,
     run,
     stateReady,
     decorateAtlassianHttp,
+    baselineTemplates,
     modelId: undefined,
     retainState: true,
     browser: false,
@@ -887,6 +905,7 @@ async function runLabProduct({
   decorateAtlassianHttp,
   configureServer,
   prepareModel,
+  baselineTemplates,
 }) {
   await requireLicense(session);
   const root = liveStateDirectory(session, retainState, restoreState);
@@ -910,6 +929,7 @@ async function runLabProduct({
     });
     const origin = `http://127.0.0.1:${product.port}`;
     const cookie = await pairedCookie(origin, secret);
+    await seedProductBaseline({ origin, cookie, root, session, baselineTemplates, jsonRequest });
     await run({ origin, cookie, session, projectPath, modelId, secret, root, deps: product.deps });
     await requireLicense(session);
     assert.notEqual(process.exitCode, 1);

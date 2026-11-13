@@ -21,6 +21,10 @@ import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs"
 import { runQualificationBatches } from "../testing/jira-chat-lab/api-qualification.mjs";
 import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
 
+// These tests start the product without a Jira; the baseline templates have their own suite
+// (jira-chat-lab-baseline-templates.test.mjs).
+vi.stubEnv("KEIKO_JIRA_LAB_BASELINE_TEMPLATES", "off");
+
 vi.mock("../testing/jira-chat-lab/run-preflight.mjs", () => ({
   prepareLabRun: async () => () => undefined,
 }));

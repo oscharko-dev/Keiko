@@ -162,6 +162,51 @@ export function callTrace(exchanges) {
   );
 }
 
+const REFUSAL_MESSAGE_CHARS = 400;
+const REFUSAL_NAMES_MAX = 16;
+const REFUSAL_NAME_CHARS = 64;
+const boundedText = (value, max) => (typeof value === "string" ? value.slice(0, max) : undefined);
+
+function refusalNames(data) {
+  const names = Array.isArray(data?.invalidArguments) ? data.invalidArguments : [];
+  return names
+    .map((name) => boundedText(name, REFUSAL_NAME_CHARS))
+    .filter((name) => name !== undefined)
+    .slice(0, REFUSAL_NAMES_MAX);
+}
+
+function refusalMessage(exchange) {
+  const { data } = exchange.result ?? {};
+  return [data?.message, data?.guidance, exchange.result?.message]
+    .map((text) => boundedText(text, REFUSAL_MESSAGE_CHARS))
+    .find((text) => text !== undefined);
+}
+
+/**
+ * Diagnosis of the calls that did not succeed: the closed reason, the names of the arguments the
+ * product refused, and the refusal message exactly as the model received it, bounded. The data
+ * itself and every argument value stay out.
+ */
+export function refusalTrace(exchanges) {
+  return exchanges.filter((exchange) => !succeeded(exchange)).map(refusalEntry);
+}
+
+const closedOf = (...values) =>
+  String(values.find((value) => value !== undefined) ?? "none").slice(0, REFUSAL_NAME_CHARS);
+
+function refusalEntry(exchange) {
+  const { result } = exchange;
+  const message = refusalMessage(exchange);
+  return {
+    call: toolAlias(exchange.call?.name),
+    status: closedOf(result?.status),
+    outcome: closedOf(result?.data?.outcome),
+    reason: closedOf(result?.reason, result?.data?.reason),
+    invalidArguments: refusalNames(result?.data),
+    ...(message === undefined ? {} : { message }),
+  };
+}
+
 /**
  * One attempt: `turn` is { failure, exchanges, gateway: { unrecovered, circuit } }, `tokens` the
  * native read truth, `effect` the native write verification. A gateway outage, an unavailable
@@ -174,6 +219,7 @@ export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavaila
   return {
     ...verdict,
     calls: callTrace(exchanges),
+    refusals: refusalTrace(exchanges),
     describe: describeTrace(exchanges, turn.gateway),
   };
 }

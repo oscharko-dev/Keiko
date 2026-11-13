@@ -1254,6 +1254,52 @@ out of each format and compares them, including the v1 to v2 changes, with the t
 templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
 truth; the product under test may not.
 
+## Baseline templates: every lab write is governed (#4369, #4354)
+
+The product refuses a Jira write that no stored template governs. The existing lab lanes write
+without a template of their own (the document lanes, the project and role journeys, catalog Chat,
+the selection write cases, the restricted cases and the whole model-free AC7 driver), so one module
+keeps them working: `requirements/baseline-templates.mjs`.
+
+- **What it seeds.** At every lab product start, one fixture template per lab project and per issue
+  type that project has, imported through the product's own skill library routes (the path
+  `withTemplate` uses) and read back from the listing. Each template is named `Lab baseline <PROJECT>
+<Issue type>`, activates on `[create, edit]`, and carries one rule that no Jira summary can break
+  (`summaryMaxLength: 255`; the parser requires at least one rule). A plain activation governs every
+  write of that project and type under the current and the planned contract; `transition:<target>`
+  only adds rules for entering one status.
+- **Where it runs.** The templates live in the product's skill library, which is per product
+  instance, so the hook is the product start in `chat-read.mjs` (`runLabProduct` and the owned-child
+  path), shared by the Chat lanes and the model-free `withModelFreeJira`. A retained state that
+  already holds a pair is left untouched (idempotent); a missing pair is imported.
+- **Projects and issue types** are read natively as the lab administrator on every start
+  (`GET /rest/api/2/project`, then each project's `statuses`), bounded to 100 projects, 50 types per
+  project and 96 pairs in all (the library holds 128 skills). A listing that cannot be read or a
+  library that does not list every pair afterwards fails the lane as a lab error, never silently.
+- **Lab instances only.** The seed asserts `KEIKO_OS_KEYCHAIN=off` and a state directory the lab
+  created itself (`keiko-jira-live-chat-*`, under the session or the OS temporary directory). It is
+  never written into a real state directory.
+- **Journeys that install their own templates** keep them in full: the product ANDs every governing
+  template, so the rule-free baseline never narrows a journey's rules, and the journey's cleanup
+  removes only its own template.
+- **Opting out.** A lane that proves "no template governs" starts without the baseline. The
+  per-call option `baselineTemplates: false` (default on) exists on `withLiveChat` and
+  `withModelFreeJira`, so one journey of a run can differ from the others; the environment value
+  `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off` is the global switch and wins over a `true` option.
+  `withBaselineSuspended(request, projects, body)` removes the baseline for the duration of `body`
+  and seeds it again, verified, afterwards; it is for a journey that must switch inside one product
+  instance and is not wired anywhere.
+- **Effect before #4354.** The baseline adds no refusal: a template that cannot be violated changes
+  no verdict. It is not free of side effects, though. A template that activates on `create` switches
+  on the product's draft preflight (`firstJiraDraftTemplateRefusal`), which reads Jira once per draft
+  item before approval. A lab draft therefore causes extra native Jira reads (the create metadata
+  and field catalog) and a different read order. Writes, their dispatch count and their order are
+  unchanged. Of the lane observers, only `consent-lifecycle` counts reads (`GET` of one issue key)
+  and `pagination-chat` inspects search pages; neither observes the reads the preflight adds, and
+  the write witnesses (`restricted-cases`, the project-agile witness, the AC7 runtime) let `GET`
+  requests pass uncounted. A new lane that counts or orders native Jira reads of create drafts must
+  start without the baseline. After #4354 the baseline is what lets the existing lanes write.
+
 ## Moving the laboratory to the next Jira Data Center release
 
 The release is pinned in three places that must name the same `tag@sha256:digest`: the `jira`

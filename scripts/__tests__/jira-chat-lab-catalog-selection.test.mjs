@@ -16,6 +16,7 @@ import {
   describeSummary,
   describeTrace,
   gradeSelection,
+  refusalTrace,
   selectionPath,
   summarizeSelection,
 } from "../testing/jira-chat-lab/catalog-selection-grade.mjs";
@@ -796,5 +797,89 @@ describe("attemptBatches", () => {
     expect(attemptBatches(one, 4, 2).map((batch) => batch.length)).toEqual([2, 2]);
     expect(attemptBatches(one, 5, 2).map((batch) => batch.length)).toEqual([2, 2, 1]);
     expect(attemptBatches([], 3)).toEqual([]);
+  });
+});
+
+describe("refusalTrace", () => {
+  const ok = {
+    call: { name: "jira.priorities" },
+    result: { status: "completed", data: { outcome: "succeeded" } },
+  };
+
+  it("keeps nothing for calls that succeeded", () => {
+    expect(refusalTrace([ok])).toEqual([]);
+  });
+
+  it("keeps the closed reason, the refused argument names and the message as received", () => {
+    const refused = {
+      call: {
+        name: "jira.upsert-remote-link",
+        arguments: { url: "https://example.invalid/secret" },
+      },
+      result: {
+        status: "failed",
+        data: {
+          outcome: "rejected",
+          reason: "invalid-arguments",
+          invalidArguments: ["globalId", "object.url"],
+          guidance: "Name the link target.",
+          items: [{ summary: "issue content that must not be copied" }],
+        },
+      },
+    };
+    const [entry] = refusalTrace([ok, refused]);
+    expect(entry).toEqual({
+      call: "jira_upsert_remote_link",
+      status: "failed",
+      outcome: "rejected",
+      reason: "invalid-arguments",
+      invalidArguments: ["globalId", "object.url"],
+      message: "Name the link target.",
+    });
+    expect(JSON.stringify(entry)).not.toMatch(/example\.invalid|issue content/u);
+  });
+
+  it("prefers the dispatcher's reason and bounds every field", () => {
+    const [entry] = refusalTrace([
+      {
+        call: { name: "jira.describe" },
+        result: {
+          status: "failed",
+          reason: "invalid-arguments",
+          data: {
+            message: "m".repeat(1000),
+            invalidArguments: Array.from({ length: 40 }, () => "n".repeat(200)),
+          },
+        },
+      },
+    ]);
+    expect(entry.reason).toBe("invalid-arguments");
+    expect(entry.message).toHaveLength(400);
+    expect(entry.invalidArguments).toHaveLength(16);
+    expect(entry.invalidArguments.every((name) => name.length === 64)).toBe(true);
+  });
+
+  it("reports a call with no result at all with closed placeholders", () => {
+    expect(refusalTrace([{ call: { name: "jira.issue" } }])).toEqual([
+      { call: "jira_issue", status: "none", outcome: "none", reason: "none", invalidArguments: [] },
+    ]);
+  });
+
+  it("bounds the closed status, outcome and reason like the other fields", () => {
+    const long = "x".repeat(500);
+    const [entry] = refusalTrace([
+      {
+        call: { name: "jira.issue" },
+        result: { status: long, data: { outcome: long, reason: long } },
+      },
+    ]);
+    expect(entry.status).toHaveLength(64);
+    expect(entry.outcome).toHaveLength(64);
+    expect(entry.reason).toHaveLength(64);
+  });
+
+  it("is carried by every graded attempt", () => {
+    const turn = { exchanges: [ok], gateway: { unrecovered: 0, rejected: {} } };
+    expect(gradeSelection(READ, turn, { tokens: ["High"] }).refusals).toEqual([]);
   });
 });
