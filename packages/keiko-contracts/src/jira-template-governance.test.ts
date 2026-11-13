@@ -30,13 +30,31 @@ describe("template governance of every Jira mutating operation (#4354 A.7)", () 
     expect(jiraTemplateGovernanceOf("jira.draft")).toEqual({ class: "draft" });
   });
 
-  it("names move-subtask, archive, restore and deletion explicitly, with their reason", () => {
+  it("holds the operations that remove or re-type many issues at once behind the bulk-impact gate", () => {
+    for (const operation of [
+      "jira.delete-issue",
+      "jira.delete-project",
+      "jira.delete-issue-type",
+      "jira.update-issue-type",
+      "jira.delete-custom-fields",
+      "jira.delete-link-type",
+      "jira.update-link-type",
+      "jira.sprint-update",
+      "jira.delete-sprint",
+      "jira.replace-sprint",
+      "jira.delete-component",
+      "jira.merge-version",
+      "jira.remove-and-swap-version",
+    ])
+      expect(jiraTemplateGovernanceOf(operation), operation).toEqual({ class: "bulk-impact" });
+  });
+
+  it("names move-subtask, archive and restore explicitly, with their reason", () => {
     for (const operation of [
       "jira.move-subtask",
       "jira.archive-issue",
       "jira.archive-issues",
       "jira.restore-issue",
-      "jira.delete-issue",
     ])
       expect(jiraTemplateGovernanceOf(operation), operation).toEqual({
         class: "not-governed",

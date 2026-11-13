@@ -83,7 +83,7 @@ export async function epicLinkTargetRefusal(
     reason: "field-validation",
     detail: {
       fieldId,
-      validation: "invalid-field",
+      validation: "invalid-epic-link",
       messages: [
         `${target} is not an Epic, or this account cannot see it, so it cannot be the Epic Link. Link to the key of an existing Epic of this project that you can see, or create the Epic first. Nothing was changed.`,
       ],

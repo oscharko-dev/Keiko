@@ -252,6 +252,14 @@ describe("reviewed worklog deletion with existing completeness and template owne
       expect(request.mock.calls.every(([, method]) => method !== "DELETE")).toBe(true);
     },
   );
+  it("jira.delete-worklog refuses an unreadable template library before DELETE", async () => {
+    const request = fixture();
+    expect(await remove(request, INPUT, () => ({ templates: [], unreadable: 1 }))).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-unreadable" }],
+    });
+    expect(request.mock.calls.every(([, method]) => method !== "DELETE")).toBe(true);
+  });
   // #4354: a worklog change touches the time fields only. A rule the issue already broke in its
   // summary does not block it; the notice is carried by the executor entry.
   it("does not let a saved constraint on an untouched field block the deletion", async () => {

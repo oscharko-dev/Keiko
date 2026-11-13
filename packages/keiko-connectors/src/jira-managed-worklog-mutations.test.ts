@@ -373,6 +373,14 @@ describe("native worklog changes with fixed remaining estimates", () => {
     });
     expect(request.mock.calls).toHaveLength(1);
   });
+  it("jira.update-worklog refuses an unreadable template library before effect", async () => {
+    const request = fixture();
+    expect(await update(request, UPDATE, () => ({ templates: [], unreadable: 1 }))).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-unreadable" }],
+    });
+    expect(request.mock.calls.every(([, method]) => method === undefined)).toBe(true);
+  });
   it("recognizes only the two closed write names", () => {
     expect(isJiraWorklogMutation("jira.create-worklog")).toBe(true);
     expect(isJiraWorklogMutation("jira.update-worklog")).toBe(true);

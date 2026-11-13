@@ -722,8 +722,10 @@ function sameTemplateType(template: JiraIssueTemplate, identity: Identity): bool
 /**
  * Fail-closed admission. A CREATION is sent only when a saved template activated for creating
  * governs its project and issue type (#4354): no library, no template for the type, or only
- * templates of other activation points is a refusal, never a pass. Edits and transitions keep the
- * earlier rule (no governing template is the unchanged path) until the owner decides theirs.
+ * templates of other activation points is a refusal, never a pass. An EDIT is judged by what it
+ * touches, never worse than before (an issue whose type has no template is edited freely), and a
+ * status change is free: only a template activated for `transition:<target>` governs it, while the
+ * fields a transition carries are an edit of those fields (owner decision, 2026-11-13).
  */
 export async function gateJiraMutationByTemplates(
   input: JiraTemplateGateInput,

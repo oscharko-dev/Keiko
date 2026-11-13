@@ -2407,6 +2407,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.validation.unsupported-field":
     "A required Jira field cannot be filled from Keiko.",
   "chat.jira.outcome.validation.invalid-field": "A Jira field had a value Jira does not accept.",
+  "chat.jira.outcome.validation.invalid-epic-link":
+    "The Epic Link points to an issue that is not an Epic, or that this account cannot see.",
   "chat.jira.outcome.validation.invalid-operation":
     "The requested field change is not possible in Jira.",
   "chat.jira.outcome.validation.bounds-exceeded": "The change was too large to send in one step.",

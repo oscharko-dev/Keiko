@@ -40,6 +40,7 @@ function run(
 ): {
   readonly result: ReturnType<typeof executeJiraManagedMutation>;
   readonly writes: () => number;
+  readonly requests: () => number;
 } {
   const state: SyntheticJira = {
     fields: {
@@ -89,6 +90,7 @@ function run(
       },
     ),
     writes: (): number => http.mock.calls.filter(([request]) => request.method !== "GET").length,
+    requests: (): number => http.mock.calls.length,
   };
 }
 const GOVERNING = [template("summaryMinLength: 40")];
@@ -122,6 +124,25 @@ describe("the fields a transition carries (#4354)", () => {
     expect(await jira.result).toMatchObject({ ok: true });
     expect(jira.writes()).toBe(1);
   });
+
+  // KEIKO-0814 on the managed path: the transition id is checked against what Jira lists for the
+  // issue right now, so a step that vanished, or never existed, is refused and nothing is sent.
+  it("refuses a transition id Jira no longer lists as invalid-transition, before any effect", async () => {
+    const jira = run({ ...TRANSITION, transitionId: "99" }, GOVERNING);
+    expect(await jira.result).toMatchObject({ ok: false, reason: "invalid-transition" });
+    expect(jira.writes()).toBe(0);
+  });
+
+  // The invariant of the retired legacy action's "hostile issue key" test, on the managed path: a
+  // key that is not an issue key never becomes part of a URL.
+  it.each(["../../rest/api/2/user", "SYN-1/../../x", "syn 1", ""])(
+    "refuses the hostile issue key %j before any request",
+    async (issueKey) => {
+      const jira = run({ ...TRANSITION, issueKey }, GOVERNING);
+      expect(await jira.result).toMatchObject({ ok: false });
+      expect(jira.requests()).toBe(0);
+    },
+  );
 
   it("lets a transition with a carried field through when no template governs it", async () => {
     const jira = run({ ...TRANSITION, fields: { summary: "Too short" } }, []);

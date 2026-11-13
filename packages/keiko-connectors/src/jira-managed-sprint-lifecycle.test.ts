@@ -367,6 +367,29 @@ describe("formal sprint-field bulk impact", () => {
     expect(f.calls.filter(({ method }) => method !== "GET")).toEqual([]);
   });
 
+  it("jira.replace-sprint refuses an automatic start/stop replacement under a required Sprint field before any effect", async () => {
+    // Only a replacement that moves issues on its own (it closes the sprint, or schedules it to
+    // start and stop by itself) is a bulk change; a plain rename is not.
+    const f = sprintLifecycleFixture();
+    f.controls.fields = [SPRINT_FIELD];
+    const args = {
+      ...CASES[0].args,
+      replacement: {
+        ...CASES[0].args.replacement,
+        autoStartStop: true,
+        startDate: "2030-01-01T09:00:00.000Z",
+        endDate: "2030-01-15T09:00:00.000Z",
+      },
+    };
+    expect(
+      await executeJiraSprintLifecycleMutation(CASES[0].name, args, {
+        ...f.ports,
+        templates: formal("Sprint"),
+      }),
+    ).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.calls.filter(({ method }) => method !== "GET")).toEqual([]);
+  });
+
   it("allows unaffected formal fields and never applies membership rules to synced=false only", async () => {
     const f = sprintLifecycleFixture();
     expect(

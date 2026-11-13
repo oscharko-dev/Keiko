@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c3bf6d8673ec8ac42badc071333fee508cdf7689161f40a9c8670750b425d246",
+    "catalogDigest": "ff4e372694d2a36ce621e6dc3c4c32c3016f3a30202afaebe6e948a369f9f694",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3992,7 +3992,8 @@
               "unsupported-field",
               "invalid-field",
               "invalid-operation",
-              "bounds-exceeded"
+              "bounds-exceeded",
+              "invalid-epic-link"
             ]
           },
           "linkRequestedCount": {
@@ -4034,8 +4035,8 @@
         "failureClasses": ["chat-tool-mutation"],
         "proofIds": ["chat.tool-mutation.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:38",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:169"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:39",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:170"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34325,9 +34326,10 @@
               "unsupported-field",
               "invalid-field",
               "invalid-operation",
-              "bounds-exceeded"
+              "bounds-exceeded",
+              "invalid-epic-link"
             ],
-            "maxItems": 5
+            "maxItems": 6
           }
         },
         "causal": "correlation",
@@ -34337,7 +34339,7 @@
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:244",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:439"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:440"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36092,7 +36094,7 @@
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:147",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:373"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:374"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -118976,7 +118978,7 @@
     {
       "op": "chat.tool-mutation",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:41",
+      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:42",
       "package": "keiko-server"
     },
     {
@@ -120514,7 +120516,7 @@
     {
       "op": "coding.jira-pod.audit",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts:804",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts:815",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

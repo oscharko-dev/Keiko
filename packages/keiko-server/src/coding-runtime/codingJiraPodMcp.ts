@@ -60,6 +60,7 @@ import {
   jiraIssueTemplateSource,
   recordJiraTemplateAttempt,
   recordJiraTemplateMetadata,
+  recordJiraFieldRefusal,
   recordJiraTemplateRefusal,
 } from "../atlassian/jiraTemplateLog.js";
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
@@ -334,6 +335,16 @@ function preflightRefusal(
       operation,
       stage: "pre-approval",
       violations: checked.violations,
+    });
+  else if (checked.detail?.validation !== undefined)
+    // A refusal by Keiko's own field validation (an Epic Link, a required field) has no violations:
+    // it is logged on the field admission line, as the Chat dry run does.
+    recordJiraFieldRefusal(runId, {
+      operation,
+      stage: "pre-approval",
+      refusedCount: 1,
+      validations: [checked.detail.validation],
+      ...(checked.detail.fieldId === undefined ? {} : { fieldId: checked.detail.fieldId }),
     });
   return JSON.stringify(
     jiraMutationToolResult(

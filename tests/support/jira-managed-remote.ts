@@ -104,7 +104,8 @@ export interface SyntheticJira {
 }
 /** The instance's own attachment switch and upload limit (#4176). */
 export const SYNTHETIC_UPLOAD_LIMIT = 1_048_576;
-export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+/** The metadata routes: attachment switch, create/edit screens and the available transitions. */
+function fixtureMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/attachment/meta"))
     return response({ enabled: true, uploadLimit: SYNTHETIC_UPLOAD_LIMIT });
   if (path.includes("createmeta"))
@@ -122,6 +123,19 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
     return response({
       transitions: [{ id: "31", to: { id: "3" }, fields: { customfield_10000: REQUIRED_CUSTOM } }],
     });
+  return undefined;
+}
+/** The identity a creation is judged by: a template governs a project and an issue type (#4354). */
+function fixtureIdentityRead(path: string): AtlassianHttpBodyResult | undefined {
+  const project = /\/project\/([A-Za-z0-9_]{1,40})$/u.exec(path);
+  if (project?.[1] !== undefined)
+    return response({ id: "10000", key: /^\d+$/u.test(project[1]) ? "SYN" : project[1] });
+  const issueType = /\/issuetype\/(\d{1,10})$/u.exec(path);
+  return issueType === null ? undefined : response({ id: issueType[1], name: "Task" });
+}
+export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+  const routed = fixtureMetadataRead(path) ?? fixtureIdentityRead(path);
+  if (routed !== undefined) return routed;
   if (path.endsWith("assignable/search"))
     return response([{ name: "synthetic-user", active: true }]);
   // A draft item's identity search: the synthetic project holds the one issue SYN-1, found by its
@@ -133,12 +147,6 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
       total: 1,
       issues: [{ key: "SYN-1", id: "10001", fields: { summary: state.fields.summary } }],
     });
-  // The identity a creation is judged by: a template governs a project and an issue type (#4354).
-  const project = /\/project\/([A-Za-z0-9_]{1,40})$/u.exec(path);
-  if (project?.[1] !== undefined)
-    return response({ id: "10000", key: /^\d+$/u.test(project[1]) ? "SYN" : project[1] });
-  const issueType = /\/issuetype\/(\d{1,10})$/u.exec(path);
-  if (issueType !== null) return response({ id: issueType[1], name: "Task" });
   if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
   const issueNumber = /\/issue\/SYN-(\d{1,3})$/u.exec(path)?.[1];
   if (issueNumber !== undefined)

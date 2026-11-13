@@ -119,7 +119,7 @@ function confluenceRoute(url: URL, method: string): { status: number; body: stri
   return confluenceWriteRoute(url.pathname, method) ?? confluenceReadRoute(url);
 }
 
-function jiraRoute(url: URL, method: string): { status: number; body: string } | undefined {
+function jiraRoute(url: URL): { status: number; body: string } | undefined {
   const p = url.pathname;
   if (p.endsWith("/rest/api/3/search/jql")) {
     return {
@@ -159,7 +159,7 @@ function routerResponse(url: URL, method: string): { status: number; body: strin
   return (
     verifyRoute(url.pathname) ??
     confluenceRoute(url, method) ??
-    jiraRoute(url, method) ?? { status: 404, body: JSON.stringify({ status: 404 }) }
+    jiraRoute(url) ?? { status: 404, body: JSON.stringify({ status: 404 }) }
   );
 }
 

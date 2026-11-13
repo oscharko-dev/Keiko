@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type {
-  AtlassianCredentialMetadata,
-  AtlassianHttpBodyPort,
-  AtlassianHttpBodyRequest,
-  AtlassianHttpBodyResult,
+import {
+  jiraTemplateViolationGuidance,
+  type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
@@ -988,8 +992,9 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
     ]);
     expect(result.structuredContent?.guidance).toBe(
-      "Nothing was changed: this breaks the issue template of the project. " +
-        "Correct what violations name (ruleId, subject), then send it again.",
+      jiraTemplateViolationGuidance([
+        { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
+      ]),
     );
     expect(writes(h)).toBe(0);
     expect(h.dispatched).not.toHaveBeenCalled();
@@ -1105,6 +1110,47 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       expect(refusal).toContain("Nothing was changed");
       expect(refusal).toContain("summary");
       expect(writes(h)).toBe(0);
+    });
+
+    it("logs the refusal on the template admission line, pre-approval, under the run's correlation", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness({ template: EDIT_TEMPLATE });
+        await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        });
+        const events = sink.events.filter(({ op }) => op === "jira.template.admission");
+        expect(events).toHaveLength(1);
+        expect(events[0]?.correlationId).toBe(runAuthority(h).runId);
+        expect(events[0]?.extra).toMatchObject({
+          operation: "jira.edit",
+          stage: "pre-approval",
+          ruleIds: ["summary-too-short"],
+        });
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("logs a refusal by Keiko's own field validation, which has no violations, on the field admission line", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness();
+        const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { notAField: "x" } },
+        });
+        expect(refusal).toContain('"reason":"field-validation"');
+        const events = sink.events.filter(({ op }) => op === "jira.field.admission");
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({ stage: "pre-approval", refusedCount: 1 });
+        expect(sink.lines().join("\n")).not.toContain("notAField");
+      } finally {
+        resetServerLogger();
+      }
     });
 
     it("leaves a conforming write, and a write no template governs, to the human's card", async () => {

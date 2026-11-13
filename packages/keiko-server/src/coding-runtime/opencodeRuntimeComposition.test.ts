@@ -4534,6 +4534,12 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       expected: "deny",
     },
     { mode: "governed-assist", refusal: undefined, expected: "ask" },
+    {
+      mode: "supervised-coding",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "deny",
+    },
+    { mode: "supervised-coding", refusal: undefined, expected: "ask" },
     // Full access never asks, so the executor gate is the authority and the dry run is not run.
     {
       mode: "autonomous-delivery",
@@ -4550,6 +4556,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       };
       const pods = attachedJiraPods(binding);
       const preflight = vi.fn(() => Promise.resolve(refusal));
+      const policyLog = createBufferedServerLogSink();
       const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
         mode,
         readToolProfile: () => "native",
@@ -4564,6 +4571,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
           }),
         },
         mcpGrantedServers: new Set(["jira"]),
+        activityLog: policyLog,
         jiraWritePreflight: preflight,
       });
       try {
@@ -4603,6 +4611,11 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
           tool: "jira.edit",
           arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
         });
+        // The decision is on the log as its own closed outcome, never as an approval or a denial of mode.
+        const decided = policyLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        );
+        expect(decided?.extra).toMatchObject({ mode, outcome: "template-refused" });
       } finally {
         await fixture.stop();
         await pods.close();

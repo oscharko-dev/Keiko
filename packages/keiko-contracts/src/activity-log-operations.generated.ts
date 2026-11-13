@@ -3865,6 +3865,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "invalid-field",
           "invalid-operation",
           "bounds-exceeded",
+          "invalid-epic-link",
         ],
       },
       linkRequestedCount: {
@@ -32926,8 +32927,9 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "invalid-field",
           "invalid-operation",
           "bounds-exceeded",
+          "invalid-epic-link",
         ],
-        maxItems: 5,
+        maxItems: 6,
       },
     },
     causal: "correlation",

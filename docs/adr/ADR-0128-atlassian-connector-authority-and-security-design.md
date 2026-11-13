@@ -1668,14 +1668,16 @@ the approval.
   (`jira-managed-reciprocal-link.ts`); `create-worklog`, `update-worklog`, `delete-worklog`
   (`jira-worklog-templates.ts`); `sprint-move-issues`, `backlog-move-issues`, `epic-move-issues`,
   `epic-update` (`jira-agile-templates.ts`); `epic-remove-issues`, `rank-epic`, `rank-issues`,
-  `set-issue-estimation` (`jira-agile-planning-admission.ts`). Thirteen operations change issues in
-  bulk or remove them under the rule-impact gates (`gateJiraBulkReferenceChange`,
-  `gateJiraSchemaRuleImpact`): they refuse when a saved rule names the field they re-reference or
-  the issue they delete, and they never write a template-governed value into an issue. Four operations
+  `set-issue-estimation` (`jira-agile-planning-admission.ts`). 13 operations change issues in bulk or remove
+  them under the rule-impact gates (`gateJiraBulkReferenceChange`, `gateJiraSchemaRuleImpact`):
+  `sprint-update`, `delete-sprint`, `replace-sprint`, `delete-component`, `merge-version`,
+  `remove-and-swap-version`, `delete-issue`, `delete-project`, `delete-issue-type`,
+  `update-issue-type`, `delete-custom-fields`, `delete-link-type` and `update-link-type`. They refuse
+  when a saved rule names the field they re-reference or the issue they delete, and they never write a template-governed value into an issue. Four operations
   have no template check because they change no governed field: `archive-issues`, `archive-issue`,
   `restore-issue` (archive state) and `move-subtask` (position among siblings). Not template-governed,
   by reason: comments, attachments (off), watchers, votes, notifications and entity properties carry no
-  field a template describes; the 168 administration operations (projects, versions, components,
+  field a template describes; the 172 administration operations (projects, versions, components,
   workflows, schemes, users, groups, filters, boards, screens, instance, cluster, avatars) touch no
   issue field. In Chat the same pipeline also runs as a dry run before any approval is asked. The
   Coding Workbench raises its approval in OpenCode's own permission hook: when the autonomy mode
@@ -1688,7 +1690,7 @@ the approval.
   `JIRA_TEMPLATE_GOVERNANCE` (`jira-template-governance.ts` in `keiko-contracts`) classifies every
   registered mutation exactly once (`create`, `create-batch`, `draft`, `edit`, `transition`,
   `bulk-impact`, or `not-governed` with a closed reason) as a `Record` over the operation union, so
-  an unclassified operation does not compile; archive, restore, delete and `move-subtask` (which
+  an unclassified operation does not compile; archive, restore and `move-subtask` (which
   reorders the subtasks of one parent and never reparents) are named there as `issue-lifecycle`.
   A template skill that no longer parses refuses every governed write and names the skill in the
   refusal; it is repaired in Skills. A `transition:<target>` activation compares the target status

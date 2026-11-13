@@ -128,7 +128,7 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
     expect(result).toMatchObject({
       ok: false,
       reason: "field-validation",
-      detail: { fieldId: "customfield_10014", validation: "invalid-field" },
+      detail: { fieldId: "customfield_10014", validation: "invalid-epic-link" },
     });
     expect(JSON.stringify(result)).toContain("not an Epic");
     expect(JSON.stringify(result)).toContain(TASK);

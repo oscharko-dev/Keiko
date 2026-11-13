@@ -14,10 +14,11 @@ import type { JiraMutationOperation } from "./jira-tool-execution.js";
  * - `draft`: stages a create or edit for review; its dry run applies the same gate before the card.
  * - `edit`: the issue's state after the change is judged against its templates (no worse than before).
  * - `transition`: only a template activated for `transition:<target>` governs it.
- * - `bulk-impact`: changes no issue field itself but moves many issues at once; guarded by the
+ * - `bulk-impact`: changes no issue field itself but moves, removes or re-types many issues at once
+ *   (a sprint, release, issue type, custom field, link type, project or issue deletion); guarded by the
  *   templates' bulk-reference rules.
  * - `not-governed`: no template rule applies; the closed reason says why. `issue-lifecycle`:
- *   archive, restore, delete and subtask reordering change no template-governed field
+ *   archive, restore and subtask reordering change no template-governed field
  *   (`jira.move-subtask` reorders the subtasks of one parent and never reparents); `comment` and
  *   `participation`: owner decision, comments, watchers and votes are unchecked;
  *   `attachment-withdrawn`: Release 1 switches attachments off; `not-issue-content`: administration,
@@ -88,7 +89,7 @@ export const JIRA_TEMPLATE_GOVERNANCE = Object.freeze({
   "jira.archive-issue": LIFECYCLE,
   "jira.archive-issues": LIFECYCLE,
   "jira.restore-issue": LIFECYCLE,
-  "jira.delete-issue": LIFECYCLE,
+  "jira.delete-issue": BULK_IMPACT,
   "jira.move-subtask": LIFECYCLE,
   "jira.comment": COMMENT,
   "jira.update-comment": COMMENT,
@@ -214,7 +215,7 @@ export const JIRA_TEMPLATE_GOVERNANCE = Object.freeze({
   "jira.update-myself": NOT_ISSUE_CONTENT,
   "jira.update-user-password": NOT_ISSUE_CONTENT,
   "jira.archive-project": NOT_ISSUE_CONTENT,
-  "jira.delete-project": NOT_ISSUE_CONTENT,
+  "jira.delete-project": BULK_IMPACT,
   "jira.remove-project-priority-scheme": NOT_ISSUE_CONTENT,
   "jira.restore-project": NOT_ISSUE_CONTENT,
   "jira.set-project-permission-scheme": NOT_ISSUE_CONTENT,
@@ -234,14 +235,14 @@ export const JIRA_TEMPLATE_GOVERNANCE = Object.freeze({
   "jira.create-custom-field": NOT_ISSUE_CONTENT,
   "jira.create-issue-type": NOT_ISSUE_CONTENT,
   "jira.create-link-type": NOT_ISSUE_CONTENT,
-  "jira.delete-custom-fields": NOT_ISSUE_CONTENT,
-  "jira.delete-issue-type": NOT_ISSUE_CONTENT,
-  "jira.delete-link-type": NOT_ISSUE_CONTENT,
+  "jira.delete-custom-fields": BULK_IMPACT,
+  "jira.delete-issue-type": BULK_IMPACT,
+  "jira.delete-link-type": BULK_IMPACT,
   "jira.move-link-type": NOT_ISSUE_CONTENT,
   "jira.reset-link-type-order": NOT_ISSUE_CONTENT,
   "jira.set-terminology": NOT_ISSUE_CONTENT,
-  "jira.update-issue-type": NOT_ISSUE_CONTENT,
-  "jira.update-link-type": NOT_ISSUE_CONTENT,
+  "jira.update-issue-type": BULK_IMPACT,
+  "jira.update-link-type": BULK_IMPACT,
   "jira.add-default-screen-field": NOT_ISSUE_CONTENT,
   "jira.add-screen-tab-field": NOT_ISSUE_CONTENT,
   "jira.move-screen-tab": NOT_ISSUE_CONTENT,

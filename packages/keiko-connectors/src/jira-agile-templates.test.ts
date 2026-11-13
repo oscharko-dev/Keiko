@@ -29,6 +29,7 @@ function mutationResponse(
 function fixture(
   summary: string,
   sprintRequired = false,
+  unreadable = 0,
 ): {
   readonly http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
   readonly run: (
@@ -121,7 +122,10 @@ function fixture(
     deployment: "data-center" as const,
     baseUrl: "https://jira.example.invalid/context",
     http,
-    issueTemplates: (): JiraIssueTemplateSet => ({ templates: [parsed.template], unreadable: 0 }),
+    issueTemplates: (): JiraIssueTemplateSet => ({
+      templates: unreadable > 0 ? [] : [parsed.template],
+      unreadable,
+    }),
   };
   return {
     http,
@@ -173,6 +177,26 @@ describe("Agile issue changes retain the existing issue-template gate", () => {
       expect(await corrected.run(operation, args)).toMatchObject({ ok: true });
     },
   );
+  // #4354: each membership operation is held back before its POST when the saved template library
+  // cannot be read in full; it never moves an issue under rules it could not check.
+  it.each([
+    "jira.sprint-move-issues",
+    "jira.epic-move-issues",
+    "jira.backlog-move-issues",
+  ] as const)("%s refuses an unreadable template library before any POST", async (operation) => {
+    const args =
+      operation === "jira.sprint-move-issues"
+        ? { sprintId: "9", issues: ["APP-12"] }
+        : operation === "jira.epic-move-issues"
+          ? { epicIdOrKey: "APP-11", issues: ["APP-12"] }
+          : { issues: ["APP-12"] };
+    const f = fixture("Approved membership", false, 1);
+    expect(await f.run(operation, args)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-unreadable" }],
+    });
+    expect(f.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(0);
+  });
   it("judges backlog's planned removal rather than the old nonempty Sprint field", async () => {
     const f = fixture("Approved backlog", true);
     expect(await f.run("jira.backlog-move-issues", { issues: ["APP-12"] })).toMatchObject({

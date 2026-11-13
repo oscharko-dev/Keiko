@@ -692,7 +692,8 @@ describe("the dry run before approval", () => {
     jira: {
       readonly fields?: readonly unknown[];
       readonly existing?: readonly unknown[];
-      readonly metadataFails?: boolean;
+      /** The HTTP status Jira answers every metadata read with. */
+      readonly metadataFails?: 403 | 503;
       readonly draftRequirements?: JiraChatTemplatePreflightPorts["draftRequirements"];
       readonly readAllowed?: boolean;
       readonly signal?: AbortSignal;
@@ -739,9 +740,8 @@ describe("the dry run before approval", () => {
           response({ issues, startAt: 0, maxResults: 100, total: issues.length }),
         );
       }
-      // A 403 is not retried; a 5xx would be read again with backoff by every stage that needs the
-      // metadata (the template check and the field check), which a test must not wait for.
-      if (jira.metadataFails === true) return Promise.resolve(response({}, 403));
+      if (jira.metadataFails !== undefined)
+        return Promise.resolve(response({}, jira.metadataFails));
       const extra = jira.fields ?? [];
       const overridden = (id: string): boolean =>
         extra.some((candidate) => (candidate as { fieldId?: unknown }).fieldId === id);
@@ -1345,15 +1345,13 @@ describe("the dry run before approval", () => {
       );
       expect(await f.run()).toBeUndefined();
       const urls = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
-      // One issue type's fields however many items; the identity reads a creation is judged by
-      // (#4354) are one project and one type per item at most, and no item is read.
-      expect(urls.filter((path) => path.includes("/createmeta/"))).toHaveLength(1);
-      expect(
-        urls.filter((path) => /\/(project|issuetype)\/[^/]+$/u.test(path)).length,
-      ).toBeLessThanOrEqual(6);
-      expect(urls.some((path) => path.includes("/issue/") && !path.includes("/createmeta/"))).toBe(
-        false,
-      );
+      // One issue type's fields, the project and the issue type that name the governing template:
+      // three reads however many items, and no item is read (#4354).
+      expect(urls).toEqual([
+        "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001",
+        "/context/rest/api/2/project/10000",
+        "/context/rest/api/2/issuetype/10001",
+      ]);
     });
 
     describe("an item Keiko itself would refuse (S05 of #4173)", () => {
@@ -1475,10 +1473,27 @@ describe("the dry run before approval", () => {
 
       it("leaves the decision to the write when Jira cannot be read", async () => {
         const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
-          metadataFails: true,
+          metadataFails: 403,
         });
         expect(await f.run()).toBeUndefined();
       });
+
+      // A 5xx is read again with backoff, once for the whole series: a dry run that cannot read Jira
+      // decides nothing, it never reads again per stage or per item (#4354).
+      it("leaves the decision to the write when Jira answers 503, after one retry series", async () => {
+        const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
+          metadataFails: 503,
+        });
+        expect(await f.run()).toBeUndefined();
+        const reads = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
+        // One series of five attempts on the one metadata read; no later stage reads it again.
+        expect(reads).toEqual(
+          Array.from(
+            { length: 5 },
+            () => "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001",
+          ),
+        );
+      }, 30_000);
     });
   });
 

@@ -219,6 +219,7 @@ const VALIDATION_MESSAGES = {
   "invalid-field": "chat.jira.outcome.validation.invalid-field",
   "invalid-operation": "chat.jira.outcome.validation.invalid-operation",
   "bounds-exceeded": "chat.jira.outcome.validation.bounds-exceeded",
+  "invalid-epic-link": "chat.jira.outcome.validation.invalid-epic-link",
 } as const;
 
 function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {

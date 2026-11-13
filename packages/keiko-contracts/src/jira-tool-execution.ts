@@ -678,6 +678,8 @@ export const JIRA_FIELD_VALIDATION_FAILURES = [
   "invalid-field",
   "invalid-operation",
   "bounds-exceeded",
+  /** An Epic Link whose target the instance does not know as an Epic (#4354). */
+  "invalid-epic-link",
 ] as const;
 export type JiraFieldValidationFailure = (typeof JIRA_FIELD_VALIDATION_FAILURES)[number];
 export const JIRA_MUTATION_DETAIL_LIMITS = Object.freeze({
