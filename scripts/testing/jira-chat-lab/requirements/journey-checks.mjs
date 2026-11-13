@@ -249,20 +249,23 @@ const PROGRESS_FIELDS = (fieldIds) =>
 
 /**
  * The facts the product's estimate rule is derived from, read natively: the board's configured
- * estimation field and the unique Story Points field. A lab context without a native reader keeps
- * the truth file's estimate (the earlier behaviour).
+ * estimation field and the unique Story Points field. When they cannot be read (a lab context
+ * without a native reader, or a project whose board has no estimation field) the result carries the
+ * reason, and the estimate is `unverified` with it in the detail: the truth file's old estimate is
+ * never graded in its place.
  */
 /** The project S10 reads: RPT, or the estimate-case project a run selects (seed-estimate-cases.mjs). */
 const estimateProject = (ctx) => ctx.estimateProject ?? "RPT";
 
 async function nativeEstimateFacts(ctx) {
-  if (ctx.nativeGet === undefined) return undefined;
+  if (ctx.nativeGet === undefined)
+    return { unavailable: "this lab context has no native Jira reader" };
   const [fields, configured] = await Promise.all([
     ctx.nativeGet("/rest/api/2/field"),
     configuredEstimateField(ctx.nativeGet, estimateProject(ctx)),
   ]);
   return configured === undefined
-    ? undefined
+    ? { unavailable: `the board of ${estimateProject(ctx)} reports no configured estimation field` }
     : { configured, storyPoints: storyPointsFieldId(fields) };
 }
 
@@ -270,8 +273,13 @@ async function nativeEstimateFacts(ctx) {
 async function progressPlan(ctx) {
   const facts = await nativeEstimateFacts(ctx);
   const baseFields = PROGRESS_FIELDS(ctx.truth.fieldIds);
-  if (facts === undefined)
-    return { fields: baseFields, estimate: estimateOf(ctx.truth), prompt: undefined };
+  if (facts.unavailable !== undefined)
+    return {
+      fields: baseFields,
+      estimate: estimateOf(ctx.truth),
+      prompt: undefined,
+      unavailable: facts.unavailable,
+    };
   const fields = [
     ...new Set([...baseFields.split(","), TIME_FIELD, facts.configured, facts.storyPoints]),
   ]
@@ -323,7 +331,10 @@ async function projectProgress(ctx, chat) {
   const grade = gradeProgress(turn.answer, truth);
   const rule =
     plan.derived === undefined ? undefined : gradeEstimateRule(turn.answer, plan.derived);
-  const parts = progressParts(grade, rule);
+  // Without native estimate facts the figure and the rule statements are not graded at all.
+  const parts = progressParts(grade, rule).filter(
+    ([name]) => plan.unavailable === undefined || name !== "estimate-totals",
+  );
   const failed = parts.filter(([, part]) => !part.ok);
   const ungraded = [grade.epics, grade.estimate].filter((part) => !part.graded).length;
   const answer = {
@@ -335,9 +346,22 @@ async function projectProgress(ctx, chat) {
   const large = await largeProjectPart(ctx);
   const unavailable = await unavailableProgressPart(ctx);
   return aggregateParts(
-    [answer, large.part, unavailable.part],
-    [turn, large.turn, unavailable.turn],
+    [answer, ...estimateUnverified(plan), large.part, unavailable.part],
+    [turn, ...(plan.unavailable === undefined ? [] : [NO_TURN]), large.turn, unavailable.turn],
   );
+}
+
+/** The estimate part when its native facts were unreadable: unverified, never green, with the reason. */
+function estimateUnverified(plan) {
+  if (plan.unavailable === undefined) return [];
+  return [
+    {
+      label: "estimate rule",
+      status: "unverified",
+      covers: ["estimate-totals", ...Object.values(ESTIMATE_RULE_OBLIGATIONS)],
+      detail: `native estimate facts unavailable (${plan.unavailable}); the figure and the three statements are not graded`,
+    },
+  ];
 }
 
 // ---------- S12 ----------

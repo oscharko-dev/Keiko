@@ -255,6 +255,75 @@ describe("S10 against the native rule, through the journey", () => {
   const bothFields = world((n) => ({ [POINTS]: n, [TIME_FIELD]: n * HOUR }));
   const neither = world(() => ({}));
 
+  it("is unverified, never green, when the native estimate facts cannot be read, and names why", async () => {
+    // A figure the old truth-file estimate would have graded green must not be credited.
+    const answer = [...BASE, "SCHÄTZUNG;5;3;2"].join("\n");
+    const graded = (overrides) =>
+      JOURNEYS.S10(
+        {
+          truth: { fieldIds: { ...FIELDS, storyPoints: TIME_FIELD }, issues: [], estimate: 5 },
+          refusals: () => 0,
+          search: async (query) => (/project = RPT/u.test(query) ? timeOnly : []),
+          turn: async () => ({
+            answer,
+            toolExchanges: [],
+            failure: undefined,
+            durationMs: 1000,
+            toolCalls: 0,
+            approvals: { writes: 0 },
+          }),
+          deselectSkill: async () => undefined,
+          ...overrides,
+        },
+        { id: "chat", jiraPodBinding: { podId: "pod-1" } },
+      );
+    const withoutReader = await graded({});
+    expect(withoutReader.detail).toContain("estimate rule: unverified");
+    expect(withoutReader.detail).toContain("no native Jira reader");
+    for (const name of ["estimate-totals", "estimate-source-labelled", "configured-unused-stated"])
+      expect(withoutReader.covers).not.toContain(name);
+    // A board without an estimation field is the same gap, with its own reason.
+    const noBoard = await graded({
+      nativeGet: async (path) => (path === "/rest/api/2/field" ? NATIVE_FIELDS : { values: [] }),
+    });
+    expect(noBoard.detail).toContain("reports no configured estimation field");
+    expect(noBoard.covers).not.toContain("estimate-totals");
+  });
+
+  it("neither: an unused-field statement naming the configured field is accepted, any other is red", async () => {
+    const base = [...BASE, "SCHÄTZUNG;0;0;0", "QUELLE;Story Points;KONFIGURIERT"];
+    expect((await run(neither, POINTS, base.join("\n"))).status).toBe("green");
+    expect(
+      (await run(neither, POINTS, [...base, "UNGENUTZT;Story Points"].join("\n"))).status,
+    ).toBe("green");
+    expect(
+      (await run(neither, POINTS, [...base, "UNGENUTZT;Original Estimate"].join("\n"))).status,
+    ).toBe("red");
+  });
+
+  it("states the unit of the WEITERES sum and asks for a bare number", () => {
+    const line = ESTIMATE_RULE_PROMPT.find((entry) => entry.startsWith("WEITERES;"));
+    expect(line).toContain("Stunden");
+    expect(line).toContain("Punkten");
+    // The S10 prompt of a time-tracking project must not mention the other field by name.
+    expect(line).not.toContain("Story Points");
+    expect(line).toContain("ohne Einheit");
+  });
+
+  it("reads the time field's WEITERES sum as hours, not seconds, and refuses a unit inside the cell", async () => {
+    const hours = [
+      ...BASE,
+      "SCHÄTZUNG;5;3;2",
+      "QUELLE;Story Points;KONFIGURIERT",
+      "WEITERES;Original Estimate;2;5",
+    ];
+    expect((await run(bothFields, POINTS, hours.join("\n"))).status).toBe("green");
+    const seconds = hours.slice(0, -1).concat("WEITERES;Original Estimate;2;18000");
+    expect((await run(bothFields, POINTS, seconds.join("\n"))).status).toBe("red");
+    const withUnit = hours.slice(0, -1).concat("WEITERES;Original Estimate;2;5 h");
+    expect((await run(bothFields, POINTS, withUnit.join("\n"))).status).toBe("red");
+  });
+
   it("asks for the statements of the rule, not for a field by name", async () => {
     const prompts = [];
     await run(timeOnly, POINTS, "", prompts);

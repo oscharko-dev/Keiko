@@ -86,7 +86,7 @@ export function estimateDescriptor(derived) {
 export const ESTIMATE_RULE_PROMPT = [
   "QUELLE;<Name des Schätzfeldes>;<KONFIGURIERT|ERSATZ> - genau eine Zeile: aus welchem Feld die Schätzung stammt und ob es das am Board konfigurierte Feld oder ein Ersatz ist.",
   "UNGENUTZT;<Name des konfigurierten Feldes> - nur wenn das am Board konfigurierte Schätzfeld in diesem Projekt von keinem Vorgang genutzt wird; sonst keine solche Zeile.",
-  "WEITERES;<Feldname>;<Anzahl Vorgänge>;<Summe> - nur wenn außer dem konfigurierten Feld ein weiteres Schätzfeld Werte trägt; sonst keine solche Zeile.",
+  "WEITERES;<Feldname>;<Anzahl Vorgänge>;<Summe> - nur wenn außer dem konfigurierten Feld ein weiteres Schätzfeld Werte trägt; sonst keine solche Zeile. Die Summe ist eine reine Zahl ohne Einheit: in Stunden beim Zeitfeld Originalschätzung, sonst in Punkten.",
 ];
 
 const normal = (value) =>
@@ -120,6 +120,17 @@ function gradeSource(answer, derived) {
 
 function gradeUnused(answer, derived) {
   const rows = rowsOf(answer, "ungenutzt");
+  // Where no issue holds any estimate a product may truthfully say the configured field is unused.
+  if (derived.case === "neither") {
+    const ok =
+      rows.length === 0 || (rows.length === 1 && names(derived.configured).has(normal(rows[0][1])));
+    return {
+      ok,
+      detail: ok
+        ? "no estimate anywhere; an unused-field statement, if any, names the configured field"
+        : "an unused-field statement that does not name the configured field",
+    };
+  }
   if (!derived.configuredUnused)
     return {
       ok: rows.length === 0,

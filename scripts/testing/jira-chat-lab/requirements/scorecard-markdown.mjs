@@ -1,7 +1,16 @@
 // The Markdown report of the requirements scorecard (epic #4173).
 import { evidenceLines } from "./coverage.mjs";
 
+/** Limits of two oracles that a reader of a report containing them must know. */
+const ORACLE_LIMITS = Object.freeze({
+  S10: "S10 derives its estimate expectation from native data read as the lab administrator; the case of an account that cannot read the estimate field is not graded.",
+  S11: "S11's unavailable-report case is graded partly on the product's own statement that the report is unavailable.",
+});
+
 export function scorecardMarkdown(report) {
+  const limits = Object.entries(ORACLE_LIMITS)
+    .filter(([id]) => report.results.some((result) => result.id === id))
+    .map(([, text]) => `Limit: ${text}`);
   const invalid = report.counts.invalid ?? 0;
   const icon = {
     green: "🟢",
@@ -25,6 +34,7 @@ export function scorecardMarkdown(report) {
         ]
       : []),
     ...(report.repeat > 1 ? [`Each journey ran ${report.repeat} times in fresh Chats.`, ""] : []),
+    ...(limits.length > 0 ? [...limits, ""] : []),
     `Green ${report.counts.green} · red ${report.counts.red} · partial ${report.counts.partial} · invalid ${invalid} · probe-only ${report.counts["probe-only"]} · unchecked ${report.counts.unchecked} of ${report.results.length}`,
     "",
     "| Scenario | Status | Requirement | Issue | Title | Evidence |",

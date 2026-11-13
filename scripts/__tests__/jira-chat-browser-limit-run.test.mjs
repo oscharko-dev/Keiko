@@ -665,6 +665,8 @@ it("accepts the step set only as an explicit trailing option", () => {
   for (const extra of [
     ["--steps"],
     ["--steps", "sprint"],
+    // The step set was called release-1 before it was renamed; the old name is refused, not aliased.
+    ["--steps", "release-1"],
     ["without-sprint"],
     ["--steps", "all", "x"],
   ])
@@ -674,6 +676,7 @@ it("accepts the step set only as an explicit trailing option", () => {
 it("refuses an unknown step set before any owner runs", async () => {
   const f = fixture();
   await expect(runBrowserLimitRun(f.ctx, { steps: "sprint" }, f.blocks)).rejects.toThrow();
+  await expect(runBrowserLimitRun(f.ctx, { steps: "release-1" }, f.blocks)).rejects.toThrow();
   expect(f.calls).toEqual([]);
 });
 
