@@ -398,7 +398,11 @@ function useRunRefresh(
       do {
         followUp.current = false;
         runSequence.current += 1;
-        await readRun(runSequence.current, runSequence, dispatch);
+        await /* NOSONAR typescript:S9382 -- coalesced re-reads run one after another by design. */ readRun(
+          runSequence.current,
+          runSequence,
+          dispatch,
+        );
       } while (followUp.current);
     })();
     runRefresh.current = pending;

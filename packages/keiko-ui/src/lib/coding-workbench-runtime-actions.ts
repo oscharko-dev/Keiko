@@ -124,8 +124,11 @@ async function startAfterModelCheck(
         (resolve) => setTimeout(resolve, START_MODEL_CHECK_POLL_MS),
       );
       const pendingBefore = stateRef.current.source;
-      await refreshSource();
-      await settledSource(stateRef, pendingBefore);
+      await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ refreshSource();
+      await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ settledSource(
+        stateRef,
+        pendingBefore,
+      );
     }
     if (stateRef.current.source.value?.available !== true) return;
   }
