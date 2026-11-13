@@ -1282,13 +1282,23 @@ keeps them working: `requirements/baseline-templates.mjs`.
 - **Journeys that install their own templates** keep them in full: the product ANDs every governing
   template, so the rule-free baseline never narrows a journey's rules, and the journey's cleanup
   removes only its own template.
-- **Opting out.** A lane that proves "no template governs" starts without the baseline:
-  `withLiveChat({ baselineTemplates: false })` or `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off`.
+- **Opting out.** A lane that proves "no template governs" starts without the baseline. The
+  per-call option `baselineTemplates: false` (default on) exists on `withLiveChat` and
+  `withModelFreeJira`, so one journey of a run can differ from the others; the environment value
+  `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off` is the global switch and wins over a `true` option.
   `withBaselineSuspended(request, projects, body)` removes the baseline for the duration of `body`
   and seeds it again, verified, afterwards; it is for a journey that must switch inside one product
   instance and is not wired anywhere.
-- **Harmless before #4354.** A template that cannot be violated adds no refusal, so today's product
-  behaves as without it; after #4354 it is what lets the existing lanes write.
+- **Effect before #4354.** The baseline adds no refusal: a template that cannot be violated changes
+  no verdict. It is not free of side effects, though. A template that activates on `create` switches
+  on the product's draft preflight (`firstJiraDraftTemplateRefusal`), which reads Jira once per draft
+  item before approval. A lab draft therefore causes extra native Jira reads (the create metadata
+  and field catalog) and a different read order. Writes, their dispatch count and their order are
+  unchanged. Of the lane observers, only `consent-lifecycle` counts reads (`GET` of one issue key)
+  and `pagination-chat` inspects search pages; neither observes the reads the preflight adds, and
+  the write witnesses (`restricted-cases`, the project-agile witness, the AC7 runtime) let `GET`
+  requests pass uncounted. A new lane that counts or orders native Jira reads of create drafts must
+  start without the baseline. After #4354 the baseline is what lets the existing lanes write.
 
 ## Moving the laboratory to the next Jira Data Center release
 

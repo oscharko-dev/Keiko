@@ -5,10 +5,12 @@
 // library routes (the same path `withTemplate` uses), read back from the library listing, and
 // left in place for the product instance's lifetime.
 //
-// Why it is harmless: the product ANDs every governing template, so a template whose only rule is
-// one no Jira summary can break never narrows another template. A journey that installs its own
+// Why it adds no refusal: the product ANDs every governing template, so a template whose only rule
+// is one no Jira summary can break never narrows another template. A journey that installs its own
 // template keeps its own rules in full; a lane that proves "no template governs" opts out of the
 // baseline at product start (`baselineTemplates: false` or `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off`).
+// It is not free of side effects: a template that activates on `create` switches on the product's
+// draft preflight, which reads Jira once per draft item (see the README section).
 import { Buffer } from "node:buffer";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,8 +42,8 @@ const ACTIVATIONS = Object.freeze(["create", "edit"]);
 
 /** A failure of the baseline itself: a lab error, never a product verdict. */
 export class BaselineTemplateError extends TypeError {
-  constructor(code) {
-    super(`Laboratory baseline templates unavailable: ${code}`);
+  constructor(code, options) {
+    super(`Laboratory baseline templates unavailable: ${code}`, options);
     this.name = "BaselineTemplateError";
     this.code = code;
   }
@@ -244,19 +246,34 @@ export function seedProductBaseline({
  * For a journey that must prove "no template governs" inside one product instance: removes the
  * baseline templates for the duration of `body` and seeds them again, verified, afterwards. Prefer
  * the product-start opt-out; this exists for a journey that has to switch within one instance.
+ *
+ * The removal sits inside the protected region and the restoration is always attempted, also after a
+ * failed delete, so a failure midway never leaves the baseline partly removed. Both failures are
+ * surfaced: the body's (or the delete's) error is the cause of the restoration's.
  */
 export async function withBaselineSuspended(request, projects, body) {
-  const removed = (await listTemplates(request)).filter((entry) => isBaselineName(entry.name));
-  for (const entry of removed)
-    await request(
-      "baseline-template-delete",
-      `/api/skills/${encodeURIComponent(entry.id)}`,
-      { expectedRevision: entry.revision },
-      "DELETE",
-    );
+  let outcome;
   try {
-    return await body();
-  } finally {
-    await seedBaselineTemplates(request, projects);
+    const removed = (await listTemplates(request)).filter((entry) => isBaselineName(entry.name));
+    for (const entry of removed)
+      await request(
+        "baseline-template-delete",
+        `/api/skills/${encodeURIComponent(entry.id)}`,
+        { expectedRevision: entry.revision },
+        "DELETE",
+      );
+    outcome = { value: await body() };
+  } catch (error) {
+    outcome = { error };
   }
+  try {
+    await seedBaselineTemplates(request, projects);
+  } catch (restoreError) {
+    if (outcome.error === undefined) throw restoreError;
+    const failure = new BaselineTemplateError("restore", { cause: outcome.error });
+    failure.restoreError = restoreError;
+    throw failure;
+  }
+  if (outcome.error !== undefined) throw outcome.error;
+  return outcome.value;
 }

@@ -859,12 +859,19 @@ export async function withLiveChat({
 }
 
 /** Same paired server/vault/transport as the Chat lab, with no provider or model probe. */
-export async function withModelFreeJira({ session, run, stateReady, decorateAtlassianHttp }) {
+export async function withModelFreeJira({
+  session,
+  run,
+  stateReady,
+  decorateAtlassianHttp,
+  baselineTemplates = true,
+}) {
   return withLabProduct({
     session,
     run,
     stateReady,
     decorateAtlassianHttp,
+    baselineTemplates,
     modelId: undefined,
     retainState: true,
     browser: false,

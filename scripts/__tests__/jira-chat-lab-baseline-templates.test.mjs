@@ -531,3 +531,69 @@ describe("a journey that installs its own templates, and a lane that must see no
     expect(library.skills.size).toBe(7);
   });
 });
+
+describe("withBaselineSuspended failure modes", () => {
+  /** A library whose Nth DELETE or whose imports after a switch throw. */
+  function failing(library, { failDeleteAt, failImports }) {
+    let deletes = 0;
+    let importsFail = false;
+    const request = async (name, path, body, method = "POST") => {
+      if (method === "DELETE") {
+        deletes += 1;
+        if (deletes === failDeleteAt) throw new TypeError("delete failed");
+        if (failImports) importsFail = true;
+      }
+      if (method === "POST" && importsFail) throw new TypeError("reseed failed");
+      return library.request(name, path, body, method);
+    };
+    return request;
+  }
+
+  it("restores every baseline template and reports the delete error when a delete fails midway", async () => {
+    const library = skillLibrary();
+    await seedBaselineTemplates(library.request, PAIRS);
+    const body = vi.fn();
+    const request = failing(library, { failDeleteAt: 3 });
+    await expect(withBaselineSuspended(request, PAIRS, body)).rejects.toThrow("delete failed");
+    expect(body).not.toHaveBeenCalled();
+    expect(library.skills.size).toBe(7);
+    expect(
+      library.entries().every((entry) => entry.valid && entry.name.startsWith("Lab baseline")),
+    ).toBe(true);
+  });
+
+  it("surfaces the reseed error when only the restoration fails", async () => {
+    const library = skillLibrary();
+    await seedBaselineTemplates(library.request, PAIRS);
+    const request = failing(library, { failImports: true });
+    await expect(withBaselineSuspended(request, PAIRS, async () => "ok")).rejects.toThrow(
+      "reseed failed",
+    );
+  });
+
+  it("surfaces both errors when the body and the restoration fail, the body's as the cause", async () => {
+    const library = skillLibrary();
+    await seedBaselineTemplates(library.request, PAIRS);
+    const request = failing(library, { failImports: true });
+    const bodyError = new TypeError("journey failed");
+    const error = await withBaselineSuspended(request, PAIRS, async () => {
+      throw bodyError;
+    }).catch((failure) => failure);
+    expect(error).toBeInstanceOf(BaselineTemplateError);
+    expect(error.code).toBe("restore");
+    expect(error.cause).toBe(bodyError);
+    expect(error.restoreError.message).toBe("reseed failed");
+  });
+
+  it("still rethrows the body's own error when the restoration succeeds", async () => {
+    const library = skillLibrary();
+    await seedBaselineTemplates(library.request, PAIRS);
+    const bodyError = new TypeError("journey failed");
+    await expect(
+      withBaselineSuspended(library.request, PAIRS, async () => {
+        throw bodyError;
+      }),
+    ).rejects.toBe(bodyError);
+    expect(library.skills.size).toBe(7);
+  });
+});
