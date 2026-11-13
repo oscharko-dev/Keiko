@@ -411,8 +411,7 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
 // `voiceId`). Checked with `Object.hasOwn`, never a plain property read, so a caller that merely
 // inherits one of these names off a prototype cannot trigger the reject.
 function callerSuppliedTools(request: RealtimeNegotiationRequest): boolean {
-  const raw = request as unknown as Record<string, unknown>;
-  return Object.hasOwn(raw, "tools") || Object.hasOwn(raw, "toolChoice");
+  return Object.hasOwn(request, "tools") || Object.hasOwn(request, "toolChoice");
 }
 
 function buildRealtimeSession(request: RealtimeNegotiationRequest): Record<string, unknown> {
