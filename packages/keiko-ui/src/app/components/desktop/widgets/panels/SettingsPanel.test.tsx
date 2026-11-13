@@ -878,9 +878,6 @@ describe("SettingsPanel gateway readiness checks", () => {
           latencyMs: 11,
           evidence: `server evidence for ${outcome}`,
           toolCallingOutcome: outcome,
-          ...(outcome === "called-only-forced"
-            ? { toolCallingWarning: "forced-only" as const }
-            : {}),
         },
       ],
       verifiedCapabilities: status === "passed" ? { toolCalling: true } : {},

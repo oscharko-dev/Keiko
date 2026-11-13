@@ -336,16 +336,16 @@
     "de": "Das Modell hat das Tool nicht von selbst aufgerufen, und der Anbieter hat den erzwungenen Aufruf abgelehnt (ein Denkmodus tut das oft). Das beweist nicht, dass das Modell keine Tools aufrufen kann, ist aber auch nicht bestätigt; deshalb sind Tool-Aufgaben für dieses Modell nicht verfügbar. Schalte den Denkmodus aus und prüfe erneut."
   },
   "settings.models.toolOutcome.no-call": {
-    "en": "The model answered in words, also when the call was forced. It does not call tools through this endpoint. Choose a model that supports tool calling, or ask your administrator to enable tool-call support for it.",
-    "de": "Das Modell hat in Worten geantwortet, auch als der Aufruf erzwungen wurde. Es ruft über diesen Endpunkt keine Tools auf. Wähle ein Modell mit Tool-Unterstützung oder bitte deine Administration, die Tool-Unterstützung dafür zu aktivieren."
+    "en": "The model answered in words, also when the call was forced. It does not call tools through this endpoint, so tool tasks are not available for it. Choose a model that supports tool calling, or ask your administrator to enable tool-call support for it.",
+    "de": "Das Modell hat in Worten geantwortet, auch als der Aufruf erzwungen wurde. Es ruft über diesen Endpunkt keine Tools auf, deshalb sind Tool-Aufgaben dafür nicht verfügbar. Wähle ein Modell mit Tool-Unterstützung oder bitte deine Administration, die Tool-Unterstützung dafür zu aktivieren."
   },
   "settings.models.toolOutcome.tools-refused": {
-    "en": "The endpoint refused the request that offers a tool. Ask your administrator to enable tool calling for this model, or choose another model.",
-    "de": "Der Endpunkt hat die Anfrage mit einem Tool abgelehnt. Bitte deine Administration, Tool-Aufrufe für dieses Modell zu aktivieren, oder wähle ein anderes Modell."
+    "en": "The endpoint refused the request that offers a tool, so tool tasks are not available for this model. Ask your administrator to enable tool calling for it, or choose another model.",
+    "de": "Der Endpunkt hat die Anfrage mit einem Tool abgelehnt, deshalb sind Tool-Aufgaben für dieses Modell nicht verfügbar. Bitte deine Administration, Tool-Aufrufe dafür zu aktivieren, oder wähle ein anderes Modell."
   },
   "settings.models.toolOutcome.inconclusive": {
-    "en": "Tool calling could not be checked: the gateway timed out, was busy or answered with an error. Check again in a few minutes.",
-    "de": "Tool-Aufrufe konnten nicht geprüft werden: Das Gateway hat nicht rechtzeitig geantwortet, war ausgelastet oder hat mit einem Fehler geantwortet. Prüfe in ein paar Minuten erneut."
+    "en": "Tool calling could not be confirmed: the gateway timed out, was busy or answered with an error, or the model did not complete the test steps. Check again in a few minutes.",
+    "de": "Tool-Aufrufe konnten nicht bestätigt werden: Das Gateway hat nicht rechtzeitig geantwortet, war ausgelastet oder hat mit einem Fehler geantwortet, oder das Modell hat die Testschritte nicht abgeschlossen. Prüfe in ein paar Minuten erneut."
   },
   "settings.models.reasoningOnToolTurnsDetected": {
     "en": "Returns its reasoning on tool turns: detected",

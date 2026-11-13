@@ -601,6 +601,8 @@ interface ProviderRawOptions {
   /** True on preserve-mode rebuilds — stored-capability carry-overs are preserve semantics. */
   readonly preserveExisting?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
+  /** False on a rewrite of a timeout nobody named; absent for a submitted value. */
+  readonly timeoutNamed?: boolean | undefined;
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
@@ -884,11 +886,26 @@ function providerDeploymentIdentity(
   return identity === undefined ? {} : { deploymentIdentitySha256: identity };
 }
 
-// The request timeout of a stored provider. Setup applies its 30 s default for a person who named
-// none and says so (`timeoutDefaulted`), so the explicit check can tell a value Setup chose from one
-// a person chose (#4351); the configuration reads it back as an absent `timeoutConfigured`.
-function providerRequestTimeout(named: number | undefined): Record<string, unknown> {
-  return named === undefined ? { timeoutMs: 30_000, timeoutDefaulted: true } : { timeoutMs: named };
+// The request timeout of a stored provider, and who named it (#4351). A person's value is stored with
+// `timeoutNamed: true`; Setup's own 30 s default (its historical value) is stored bare, which the
+// configuration reads back as not named, so the explicit check can lift it. A rewrite of a stored
+// provider passes `timeoutNamed: false` for a timeout nobody named, never as if it were submitted.
+function providerRequestTimeout(options: {
+  readonly timeoutMs?: number | undefined;
+  readonly timeoutNamed?: boolean | undefined;
+}): Record<string, unknown> {
+  const { timeoutMs } = options;
+  return timeoutMs !== undefined && options.timeoutNamed !== false
+    ? { timeoutMs, timeoutNamed: true }
+    : { timeoutMs: timeoutMs ?? 30_000 };
+}
+
+/** What a rewrite of an existing provider carries: its timeout and whether a person named it. */
+function carriedRequestTimeout(provider: ModelProviderConfig): {
+  readonly timeoutMs: number;
+  readonly timeoutNamed: boolean;
+} {
+  return { timeoutMs: provider.timeoutMs, timeoutNamed: provider.timeoutConfigured === true };
 }
 
 function providerRaw(
@@ -923,7 +940,7 @@ function providerRaw(
         : { supportsImageInput: options.imageInputModelIds.includes(modelId) }),
       ...(supportsResponseFormat ? { structuredOutput: true, supportsResponseFormat: true } : {}),
     },
-    ...providerRequestTimeout(options.timeoutMs),
+    ...providerRequestTimeout(options),
     maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
   };
@@ -1000,6 +1017,8 @@ function createDefaultVoiceCapabilityForSetup(
 interface VoiceProviderRawOptions {
   readonly apiKeyHeaderName?: string | undefined;
   readonly timeoutMs?: number | undefined;
+  /** False on a rewrite of a timeout nobody named; absent for a submitted value. */
+  readonly timeoutNamed?: boolean | undefined;
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
   readonly endpointStyle?: ModelProviderConfig["endpointStyle"];
@@ -1053,7 +1072,7 @@ function voiceProviderRaw(
     // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): re-serialize the
     // per-provider circuit-breaker override so a voice/setup save preserves it.
     ...(options.circuitBreaker === undefined ? {} : { circuitBreaker: options.circuitBreaker }),
-    ...providerRequestTimeout(options.timeoutMs),
+    ...providerRequestTimeout(options),
     maxRetries: options.maxRetries ?? 1,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
   };
@@ -1364,10 +1383,10 @@ function storedRequestTimeout(
   provider: ModelProviderConfig,
   submitted: number | undefined,
 ): Record<string, unknown> {
-  const timeoutMs = submitted ?? provider.timeoutMs;
-  return submitted === undefined && provider.timeoutConfigured !== true
-    ? { timeoutMs, timeoutDefaulted: true }
-    : { timeoutMs };
+  return providerRequestTimeout({
+    timeoutMs: submitted ?? provider.timeoutMs,
+    timeoutNamed: submitted !== undefined || provider.timeoutConfigured === true,
+  });
 }
 
 function rawProviderFromCurrent(
@@ -1493,7 +1512,7 @@ function setupVoiceProviderFromCurrent(
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-      timeoutMs: provider.timeoutMs,
+      ...carriedRequestTimeout(provider),
       maxRetries: provider.maxRetries,
       retryBaseDelayMs: provider.retryBaseDelayMs,
       ...voiceProviderEndpointRaw({ capabilities: voiceCapabilities(capability), ...provider }),
@@ -1554,6 +1573,7 @@ function applyVoiceProviders(
         voiceProviderRaw(provider.modelId, provider.baseUrl, provider.apiKey, {
           apiKeyHeaderName: provider.apiKeyHeaderName,
           timeoutMs: provider.timeoutMs,
+          timeoutNamed: provider.timeoutNamed,
           maxRetries: provider.maxRetries,
           retryBaseDelayMs: provider.retryBaseDelayMs,
           endpointStyle: provider.endpointStyle,
@@ -3907,6 +3927,8 @@ interface SetupVoiceProvider {
   readonly followsSetupGateway?: boolean | undefined;
   readonly apiKeyHeaderName: string;
   readonly timeoutMs: number | undefined;
+  /** False for a timeout nobody named (carried from a stored default); absent when submitted. */
+  readonly timeoutNamed?: boolean | undefined;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   readonly endpointStyle?: ModelProviderConfig["endpointStyle"];
@@ -4480,6 +4502,7 @@ function validateVoiceProviderConnection(
           voiceProviderRaw(provider.modelId, provider.baseUrl, provider.apiKey, {
             apiKeyHeaderName: provider.apiKeyHeaderName,
             timeoutMs: provider.timeoutMs,
+            timeoutNamed: provider.timeoutNamed,
             maxRetries: provider.maxRetries,
             retryBaseDelayMs: provider.retryBaseDelayMs,
             endpointStyle: provider.endpointStyle,
@@ -5117,6 +5140,23 @@ function voiceProviderTemplate(
   );
 }
 
+// A submitted timeout is a person's; otherwise the carried one keeps who named it.
+function voiceRequestTimeout(
+  raw: Record<string, unknown>,
+  template: SetupVoiceProvider | undefined,
+  defaults: SetupVoiceProviderDefaults,
+): Pick<SetupVoiceProvider, "timeoutMs" | "timeoutNamed"> {
+  const carried = template ?? defaults;
+  return {
+    timeoutMs: submittedOrTemplateValue(
+      raw.voiceTimeoutMs,
+      template?.timeoutMs,
+      defaults.timeoutMs,
+    ),
+    timeoutNamed: raw.voiceTimeoutMs === undefined ? carried.timeoutNamed : undefined,
+  };
+}
+
 function voiceProviderConnection(
   raw: Record<string, unknown>,
   defaults: SetupVoiceProviderDefaults,
@@ -5138,11 +5178,7 @@ function voiceProviderConnection(
       template?.apiKeyHeaderName,
       defaults.apiKeyHeaderName,
     ),
-    timeoutMs: submittedOrTemplateValue(
-      raw.voiceTimeoutMs,
-      template?.timeoutMs,
-      defaults.timeoutMs,
-    ),
+    ...voiceRequestTimeout(raw, template, defaults),
     maxRetries: template?.maxRetries ?? defaults.maxRetries,
     retryBaseDelayMs: template?.retryBaseDelayMs ?? defaults.retryBaseDelayMs,
     ...voiceConnectionEndpointOptions(baseUrl, template, defaults, submittedEndpoint),
@@ -5625,6 +5661,7 @@ function setupVoiceProviderDefaults(
     ...sharedGatewayProvenance(sharedGateway),
     apiKeyHeaderName,
     timeoutMs: timeoutMs ?? existing?.timeoutMs,
+    timeoutNamed: timeoutMs === undefined ? existing?.timeoutConfigured === true : undefined,
     maxRetries: existing?.maxRetries ?? 1,
     retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
     ...inheritedVoiceEndpoint(connection.baseUrl, existing, gateway, sharedGateway),
@@ -6834,7 +6871,7 @@ function storedDedicatedProviderRaw(
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
     reasoningContinuation: provider.reasoningContinuation,
-    timeoutMs: provider.timeoutMs,
+    ...providerRequestTimeout(carriedRequestTimeout(provider)),
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
     // KEIKO-0167 (PR-review follow-up): the per-provider circuit-breaker override must

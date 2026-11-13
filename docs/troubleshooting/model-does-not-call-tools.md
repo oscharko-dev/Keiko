@@ -53,6 +53,11 @@ the root by the same gateway choke point and are not covered by the repository's
 1. In Settings > Models, run the readiness check of the model and read the tool-calling line and its
    evidence. A check of a slow model keeps running until it answers (a model that is slow to load can
    take several minutes); close the panel to cancel it.
+   The check lifts only a timeout nobody named: a value a person types in Setup is stored with
+   `timeoutNamed: true` and kept exactly, even at 30 000 ms. Setup's own 30 s default, and an
+   installation written before that marker whose stored timeout is 30 s or 120 s, read as defaults and
+   get the longer explicit-check wait; anyone who typed exactly one of those values by hand before the
+   marker gets the longer wait too, which harms nothing.
 2. Export the redacted support evidence and read the outcome without raw logs:
 
 ```bash
@@ -74,7 +79,7 @@ next, per outcome:
 
 - `called-unforced` (`settings.models.toolOutcome.called-unforced`): nothing to do.
 - `called-only-forced` (`...called-only-forced`): the model is admitted and tools stay available, with
-  the closed `toolCallingWarning: forced-only` in the report. In conversations it may not use tools:
+  its closed outcome in the report. In conversations it may not use tools:
   choose a model that calls tools on its own, or turn its thinking mode off, then check again.
 - `forced-refused` (`...forced-refused`): not a verdict that the model cannot call tools, and no durable
   "unsupported" record is written: the conversation stays admitted. Keiko cannot confirm tool calling

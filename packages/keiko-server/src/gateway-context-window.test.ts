@@ -796,6 +796,30 @@ describe("context meter reading of a model nobody used", () => {
     expect(withheld()).toHaveLength(1);
   });
 
+  it("logs no withheld probe for a window the provider already reported", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response("{}", { status: 200 })),
+    );
+    const { deps } = fixture(
+      {
+        ...assumedChatCapability(MODEL),
+        contextWindowAssumed: undefined,
+        contextWindowReported: true,
+      },
+      fetchImpl,
+    );
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-reported-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const sink = capture();
+    await meterRead(deps, project, chatId);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(sink.events.filter((event) => event.op === "gateway.context-window.probe")).toHaveLength(
+      0,
+    );
+  });
+
   it("probes once after the model completed one real call through the gateway", async () => {
     const probeFetch = vi.fn<typeof fetch>(() =>
       Promise.resolve(

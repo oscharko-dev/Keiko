@@ -1277,15 +1277,15 @@ existing readiness completion lines and told in plain words in the tool-calling 
 Settings > Models. A forced call the provider refuses (a thinking mode answers HTTP 400 to
 `tool_choice`) is never a verdict that the model cannot call tools, and writes no "unsupported"
 record, but it confirms nothing either: the conversation stays admitted and tool turns stay
-`unverified` until a check passes. `called-only-forced` is admitted and carries the closed
-`toolCallingWarning: forced-only`. Settings > Models words every closed outcome in one plain
+`unverified` until a check passes. `called-only-forced` is admitted. Settings > Models words every closed outcome in one plain
 sentence per language (`settings.models.toolOutcome.<outcome>`, informal German), saying what it was
 and what to do next, in place of the server's English evidence; a new outcome without a sentence
 fails a test. A check a
 person starts in Settings waits at least the interactive silence floor for a slow model when the stored
 configuration does not name a provider timeout (a timeout a person named, whatever its value, stays as
-configured; the 30 s default Setup applies is stored with `timeoutDefaulted: true` and is not a
-person's choice); it is bounded, cancelled when
+configured; a person's value is stored with `timeoutNamed: true`, and Setup's own 30 s default is
+stored bare, as are the 30 s and 120 s defaults of installations written before the marker, so those
+read as defaults); it is bounded, cancelled when
 the request closes, shown on the start line as `chatProbeTimeoutMs` and announced as still running; no
 conversation turn is affected. Every tool definition leaves the gateway as a plain object schema (no
 `oneOf`, `anyOf`, `allOf`, `enum`, `const` or `not` at the top level; the alternatives are named in the

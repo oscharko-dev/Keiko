@@ -1696,7 +1696,7 @@ const TOOL_CALLING_EVIDENCE: Readonly<Record<GatewayToolCallingOutcome, string>>
   "tools-refused":
     "The endpoint refused the request that offers a tool. Tool calling is not accepted by this endpoint or model.",
   inconclusive:
-    "Tool calling could not be verified: the gateway timed out, was rate-limited or answered with an error. Verify again later.",
+    "Tool calling could not be confirmed: the gateway timed out, was rate-limited or answered with an error, or the model did not complete the test steps. Verify again later.",
 };
 
 function observedToolCallingResult(
@@ -1707,12 +1707,9 @@ function observedToolCallingResult(
   const { status, outcome } = verdict;
   const evidence = TOOL_CALLING_EVIDENCE[outcome];
   if (status === "verified") {
-    // Admitted either way; a model that called a tool only when forced carries the closed note.
-    return {
-      ...result("tool_calling", "passed", start, evidence),
-      toolCallingOutcome: outcome,
-      ...(outcome === "called-only-forced" ? { toolCallingWarning: "forced-only" as const } : {}),
-    };
+    // Admitted either way: a model that called a tool only when forced is told its limit by the
+    // closed outcome, which Settings words for the person.
+    return { ...result("tool_calling", "passed", start, evidence), toolCallingOutcome: outcome };
   }
   if (status === "transient") {
     return {

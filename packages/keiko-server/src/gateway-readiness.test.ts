@@ -1322,7 +1322,7 @@ describe("gateway readiness route", () => {
   }
 
   // A model that calls a tool only when the call is forced is admitted, with a closed note.
-  it("admits a model that called a tool only when forced and carries the closed forced-only note", async () => {
+  it("admits a model that called a tool only when forced, with its closed outcome", async () => {
     const fetchImpl = vi.fn((_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
         tool_choice?: unknown;
@@ -1363,7 +1363,6 @@ describe("gateway readiness route", () => {
     expect(probe).toMatchObject({
       status: "passed",
       toolCallingOutcome: "called-only-forced",
-      toolCallingWarning: "forced-only",
     });
     expect(report.verifiedCapabilities.toolCalling).toBe(true);
     // A model that called its tool on its own carries no note.
@@ -1401,7 +1400,6 @@ describe("gateway readiness route", () => {
     if ("status" in plainReport) return;
     const plainProbe = plainReport.probes.find((entry) => entry.name === "tool_calling");
     expect(plainProbe).toMatchObject({ status: "passed", toolCallingOutcome: "called-unforced" });
-    expect(plainProbe).not.toHaveProperty("toolCallingWarning");
     deps.store.close();
   });
 

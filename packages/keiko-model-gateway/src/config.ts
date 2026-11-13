@@ -1913,15 +1913,19 @@ function parseProviderConfig(
   };
 }
 
-// A timeout a person named, as opposed to the default (the resolver's or Setup's, which says so with
-// `timeoutDefaulted`): the explicit check lifts only a default (#4351).
+// Who named the request timeout (#4351): the explicit check lifts only a default. A stored `timeoutNamed:
+// true` is a person's value, whatever it is. Without that marker, a value equal to a default Keiko
+// itself ever stored (Setup's 30 s, the resolver's 120 s) is a default, which is every installation
+// written before the marker existed; any other unmarked value was typed by a person.
+const LEGACY_DEFAULT_TIMEOUTS_MS: readonly unknown[] = [30_000, DEFAULT_TIMEOUT_MS];
+
 function timeoutNamedMarker(raw: {
   readonly timeoutMs?: unknown;
-  readonly timeoutDefaulted?: unknown;
+  readonly timeoutNamed?: unknown;
 }): Pick<ModelProviderConfig, "timeoutConfigured"> {
-  return raw.timeoutMs === undefined || raw.timeoutDefaulted === true
-    ? {}
-    : { timeoutConfigured: true };
+  if (raw.timeoutMs === undefined) return {};
+  if (raw.timeoutNamed === true) return { timeoutConfigured: true };
+  return LEGACY_DEFAULT_TIMEOUTS_MS.includes(raw.timeoutMs) ? {} : { timeoutConfigured: true };
 }
 
 function reasoningContinuationConfig(

@@ -1740,9 +1740,9 @@ describe("parseGatewayConfig", () => {
   // one. The parser reuses parseCircuitBreaker so per-provider validation stays consistent with
   // the top-level surface.
   describe("operator-named provider timeout (#4351)", () => {
-    it("marks a timeout the configuration names, whatever its value, and only then", () => {
+    it("marks a timeout the configuration names, and none the configuration omits", () => {
       const named = parseGatewayConfig(
-        rawWithProvider((provider) => ({ ...provider, timeoutMs: 120_000 })),
+        rawWithProvider((provider) => ({ ...provider, timeoutMs: 45_000 })),
       );
       expect(named.providers[0]?.timeoutConfigured).toBe(true);
       const { timeoutMs: _omitted, ...withoutTimeout } = validProvider();
@@ -1751,13 +1751,27 @@ describe("parseGatewayConfig", () => {
       expect(defaulted.providers[0]?.timeoutConfigured).toBeUndefined();
     });
 
-    it("does not count a timeout Setup defaulted as one a person named", () => {
-      const setupDefault = parseGatewayConfig(
-        rawWithProvider((provider) => ({ ...provider, timeoutMs: 30_000, timeoutDefaulted: true })),
-      );
-      expect(setupDefault.providers[0]?.timeoutMs).toBe(30_000);
-      expect(setupDefault.providers[0]?.timeoutConfigured).toBeUndefined();
-    });
+    // Installations written before the marker existed: a value equal to a default Keiko itself stored
+    // (Setup's 30 s, the resolver's 120 s) is a default; any other unmarked value was a person's.
+    it.each([
+      [30_000, undefined, undefined],
+      [120_000, undefined, undefined],
+      [45_000, undefined, true],
+      [30_000, true, true],
+      [120_000, true, true],
+    ] as const)(
+      "reads a stored timeout of %i with marker %s as named=%s",
+      (timeoutMs, timeoutNamed, expected) => {
+        const config = parseGatewayConfig(
+          rawWithProvider((provider) => ({
+            ...provider,
+            timeoutMs,
+            ...(timeoutNamed === undefined ? {} : { timeoutNamed }),
+          })),
+        );
+        expect(config.providers[0]?.timeoutConfigured).toBe(expected);
+      },
+    );
   });
 
   describe("per-provider circuitBreaker override (KEIKO-0167)", () => {

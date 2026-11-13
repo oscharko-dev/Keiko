@@ -5272,6 +5272,98 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // #4351: who named a request timeout survives every rewrite a Setup save makes, for every kind of
+  // provider. A legacy default (30 s, no marker) stays liftable; a timeout a person named stays theirs.
+  it("keeps who named each provider's timeout through a Setup save: chat, voice and embedding", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-timeout-owner-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-timeout-owner-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          // written before the marker existed: Setup's own 30 s default
+          {
+            modelId: "legacy-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+          },
+          // named after the marker: 30 s on purpose
+          {
+            modelId: "named-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            timeoutNamed: true,
+          },
+          {
+            modelId: "legacy-voice",
+            baseUrl: "https://audio.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            capability: {
+              kind: "voice",
+              supportsSpeechOutput: true,
+              voiceProviderLocality: "customer-hosted",
+            },
+          },
+          {
+            modelId: "named-voice",
+            baseUrl: "https://audio.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            timeoutNamed: true,
+            capability: {
+              kind: "voice",
+              supportsSpeechOutput: true,
+              voiceProviderLocality: "customer-hosted",
+            },
+          },
+          {
+            modelId: "legacy-embedding",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            capability: { kind: "embedding", contextWindow: 8_192, embeddingDimensions: 4 },
+          },
+          {
+            modelId: "named-embedding",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            timeoutNamed: true,
+            capability: { kind: "embedding", contextWindow: 8_192, embeddingDimensions: 4 },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+    const named = (modelId: string): boolean | undefined =>
+      requiredGatewayConfig(deps).providers.find((p) => p.modelId === modelId)?.timeoutConfigured;
+    // The loaded configuration: legacy defaults are liftable, named values are not.
+    expect(["legacy-chat", "legacy-voice", "legacy-embedding"].map(named)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(["named-chat", "named-voice", "named-embedding"].map(named)).toEqual([true, true, true]);
+    // A Setup save that names no timeout rewrites the stored providers and keeps who named each.
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceSupportsSemanticTurnDetection: false }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    for (const modelId of ["legacy-chat", "legacy-voice", "legacy-embedding"])
+      expect(named(modelId), modelId).toBeUndefined();
+    for (const modelId of ["named-chat", "named-voice", "named-embedding"])
+      expect(named(modelId), modelId).toBe(true);
+    deps.store.close();
+  });
+
   it("preserves heterogeneous voice providers and replaces only the targeted Realtime role", async () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,

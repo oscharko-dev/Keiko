@@ -333,7 +333,13 @@ export function noteWithheldContextWindowProbe(
   const config = currentGatewayConfig(deps);
   const state = probeState(deps);
   if (config === undefined || state === undefined || state.disposed) return;
-  const key = windowAssumed(config, modelId) ? probeKey(deps, config, modelId) : undefined;
+  // Only a window that is really still assumed stays "assumed" for want of the probe; a window the
+  // provider already reported is merely not re-checked, which changes nothing a person sees.
+  const capability = findConfiguredCapability(config, modelId);
+  const key =
+    capability?.kind === "chat" && capability.contextWindowAssumed === true
+      ? probeKey(deps, config, modelId)
+      : undefined;
   if (key === undefined || state.withheld.has(key)) return;
   state.withheld.add(key);
   const probe = { correlationId: newCorrelationId(), parentCorrelationId: correlationId };
