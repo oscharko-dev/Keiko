@@ -77,17 +77,27 @@ function run(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed`);
 }
 
+/** Poll until `check` holds; a check that throws means the server is still starting. */
 async function waitFor(check, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      if (await check()) return;
-    } catch {
-      // The server is still starting; retry until the deadline.
-    }
+  const attempt = async () => {
+    const ready = await Promise.resolve()
+      .then(check)
+      .catch(() => false);
+    if (ready) return;
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
     await sleep(500);
-  }
+    await attempt();
+  };
+  await attempt();
+}
+
+/** Sleep in bounded steps until `due`, so a long wait stays responsive to the clock. */
+async function waitUntil(due) {
+  const left = due - Date.now();
+  if (left <= 0) return;
+  await sleep(Math.min(left, 30_000));
+  await waitUntil(due);
 }
 
 function activityLines(stateDir, sinceIso) {
@@ -95,7 +105,7 @@ function activityLines(stateDir, sinceIso) {
   if (!existsSync(directory)) return [];
   return readdirSync(directory)
     .filter((name) => /^activity-.*\.jsonl$/u.test(name))
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .flatMap((name) => readFileSync(join(directory, name), "utf8").split("\n"))
     .filter((line) => line.length > 0)
     .map((line) => {
@@ -214,13 +224,19 @@ async function drive(report, baseUrl, secret) {
     await page.goto(`${baseUrl}/${await pairingFragment(secret)}`);
     await waitFor(async () => (await inspect()) === "active", 60_000, "the paired session");
     report.pairedAt = new Date(pairedAt).toISOString();
-    for (const minute of [...schedule].sort((a, b) => a - b)) {
-      const due = pairedAt + minute * MINUTE_MS;
-      while (Date.now() < due) await sleep(Math.min(due - Date.now(), 30_000));
-      const entry = await reloadEntry(page, inspect, minute, pairedAt);
-      report.reloads.push(entry);
-      process.stdout.write(`${JSON.stringify(entry)}\n`);
-    }
+    // The reloads are real-time steps of one run: each starts only after the previous one is done.
+    await [...schedule]
+      .sort((a, b) => a - b)
+      .reduce(
+        (previous, minute) =>
+          previous.then(async () => {
+            await waitUntil(pairedAt + minute * MINUTE_MS);
+            const entry = await reloadEntry(page, inspect, minute, pairedAt);
+            report.reloads.push(entry);
+            process.stdout.write(`${JSON.stringify(entry)}\n`);
+          }),
+        Promise.resolve(),
+      );
     const remaining = pairedAt + minutes * MINUTE_MS - Date.now();
     if (remaining > 0) await sleep(remaining);
     report.session = await inspect().catch(() => "unreachable");
