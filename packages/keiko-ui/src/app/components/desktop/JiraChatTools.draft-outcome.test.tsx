@@ -132,6 +132,50 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(document.body.textContent).not.toMatch(/REQOBA001A1|bug1/u);
   });
 
+  // Wiki text (an issue's description, a comment's body) is read; plain text (a sprint goal, a
+  // version's description) is shown exactly as stored. See `itemBody` in jira-tool-outcome.ts.
+  it.each([
+    [
+      "an issue description",
+      "jira_search",
+      { key: "KER-1", description: "h2. Ziel\n* *a*" },
+      "Ziel\n• a",
+    ],
+    ["a comment body", "jira_comments", { id: "10001", body: "h2. Ziel\n* *a*" }, "Ziel\n• a"],
+    ["a stored comment", "jira_get_comment", { id: "10001", body: "h2. Ziel\n* *a*" }, "Ziel\n• a"],
+    [
+      "a worklog comment",
+      "jira_worklogs",
+      { id: "10002", comment: "h2. Ziel\n* *a*" },
+      "Ziel\n• a",
+    ],
+    ["a sprint goal", "jira_sprints", { id: 5, name: "S1", goal: "h2. Ziel *a*" }, "h2. Ziel *a*"],
+    [
+      "a version description",
+      "jira_versions",
+      { versionName: "1.0", description: "h2. Ziel *a*" },
+      "h2. Ziel *a*",
+    ],
+  ])("shows %s as it is stored or read", (_name, tool, row, expected) => {
+    const view = jiraToolOutcomeView(draft(tool, { outcome: "succeeded", items: [row] }));
+    expect(view.items[0]?.body).toBe(expected);
+  });
+
+  it("marks a result item the call never listed instead of borrowing a place", async () => {
+    await show(
+      draft(
+        "jira_draft",
+        {
+          outcome: "partial",
+          items: [{ ref: "ghost", state: "failed", validation: "required-field" }],
+        },
+        { items: [{ ref: "a", fields: { summary: "A" } }] },
+      ),
+    );
+    expect(screen.getByText(/Item not in your request/u)).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/Item 1/u);
+  });
+
   it("tells refused items with the same summary apart by their place in the call", async () => {
     await show(
       draft(

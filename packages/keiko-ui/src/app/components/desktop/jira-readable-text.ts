@@ -15,13 +15,13 @@ const HEADING = /^h[1-6]\.[ \t]+/u;
 const RULE = /^-{4,}[ \t]*$/u;
 const BULLET = /^(\*+)[ \t]+(?=\S)/u;
 const TABLE_ROW = /^[ \t]*\|.*\|[ \t]*$/u;
-const CODE_FENCE = /^[ \t]*\{(code|noformat)(?::[^}]*)?\}[ \t]*$/u;
+const CODE_FENCE = /^[ \t]*\{(code|noformat)(?::([^}]*))?\}[ \t]*$/u;
 const PANEL_FENCE = /^[ \t]*\{panel(?::([^}]*))?\}[ \t]*$/u;
 const QUOTE_FENCE = /^[ \t]*\{quote\}[ \t]*$/u;
 const COLOR_OPEN = /^\{color(?::[^}\n]*)?\}/u;
 const LINK_TARGET = /^(?:https?:\/\/|mailto:)\S+$/iu;
 const WORD = /[\p{L}\p{N}_]/u;
-const ESCAPABLE = "{}[]~!|*_+-^?#\\";
+const ESCAPABLE = "{}[]~!|*_+-^?#";
 const EMPTY_CELL = "–";
 const NESTING_MAX = 3;
 
@@ -249,7 +249,7 @@ function fenceLine(block: Block, line: string): string | undefined | null {
   const panel = PANEL_FENCE.exec(line);
   if (code === null && panel === null) return QUOTE_FENCE.test(line) ? null : undefined;
   block.fence = code?.[1];
-  return panel === null ? null : panelLine(panel[1]);
+  return panelLine(panel === null ? code?.[2] : panel[1]);
 }
 
 function readableLine(block: Block, line: string): string | undefined {
@@ -265,7 +265,8 @@ function readableLine(block: Block, line: string): string | undefined {
 export function jiraReadableText(text: string): string {
   const block: Block = { fence: undefined };
   const lines: string[] = [];
-  for (const line of text.split("\n")) {
+  // A line ending is not content: CRLF and a lone CR read as LF, so no `\r` hides a fence or a row.
+  for (const line of text.split(/\r\n|\r|\n/u)) {
     const readable = readableLine(block, line);
     if (readable !== undefined) lines.push(readable);
   }

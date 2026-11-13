@@ -2543,6 +2543,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.issues": "Jira-Vorgänge",
   "chat.jira.outcome.problems": "Was Jira gemeldet hat",
   "chat.jira.outcome.itemOrdinal": "Eintrag {position}",
+  "chat.jira.outcome.itemUnlisted": "Eintrag, der nicht in Ihrer Anfrage stand",
   "chat.jira.outcome.more": "und {count} weitere",
   "chat.jira.outcome.newTab": "(öffnet Jira in einem neuen Tab)",
   "chat.jira.outcome.validation.required-field": "Ein Pflichtfeld in Jira fehlte.",

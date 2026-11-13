@@ -963,6 +963,21 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
     expect(await axe(review.container)).toHaveNoViolations();
   });
 
+  it("reads only the issue's own description, never a description inside another object (#4355)", async () => {
+    const review = await reviewed("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10002",
+      fields: {
+        summary: "Synthetic story",
+        components: [{ id: "10", name: "Core", description: "*keep* [a|https://x.example/y]" }],
+        description: "* real *wichtig*",
+      },
+    });
+    expect(review.text).toContain("• real wichtig");
+    expect(review.text).toContain("*keep* [a|https://x.example/y]");
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+
   it("shows an edit's fields, label changes and links", async () => {
     const review = await reviewed("jira.edit", {
       issueKey: "SYN-1",

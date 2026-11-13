@@ -405,6 +405,7 @@ describe("AC9 current Chat result cards", () => {
     ["wiki bullet line", { body: "Scope\n* first point" }],
     ["wiki bold", { body: "an *important* point" }],
     ["wiki labelled link", { body: "see [the guide|https://docs.example.test/g]" }],
+    ["wiki bare web link", { body: "see [https://docs.example.test/g]" }],
     ["wiki monospace", { body: "set {{config.json}} first" }],
     ["English fallback", { body: "A readable view of this result is unavailable." }],
     ["German fallback", { body: "Für dieses Ergebnis ist keine lesbare Ansicht verfügbar." }],
@@ -421,7 +422,9 @@ describe("AC9 current Chat result cards", () => {
   it("accepts ordinary prose that only resembles markup", async () => {
     const f = fixture();
     f.state.cards = [
-      card("LIM7-1", { body: "Retention is 2 * 3 days, [optional] items, (a|b) and a_b_c names." }),
+      card("LIM7-1", {
+        body: "Retention is 2 * 3 days, [optional] items, (a|b), a_b_c, [ok|fail], [~jdoe], -old- and {{open *unclosed.",
+      }),
     ];
     expect((await assertCardsReadable(f.ctx, { reload: true })).status).toBe("green");
   });

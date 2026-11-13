@@ -16,20 +16,23 @@ const UNAVAILABLE = [
   /Für dieses Ergebnis ist keine lesbare Ansicht verfügbar\./gu,
 ];
 
-// Jira wiki markup a person must never read raw. It detects: a heading line, the code, noformat,
-// panel, quote and colour macros, a table row (`||` header or `|a|b|` body), a bullet line (`* x`),
-// `*bold*`, a labelled link `[a|b]` and `{{monospace}}`. Each pattern is written so ordinary prose
-// does not match (`2 * 3`, `[optional]`, `(a|b)`). It CANNOT detect markup that is also ordinary
-// text: numbered lines (`# x`), `-struck-` and `+inserted+` text, `!image!`, `[~mention]`,
-// `{anchor}`/`{toc}`, backslash escapes, `_italic_` (snake_case), and anything nested or malformed;
-// nor an internal item reference (`bug1`), which has no recognisable shape: the UI tests pin those.
+// Jira wiki markup a person must never read raw. It flags only what the card helper
+// (`jira-readable-text.ts`) would have converted, so text the helper keeps on purpose passes: a
+// heading line, the code, noformat, panel, quote and colour macros, a table row (`||` header or
+// `|a|b|` body), a bullet line (`* x`), a `*bold*` pair at a markup position, a link whose target is
+// a web or mail address (`[a|https://x]`, `[https://x]`) and a `{{monospace}}` pair. It passes
+// `[ok|fail]`, `2 * 3`, `[optional]`, `(a|b)`, `-struck-`, `[~mention]`, unclosed markers and the
+// like. It CANNOT detect markup that is also ordinary text: numbered lines (`# x`), `+inserted+`,
+// `!image!`, `{anchor}`/`{toc}`, `_italic_` (snake_case), backslash escapes, anything nested or
+// malformed, nor an internal item reference (`bug1`), which has no recognisable shape: the UI tests
+// pin those. Text inside a code fence is kept verbatim by the helper and may trip a pattern here.
 const WIKI_MARKUP = [
   /^h[1-6]\.\s/mu,
   /\{(?:code|noformat|panel|quote|color)(?::[^}\n]*)?\}/u,
   /^\s*\|\|?.+\|\s*$/mu,
   /^\*+[ \t]+\S/mu,
   /(?<![\p{L}\p{N}_*])\*[^\s*][^*\n]*[^\s*]\*(?![\p{L}\p{N}_*])/u,
-  /\[[^\]|\n]+\|[^\]\n]+\]/u,
+  /\[(?:[^\]|\n]+\|)?(?:https?:\/\/|mailto:)[^\]\s]+\]/iu,
   /\{\{[^}\n]+\}\}/u,
 ];
 

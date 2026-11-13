@@ -286,15 +286,12 @@ function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): React
 /** The reviewed summary, else the item's place in the draft: never the model's own reference. */
 function JiraItemName({ item }: { readonly item: JiraOutcomeItemName }): ReactNode {
   const t = useTranslate();
-  return (
-    <strong>
-      {item.summary === undefined
-        ? t("chat.jira.outcome.itemOrdinal", { position: item.position })
-        : item.ambiguous === true
-          ? `${item.summary} (${String(item.position)})`
-          : item.summary}{" "}
-    </strong>
-  );
+  let name: string;
+  if (item.unlisted === true) name = t("chat.jira.outcome.itemUnlisted");
+  else if (item.summary === undefined)
+    name = t("chat.jira.outcome.itemOrdinal", { position: item.position });
+  else name = item.ambiguous === true ? `${item.summary} (${String(item.position)})` : item.summary;
+  return <strong>{name} </strong>;
 }
 function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
@@ -320,8 +317,8 @@ function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): R
         </ul>
       )}
       {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
-      {view.itemValidations.map((item) => (
-        <p key={item.item.position}>
+      {view.itemValidations.map((item, index) => (
+        <p key={`${String(item.item.position)}:${String(index)}`}>
           <JiraItemName item={item.item} />
           {t(VALIDATION_MESSAGES[item.validation])}
         </p>

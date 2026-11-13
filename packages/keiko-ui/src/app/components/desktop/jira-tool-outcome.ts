@@ -186,6 +186,8 @@ export interface JiraOutcomeItemName {
   /** 1-based place in the draft as the call listed it (the result's order when the call lists none). */
   readonly position: number;
   readonly summary?: string;
+  /** The result names an item the call never listed, so no place of the call applies. */
+  readonly unlisted?: true;
   /** Another item of the draft carries the same summary or reference, so the place is shown too. */
   readonly ambiguous?: true;
 }
@@ -549,18 +551,31 @@ function presentable(entries: readonly unknown[], source: UnknownRecord): boolea
     (text(source.ref) !== undefined && itemLabels(source).length > 0)
   );
 }
-/** The body of a row and how it is shown: a description or a comment is wiki text, other text is not. */
+/**
+ * The one place that decides which stored text is Jira wiki text and which is plain text (#4355).
+ * Wiki text is what Jira renders as wiki markup, so it is shown through `jiraReadableText`: an
+ * issue's description (a row with an issue key), a comment's body and a worklog's comment. Plain
+ * text is shown exactly as stored, because Jira shows it as typed: a sprint goal and an epic's
+ * summary (`agile`), and the descriptions of a project, version, component or catalog tool, which
+ * never reach this function (`metadataOutcomeItem` and `catalogOutcomeItem` build their own rows).
+ */
 function itemBody(
   tool: string,
   source: UnknownRecord,
-  others: readonly unknown[],
+  collaboration: unknown,
+  agile: unknown,
 ): { readonly body: string | undefined; readonly shown: string | undefined } {
-  const nativeBody = tool === "jira_comments" ? source.body : source.description;
-  const body = firstText([...others, nativeBody]);
-  return {
-    body,
-    shown: body !== undefined && body === text(nativeBody) ? jiraReadableText(body) : body,
-  };
+  const issueRow = ISSUE_KEY.test(text(source.key) ?? text(source.issueKey) ?? "");
+  const nativeBody = text(tool === "jira_comments" ? source.body : source.description);
+  const hit = (
+    [
+      [text(collaboration), true],
+      [text(agile), false],
+      [nativeBody, tool === "jira_comments" || issueRow],
+    ] as const
+  ).find(([value]) => value !== undefined);
+  const body = hit?.[0];
+  return { body, shown: body !== undefined && hit?.[1] === true ? jiraReadableText(body) : body };
 }
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
@@ -591,7 +606,7 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
     author.displayName,
     author.name,
   ]);
-  const { body, shown: readableBody } = itemBody(tool, source, [collaboration.body, agile.body]);
+  const { body, shown: readableBody } = itemBody(tool, source, collaboration.body, agile.body);
   const facts = [...agile.facts, ...collaboration.facts, ...participation.facts];
   if (!presentable([key, name, body, ...facts], source)) return undefined;
   const status = firstText([source.status, source.to].map((value) => record(value)?.name));
@@ -923,10 +938,12 @@ function itemName(
   const ref = text(record(entry)?.ref);
   if (ref === undefined) return undefined;
   const known = reviewed.get(ref);
+  if (known === undefined)
+    return { position: index + 1, ...(reviewed.size > 0 ? { unlisted: true as const } : {}) };
   return {
-    position: known?.position ?? index + 1,
-    ...(known?.summary === undefined ? {} : { summary: known.summary }),
-    ...(known?.ambiguous === true ? { ambiguous: true as const } : {}),
+    position: known.position,
+    ...(known.summary === undefined ? {} : { summary: known.summary }),
+    ...(known.ambiguous ? { ambiguous: true as const } : {}),
   };
 }
 /** Jira's words for each refused draft item, tied to the item as the person knows it. */

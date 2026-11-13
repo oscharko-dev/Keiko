@@ -141,7 +141,7 @@ function denyingCapsule(): KnowledgeCapsule {
 // it is shown, so it reads the real prompt the gateway judge sends.
 function strictPort(shown: string[] = []): ModelPort {
   return {
-    call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+    call: (request: GatewayRequest, signal: AbortSignal): Promise<NormalizedResponse> => {
       const prompt = request.messages.map((message) => message.content).join("\n");
       const claim = /<ge-claim>\n([\s\S]*?)\n<\/ge-claim>/u.exec(prompt)?.[1] ?? "";
       const excerpt = /<ge-excerpt>\n([\s\S]*?)\n<\/ge-excerpt>/u.exec(prompt)?.[1] ?? "";
@@ -150,7 +150,7 @@ function strictPort(shown: string[] = []): ModelPort {
       const supported = words.every((word) => excerpt.toLowerCase().includes(word));
       return portReturning(
         JSON.stringify({ verdict: supported ? "supported" : "unsupported" }),
-      ).call(request);
+      ).call(request, signal);
     },
   };
 }

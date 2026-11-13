@@ -1189,6 +1189,7 @@ describe("weakly supported citations", () => {
       const turn: NonNullable<UiHandlerDeps["chatToolTurn"]> = {
         onTranscript: (): void => undefined,
         hasUsableObservation: (): boolean => true,
+        reportEvidence: [],
         reportsToolAction: false,
         readOnlySynthesisRequest: (request): Parameters<ModelPort["call"]>[0] => request,
         meter: (model): ModelPort => model,

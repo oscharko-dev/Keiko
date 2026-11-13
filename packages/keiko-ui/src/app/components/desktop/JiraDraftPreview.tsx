@@ -60,15 +60,26 @@ function CollapsibleText({
   );
 }
 
-/** Only these fields hold wiki text; a summary or a label is shown exactly as it is stored. */
+/**
+ * Only the issue's own description and a comment's body hold wiki text, matched by where they sit
+ * and not by a member name at any depth: a summary, a label or a `description` inside another
+ * object (a component, a link) is shown exactly as it is stored.
+ */
 const WIKI_TEXT_FIELDS: ReadonlySet<string> = new Set(["description", "comment", "body"]);
+/** A description value is `{ format, text }`: only its `text` member is wiki text. */
+const WIKI_TEXT_MEMBER: ReadonlySet<string> = new Set(["text"]);
+const NO_WIKI_FIELDS: ReadonlySet<string> = new Set();
 
 function DraftValue({
   value,
   readable = false,
+  wikiMembers = NO_WIKI_FIELDS,
 }: {
   readonly value: JiraDraftValue;
+  /** This value is wiki text itself. */
   readonly readable?: boolean;
+  /** Which members of this value, when it is a group, are wiki text. */
+  readonly wikiMembers?: ReadonlySet<string>;
 }): ReactNode {
   const t = useTranslate();
   switch (value.kind) {
@@ -82,7 +93,7 @@ function DraftValue({
       return (
         <DraftFields
           fields={value.members.map((member) => ({ id: member.name, value: member.value }))}
-          readable={readable}
+          wikiIds={readable ? WIKI_TEXT_MEMBER : wikiMembers}
         />
       );
     case "list":
@@ -90,7 +101,7 @@ function DraftValue({
         <ul className={styles.cmpDraftList}>
           {value.items.map((entry) => (
             <li key={entry.position}>
-              <DraftValue value={entry.value} readable={readable} />
+              <DraftValue value={entry.value} />
             </li>
           ))}
         </ul>
@@ -101,10 +112,11 @@ function DraftValue({
 /** Named values as a definition list: a field id (or argument name) and what it is set to. */
 export function DraftFields({
   fields,
-  readable = false,
+  wikiIds = WIKI_TEXT_FIELDS,
 }: {
   readonly fields: readonly JiraDraftField[];
-  readonly readable?: boolean;
+  /** The ids of the fields whose text is wiki text; the top-level default names the issue's own. */
+  readonly wikiIds?: ReadonlySet<string>;
 }): ReactNode {
   const t = useTranslate();
   const reported = useRef(false);
@@ -125,7 +137,11 @@ export function DraftFields({
         <div key={field.id}>
           <dt>{field.label ?? field.id}</dt>
           <dd>
-            <DraftValue value={field.value} readable={readable || WIKI_TEXT_FIELDS.has(field.id)} />
+            <DraftValue
+              value={field.value}
+              readable={wikiIds.has(field.id)}
+              wikiMembers={field.id === "fields" ? WIKI_TEXT_FIELDS : NO_WIKI_FIELDS}
+            />
           </dd>
         </div>
       ))}
