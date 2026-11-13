@@ -662,7 +662,12 @@ it("accepts the step set only as an explicit trailing option", () => {
   expect(limitRunArguments(args).steps).toBe("all");
   expect(limitRunArguments([...args, "--steps", "without-sprint"]).steps).toBe("without-sprint");
   expect(limitRunArguments([...args, "--steps", "all"]).steps).toBe("all");
-  for (const extra of [["--steps"], ["--steps", "sprint"], ["without-sprint"], ["--steps", "all", "x"]])
+  for (const extra of [
+    ["--steps"],
+    ["--steps", "sprint"],
+    ["without-sprint"],
+    ["--steps", "all", "x"],
+  ])
     expect(() => limitRunArguments([...args, ...extra])).toThrow();
 });
 

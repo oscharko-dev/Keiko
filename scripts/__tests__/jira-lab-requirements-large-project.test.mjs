@@ -128,6 +128,10 @@ describe("the large project plan", () => {
       "estimate-totals",
       "large-project-report",
       "unavailable-metrics-labelled",
+      // Strengthened by #4369: the product's estimate rule adds three graded statements (#4356).
+      "estimate-source-labelled",
+      "configured-unused-stated",
+      "other-estimate-field-named",
     ]);
   });
 });

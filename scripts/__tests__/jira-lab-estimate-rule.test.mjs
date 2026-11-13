@@ -79,9 +79,16 @@ describe("deriveEstimate", () => {
     expect(derive(rows([0, null])).case).toBe("configured");
   });
 
-  it("has no second field when Story Points is ambiguous or absent", () => {
+  it("has no second field when Story Points is ambiguous or absent: the configured time field still decides", () => {
+    const issues = rows([null, 7200]);
     expect(
-      deriveEstimate({ issues: rows([null, 7200]), configured: TIME_FIELD, storyPoints: undefined })
+      deriveEstimate({ issues, configured: TIME_FIELD, storyPoints: undefined }),
+    ).toMatchObject({
+      case: "configured",
+      other: undefined,
+    });
+    expect(
+      deriveEstimate({ issues: rows([null, null]), configured: TIME_FIELD, storyPoints: undefined })
         .case,
     ).toBe("neither");
   });
