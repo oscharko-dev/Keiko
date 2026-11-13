@@ -440,10 +440,12 @@ export async function fetchHealth(correlationId?: string): Promise<HealthSnapsho
   let snapshot: HealthSnapshot = isServerInstanceId(instanceId)
     ? { ...health, instanceId }
     : health;
-  if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...health, diagnostics };
+  // Both diagnostics branches build on `snapshot`, not `health`: rebuilding from `health` would drop
+  // the instance identity from every real response, which always carries diagnostics (#4370).
+  if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...snapshot, diagnostics };
   else if (diagnostics !== undefined)
     snapshot = {
-      ...health,
+      ...snapshot,
       diagnosticsInvalid: true,
       diagnosticsInvalidReason: classifyInvalidActivityLogReadiness(diagnostics),
     };
