@@ -82,4 +82,16 @@ describe("the Epic member read is complete or it is not a success (#4356)", () =
       expect(result.kind).not.toBe("resolved");
     }
   });
+
+  it.each([["not a key"], [""], ['REP-1" OR 1=1']])(
+    "does not resolve when a member hit has no valid key (%j), so no member silently drops out",
+    async (bad) => {
+      const result = await resolve(
+        memberHttp((page, call) =>
+          call === 2 ? { ...page, keys: [bad, ...page.keys.slice(1)] } : page,
+        ),
+      );
+      expect(result).toEqual({ kind: "failed", reason: "malformed-payload" });
+    },
+  );
 });

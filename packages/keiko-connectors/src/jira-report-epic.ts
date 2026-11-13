@@ -73,19 +73,34 @@ interface Collected {
 }
 /** The member read ended because the list moved or was cut, not because it was complete. */
 type MemberEnd = JiraReportFailure | "moved" | undefined;
-/** Returns true when a key repeated: a list that shifts between pages shows a key twice. */
-function observe(hits: readonly unknown[], epicKey: string, into: Collected): boolean {
+/**
+ * `repeated`: a key showed twice, as a list that shifts between pages does; `invalid`: a hit
+ * without a valid key, whose sub-tasks could not be selected; it is never skipped.
+ */
+function enumerate(
+  key: string,
+  record: Record<string, unknown> | undefined,
+  epicKey: string,
+  into: Collected,
+): void {
+  into.seen.add(key);
+  if (key === epicKey) into.epicSeen = true;
+  else if (asRecord(asRecord(record?.fields)?.issuetype)?.subtask !== true) into.parents.add(key);
+}
+function observe(
+  hits: readonly unknown[],
+  epicKey: string,
+  into: Collected,
+): "ok" | "repeated" | "invalid" {
   let repeated = false;
   for (const hit of hits) {
     const record = asRecord(hit);
     const key = record?.key;
-    if (!isSafeAtlassianIdentifier(key)) continue;
-    if (into.seen.has(key)) repeated = true;
-    into.seen.add(key);
-    if (key === epicKey) into.epicSeen = true;
-    else if (asRecord(asRecord(record?.fields)?.issuetype)?.subtask !== true) into.parents.add(key);
+    if (!isSafeAtlassianIdentifier(key)) return "invalid";
+    repeated ||= into.seen.has(key);
+    enumerate(key, record, epicKey, into);
   }
-  return repeated;
+  return repeated ? "repeated" : "ok";
 }
 interface MemberPage {
   readonly hits: readonly unknown[];
@@ -120,7 +135,9 @@ async function readMembers(
   if (page.total > JIRA_REPORT_EPIC_MEMBERS_MAX) return "bounds-exceeded";
   if (into.total !== undefined && into.total !== page.total) return "moved";
   into.total = page.total;
-  if (observe(page.hits, epicKey, into)) return "moved";
+  const seen = observe(page.hits, epicKey, into);
+  if (seen === "invalid") return "malformed-payload";
+  if (seen === "repeated") return "moved";
   into.enumerated += page.hits.length;
   if (startAt + page.hits.length >= page.total) return undefined;
   // An empty page before the stated total is a cut list, never a complete one.
