@@ -550,7 +550,7 @@ export const DE_MESSAGES = {
   "chat.error.jiraAuthentication.message":
     "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
   "chat.error.jiraAuthentication.remediation":
-    "Öffne den Knowledge Pods Hub, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+    "Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
   "chat.error.knowledgePodUnavailable.title": "Knowledge Pod nicht verfügbar",
   "chat.error.knowledgePodUnavailable.message":
     "Der gewählte Knowledge Pod existiert nicht mehr oder wird gerade gelöscht. Wähle einen anderen Knowledge Pod.",
@@ -565,17 +565,17 @@ export const DE_MESSAGES = {
   "chat.error.jiraPodUnavailable.message":
     "Der an diesen Chat gebundene Jira Pod ist nicht mehr verfügbar. Wähle erneut einen Jira Pod.",
   "chat.error.jiraPodUnavailable.remediation":
-    "Öffne das Menü Datenquellen über der Unterhaltung, wähle einen Jira Pod und sende deine Nachricht erneut.",
+    "Öffne das Menü Konnektoren über der Unterhaltung, schalte einen Jira Pod ein und sende deine Nachricht erneut.",
   "chat.error.jiraPodVerification.title": "Jira Pod muss geprüft werden",
   "chat.error.jiraPodVerification.message":
-    "Der Jira Pod muss erneut geprüft werden, bevor dieser Chat ihn nutzen kann. Prüfe ihn im Knowledge Pods Hub.",
+    "Der Jira Pod muss erneut geprüft werden, bevor dieser Chat ihn nutzen kann. Prüfe ihn im Fenster Lokales Wissen.",
   "chat.error.jiraPodVerification.remediation":
-    "Öffne den Knowledge Pods Hub, prüfe die Jira-Verbindung und sende deine Nachricht dann erneut.",
+    "Öffne das Fenster Lokales Wissen, prüfe die Jira-Verbindung und sende deine Nachricht dann erneut.",
   "chat.error.jiraPodConnectionChanged.title": "Jira-Verbindung geändert",
   "chat.error.jiraPodConnectionChanged.message":
     "Die Jira-Verbindung hat sich geändert, nachdem dieser Chat seinen Jira Pod gewählt hat. Wähle den Jira Pod erneut.",
   "chat.error.jiraPodConnectionChanged.remediation":
-    "Öffne das Menü Datenquellen über der Unterhaltung, wähle den Jira Pod erneut und sende deine Nachricht dann erneut.",
+    "Öffne das Menü Konnektoren über der Unterhaltung, schalte den Jira Pod erneut ein und sende deine Nachricht dann erneut.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",
