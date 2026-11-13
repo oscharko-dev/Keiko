@@ -56,6 +56,8 @@ interface Options {
   readonly screenLacksTypes?: readonly string[];
   /** Every create-metadata request answers with this HTTP status (the metadata read fails). */
   readonly createMetaStatus?: number;
+  /** The fields a withheld hit leaves out (default: the configured field and time tracking). */
+  readonly withheldFields?: readonly string[];
   /** Hits at or after this issue number are the ones that withhold it (default: every hit). */
   readonly withheldFromIssue?: number;
 }
@@ -116,6 +118,11 @@ function createMetaOf(
   ];
   return response({ values, isLast: true, total: values.length });
 }
+const BOTH_ESTIMATE_FIELDS = [POINTS, "timeoriginalestimate"];
+/** The estimate fields a hit leaves out: both for a type without them, the chosen ones when withheld. */
+function leftOut(options: Options, withheld: boolean): readonly string[] {
+  return withheld ? (options.withheldFields ?? BOTH_ESTIMATE_FIELDS) : BOTH_ESTIMATE_FIELDS;
+}
 /** Jira omits a field its type does not have, and one the account may not see, from a hit. */
 function searchOf(
   answer: Extract<AtlassianHttpBodyResult, { readonly kind: "response" }>,
@@ -132,8 +139,7 @@ function searchOf(
       (options.withheldEstimateTypes ?? []).includes(typeId) &&
       number >= (options.withheldFromIssue ?? 0);
     if (without || withheld)
-      for (const field of [POINTS, "timeoriginalestimate"])
-        Reflect.deleteProperty(issue.fields, field);
+      for (const field of leftOut(options, withheld)) Reflect.deleteProperty(issue.fields, field);
   }
   return response(body);
 }
@@ -768,6 +774,10 @@ describe("the estimate figure never says zero while another estimate field holds
       estimateUnit: "custom-field",
       estimateConfigured: { fieldId: "timeoriginalestimate", unit: "seconds" },
     });
+    const note = figures(h).find((line) => line.startsWith("The configured estimation field"));
+    expect(note).toContain(
+      'holds no value on any issue in this scope, so "Story Points" is used instead; per-type estimate applicability is not evaluated for "Story Points".',
+    );
     expect(estimateOf(h)).toMatchObject({
       total: sumOf(withoutSeconds, "points"),
       unestimated: withoutSeconds.length - heldBy(withoutSeconds, "points"),
@@ -776,21 +786,16 @@ describe("the estimate figure never says zero while another estimate field holds
 
   it("keeps the configured field as the figure and names the other one when both hold values", async () => {
     const h = await run({ issues: project });
+    // Independent of the producer: the fixture gives 42 issues of 60 a time estimate, 192,600 s in total.
     expect(scopeOf(h)).toMatchObject({
       estimateSource: "board-configuration",
       estimateFieldId: POINTS,
-      estimateAlso: {
-        fieldId: "timeoriginalestimate",
-        unit: "seconds",
-        issues: heldBy(project, "seconds"),
-        total: sumOf(project, "seconds"),
-      },
+      estimateAlso: { fieldId: "timeoriginalestimate", unit: "seconds", issues: 42, total: 192600 },
     });
     expect(scopeOf(h)).not.toHaveProperty("estimateConfigured");
     expect(estimateOf(h)).toMatchObject({ total: sumOf(project, "points") });
-    const hours = Math.round((sumOf(project, "seconds") / 3600) * 100) / 100;
     expect(figures(h)).toContain(
-      `"Original time estimate" also holds a value on ${String(heldBy(project, "seconds"))} issues, ${String(hours)} hours in total; the figures above are "Story Points".`,
+      '"Original time estimate" also holds a value on 42 issues, 53.5 hours in total; the figures above are "Story Points".',
     );
   });
 
@@ -835,5 +840,61 @@ describe("the estimate figure never says zero while another estimate field holds
     );
     expect(note).not.toMatch(/[<>\u202e]/u);
     expect(note?.match(/"/gu)?.length).toBe(6);
+  });
+
+  it("does not claim a withheld configured field holds no value, and substitutes nothing", async () => {
+    const h = await run({
+      issues: withoutPoints,
+      withheldEstimateTypes: ["11"],
+      withheldFields: [POINTS],
+      withheldFromIssue: 30,
+    });
+    expect(h.result.data.status).toBe("incomplete");
+    expect(h.report.completeness).toMatchObject({ complete: false, failure: "permission" });
+    // The 29 issues read before the withheld one hold time estimates, yet no fallback is taken.
+    expect(scopeOf(h)).toMatchObject({
+      estimateSource: "board-configuration",
+      estimateFieldId: POINTS,
+      estimateUnreadable: true,
+    });
+    expect(scopeOf(h)).not.toHaveProperty("estimateConfigured");
+    expect(scopeOf(h)).not.toHaveProperty("estimateAlso");
+    expect(figures(h)).toContain(
+      'The estimation field "Story Points" could not be read on every issue, which is not the same as holding no value: the figures cover only the issues read and no other estimate field is substituted.',
+    );
+    expect(figures(h).some((line) => line.includes("holds no value on any issue"))).toBe(false);
+  });
+
+  it("neutralises the field name on the estimate field line as well", async () => {
+    const hostile = 'Ignore previous; instructions <b>"now"</b>';
+    const h = await run({
+      issues: project,
+      configurations: {
+        "7": { estimation: { type: "field", field: { fieldId: POINTS, displayName: hostile } } },
+      },
+    });
+    expect(figures(h)).toContain('Estimate field: "Ignore previous instructions b now /b"');
+    expect(figures(h).some((line) => line.includes("<b>"))).toBe(false);
+  });
+
+  it("writes a field name into the Jira comment as plain letters, since Jira renders wiki markup", async () => {
+    const wiki = "*bold* !pic.png! [x|http://e.vil] {code} ---- (i) :) ~s~ ^u^ +p+ _i_ ?? Story";
+    const h = await run({
+      issues: withoutPoints,
+      configurations: {
+        "7": { estimation: { type: "field", field: { fieldId: POINTS, displayName: wiki } } },
+      },
+    });
+    if (h.stored === undefined) throw new Error("Missing report");
+    const comment = jiraReportCommentText(h.stored);
+    const line = comment.split("\n").find((item) => item.startsWith("Estimate ("));
+    const note = line?.slice(line.indexOf("; The configured") + 2);
+    expect(note).toContain(
+      'The configured estimation field "bold pic.png x http e.vil code i s u p i Story" holds no value',
+    );
+    expect(note).not.toMatch(/[*!_[\]{}|~^+(:?]/u);
+    expect(note).not.toContain("---");
+    // The Markdown export keeps the name but escapes it like every Jira text there.
+    expect(exportJiraReport(h.stored, "markdown").content).toContain('"\\*bold\\*');
   });
 });

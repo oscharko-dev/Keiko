@@ -49,6 +49,8 @@ export interface JiraReportSession {
   scope: JiraReportScope;
   /** The other estimate field the search reads beside the configured one (#4356). */
   alternateEstimate: JiraReportAlternateEstimate | undefined;
+  /** Jira withheld the configured estimate field on an issue: unreadable, never an empty value. */
+  estimateWithheld: boolean;
   /** The query being read: the first window, or the current one of an Epic scope. */
   jql: string;
   /**
@@ -185,6 +187,7 @@ export function createJiraReportSession(input: {
     request,
     scope: initialScope(request, input.now),
     alternateEstimate: undefined,
+    estimateWithheld: false,
     jql: reportJql(request.projectKey, request.jql),
     windows: [],
     windowIndex: 0,

@@ -42,7 +42,7 @@ const DESCRIPTION =
   "Deterministic Jira report; use it, not jira.search or jira.issue, for any question about a whole project or many issues: " +
   "progress, estimates, template compliance, requirement coverage, epics without members, issues without an epic. " +
   "Scope: projectKey and/or jql, or epicKey for one Epic with its members and their sub-tasks (Keiko composes the JQL). Keiko computes every number: quote report.figures verbatim, never recompute. " +
-  "requirementsFromPods covers this Chat's Pod requirements. Estimate is seconds of original estimate unless estimateFieldId. " +
+  "requirementsFromPods covers this Chat's Pod requirements. The estimate field and its unit are stated in report.figures. " +
   "While status is reading, call again with only the reportId. " +
   "A call without a section returns the summary and report.figures; a call that names a section returns only that page, not the summary. " +
   "Page a list with reportId, section and startAt (0, then the returned nextStartAt; maxResults up to 100; report every deviation). " +

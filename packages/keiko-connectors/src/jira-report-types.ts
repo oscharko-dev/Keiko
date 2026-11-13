@@ -239,6 +239,11 @@ export interface JiraReportScope {
    */
   readonly estimateConfigured?: JiraReportEstimateFieldRef;
   /**
+   * Set (`true`) when Jira withheld the configured estimate field on an issue: that field could not
+   * be read, which is not the same as holding no value, so no other field is substituted.
+   */
+  readonly estimateUnreadable?: true;
+  /**
    * Set when a second estimate field also holds values beside the one the figures use, so nothing
    * is hidden: that field, how many issues hold a value in it and their total in its own unit.
    */

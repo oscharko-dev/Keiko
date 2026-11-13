@@ -10,6 +10,7 @@ import type {
   JiraReportRequirementCoverage,
   JiraReportRow,
 } from "./jira-report-types.js";
+import { jiraReportDataText, jiraReportWikiPlainText } from "./jira-report-data-text.js";
 import { jiraReportEstimateSummary } from "./jira-report-figures.js";
 
 /** Columns of the CSV export. A parser needs nothing but this list and RFC 4180. */
@@ -200,12 +201,15 @@ function progressRow(label: string, progress: JiraReportProgress): readonly (str
 }
 const PROGRESS_HEADER = ["", "Issues", "To do", "In progress", "Done", "No category", "Done"];
 
+/** A field name in the Markdown export: neutralised, quoted and escaped like every Jira text there. */
+const markdownLabel = (name: string): string => `"${markdownText(jiraReportDataText(name))}"`;
+
 function progressSection(report: JiraReport): string {
   const { project, byType, unassigned, overdue } = report.progress;
   return [
     "## Progress\n",
     table(PROGRESS_HEADER, [progressRow("Project", project)]),
-    `${jiraReportEstimateSummary(report)}.\n`,
+    `${jiraReportEstimateSummary(report, markdownLabel)}.\n`,
     `Open issues without an assignee: ${String(unassigned)}. Open issues past their due date on ${report.scope.asOf} (${report.scope.timeZone}): ${String(overdue)}.\n`,
     "### By issue type and status\n",
     table(
@@ -394,7 +398,13 @@ function readText(report: JiraReport): string {
   const total = issuesTotal === undefined ? " of an unknown total" : ` of ${String(issuesTotal)}`;
   return `${String(issuesRead)}${total}`;
 }
-/** Numbers and issue keys only, so the text is safe in a Jira comment and cannot carry markup. */
+/** A field name in a Jira comment: letters, digits and spaces only, since Jira renders the comment as wiki markup. */
+const wikiLabel = (name: string): string => `"${jiraReportWikiPlainText(name)}"`;
+
+/**
+ * Numbers, issue keys and field names reduced to plain letters and digits, so the text is safe in a
+ * Jira comment, which Jira renders as wiki markup, and cannot carry markup, an image or a link.
+ */
 export function jiraReportCommentText(report: JiraReport): string {
   const { project, unassigned, overdue } = report.progress;
   const { compliance, coverage } = report;
@@ -402,7 +412,7 @@ export function jiraReportCommentText(report: JiraReport): string {
     `Keiko Jira report ${report.scope.projectKey ?? ""} (${stateText(report)}), digest ${report.digest}`,
     `Issues read: ${readText(report)}`,
     `Progress: ${String(project.total)} issues, ${String(project.new)} to do, ${String(project.indeterminate)} in progress, ${String(project.done)} done (${String(project.donePercent)}%), ${String(project.noCategory)} without category`,
-    jiraReportEstimateSummary(report),
+    jiraReportEstimateSummary(report, wikiLabel),
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
     `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesJudged)} issues deviate (${String(compliance.deviationCount)} deviations)`,
     `Required-field rules: ${compliance.requiredFieldRules}. Template checker: ${compliance.checker}.`,

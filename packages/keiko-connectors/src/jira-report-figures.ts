@@ -38,14 +38,20 @@ function incompleteLines(report: JiraReport): readonly string[] {
     `INCOMPLETE REPORT: ${String(issuesRead)} of ${total} issues were read (${incompleteCause(report)}). Every figure below describes only the issues read, not the whole scope.`,
   ];
 }
-export function jiraReportEstimateSummary(report: JiraReport): string {
+/** How a field name is written into a sentence: data, quoted, for the sink that reads it. */
+type FieldLabel = (name: string) => string;
+
+export function jiraReportEstimateSummary(
+  report: JiraReport,
+  label: FieldLabel = fieldLabel,
+): string {
   const estimate = report.progress.project.estimate;
   if (estimate === null)
     return `Estimate: unavailable (${ESTIMATE_REASONS[report.scope.estimateUnavailableReason ?? "metadata-unavailable"]})`;
   const unit = report.scope.estimateUnit === "seconds" ? "seconds" : "field units";
   const field = report.scope.estimateFieldId ?? "timeoriginalestimate";
   const base = `Estimate (${unit}, field ${field}): ${String(estimate.total)} total, ${String(estimate.done)} done, ${String(estimate.remaining)} remaining; ${String(estimate.unestimated)} issues without an estimate`;
-  return [base, ...estimateNotes(report)].join("; ");
+  return [base, ...estimateNotes(report, label)].join("; ");
 }
 /** A total in the unit of its field: hours beside seconds, the field's own unit otherwise. */
 function inUnit(total: number, unit: string): string {
@@ -55,19 +61,23 @@ function inUnit(total: number, unit: string): string {
  * What the estimate figures leave unsaid without these sentences: a configured field no issue of
  * the scope uses, or a second field that also holds values (#4356). Never a silent fallback.
  */
-function estimateNotes(report: JiraReport): readonly string[] {
+function estimateNotes(report: JiraReport, label: FieldLabel): readonly string[] {
   const { estimateConfigured, estimateAlso, estimateFieldName, estimateFieldId } = report.scope;
-  const used = fieldLabel(estimateFieldName ?? estimateFieldId ?? "timeoriginalestimate");
+  if (report.scope.estimateUnreadable === true)
+    return [
+      `The estimation field ${label(estimateFieldName ?? estimateFieldId ?? "timeoriginalestimate")} could not be read on every issue, which is not the same as holding no value: the figures cover only the issues read and no other estimate field is substituted`,
+    ];
+  const used = label(estimateFieldName ?? estimateFieldId ?? "timeoriginalestimate");
   return [
     ...(estimateConfigured === undefined
       ? []
       : [
-          `The configured estimation field ${fieldLabel(estimateConfigured.fieldName)} holds no value on any issue in this scope, so ${used} is used instead; per-type estimate applicability is not evaluated for ${used}`,
+          `The configured estimation field ${label(estimateConfigured.fieldName)} holds no value on any issue in this scope, so ${used} is used instead; per-type estimate applicability is not evaluated for ${used}`,
         ]),
     ...(estimateAlso === undefined
       ? []
       : [
-          `${fieldLabel(estimateAlso.fieldName)} also holds a value on ${String(estimateAlso.issues)} issues, ${inUnit(estimateAlso.total, estimateAlso.unit)} in total; the figures above are ${used}`,
+          `${label(estimateAlso.fieldName)} also holds a value on ${String(estimateAlso.issues)} issues, ${inUnit(estimateAlso.total, estimateAlso.unit)} in total; the figures above are ${used}`,
         ]),
   ];
 }
@@ -128,7 +138,7 @@ function estimateLines(report: JiraReport): readonly string[] {
   const { total, done, remaining, unestimated } = estimate;
   const unit = report.scope.estimateUnit;
   return [
-    `Estimate field: ${report.scope.estimateFieldName ?? report.scope.estimateFieldId ?? "timeoriginalestimate"}`,
+    `Estimate field: ${fieldLabel(report.scope.estimateFieldName ?? report.scope.estimateFieldId ?? "timeoriginalestimate")}`,
     unit === "seconds"
       ? "Estimate in seconds of original estimate (total;done;remaining):"
       : `Estimate in the unit of field ${report.scope.estimateFieldId ?? ""} (total;done;remaining):`,
@@ -140,7 +150,7 @@ function estimateLines(report: JiraReport): readonly string[] {
         ]
       : []),
     `Issues without an estimate: ${String(unestimated)}`,
-    ...estimateNotes(report).map((note) => `${note}.`),
+    ...estimateNotes(report, fieldLabel).map((note) => `${note}.`),
   ];
 }
 

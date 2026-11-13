@@ -107,6 +107,7 @@ function reportInput(
     [...session.issues.values()],
     session.scope,
     session.alternateEstimate,
+    session.estimateWithheld,
   );
   return {
     issues: estimate.issues,
@@ -325,6 +326,16 @@ function nativeSliceAvailable(plan: JiraReportFieldPlan, admission: PageAdmissio
   return plan.checker?.requiresNativeEvidence !== true || sliceAvailable(admission);
 }
 /** Sequential issue admission bounds concurrency; each issue's independent parents share the HTTP gate. */
+/** The configured estimate field Jira withheld on an issue: unreadable, so no fallback may claim it empty. */
+function noteWithheldEstimate(
+  session: JiraReportSession,
+  plan: JiraReportFieldPlan,
+  observed: JiraReportFieldPlan,
+  retained: Ingest,
+): void {
+  if (retained === "omitted" && observed.omittedFields.has(plan.estimateFieldId ?? ""))
+    session.estimateWithheld = true;
+}
 async function ingestPage(
   session: JiraReportSession,
   raws: readonly unknown[],
@@ -339,6 +350,7 @@ async function ingestPage(
   if (!nativeSliceAvailable(plan, admission)) return "slice";
   if (parsed === undefined) return "invalid";
   const retained = retainIssue(session, parsed, observed, admission.deps.memoryBudgetBytes);
+  noteWithheldEstimate(session, plan, observed, retained);
   if (retained === "ok" || retained === "budget") retainFieldObservations(plan, observed);
   return retained === "ok" ? ingestPage(session, raws, plan, admission, index + 1) : retained;
 }

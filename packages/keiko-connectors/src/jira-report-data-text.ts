@@ -28,3 +28,15 @@ export function jiraReportDataText(value: string): string {
         .trimEnd()}…`
     : text;
 }
+
+/** Everything but letters, digits, spaces, dots and commas: nothing Jira wiki markup can use. */
+const NOT_WIKI_PLAIN = /[^\p{L}\p{N} .,]+/gu;
+
+/**
+ * A name for a Jira comment, which Jira renders as wiki markup: `*`, `_`, `!`, `[`, `{`, `|`, `~`,
+ * `+`, `^`, `-`, `?`, `(` and `:` can bold, embed an image, link, start a macro or draw an icon.
+ * Only letters, digits, spaces, dots and commas stay, so a name can never be markup.
+ */
+export function jiraReportWikiPlainText(value: string): string {
+  return jiraReportDataText(value.replaceAll(NOT_WIKI_PLAIN, " "));
+}
