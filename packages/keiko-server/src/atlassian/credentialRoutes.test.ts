@@ -25,6 +25,7 @@ import { chatAuthorityFixture } from "../editor/chatAuthority.test-support.js";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
+import type { EditorAgentGovernedAuthorityReference } from "@oscharko-dev/keiko-contracts";
 import type { Chat } from "../store/index.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { isCurrentJiraChatReadGrant } from "./jiraChatAuthority.js";
@@ -1406,7 +1407,11 @@ function jiraChatSubject(chat: Chat): JiraChatToolAuthoritySubject {
   };
 }
 
-function retainedChatAuthority(chat: Chat): (nowIso?: string) => ChatToolAuthorityResolution {
+type RetainedAuthority = ((nowIso?: string) => ChatToolAuthorityResolution) & {
+  readonly reference: EditorAgentGovernedAuthorityReference;
+};
+
+function retainedChatAuthority(chat: Chat): RetainedAuthority {
   const ceiling = baseDeps(wiring).autonomousDeliveryDeploymentCeiling ?? "governed-assist";
   const value = chatAuthorityFixture({
     deploymentCeiling: ceiling,
@@ -1421,8 +1426,11 @@ function retainedChatAuthority(chat: Chat): (nowIso?: string) => ChatToolAuthori
     new Date().toISOString(),
   );
   if (!registered.ok) throw new Error("Expected retained Chat authority");
-  return (nowIso = new Date().toISOString()) =>
-    fixtureAuthorityRegistry.resolveChat(registered.authorityRef, value.subject, ceiling, nowIso);
+  return Object.assign(
+    (nowIso = new Date().toISOString()) =>
+      fixtureAuthorityRegistry.resolveChat(registered.authorityRef, value.subject, ceiling, nowIso),
+    { reference: registered.authorityRef },
+  );
 }
 
 function retainedChatReadGrant(
@@ -2437,40 +2445,72 @@ describe("Jira Live Pod direct Data-surface isolation", () => {
 });
 
 // #4353 AC4: a Pod switch, a Pod deletion, a token replacement, a token revocation and an authority
-// expiry each invalidate pending work and current grants. One test per case; each starts from the
-// same state (a retained authority, one pending and one current read grant, and a turn in flight).
+// expiry each invalidate pending work and current grants. One test per case. Each starts from the
+// same state: a retained authority, one pending and one current read grant, a queued write approval
+// and a turn in flight (an open Jira draft is a tool call in the turn's transcript: no invalidation
+// touches it, so it stays as history, but it cannot be executed because its authority and its write
+// approval are gone, which is asserted through the approval).
 describe("invalidation of pending work and current grants (#4353 AC4)", () => {
   interface Held {
     readonly chat: Chat;
-    readonly authority: (nowIso?: string) => ChatToolAuthorityResolution;
-    readonly pending: string;
-    readonly current: string;
+    readonly authority: RetainedAuthority;
+    readonly pendingId: string;
     readonly pendingState: () => ChatToolReadGrant["state"] | undefined;
     readonly currentState: () => ChatToolReadGrant["state"] | undefined;
+    readonly write: ChatWriteApprovalFixture;
     readonly turn: AbortController;
     readonly release: () => void;
     readonly done: Promise<unknown>;
   }
+  type ChatWriteApprovalFixture = NonNullable<
+    ReturnType<AtlassianActionApprovalRegistry["getChatWriteApproval"]>
+  >;
+  function queuedWrite(chat: Chat, authority: RetainedAuthority): ChatWriteApprovalFixture {
+    const subject = jiraChatSubject(chat);
+    const now = Date.now();
+    const entry = {
+      subject,
+      authority: authority.reference,
+      approvalProofDigest: null,
+      approval: {
+        kind: "jira-chat-write",
+        approvalId: randomUUID(),
+        chatId: subject.chatId,
+        podId: subject.podId,
+        bindingGeneration: subject.bindingGeneration,
+        authenticationGeneration: subject.authenticationGeneration,
+        invocationId: "invocation-ac4",
+        operation: "jira.comment",
+        actionDigest: "d".repeat(64),
+        requestedAt: now,
+        expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        state: "pending",
+      },
+    } as const;
+    expect(fixtureApprovalRegistry.createChatWriteApproval(entry).ok).toBe(true);
+    const retained = fixtureApprovalRegistry.getChatWriteApproval(entry.approval.approvalId);
+    if (retained === undefined) throw new Error("Expected the queued write approval");
+    return retained;
+  }
   async function held(podId: string, withTurn = true): Promise<Held> {
     const chat = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
-    const pending = randomUUID();
-    const current = randomUUID();
+    const authority = retainedChatAuthority(chat);
+    const pendingId = randomUUID();
     const result: Held = {
       chat,
-      authority: retainedChatAuthority(chat),
-      pending,
-      current,
-      pendingState: retainedChatReadGrant(chat, false, pending),
-      currentState: retainedChatReadGrant(chat, true, current),
+      authority,
+      pendingId,
+      pendingState: retainedChatReadGrant(chat, false, pendingId),
+      currentState: retainedChatReadGrant(chat, true, randomUUID()),
+      write: queuedWrite(chat, authority),
       ...(withTurn ? startHeldTurn(chat) : idleTurn()),
     };
-    expect(result.authority().ok).toBe(true);
+    expect(authority().ok).toBe(true);
     expect([result.pendingState(), result.currentState()]).toEqual(["pending", "granted"]);
+    expect(result.write.approval.state).toBe("pending");
     expect(result.turn.signal.aborted).toBe(false);
     return result;
   }
-  // A switch of the binding is serialized behind a turn in flight (it waits for the turn), so that
-  // case starts without one: its pending work is the pending grant and the retained authority.
   function idleTurn(): {
     readonly turn: AbortController;
     readonly release: () => void;
@@ -2478,6 +2518,7 @@ describe("invalidation of pending work and current grants (#4353 AC4)", () => {
   } {
     return { turn: new AbortController(), release: () => undefined, done: Promise.resolve() };
   }
+  // The turn honors its own cancellation like a real one: it ends when it is released or aborted.
   function startHeldTurn(chat: Chat): {
     readonly turn: AbortController;
     readonly release: () => void;
@@ -2487,6 +2528,9 @@ describe("invalidation of pending work and current grants (#4353 AC4)", () => {
     let release: () => void = () => undefined;
     const work = new Promise<void>((resolve) => {
       release = resolve;
+      turn.signal.addEventListener("abort", () => {
+        resolve();
+      });
     });
     const done = runSerializedChatTurn(
       { store: fixtureStore },
@@ -2497,11 +2541,37 @@ describe("invalidation of pending work and current grants (#4353 AC4)", () => {
     );
     return { turn, release, done };
   }
-  // Deletion, replacement and revocation also cancel the turn in flight; a Pod switch has none.
-  async function expectInvalidated(h: Held, cancelsTurn = true): Promise<void> {
+  // Everything pending or current is gone: the authority, both grants and the queued write approval
+  // (which can no longer be accepted or claimed, so the write cannot be executed), and the turn in
+  // flight is cancelled.
+  async function expectInvalidated(
+    h: Held,
+    expectation: { readonly cancelsTurn: boolean },
+  ): Promise<void> {
     expect(h.authority()).toEqual({ ok: false, reason: "revoked" });
     expect([h.pendingState(), h.currentState()]).toEqual(["revoked", "revoked"]);
-    expect(h.turn.signal.aborted).toBe(cancelsTurn);
+    const { approval, subject, authority } = h.write;
+    expect(fixtureApprovalRegistry.getChatWriteApproval(approval.approvalId)?.approval.state).toBe(
+      "revoked",
+    );
+    expect(
+      fixtureApprovalRegistry.acceptChatWriteApproval(
+        approval.approvalId,
+        subject,
+        authority,
+        approval,
+        "f".repeat(64),
+      ).ok,
+    ).toBe(false);
+    expect(
+      fixtureApprovalRegistry.claimChatWriteApproval(
+        approval.approvalId,
+        subject,
+        authority,
+        approval,
+      ).ok,
+    ).toBe(false);
+    expect(h.turn.signal.aborted).toBe(expectation.cancelsTurn);
     h.release();
     await h.done;
   }
@@ -2509,10 +2579,12 @@ describe("invalidation of pending work and current grants (#4353 AC4)", () => {
   it("a Pod switch invalidates the previous binding's pending work and current grants", async () => {
     const podId = await readyJiraPod();
     const otherPodId = await readyJiraPod();
-    const h = await held(podId, false);
+    const h = await held(podId);
+    // The real PATCH route interrupts the turn in flight before the update queues behind it
+    // (`jiraPodId` is part of the grounding scope), then revokes the old binding's access.
     const moved = await updatedJiraChat(h.chat, { jiraPodId: otherPodId });
     expect(moved.jiraPodBinding?.podId).toBe(otherPodId);
-    await expectInvalidated(h, false);
+    await expectInvalidated(h, { cancelsTurn: true });
   });
 
   it("a Pod deletion invalidates pending work and current grants", async () => {
@@ -2523,7 +2595,7 @@ describe("invalidation of pending work and current grants (#4353 AC4)", () => {
       { method: "DELETE", headers: csrfHeaders() },
     );
     expect(response.status).toBe(200);
-    await expectInvalidated(h);
+    await expectInvalidated(h, { cancelsTurn: true });
   });
 
   it("a token replacement invalidates pending work and current grants", async () => {
@@ -2534,42 +2606,138 @@ describe("invalidation of pending work and current grants (#4353 AC4)", () => {
       apiToken: `${SYNTHETIC_TOKEN}-replacement`,
     });
     expect(response.status).toBe(200);
-    await expectInvalidated(h);
+    await expectInvalidated(h, { cancelsTurn: true });
   });
 
-  it("a token revocation observed as a Jira-authored 401 invalidates pending work and current grants", async () => {
-    const podId = await readyJiraPod();
-    const h = await held(podId);
-    const credential = credentialForPod(podId);
-    if (credential.deployment !== "data-center" || credential.livePod === undefined)
-      throw new Error("Expected a Live Pod credential");
-    expect(
-      wiring.custody.observeAuthenticationFailure(
-        credential.authRef,
-        credential.generation,
-        credential.livePod.verificationRevision,
-        "revocation-ac4",
-      ),
-    ).toBe(true);
-    await expectInvalidated(h);
+  it("a token revocation seen as a Jira-authored 401 on a tool call invalidates pending work and current grants", async () => {
+    const privateBase = "https://10.23.45.67:8443/context";
+    let revoked = false;
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      onLivePodInvalidated: (podId, generation, correlationId, reason): void => {
+        invalidateJiraPodChats(
+          fixtureStore,
+          podId,
+          generation,
+          correlationId,
+          {
+            agentAuthorityRegistry: fixtureAuthorityRegistry,
+            atlassianActionApprovalRegistry: fixtureApprovalRegistry,
+          },
+          reason,
+        );
+      },
+      // After the revocation Jira answers every request with the 401 it authored for an unknown token.
+      fetchImpl: (input): Promise<Response> => {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        if (revoked)
+          return Promise.resolve(new Response("{}", { status: 401, headers: JIRA_401_HEADERS }));
+        return Promise.resolve(
+          Response.json(
+            url.pathname.endsWith("/serverInfo")
+              ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Data Center" }
+              : { name: "synthetic-user", key: "synthetic-key", active: true },
+          ),
+        );
+      },
+    });
+    await rebuild(real);
+    const created = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({
+        ...livePodCreateInput(),
+        baseUrl: privateBase,
+        livePodCreationRequestId: randomUUID(),
+      }),
+    });
+    const { authRef, livePod } = (await created.json()) as AtlassianCredentialMetadata & {
+      readonly livePod: { readonly podId: string };
+    };
+    expect(await (await verifyCredentialRequest(authRef)).json()).toMatchObject({ status: "ok" });
+    const h = await held(livePod.podId);
+    revoked = true;
+    const metadata = real.custody.getMetadata(authRef);
+    if (metadata === undefined) throw new Error("Expected the Pod credential");
+    // The tool call's own HTTP request meets the 401; the identity read confirms it is Jira's.
+    const result = await real.httpBodyPortFactory(
+      metadata,
+      "revocation-tool-call",
+    )({
+      method: "GET",
+      url: `${privateBase}/rest/api/2/project`,
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    });
+    expect(result).toMatchObject({ status: 401 });
+    expect(result).not.toHaveProperty("authentication");
+    expect(real.custody.getMetadata(authRef)).toMatchObject({
+      livePod: { verificationStatus: "auth-failed" },
+    });
+    await expectInvalidated(h, { cancelsTurn: true });
   });
 
   it("an expired authority invalidates pending work and current grants", async () => {
+    // The real expiry path: the clock moves past the authority's and the approvals' lifetime, and
+    // the registries refuse and sweep instead of anyone calling revoke.
     const podId = await readyJiraPod();
-    const h = await held(podId);
-    const pendingEntry = fixtureApprovalRegistry.getChatReadGrant(h.pending);
-    const currentEntry = fixtureApprovalRegistry.getChatReadGrant(h.current);
-    if (pendingEntry === undefined || currentEntry === undefined)
-      throw new Error("Expected both grants");
-    const afterExpiry = new Date(
-      Math.max(pendingEntry.grant.expiresAt, currentEntry.grant.expiresAt) + 1,
-    ).toISOString();
-    const stillCurrent = (entry: typeof pendingEntry): boolean =>
-      isCurrentJiraChatReadGrant(baseDeps(wiring), entry, afterExpiry, "authority-expired");
-    expect([stillCurrent(pendingEntry), stillCurrent(currentEntry)]).toEqual([false, false]);
+    const h = await held(podId, false);
+    let now = Date.now();
+    const clocked = new AtlassianActionApprovalRegistry(() => now);
+    const readEntry = fixtureApprovalRegistry.getChatReadGrant(h.pendingId);
+    if (readEntry === undefined || readEntry.grant.subject.kind === "configured-mcp")
+      throw new Error("Expected the pending Jira read grant");
+    const { approval, subject, authority } = h.write;
+    expect(
+      clocked.createChatReadGrant({
+        ...readEntry,
+        grant: {
+          ...readEntry.grant,
+          requestedAt: now,
+          expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      clocked.createChatWriteApproval({
+        ...h.write,
+        approval: {
+          ...approval,
+          requestedAt: now,
+          expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        },
+      }).ok,
+    ).toBe(true);
+    now += ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1;
+    // A pending read grant cannot be used any more.
+    expect(
+      clocked.acceptChatReadGrant(
+        h.pendingId,
+        readEntry.grant.subject,
+        readEntry.authority,
+        "b".repeat(64),
+      ),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(clocked.getChatReadGrant(h.pendingId)).toBeUndefined();
+    // A write waiting for approval is refused, never executed.
+    expect(
+      clocked.acceptChatWriteApproval(
+        approval.approvalId,
+        subject,
+        authority,
+        approval,
+        "f".repeat(64),
+      ).ok,
+    ).toBe(false);
+    expect(
+      clocked.claimChatWriteApproval(approval.approvalId, subject, authority, approval).ok,
+    ).toBe(false);
+    expect(clocked.getChatWriteApproval(approval.approvalId)).toBeUndefined();
+    // The authority itself reports the expiry and drops its record.
+    const afterExpiry = new Date(now).toISOString();
     expect(h.authority(afterExpiry)).toEqual({ ok: false, reason: "expired" });
-    // The authority and grants of the turn in flight end with it; nothing else is left current.
-    h.release();
-    await h.done;
+    expect(h.authority(afterExpiry).ok).toBe(false);
   });
 });
