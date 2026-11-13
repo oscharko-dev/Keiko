@@ -1007,7 +1007,7 @@ for pass in $(seq 1 10); do
   $SSH 'Remove-Item C:\ProgramData\keiko-setup\update-result.txt -ErrorAction SilentlyContinue; schtasks /run /tn KeikoUpdate' >/dev/null 2>&1
   r=""
   for i in $(seq 1 300); do
-    r=$($SSH 'if (Test-Path C:\ProgramData\keiko-setup\update-result.txt) { Get-Content C:\ProgramData\keiko-setup\update-result.txt }' 2>/dev/null)
+    r=$($SSH 'if (Test-Path C:\ProgramData\keiko-setup\update-result.txt) { Get-Content C:\ProgramData\keiko-setup\update-result.txt }' 2>/dev/null | tr -d '\r')
     [ -n "$r" ] && break; sleep 10
   done
   echo "pass $pass: $r"; $SSH 'Get-Content C:\ProgramData\keiko-setup\update.log -Tail 4' 2>&1 | cut -c1-180
