@@ -411,7 +411,12 @@ export const JIRA_DRAFT_ID_PATTERN =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 export const JIRA_DRAFT_DIGEST_PATTERN = "^[0-9a-f]{64}$";
 /** Why a `jira.draft` call that names a staged draft is refused before anyone is asked. */
-export const JIRA_DRAFT_REFUSALS = ["draft-not-found", "draft-changed", "draft-invalid"] as const;
+export const JIRA_DRAFT_REFUSALS = [
+  "draft-not-found",
+  "draft-changed",
+  "draft-invalid",
+  "connection-changed",
+] as const;
 export type JiraDraftRefusalReason = (typeof JIRA_DRAFT_REFUSALS)[number];
 /** A model-chosen local reference that relations between draft items use before keys exist. */
 export const JIRA_DRAFT_REF_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,31}$";

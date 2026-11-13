@@ -469,6 +469,13 @@ function preselectFixtureCatalog(deps: UiHandlerDeps): void {
   );
 }
 
+/** The fingerprint the Chat's own connection stores a draft under. */
+function connectionOfFixture(f: { readonly chatId: string; readonly deps: UiHandlerDeps }): string {
+  const fingerprint = f.deps.jiraDraftStore?.connectionOf(f.chatId);
+  if (fingerprint === undefined) throw new TypeError("The fixture chat has no connection");
+  return fingerprint;
+}
+
 function fixture(
   mutation: Mutation = false,
   writeResponse?: Promise<void>,
@@ -2042,7 +2049,12 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     const items = backlog(size.epics, size.stories);
     let draftId: string | undefined;
     for (let from = 0; from < items.length; from += 50) {
-      const appended = store.append(f.chatId, draftId, "fingerprint", items.slice(from, from + 50));
+      const appended = store.append(
+        f.chatId,
+        draftId,
+        connectionOfFixture(f),
+        items.slice(from, from + 50),
+      );
       if (!appended.ok) throw new Error("Expected the page to stage");
       draftId = appended.draft.id;
     }
@@ -2109,7 +2121,7 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     const { f, reference } = stagedFixture();
     const store = f.deps.jiraDraftStore;
     const draftId = typeof reference.draftId === "string" ? reference.draftId : "";
-    store?.append(f.chatId, draftId, "fingerprint", [
+    store?.append(f.chatId, draftId, connectionOfFixture(f), [
       {
         ref: "late",
         projectId: "10000",
@@ -3139,7 +3151,7 @@ describe("four-item Epic and Task template fullchain", () => {
     const staged = f.deps.jiraDraftStore?.append(
       f.chatId,
       undefined,
-      "fullchain-fingerprint",
+      connectionOfFixture(f),
       items,
     );
     if (staged?.ok !== true) throw new TypeError("Missing staged batch");
@@ -4883,6 +4895,65 @@ describe("an expired write approval says that it expired and keeps the draft (#4
 
   const toolMessage = (f: ReturnType<typeof fixture>): string =>
     f.calls[1]?.messages.find((message) => message.role === "tool")?.content ?? "";
+
+  it("refuses a held draft on another connection: connection-changed, no card, no Jira request", async () => {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    cleanups.push(() => {
+      resetServerLogger();
+      return Promise.resolve();
+    });
+    const { f, next } = await expireInlineDraft();
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    if (draft === undefined) throw new Error("Missing open draft");
+    // The Pod now points at another Jira whose project and issue-type ids may coincide with ours.
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing credential owner");
+    vi.spyOn(credentials.custody, "list").mockImplementation(() => [
+      { ...metadata(f.deps), baseUrl: "https://other-jira.example.invalid" },
+    ]);
+    const requestsBefore = f.requests();
+    next({ draftId: draft.id, draftDigest: draft.digest });
+    expect((await send(f, "switched-second")).status).toBe(200);
+    const result = f.calls
+      .flatMap((call) => call.messages)
+      .filter((message) => message.role === "tool")
+      .at(-1)?.content;
+    expect(result).toContain("connection-changed");
+    expect(result).toMatch(/Jira connection changed/u);
+    const cards = f.deps.store
+      .listMessages(f.chatId)
+      .flatMap((message) => message.toolTranscript?.exchanges ?? [])
+      .filter((exchange) => exchange.approval?.state === "pending");
+    expect(cards).toHaveLength(0);
+    expect(f.requests()).toBe(requestsBefore);
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+    expect(
+      logs.events
+        .filter((event) => event.op === "atlassian.jira-draft")
+        .map((event) => event.extra),
+    ).toContainEqual(expect.objectContaining({ phase: "refused", refusal: "connection-changed" }));
+  });
+
+  it("refuses a staged draft stored under another connection the same way", async () => {
+    let arguments_: Record<string, unknown> = DRAFT_ARGUMENTS;
+    const f = fixture(true, undefined, true, false, () => arguments_);
+    const staged = f.deps.jiraDraftStore?.append(f.chatId, undefined, "another-connection", [
+      { ref: "a", projectId: "10000", issueTypeId: "10001", fields: { summary: "Old Jira" } },
+    ]);
+    if (staged?.ok !== true) throw new Error("Missing staged draft");
+    arguments_ = { draftId: staged.draft.id, draftDigest: staged.draft.digest };
+    expect((await send(f, "staged-foreign")).status).toBe(200);
+    expect(toolMessage(f)).toContain("connection-changed");
+    const pending = f.deps.store
+      .listMessages(f.chatId)
+      .flatMap((message) => message.toolTranscript?.exchanges ?? [])
+      .filter((exchange) => exchange.approval?.state === "pending");
+    expect(pending).toHaveLength(0);
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+  });
 
   it("does not report an approval the registry merely lost as expired", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });

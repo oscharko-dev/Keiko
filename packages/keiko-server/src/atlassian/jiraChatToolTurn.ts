@@ -14,7 +14,6 @@ import {
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
-  connectionFingerprint,
   isJiraDraftItem,
   parseJiraAttachmentArguments,
   parseJiraDraft,
@@ -22,6 +21,7 @@ import {
   type StagedJiraDraftItem,
 } from "@oscharko-dev/keiko-connectors";
 import { JIRA_DRAFT_PAGE_ITEMS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { jiraChatConnectionFingerprint } from "./jiraChatConnectionIdentity.js";
 import { chatDraftArguments } from "./jiraChatDraftArguments.js";
 import type { HeldJiraDraft } from "./jiraApprovalExpiry.js";
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
@@ -207,8 +207,6 @@ function holdInlineItems(
   context: JiraChatCatalogContext,
 ): HeldJiraDraft | undefined {
   if (!isStagedItems(items)) return undefined;
-  const open = store.latest(context.chatId);
-  if (open !== undefined && sameItems(open.items, items)) return heldOf(open);
   const current = resolveCurrentJiraChatAuthority(
     options.deps,
     context.chatId,
@@ -217,11 +215,9 @@ function holdInlineItems(
     context.correlationId,
   );
   if (!current.ok) return undefined;
-  const { credential } = current;
-  const fingerprint = connectionFingerprint({
-    baseUrl: credential.baseUrl,
-    identity: `${credential.authRef}:${String(credential.generation)}`,
-  });
+  const fingerprint = jiraChatConnectionFingerprint(current.credential);
+  const open = store.latest(context.chatId);
+  if (open?.fingerprint === fingerprint && sameItems(open.items, items)) return heldOf(open);
   let draft: StagedJiraDraft | undefined;
   for (let start = 0; start < items.length; start += JIRA_DRAFT_PAGE_ITEMS_MAX) {
     const page = items.slice(start, start + JIRA_DRAFT_PAGE_ITEMS_MAX);

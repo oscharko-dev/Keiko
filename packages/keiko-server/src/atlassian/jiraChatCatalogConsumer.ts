@@ -436,6 +436,28 @@ function reviewableAction(
  * The template and field dry run of a write. A violating write is refused before any effect starts
  * and before any human is asked, whether or not its mode asks for an approval.
  */
+/** A draft the source preparation refused by its closed reason: one body-free line, no text. */
+function recordPreparedDraftRefusal(
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+  refusal: CatalogJsonObject,
+): void {
+  const reason = refusal.draftRefusal;
+  if (action.tool !== "jira.draft" || reason !== "connection-changed") return;
+  recordJiraDraftActivity(undefined, context.correlationId, {
+    phase: "refused",
+    refusal: reason,
+    newDraft: false,
+    pageItemCount: 0,
+    itemCount: 0,
+    pageCount: 0,
+    byteCount: 0,
+    unresolvedRefCount: 0,
+    violationCount: 0,
+    durationMs: 0,
+  });
+}
+
 async function refuseByPreflight(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
@@ -445,9 +467,10 @@ async function refuseByPreflight(
   const preparation = options.sourcePreparation;
   // The dry run admits what the write will: the write receives this prepared trace too (LIM27).
   const trace = preparation?.sourceFor(action.actionId, action.argumentsDigest)?.items[0]?.trace;
-  const refusal =
-    preparation?.refusalFor(action.actionId, action.argumentsDigest) ??
-    (await options.preflightWrite?.(action, context, trace));
+  const prepared = preparation?.refusalFor(action.actionId, action.argumentsDigest);
+  const refusal = prepared ?? (await options.preflightWrite?.(action, context, trace));
+  // The preflight records its own draft refusals; one the source preparation made has no other line.
+  if (prepared !== undefined) recordPreparedDraftRefusal(action, context, prepared);
   if (refusal !== undefined) {
     const binding = jiraOperationBindingForTool(action.tool);
     requireDispatch(binding !== undefined, "failed", "provider-reported-error");

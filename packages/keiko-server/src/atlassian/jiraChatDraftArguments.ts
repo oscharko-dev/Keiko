@@ -27,7 +27,11 @@ export function chatDraftArguments(
   chatId: string,
   args: Readonly<Record<string, unknown>>,
 ): ChatDraftArguments {
-  const resolved = resolveJiraDraftArguments(args, (draftId) => store?.get(draftId, chatId));
+  const resolved = resolveJiraDraftArguments(
+    args,
+    (draftId) => store?.get(draftId, chatId),
+    store?.connectionOf(chatId),
+  );
   if (resolved === undefined)
     return { ok: true, arguments: args as CatalogJsonObject, staged: false };
   return resolved.ok
@@ -83,6 +87,9 @@ const PROBLEM_GUIDANCE: Readonly<Record<JiraDraftProblem, string>> = {
     "The parent and link relations form a cycle. A parent must be an item that does not depend on its child.",
 };
 const DRAFT_REFUSED = "Nothing was changed. Correct the draft and send it once.";
+/** The fixed sentence for a draft that belongs to another Jira connection (never its content). */
+const CONNECTION_CHANGED_GUIDANCE =
+  "The Jira connection changed since this draft was made, so nothing was changed. Create the draft again for the current Jira.";
 export function jiraDraftProblemGuidance(
   problem: JiraDraftProblem,
   item: number | undefined,
@@ -105,7 +112,9 @@ export function draftRefusalData(
     reason: "field-validation",
     draftRefusal: refusal.reason,
     ...(refusal.problem === undefined
-      ? {}
+      ? refusal.reason === "connection-changed"
+        ? { guidance: CONNECTION_CHANGED_GUIDANCE }
+        : {}
       : { guidance: jiraDraftProblemGuidance(refusal.problem, refusal.item) }),
     items: [],
   };

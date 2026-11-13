@@ -9,6 +9,7 @@ import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { parseJiraDraft } from "./jira-draft.js";
+import { connectionFingerprint } from "./jira-report-tool.js";
 import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
 import {
   executeJiraDraftStageTool,
@@ -114,6 +115,9 @@ function harness(
   ) => ReturnType<typeof executeJiraDraftStageTool>;
 } {
   const store = createJiraDraftStore(storeOptions);
+  // The harness is on one connection: staged drafts resolve under the fingerprint they are stored with.
+  const current = connectionFingerprint(connection());
+  store.bindConnection(() => current);
   const activity: JiraDraftActivity[] = [];
   const base: JiraDraftToolDeps<ManagedMcpInvocationContext> = {
     store,
@@ -255,6 +259,7 @@ describe("jira.draft-stage (#4178)", () => {
           draftDigest: result.data.draftDigest,
         },
         () => held,
+        h.deps.store.connectionOf("chat-1"),
       ),
     ).toEqual({ ok: true, arguments: { items: held?.items } });
     expect(result.data).not.toHaveProperty("sourceBindings");
@@ -359,6 +364,7 @@ describe("jira.draft-stage (#4178)", () => {
                 ...held,
                 sourceBindings: [{ ref: "source", sourceDigest: "b".repeat(64) }],
               },
+        h.deps.store.connectionOf("chat-1"),
       ),
     ).toEqual({ ok: false, reason: "draft-changed" });
   });
@@ -396,6 +402,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(first.data.draftId), draftDigest: text(second.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
       "projected a",
@@ -457,6 +464,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId, draftDigest: text(second.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok).toBe(true);
     const draft = resolved?.ok === true ? parseJiraDraft(resolved.arguments) : undefined;
@@ -511,6 +519,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(draftId), draftDigest: staged?.digest ?? "" },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     const draft = resolved?.ok === true ? parseJiraDraft(resolved.arguments) : undefined;
     expect(draft?.items).toHaveLength(1200);
@@ -768,6 +777,7 @@ describe("refs repeated inside one staged page (review)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(staged.data.draftId), draftDigest: text(staged.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok === true && parseJiraDraft(resolved.arguments)).toBeTruthy();
   });
@@ -775,7 +785,22 @@ describe("refs repeated inside one staged page (review)", () => {
 
 describe("resolving the draft a jira.draft call names (#4178)", () => {
   it("is not a reference when the call carries its own items", () => {
-    expect(resolveJiraDraftArguments({ items: [] }, () => undefined)).toBeUndefined();
+    expect(resolveJiraDraftArguments({ items: [] }, () => undefined, undefined)).toBeUndefined();
+  });
+
+  it("resolves a draft only under the connection it was stored with (#4353 AC4)", async () => {
+    const h = harness();
+    const first = await h.stage({ items: [item("a") as CatalogJsonObject] });
+    const args = { draftId: text(first.data.draftId), draftDigest: text(first.data.draftDigest) };
+    const lookup = (id: string): ReturnType<typeof h.deps.store.get> =>
+      h.deps.store.get(id, "chat-1");
+    const stored = h.deps.store.connectionOf("chat-1");
+    expect(resolveJiraDraftArguments(args, lookup, stored)).toMatchObject({ ok: true });
+    for (const current of ["another-jira", "", undefined])
+      expect(resolveJiraDraftArguments(args, lookup, current)).toEqual({
+        ok: false,
+        reason: "connection-changed",
+      });
   });
 
   it("refuses a draft that was extended after its digest was read", async () => {
@@ -785,8 +810,10 @@ describe("resolving the draft a jira.draft call names (#4178)", () => {
     const digest = text(first.data.draftDigest);
     await h.stage({ draftId, items: [item("b") as CatalogJsonObject] });
     expect(
-      resolveJiraDraftArguments({ draftId, draftDigest: digest }, (id) =>
-        h.deps.store.get(id, "chat-1"),
+      resolveJiraDraftArguments(
+        { draftId, draftDigest: digest },
+        (id) => h.deps.store.get(id, "chat-1"),
+        h.deps.store.connectionOf("chat-1"),
       ),
     ).toEqual({ ok: false, reason: "draft-changed" });
   });
@@ -799,7 +826,7 @@ describe("resolving the draft a jira.draft call names (#4178)", () => {
     ],
     ["a malformed digest", { draftId: "11111111-2222-4333-8444-555555555555", draftDigest: "A" }],
   ])("refuses %s as an unknown draft", (_name, args) => {
-    expect(resolveJiraDraftArguments(args, () => undefined)).toEqual({
+    expect(resolveJiraDraftArguments(args, () => undefined, undefined)).toEqual({
       ok: false,
       reason: "draft-not-found",
     });
