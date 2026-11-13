@@ -82,11 +82,15 @@ const ATLASSIAN_CREDENTIAL_ARTIFACT_SET: ReadonlySet<string> = new Set(
 export const UI_SHUTDOWN_REQUEST_FILE = "ui.shutdown";
 export const UI_BROWSER_OPEN_REQUEST_FILE = "ui.browser-open";
 
+// The starting UI process's sign of life for its launcher (#4358, ui-startup-progress.ts).
+export const UI_STARTUP_PROGRESS_STATE_FILE = "ui.starting";
+
 export const KEIKO_STATE_FILES = [
   "ui.pid",
   "ui.log",
   UI_SHUTDOWN_REQUEST_FILE,
   UI_BROWSER_OPEN_REQUEST_FILE,
+  UI_STARTUP_PROGRESS_STATE_FILE,
   "launcher-state.json",
   "portable-install-state.json",
 ] as const;

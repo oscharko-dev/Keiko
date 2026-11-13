@@ -374,6 +374,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface LocalKnowledgeListOptions {
   readonly includeKnowledgePods?: boolean;
+  /** Aborts the request (a catalog read that outlasts its bound must not wait forever). */
+  readonly signal?: AbortSignal;
+}
+
+function listInit(options: LocalKnowledgeListOptions | undefined): RequestInit | undefined {
+  return options?.signal === undefined ? undefined : { signal: options.signal };
 }
 
 function listPath(path: string, options: LocalKnowledgeListOptions | undefined): string {
@@ -383,13 +389,19 @@ function listPath(path: string, options: LocalKnowledgeListOptions | undefined):
 export async function fetchCapsules(
   options?: LocalKnowledgeListOptions,
 ): Promise<CapsulesResponse> {
-  return fetchJson<CapsulesResponse>(listPath("/api/local-knowledge/capsules", options));
+  return fetchJson<CapsulesResponse>(
+    listPath("/api/local-knowledge/capsules", options),
+    listInit(options),
+  );
 }
 
 export async function fetchCapsuleSets(
   options?: LocalKnowledgeListOptions,
 ): Promise<CapsuleSetsResponse> {
-  return fetchJson<CapsuleSetsResponse>(listPath("/api/local-knowledge/capsule-sets", options));
+  return fetchJson<CapsuleSetsResponse>(
+    listPath("/api/local-knowledge/capsule-sets", options),
+    listInit(options),
+  );
 }
 
 // ---------------------------------------------------------------------------

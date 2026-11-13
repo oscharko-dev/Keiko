@@ -36,6 +36,7 @@ import {
   parseExpectedGroundingScopeIdentity,
 } from "./store/chat-grounding-scope-identity.js";
 import { logChatScopeUpdate } from "./chat-scope-update-log.js";
+import { refuseUnavailableKnowledgeScopes } from "./chat-knowledge-scope-availability.js";
 import { jiraChatPatchFields, jiraChatUpdateOptions } from "./atlassian/jiraChatBindingPatch.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
@@ -1325,6 +1326,8 @@ function interruptChangedScopeTurn(
   if (existing === undefined) return notFoundResult("Chat not found.");
   const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
   if (conflict !== undefined) return conflict;
+  const refused = knowledgeScopeRefusal(deps, existing, patch, correlationId);
+  if (refused !== undefined) return refused;
   const safePatch = canonicalizeGitChangeScopePatch(
     deps,
     existing,
@@ -1337,6 +1340,20 @@ function interruptChangedScopeTurn(
   });
   interruptChangedChatGenerations(deps, existing, preview, correlationId, patch);
   return undefined;
+}
+
+// A newly added Knowledge Pod that does not exist or is being deleted refuses the whole update before
+// any state changes or running turn is interrupted (#4371).
+function knowledgeScopeRefusal(
+  deps: UiHandlerDeps,
+  existing: Chat,
+  patch: UpdateChatPatch,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const refusal = refuseUnavailableKnowledgeScopes(deps, existing, patch);
+  if (refusal === undefined) return undefined;
+  logChatScopeUpdate("denied", existing, existing, patch, correlationId, undefined, refusal.reason);
+  return { status: refusal.status, body: errorBody(refusal.code, refusal.message, correlationId) };
 }
 
 function groundingPatchConflict(
@@ -1375,6 +1392,8 @@ function applyChatUpdate(
   if (existing === undefined) return notFoundResult("Chat not found.");
   const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
   if (conflict !== undefined) return conflict;
+  const refused = knowledgeScopeRefusal(deps, existing, patch, correlationId);
+  if (refused !== undefined) return refused;
   const scopesToCheck = scopesRequiringAccessValidation(patch);
   const needsGitChangeCheck = gitChangeScopePatchNeedsAccessValidation(patch);
   let safePatch = patch;

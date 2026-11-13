@@ -4400,6 +4400,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.send.noModel": "No model available",
   "chat.send.connecting": "Connecting to gateway",
   "chat.send.cancel": "Cancel response",
+  "chat.send.running": "Send is unavailable while a response is running",
+  "chat.send.runningHint":
+    "Your next message can be sent when this response is complete, or cancel the response first.",
   "chat.send.statusQueued": "Submitting your message…",
   "chat.send.statusContacting": "Preparing response…",
   "chat.send.statusAwaitingDecision": "Waiting for your decision",

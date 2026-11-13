@@ -141,6 +141,21 @@ the Linux gates container (`--init`, Node 24.18.0): **9 passed (1.9m)**, and
 captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
 assertion or numerical ceiling changed. This remains updater fixture evidence.
 
+Integrating the Windows readiness work (#4358) on the Release 1 integration branch changed `api.ts` and
+the message catalogs, so the freshness gate rejected their digests. On 2026-11-13 (UTC) the complete
+original nine-case producer ran on the combined sources in the Linux gates container (`--init`,
+Node 24.18.0): **9 passed (1.9m)**, and `npm run check:update-ui-evidence` passes. Only the three
+records were kept; its fallback-font captures were discarded and the 14 committed captures are
+unchanged. No updater behavior, fixture, assertion or numerical ceiling changed. This remains updater
+fixture evidence.
+
+Integrating the Chat shell repair for the Jira path (#4371) on the Release 1 integration branch moved
+the catalog and `api.ts` digests again. On 2026-11-13 (UTC) the complete original nine-case producer
+ran on the combined sources in the Linux gates container (`--init`, Node 24.18.0): **9 passed
+(1.8m)**, and `npm run check:update-ui-evidence` passes. Only the three records were kept; its
+fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
+behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -495,6 +510,17 @@ three records were taken from this run; its fallback-font captures were discarde
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
 
+## Chat shell picker and composer wording — 2026-11-13 (#4371)
+
+The Knowledge Pod picker no longer hides known pods during a refresh, and the Chat composer's stop
+control is a separate element beside an inert Send. Both added messages to the optional catalogs, so
+the freshness gate rejected their digests (the stop control's styles live in a component CSS module,
+not in `globals.css`). The complete original nine-case producer ran with
+`KEIKO_WRITE_TRACKED_EVIDENCE=1` in the Linux arm64 gates container (Node 24.18.0): **9 passed
+(2.0m)**, including the real BFF stop and restart, and `npm run check:update-ui-evidence` passes.
+Only the source digests and `generatedAt` in the three records were taken from this run; its
+fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
+
 ## Browser restart notice wording — 2026-11-13 (#4370)
 
 The notice that tells a person Keiko was restarted added messages to both optional catalogs (the
@@ -506,6 +532,17 @@ Linux arm64 gates container (Node 24.18.0, existing Chromium cache mounted read-
 `generatedAt` in the three records were taken from this run; its fallback-font captures were
 discarded and the 14 committed captures are unchanged. No record binds capture bytes. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Chat refusal codes in the core catalogs — 2026-11-13 (#4371)
+
+Five closed error codes (the unavailable Knowledge Pod and Knowledge Pod store, and a Jira Pod that is
+gone, needs verifying again or whose connection changed) gained localized notices in both core
+catalogs, so the freshness gate rejected their digests. The complete original nine-case producer ran
+with `KEIKO_WRITE_TRACKED_EVIDENCE=1` in the Linux arm64 gates container (Node 24.18.0): **9 passed
+(1.6m)**, including the real BFF stop and restart, and `npm run check:update-ui-evidence` passes. Only
+the source digests and `generatedAt` in the three records were taken from this run; its fallback-font
+captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
+assertion or numerical ceiling changed. This remains updater fixture evidence.
 
 The final correction round of the same change (stale check re-validation on Send, Start ownership,
 the closed `cooldown` outcome and its message, wildcard-route and asserted-model wording) changed the

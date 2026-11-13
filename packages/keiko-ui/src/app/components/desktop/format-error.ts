@@ -175,6 +175,31 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
     message: "chat.error.scopeChanged.message",
     remediation: "chat.error.scopeChanged.remediation",
   },
+  KNOWLEDGE_POD_UNAVAILABLE: {
+    title: "chat.error.knowledgePodUnavailable.title",
+    message: "chat.error.knowledgePodUnavailable.message",
+    remediation: "chat.error.knowledgePodUnavailable.remediation",
+  },
+  KNOWLEDGE_STORE_UNAVAILABLE: {
+    title: "chat.error.knowledgeStoreUnavailable.title",
+    message: "chat.error.knowledgeStoreUnavailable.message",
+    remediation: "chat.error.knowledgeStoreUnavailable.remediation",
+  },
+  JIRA_POD_UNAVAILABLE: {
+    title: "chat.error.jiraPodUnavailable.title",
+    message: "chat.error.jiraPodUnavailable.message",
+    remediation: "chat.error.jiraPodUnavailable.remediation",
+  },
+  JIRA_POD_VERIFICATION_REQUIRED: {
+    title: "chat.error.jiraPodVerification.title",
+    message: "chat.error.jiraPodVerification.message",
+    remediation: "chat.error.jiraPodVerification.remediation",
+  },
+  JIRA_POD_CONNECTION_CHANGED: {
+    title: "chat.error.jiraPodConnectionChanged.title",
+    message: "chat.error.jiraPodConnectionChanged.message",
+    remediation: "chat.error.jiraPodConnectionChanged.remediation",
+  },
   GATEWAY_TIMEOUT: {
     title: "chat.error.gatewayTimeout.title",
     message: "chat.error.gatewayTimeout.message",

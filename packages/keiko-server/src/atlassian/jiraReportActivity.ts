@@ -98,7 +98,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["project", "jql", "project-jql", "report"],
+      values: ["project", "jql", "project-jql", "epic", "report"],
     },
     continued: { type: "boolean", dataClass: "closed-enum", required: true },
     estimateSource: {
@@ -194,7 +194,7 @@ function errorKindOf(input: JiraReportLogInput): ActivityLogErrorKind | undefine
 }
 interface JiraReportLine {
   readonly phase: "read" | "section" | "refused" | "export";
-  readonly scopeKind: "project" | "jql" | "project-jql" | "report";
+  readonly scopeKind: "project" | "jql" | "project-jql" | "epic" | "report";
   readonly continued: boolean;
   readonly durationMs: number;
   readonly status?: JiraReportStatus;
