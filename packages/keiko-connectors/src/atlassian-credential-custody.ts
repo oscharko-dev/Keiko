@@ -740,6 +740,23 @@ function releaseVerification(
   return true;
 }
 
+function assertStorableVerification(
+  status: JiraLivePodMetadata["verificationStatus"],
+  compatibility: JiraDataCenterCompatibilityFacts | undefined,
+): void {
+  // An unconfirmed verification is released, never stored as a status.
+  if (
+    status === "auth-unverified" ||
+    (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  if (
+    compatibility !== undefined &&
+    (status !== "ok" || !isJiraDataCenterCompatibilityFacts(compatibility))
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input");
+}
+
 function finishVerification(
   deps: AtlassianCredentialCustodyDeps,
   authRef: string,
@@ -756,17 +773,7 @@ function finishVerification(
     !metadata.livePod.verificationInProgress
   )
     return false;
-  // An unconfirmed verification is released, never stored as a status.
-  if (
-    status === "auth-unverified" ||
-    (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
-  )
-    throw new AtlassianCredentialCustodyError("invalid-input");
-  if (
-    compatibility !== undefined &&
-    (status !== "ok" || !isJiraDataCenterCompatibilityFacts(compatibility))
-  )
-    throw new AtlassianCredentialCustodyError("invalid-input");
+  assertStorableVerification(status, compatibility);
   commitVerificationStatus(deps, metadata, status, correlationId, compatibility);
   return true;
 }

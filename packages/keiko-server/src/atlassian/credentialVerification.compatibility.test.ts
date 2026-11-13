@@ -316,7 +316,7 @@ describe("Jira compatibility through stored credential verification", () => {
         expectedGeneration: after.generation,
         apiToken: ["replacement", "synthetic", "credential"].join("-"),
       });
-      expect(rotated.generation).toBe((after.generation ?? 1) + 1);
+      expect(rotated.generation).toBe(after.generation + 1);
     },
   );
 

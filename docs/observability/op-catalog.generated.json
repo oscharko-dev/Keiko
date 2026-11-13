@@ -118514,7 +118514,7 @@
     {
       "op": "atlassian.connection.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/wiring.ts:633",
+      "site": "packages/keiko-server/src/atlassian/wiring.ts:652",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
