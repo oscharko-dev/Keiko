@@ -306,6 +306,47 @@ describe("template documents in the skill library", () => {
   });
 });
 
+// #4354 AC3: a template that names a project the connected Jira does not have (KERNBANK against the
+// key KER, the owner's 2026-11-07 walk) is a finding the person sees, not a failure and not a pass.
+describe("a template naming a project the Jira does not have", () => {
+  const KERNBANK = TEMPLATE.replace("project: SYN", "project: KERNBANK").replace(
+    "requiredFields: [Story Points, Unknown Thing]\n",
+    "",
+  );
+
+  it("is a finding with the template's own key, and nothing about the project is claimed checked", async () => {
+    const { deps, cookie, http } = fixture();
+    const result = await handleValidateJiraTemplate(
+      context(cookie, { markdown: KERNBANK, podId: POD }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ valid: true, checked: { project: false } });
+    expect((result.body as { readonly findings: readonly unknown[] }).findings).toContainEqual({
+      code: "unknown-project",
+      subject: "KERNBANK",
+    });
+    expect(http.mock.calls.some(([request]) => request.url.endsWith("/project/KERNBANK"))).toBe(
+      true,
+    );
+  });
+
+  it("is not mistaken for a Jira that could not be read", async () => {
+    const { deps, cookie, http } = fixture();
+    http.mockImplementation((request) =>
+      new URL(request.url).pathname.endsWith("/project/KERNBANK")
+        ? Promise.resolve(response({}, 403))
+        : jiraGet(request),
+    );
+    const result = await handleValidateJiraTemplate(
+      context(cookie, { markdown: KERNBANK, podId: POD }),
+      deps,
+    );
+    expect(result.status).toBe(502);
+    expect(JSON.stringify(result.body)).not.toContain("unknown-project");
+  });
+});
+
 describe("validate against the live instance", () => {
   it("reports malformed Markdown without touching Jira", async () => {
     const { deps, cookie, http } = fixture();
