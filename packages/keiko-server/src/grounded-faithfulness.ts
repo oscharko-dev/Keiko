@@ -1533,6 +1533,7 @@ interface ScheduledClaim {
   readonly verdict: Promise<EntailmentVerdict>;
 }
 
+const SUPPLEMENTAL_HEADER = "Figures Keiko computed for the Jira report of this turn:";
 const EVIDENCE_TOKEN = /[\p{L}\p{N}][\p{L}\p{N}_-]*/gu;
 
 function evidenceTokens(text: string): ReadonlySet<string> {
@@ -1562,13 +1563,13 @@ function supplementalLinesFor(
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const picked: string[] = [];
-  let size = 0;
+  let size = SUPPLEMENTAL_HEADER.length + 1;
   for (const { line } of scored) {
     if (size + line.length + 1 > maxChars) continue;
     picked.push(line);
     size += line.length + 1;
   }
-  return picked.length === 0 ? undefined : picked.join("\n");
+  return picked.length === 0 ? undefined : [SUPPLEMENTAL_HEADER, ...picked].join("\n");
 }
 
 /** The turn's own evidence joins every claim whose citations leave room for one more item. */

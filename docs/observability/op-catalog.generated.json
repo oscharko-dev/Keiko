@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a378bcd403a76631668fa631c6c4738a99338f8bd6f591a279115db447edb46e",
+    "catalogDigest": "aad9e67387921ed57c62f375d8c7228df2a282c64cf1bf0a2ddc03100ddc5400",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4193,8 +4193,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:518",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:565"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:552",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:599"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4279,7 +4279,8 @@
               "report-omission",
               "report-coverage",
               "unsupported-issue-key",
-              "knowledge-coverage"
+              "knowledge-coverage",
+              "raw-report-key"
             ]
           },
           "omittedFindingCount": {
@@ -4297,6 +4298,11 @@
             "dataClass": "count",
             "required": false
           },
+          "rawReportKeyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "pendingKnowledgePageCount": {
             "type": "integer",
             "dataClass": "count",
@@ -4310,7 +4316,7 @@
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:391",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:489"]
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:534"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -67428,6 +67434,12 @@
                   "required": false
                 },
                 {
+                  "name": "rawReportKeyCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "settledExchangeCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -118297,7 +118309,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:401",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:408",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119146,7 +119158,7 @@
     {
       "op": "chat.tool-turn.batch-draft-offer",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:521",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:555",
       "package": "keiko-server"
     },
     {

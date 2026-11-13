@@ -418,6 +418,7 @@ const CORRECTED = defineActivityLogOperation({
         "report-coverage",
         "unsupported-issue-key",
         "knowledge-coverage",
+        "raw-report-key",
       ],
     },
     omittedFindingCount: {
@@ -431,6 +432,11 @@ const CORRECTED = defineActivityLogOperation({
       required: false,
     },
     unsupportedKeyCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    rawReportKeyCount: {
       type: "integer",
       dataClass: "count",
       required: false,
@@ -455,6 +461,59 @@ const CORRECTED = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+interface ChatToolTurnCorrectionInput {
+  readonly correlationId: string;
+  readonly messageId: string;
+  readonly settledExchangeCount: number;
+  readonly correctionKind:
+    | "tool-schema"
+    | "empty-answer"
+    | "report-omission"
+    | "report-coverage"
+    | "unsupported-issue-key"
+    | "knowledge-coverage"
+    | "raw-report-key";
+  readonly omittedFindingCount?: number;
+  readonly mismatchedRequirementCount?: number;
+  readonly unsupportedKeyCount?: number;
+  readonly rawReportKeyCount?: number;
+  readonly pendingKnowledgePageCount?: number;
+}
+
+/** The optional body-free counts of one correction line. */
+function correctionCounts(
+  input: ChatToolTurnCorrectionInput,
+): Readonly<
+  Partial<
+    Record<
+      | "omittedFindingCount"
+      | "mismatchedRequirementCount"
+      | "unsupportedKeyCount"
+      | "rawReportKeyCount"
+      | "pendingKnowledgePageCount",
+      number
+    >
+  >
+> {
+  return {
+    ...(input.omittedFindingCount === undefined
+      ? {}
+      : { omittedFindingCount: input.omittedFindingCount }),
+    ...(input.mismatchedRequirementCount === undefined
+      ? {}
+      : { mismatchedRequirementCount: input.mismatchedRequirementCount }),
+    ...(input.unsupportedKeyCount === undefined
+      ? {}
+      : { unsupportedKeyCount: input.unsupportedKeyCount }),
+    ...(input.rawReportKeyCount === undefined
+      ? {}
+      : { rawReportKeyCount: input.rawReportKeyCount }),
+    ...(input.pendingKnowledgePageCount === undefined
+      ? {}
+      : { pendingKnowledgePageCount: input.pendingKnowledgePageCount }),
+  };
+}
+
 /**
  * Recorded when a turn gets one further round carrying a correction instead of ending: a tool call
  * the gateway rejected again after its own schema correction (`tool-schema`), a round the model
@@ -462,27 +521,13 @@ const CORRECTED = defineActivityLogOperation({
  * out findings the turn's report pages list (`report-omission`, with their count; never the keys),
  * an answer that gave requirements other issues than the report's requirement pages state
  * (`report-coverage`, with the requirement count; never the ids or keys), or an answer that named issue keys no tool result showed (`unsupported-issue-key`, with their
- * count; never the keys), or unfinished Knowledge pages (`knowledge-coverage`, with the pending
+ * count; never the keys), or an answer that printed the report's internal result keys (`raw-report-key`, with
+ * their count; never the keys), or unfinished Knowledge pages (`knowledge-coverage`, with the pending
  * page count). A combined correction emits one line per kind for the same admitted model round.
  */
 export function recordChatToolTurnCorrected(
   log: ServerLogSink,
-  input: {
-    readonly correlationId: string;
-    readonly messageId: string;
-    readonly settledExchangeCount: number;
-    readonly correctionKind:
-      | "tool-schema"
-      | "empty-answer"
-      | "report-omission"
-      | "report-coverage"
-      | "unsupported-issue-key"
-      | "knowledge-coverage";
-    readonly omittedFindingCount?: number;
-    readonly mismatchedRequirementCount?: number;
-    readonly unsupportedKeyCount?: number;
-    readonly pendingKnowledgePageCount?: number;
-  },
+  input: ChatToolTurnCorrectionInput,
 ): void {
   try {
     log.write(
@@ -493,18 +538,7 @@ export function recordChatToolTurnCorrected(
           messageDigest: sha256Hex(input.messageId),
           settledExchangeCount: input.settledExchangeCount,
           correctionKind: input.correctionKind,
-          ...(input.omittedFindingCount === undefined
-            ? {}
-            : { omittedFindingCount: input.omittedFindingCount }),
-          ...(input.mismatchedRequirementCount === undefined
-            ? {}
-            : { mismatchedRequirementCount: input.mismatchedRequirementCount }),
-          ...(input.unsupportedKeyCount === undefined
-            ? {}
-            : { unsupportedKeyCount: input.unsupportedKeyCount }),
-          ...(input.pendingKnowledgePageCount === undefined
-            ? {}
-            : { pendingKnowledgePageCount: input.pendingKnowledgePageCount }),
+          ...correctionCounts(input),
           completeness: "complete",
           loss: "none",
         },
