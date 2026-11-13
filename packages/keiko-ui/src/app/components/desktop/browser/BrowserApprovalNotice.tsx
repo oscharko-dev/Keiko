@@ -156,6 +156,36 @@ function noticeMessageKey(state: {
   return state.restarted ? "browserApproval.restarted" : "browserApproval.launchNotice";
 }
 
+/**
+ * The compact header keeps its ordinary message visually hidden, but a restart is a rare state the
+ * person has to be able to read: it shows one short line there, with the full text as the tooltip.
+ */
+function NoticeMessage({
+  message,
+  compact,
+  alert,
+  showRestart,
+}: {
+  readonly message: string;
+  readonly compact: boolean;
+  readonly alert: boolean;
+  readonly showRestart: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  const roleProps = alert ? { role: "alert" } : {};
+  if (compact && showRestart)
+    return (
+      <span className={styles.cmpCompactMessage} {...roleProps}>
+        {t("browserApproval.restartedCompact")}
+      </span>
+    );
+  return (
+    <span className={compact ? "visually-hidden" : undefined} {...roleProps}>
+      {message}
+    </span>
+  );
+}
+
 function BrowserApprovalBanner({
   compact,
   failed,
@@ -176,12 +206,12 @@ function BrowserApprovalBanner({
       className={`${styles.cmpNotice} ${compact ? styles.cmpCompactNotice : ""}`}
       aria-label={t("browserApproval.title")}
     >
-      <span
-        role={launchFailed ? "alert" : undefined}
-        className={compact ? "visually-hidden" : undefined}
-      >
-        {message}
-      </span>
+      <NoticeMessage
+        message={message}
+        compact={compact}
+        alert={launchFailed}
+        showRestart={restarted && !failed && !launchFailed}
+      />
       <button type="button" disabled={working} title={message} onClick={failed ? onRetry : onOpen}>
         {t(buttonKey)}
       </button>

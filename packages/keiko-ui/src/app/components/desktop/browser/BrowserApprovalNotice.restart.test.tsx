@@ -67,6 +67,28 @@ describe("after Keiko restarted (#4370)", () => {
     expect(message.textContent).not.toMatch(/session|cookie|error|unauthor|registry/iu);
   });
 
+  it("shows the restart in plain sight in the compact header, not only to assistive technology", async () => {
+    // The shell renders the compact variant: its ordinary message stays visually hidden, but a restart
+    // is a rare state the person must be able to read, with the full text kept as the tooltip.
+    vi.mocked(restart.sessionEndedByRestart).mockResolvedValue(true);
+    render(<BrowserApprovalNotice compact />);
+    const visible = await screen.findByText(
+      "Keiko was restarted. Connect again; your chat and draft are kept.",
+    );
+    expect(visible).not.toHaveClass("visually-hidden");
+    expect(screen.getByRole("button", { name: "Connect browser" })).toHaveAttribute(
+      "title",
+      RESTARTED_MESSAGE,
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps the ordinary compact message visually hidden when no restart was observed", async () => {
+    render(<BrowserApprovalNotice compact />);
+    const hidden = await screen.findByText("Keiko opens a connected window in this browser.");
+    expect(hidden).toHaveClass("visually-hidden");
+  });
+
   it("offers no way to remember the browser here and starts no approval by itself", async () => {
     vi.mocked(restart.sessionEndedByRestart).mockResolvedValue(true);
     render(<BrowserApprovalNotice />);
