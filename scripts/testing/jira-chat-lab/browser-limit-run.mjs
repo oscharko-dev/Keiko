@@ -369,33 +369,40 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
   const results = [];
   try {
     await stages(ctx, selected, blocks, results);
-    const verified = results.every((result) => result.status === "green");
-    const skipped = LIMIT_RUN_SKIPPED_STEPS[selected.steps] ?? [];
-    const partial = verified && skipped.length > 0;
-    ctx.intent.record("orchestrator", {
-      phase: verified ? "steps-verified" : "steps-unverified",
-      steps: selected.steps,
-      partial,
-      skipped,
-      results,
-    });
-    if (!verified) ctx.intent.failed();
-    return {
-      step: "browser-limit-run",
-      status: verified ? (partial ? "partial" : "green") : "unverified",
-      detail: verified
-        ? partial
-          ? `All ${selected.steps} limit-run steps independently verified; ${skipped.join(", ")} not run`
-          : "All limit-run steps independently verified"
-        : "Fault evidence remains incomplete",
-      counts: { steps: results.length },
-      ...(partial ? { partial: true, skipped } : {}),
-      evidenceFile: ctx.intent.path,
-    };
+    return limitRunOutcome(ctx, selected, results);
   } catch (error) {
     ctx.intent.failed();
     throw error;
   }
+}
+
+/** The terminal verdict of the steps that ran: green, partial (a package left out) or unverified. */
+function limitRunOutcome(ctx, selected, results) {
+  const verified = results.every((result) => result.status === "green");
+  const skipped = LIMIT_RUN_SKIPPED_STEPS[selected.steps] ?? [];
+  const partial = verified && skipped.length > 0;
+  ctx.intent.record("orchestrator", {
+    phase: verified ? "steps-verified" : "steps-unverified",
+    steps: selected.steps,
+    partial,
+    skipped,
+    results,
+  });
+  if (!verified) ctx.intent.failed();
+  return {
+    step: "browser-limit-run",
+    status: verified ? (partial ? "partial" : "green") : "unverified",
+    detail: limitRunDetail({ verified, partial, selected, skipped }),
+    counts: { steps: results.length },
+    ...(partial ? { partial: true, skipped } : {}),
+    evidenceFile: ctx.intent.path,
+  };
+}
+
+function limitRunDetail({ verified, partial, selected, skipped }) {
+  if (!verified) return "Fault evidence remains incomplete";
+  if (!partial) return "All limit-run steps independently verified";
+  return `All ${selected.steps} limit-run steps independently verified; ${skipped.join(", ")} not run`;
 }
 
 /** Finalization runs only after the owned browser/server cleanup has completed. */

@@ -297,6 +297,48 @@ function forward(req, res, backendPort, compose, upstreamHost) {
   req.pipe(upstream);
 }
 
+/** Port 0 (an ephemeral port the caller owns) is for the hermetic tests only; the CLI refuses it. */
+function requireFrontPorts(listenPort, backendPort) {
+  if (listenPort !== 0) portNumber(listenPort);
+  portNumber(backendPort);
+  if (listenPort === backendPort && listenPort !== 0)
+    throw new TypeError("Lab frontend and backend ports must differ");
+}
+
+/** Compose serves the files its volumes mount; outside compose the front owns its certificates. */
+function tlsOptions(directory, compose, privateAddress) {
+  const files = compose
+    ? { "server.key": join(directory, "server.key"), "server.pem": join(directory, "server.pem") }
+    : initializeLabTls(directory, { privateAddress });
+  Object.values(files).forEach(requirePrivateFile);
+  return {
+    key: readFileSync(files["server.key"]),
+    cert: readFileSync(files["server.pem"]),
+    minVersion: "TLSv1.2",
+  };
+}
+
+const defaultListenHost = (compose) => (compose ? "0.0.0.0" : "127.0.0.1");
+
+const bounded = (server) => {
+  server.requestTimeout = 35_000;
+  server.headersTimeout = 10_000;
+  return server;
+};
+
+/** A second listener on the private address; it closes with the main one and fails it loudly. */
+function servePrivateAddress({ server, options, handler, listenPort, privateAddress }) {
+  const extra = bounded(createServer(options, handler));
+  // A private address the host does not hold must stop the front, never be skipped silently.
+  extra.on("error", (error) => server.emit("error", error));
+  extra.listen(listenPort, privateAddress);
+  const close = server.close.bind(server);
+  server.close = (callback) => {
+    extra.close();
+    return close(callback);
+  };
+}
+
 /**
  * `privateAddress` (optional) adds one private-class address: the certificate names it, the Host
  * guard accepts it and, outside compose, a second listener serves it. The loopback default is
@@ -310,46 +352,20 @@ export function startLabTlsFront(
   privateAddress = undefined,
   { upstreamHost, listenHost } = {},
 ) {
-  // Port 0 (an ephemeral port the caller owns) is for the hermetic tests only; the CLI refuses it.
-  if (listenPort !== 0) portNumber(listenPort);
-  portNumber(backendPort);
-  if (listenPort === backendPort && listenPort !== 0)
-    throw new TypeError("Lab frontend and backend ports must differ");
-  const files = compose
-    ? { "server.key": join(directory, "server.key"), "server.pem": join(directory, "server.pem") }
-    : initializeLabTls(directory, { privateAddress });
-  Object.values(files).forEach(requirePrivateFile);
-  const options = {
-    key: readFileSync(files["server.key"]),
-    cert: readFileSync(files["server.pem"]),
-    minVersion: "TLSv1.2",
-  };
+  requireFrontPorts(listenPort, backendPort);
+  const options = tlsOptions(directory, compose, privateAddress);
   // The Host guard follows the port the listener actually holds.
-  const hostsOf = () => allowedLabHosts(server.address().port, privateAddress);
   const handler = (req, res) => {
-    if (!hostsOf().has(req.headers.host)) {
+    if (!allowedLabHosts(server.address().port, privateAddress).has(req.headers.host)) {
       res.writeHead(421).end();
       return;
     }
     forward(req, res, backendPort, compose, upstreamHost);
   };
-  const server = createServer(options, handler);
-  server.requestTimeout = 35_000;
-  server.headersTimeout = 10_000;
-  server.listen(listenPort, listenHost ?? (compose ? "0.0.0.0" : "127.0.0.1"));
-  if (!compose && privateAddress !== undefined) {
-    const extra = createServer(options, handler);
-    extra.requestTimeout = server.requestTimeout;
-    extra.headersTimeout = server.headersTimeout;
-    // A private address the host does not hold must stop the front, never be skipped silently.
-    extra.on("error", (error) => server.emit("error", error));
-    extra.listen(listenPort, privateAddress);
-    const close = server.close.bind(server);
-    server.close = (callback) => {
-      extra.close();
-      return close(callback);
-    };
-  }
+  const server = bounded(createServer(options, handler));
+  server.listen(listenPort, listenHost ?? defaultListenHost(compose));
+  if (!compose && privateAddress !== undefined)
+    servePrivateAddress({ server, options, handler, listenPort, privateAddress });
   return server;
 }
 
