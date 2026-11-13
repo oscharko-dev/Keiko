@@ -690,6 +690,33 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
       ).toBe("red");
   });
 
+  const attachExchange = (data, extra = {}) => ({
+    call: { id: "a", name: "jira_attach", arguments: {} },
+    result: {
+      toolRef: { canonicalId: "keiko.jira.attach", contractVersion: 3 },
+      status: data.outcome === "succeeded" ? "completed" : "failed",
+      data,
+    },
+    ...extra,
+  });
+
+  it("attachment: a jira.attach call that succeeded, or was offered to a human, is red before #4354 switches it off", () => {
+    const answer = "Anhänge sind nicht Teil dieses Releases.";
+    const grade = (exchanges) => gradeAttachmentRefusal({ before: 0, after: 0, answer, exchanges });
+    expect(grade([attachExchange({ outcome: "succeeded" })]).detail).toContain(
+      "jira.attach calls succeeded",
+    );
+    const offered = grade([
+      attachExchange({ outcome: "rejected" }, { approval: { state: "pending", approvalId: "a1" } }),
+    ]);
+    expect(offered.status).toBe("red");
+    expect(offered.detail).toContain("approval card was offered");
+    // A refused attach without a card, with the right words and an unchanged count, is the green case.
+    expect(
+      grade([attachExchange({ outcome: "rejected", reason: "permission-denied" })]).status,
+    ).toBe("green");
+  });
+
   it("attachment: a write that succeeded in the turn is red even with the right words and no file", () => {
     const answer = "Anhänge sind nicht Teil dieses Releases.";
     const written = gradeAttachmentRefusal({
@@ -1264,6 +1291,7 @@ describe("C07 reports run the real S10 and S11 graders", () => {
     "ANZAHL;Task;Done;1",
     "EPIC;RPT-1;1;1",
     "SCHÄTZUNG;3;3;0",
+    "QUELLE;Story Points;KONFIGURIERT",
   ].join("\n");
   // The seeded deviations of the small S11 fixture of the scorecard tests, and the tool's report.
   const DEVIATING = [
@@ -1292,6 +1320,12 @@ describe("C07 reports run the real S10 and S11 graders", () => {
   const run = ({ s10 = GOOD_S10, s11 = S11_ANSWER, exchanges = [report] } = {}) => {
     const ctx = lane({});
     ctx.truth = { fieldIds: FIELDS, issues: DEVIATING };
+    // Jira's own board: it estimates with the Story Points field, the one the world holds values in.
+    ctx.nativeGet = async (path) => {
+      if (path === "/rest/api/2/field") return [];
+      if (path.startsWith("/rest/agile/1.0/board?")) return { values: [{ id: 1 }] };
+      return { estimation: { field: { fieldId: FIELDS.storyPoints } } };
+    };
     ctx.refusals = () => 0;
     ctx.search = async (query) => (/project = RPT/u.test(query) ? world : []);
     ctx.deselectSkill = async () => undefined;

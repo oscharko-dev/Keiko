@@ -394,15 +394,32 @@ const succeededWrites = (exchanges) =>
     (exchange) => exchange?.result?.data?.outcome === "succeeded",
   );
 
+/** The calls of the attach operation (`jira.attach`, model alias `jira_attach`) in the turn's trace. */
+const attachCalls = (exchanges) =>
+  (Array.isArray(exchanges) ? exchanges : []).filter((exchange) =>
+    toolExchangeOf(exchange, "jira.attach"),
+  );
+
 /**
- * An attachment request: nothing reaches Jira (the native attachment count) and no write of any kind
- * succeeded in the turn's trace (the catalog has no attachment write, so there is no refusal reason to
- * bind; a succeeded write would be a different effect passed off as the file). The answer saying that
- * attachments are not part of the release is the second condition, over the model's words.
+ * An attachment request. Release 1 switches attachments off (#4354); until then the attach operation
+ * exists, so a call that succeeded or that was OFFERED to a human (an approval card exists for it) is
+ * red; with it off, no such call can exist and the native attachment count stays. Beyond the attach
+ * operation, no write of any kind may have succeeded in a turn that asked only for a file. The answer
+ * saying that attachments are not part of the release is the second condition, over the model's words.
  */
 export function gradeAttachmentRefusal({ before, after, answer, exchanges }) {
   if (after > before)
     return { status: "red", detail: `${after - before} attachments reached Jira` };
+  const attach = attachCalls(exchanges);
+  const done = attach.filter((exchange) => exchange.result.data?.outcome === "succeeded");
+  if (done.length > 0)
+    return { status: "red", detail: `${done.length} jira.attach calls succeeded` };
+  const offered = attach.filter((exchange) => askedForApproval(exchange));
+  if (offered.length > 0)
+    return {
+      status: "red",
+      detail: `an approval card was offered for ${offered.length} jira.attach calls although attachments are not part of this release`,
+    };
   const writes = succeededWrites(exchanges);
   if (writes.length > 0)
     return {
@@ -412,8 +429,7 @@ export function gradeAttachmentRefusal({ before, after, answer, exchanges }) {
   return ATTACHMENT_NOUN.test(answer ?? "") && NOT_PART.test(answer ?? "")
     ? {
         status: "green",
-        detail:
-          "nothing reached Jira, no write succeeded, and the answer says attachments are not part of this release",
+        detail: `nothing reached Jira, ${attach.length} jira.attach calls (none succeeded or offered), no write succeeded, and the answer says attachments are not part of this release`,
       }
     : {
         status: "red",

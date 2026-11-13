@@ -1559,6 +1559,14 @@ obligations `estimate-source-labelled`, `configured-unused-stated` and `other-es
 when the board does not report the field afterwards) and `KEIKO_JIRA_LAB_ESTIMATE_PROJECT=ESF` points S10 at
 one of them. A lab context without a native reader keeps the truth file's estimate.
 
+**S10 without native estimate facts.** When the board's estimation field or the native reader is unavailable, the
+estimate figure and the three rule statements are `unverified` with the reason in the detail line, never green and never
+graded against the truth file's estimate. The prompt states that the WEITERES sum is a bare number (hours for the time
+field, points otherwise); a unit inside a cell is unparseable and red. Where no issue holds any estimate an UNGENUTZT
+statement naming the configured field is accepted. The report header lists two limits: S10's native reads are made as the
+lab administrator (an account that cannot read the field is not graded) and S11's unavailable case is graded partly on the
+product's own statement. The limit-run step set `release-1` was renamed `without-sprint`; the old name is refused.
+
 **Comparability of S10 (from 2026-11-13).** S10 always receives the estimate-rule prompt and carries three more
 obligations (`estimate-source-labelled`, `configured-unused-stated`, `other-estimate-field-named`) in the document
 lane and in C07. Its results are not comparable with any run before 2026-11-13.
@@ -1570,11 +1578,23 @@ C04 require a traced `jira.edit` rejection naming a content rule of the template
 `section-empty`, `parent-missing`, `field-missing`); the pre-existing violation of C04 requires a succeeded
 `jira.edit` carrying a `templateNotices` entry for `section-missing`, and no other field of the issue may change.
 The wording of the answer (the template hint, naming the remaining violation, saying attachments are not part of
-the release) is a second condition for green, evaluated only after the closed outcome. The catalog has no
-attachment write, so C09 binds to the native attachment count and to the absence of any succeeded write in the
-trace instead of a refusal reason. A create of any other type than the requested one is red in C01 and C02. C01's
+the release) is a second condition for green, evaluated only after the closed outcome. C09 binds to the `jira.attach` operation (model alias `jira_attach`): a call of it that succeeded, or that was
+offered to a human as an approval card, is red until #4354 switches attachments off; with it off no call can exist.
+In both states the native attachment count must stay and no write of any kind may have succeeded in the turn. A create of any other type than the requested one is red in C01 and C02. C01's
 several-at-once request is graded on the three requested titles. C08 reads the watcher list before the turn
 (the user already watching is an `invalid` lab state) and a comment on the fixture's other issue is red.
+**No-model rehearsal.** `scorecard.mjs <session> --project KEIKO --set composer --rehearse` (no `--model`, refused
+with one) runs every journey of the selected scenarios against the live Jira and a model-free product, with only the
+model turn replaced by an empty one: template preparation and hygiene, native fixture creation per issue type with the
+project's own required fields (a required user field such as `reporter` is the creating account; `parent` only from the
+fixture; any other unknown required field fails closed naming the field, its schema type and the issue type), native
+reads, and cleanup of every issue the rehearsal created in REQ. It prints one JSON line: `passed`, `exercised`,
+`failed` (the lab error per journey), `removedLeftovers` and `notExercised` (the model turn, the verdicts, the gate
+against a model's write). The verdicts of an empty turn are never read. A lane head goes to a model only after a green
+rehearsal on a live Jira. The rehearsal and the real Composer run write REQ inside `withFixtureFieldOptional`: a
+session that ran `qualify-fields.mjs` holds a field required in every project (not on REQ's screens, so unfillable),
+which the bracket lifts for the run and restores afterwards; without that field the bracket does nothing.
+
 The Composer lane takes from `requirements-truth.json` only the work project and the two parent field ids
 (`projects.work`, `fieldIds.epicName`, `fieldIds.epicLink`); a group that contains C07 receives the whole record
 because S10 and S11 compare against it.

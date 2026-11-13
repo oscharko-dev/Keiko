@@ -22,7 +22,7 @@ import { eachJourneyInLicenseWindow, ensureLicenseWindow } from "./license-windo
 import { LabOutageError, labJiraState } from "./lab-health.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
 import { WORK_PROJECT, clearWorkProject } from "./work-project-reset.mjs";
-import { basicAuth, checked, labRequest } from "../lab-client.mjs";
+import { actorDetails, basicAuth, checked, labRequest } from "../lab-client.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { writeCorpusDocuments } from "./corpus-documents.mjs";
 import { FORMATS } from "./formats.mjs";
@@ -484,17 +484,17 @@ const SYNTHETIC_VALUE = "Synthetic required value";
 
 /**
  * The required fields a native create must still fill, read from the project's own create metadata
- * for the issue type (never from another project's fixture): a text field gets a synthetic value, a
- * field with allowed values its first one. Anything else fails closed.
+ * for the issue type (never from another project's fixture). See `requiredValue` for what each type
+ * of field gets; any other required field fails closed, naming the field and the issue type.
  */
 export async function requiredFieldValues(session, fields) {
   const auth = basicAuth(session, "admin");
   const project = fields.project.key;
+  const typeName = fields.issuetype.name;
   const base = `/rest/api/2/issue/createmeta/${encodeURIComponent(project)}/issuetypes`;
   const types = await checked(session, "composer-create-types", "GET", base, auth);
-  const type = (types.values ?? []).find((entry) => entry.name === fields.issuetype.name);
-  if (type === undefined)
-    throw new TypeError(`${project} has no issue type ${fields.issuetype.name}`);
+  const type = (types.values ?? []).find((entry) => entry.name === typeName);
+  if (type === undefined) throw new TypeError(`${project} has no issue type ${typeName}`);
   const meta = await checked(
     session,
     "composer-create-meta",
@@ -505,35 +505,73 @@ export async function requiredFieldValues(session, fields) {
   const missing = (meta.values ?? []).filter(
     (field) => field.required && !Object.hasOwn(fields, field.fieldId),
   );
-  return Object.fromEntries(missing.map((field) => [field.fieldId, requiredValue(project, field)]));
+  return Object.fromEntries(
+    missing.map((field) => [field.fieldId, requiredValue({ project, typeName }, field)]),
+  );
 }
 
-/** A text field gets a synthetic value, a field with allowed values its first one; else fail closed. */
-function requiredValue(project, field) {
-  if (field.schema?.type === "string") return SYNTHETIC_VALUE;
-  if (Array.isArray(field.allowedValues) && field.allowedValues.length > 0)
-    return { id: String(field.allowedValues[0].id) };
-  throw new TypeError(`A required field of ${project} cannot be filled natively`);
+/** The synthetic value of the schema types that need no allowed value (a user field is the creator). */
+const SCALAR_VALUES = new Map([
+  ["user", () => ({ name: actorDetails("admin").name })],
+  ["number", () => 1],
+  ["date", () => new Date().toISOString().slice(0, 10)],
+  ["datetime", () => new Date().toISOString().replace(/Z$/u, "+0000")],
+]);
+
+/** The synthetic value of a required field of one schema type, or undefined when none is known. */
+function syntheticValue(field) {
+  const type = field.schema?.type;
+  const first = Array.isArray(field.allowedValues) ? field.allowedValues[0] : undefined;
+  if (type === "string" && first === undefined) return SYNTHETIC_VALUE;
+  const scalar = SCALAR_VALUES.get(type)?.();
+  if (scalar !== undefined) return scalar;
+  if (first === undefined) return undefined;
+  const option = { id: String(first.id) };
+  return type === "array" ? [option] : option;
+}
+
+/**
+ * A required field gets: a synthetic text, the creating account (a user field such as `reporter`), a
+ * number, a date, or the first of its allowed values (an array of them for an array field). Anything
+ * else — `parent` included, which only the fixture can name — fails closed with the field's id, name
+ * and schema type and the issue type, so a lab error is never a bare "cannot be filled".
+ */
+function requiredValue({ project, typeName }, field) {
+  const value = syntheticValue(field);
+  if (value !== undefined) return value;
+  throw new TypeError(
+    `A required field of ${project} cannot be filled natively: ${field.fieldId} "${field.name ?? "unnamed"}" (schema type ${field.schema?.type ?? "unknown"}) on ${typeName}`,
+  );
+}
+
+/** What Jira said to a refused native create, as lab text: its messages and per-field errors, bounded. */
+function refusalText(value) {
+  const messages = Array.isArray(value?.errorMessages) ? value.errorMessages : [];
+  const fields = Object.entries(value?.errors ?? {}).map(([id, text]) => `${id}: ${text}`);
+  return redactLabDetail([...messages, ...fields].join("; ")).slice(0, 400);
 }
 
 /** A native admin create (fixtures of the Composer lane); returns the new issue key. */
 async function createNativeIssue(session, fields) {
   const required = await requiredFieldValues(session, fields);
-  const created = await checked(
+  const created = await labRequest(
     session,
-    "composer-fixture",
     "POST",
     "/rest/api/2/issue",
     basicAuth(session, "admin"),
     { fields: { ...required, ...fields } },
   );
-  return String(created.key);
+  if (created.status !== 201 || typeof created.value?.key !== "string")
+    throw new TypeError(
+      `The native create of a ${fields.issuetype.name} in ${fields.project.key} was refused (HTTP ${created.status}): ${refusalText(created.value)}`,
+    );
+  return created.value.key;
 }
 
 export { JOURNEY_IDS };
 
 /** The live plumbing the journey checks are given (see journey-checks.mjs). */
-function journeyContext(live, session, truth) {
+export function journeyContext(live, session, truth) {
   const ctx = {
     ...live,
     truth,

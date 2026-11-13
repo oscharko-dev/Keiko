@@ -1,8 +1,9 @@
 // The Composer lane's command line and native fixtures (#4369): selection errors, baseline grouping,
 // report directory, required fields read from the project's own metadata, and the work-project lock.
 import { readFileSync } from "node:fs";
+import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const reads = vi.hoisted(() => new Map());
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
@@ -136,6 +137,7 @@ describe("report directory", () => {
 describe("native create reads the required fields from the project's own metadata", () => {
   const base = "/rest/api/2/issue/createmeta/REQ/issuetypes";
   const fields = { project: { key: "REQ" }, issuetype: { name: "Task" }, summary: "x" };
+  beforeEach(() => reads.set(base, { values: [{ id: "10002", name: "Task" }] }));
 
   it("fills a required text field and a required field with allowed values, leaves supplied fields alone", async () => {
     reads.set(base, { values: [{ id: "10002", name: "Task" }] });
@@ -153,11 +155,71 @@ describe("native create reads the required fields from the project's own metadat
     });
   });
 
-  it("fails closed on a required field it cannot fill and on an unknown issue type", async () => {
+  it("fills the required user field with the creating account, as REQ's every issue type needs", async () => {
+    reads.set(base, { values: [{ id: "10002", name: "Task" }] });
     reads.set(`${base}/10002?maxResults=200`, {
-      values: [{ fieldId: "customfield_9", required: true, schema: { type: "user" } }],
+      values: [
+        { fieldId: "summary", name: "Summary", required: true, schema: { type: "string" } },
+        { fieldId: "issuetype", name: "Issue Type", required: true, schema: { type: "issuetype" } },
+        { fieldId: "project", name: "Project", required: true, schema: { type: "project" } },
+        { fieldId: "reporter", name: "Reporter", required: true, schema: { type: "user" } },
+      ],
     });
-    await expect(requiredFieldValues({}, fields)).rejects.toThrow("cannot be filled natively");
+    // summary, issuetype and project are supplied by the fixture; only the reporter is left.
+    expect(
+      await requiredFieldValues(
+        {},
+        { ...fields, issuetype: { name: "Task" }, project: { key: "REQ" } },
+      ),
+    ).toEqual({ reporter: { name: actorDetails("admin").name } });
+  });
+
+  it("fills a number, a date and an option array, and takes the sub-task's parent from the fixture only", async () => {
+    reads.set(`${base}/10002?maxResults=200`, {
+      values: [
+        { fieldId: "customfield_1", name: "Points", required: true, schema: { type: "number" } },
+        { fieldId: "customfield_2", name: "Due", required: true, schema: { type: "date" } },
+        {
+          fieldId: "customfield_3",
+          name: "Components",
+          required: true,
+          schema: { type: "array" },
+          allowedValues: [{ id: 7 }, { id: 8 }],
+        },
+        { fieldId: "parent", name: "Parent", required: true, schema: { type: "issuelink" } },
+      ],
+    });
+    const supplied = { ...fields, parent: { key: "REQ-2" } };
+    const filled = await requiredFieldValues({}, supplied);
+    expect(filled.customfield_1).toBe(1);
+    expect(filled.customfield_2).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+    expect(filled.customfield_3).toEqual([{ id: "7" }]);
+    expect(Object.hasOwn(filled, "parent")).toBe(false);
+  });
+
+  it("fails closed on a required field of an unknown type, naming the field, its schema type and the issue type", async () => {
+    reads.set(`${base}/10002?maxResults=200`, {
+      values: [
+        { fieldId: "parent", name: "Parent", required: true, schema: { type: "issuelink" } },
+        { fieldId: "customfield_9", name: "Team", required: true, schema: { type: "team" } },
+      ],
+    });
+    const error = await requiredFieldValues({}, fields).catch((thrown) => thrown);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toContain("parent");
+    expect(error.message).toContain("Parent");
+    expect(error.message).toContain("issuelink");
+    expect(error.message).toContain("on Task");
+    const unnamed = await (async () => {
+      reads.set(`${base}/10002?maxResults=200`, {
+        values: [{ fieldId: "customfield_9", required: true }],
+      });
+      return requiredFieldValues({}, fields).catch((thrown) => thrown);
+    })();
+    expect(unnamed.message).toContain('customfield_9 "unnamed" (schema type unknown) on Task');
+  });
+
+  it("fails closed on an unknown issue type", async () => {
     await expect(
       requiredFieldValues({}, { ...fields, issuetype: { name: "Nope" } }),
     ).rejects.toThrow("no issue type Nope");
