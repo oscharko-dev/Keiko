@@ -170,6 +170,7 @@ import {
   jiraPinnedCommentDetails,
 } from "./jira-issue-context-presentation";
 import { jiraPresentationNativeText } from "./jira-presentation-values";
+import { jiraReadableText } from "./jira-readable-text";
 
 /** One Jira issue a tool call created, changed or read, as a person recognises it. */
 interface JiraOutcomeIssue {
@@ -177,9 +178,17 @@ interface JiraOutcomeIssue {
   readonly summary?: string;
   readonly href?: string;
 }
+/**
+ * How a person recognises a draft item: the summary they reviewed, else its place in the draft. The
+ * model's own item reference never reaches the screen (#4355).
+ */
+export interface JiraOutcomeItemName {
+  readonly position: number;
+  readonly summary?: string;
+}
 /** One draft item Keiko's own field check refused before Jira saw it. */
 interface JiraOutcomeItemValidation {
-  readonly ref: string;
+  readonly item: JiraOutcomeItemName;
   readonly validation: JiraFieldValidationFailure;
 }
 export interface JiraOutcomeItem {
@@ -198,7 +207,7 @@ export interface JiraOutcomeItem {
 }
 interface JiraOutcomeProblem {
   /** The draft item the refusal belongs to. */
-  readonly ref?: string;
+  readonly item?: JiraOutcomeItemName;
   readonly field?: string;
   readonly message: string;
 }
@@ -219,7 +228,7 @@ export interface JiraToolOutcomeView {
   readonly problems: readonly JiraOutcomeProblem[];
   readonly rules: readonly JiraOutcomeRule[];
   readonly validation: JiraFieldValidationFailure | undefined;
-  /** Keiko's own field check refused these draft items; each is named by its reference. */
+  /** Keiko's own field check refused these draft items; each is named by its summary. */
   readonly itemValidations: readonly JiraOutcomeItemValidation[];
   /** Problems beyond the shown ones, counted rather than dropped silently. */
   readonly hiddenProblemCount: number;
@@ -530,6 +539,13 @@ function catalogOutcomeItem(source: UnknownRecord): JiraOutcomeItem | undefined 
     facts: [],
   };
 }
+/** A draft row that carries only its state (excluded, skipped) still reads as that state. */
+function presentable(entries: readonly unknown[], source: UnknownRecord): boolean {
+  return (
+    entries.some((entry) => entry !== undefined) ||
+    (text(source.ref) !== undefined && itemLabels(source).length > 0)
+  );
+}
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined || refusedRow(source)) return undefined;
@@ -556,7 +572,6 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
     source.summary,
     source.displayName,
     source.name,
-    source.ref,
     author.displayName,
     author.name,
   ]);
@@ -565,14 +580,15 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
     agile.body,
     tool === "jira_comments" ? source.body : source.description,
   ]);
+  const readableBody = body === undefined ? undefined : jiraReadableText(body);
   const facts = [...agile.facts, ...collaboration.facts, ...participation.facts];
-  if (![key, name, body, ...facts].some((entry) => entry !== undefined)) return undefined;
+  if (!presentable([key, name, body, ...facts], source)) return undefined;
   const status = firstText([source.status, source.to].map((value) => record(value)?.name));
   const href = outcomeHref(tool, source, key, projectKey);
   const projectId = text(source.projectId);
   const boardHref = boardContextLink(tool, source);
   return {
-    ...textMembers({ key, name, body, status, href, projectId, boardHref }),
+    ...textMembers({ key, name, body: readableBody, status, href, projectId, boardHref }),
     labels: [...itemLabels(source), ...agile.labels, ...participation.labels],
     facts,
   };
@@ -701,8 +717,9 @@ function outcomeItems(
   const collaboration = collaborationItems(exchange.call.name, data, items);
   if (collaboration !== undefined) return collaboration;
   const seen = new Set<string>();
+  const summaries = reviewedSummaries(exchange);
   return source.flatMap((entry) => {
-    const item = outcomeItem(entry, exchange.call.name);
+    const item = outcomeItem(withReviewedSummary(entry, summaries), exchange.call.name);
     if (item === undefined) return [];
     // A journal fallback and a final receipt can describe the same draft item.
     const identity = item.key;
@@ -810,10 +827,13 @@ function uniqueIssues(issues: readonly JiraOutcomeIssue[]): JiraOutcomeIssue[] {
   for (const issue of issues) if (!seen.has(issue.key)) seen.set(issue.key, issue);
   return [...seen.values()];
 }
-function problemsOf(data: UnknownRecord | undefined, ref?: string): JiraOutcomeProblem[] {
+function problemsOf(
+  data: UnknownRecord | undefined,
+  item?: JiraOutcomeItemName,
+): JiraOutcomeProblem[] {
   const fieldErrors = Array.isArray(data?.fieldErrors) ? data.fieldErrors : [];
   const messages = Array.isArray(data?.messages) ? data.messages : [];
-  const own = ref === undefined ? {} : { ref };
+  const own = item === undefined ? {} : { item };
   return [
     ...fieldErrors.flatMap((entry): JiraOutcomeProblem[] => {
       const error = record(entry);
@@ -828,21 +848,60 @@ function problemsOf(data: UnknownRecord | undefined, ref?: string): JiraOutcomeP
     }),
   ];
 }
-/** Jira's words for each refused draft item, tied to the item's reference. */
-function itemProblemsOf(data: UnknownRecord | undefined): JiraOutcomeProblem[] {
-  const items = Array.isArray(data?.items) ? data.items : [];
-  return items.flatMap((entry) => {
+/** The summaries the person reviewed, by the model's item reference, from the call's own draft. */
+function reviewedSummaries(exchange: ChatToolExchange): ReadonlyMap<string, string> {
+  const items: readonly unknown[] = Array.isArray(exchange.call.arguments.items)
+    ? (exchange.call.arguments.items as readonly unknown[])
+    : [];
+  const summaries = new Map<string, string>();
+  for (const entry of items) {
     const item = record(entry);
-    return problemsOf(item, text(item?.ref));
-  });
-}
-function itemValidationsOf(data: UnknownRecord | undefined): JiraOutcomeItemValidation[] {
-  const items = Array.isArray(data?.items) ? data.items : [];
-  return items.flatMap((entry): JiraOutcomeItemValidation[] => {
-    const item = record(entry);
+    const summary = text(record(item?.fields)?.summary);
     const ref = text(item?.ref);
-    const validation = JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === item?.validation);
-    return ref === undefined || validation === undefined ? [] : [{ ref, validation }];
+    if (ref !== undefined && summary !== undefined) summaries.set(ref, summary);
+  }
+  return summaries;
+}
+/** A result row the model's reference names gets the summary the person reviewed for it. */
+function withReviewedSummary(entry: unknown, summaries: ReadonlyMap<string, string>): unknown {
+  const source = record(entry);
+  const ref = text(source?.ref);
+  const summary = ref === undefined ? undefined : summaries.get(ref);
+  return source === undefined || summary === undefined || text(source.summary) !== undefined
+    ? entry
+    : { ...source, summary };
+}
+function itemName(
+  entry: unknown,
+  index: number,
+  summaries: ReadonlyMap<string, string>,
+): JiraOutcomeItemName | undefined {
+  const ref = text(record(entry)?.ref);
+  if (ref === undefined) return undefined;
+  const summary = summaries.get(ref);
+  return { position: index + 1, ...(summary === undefined ? {} : { summary }) };
+}
+/** Jira's words for each refused draft item, tied to the item as the person knows it. */
+function itemProblemsOf(
+  data: UnknownRecord | undefined,
+  summaries: ReadonlyMap<string, string>,
+): JiraOutcomeProblem[] {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  return items.flatMap((entry, index) =>
+    problemsOf(record(entry), itemName(entry, index, summaries)),
+  );
+}
+function itemValidationsOf(
+  data: UnknownRecord | undefined,
+  summaries: ReadonlyMap<string, string>,
+): JiraOutcomeItemValidation[] {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  return items.flatMap((entry, index): JiraOutcomeItemValidation[] => {
+    const item = itemName(entry, index, summaries);
+    const validation = JIRA_FIELD_VALIDATION_FAILURES.find(
+      (value) => value === record(entry)?.validation,
+    );
+    return item === undefined || validation === undefined ? [] : [{ item, validation }];
   });
 }
 
@@ -962,6 +1021,7 @@ function failureMessage(
 function pageCounts(
   data: UnknownRecord,
   tool: string,
+  summaries: ReadonlyMap<string, string>,
 ): Pick<JiraToolOutcomeView, "returnedCount" | "total" | "unreadableCount"> {
   const items = returnedEntries(data, tool);
   if (items === undefined)
@@ -982,7 +1042,9 @@ function pageCounts(
     unreadableCount:
       omitted +
       items.filter(
-        (item) => outcomeItem(item, tool) === undefined && !refusedRow(record(item) ?? {}),
+        (item) =>
+          outcomeItem(withReviewedSummary(item, summaries), tool) === undefined &&
+          !refusedRow(record(item) ?? {}),
       ).length,
   };
 }
@@ -1333,7 +1395,7 @@ function problemViews(
   // Private credential/session validators expose only closed reasons and violation counts.
   const all = privateAccount(exchange.call.name)
     ? []
-    : [...problemsOf(data), ...itemProblemsOf(data)];
+    : [...problemsOf(data), ...itemProblemsOf(data, reviewedSummaries(exchange))];
   return {
     problems: all.slice(0, JIRA_OUTCOME_PROBLEMS_SHOWN),
     hiddenProblemCount: Math.max(0, all.length - JIRA_OUTCOME_PROBLEMS_SHOWN),
@@ -1390,7 +1452,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const data = storedOutcomeData(exchange);
   return {
     ...resultItemsView(exchange, data),
-    ...pageCounts(data, exchange.call.name),
+    ...pageCounts(data, exchange.call.name, reviewedSummaries(exchange)),
     ...(exchange.call.name === "jira_describe" &&
     data.outcome === "succeeded" &&
     data.selectedFor === "next-round"
@@ -1401,7 +1463,9 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     ...problemViews(exchange, data),
     rules: privateAccount(exchange.call.name) ? [] : rulesOf(data),
     validation: JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === data.validation),
-    itemValidations: privateAccount(exchange.call.name) ? [] : itemValidationsOf(data),
+    itemValidations: privateAccount(exchange.call.name)
+      ? []
+      : itemValidationsOf(data, reviewedSummaries(exchange)),
     failure: failureMessage(exchange, data),
   };
 }

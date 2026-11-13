@@ -5,6 +5,7 @@ import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { JiraWriteApproval } from "./JiraWriteApproval";
+import { jiraReadableText } from "./jira-readable-text";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
@@ -900,7 +901,10 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
       const review = await reviewed(operation, args);
       const canonical = projectJiraDescriptionInput(fields.description);
       if (canonical === undefined) throw new TypeError("Missing canonical description projection");
-      expect(review.text).toContain(canonical.text);
+      // #4355: the preview reads the canonical projection that will be sent (never the model's
+      // own markdown) as the person reads it: its headings and bullets, without the wiki markers.
+      expect(review.text).toContain(jiraReadableText(canonical.text));
+      expect(review.text).not.toMatch(/h[1-6]\.\s/u);
       expect(JSON.stringify(args)).toBe(before);
       expect(fields.description).toEqual({ format: "markdown", text: description });
     },
@@ -933,6 +937,22 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
     expect(review.text).toContain("Cleared");
     expect(review.text).toContain("Relates → SYN-9");
     expect(review.text).toContain("REQ-1");
+    expectNoJson(review);
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+
+  it("shows a created issue's description written in wiki markup as readable text (#4355)", async () => {
+    const review = await reviewed("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10002",
+      fields: {
+        summary: "Synthetic story",
+        description: "h2. Ziel\n* erster *wichtiger* Punkt",
+      },
+    });
+    expect(review.text).toContain("Ziel");
+    expect(review.text).toContain("• erster wichtiger Punkt");
+    expect(review.text).not.toMatch(/h2\.|\*wichtiger\*/u);
     expectNoJson(review);
     expect(await axe(review.container)).toHaveNoViolations();
   });

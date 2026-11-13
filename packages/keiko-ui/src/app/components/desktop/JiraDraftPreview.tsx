@@ -7,6 +7,7 @@ import type {
   JiraDraftTreeItem,
   JiraDraftValue,
 } from "./jiraDraftTree";
+import { jiraReadableText } from "./jira-readable-text";
 import { JiraNamesContext, jiraNamed, jiraNameOf, restatesTarget } from "./jiraNames";
 import { jiraStandardFieldLabel } from "./jira-standard-field-label";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -23,9 +24,10 @@ interface ItemProps {
   readonly toggle: (ref: string) => void;
 }
 
-function CollapsibleText({ text }: { readonly text: string }): ReactNode {
+function CollapsibleText({ text: raw }: { readonly text: string }): ReactNode {
   const t = useTranslate();
   const [open, setOpen] = useState(false);
+  const text = jiraReadableText(raw);
   const characters = Array.from(text);
   if (characters.length <= COLLAPSE_AT)
     return (

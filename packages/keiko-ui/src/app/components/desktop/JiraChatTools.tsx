@@ -40,6 +40,7 @@ import {
   knowledgeToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
   type JiraOutcomeItem,
+  type JiraOutcomeItemName,
   type JiraOutcomeRule,
   type JiraToolOutcomeView,
 } from "./jira-tool-outcome";
@@ -282,6 +283,15 @@ function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): React
     </>
   );
 }
+/** The reviewed summary, else the item's place in the draft: never the model's own reference. */
+function JiraItemName({ item }: { readonly item: JiraOutcomeItemName }): ReactNode {
+  const t = useTranslate();
+  return (
+    <strong>
+      {item.summary ?? t("chat.jira.outcome.itemOrdinal", { position: item.position })}{" "}
+    </strong>
+  );
+}
 function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   const nothingSent = view.validation !== undefined || view.itemValidations.length > 0;
@@ -290,8 +300,10 @@ function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): R
       {view.problems.length === 0 ? null : (
         <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.problems")}>
           {view.problems.map((problem, index) => (
-            <li key={`${problem.ref ?? ""}:${problem.field ?? ""}:${String(index)}`}>
-              {problem.ref === undefined ? null : <code>{problem.ref} </code>}
+            <li
+              key={`${String(problem.item?.position ?? 0)}:${problem.field ?? ""}:${String(index)}`}
+            >
+              {problem.item === undefined ? null : <JiraItemName item={problem.item} />}
               {problem.field === undefined ? null : <strong>{problem.field}: </strong>}
               <span>{problem.message}</span>
             </li>
@@ -305,8 +317,8 @@ function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): R
       )}
       {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
       {view.itemValidations.map((item) => (
-        <p key={item.ref}>
-          <code>{item.ref} </code>
+        <p key={item.item.position}>
+          <JiraItemName item={item.item} />
           {t(VALIDATION_MESSAGES[item.validation])}
         </p>
       ))}

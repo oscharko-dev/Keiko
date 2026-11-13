@@ -6,9 +6,13 @@ import { jiraToolOutcomeView } from "./jira-tool-outcome";
 import { I18N_STORAGE_KEY, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
-function draft(name: string, data: Record<string, unknown>): ChatToolExchange {
+function draft(
+  name: string,
+  data: Record<string, unknown>,
+  args: Record<string, unknown> = {},
+): ChatToolExchange {
   return {
-    call: { id: "draft-1", name, arguments: {} },
+    call: { id: "draft-1", name, arguments: args },
     result: {
       schemaVersion: 1,
       invocationId: "invocation-1",
@@ -67,34 +71,81 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(screen.getByRole("link", { name: /SYN-2/u })).toBeVisible();
   });
 
-  it("names Jira's field error and Keiko's validation against the item's ref", async () => {
+  // #4355 AC3: a refused draft item is named by the summary the person reviewed, or by its place
+  // in the draft. The model's own item reference ("story-7") is never shown.
+  it("names Jira's field error and Keiko's validation against the item's summary", async () => {
+    await show(
+      draft(
+        "jira_draft",
+        {
+          outcome: "partial",
+          items: [
+            { ref: "epic", state: "created", issueKey: "SYN-1" },
+            {
+              ref: "story-7",
+              state: "failed",
+              fieldErrors: [
+                {
+                  fieldId: "customfield_10104",
+                  fieldName: "Epic Name",
+                  message: "Epic Name is required.",
+                },
+              ],
+            },
+            { ref: "task-9", state: "failed", validation: "required-field" },
+          ],
+        },
+        {
+          items: [
+            { ref: "epic", fields: { summary: "Checkout" } },
+            { ref: "story-7", fields: { summary: "Pay by card" } },
+            { ref: "task-9", fields: { summary: "Send receipt" } },
+          ],
+        },
+      ),
+    );
+    const problems = screen.getByRole("list", { name: "What Jira said" });
+    expect(problems).toHaveTextContent("Pay by card");
+    expect(problems).toHaveTextContent("Epic Name: Epic Name is required.");
+    const refused = screen.getByText(/Send receipt/u).closest("p");
+    expect(refused).toHaveTextContent("A required Jira field was missing.");
+    expect(within(problems).queryByText(/Send receipt/u)).toBeNull();
+    expect(screen.getAllByText("Nothing was sent to Jira.")).toHaveLength(1);
+    expect(document.body.textContent).not.toMatch(/story-7|task-9|\bepic\b/u);
+    // A created row is named by the reviewed summary, not by the model's reference.
+    expect(screen.getByText(/Checkout/u)).toBeVisible();
+  });
+
+  it("names a refused item by its place in the draft when no summary was reviewed", async () => {
     await show(
       draft("jira_draft", {
         outcome: "partial",
         items: [
-          { ref: "epic", state: "created", issueKey: "SYN-1" },
-          {
-            ref: "story-7",
-            state: "failed",
-            fieldErrors: [
-              {
-                fieldId: "customfield_10104",
-                fieldName: "Epic Name",
-                message: "Epic Name is required.",
-              },
-            ],
-          },
-          { ref: "task-9", state: "failed", validation: "required-field" },
+          { ref: "REQOBA001A1", state: "created", issueKey: "SYN-1" },
+          { ref: "bug1", state: "failed", validation: "required-field" },
         ],
       }),
     );
-    const problems = screen.getByRole("list", { name: "What Jira said" });
-    expect(problems).toHaveTextContent("story-7");
-    expect(problems).toHaveTextContent("Epic Name: Epic Name is required.");
-    const refused = screen.getByText(/task-9/u).closest("p");
-    expect(refused).toHaveTextContent("A required Jira field was missing.");
-    expect(within(problems).queryByText(/task-9/u)).toBeNull();
-    expect(screen.getAllByText("Nothing was sent to Jira.")).toHaveLength(1);
+    expect(screen.getByText(/Item 2/u).closest("p")).toHaveTextContent(
+      "A required Jira field was missing.",
+    );
+    expect(document.body.textContent).not.toMatch(/REQOBA001A1|bug1/u);
+  });
+
+  it("shows a description written in Jira wiki markup as readable text", () => {
+    const view = jiraToolOutcomeView(
+      draft("jira_search", {
+        outcome: "succeeded",
+        items: [
+          {
+            key: "KER-1",
+            summary: "Login",
+            description: "h2. Ziel\n* Anmeldung mit *Passwort*\n{code}\nx = 1\n{code}",
+          },
+        ],
+      }),
+    );
+    expect(view.items[0]?.body).toBe("Ziel\n• Anmeldung mit Passwort\nx = 1");
   });
 
   it("counts the keys of a compact large-draft result instead of showing nothing", async () => {

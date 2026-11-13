@@ -16,6 +16,13 @@ const UNAVAILABLE = [
   /Für dieses Ergebnis ist keine lesbare Ansicht verfügbar\./gu,
 ];
 
+// Jira wiki markup a person must never read raw: a heading line, a code/panel/colour macro, a table row.
+const WIKI_MARKUP = [
+  /^h[1-6]\.\s/mu,
+  /\{(?:code|noformat|panel|quote|color)(?::[^}\n]*)?\}/u,
+  /^\|\|.+\|\|?\s*$/mu,
+];
+
 function jsonObject(fragment) {
   try {
     const value = JSON.parse(fragment);
@@ -65,5 +72,6 @@ export function cardTextFindings({ title, text, preCount }) {
       0,
     ),
     raw: preCount + Number(rawJson(text)),
+    wiki: WIKI_MARKUP.filter((pattern) => pattern.test(text)).length,
   };
 }
