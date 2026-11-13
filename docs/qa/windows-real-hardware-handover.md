@@ -29,8 +29,9 @@ node scripts/testing/jira-chat-lab/seed.mjs  "$HOME/.local/share/keiko-jira-win"
 - **License.** `setup.mjs` takes Atlassian's published test license, saved by you in a private file.
   It lasts three hours; plan the checks of section 3 inside one such window and repeat a group that
   outlived it. Never change a clock or license data.
-- **Certificate.** `init` creates a private authority and server certificate that last seven days.
-  After that a "certificate not trusted" answer is expected even with `ca.pem` in place.
+- **Certificate.** `init` creates a private authority and a server certificate that last 365 days;
+  a session start renews them when seven days or less remain. After a renewal, copy the new
+  `ca.pem` again: with the old one a "certificate not trusted" answer is expected.
 - **Where it may run.** The lab publishes loopback ports only (HTTP 18081 and HTTPS 18443 by
   default; `init` accepts others), and its certificate and `Host` guard accept `localhost` and
   `127.0.0.1` alone. Two ways to reach it from the Windows computer:
@@ -61,10 +62,11 @@ whether the browser opened by itself. In the virtual machine the state folder of
 directory. To trust the lab's authority, set `KEIKO_CA_BUNDLE_PATH=<path to ca.pem>` for the user
 before starting Keiko; certificate verification stays on.
 
-"`keiko <command>`" below means the command line of the installed release: its own Node with
-`app\dist\cli\index.js` under the installation folder, for example
-`…\runtime\node\node.exe …\app\dist\cli\index.js status`. **(unverified)** as an exact path: the
-checks in the virtual machine took the path from the running process.
+"`keiko <command>`" below means the release's own command line: a portable install puts no `keiko`
+command on PATH. From the folder that holds `Keiko.exe` (the extracted folder, or the installed copy
+under `%LOCALAPPDATA%\Programs\Keiko`), run
+`.\runtime\node\node.exe .\app\dist\cli\index.js <command>`, for example `… status`. This form ran
+in the virtual machine for the extracted release (start, stop, status, support export and analyze).
 
 ## 3. The checks
 

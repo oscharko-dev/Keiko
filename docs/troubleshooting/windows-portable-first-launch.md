@@ -88,12 +88,20 @@ Get-Item .\runtime\node\node.exe, .\app\dist\cli\index.js | Format-List FullName
 .\Keiko.exe
 
 # 4) What did the managed install record?
+#    A portable install puts no `keiko` command on PATH: run the bundled Node against the CLI,
+#    from the folder that holds Keiko.exe (the extracted folder, or the installed copy).
 Get-Content $env:USERPROFILE\.keiko\portable-install-state.json
-keiko support export --state-dir $env:USERPROFILE\.keiko
+.\runtime\node\node.exe .\app\dist\cli\index.js support export --state-dir $env:USERPROFILE\.keiko
 $report = (Get-ChildItem $env:USERPROFILE\.keiko\support-reports\keiko-support-v1-*.json |
   Sort-Object LastWriteTime)[-1].FullName
-keiko support analyze $report --clusters
+.\runtime\node\node.exe .\app\dist\cli\index.js support analyze $report --clusters
 ```
+
+Wherever this page writes `keiko <command>` (`keiko stop`, `keiko status`), a portable install
+means `.\runtime\node\node.exe .\app\dist\cli\index.js <command>` run from the folder that holds
+`Keiko.exe`: the extracted folder, or the installed copy under `%LOCALAPPDATA%\Programs\Keiko`. The
+launcher runs the CLI the same way, and no `keiko` command is registered on PATH. An npm install
+uses `npx keiko <command>` instead.
 
 If step 1 reports a version below 0.3.6, the flash-and-exit is the known launcher defect (entry 1),
 regardless of what the other steps show. If step 2 shows a missing or zero-length file, the
