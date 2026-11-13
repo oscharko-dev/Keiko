@@ -38,7 +38,7 @@ const REPORT_INPUT = object({
 });
 
 const DESCRIPTION =
-  "Deterministic Jira report; use it, not jira.search or jira.issue, for any question about a whole project or many issues: " +
+  "Deterministic Jira report computed by Keiko over the issues of a project or JQL scope: " +
   "progress, estimates, template compliance, requirement coverage, epics without members, issues without an epic. " +
   "Scope: projectKey and/or jql. Keiko computes every number: quote report.figures verbatim, never recompute. " +
   "requirementsFromPods covers this Chat's Pod requirements. Estimate is seconds of original estimate unless estimateFieldId. " +
