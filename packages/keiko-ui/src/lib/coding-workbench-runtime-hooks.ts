@@ -21,6 +21,7 @@ import type {
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
+  type CodingWorkbenchModelCheck,
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
 import {
@@ -60,7 +61,7 @@ type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 type SourceRefresh = (
   catalogAlreadyCurrent?: boolean,
   parentCorrelationId?: string,
-  checkModel?: boolean,
+  checkModel?: CodingWorkbenchModelCheck,
 ) => Promise<void>;
 
 interface RefreshSequences {
@@ -180,7 +181,7 @@ async function refreshManagedGatewaySource(
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
   catalogAlreadyCurrent: boolean,
-  model: { readonly id: string | null; readonly check: boolean },
+  model: { readonly id: string | null; readonly check: CodingWorkbenchModelCheck },
   parentCorrelationId?: string,
 ): Promise<void> {
   const correlationId = newClientCorrelationId();
@@ -276,7 +277,7 @@ function useSourceRefresh(
     async (
       catalogAlreadyCurrent = false,
       parentCorrelationId?: string,
-      checkModel = false,
+      checkModel: CodingWorkbenchModelCheck = false,
     ): Promise<void> => {
       const sequence = (sequenceRef.current += 1);
       const preference = stateRef.current.runtimePreference;

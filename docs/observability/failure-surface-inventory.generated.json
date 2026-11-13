@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0cf419ce37eff37f99262aeb37f33fc50e296241b0622d39a9f4823a1a5bdbe7"
+    "catalogDigest": "273e8d06dc77c1a6c39113f8793b3e578f5c68df86e09845a14b5b537115eeba"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 696,
-    "proofCount": 719,
-    "resolvedProofCount": 719,
+    "operationCount": 697,
+    "proofCount": 720,
+    "resolvedProofCount": 720,
     "failureClassCount": 401,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -307,6 +307,7 @@
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
         "gateway.readiness.scope",
+        "gateway.readiness.selection",
         "gateway.readiness.started",
         "gateway.reasoning-history",
         "gateway.reranker.setup.resolved",
@@ -2380,6 +2381,7 @@
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
     "gateway.readiness.scope.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
+    "gateway.readiness.selection.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.reasoning-history.lifecycle": [
       "packages/keiko-model-gateway/src/reasoning-history.test.ts"

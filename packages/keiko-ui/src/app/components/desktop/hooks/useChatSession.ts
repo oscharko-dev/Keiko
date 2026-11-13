@@ -43,6 +43,7 @@ import {
 import {
   ATTACHMENT_CLEANUP_DEFERRED_ERROR,
   DRAFT_ATTACHMENTS_UNSAVED_ERROR,
+  MODEL_NOT_READY_ERROR,
   SKILL_SELECTION_UNAVAILABLE_ERROR,
 } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
@@ -1899,29 +1900,87 @@ function adoptStartupModelSettlement(
 
 // One shared follow-up consumes already-running startup observations. No timer, focus listener,
 // provider check or retry is introduced, and configuration changes discard this observation.
+type ModelCheckOutcome = "ready" | "refused";
+
+/**
+ * The first use of a model that was never checked (#4351): ask the server for the one check, show
+ * that the model is being checked, join the shared settlement read and report whether the model
+ * answered. An HTTP failure is thrown to the caller, which shows its reason; nothing is swallowed.
+ */
+async function checkModelOnFirstUse(
+  modelId: string,
+  setState: Dispatch<SetStateAction<SessionState>>,
+): Promise<ModelCheckOutcome> {
+  const correlationId = newClientCorrelationId();
+  const { state } = await startChatModelSelectionCheck(modelId, correlationId);
+  if (state === "ready") return "ready";
+  if (state === "not-ready") return "refused";
+  // The server marks the model while its check runs; the shared settlement read adopts the result.
+  setState((previous) => ({
+    ...previous,
+    models: previous.models.map((model) =>
+      model.id === modelId ? { ...model, conversationCheckPending: true } : model,
+    ),
+    startupReadinessPending: true,
+  }));
+  const payload = await fetchModels(correlationId, false, {
+    waitForStartup: true,
+    signal: new AbortController().signal,
+  });
+  publishGatewayModelRefresh({
+    kind: "success",
+    models: payload.models,
+    source: "background",
+    correlationId,
+  });
+  return payload.models.find((model) => model.id === modelId)?.conversationReady === true
+    ? "ready"
+    : "refused";
+}
+
 async function requestModelSelectionCheck(
   modelId: string,
   setState: Dispatch<SetStateAction<SessionState>>,
+  setError: (message: string) => void,
 ): Promise<void> {
-  const correlationId = newClientCorrelationId();
   try {
-    const { state } = await startChatModelSelectionCheck(modelId, correlationId);
-    if (state !== "checking") return;
-    // The server marks the model while its check runs; the shared settlement read adopts the result.
-    setState((previous) => ({
-      ...previous,
-      models: previous.models.map((model) =>
-        model.id === modelId ? { ...model, conversationCheckPending: true } : model,
-      ),
-      startupReadinessPending: true,
-    }));
+    await checkModelOnFirstUse(modelId, setState);
   } catch (error) {
     reportClientDiagnostic("The selection check of a chat model could not be started.", {
-      correlationId,
+      correlationId: correlationIdOf(error),
       errorKind: bffRequestErrorKind(error),
       errorEvidence: clientErrorEvidence(error),
     });
+    // The person sees the reason; a check that failed to start is not a silent refusal.
+    setError(errorMessage(error));
   }
+}
+
+// The first Send on a model nobody checked: "ready" goes ahead, anything else leaves the person the
+// reason (the gateway's refusal, or why the check could not run) and the draft untouched.
+async function checkModelBeforeSend(
+  modelId: string,
+  setState: Dispatch<SetStateAction<SessionState>>,
+  setError: (message: string) => void,
+): Promise<ModelCheckOutcome | "failed"> {
+  try {
+    const outcome = await checkModelOnFirstUse(modelId, setState);
+    if (outcome === "refused") setError(MODEL_NOT_READY_ERROR);
+    return outcome;
+  } catch (error) {
+    reportClientDiagnostic("The first-use check of a chat model could not be completed.", {
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    setError(errorMessage(error));
+    return "failed";
+  }
+}
+
+function modelNeedsFirstUseCheck(models: readonly ModelCapability[], modelId: string): boolean {
+  const model = models.find((candidate) => candidate.id === modelId);
+  return model?.kind === "chat" && model.conversationReady !== true;
 }
 
 function joinStartupModelSettlement(): () => void {
@@ -3447,6 +3506,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     new Map<AbortController, ReturnType<typeof setTimeout>>(),
   );
   const sendMessageRef = useRef<SendMessage | null>(null);
+  // A first-use model check is running: a second Send waits for it instead of starting another.
+  const firstUseCheckRef = useRef(false);
   const canonicalVoiceQueueRef = canonicalVoicePageOutbox.queueRef;
   const canonicalVoiceQueueOwnerRef = useRef(Symbol("canonical-voice-page-outbox-owner"));
   const canonicalVoiceQueueControllerRef = useRef(new AbortController());
@@ -4181,7 +4242,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       picked.conversationReady === undefined &&
       picked.conversationCheckPending !== true
     ) {
-      launchChatWork(requestModelSelectionCheck(id, setState));
+      launchChatWork(
+        requestModelSelectionCheck(id, setState, (message) => {
+          setError(message);
+        }),
+      );
     }
     // COMP-5: drop pending attachments the newly selected model can no longer
     // accept so an image chip queued under an image-capable model doesn't persist
@@ -5317,7 +5382,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           models: state.models,
           selectionUnavailable,
           pendingAttachmentCount: pendingAttachments.length,
-          sendInFlight: isInFlight(sendStatusRef.current),
+          sendInFlight: isInFlight(sendStatusRef.current) || firstUseCheckRef.current,
         }),
       );
       if (admission.kind === "rejected") {
@@ -5325,6 +5390,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return { status: "not-sent" };
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
+      // #4351: pressing Send on a model nobody checked is the first use that checks it. The check
+      // shows the model as "being checked", the message goes out when the model answers, and a
+      // refusal or a failure shows its reason instead; the draft stays untouched either way.
+      if (canonicalTarget === undefined && modelNeedsFirstUseCheck(state.models, modelId)) {
+        firstUseCheckRef.current = true;
+        try {
+          if ((await checkModelBeforeSend(modelId, setState, setError)) !== "ready")
+            return { status: "not-sent" };
+        } finally {
+          firstUseCheckRef.current = false;
+        }
+      }
       if (skillSelectionBlocksSend(markdownSkill, chat.id, canonicalTarget)) {
         setError(SKILL_SELECTION_UNAVAILABLE_ERROR);
         return { status: "not-sent" };

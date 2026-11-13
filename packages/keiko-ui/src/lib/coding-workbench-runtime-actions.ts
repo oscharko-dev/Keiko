@@ -71,6 +71,67 @@ interface RuntimeActionInput {
   readonly mutations: RuntimeMutationActions;
 }
 
+// #4351: pressing Start on a model that was never checked is the first use that checks it. The
+// window asks the server for the one check (an explicit read, like a pick), shows the source's own
+// "being checked" state while it runs, and starts when the model is ready; a refusal leaves the
+// source's readable reason on screen and starts nothing.
+const START_MODEL_CHECK_POLL_MS = 5_000;
+const START_MODEL_CHECK_MAX_WAIT_MS = 600_000;
+
+function sourceNeedsModelCheck(state: CodingWorkbenchRuntimeState): boolean {
+  const value = state.source.value;
+  return (
+    state.runtimePreference === "managed-gateway" &&
+    value?.available === true &&
+    value.verification !== "verified"
+  );
+}
+
+function sourceCheckPending(state: CodingWorkbenchRuntimeState): boolean {
+  return state.source.value?.unavailableReason === "model-verification-pending";
+}
+
+// A read lands its source in the ref after React commits it, and a catalog update the read
+// announces may start one more read: wait (bounded) until the source is a newer one than `before`
+// and no longer loading.
+async function settledSource(
+  stateRef: RefObject<CodingWorkbenchRuntimeState>,
+  before: CodingWorkbenchRuntimeState["source"],
+): Promise<void> {
+  for (let tick = 0; tick < 100; tick += 1) {
+    await /* NOSONAR typescript:S9382 -- bounded wait for the committed state (#4351). */ new Promise<void>(
+      (resolve) => setTimeout(resolve, 10),
+    );
+    const current = stateRef.current.source;
+    if (current !== before && current.status !== "loading") return;
+  }
+}
+
+async function startAfterModelCheck(
+  stateRef: RefObject<CodingWorkbenchRuntimeState>,
+  refreshSource: RuntimeResources["refreshSource"],
+  start: RuntimeMutationActions["start"],
+  taskIntent: string,
+  options: CodingWorkbenchStartOptions,
+): Promise<void> {
+  if (sourceNeedsModelCheck(stateRef.current)) {
+    const before = stateRef.current.source;
+    await refreshSource(false, undefined, true);
+    await settledSource(stateRef, before);
+    const deadline = Date.now() + START_MODEL_CHECK_MAX_WAIT_MS;
+    while (sourceCheckPending(stateRef.current) && Date.now() < deadline) {
+      await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ new Promise<void>(
+        (resolve) => setTimeout(resolve, START_MODEL_CHECK_POLL_MS),
+      );
+      const pendingBefore = stateRef.current.source;
+      await refreshSource();
+      await settledSource(stateRef, pendingBefore);
+    }
+    if (stateRef.current.source.value?.available !== true) return;
+  }
+  await start(taskIntent, options);
+}
+
 function createCodingWorkbenchRuntimeActions({
   stateRef,
   dispatch,
@@ -117,7 +178,8 @@ function createCodingWorkbenchRuntimeActions({
     refreshSource,
     refreshRuntime,
     refreshRun,
-    start,
+    start: (taskIntent, options) =>
+      startAfterModelCheck(stateRef, refreshSource, start, taskIntent, options),
     cancelStart,
     decideApproval,
     stop,

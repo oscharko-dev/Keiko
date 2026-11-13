@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
@@ -12,6 +12,7 @@ import type {
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
 import { logRuntimeActivityEvents } from "@/app/components/desktop/widgets/shared/activityBus";
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
+import type { CodingWorkbenchModelCheck } from "./coding-workbench-provider-api";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
 import { useCodingAppSessionRedemptions } from "./coding-app-session-client";
 import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
@@ -53,7 +54,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   readonly refreshSource: (
     catalogAlreadyCurrent?: boolean,
     parentCorrelationId?: string,
-    checkModel?: boolean,
+    checkModel?: CodingWorkbenchModelCheck,
   ) => Promise<void>;
   readonly refreshRun: () => Promise<void>;
 }): void {
@@ -63,8 +64,14 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   // A model chosen in the picker is the model the source describes: choosing one reads its profile
   // and asks the server to check exactly that model when it holds no fresh answer for it. No other
   // re-read asks for a check, so an open Workbench probes nothing in the background (customer 1.3.4).
+  // The first read of a mounted window is not a pick: it carries a restored selection, so it asks
+  // only for the model the server itself has in use (`check=use`, #4351). Pressing Start on a
+  // model that was never checked is the first use that checks it.
+  const mountedRef = useRef(false);
   useEffect(() => {
-    void refreshSource(false, undefined, true);
+    const restored = !mountedRef.current;
+    mountedRef.current = true;
+    void refreshSource(false, undefined, restored ? "use" : true);
   }, [state.runtimePreference, state.selectedModelId, refreshSource]);
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"

@@ -717,7 +717,10 @@ describe("automatic Workbench probes — an unanswered run is retried when someo
   });
 });
 
-it("probes only the model in use and the model a person picked, never a third listed model, without duplicates", async () => {
+// The one place a queue of Workbench proofs still holds mixed work (#4351): the startup proof of the
+// model in use is queued behind a running proof, and a person's pick arrives after it. The pick is
+// promoted ahead of the earlier-queued startup proof; no listed model beyond those two is proven.
+it("promotes a person's pick ahead of an already queued startup proof, without duplicates", async () => {
   let release: ((response: Response) => void) | undefined;
   const pending = new Promise<Response>((resolve) => {
     release = resolve;
@@ -728,10 +731,15 @@ it("probes only the model in use and the model a person picked, never a third li
   const model = original?.capabilities?.[0];
   if (holder === undefined || original === undefined || model === undefined)
     throw new TypeError("Expected original Workbench fixture.");
-  const ids = ["first-chat", "middle-chat", "elected-chat"];
+  // The first listed model is the one in use: startup queues its proof.
+  const ids = ["middle-chat", "first-chat", "elected-chat", "unpicked-chat"];
   const config = {
     ...original,
-    providers: ids.map((modelId) => ({ ...provider(30_000), modelId })),
+    providers: ids.map((modelId) => ({
+      ...provider(30_000),
+      modelId,
+      tokenCounter: "litellm" as const,
+    })),
     capabilities: ids.map((id) => ({ ...model, id })),
   };
   holder.current = (): GatewayConfig => config;
@@ -754,18 +762,25 @@ it("probes only the model in use and the model a person picked, never a third li
           );
     },
   });
-  const background = ensureCodingWorkbenchContextWindows(deps, undefined);
+  const active = ensureCodingWorkbenchContextWindows(deps, "first-chat");
   await vi.waitFor(() => {
     expect(observed).toEqual(["first-chat"]);
   });
-  const selected = ensureCodingWorkbenchContextWindows(deps, "elected-chat");
+  const startup = initializeLiteLlmCodingReadiness(deps, "corr-queued-startup");
+  const picked = ensureCodingWorkbenchContextWindows(deps, "elected-chat");
   release?.(
     Response.json({ choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }] }),
   );
-  await background;
-  await selected;
+  await Promise.all([active, startup, picked]);
   await codingWorkbenchProbesSettledForTests();
-  expect(observed).toEqual(["first-chat", "first-chat", "elected-chat", "elected-chat"]);
+  expect(observed).toEqual([
+    "first-chat",
+    "first-chat",
+    "elected-chat",
+    "elected-chat",
+    "middle-chat",
+    "middle-chat",
+  ]);
   resetCodingWorkbenchContextWindowProbesForTests();
 });
 

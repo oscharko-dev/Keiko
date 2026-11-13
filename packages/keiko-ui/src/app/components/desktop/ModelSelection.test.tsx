@@ -847,3 +847,105 @@ describe("explicit model selection starts exactly one check (#4351)", () => {
     expect(screen.getByText(/model-b is not ready\./)).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4351 — the first Send on a model nobody checked is the first use that checks it
+// ---------------------------------------------------------------------------
+
+describe("first use of an unchecked model on Send (#4351)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.resetModelRequestCache();
+    mockBootstrapModels(["model-a"]);
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [
+        chatModel("model-a"),
+        { ...chatModel("model-unchecked"), conversationReady: undefined },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({
+      chats: [makeHookChat({ selectedModel: "model-unchecked" })],
+    });
+    vi.spyOn(api, "updateChat").mockResolvedValue(chatResponse(makeHookChat()));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function sendSpies(): { readonly sent: () => number } {
+    const stream = vi
+      .spyOn(api, "sendDesktopChatStream")
+      .mockReturnValue(new Promise(() => undefined));
+    const buffered = vi.spyOn(api, "sendDesktopChat").mockReturnValue(new Promise(() => undefined));
+    return { sent: (): number => stream.mock.calls.length + buffered.mock.calls.length };
+  }
+
+  it("checks nothing when a restored chat is opened, and sends after the check answers", async () => {
+    const start = vi
+      .spyOn(api, "startChatModelSelectionCheck")
+      .mockResolvedValue({ state: "ready" });
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    expect(view.result.current.selectedModel).toBe("model-unchecked");
+    // No check on page load, on restore or on opening a chat.
+    expect(start).not.toHaveBeenCalled();
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(spies.sent()).toBe(1);
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledWith("model-unchecked", expect.any(String));
+  });
+
+  it("shows the reason and sends nothing when the model refuses its check", async () => {
+    vi.spyOn(api, "startChatModelSelectionCheck").mockResolvedValue({ state: "not-ready" });
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await view.result.current.sendMessage();
+    });
+    expect(outcome).toEqual({ status: "not-sent" });
+    expect(spies.sent()).toBe(0);
+    expect(view.result.current.error).toBe("MODEL_NOT_READY");
+    // The draft is untouched: the person can pick another model and send it.
+    expect(view.result.current.draft).toBe("hello");
+  });
+
+  it("shows an HTTP failure of the check instead of swallowing it", async () => {
+    vi.spyOn(api, "startChatModelSelectionCheck").mockRejectedValue(
+      new api.ApiError("INTERNAL", "gateway check failed", 500),
+    );
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+    expect(spies.sent()).toBe(0);
+    expect(view.result.current.error).toMatch(/gateway check failed/);
+  });
+
+  it("starts no check for a model that already answered", async () => {
+    vi.spyOn(api, "fetchChats").mockResolvedValue({
+      chats: [makeHookChat({ selectedModel: "model-a" })],
+    });
+    const start = vi.spyOn(api, "startChatModelSelectionCheck");
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(spies.sent()).toBe(1);
+    });
+    expect(start).not.toHaveBeenCalled();
+  });
+});

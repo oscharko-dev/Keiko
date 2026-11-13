@@ -4410,6 +4410,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.voice.batchFinish": "Finish speaking",
   "chat.voice.batchMode": "Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.",
   "chat.error.send": "Could not send message.",
+  "chat.error.modelNotReady":
+    "The selected model did not answer its check, so nothing was sent. Pick another model, or check it in Settings > Models and try again.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
   "chat.grounding.dataLabel": "Data sources",

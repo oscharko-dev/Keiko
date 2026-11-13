@@ -4635,6 +4635,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.voice.batchFinish": "Sprechen beenden",
   "chat.voice.batchMode":
     "Digital Twin: Sprich, um Keiko zu unterbrechen, oder nutze die Taste Unterbrechen.",
+  "chat.error.modelNotReady":
+    "Das gewählte Modell hat seine Prüfung nicht bestanden, deshalb wurde nichts gesendet. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle und versuche es erneut.",
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",

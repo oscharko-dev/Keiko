@@ -127,6 +127,12 @@ the complete original nine-case producer ran in the Linux gates container (`--in
 and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or numerical
 ceiling changed. This remains updater fixture evidence.
 
+The follow-up of the same change adds the first-use check on Send and Start, the `check=use` read of a
+mounted Workbench window, one error message in both optional catalogs and the profile read mode in
+`api.ts`-adjacent provider code, so the freshness gate rejected the catalog and `api.ts` digests
+again; the producer was rerun on the final sources the same way (Linux gates container, `--init`,
+Node 24.18.0, 9 passed) and only the three records were kept.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

@@ -412,6 +412,17 @@ function voiceElectionProviders(): readonly Record<string, unknown>[] {
   ];
 }
 
+function expectListedModelsReportedUnverified(deps: UiHandlerDeps, body: unknown): void {
+  expect((body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds).toEqual([
+    "example-chat-model-fast",
+    "example-vision-model",
+  ]);
+  const verification = currentGatewayConfig(deps)?.capabilities?.find(
+    (capability) => capability.id === "example-chat-model-fast",
+  )?.toolCallingVerification;
+  expect(verification?.status).toBe("unverified");
+}
+
 function verifiedLiteLlmModels(explicit: boolean): readonly string[] {
   return explicit
     ? ["litellm-chat-large", "litellm-vision-chat", "litellm-unknown-mode"]
@@ -2196,6 +2207,91 @@ describe("handleGatewaySetup", () => {
     expect(gatewaySetupTargetClass(url)).toBe(expected);
   });
 
+  it("keeps a default that got no verdict configured as unverified and sends nothing to the next model (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-no-verdict-");
+    const evidenceDir = await tempDir("keiko-gw-ev-no-verdict-");
+    const originalFetch = globalThis.fetch;
+    const seenModels: string[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      if (href.endsWith("/model/info")) return Promise.resolve(new Response("{}", { status: 404 }));
+      if (href.endsWith("/models"))
+        return Promise.resolve(
+          Response.json({ data: [{ id: "overloaded-default" }, { id: "would-answer" }] }),
+        );
+      const body = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
+      seenModels.push(body.model ?? "");
+      if (body.model === "overloaded-default")
+        return Promise.resolve(new Response("busy", { status: 503 }));
+      return Promise.resolve(
+        Response.json({
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+        }),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      // An overloaded gateway gave no verdict: the default is not rejected and no other model is loaded.
+      expect(seenModels).not.toContain("would-answer");
+      expect(seenModels).toContain("overloaded-default");
+      expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toContain(
+        "overloaded-default",
+      );
+      expect(
+        (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds,
+      ).toEqual(expect.arrayContaining(["overloaded-default", "would-answer"]));
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it("tests the models a request asserts once, not on every step of the walk (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-asserted-once-");
+    const evidenceDir = await tempDir("keiko-gw-ev-asserted-once-");
+    const calls: (readonly string[])[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "second-chat", "vision-chat"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        // The default is rejected; the next model answers.
+        return calls.length === 1
+          ? Promise.reject(new Error("model rejected"))
+          : Promise.resolve([modelIds[0] ?? ""]);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: ["vision-chat"],
+      }),
+      deps,
+    );
+    // The asserted model is tested with the first step only; a later step of the same walk never
+    // repeats it (a later whole-verification retry on another base URL is a separate attempt).
+    expect(calls.slice(0, 2)).toEqual([["text-chat", "vision-chat"], ["second-chat"]]);
+    // The asserted model was never tested, so no capability claim is stored for it.
+    expect(result.status).toBe(502);
+    deps.store.close();
+  });
+
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
     const evidenceDir = await tempDir("keiko-gw-ev-");
@@ -2238,6 +2334,9 @@ describe("handleGatewaySetup", () => {
     expect(saved).toContain("apiKeySecretRef");
     expect(saved).toContain("cred:example-chat-model-large");
     expect(saved).toContain("example-chat-model-large");
+    // Settings reports the listed models no request reached as unverified, and their tool-calling
+    // record carries the same closed "unverified" state a model kept without an answer carries.
+    expectListedModelsReportedUnverified(deps, result.body);
     // Listed, unverified models are persisted as listed: no secret rides with them.
     expect(saved).toContain("example-chat-model-fast");
     expect(saved).toContain("example-vision-model");

@@ -3144,7 +3144,12 @@ async function passingCandidates(
 function allProbesFailedError(failures: readonly ProbeFailureEvidence[]): Error {
   const error = new Error("no discovered model accepted the chat-completions smoke test");
   const worst = mostSevereProbeFailure(failures);
-  if (worst === undefined) return error;
+  // Every probe ended without a verdict (an overloaded or unreachable gateway): the aggregate says
+  // so, so a walk over the catalog does not take a lone 503 for a rejection (#4351).
+  if (worst === undefined)
+    return failures.length > 0 && failures.every(isUnverifiedSmokeFailure)
+      ? Object.assign(error, { noVerdict: true })
+      : error;
   return Object.assign(error, {
     ...(worst.code === undefined ? {} : { code: worst.code }),
     ...(worst.httpStatus === undefined ? {} : { httpStatus: worst.httpStatus }),
@@ -6887,6 +6892,8 @@ interface ChatAdmission {
   readonly skippedModelIds: readonly string[];
   /** Candidates the gateway answered and rejected — not configured (#3591). */
   readonly droppedModelIds: readonly string[];
+  /** Listed models no request reached (#4351): configured and reported unverified. */
+  readonly listedUnverifiedModelIds: readonly string[];
 }
 
 function temporaryChatAdmission(
@@ -6919,6 +6926,7 @@ function temporaryChatAdmission(
     unverifiedModelIds: candidateModels.chatModelIds,
     skippedModelIds: [],
     droppedModelIds: [],
+    listedUnverifiedModelIds: [],
   };
 }
 
@@ -6945,22 +6953,25 @@ async function admitChatCandidates(
   candidateModels: SetupCandidateModels,
   candidateConfig: GatewayConfig,
 ): Promise<ChatAdmission> {
-  const ids = candidateModels.chatModelIds;
+  // A wildcard route pattern (`openai/*`) names no model: it is dropped by its shape, with no request.
+  const wildcardIds = candidateModels.chatModelIds.filter((id) => id.includes("*"));
+  const ids = candidateModels.chatModelIds.filter((id) => !id.includes("*"));
   // A model the request itself asserts a capability for is a model the person named: it is tested
   // with the default, so no claim is ever stored for a model that was not tested.
   const asserted = input.imageInputModelIdsProvided
     ? input.imageInputModelIds.filter((id) => ids.includes(id))
     : [];
   if (input.deploymentNames.length > 0 || ids.length <= 1 || asserted.length >= ids.length) {
-    return chatAdmissionFromTest(await input.tester(candidateConfig, ids));
+    return chatAdmissionFromTest(await input.tester(candidateConfig, ids), [], wildcardIds, ids);
   }
   const ordered = preferredConversationModelOrder(
     listConfiguredCapabilities(candidateConfig).filter((model) => model.kind === "chat"),
   ).map((model) => model.id);
-  const order = [...ordered, ...ids.filter((id) => !ordered.includes(id))].filter(
-    (id) => !asserted.includes(id),
-  );
-  return walkChatCandidates(input, candidateConfig, order, asserted);
+  const order = [
+    ...ordered.filter((id) => ids.includes(id)),
+    ...ids.filter((id) => !ordered.includes(id)),
+  ].filter((id) => !asserted.includes(id));
+  return walkChatCandidates(input, candidateConfig, order, asserted, wildcardIds, ids);
 }
 
 async function walkChatCandidates(
@@ -6968,20 +6979,34 @@ async function walkChatCandidates(
   candidateConfig: GatewayConfig,
   order: readonly string[],
   asserted: readonly string[],
+  wildcardIds: readonly string[],
+  gatewayOrder: readonly string[],
 ): Promise<ChatAdmission> {
-  const dropped: string[] = [];
+  const dropped: string[] = [...wildcardIds];
   let lastError: unknown;
   for (const [index, id] of order.entries()) {
     input.signal?.throwIfAborted();
     try {
+      // The models the request asserted a capability for are tested once, with the first step.
       const tested =
         await /* NOSONAR typescript:S9382 -- one model at a time by design (#4351). */ input.tester(
           candidateConfig,
-          [id, ...asserted],
+          index === 0 ? [id, ...asserted] : [id],
         );
-      return chatAdmissionFromTest(tested, order.slice(index + 1), dropped);
+      return chatAdmissionFromTest(tested, order.slice(index + 1), dropped, gatewayOrder);
     } catch (error) {
-      if (temporaryGatewaySetupFailure(error) || definitiveGatewaySetupFailure(error)) throw error;
+      if (definitiveGatewaySetupFailure(error) || temporaryGatewaySetupFailure(error)) throw error;
+      // No verdict (an overloaded or unreachable gateway) is no rejection: the model stays
+      // configured as unverified and the walk stops, so no other model is loaded on that gateway.
+      if (setupFailureWithoutVerdict(error))
+        return withoutVerdictAdmission(
+          input,
+          candidateConfig,
+          id,
+          order.slice(index + 1),
+          dropped,
+          gatewayOrder,
+        );
       lastError = error;
       dropped.push(id);
     }
@@ -6989,10 +7014,54 @@ async function walkChatCandidates(
   throw lastError;
 }
 
+function setupFailureWithoutVerdict(error: unknown): boolean {
+  if (error instanceof Error && "noVerdict" in error && error.noVerdict === true) return true;
+  return isUnverifiedSmokeFailure({
+    code: setupErrorCode(error),
+    httpStatus: setupHttpStatus(error),
+  });
+}
+
+function withoutVerdictAdmission(
+  input: SetupVerificationInput,
+  candidateConfig: GatewayConfig,
+  modelId: string,
+  listedUnverified: readonly string[],
+  droppedInWalk: readonly string[],
+  gatewayOrder: readonly string[],
+): ChatAdmission {
+  return chatAdmissionFromTest(
+    {
+      testedModelIds: [],
+      responseFormatModelIds: [],
+      toolCallingObservations: unverifiedKeptToolCallingObservations(
+        candidateConfig,
+        [modelId],
+        input.correlationId,
+      ),
+      unverifiedModelIds: [modelId],
+    },
+    listedUnverified,
+    droppedInWalk,
+    gatewayOrder,
+  );
+}
+
+// The configured chat models keep the gateway's own order, whichever of them the walk reached.
+function inGatewayOrder(
+  ids: readonly string[],
+  gatewayOrder: readonly string[],
+): readonly string[] {
+  const wanted = new Set(ids);
+  const ordered = gatewayOrder.filter((id) => wanted.has(id));
+  return [...ordered, ...ids.filter((id) => !gatewayOrder.includes(id))];
+}
+
 function chatAdmissionFromTest(
   result: readonly string[] | GatewaySetupTestResult,
   listedUnverified: readonly string[] = [],
   droppedInWalk: readonly string[] = [],
+  gatewayOrder: readonly string[] = [],
 ): ChatAdmission {
   const testResult = normalizeSetupTestResult(result);
   const unverifiedModelIds = testResult.unverifiedModelIds ?? [];
@@ -7001,10 +7070,14 @@ function chatAdmissionFromTest(
     // A candidate kept unverified (timeout/transport) is still CONFIGURED, exactly like an
     // asserted embedding model that failed its probe (#3591). A listed model the walk never
     // reached is configured the same way, without having received a request.
-    configuredModelIds: [...testResult.testedModelIds, ...unverifiedModelIds, ...listedUnverified],
+    configuredModelIds: inGatewayOrder(
+      [...testResult.testedModelIds, ...unverifiedModelIds, ...listedUnverified],
+      gatewayOrder,
+    ),
     unverifiedModelIds,
     skippedModelIds: testResult.skippedModelIds ?? [],
     droppedModelIds: [...(testResult.droppedModelIds ?? []), ...droppedInWalk],
+    listedUnverifiedModelIds: listedUnverified,
   };
 }
 
@@ -7567,7 +7640,16 @@ function verifiedSetupFromChatAdmission(
     input,
     rawConfigWithOptionalBlocks,
     candidateConfig,
-    testResult.toolCallingObservations ?? [],
+    [
+      ...(testResult.toolCallingObservations ?? []),
+      // Listed models no request reached carry an explicit "unverified" tool-calling record, the
+      // same closed state a model kept without an answer carries, so Settings reports them as such.
+      ...unverifiedKeptToolCallingObservations(
+        candidateConfig,
+        chatAdmission.listedUnverifiedModelIds,
+        input.correlationId,
+      ),
+    ],
   );
   return verifiedSetupResult(
     parsedConfig.rawConfig,
@@ -7577,6 +7659,12 @@ function verifiedSetupFromChatAdmission(
     embeddingAdmission,
     chatAdmission,
   );
+}
+
+// What Settings reports as unverified: the models kept without an answer and the listed models no
+// request reached. The diagnostic about silent candidates keeps counting only the first kind.
+function reportedUnverifiedChatModelIds(chatAdmission: ChatAdmission): readonly string[] {
+  return [...chatAdmission.unverifiedModelIds, ...chatAdmission.listedUnverifiedModelIds];
 }
 
 function verifiedSetupResult(
@@ -7605,8 +7693,8 @@ function verifiedSetupResult(
     ...(embeddingAdmission.droppedUnverified.length > 0
       ? { droppedEmbeddingModelIds: embeddingAdmission.droppedUnverified }
       : {}),
-    ...(chatAdmission.unverifiedModelIds.length > 0
-      ? { unverifiedChatModelIds: chatAdmission.unverifiedModelIds }
+    ...(reportedUnverifiedChatModelIds(chatAdmission).length > 0
+      ? { unverifiedChatModelIds: reportedUnverifiedChatModelIds(chatAdmission) }
       : {}),
     ...(chatAdmission.droppedModelIds.length > 0
       ? { droppedChatModelIds: chatAdmission.droppedModelIds }

@@ -4,6 +4,7 @@ import {
   CHAT_MODEL_WALK_BUDGET_MS,
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
+  checkSelectedConversationModel,
   ensureAnyConversationReadyChatModel,
   ensureOnDemandConversationReadiness,
   initializeConfiguredConversationReadiness,
@@ -468,7 +469,7 @@ describe("startup check without request-time recovery", () => {
     },
   );
 
-  it("sends startup requests only to the elected model and none to the unselected catalog, also after replacement", async () => {
+  it("sends startup requests only to the elected model, and skips queued picks of a replaced generation", async () => {
     const { deps } = probeableDeps("invalid", {});
     const originalHolder = deps.gatewayConfig;
     const base = originalHolder?.current();
@@ -477,9 +478,17 @@ describe("startup check without request-time recovery", () => {
       throw new Error("Missing fixture config");
     let generation = originalHolder.generation();
     const releases: (() => void)[] = [];
+    const requested: { readonly model: string; readonly url: string }[] = [];
     const fetch = vi.fn(
-      (_url: unknown, _init?: RequestInit) =>
+      (url: unknown, init?: RequestInit) =>
         new Promise<Response>((resolve) => {
+          requested.push({
+            url: String(url),
+            model:
+              typeof init?.body === "string"
+                ? ((JSON.parse(init.body) as { model?: string }).model ?? "")
+                : "",
+          });
           releases.push(() => {
             resolve(
               new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
@@ -489,6 +498,8 @@ describe("startup check without request-time recovery", () => {
           });
         }),
     );
+    // The replacement changes the connection of every model, so a conclusion of the old generation
+    // can never stand for the new one.
     const holder = {
       ...originalHolder,
       generation: (): number => generation,
@@ -497,6 +508,10 @@ describe("startup check without request-time recovery", () => {
         providers: Array.from({ length: 8 }, (_, index) => ({
           ...provider,
           modelId: "m" + String(index),
+          baseUrl:
+            generation === originalHolder.generation()
+              ? provider.baseUrl
+              : "https://replaced.example.invalid/v1",
         })),
       }),
     };
@@ -505,19 +520,36 @@ describe("startup check without request-time recovery", () => {
     await vi.waitFor(() => {
       expect(fetch).toHaveBeenCalledTimes(1);
     });
+    // Three explicit picks on the two slots: one runs beside the startup check, two queue.
+    const picks = ["m1", "m2", "m3"].map((modelId) =>
+      checkSelectedConversationModel(queued, modelId, `corr-pick-${modelId}`),
+    );
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+    expect(requested.map((entry) => entry.model)).toEqual(["m0", "m1"]);
     generation++;
+    releases.splice(0).forEach((release) => {
+      release();
+    });
+    await vi.waitFor(() => {
+      expect(releases).toHaveLength(0);
+    });
+    await Promise.all(picks);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    // The queued picks of the replaced generation never ran.
+    expect(requested.map((entry) => entry.model)).toEqual(["m0", "m1"]);
+    // The new generation runs its own check, of the model in use only.
     initializeConfiguredConversationReadiness(queued, "corr-next-change");
-    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(3);
+    });
+    expect(requested[2]?.model).toBe("m0");
+    expect(requested[2]?.url).toContain("replaced.example");
     releases.splice(0).forEach((release) => {
       release();
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    // #4351: eight listed models, one request. The seven models nobody uses receive none.
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const requested = fetch.mock.calls.map(([, init]) =>
-      typeof init?.body === "string" ? (JSON.parse(init.body) as { model?: string }).model : "",
-    );
-    expect(requested).toEqual(["m0"]);
-    generation++;
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 });

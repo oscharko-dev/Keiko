@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
@@ -15,9 +16,12 @@ import {
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
+  handleGatewayReadiness,
   handleGatewaySelectionCheck,
   initializeConfiguredConversationReadiness,
 } from "./gateway-readiness.js";
+import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
+import { resolveNewCapsuleEmbeddingIdentity } from "./local-knowledge-handlers.js";
 import { handleModels } from "./read-handlers.js";
 import type { RouteContext } from "./routes.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -51,7 +55,9 @@ afterEach(async () => {
   resetServerLogger();
 });
 
-function config(): GatewayConfig {
+function config(
+  options: { readonly declaredChat?: string; readonly litellm?: boolean } = {},
+): GatewayConfig {
   return parseGatewayConfig({
     providers: [CHAT_A, CHAT_B, CHAT_C, EMBEDDING_A, EMBEDDING_B].map((modelId) => ({
       modelId,
@@ -60,10 +66,14 @@ function config(): GatewayConfig {
       timeoutMs: 1000,
       maxRetries: 0,
       retryBaseDelayMs: 1,
+      ...(options.litellm === true ? { tokenCounter: "litellm" } : {}),
     })),
     capabilities: [
       createDefaultChatCapability(CHAT_A),
-      createDefaultChatCapability(CHAT_B),
+      {
+        ...createDefaultChatCapability(CHAT_B),
+        ...(options.declaredChat === CHAT_B ? { chatModeDeclared: true } : {}),
+      },
       createDefaultChatCapability(CHAT_C),
       createDefaultEmbeddingCapability(EMBEDDING_A),
       createDefaultEmbeddingCapability(EMBEDDING_B),
@@ -90,11 +100,17 @@ interface GatewayDouble {
   readonly requestsFor: (modelId: string) => number;
   /** Models whose chat requests the double rejects with a definitive 4xx. */
   readonly rejectChat: Set<string>;
+  /** Models whose chat requests answer another status: 503 is no verdict, 401 a refused credential. */
+  readonly chatStatus: Map<string, number>;
+  /** Embedding aliases that cannot embed. */
+  readonly rejectEmbedding: Set<string>;
 }
 
 function gatewayDouble(): GatewayDouble {
   const requests: string[] = [];
   const rejectChat = new Set<string>();
+  const chatStatus = new Map<string, number>();
+  const rejectEmbedding = new Set<string>();
   vi.stubGlobal(
     "fetch",
     vi.fn((url: unknown, init?: { readonly body?: unknown }): Promise<Response> => {
@@ -105,7 +121,13 @@ function gatewayDouble(): GatewayDouble {
       const model = body.model ?? "unknown";
       requests.push(`${path.slice(path.lastIndexOf("/") + 1)}:${model}`);
       if (path.endsWith("/embeddings"))
-        return Promise.resolve(Response.json({ data: [{ embedding: [3, 4] }], model }));
+        return Promise.resolve(
+          rejectEmbedding.has(model)
+            ? new Response("cannot embed", { status: 400 })
+            : Response.json({ data: [{ embedding: [3, 4] }], model }),
+        );
+      const status = chatStatus.get(model);
+      if (status !== undefined) return Promise.resolve(new Response("", { status }));
       if (rejectChat.has(model))
         return Promise.resolve(new Response("model rejected", { status: 400 }));
       return Promise.resolve(
@@ -120,6 +142,8 @@ function gatewayDouble(): GatewayDouble {
     requestsFor: (modelId): number =>
       requests.filter((line) => line.endsWith(`:${modelId}`)).length,
     rejectChat,
+    chatStatus,
+    rejectEmbedding,
   };
 }
 
@@ -331,4 +355,294 @@ it("refuses a selection without a model id and ignores a model the gateway does 
     await handleGatewaySelectionCheck(selectionRequest({ modelId: "not-listed" }), deps),
   ).toMatchObject({ status: 200, body: { state: "unchecked" } });
   expect(gateway.requests).toHaveLength(before);
+});
+
+// ---------------------------------------------------------------------------
+// Follow-up of the audit: what the log says, which model is elected, no dead ends, no sweeps.
+// ---------------------------------------------------------------------------
+
+function loggedSink(): ReturnType<typeof createBufferedServerLogSink> {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  return sink;
+}
+
+function linesOf(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  op: string,
+): readonly ServerLogEvent[] {
+  return sink.events.filter((event) => event.op === op);
+}
+
+function profileRequest(search: string): RouteContext {
+  return {
+    correlationId: "corr-profile",
+    req: Readable.from([]) as IncomingMessage,
+    res: {} as RouteContext["res"],
+    params: {},
+    url: new URL(`http://127.0.0.1/api/coding-sidecar/gateway/profile?${search}`),
+  };
+}
+
+async function settle(ms = 60): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+it("writes a scope line only for a check that sent a request", async () => {
+  const sink = loggedSink();
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  const selectionScopes = (): number =>
+    linesOf(sink, "gateway.readiness.scope").filter((line) => line.extra?.reason === "selection")
+      .length;
+  await Promise.all([
+    checkSelectedConversationModel(deps, CHAT_B, "corr-pick-1"),
+    checkSelectedConversationModel(deps, CHAT_B, "corr-pick-2"),
+  ]);
+  expect(gateway.requestsFor(CHAT_B)).toBe(1);
+  // The second pick joined the first: it sent nothing, so it wrote no scope line.
+  expect(selectionScopes()).toBe(1);
+  await checkSelectedConversationModel(deps, CHAT_B, "corr-pick-3");
+  // A settled model sends nothing either.
+  expect(selectionScopes()).toBe(1);
+  // The proof of a model that is not due (nothing queued, nothing to prove) writes none either.
+  const before = linesOf(sink, "gateway.readiness.scope").length;
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=use"), deps);
+  expect(linesOf(sink, "gateway.readiness.scope")).toHaveLength(before);
+});
+
+it("records every selection outcome under the pick's own correlation id, with closed values", async () => {
+  const sink = loggedSink();
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  const first = handleGatewaySelectionCheck(selectionRequest({ modelId: CHAT_B }), deps);
+  const joined = handleGatewaySelectionCheck(
+    { ...selectionRequest({ modelId: CHAT_B }), correlationId: "corr-selection-joined" },
+    deps,
+  );
+  await Promise.all([first, joined]);
+  await vi.waitFor(() => {
+    expect(currentConversationReady(deps, CHAT_B)).toBe(true);
+  });
+  await handleGatewaySelectionCheck(
+    { ...selectionRequest({ modelId: CHAT_B }), correlationId: "corr-selection-answered" },
+    deps,
+  );
+  await handleGatewaySelectionCheck(
+    { ...selectionRequest({ modelId: "not-listed" }), correlationId: "corr-selection-unknown" },
+    deps,
+  );
+  await handleGatewaySelectionCheck(
+    { ...selectionRequest({}), correlationId: "corr-selection-bad" },
+    deps,
+  );
+  const outcomes = new Map(
+    linesOf(sink, "gateway.readiness.selection").map((line) => [
+      line.correlationId,
+      line.extra?.outcome,
+    ]),
+  );
+  expect(outcomes.get("corr-selection-route")).toBe("started");
+  expect(outcomes.get("corr-selection-joined")).toBe("joined");
+  expect(outcomes.get("corr-selection-answered")).toBe("already-answered");
+  expect(outcomes.get("corr-selection-unknown")).toBe("unknown-model");
+  expect(outcomes.get("corr-selection-bad")).toBe("bad-request");
+  const line = linesOf(sink, "gateway.readiness.selection")[0];
+  if (line === undefined) throw new TypeError("No selection line was recorded");
+  expectActivityLogProof("gateway.readiness.selection.line", formatActivityLogProofLine(line));
+});
+
+it("reports a failed selection check instead of leaving an unhandled rejection", async () => {
+  const sink = loggedSink();
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  const unhandled = vi.fn();
+  process.on("unhandledRejection", unhandled);
+  try {
+    // A sink that cannot record the check's completed line makes the check itself fail.
+    const failing = {
+      ...deps,
+      activityLog: {
+        write: (event: { readonly op: string }): void => {
+          if (event.op === "gateway.readiness.automatic.completed")
+            throw new TypeError("sink unavailable");
+          sink.write(event as never);
+        },
+      },
+    } as UiHandlerDeps;
+    const answered = await handleGatewaySelectionCheck(
+      { ...selectionRequest({ modelId: CHAT_B }), correlationId: "corr-selection-failing" },
+      failing,
+    );
+    expect(answered.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(
+        linesOf(sink, "gateway.readiness.selection").some(
+          (line) =>
+            line.correlationId === "corr-selection-failing" && line.extra?.outcome === "failed",
+        ),
+      ).toBe(true);
+    });
+    await settle();
+    expect(unhandled).not.toHaveBeenCalled();
+    // The Workbench read does not turn the same failure into a 500.
+    const read = await handleCodingSidecarGatewayProfile(
+      profileRequest("modelId=chat-c&check=1"),
+      failing,
+    );
+    expect(read.status).toBe(200);
+  } finally {
+    process.off("unhandledRejection", unhandled);
+  }
+});
+
+it("elects the startup model like Chat: a mode-declared model ahead of listed order", async () => {
+  const gateway = gatewayDouble();
+  const deps = composition();
+  deps.gatewayConfig?.set(config({ declaredChat: CHAT_B }), true, "corr-election");
+  await vi.waitFor(() => {
+    expect(currentConversationReady(deps, CHAT_B)).toBe(true);
+  });
+  await settle();
+  expect(gateway.requestsFor(CHAT_A)).toBe(0);
+  expect(gateway.requestsFor(CHAT_C)).toBe(0);
+});
+
+it("stops the startup walk at a refused credential instead of sweeping the catalog", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 401);
+  const deps = composition();
+  deps.gatewayConfig?.set(config(), true, "corr-credential");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
+  });
+  await settle(150);
+  expect(gateway.requestsFor(CHAT_B)).toBe(0);
+  expect(gateway.requestsFor(CHAT_C)).toBe(0);
+});
+
+it("moves no further on a check without a verdict, until an explicit verification answers definitively", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(config(), true, "corr-busy");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
+  });
+  await settle(150);
+  initializeConfiguredConversationReadiness(deps, "corr-busy-again");
+  await settle(100);
+  expect(gateway.requestsFor(CHAT_B)).toBe(0);
+  // Settings verifies the default and the gateway now refuses it definitively: the pause ends.
+  gateway.chatStatus.delete(CHAT_A);
+  gateway.rejectChat.add(CHAT_A);
+  const settings = await handleGatewayReadiness(
+    {
+      ...selectionRequest({ modelId: CHAT_A }),
+      url: new URL("http://127.0.0.1/api/gateway/readiness"),
+    },
+    deps,
+  );
+  expect(settings.status).toBe(200);
+  initializeConfiguredConversationReadiness(deps, "corr-after-settings");
+  await vi.waitFor(() => {
+    expect(currentConversationReady(deps, CHAT_B)).toBe(true);
+  });
+  expect(gateway.requestsFor(CHAT_C)).toBe(0);
+});
+
+it("lets a pick check a model again after a no-verdict result, but never after a refusal", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(config(), true, "corr-no-dead-end");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
+  });
+  await settle(150);
+  const base = Date.now();
+  let offset = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => base + offset);
+  const early = gateway.requestsFor(CHAT_A);
+  await checkSelectedConversationModel(deps, CHAT_A, "corr-pick-early");
+  // Inside the existing not-ready cooldown nothing is sent.
+  expect(gateway.requestsFor(CHAT_A)).toBe(early);
+  offset = 31_000;
+  gateway.chatStatus.delete(CHAT_A);
+  await checkSelectedConversationModel(deps, CHAT_A, "corr-pick-later");
+  expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(early);
+  expect(currentConversationReady(deps, CHAT_A)).toBe(true);
+  // A definitive refusal stays refused: a pick never repeats it.
+  await checkSelectedConversationModel(deps, CHAT_C, "corr-pick-refused");
+  gateway.rejectChat.add(CHAT_B);
+  await checkSelectedConversationModel(deps, CHAT_B, "corr-pick-b");
+  expect(currentConversationReady(deps, CHAT_B)).toBe(false);
+  const refused = gateway.requestsFor(CHAT_B);
+  offset = 120_000;
+  await checkSelectedConversationModel(deps, CHAT_B, "corr-pick-b-again");
+  expect(gateway.requestsFor(CHAT_B)).toBe(refused);
+});
+
+it("sends no tool-calling request to a model nobody picked when the default ends without a verdict", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(config({ litellm: true }), true, "corr-startup-no-verdict");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
+  });
+  await deps.waitForStartupGatewayCatalog?.();
+  await settle(400);
+  expect(gateway.requestsFor(CHAT_B)).toBe(0);
+  expect(gateway.requestsFor(CHAT_C)).toBe(0);
+});
+
+it("reads the Workbench profile of a restored selection passively, and of an explicit pick actively", async () => {
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  const before = gateway.requestsFor(CHAT_B);
+  // A window opening names its restored selection with `check=use`: not the model in use, no request.
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=use"), deps);
+  await settle();
+  expect(gateway.requestsFor(CHAT_B)).toBe(before);
+  // A passive read, with or without a model, sends nothing.
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b"), deps);
+  expect(gateway.requestsFor(CHAT_B)).toBe(before);
+  // The model in use, asked for by an opening window, may be checked; nobody else.
+  await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
+  expect(gateway.requestsFor(CHAT_B)).toBe(before);
+  expect(gateway.requestsFor(CHAT_C)).toBe(0);
+  // An explicit pick checks exactly that model.
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=1"), deps);
+  expect(gateway.requestsFor(CHAT_B)).toBeGreaterThan(before);
+  expect(gateway.requestsFor(CHAT_C)).toBe(0);
+});
+
+it("proves a never-probed embedding alias when a Knowledge Pod first binds it, and never binds one that cannot embed", async () => {
+  const gateway = gatewayDouble();
+  gateway.rejectEmbedding.add(EMBEDDING_A);
+  const deps = composition();
+  deps.gatewayConfig?.set(config(), true, "corr-embedding-first-use");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(EMBEDDING_A)).toBeGreaterThan(0);
+  });
+  await settle();
+  // Startup probed the embedding in use only; the other alias is listed, never probed.
+  expect(gateway.requestsFor(EMBEDDING_B)).toBe(0);
+  const bound = await resolveNewCapsuleEmbeddingIdentity(deps);
+  expect(bound.ok).toBe(true);
+  if (bound.ok) expect(bound.identity.modelId).toBe(EMBEDDING_B);
+  // Every binding preflights the alias it binds: the proof is the binding's own, never inherited.
+  expect(gateway.requestsFor(EMBEDDING_B)).toBeGreaterThan(0);
+  // An alias that cannot embed is refused, never bound.
+  gateway.rejectEmbedding.add(EMBEDDING_B);
+  const another = composition();
+  another.gatewayConfig?.set(config(), true, "corr-embedding-refused");
+  await settle(150);
+  const refused = await resolveNewCapsuleEmbeddingIdentity(another);
+  expect(refused.ok).toBe(false);
 });

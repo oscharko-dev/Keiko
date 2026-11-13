@@ -24379,6 +24379,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.readiness.selection",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.logSelectionOutcome",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["started", "joined", "already-answered", "unknown-model", "bad-request", "failed"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.selection.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.readiness.started",
     category: "gateway",
     owner: "keiko-server",

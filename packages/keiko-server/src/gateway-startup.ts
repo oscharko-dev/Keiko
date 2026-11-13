@@ -1,7 +1,7 @@
 import type { GatewayConfig, ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
 import { codingSidecarDisabledByPolicy } from "./coding-sidecar-gateway.js";
 import { newCorrelationId } from "./correlation.js";
-import type { UiHandlerDeps } from "./deps.js";
+import { currentConversationReadinessObservation, type UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import {
   catalogConnectionMatches,
@@ -12,7 +12,7 @@ import {
   cancellableConversationProbeDeps,
   initializeConfiguredConversationReadiness,
   initializeConfiguredEmbeddingReadiness,
-  conversationModelInUse,
+  conversationModelForStartupProof,
   initializeLiteLlmCodingReadiness,
   settleStartupConversationReadiness,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
@@ -213,18 +213,21 @@ class GatewayStartupChecks {
   }
 
   // The tool-calling proof follows the chat model in use (#4351). It starts for the model elected
-  // now; when the startup walk then moved to another model because the default was refused, that
-  // model gets its proof too, and a model the first pass already proved is never proven again.
+  // now. When the startup walk then moved to another model because the default was refused
+  // definitively, that model gets its proof too, but only because it answered the walk's own check:
+  // a model nobody picked, and that no check proved ready, never receives a tool-calling request.
   private async initializeCodingReadiness(
     deps: UiHandlerDeps,
     correlationId: string,
     generation: number,
   ): Promise<void> {
     const probeDeps = cancellableConversationProbeDeps(deps, this.controller.signal);
-    const first = conversationModelInUse(deps);
+    const first = conversationModelForStartupProof(deps);
     await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
     await settleStartupConversationReadiness(deps);
-    if (!this.currentGeneration(generation) || conversationModelInUse(deps) === first) return;
+    const next = conversationModelForStartupProof(deps);
+    if (!this.currentGeneration(generation) || next === first || next === undefined) return;
+    if (currentConversationReadinessObservation(deps, next) !== true) return;
     await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
   }
 

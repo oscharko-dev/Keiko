@@ -1229,9 +1229,24 @@ exactly one check of that model, and in the Workbench its tool-calling proof; th
 it is being checked. Startup also probes only the embedding model in use, and Gateway Setup verifies
 only the model that becomes the default and the embedding model in use: the other listed models are
 configured as listed and unverified, and a rejection surfaces at their first selection.
-`gateway.readiness.scope` records how many models were listed and checked and why, and
-`gateway.readiness.automatic.started` carries the closed `checkReason` (`startup`, `fallback`,
-`selection`). Nothing renews or recovers a model on a
+The walk uses the election Chat makes for its default (`electConversationDefault`), stops at a
+refused credential (HTTP 401/403) instead of sweeping the catalog, and an explicit Settings
+verification that answers definitively ends its pause on a model. The tool-calling proof at startup
+follows the model in use; a model nobody picked receives none unless the walk itself found it ready.
+A restored selection is never checked on page load, restore or opening a Chat: the first Send (Chat)
+or Start (Workbench) on a model without a current observation is the first use that checks it, shows
+that it is being checked and goes ahead when it answers; a refusal shows its reason and keeps the
+draft. A window opening reads the Workbench profile with `check=use`, which asks only for the model
+in use; a pick or Start reads with `check=1`. A check that ended without a verdict may be checked
+again by a pick or the next Send, bounded by the existing not-ready cooldown; a definitive refusal
+stays refused. Gateway Setup keeps the full verification round for explicitly named deployments;
+for a discovered listing, a candidate the walk reaches and the gateway rejects is dropped, a wildcard
+route pattern is dropped by its shape without a request, a default that got no verdict is kept
+unverified and the walk stops, and the listed models no request reached are configured and reported
+as unverified. `gateway.readiness.scope` records how many models were listed and checked and why,
+only for a check that actually sent a request; `gateway.readiness.selection` records the outcome of
+every pick under its own correlation id; and `gateway.readiness.automatic.started` carries the
+closed `checkReason` (`startup`, `fallback`, `selection`). Nothing renews or recovers a model on a
 timer or passive read. Explicit Settings verification may retry an unsuccessful check. Startup-owned
 work can be observed with a bounded, cancellable metadata wait; disconnecting a browser does not
 cancel shared discovery or start another provider call. The Workbench profile describes the model

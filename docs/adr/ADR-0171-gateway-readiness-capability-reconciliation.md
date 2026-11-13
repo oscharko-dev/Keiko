@@ -84,7 +84,19 @@ explicit verification. Startup probes only the embedding model in use, and Gatew
 the model that becomes the default and the embedding model in use; the other listed models are
 configured as listed and unverified. The typed `gateway.readiness.scope` operation records, with
 closed values and counts, how many models were listed and checked and why (`startup`, `fallback`,
-`selection`); `gateway.readiness.automatic.started` carries the same `checkReason`. A connection is the provider entry
+`selection`), only for a check that sent a request; `gateway.readiness.automatic.started` carries
+the same `checkReason`, and `gateway.readiness.selection` records each pick's outcome under its own
+correlation id. The startup walk uses Chat's own election (`electConversationDefault`), stops at a
+refused credential and at a check without a verdict, and the tool-calling proof at startup follows
+the model in use, never a model nobody picked. A restored selection is not checked on page load,
+restore or opening a Chat; the first Send or Start on a model without a current observation is the
+first use that checks it and goes ahead when it answers, and a window opening reads the Workbench
+profile with `check=use` (the model in use only) while a pick or Start reads with `check=1`. A check
+without a verdict may be repeated by a pick or the next Send within the not-ready cooldown; an
+explicit Settings verification that answers definitively ends the walk's pause. Gateway Setup keeps
+the full round for explicitly named deployments; for a discovered listing a candidate the walk
+rejects is dropped, a wildcard route pattern is dropped by its shape, and listed models no request
+reached are configured and reported unverified. A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
 interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.
