@@ -1,9 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
+import { axe } from "jest-axe";
+import { JIRA_DRAFT_PROBLEMS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { JiraChatTools } from "./JiraChatTools";
 import { jiraToolOutcomeView } from "./jira-tool-outcome";
-import { I18N_STORAGE_KEY, loadLocaleMessages } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
 function draft(
@@ -257,6 +259,97 @@ describe("Jira draft results as the production draft tool reports them", () => {
       }),
     );
     expect(view.items[0]?.body).toBe("Ziel\n• Anmeldung mit Passwort\nx = 1");
+  });
+
+  // #4355 AC5: a refused draft names what to change, in the person's language, for every closed
+  // problem. Expressions are literals; the item is the 1-based place in the call.
+  const DRAFT_PROBLEMS_EN: Readonly<Record<(typeof JIRA_DRAFT_PROBLEMS)[number], string>> = {
+    "draft-shape": "The draft is not in a readable form. Ask Keiko to draft the issues again.",
+    "items-missing": "The draft contains no issues. Ask Keiko to name the issues to create.",
+    "item-shape": "Item 2 contains an entry Keiko cannot read. Ask Keiko to rewrite this issue.",
+    "item-ref": "Item 2 has no usable name. Ask Keiko to give every issue its own short name.",
+    "item-ids":
+      "Item 2 has no valid project or issue type. Choose the project and the issue type again.",
+    "item-fields":
+      "Item 2 needs a summary and must not name another project or issue type. Ask Keiko to complete its fields.",
+    "item-parent":
+      "Item 2 has a parent Keiko cannot read. Ask Keiko to name the parent issue again.",
+    "item-links":
+      "Item 2 has a link Keiko cannot read. Ask Keiko to name the link type, its direction and its target again.",
+    "item-requirements":
+      "Item 2 has requirement references Keiko cannot read. Ask Keiko to list them again.",
+    "ref-duplicate": "Two issues share one name. Ask Keiko to give every issue its own name.",
+    "ref-self":
+      "Item 2 names itself as its parent or link target. Ask Keiko to point it at another issue.",
+    "ref-unknown":
+      "Item 2 points to an issue that is not in this draft. Add that issue to the draft or name an existing issue key.",
+    "ref-cycle":
+      "The parent and link relations form a cycle. Ask Keiko to make each parent an issue that does not depend on its child.",
+  };
+  it.each(JIRA_DRAFT_PROBLEMS)("names what to change for the draft problem %s", async (problem) => {
+    await show(
+      draft("jira_draft", {
+        outcome: "rejected",
+        reason: "field-validation",
+        draftRefusal: "draft-invalid",
+        draftProblem: problem,
+        draftItem: 2,
+        guidance: "Model-facing guidance that the person never reads.",
+        items: [],
+      }),
+    );
+    expect(screen.getByText(DRAFT_PROBLEMS_EN[problem])).toBeVisible();
+    expect(screen.getByText("Nothing was sent to Jira.")).toBeVisible();
+    expect(document.body.textContent).not.toContain("Review the required Jira fields");
+    expect(document.body.textContent).not.toContain("Model-facing guidance");
+    expect(document.body.textContent).not.toMatch(/chat\.jira\./u);
+  });
+
+  it("shows the draft problem in German and passes the accessibility check", async () => {
+    await Promise.all([loadLocaleMessages("de"), loadOptionalWidgetMessages("de")]);
+    localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools
+          transcript={{
+            schemaVersion: 1,
+            exchanges: [
+              draft("jira_draft", {
+                outcome: "rejected",
+                reason: "field-validation",
+                draftRefusal: "draft-invalid",
+                draftProblem: "item-ids",
+                draftItem: 3,
+                items: [],
+              }),
+            ],
+          }}
+          turnState="completed"
+        />
+      </I18nProvider>,
+    );
+    expect(
+      screen.getByText(
+        "Eintrag 3 hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wählen Sie Projekt und Vorgangstyp erneut aus.",
+      ),
+    ).toBeVisible();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("ignores a draft problem code outside the closed vocabulary", async () => {
+    await show(
+      draft("jira_draft", {
+        outcome: "rejected",
+        reason: "field-validation",
+        draftProblem: "made-up",
+        items: [],
+      }),
+    );
+    expect(
+      screen.getByText(
+        "Review the required Jira fields and template rules before requesting the change again.",
+      ),
+    ).toBeVisible();
   });
 
   it("counts the keys of a compact large-draft result instead of showing nothing", async () => {

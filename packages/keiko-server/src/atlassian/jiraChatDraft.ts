@@ -42,7 +42,7 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
-import { jiraDraftProblemGuidance } from "./jiraChatDraftArguments.js";
+import { draftProblemData } from "./jiraChatDraftArguments.js";
 import { JIRA_DRAFT_UNLISTED_GUIDANCE, listIssueKeys } from "./jiraDraftKeyRanges.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
@@ -938,7 +938,7 @@ export async function executeJiraChatDraft(
       data: {
         outcome: "rejected",
         reason: "field-validation",
-        guidance: jiraDraftProblemGuidance(checked.problem, checked.item),
+        ...draftProblemData(checked.problem, checked.item),
         items: [],
       },
       isError: true,

@@ -1,6 +1,8 @@
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  JIRA_DRAFT_PROBLEMS,
   JIRA_FIELD_VALIDATION_FAILURES,
+  type JiraDraftProblemCode,
   JIRA_TEMPLATE_RULE_IDS,
   type JiraFieldValidationFailure,
   type JiraTemplateRuleId,
@@ -216,6 +218,11 @@ interface JiraOutcomeProblem {
   readonly field?: string;
   readonly message: string;
 }
+/** Why Keiko refused a whole draft before sending it: a closed code and the item it concerns. */
+export interface JiraOutcomeDraftProblem {
+  readonly problem: JiraDraftProblemCode;
+  readonly position?: number;
+}
 export interface JiraOutcomeRule {
   readonly ruleId: JiraTemplateRuleId;
   readonly subject: string;
@@ -231,6 +238,8 @@ export interface JiraToolOutcomeView {
   readonly stagedCount: number | undefined;
   readonly unresolvedCount: number | undefined;
   readonly problems: readonly JiraOutcomeProblem[];
+  /** Absent unless the draft itself was refused; a person reads what to change from it. */
+  readonly draftProblem?: JiraOutcomeDraftProblem;
   readonly rules: readonly JiraOutcomeRule[];
   readonly validation: JiraFieldValidationFailure | undefined;
   /** Keiko's own field check refused these draft items; each is named by its summary. */
@@ -956,6 +965,12 @@ function itemProblemsOf(
     problemsOf(record(entry), itemName(entry, index, reviewed)),
   );
 }
+function draftProblemOf(data: UnknownRecord | undefined): JiraOutcomeDraftProblem | undefined {
+  const problem = JIRA_DRAFT_PROBLEMS.find((value) => value === data?.draftProblem);
+  if (problem === undefined) return undefined;
+  const position = count(data?.draftItem);
+  return position === undefined || position < 1 ? { problem } : { problem, position };
+}
 function itemValidationsOf(
   data: UnknownRecord | undefined,
   reviewed: ReadonlyMap<string, ReviewedItem>,
@@ -1515,6 +1530,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const knowledge = knowledgeToolOutcomeView(exchange);
   if (knowledge !== undefined) return knowledge;
   const data = storedOutcomeData(exchange);
+  const draftProblem = draftProblemOf(data);
   return {
     ...resultItemsView(exchange, data),
     ...pageCounts(data, exchange.call.name, reviewedItems(exchange)),
@@ -1531,7 +1547,9 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     itemValidations: privateAccount(exchange.call.name)
       ? []
       : itemValidationsOf(data, reviewedItems(exchange)),
-    failure: failureMessage(exchange, data),
+    ...(draftProblem === undefined ? {} : { draftProblem }),
+    // A named draft problem replaces the generic "review the fields" advice.
+    failure: draftProblem === undefined ? failureMessage(exchange, data) : undefined,
   };
 }
 function resultsLabelOf(
