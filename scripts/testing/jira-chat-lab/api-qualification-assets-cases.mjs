@@ -248,23 +248,6 @@ async function emailRevert(context, f) {
   }
   assert.notEqual(f.assetEmailPrior.manifestSha256, f.assetEmailDefault.manifestSha256);
 }
-async function materializeEmailUpload(context, f, data) {
-  await emailMutationReadback(context, data, f, "upload");
-  await fixtureWrite(context, "jira.apply-email-template-pack", emailArgs(f, true), (c, result) =>
-    emailMutationReadback(c, result, f, "apply"),
-  );
-}
-async function materializedEmailReadback(context, data, f) {
-  const pack = await observeEmailPack(context);
-  const native = await read(context, "/rest/api/2/myself");
-  assert.equal(data.userKey, native.key);
-  assert.equal(data.emailTemplateAction, "upload");
-  assert.equal(data.uploadSha256, f.assetEmailFile.expectedFile.sha256);
-  assert.equal(data.uploadBytes, f.assetEmailFile.expectedFile.sizeBytes);
-  assert.equal(pack.manifestSha256, f.assetEmailPack.manifestSha256);
-  assertQualificationJson(pack.entries, f.assetEmailPack.entries);
-  return { ...proof(6), materializedByGovernedApply: true };
-}
 
 export const API_QUALIFICATION_ASSETS_CASES = [
   {
@@ -377,11 +360,13 @@ export const API_QUALIFICATION_ASSETS_CASES = [
     ...adminMutationCase(
       "jira.upload-email-template-pack",
       (f) => ({ ...actorArgs(f), ...f.assetEmailFile, acceptStagedTemplateReplacement: true }),
-      materializedEmailReadback,
+      // The upload only stages the pack, so the readback proves the receipt and an unchanged active
+      // pack. The staged bytes become observable only through the apply case, which uploads in its
+      // own turn first: the product refuses any further write in the turn of an unconfirmed one
+      // (`not-dispatched` / `conflict`), so an apply chained into this turn could never run.
+      (c, data, f) => emailMutationReadback(c, data, f, "upload"),
       emailUpload,
     ),
-    prerequisiteTools: ["jira.apply-email-template-pack"],
-    verifyInvocation: materializeEmailUpload,
   },
   adminMutationCase(
     "jira.apply-email-template-pack",
