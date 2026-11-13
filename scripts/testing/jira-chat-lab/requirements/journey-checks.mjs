@@ -264,9 +264,22 @@ async function nativeEstimateFacts(ctx) {
     ctx.nativeGet("/rest/api/2/field"),
     configuredEstimateField(ctx.nativeGet, estimateProject(ctx)),
   ]);
-  return configured === undefined
-    ? { unavailable: `the board of ${estimateProject(ctx)} reports no configured estimation field` }
-    : { configured, storyPoints: storyPointsFieldId(fields) };
+  if (configured === undefined)
+    return {
+      unavailable: `the board of ${estimateProject(ctx)} reports no configured estimation field`,
+    };
+  const storyPoints = storyPointsFieldId(fields);
+  // The names Jira shows the reading account (German on a German session), never a hardcoded label.
+  const nativeNames = Object.fromEntries(
+    [TIME_FIELD, configured, storyPoints]
+      .filter(Boolean)
+      .map((id) => [
+        id,
+        (Array.isArray(fields) ? fields : []).find((field) => field.id === id)?.name,
+      ])
+      .filter(([, name]) => typeof name === "string"),
+  );
+  return { configured, storyPoints, nativeNames };
 }
 
 /** What the S10 turn asks and what Jira must hold: the expectation follows the product's rule. */

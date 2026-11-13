@@ -71,9 +71,26 @@ export function composerConformity(type, { epicLink }) {
 
 const quoted = (title) => `„${title}“`;
 
-/** The plain, titled create instruction of `type`; no structure is given: the template governs it. */
+/** What a person writes under one required section after seeing the template. */
+const sectionContent = (name) => `${name}: Synthetischer Inhalt zum Abschnitt ${name}.`;
+
+/** The content every section and required field of the type's template asks for, said in the request. */
+function contentRequest(type) {
+  const sections = requiredSections(type)
+    .map((name) => sectionContent(name))
+    .join(" ");
+  const priority = type === "Bug" ? " Die Priorität ist High." : "";
+  return `Die Beschreibung enthält diese Abschnitte, jeweils unter einer eigenen Überschrift: ${sections}${priority}`;
+}
+
+/**
+ * The titled create instruction of `type`, as a person writes it after seeing the template: the
+ * title, the named parents and the content of every section and required field the template asks
+ * for, so that a conformant issue is possible without the model inventing anything. It offers no
+ * way to stop at a refusal: a request that cannot be met is reported in words by the model itself.
+ */
 export function createPrompt(type, title, { epic, task }) {
-  const tail = "Melde den Vorgangsschlüssel oder den genauen Fehler.";
+  const tail = `${contentRequest(type)} Melde den Vorgangsschlüssel.`;
   const base = `Lege im Jira-Projekt REQ`;
   switch (type) {
     case "Epic":
@@ -87,6 +104,15 @@ export function createPrompt(type, title, { epic, task }) {
     default:
       return `${base} einen Fehler (Vorgangstyp Bug) mit dem Titel ${quoted(title)} im Epic ${epic} an und verknüpfe ihn über eine Vorgangsverknüpfung vom Typ „Relates“ mit der Aufgabe ${task}. ${tail}`;
   }
+}
+
+/**
+ * A request nobody can repair alone: a Sub-task under a Story, although the template requires a
+ * Task as parent. The content is complete; only the parent is wrong, and only the person can choose
+ * another one. The model must say so in plain words, and nothing may be created.
+ */
+export function unrepairablePrompt(title, { story }) {
+  return `Lege im Jira-Projekt REQ eine Teilaufgabe (Vorgangstyp Sub-task) mit dem Titel ${quoted(title)} unter dem Vorgang ${story} an. ${contentRequest("Sub-task")} Melde den Vorgangsschlüssel.`;
 }
 
 /**

@@ -226,6 +226,54 @@ export function gradeNoTemplate({ created, exchanges, answer }) {
   };
 }
 
+/** Machine identifiers of the product that a person reading the answer should never have to decode. */
+const RAW_IDENTIFIERS = Object.freeze([
+  "parent-type-mismatch",
+  "parent-missing",
+  "section-missing",
+  "section-empty",
+  "field-missing",
+  "field-validation",
+  "template-missing",
+  "jira_create",
+  "jira.create",
+  "jira_draft",
+]);
+
+/**
+ * A request nobody can repair alone (a Sub-task under a Story): the template refuses it with
+ * `parent-type-mismatch` (a traced refusal of the gate, else the gate was not exercised), nothing is
+ * created, and the model says in plain words what is missing: the answer names the parent type the
+ * template needs and shows no machine identifier, raw rule id or tool name.
+ */
+export function gradeUnrepairable({ created, exchanges, answer }) {
+  if (created.length > 0)
+    return {
+      status: "red",
+      detail: `${created.length} issues were created under a parent the template does not allow: ${created.map((issue) => issue.key).join(", ")}`,
+    };
+  const refused = namesRule(templateRefusals(exchanges), ["parent-type-mismatch"]);
+  if (refused.length === 0)
+    return {
+      status: "unverified",
+      detail:
+        "nothing was created, but no traced refusal names parent-type-mismatch; the gate was not exercised",
+    };
+  const text = String(answer ?? "");
+  const shown = RAW_IDENTIFIERS.filter((id) => text.includes(id));
+  if (shown.length > 0)
+    return { status: "red", detail: `the answer shows machine identifiers: ${shown.join(", ")}` };
+  return /aufgabe|task/iu.test(text)
+    ? {
+        status: "green",
+        detail: "refused by the gate; the answer names the needed parent type in plain words",
+      }
+    : {
+        status: "red",
+        detail: "refused by the gate, but the answer does not say which parent is needed",
+      };
+}
+
 const changed = (before, after, fields) =>
   fields.some(
     (field) =>

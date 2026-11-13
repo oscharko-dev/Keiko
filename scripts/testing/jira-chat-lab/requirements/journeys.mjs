@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -327,7 +328,20 @@ function appendJqlIssues(state, issues) {
 }
 
 /**
- * The existing independent admin search, with receipts of the actual GET pages. `maxResults`
+ * The account the oracles read Jira as. Jira localizes per user, and the product acts as the lab actor
+ * `api`: in a German-language session (`language.json` says `de_DE`) the oracle reads as that same
+ * actor, so the type, status and field names it compares are the names the product sees. Any other
+ * session reads as the administrator, as it always did.
+ */
+export function oracleReader(session) {
+  if (typeof session?.directory !== "string") return "admin";
+  const path = join(session.directory, "language.json");
+  if (!existsSync(path)) return "admin";
+  return JSON.parse(readFileSync(path, "utf8")).locale === "de_DE" ? "api" : "admin";
+}
+
+/**
+ * The existing independent search (as `oracleReader`), with receipts of the actual GET pages. `maxResults`
  * records the fixed requested size, not the report tool's own pagination. One flat continuation
  * keeps reads sequential without retaining one unresolved promise per native page.
  */
@@ -339,7 +353,7 @@ export function pagedJql(session, query, fields = "summary") {
       Promise.resolve()
         .then(() => {
           const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&startAt=${startAt}&maxResults=100&fields=${encodeURIComponent(fields)}`;
-          return labRequest(session, "GET", path, basicAuth(session, "admin"));
+          return labRequest(session, "GET", path, basicAuth(session, oracleReader(session)));
         })
         .then((response) => {
           const page = admitJqlPage(response, startAt, state.total);
@@ -367,7 +381,7 @@ async function jql(session, query, fields = "summary") {
 }
 async function jqlCount(session, query) {
   const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&maxResults=0`;
-  const page = await labRequest(session, "GET", path, basicAuth(session, "admin"));
+  const page = await labRequest(session, "GET", path, basicAuth(session, oracleReader(session)));
   if (page.status !== 200 || !Number.isSafeInteger(page.value?.total))
     throw new TypeError(`Oracle count failed (${page.status})`);
   return page.value.total;
@@ -593,7 +607,8 @@ export function journeyContext(live, session, truth) {
       ),
     labSprint: () => labSprintSetup(session, WORK_PROJECT),
     // The oracles that derive their expectation from Jira itself (the S10 estimate rule).
-    nativeGet: (path) => checked(session, "native-read", "GET", path, basicAuth(session, "admin")),
+    nativeGet: (path) =>
+      checked(session, "native-read", "GET", path, basicAuth(session, oracleReader(session))),
     ...(/^[A-Z][A-Z0-9]{1,9}$/u.test(process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT ?? "")
       ? { estimateProject: process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT }
       : {}),

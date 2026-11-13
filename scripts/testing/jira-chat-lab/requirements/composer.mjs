@@ -13,6 +13,7 @@ import {
   createPrompt,
   requiredSections,
   typeSlug,
+  unrepairablePrompt,
   violationPrompt,
 } from "./composer-templates.mjs";
 import {
@@ -25,6 +26,7 @@ import {
   gradeEditPreexisting,
   gradeMultiCreate,
   gradeNoTemplate,
+  gradeUnrepairable,
   gradeUngovernedChange,
   gradeWatcher,
   composerRelation,
@@ -76,7 +78,15 @@ async function composerFixture(ctx) {
     [epicLink]: epic,
     description: SYNTHETIC_BODY(requiredSections("Task")),
   });
-  return { epic, task, epicLink };
+  // A Story: the one parent a Sub-task must not be created under (the unrepairable request of C01).
+  const story = await ctx.nativeCreate({
+    project: { key: PROJECT },
+    issuetype: { name: "Story" },
+    summary: "Composer Eltern-Story",
+    [epicLink]: epic,
+    description: SYNTHETIC_BODY(requiredSections("Story")),
+  });
+  return { epic, task, story, epicLink };
 }
 
 const OWN_TEMPLATE = /Composer-/u;
@@ -179,8 +189,27 @@ async function createEveryType(ctx) {
       return { turn, part: part(`create ${type}`, [`create-conformant-${slugOf(type)}`], grade) };
     });
     const several = types.includes("Task") ? [await createSeveralTasks(ctx, fixture)] : [];
-    return parts([...singles, ...several]);
+    const unrepairable = types.includes("Sub-task")
+      ? [await unrepairableRequest(ctx, fixture)]
+      : [];
+    return parts([...singles, ...several, ...unrepairable]);
   });
+}
+
+/** A Sub-task under a Story cannot be created and cannot be repaired by the model: it must say why. */
+async function unrepairableRequest(ctx, fixture) {
+  const { turn, issues } = await composerTurn(ctx, fixture, {
+    prompt: unrepairablePrompt("Composer Teilaufgabe unter Story", fixture),
+  });
+  const grade = gradeUnrepairable({
+    created: issues.created,
+    exchanges: turn.toolExchanges,
+    answer: turn.answer,
+  });
+  return {
+    turn,
+    part: part("unrepairable request", ["refusal-readable-unrepairable"], grade),
+  };
 }
 
 const SEVERAL_TITLES = ["Composer Teil A", "Composer Teil B", "Composer Teil C"];

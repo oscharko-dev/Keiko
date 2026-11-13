@@ -19,6 +19,7 @@ export const COMPOSER_SCENARIOS = Object.freeze([
       ...slugs.map((slug) => `create-conformant-${slug}`),
       "multi-create-all-created",
       "multi-create-keys-listed",
+      "refusal-readable-unrepairable",
     ],
   },
   {

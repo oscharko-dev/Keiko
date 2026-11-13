@@ -12,7 +12,9 @@ const SECONDS_PER_HOUR = 3600;
 const STORY_POINTS_SCHEMA = "com.atlassian.jira.plugin.system.customfieldtypes:float";
 export const ESTIMATE_CASES = Object.freeze(["configured", "fallback", "both", "neither"]);
 
-const labelOf = (fieldId) => (fieldId === TIME_FIELD ? "Original Estimate" : "Story Points");
+/** The field's name as Jira shows it to the reading account when known, else its English default. */
+const labelOf = (fieldId, nativeNames = {}) =>
+  nativeNames[fieldId] ?? (fieldId === TIME_FIELD ? "Original Estimate" : "Story Points");
 const unitOf = (fieldId) => (fieldId === TIME_FIELD ? "seconds" : "points");
 const round6 = (value) => Math.round(value * 1e6) / 1e6;
 const holders = (issues, fieldId) =>
@@ -45,13 +47,14 @@ export async function configuredEstimateField(read, project) {
  * The expected figure and statements of a project: which case applies and what is summed. `issues`
  * must carry the configured field and the other estimate field (null when unestimated).
  */
-export function deriveEstimate({ issues, configured, storyPoints }) {
+export function deriveEstimate({ issues, configured, storyPoints, nativeNames = {} }) {
   const other = configured === TIME_FIELD ? storyPoints : TIME_FIELD;
   const own = holders(issues, configured);
   const alternative = holders(issues, other);
   if (own.length > 0) {
     return {
       case: alternative.length > 0 ? "both" : "configured",
+      nativeNames,
       figureField: configured,
       configured,
       configuredUnused: false,
@@ -59,7 +62,7 @@ export function deriveEstimate({ issues, configured, storyPoints }) {
         alternative.length > 0
           ? {
               fieldId: other,
-              label: labelOf(other),
+              label: labelOf(other, nativeNames),
               count: alternative.length,
               sum: reported(other, sumOf(alternative, other)),
             }
@@ -69,6 +72,7 @@ export function deriveEstimate({ issues, configured, storyPoints }) {
   const fallback = alternative.length > 0;
   return {
     case: fallback ? "fallback" : "neither",
+    nativeNames,
     figureField: fallback ? other : configured,
     configured,
     configuredUnused: fallback,
@@ -79,7 +83,12 @@ export function deriveEstimate({ issues, configured, storyPoints }) {
 /** What the figure's field and unit are, for the prompt and the number grader (`progressTruth`). */
 export function estimateDescriptor(derived) {
   const fieldId = derived.figureField;
-  return { fieldId, writeFieldId: fieldId, unit: unitOf(fieldId), label: labelOf(fieldId) };
+  return {
+    fieldId,
+    writeFieldId: fieldId,
+    unit: unitOf(fieldId),
+    label: labelOf(fieldId, derived.nativeNames),
+  };
 }
 
 /** The extra lines the S10 prompt asks for so the rule's statements can be graded. */
@@ -99,7 +108,9 @@ const rowsOf = (answer, token) =>
     .map((line) => cellsOf(line))
     .filter((cells) => cells !== undefined && normal(cells[0]) === token);
 
-const names = (fieldId) => new Set([normal(labelOf(fieldId)), normal(fieldId)]);
+/** The names an answer may call a field: the name Jira shows the reading account, or the field id. */
+const names = (fieldId, derived) =>
+  new Set([normal(labelOf(fieldId, derived.nativeNames)), normal(fieldId)]);
 
 function gradeSource(answer, derived) {
   const rows = rowsOf(answer, "quelle");
@@ -108,13 +119,13 @@ function gradeSource(answer, derived) {
   const ok =
     rows.length === 1 &&
     row.length === 3 &&
-    names(derived.figureField).has(normal(row[1])) &&
+    names(derived.figureField, derived).has(normal(row[1])) &&
     normal(row[2]) === expected;
   return {
     ok,
     detail: ok
-      ? `source ${labelOf(derived.figureField)} labelled ${expected}`
-      : `source line missing or wrong (expected ${labelOf(derived.figureField)}, ${expected})`,
+      ? `source ${labelOf(derived.figureField, derived.nativeNames)} labelled ${expected}`
+      : `source line missing or wrong (expected ${labelOf(derived.figureField, derived.nativeNames)}, ${expected})`,
   };
 }
 
@@ -123,7 +134,8 @@ function gradeUnused(answer, derived) {
   // Where no issue holds any estimate a product may truthfully say the configured field is unused.
   if (derived.case === "neither") {
     const ok =
-      rows.length === 0 || (rows.length === 1 && names(derived.configured).has(normal(rows[0][1])));
+      rows.length === 0 ||
+      (rows.length === 1 && names(derived.configured, derived).has(normal(rows[0][1])));
     return {
       ok,
       detail: ok
@@ -139,7 +151,7 @@ function gradeUnused(answer, derived) {
           ? "no unused-field claim, none expected"
           : "claims the configured field is unused, but it holds values",
     };
-  const ok = rows.length === 1 && names(derived.configured).has(normal(rows[0][1]));
+  const ok = rows.length === 1 && names(derived.configured, derived).has(normal(rows[0][1]));
   return {
     ok,
     detail: ok
@@ -149,11 +161,11 @@ function gradeUnused(answer, derived) {
 }
 
 /** Whether the one WEITERES row names the second field with its exact count and sum. */
-function otherRowMatches(row, other) {
+function otherRowMatches(row, other, derived) {
   const count = integerCell(row[2] ?? "");
   const sum = decimalCell(row[3] ?? "");
   return (
-    names(other.fieldId).has(normal(row[1])) &&
+    names(other.fieldId, derived).has(normal(row[1])) &&
     count === other.count &&
     sum !== undefined &&
     Math.abs(sum - other.sum) < 1e-6
@@ -170,7 +182,7 @@ function gradeOther(answer, derived) {
           ? "no second field claimed, none expected"
           : "claims a second estimate field that holds no values",
     };
-  const ok = rows.length === 1 && otherRowMatches(rows[0], derived.other);
+  const ok = rows.length === 1 && otherRowMatches(rows[0], derived.other, derived);
   return {
     ok,
     detail: ok

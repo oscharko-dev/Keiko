@@ -21,6 +21,7 @@ import {
   gradeEditPreexisting,
   gradeMultiCreate,
   gradeNoTemplate,
+  gradeUnrepairable,
   gradeUngovernedChange,
   gradeWatcher,
   keysListed,
@@ -31,6 +32,7 @@ import {
   composerConformity,
   composerTemplates,
   createPrompt,
+  unrepairablePrompt,
   violationPrompt,
 } from "../testing/jira-chat-lab/requirements/composer-templates.mjs";
 import { SCENARIOS } from "../testing/jira-chat-lab/requirements/catalog.mjs";
@@ -106,6 +108,48 @@ describe("templates and prompts of the lane", () => {
     expect(createPrompt("Sub-task", "t", FIXTURE)).toContain("REQ-2");
     expect(createPrompt("Bug", "t", FIXTURE)).toMatch(/Relates.*REQ-2/u);
     expect(createPrompt("Story", "t", FIXTURE)).toContain("REQ-1");
+  });
+});
+
+describe("the create prompt carries what the template asks for", () => {
+  const sectionsOf = (markdown) =>
+    [...markdown.matchAll(/^## (.+)$/gmu)].map((match) => match[1].trim());
+  const fieldsOf = (markdown) => {
+    const line = /^requiredFields: \[(.*)\]$/mu.exec(markdown)?.[1] ?? "";
+    return line === "" ? [] : line.split(",").map((name) => name.trim().replaceAll('"', ""));
+  };
+  const templates = composerTemplates("REQ", LINK);
+
+  it.each(COMPOSER_TYPES)(
+    "%s: every section of the template has its content in the request, and no way out",
+    (type) => {
+      const { markdown } = templates.find((entry) => entry.issueType === type);
+      const sections = sectionsOf(markdown.split("\n---\n").at(-1));
+      expect(sections.length).toBeGreaterThan(0);
+      const prompt = createPrompt(type, "Mein Titel", FIXTURE);
+      for (const name of sections) expect(prompt).toContain(`${name}: Synthetischer Inhalt`);
+      expect(prompt).not.toContain("genauen Fehler");
+      expect(prompt).toMatch(/Melde den Vorgangsschlüssel\.$/u);
+    },
+  );
+
+  it("names the value of every required field of the template (a Bug's priority)", () => {
+    for (const { markdown, issueType } of templates) {
+      const prompt = createPrompt(issueType, "t", FIXTURE);
+      for (const field of fieldsOf(markdown))
+        expect(prompt.toLowerCase()).toContain(field === "priority" ? "priorität ist high" : field);
+    }
+    expect(fieldsOf(templates.find((entry) => entry.issueType === "Bug").markdown)).toEqual([
+      "priority",
+    ]);
+  });
+
+  it("the unrepairable request holds complete content and only a wrong parent", () => {
+    const prompt = unrepairablePrompt("Titel", { story: "REQ-3" });
+    expect(prompt).toContain("unter dem Vorgang REQ-3");
+    const { markdown } = templates.find((entry) => entry.issueType === "Sub-task");
+    for (const name of sectionsOf(markdown.split("\n---\n").at(-1)))
+      expect(prompt).toContain(`${name}: Synthetischer Inhalt`);
   });
 });
 
@@ -457,6 +501,49 @@ describe("obligation c) no template: nothing written, the gate refused, no card,
       expect(
         gradeNoTemplate({ created: [], exchanges: [refusedNoTemplate()], answer }).status,
       ).toBe("red");
+  });
+});
+
+describe("the unrepairable request: refused by the gate, said in plain words", () => {
+  const mismatch = () =>
+    createExchange(
+      {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations: [{ ruleId: "parent-type-mismatch" }],
+      },
+      "failed",
+    );
+  const plain =
+    "Eine Teilaufgabe braucht eine Aufgabe als Eltern, keine Story. Nenne mir eine Aufgabe.";
+  const grade = (overrides) =>
+    gradeUnrepairable({ created: [], exchanges: [mismatch()], answer: plain, ...overrides });
+
+  it("is green when nothing was created, the gate refused and the answer names the parent type", () => {
+    expect(grade({}).status).toBe("green");
+  });
+
+  it("is red when an issue was created under the wrong parent", () => {
+    const result = grade({ created: turnOf([conformant("REQ-9", "Sub-task")]).created });
+    expect(result.status).toBe("red");
+    expect(result.detail).toContain("REQ-9");
+  });
+
+  it("is red when the answer shows machine identifiers or does not say which parent is needed", () => {
+    for (const answer of [
+      "Abgelehnt: parent-type-mismatch (Aufgabe erforderlich).",
+      "Fehler field-validation, eine Aufgabe fehlt.",
+      "Aufruf jira_create gescheitert, Aufgabe nötig.",
+    ])
+      expect(grade({ answer }).status).toBe("red");
+    expect(grade({ answer: "Das hat leider nicht geklappt." }).status).toBe("red");
+    expect(grade({ answer: "" }).status).toBe("red");
+  });
+
+  it("is unverified when no traced refusal names parent-type-mismatch", () => {
+    expect(grade({ exchanges: [] }).status).toBe("unverified");
+    expect(grade({ exchanges: [failedElsewhere()] }).status).toBe("unverified");
+    expect(grade({ exchanges: [refusal("Sub-task")] }).status).toBe("unverified");
   });
 });
 
@@ -940,6 +1027,21 @@ describe("C01 creates every type, also several at once", () => {
           const keys = ["A", "B", "C"].map((n) => add("Task", {}, `Composer Teil ${n}`).key);
           return { answer: `Angelegt: ${keys.join(", ")}` };
         }
+        if (/unter Story/u.test(content))
+          return {
+            toolExchanges: [
+              createExchange(
+                {
+                  outcome: "rejected",
+                  reason: "field-validation",
+                  violations: [{ ruleId: "parent-type-mismatch" }],
+                },
+                "failed",
+              ),
+            ],
+            answer:
+              "Eine Teilaufgabe braucht eine Aufgabe als Eltern. Nenne mir bitte eine Aufgabe.",
+          };
         add(typeOfPrompt(content));
       },
     });
@@ -950,6 +1052,7 @@ describe("C01 creates every type, also several at once", () => {
         "create-conformant-bug",
         "multi-create-all-created",
         "multi-create-keys-listed",
+        "refusal-readable-unrepairable",
       ]),
     );
     expect(good.calls.http.filter((name) => name === "template-import")).toHaveLength(5);
@@ -984,6 +1087,7 @@ describe("C01 creates every type, also several at once", () => {
     });
     const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
     expect(ctx.calls.turns).toHaveLength(1);
+    // Without the Sub-task type there is no unrepairable request either.
     expect(check.covers).toEqual(["create-conformant-epic"]);
   });
 });

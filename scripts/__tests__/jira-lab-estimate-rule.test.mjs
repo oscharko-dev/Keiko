@@ -131,6 +131,44 @@ describe("native facts", () => {
   });
 });
 
+describe("the names of the estimate fields are the ones Jira shows the reading account", () => {
+  const german = { [TIME_FIELD]: "Ursprüngliche Schätzung", [POINTS]: "Story-Punkte" };
+  const derived = deriveEstimate({
+    issues: [{ fields: { [POINTS]: null, [TIME_FIELD]: 3 * HOUR } }],
+    configured: POINTS,
+    storyPoints: POINTS,
+    nativeNames: german,
+  });
+
+  it("expects the native (German) name in the QUELLE line, not a hardcoded English label", () => {
+    expect(estimateDescriptor(derived).label).toBe("Ursprüngliche Schätzung");
+    const right = gradeEstimateRule(
+      "QUELLE;Ursprüngliche Schätzung;ERSATZ\nUNGENUTZT;Story-Punkte",
+      derived,
+    );
+    expect([right.source.ok, right.unused.ok]).toEqual([true, true]);
+    // The product's own hardcoded English label is exactly what a German session must not accept.
+    const hardcoded = gradeEstimateRule(
+      "QUELLE;Original time estimate;ERSATZ\nUNGENUTZT;Story Points",
+      derived,
+    );
+    expect([hardcoded.source.ok, hardcoded.unused.ok]).toEqual([false, false]);
+  });
+
+  it("still accepts the field id, and the English names when Jira shows the English ones", () => {
+    expect(gradeEstimateRule("QUELLE;timeoriginalestimate;ERSATZ", derived).source.ok).toBe(true);
+    const english = deriveEstimate({
+      issues: [{ fields: { [POINTS]: null, [TIME_FIELD]: 3 * HOUR } }],
+      configured: POINTS,
+      storyPoints: POINTS,
+    });
+    expect(gradeEstimateRule("QUELLE;Original Estimate;ERSATZ", english).source.ok).toBe(true);
+    expect(gradeEstimateRule("QUELLE;Original time estimate;ERSATZ", english).source.ok).toBe(
+      false,
+    );
+  });
+});
+
 describe("gradeEstimateRule", () => {
   const derivedOf = (issues, configured = POINTS) =>
     deriveEstimate({ issues, configured, storyPoints: POINTS });

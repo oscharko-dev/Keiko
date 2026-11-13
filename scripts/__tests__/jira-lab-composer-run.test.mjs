@@ -1,8 +1,9 @@
 // The Composer lane's command line and native fixtures (#4369): selection errors, baseline grouping,
 // report directory, required fields read from the project's own metadata, and the work-project lock.
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
-import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const reads = vi.hoisted(() => new Map());
@@ -21,7 +22,10 @@ import {
   withBaselineSetting,
 } from "../testing/jira-chat-lab/requirements/composer-run.mjs";
 import { SCENARIOS } from "../testing/jira-chat-lab/requirements/catalog.mjs";
-import { requiredFieldValues } from "../testing/jira-chat-lab/requirements/journeys.mjs";
+import {
+  oracleReader,
+  requiredFieldValues,
+} from "../testing/jira-chat-lab/requirements/journeys.mjs";
 import { SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 
 describe("--only is validated against the selected set", () => {
@@ -91,6 +95,24 @@ describe("baseline grouping and settings", () => {
       ),
     ).rejects.toThrow("x");
     expect(Object.hasOwn(bare, "KEIKO_JIRA_LAB_BASELINE_TEMPLATES")).toBe(false);
+  });
+});
+
+describe("the account the oracles read Jira as", () => {
+  const sessionWith = (language) => {
+    const directory = mkdtempSync(join(tmpdir(), "oracle-reader-"));
+    if (language !== undefined) writeFileSync(join(directory, "language.json"), language);
+    return { directory };
+  };
+
+  it("is the administrator unless the session is German, so default sessions read as before", () => {
+    expect(oracleReader(sessionWith(undefined))).toBe("admin");
+    expect(oracleReader(sessionWith(JSON.stringify({ locale: "en_US" })))).toBe("admin");
+    expect(oracleReader({})).toBe("admin");
+  });
+
+  it("is the localized lab actor in a German session, the account whose names the product sees", () => {
+    expect(oracleReader(sessionWith(JSON.stringify({ locale: "de_DE" })))).toBe("api");
   });
 });
 
