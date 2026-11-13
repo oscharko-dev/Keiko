@@ -43,11 +43,21 @@ beforeAll(async () => {
   jiraToolOutcomeView = outcomeViewer(await import(UI_OUTCOME_MODULE));
 });
 
-function viewOf(items: readonly DraftItemResult[]): OutcomeView {
+// `reviewed` is the draft as the call listed it, with the summary the person reviewed for each item;
+// without it the call lists nothing and an item is known by its place in the result.
+function viewOf(
+  items: readonly DraftItemResult[],
+  reviewed: readonly { readonly ref: string; readonly summary: string }[] = [],
+): OutcomeView {
   const { data } = draftResult(BASE_URL, items);
   expect(describeCatalogSchemaMismatch(SCHEMA, data)).toBeUndefined();
+  const callItems = reviewed.map(({ ref, summary }) => ({ ref, fields: { summary } }));
   const exchange = {
-    call: { id: "draft-1", name: "jira_draft", arguments: {} },
+    call: {
+      id: "draft-1",
+      name: "jira_draft",
+      arguments: reviewed.length === 0 ? {} : { items: callItems },
+    },
     result: { status: "completed", data },
   } as unknown as ChatToolExchange;
   return jiraToolOutcomeView(exchange);
@@ -65,28 +75,75 @@ describe("jira.draft result as the Chat outcome card reads it", () => {
     ]);
   });
 
-  it("ties Jira's field errors and Keiko's validation to each failed item's ref", () => {
-    const view = viewOf([
-      { ref: "epic", state: "created", issueKey: "SYN-1" },
-      {
-        ref: "story-7",
-        state: "failed",
-        detail: {
-          fieldErrors: [
-            {
-              fieldId: "customfield_10104",
-              fieldName: "Epic Name",
-              message: "Epic Name is required.",
-            },
-          ],
-        },
+  // The model-internal ref never reaches the screen (#4355 AC3); what ties a refusal to its item is
+  // the item a person knows: its place in the draft, or the summary they reviewed.
+  const FAILED_ITEMS: readonly DraftItemResult[] = [
+    { ref: "epic", state: "created", issueKey: "SYN-1" },
+    {
+      ref: "story-7",
+      state: "failed",
+      detail: {
+        fieldErrors: [
+          {
+            fieldId: "customfield_10104",
+            fieldName: "Epic Name",
+            message: "Epic Name is required.",
+          },
+        ],
       },
-      { ref: "task-9", state: "failed", detail: { validation: "required-field" } },
-    ]);
+    },
+    { ref: "task-9", state: "failed", detail: { validation: "required-field" } },
+    {
+      ref: "bug-4",
+      state: "failed",
+      detail: {
+        fieldErrors: [
+          { fieldId: "priority", fieldName: "Priority", message: "Priority is invalid." },
+        ],
+      },
+    },
+  ];
+
+  it("ties each of Jira's field errors and Keiko's validation to the failed item it belongs to, by its place in the draft", () => {
+    const view = viewOf(FAILED_ITEMS);
+
+    // Each problem carries exactly its own item, and no other: the second and the fourth item of the
+    // result for Jira's words, the third for Keiko's own check.
     expect(view.problems).toEqual([
-      { ref: "story-7", field: "Epic Name", message: "Epic Name is required." },
+      { item: { position: 2 }, field: "Epic Name", message: "Epic Name is required." },
+      { item: { position: 4 }, field: "Priority", message: "Priority is invalid." },
     ]);
-    expect(view.itemValidations).toEqual([{ ref: "task-9", validation: "required-field" }]);
+    expect(view.itemValidations).toEqual([{ item: { position: 3 }, validation: "required-field" }]);
+    // The model's own references appear nowhere in what the card shows.
+    const shown = JSON.stringify(view);
+    for (const ref of ["story-7", "task-9", "bug-4"]) expect(shown).not.toContain(ref);
+  });
+
+  it("names a failed item by the summary the person reviewed, still with its own place", () => {
+    const view = viewOf(FAILED_ITEMS, [
+      { ref: "epic", summary: "Plan the release" },
+      { ref: "story-7", summary: "Publish the notes" },
+      { ref: "task-9", summary: "Tag the build" },
+      { ref: "bug-4", summary: "Fix the banner" },
+    ]);
+
+    expect(view.problems).toEqual([
+      {
+        item: { position: 2, summary: "Publish the notes" },
+        field: "Epic Name",
+        message: "Epic Name is required.",
+      },
+      {
+        item: { position: 4, summary: "Fix the banner" },
+        field: "Priority",
+        message: "Priority is invalid.",
+      },
+    ]);
+    expect(view.itemValidations).toEqual([
+      { item: { position: 3, summary: "Tag the build" }, validation: "required-field" },
+    ]);
+    const shown = JSON.stringify(view);
+    for (const ref of ["story-7", "task-9", "bug-4"]) expect(shown).not.toContain(ref);
   });
 
   it("lists the keys of a compact large draft with links and counts the rest", () => {
