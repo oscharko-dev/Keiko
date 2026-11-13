@@ -324,6 +324,7 @@ export {
   jiraDraftDependencies,
   jiraDraftIdentity,
   checkJiraDraft,
+  isJiraDraftItem,
   parseJiraDraft,
   type JiraDraft,
   type JiraDraftCheck,

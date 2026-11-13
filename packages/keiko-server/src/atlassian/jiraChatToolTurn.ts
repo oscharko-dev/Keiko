@@ -15,10 +15,13 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   connectionFingerprint,
+  isJiraDraftItem,
   parseJiraAttachmentArguments,
   parseJiraDraft,
+  type StagedJiraDraft,
   type StagedJiraDraftItem,
 } from "@oscharko-dev/keiko-connectors";
+import { JIRA_DRAFT_PAGE_ITEMS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { chatDraftArguments } from "./jiraChatDraftArguments.js";
 import type { HeldJiraDraft } from "./jiraApprovalExpiry.js";
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
@@ -192,12 +195,18 @@ function holdOpenDraft(
   return holdInlineItems(options, store, resolved.arguments.items, context);
 }
 
+/** Whether these are well-formed draft items by the check the staging tool applies to a page. */
+function isStagedItems(items: unknown): items is readonly StagedJiraDraftItem[] {
+  return Array.isArray(items) && items.length > 0 && items.every(isJiraDraftItem);
+}
+
 function holdInlineItems(
   options: JiraChatTurnOptions,
   store: NonNullable<UiHandlerDeps["jiraDraftStore"]>,
   items: unknown,
   context: JiraChatCatalogContext,
 ): HeldJiraDraft | undefined {
+  if (!isStagedItems(items)) return undefined;
   const open = store.latest(context.chatId);
   if (open !== undefined && sameItems(open.items, items)) return heldOf(open);
   const current = resolveCurrentJiraChatAuthority(
@@ -207,30 +216,32 @@ function holdInlineItems(
     new Date().toISOString(),
     context.correlationId,
   );
-  if (!current.ok || !Array.isArray(items)) return undefined;
+  if (!current.ok) return undefined;
   const { credential } = current;
-  const appended = store.append(
-    context.chatId,
-    undefined,
-    connectionFingerprint({
-      baseUrl: credential.baseUrl,
-      identity: `${credential.authRef}:${String(credential.generation)}`,
-    }),
-    items as readonly StagedJiraDraftItem[],
-  );
-  if (!appended.ok) return undefined;
+  const fingerprint = connectionFingerprint({
+    baseUrl: credential.baseUrl,
+    identity: `${credential.authRef}:${String(credential.generation)}`,
+  });
+  let draft: StagedJiraDraft | undefined;
+  for (let start = 0; start < items.length; start += JIRA_DRAFT_PAGE_ITEMS_MAX) {
+    const page = items.slice(start, start + JIRA_DRAFT_PAGE_ITEMS_MAX);
+    const appended = store.append(context.chatId, draft?.id, fingerprint, page);
+    if (!appended.ok) return undefined;
+    draft = appended.draft;
+  }
+  if (draft === undefined) return undefined;
   recordJiraDraftActivity(options.deps.activityLog, context.correlationId, {
     phase: "held",
     newDraft: true,
     pageItemCount: 0,
-    itemCount: appended.draft.items.length,
-    pageCount: appended.draft.pageCount,
-    byteCount: appended.draft.bytes,
+    itemCount: draft.items.length,
+    pageCount: draft.pageCount,
+    byteCount: draft.bytes,
     unresolvedRefCount: 0,
     violationCount: 0,
     durationMs: 0,
   });
-  return heldOf(appended.draft);
+  return heldOf(draft);
 }
 
 function heldOf(

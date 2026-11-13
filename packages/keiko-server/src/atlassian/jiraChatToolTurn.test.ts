@@ -4794,6 +4794,7 @@ describe("held approval worker timers", () => {
 describe("an expired write approval says that it expired and keeps the draft (#4354 AC4)", () => {
   async function expireInlineDraft(): Promise<{
     readonly f: ReturnType<typeof fixture>;
+    readonly first: ChatToolWriteApprovalView;
     readonly next: (arguments_: Record<string, unknown>) => void;
   }> {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -4802,10 +4803,12 @@ describe("an expired write approval says that it expired and keeps the draft (#4
     const pending = send(f, "expiry-first");
     void pending.catch(() => undefined);
     await awaitPendingConsent(f);
+    const first = await pendingWriteApproval(f);
     await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1000);
     expect((await pending).status).toBe(200);
     return {
       f,
+      first,
       next: (value): void => {
         arguments_ = value;
       },
@@ -4834,6 +4837,12 @@ describe("an expired write approval says that it expired and keeps the draft (#4
     const toolResult = f.calls[1]?.messages.find((message) => message.role === "tool")?.content;
     expect(toolResult).toMatch(/expired/iu);
     expect(toolResult).not.toMatch(/declin|reject/iu);
+    // Nothing was dispatched: no effect started and the outcome says not-dispatched.
+    expect(firstToolExchange(f).result).toMatchObject({
+      status: "failed",
+      data: { outcome: "not-dispatched" },
+    });
+    expect(firstToolExchange(f).mutationOutcome ?? "not-dispatched").toBe("not-dispatched");
     expect(f.writes()).toBe(0);
     expect(f.jira.issues).toHaveLength(0);
   });
@@ -4870,5 +4879,115 @@ describe("an expired write approval says that it expired and keeps the draft (#4
       { summary: "Story" },
       { summary: "Loose" },
     ]);
+  });
+
+  const toolMessage = (f: ReturnType<typeof fixture>): string =>
+    f.calls[1]?.messages.find((message) => message.role === "tool")?.content ?? "";
+
+  it("does not report an approval the registry merely lost as expired", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const f = fixture(true, undefined, true, false, () => DRAFT_ARGUMENTS);
+    const pending = send(f, "lost-approval");
+    void pending.catch(() => undefined);
+    await awaitPendingConsent(f);
+    f.deps.atlassianActionApprovalRegistry?.reset();
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(toolMessage(f)).not.toMatch(/expired|draftId/iu);
+    expect(f.writes()).toBe(0);
+  });
+
+  it("neither a decline nor a revoked approval is reported as expired or offers a resubmission", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const declined = fixture(true, undefined, true, false, () => DRAFT_ARGUMENTS);
+    const first = send(declined, "declined");
+    void first.catch(() => undefined);
+    await awaitPendingConsent(declined);
+    expect(await postWriteDecision(declined, await pendingWriteApproval(declined), "reject")).toBe(
+      200,
+    );
+    await first;
+    expect(toolMessage(declined)).not.toMatch(/expired|draftId/iu);
+    const revoked = fixture(true, undefined, true, false, () => DRAFT_ARGUMENTS);
+    const second = send(revoked, "revoked");
+    void second.catch(() => undefined);
+    await awaitPendingConsent(revoked);
+    const approval = await pendingWriteApproval(revoked);
+    revoked.deps.atlassianActionApprovalRegistry?.revokeChatWriteApproval(
+      approval.approvalId,
+      "revoked-proof",
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    await second;
+    expect(toolMessage(revoked)).not.toMatch(/expired|draftId/iu);
+    expect(revoked.writes()).toBe(0);
+  });
+
+  it("refuses a late approval of the expired card and creates the issues exactly once overall", async () => {
+    const { f, first, next } = await expireInlineDraft();
+    expect(await postWriteDecision(f, first, "approve")).not.toBe(200);
+    expect(f.writes()).toBe(0);
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    if (draft === undefined) throw new Error("Missing open draft");
+    next({ draftId: draft.id, draftDigest: draft.digest });
+    const second = send(f, "late-second");
+    void second.catch(() => undefined);
+    const approval = (): ChatToolWriteApprovalView | undefined =>
+      f.deps.store.listMessages(f.chatId).filter((message) => message.role === "user")[1]
+        ?.toolTranscript?.exchanges[0]?.approval;
+    await vi.waitFor(() => {
+      expect(approval()?.state).toBe("pending");
+    });
+    const fresh = approval();
+    if (fresh === undefined) throw new Error("Missing fresh approval");
+    expect(await postWriteDecision(f, first, "approve")).not.toBe(200);
+    expect(await postWriteDecision(f, fresh, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(await postWriteDecision(f, first, "approve")).not.toBe(200);
+    expect(f.jira.posts()).toHaveLength(3);
+  });
+
+  it("does not hold a draft the preflight refused before anyone was asked", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const invalid = {
+      items: [
+        {
+          ref: "orphan",
+          projectId: "10000",
+          issueTypeId: "10001",
+          fields: { summary: "Orphan" },
+          parent: { fieldId: "parent", ref: "ghost" },
+        },
+      ],
+    };
+    const f = fixture(true, undefined, true, false, () => invalid);
+    const pending = send(f, "refused-draft");
+    void pending.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(2000);
+    await pending;
+    expect(f.deps.jiraDraftStore?.latest(f.chatId)).toBeUndefined();
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(f.writes()).toBe(0);
+  });
+
+  it("logs the expiry of a comment's approval on the authority record, never as a draft", async () => {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    cleanups.push(() => {
+      resetServerLogger();
+      return Promise.resolve();
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const f = fixture(true);
+    const pending = send(f, "comment-expiry");
+    void pending.catch(() => undefined);
+    await awaitPendingConsent(f);
+    await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1000);
+    await pending;
+    expect(logs.events.filter((event) => event.op === "atlassian.jira-draft")).toEqual([]);
+    expect(
+      logs.events.some((event) => JSON.stringify(event.extra ?? {}).includes('"expired"')),
+    ).toBe(true);
+    expect(f.writes()).toBe(0);
   });
 });

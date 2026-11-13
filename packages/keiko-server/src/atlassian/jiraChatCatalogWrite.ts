@@ -167,7 +167,8 @@ async function reviewedIdentity(
 
 /**
  * What happened to the write approval a person was asked for: it ran out before anyone decided
- * (`expired`, so the model and the card say so instead of "declined"), or nothing special.
+ * (`expired`, so the model and the card say so instead of "declined"), or nothing special. An
+ * approval that is merely gone, after a reset or a shutdown, is never reported as expired.
  */
 export type CatalogWriteApprovalWait = "expired" | undefined;
 
@@ -177,19 +178,22 @@ export async function requestCatalogWriteApproval(
 ): Promise<CatalogWriteApprovalWait> {
   const context = options.context();
   const requested = await requestedApproval(options, action, context);
-  if (requested === undefined || requested === "expired") return requested;
+  if (requested === undefined) return undefined;
   await options.requestWriteConsent?.(requested, context.signal);
-  return approvalExpired(options, requested.approvalId, context.correlationId)
+  return options.deps.atlassianActionApprovalRegistry?.chatWriteApprovalExpired(
+    requested.approvalId,
+    context.correlationId,
+  ) === true
     ? "expired"
     : undefined;
 }
 
-/** The approval a person must decide, `expired` when the retained one already ran out. */
+/** The approval a person must decide, if this write needs one. */
 async function requestedApproval(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
   context: JiraChatCatalogContext,
-): Promise<ChatToolWriteApprovalView | "expired" | undefined> {
+): Promise<ChatToolWriteApprovalView | undefined> {
   const identity = jiraChatWriteAction(action);
   if (identity === undefined || options.reviewableWrite?.(action) !== true) return undefined;
   const reviewed = await reviewedIdentity(options, action, identity);
@@ -203,21 +207,7 @@ async function requestedApproval(
     context.correlationId,
     identity.operation === "jira.draft" ? options.draftItemRefs?.(action) : undefined,
   );
-  if (result.kind === "denied") return result.reason === "expired" ? "expired" : undefined;
   return result.kind === "review-required" ? result.approval : undefined;
-}
-
-/** The registry's own record decides: an evicted entry is an expired one, as the card shows it. */
-function approvalExpired(
-  options: JiraChatAdmissionOptions,
-  approvalId: string,
-  correlationId: string,
-): boolean {
-  const retained = options.deps.atlassianActionApprovalRegistry?.getChatWriteApproval(
-    approvalId,
-    correlationId,
-  );
-  return retained === undefined || retained.approval.state === "expired";
 }
 
 export function claimJiraChatWrite(

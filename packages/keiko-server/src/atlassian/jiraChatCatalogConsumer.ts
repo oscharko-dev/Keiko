@@ -470,18 +470,20 @@ async function requestWriteStage(
   const held = options.holdDraft?.(action, context);
   const wait = await requestCatalogWriteApproval({ ...options, context: () => context }, action);
   if (wait === "expired") {
-    recordJiraDraftActivity(undefined, context.correlationId, {
-      phase: "refused",
-      refusal: "approval-expired",
-      newDraft: false,
-      pageItemCount: 0,
-      itemCount: held?.itemCount ?? 0,
-      pageCount: 0,
-      byteCount: 0,
-      unresolvedRefCount: 0,
-      violationCount: 0,
-      durationMs: 0,
-    });
+    // The registry's own line records every expiry; a draft's refusal is also a draft event.
+    if (action.tool === "jira.draft")
+      recordJiraDraftActivity(undefined, context.correlationId, {
+        phase: "refused",
+        refusal: "approval-expired",
+        newDraft: false,
+        pageItemCount: 0,
+        itemCount: held?.itemCount ?? 0,
+        pageCount: 0,
+        byteCount: 0,
+        unresolvedRefCount: 0,
+        violationCount: 0,
+        durationMs: 0,
+      });
     throw expiredApprovalFault(action, held);
   }
 }
@@ -493,6 +495,9 @@ function expiredApprovalFault(
 ): CatalogDispatchFault {
   const binding = jiraOperationBindingForTool(action.tool);
   requireDispatch(binding !== undefined, "failed", "provider-reported-error");
+  // The model-visible refusal rides the `failed` class like every other refusal that carries
+  // guidance (a denied result carries no data, the envelope rejects it): effectStarted is false and
+  // the outcome says not-dispatched, so nothing claims an effect or a provider answer.
   return new CatalogDispatchFault("failed", "provider-reported-error", undefined, {
     ...jiraApprovalExpiredResult(held),
     operationBinding: { ...binding },
