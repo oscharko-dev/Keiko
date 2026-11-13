@@ -7,7 +7,7 @@ import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagn
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import {
   CONNECTED_SERVER_INSTANCE_STORAGE_KEY,
-  resetServerRestartStorageReport,
+  resetServerRestartReports,
 } from "@/lib/server-restart";
 import { BrowserApprovalNotice } from "./BrowserApprovalNotice";
 
@@ -38,7 +38,7 @@ beforeEach(() => {
   connected = true;
   instanceId = BEFORE;
   window.sessionStorage.clear();
-  resetServerRestartStorageReport();
+  resetServerRestartReports();
   setClientDiagnosticWriter(() => undefined);
   vi.stubGlobal(
     "fetch",
