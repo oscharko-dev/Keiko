@@ -533,9 +533,10 @@ export const EN_MESSAGES = {
   "chat.error.scopeChanged.remediation":
     "Check the Chat's current sources, then send your request again.",
   "chat.error.jiraAuthentication.title": "Jira authentication failed",
-  "chat.error.jiraAuthentication.message": "The Jira connection could not be authenticated.",
+  "chat.error.jiraAuthentication.message":
+    "Jira rejected the token of this connection. It may have expired or been revoked.",
   "chat.error.jiraAuthentication.remediation":
-    "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira.",
+    "Open the Knowledge Pods Hub, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira.",
   "chat.error.knowledgePodUnavailable.title": "Knowledge Pod unavailable",
   "chat.error.knowledgePodUnavailable.message":
     "The selected Knowledge Pod no longer exists or is being deleted. Choose another Knowledge Pod.",
