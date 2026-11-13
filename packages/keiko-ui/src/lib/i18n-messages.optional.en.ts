@@ -2475,14 +2475,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Connect this browser to save private drafts and use protected features.",
   "browserApproval.launchNotice": "Keiko opens a connected window in this browser.",
   "browserApproval.restarted":
-    "Keiko was restarted, so this browser has to be connected again. One click on Connect browser does it. Your open chat and its draft are kept.",
-  "browserApproval.rememberChoice": "Remember this browser",
-  "browserApproval.rememberDescription":
-    "This browser then continues after a restart, for up to 30 days.",
-  "browserApproval.rememberDone":
-    "This browser stays connected after a restart, for up to 30 days.",
-  "browserApproval.rememberNotDone":
-    "This browser is connected, but it could not be remembered. After a restart, connect it again.",
+    "Keiko was restarted, so this browser has to be connected again. One click on Connect browser does it. Your open chat and its draft are kept. A browser you remembered under Settings → Security → Browser approvals reconnects on its own.",
   "browserApproval.launchFailed":
     "Keiko could not connect this browser. Try again or reopen Keiko from its launcher.",
   "browserApproval.open": "Connect browser",

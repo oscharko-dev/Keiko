@@ -1,9 +1,8 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import type { BrowserApprovalManagementResult } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import * as api from "@/lib/browser-approval-api";
-import * as approvalClient from "@/lib/browser-approval-client";
 import * as restart from "@/lib/server-restart";
 import { codingAppSessionPairingSettled } from "@/lib/coding-app-session-client";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -29,7 +28,6 @@ vi.mock("@/lib/server-restart", () => ({
 }));
 
 let active = false;
-const rememberCurrent = vi.fn();
 
 function inspection(): BrowserApprovalManagementResult {
   return active ? { state: "active", requests: [], approvals: [] } : { state: "unavailable" };
@@ -45,33 +43,43 @@ beforeEach(() => {
   vi.mocked(openLauncherBrowser).mockImplementation(async () => {
     active = true;
   });
-  vi.spyOn(approvalClient, "createLocalBrowserApprovalClient").mockReturnValue({
-    begin: vi.fn(),
-    complete: vi.fn(),
-    restore: vi.fn(),
-    rememberCurrent,
-  });
-  rememberCurrent.mockResolvedValue("stored");
   setClientDiagnosticWriter(() => undefined);
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetClientDiagnosticWriter();
   vi.restoreAllMocks();
 });
+
+const RESTARTED_MESSAGE =
+  "Keiko was restarted, so this browser has to be connected again. One click on Connect browser does it. Your open chat and its draft are kept. A browser you remembered under Settings → Security → Browser approvals reconnects on its own.";
 
 describe("after Keiko restarted (#4370)", () => {
   it("says in plain words that Keiko was restarted, without error styling", async () => {
     vi.mocked(restart.sessionEndedByRestart).mockResolvedValue(true);
     render(<BrowserApprovalNotice />);
     const message = await screen.findByText(/Keiko was restarted/u);
-    expect(message).toHaveTextContent(
-      "Keiko was restarted, so this browser has to be connected again. One click on Connect browser does it. Your open chat and its draft are kept.",
-    );
+    expect(message).toHaveTextContent(RESTARTED_MESSAGE);
     // An expected state: no alert role, one existing Connect control.
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getAllByRole("button", { name: "Connect browser" })).toHaveLength(1);
     expect(message.textContent).not.toMatch(/session|cookie|error|unauthor|registry/iu);
+  });
+
+  it("offers no way to remember the browser here and starts no approval by itself", async () => {
+    vi.mocked(restart.sessionEndedByRestart).mockResolvedValue(true);
+    render(<BrowserApprovalNotice />);
+    await screen.findByText(/Keiko was restarted/u);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    screen.getByRole("button", { name: "Connect browser" }).click();
+    await waitFor(() => expect(openLauncherBrowser).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull(),
+    );
+    expect(api.requestBrowserApproval).not.toHaveBeenCalled();
+    expect(api.approveBrowserRequest).not.toHaveBeenCalled();
+    expect(api.proveBrowserApproval).not.toHaveBeenCalled();
   });
 
   it("keeps the ordinary wording when no restart was observed", async () => {
@@ -94,83 +102,51 @@ describe("after Keiko restarted (#4370)", () => {
     await waitFor(() => expect(restart.noteConnectedServerInstance).toHaveBeenCalled());
     expect(restart.sessionEndedByRestart).not.toHaveBeenCalled();
   });
-});
 
-describe("offering to remember this browser (#4370)", () => {
-  it("is off by default, explains itself in one sentence and does not remember on a plain connect", async () => {
+  it("keeps the remembered server instance current while the session stays connected", async () => {
+    // A restart the session survives must not be blamed for a later, unrelated loss: the stored
+    // identity follows the server for as long as the tab is connected, with no state change.
+    vi.useFakeTimers();
+    active = true;
     render(<BrowserApprovalNotice />);
-    const choice = await screen.findByRole("checkbox", { name: "Remember this browser" });
-    expect(choice).not.toBeChecked();
-    expect(choice).toHaveAccessibleDescription(
-      "This browser then continues after a restart, for up to 30 days.",
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const initial = vi.mocked(restart.noteConnectedServerInstance).mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(vi.mocked(restart.noteConnectedServerInstance).mock.calls.length).toBeGreaterThan(
+      initial,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Connect browser" }));
-    await waitFor(() => expect(openLauncherBrowser).toHaveBeenCalledOnce());
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull(),
+    const afterFirst = vi.mocked(restart.noteConnectedServerInstance).mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(vi.mocked(restart.noteConnectedServerInstance).mock.calls.length).toBeGreaterThan(
+      afterFirst,
     );
-    expect(rememberCurrent).not.toHaveBeenCalled();
   });
 
-  it("remembers exactly once after the connection succeeds when the human chose it", async () => {
-    render(<BrowserApprovalNotice />);
-    fireEvent.click(await screen.findByRole("checkbox", { name: "Remember this browser" }));
-    fireEvent.click(screen.getByRole("button", { name: "Connect browser" }));
-    await waitFor(() => expect(rememberCurrent).toHaveBeenCalledOnce());
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "This browser stays connected after a restart, for up to 30 days.",
-    );
-    // Polling and focus refreshes after the connection never repeat the choice.
-    fireEvent.focus(window);
-    await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalled());
-    expect(rememberCurrent).toHaveBeenCalledOnce();
-  });
-
-  it.each(["unconfirmed", "unavailable"] as const)(
-    "says plainly when remembering did not work (%s) and keeps the connection",
-    async (outcome) => {
-      rememberCurrent.mockResolvedValue(outcome);
-      render(<BrowserApprovalNotice />);
-      fireEvent.click(await screen.findByRole("checkbox", { name: "Remember this browser" }));
-      fireEvent.click(screen.getByRole("button", { name: "Connect browser" }));
-      expect(await screen.findByRole("status")).toHaveTextContent(
-        "This browser is connected, but it could not be remembered. After a restart, connect it again.",
-      );
-      expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
-    },
-  );
-
-  it("treats a thrown failure as not remembered, records a diagnostic and never retries by itself", async () => {
-    const writer = vi.fn();
-    setClientDiagnosticWriter(writer);
-    rememberCurrent.mockRejectedValue(new TypeError("storage blocked"));
-    render(<BrowserApprovalNotice />);
-    fireEvent.click(await screen.findByRole("checkbox", { name: "Remember this browser" }));
-    fireEvent.click(screen.getByRole("button", { name: "Connect browser" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("could not be remembered");
-    expect(rememberCurrent).toHaveBeenCalledOnce();
-    expect(writer).toHaveBeenCalled();
-  });
-
-  it("offers the same choice at the moment of a restart and has no accessibility violations", async () => {
-    vi.mocked(restart.sessionEndedByRestart).mockResolvedValue(true);
-    const { container } = render(<BrowserApprovalNotice />);
-    await screen.findByText(/Keiko was restarted/u);
-    expect(screen.getByRole("checkbox", { name: "Remember this browser" })).not.toBeChecked();
-    expect(await axe(container)).toHaveNoViolations();
-  });
-
-  it("keeps the compact notice to its single existing control", async () => {
-    render(<BrowserApprovalNotice compact />);
-    await screen.findByRole("button", { name: "Connect browser" });
-    expect(screen.queryByRole("checkbox")).toBeNull();
-  });
-
-  it("does not offer the choice while the connection check itself failed", async () => {
-    vi.mocked(api.inspectBrowserApprovals).mockRejectedValue(new TypeError("offline"));
-    render(<BrowserApprovalNotice />);
-    await screen.findByRole("button", { name: "Retry" });
-    expect(screen.queryByRole("checkbox")).toBeNull();
-    await act(async () => undefined);
+  it("stops refreshing once the session is gone and then compares instead", async () => {
+    vi.useFakeTimers();
+    active = true;
+    const view = render(<BrowserApprovalNotice />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    active = false;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(restart.sessionEndedByRestart).toHaveBeenCalled();
+    const calls = vi.mocked(restart.noteConnectedServerInstance).mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(vi.mocked(restart.noteConnectedServerInstance).mock.calls.length).toBe(calls);
+    view.unmount();
   });
 });

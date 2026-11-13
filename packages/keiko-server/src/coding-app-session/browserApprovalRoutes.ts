@@ -46,7 +46,7 @@ const APPROVAL_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["first-pairing", "live-credential", "after-restart", "replaced-credential"],
+      values: ["no-credential", "live-credential", "ended-credential", "after-restart"],
     },
   },
   causal: "correlation",

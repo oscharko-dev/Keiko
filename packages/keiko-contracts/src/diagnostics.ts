@@ -2825,6 +2825,13 @@ export function isMemoryReadinessSnapshot(value: unknown): value is MemoryReadin
   );
 }
 
+/** A server instance identity: 128 random bits as 32 lowercase hex characters (#4370). */
+export const SERVER_INSTANCE_ID_PATTERN = /^[a-f0-9]{32}$/u;
+
+export function isServerInstanceId(value: unknown): value is string {
+  return typeof value === "string" && SERVER_INSTANCE_ID_PATTERN.test(value);
+}
+
 /** The `GET /api/health` body. Readiness projections are additive; `status` stays server liveness. */
 export interface HealthResponse {
   readonly status: "ok";

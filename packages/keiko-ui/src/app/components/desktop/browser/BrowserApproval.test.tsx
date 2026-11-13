@@ -124,7 +124,6 @@ describe("browser approval surfaces", () => {
       begin: vi.fn().mockResolvedValue({ key, request: REQUEST, correlationId: "corr_ui" }),
       complete: vi.fn().mockResolvedValue({ state: "active", persistence: "unconfirmed" }),
       restore: vi.fn().mockResolvedValue(false),
-      rememberCurrent: vi.fn().mockResolvedValue("unavailable"),
     };
     vi.mocked(createLocalBrowserApprovalClient).mockReturnValue(client);
     render(<BrowserApprovalDialog onClose={vi.fn()} />);
@@ -147,7 +146,6 @@ describe("browser approval surfaces", () => {
       ),
       complete: vi.fn(),
       restore: vi.fn().mockResolvedValue(false),
-      rememberCurrent: vi.fn().mockResolvedValue("unavailable"),
     };
     vi.mocked(createLocalBrowserApprovalClient).mockReturnValue(client);
     const view = render(<BrowserApprovalDialog onClose={vi.fn()} />);

@@ -48,19 +48,26 @@ export interface CodingAppSessionContentSource {
 }
 
 /**
- * How a session issuance relates to the credential the browser presented with it (#4370):
- * `first-pairing` presented none, `live-credential` still held a registered session,
- * `after-restart` held one this process never issued while it had issued nothing at all (so it can
- * only come from an earlier process), `replaced-credential` held one this process no longer knows
- * (expired, revoked, evicted or rotated away). Evidence only; it grants nothing.
+ * How a session issuance relates to the credential the browser presented with it (#4370).
+ * `no-credential` presented none (or an unreadable one); `live-credential` still held a valid
+ * session; `ended-credential` held one this process issued that is no longer valid (expired,
+ * revoked or evicted); `after-restart` held a session id this process never issued, which an
+ * earlier process explains (a foreign value looks the same). Evidence only; it grants nothing.
  */
 export type SessionReconnectKind =
-  "first-pairing" | "live-credential" | "after-restart" | "replaced-credential";
+  "no-credential" | "live-credential" | "ended-credential" | "after-restart";
 
 export function classifyReconnect(standing: SessionProofStanding): SessionReconnectKind {
-  if (standing.presented === "registered") return "live-credential";
-  if (standing.presented !== "unregistered") return "first-pairing";
-  return standing.mintedSessionCount === 0 ? "after-restart" : "replaced-credential";
+  switch (standing.presented) {
+    case "valid":
+      return "live-credential";
+    case "ended":
+      return "ended-credential";
+    case "unknown":
+      return "after-restart";
+    default:
+      return "no-credential";
+  }
 }
 
 export type CodingAppSessionPairResult =

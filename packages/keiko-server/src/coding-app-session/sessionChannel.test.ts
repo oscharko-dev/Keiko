@@ -497,31 +497,50 @@ it("revokes a replacement that loses its last full second during rotation", () =
 });
 
 describe("classifyReconnect (#4370)", () => {
-  it("separates a restart from an ordinary replacement and a first pairing", () => {
-    expect(classifyReconnect({ presented: "absent", mintedSessionCount: 0 })).toBe("first-pairing");
-    expect(classifyReconnect({ presented: "malformed", mintedSessionCount: 3 })).toBe(
-      "first-pairing",
-    );
-    expect(classifyReconnect({ presented: "registered", mintedSessionCount: 1 })).toBe(
-      "live-credential",
-    );
-    expect(classifyReconnect({ presented: "unregistered", mintedSessionCount: 0 })).toBe(
-      "after-restart",
-    );
-    expect(classifyReconnect({ presented: "unregistered", mintedSessionCount: 1 })).toBe(
-      "replaced-credential",
-    );
+  it("labels what happened to the credential the browser presented", () => {
+    expect(classifyReconnect({ presented: "absent" })).toBe("no-credential");
+    expect(classifyReconnect({ presented: "malformed" })).toBe("no-credential");
+    expect(classifyReconnect({ presented: "valid" })).toBe("live-credential");
+    expect(classifyReconnect({ presented: "ended" })).toBe("ended-credential");
+    expect(classifyReconnect({ presented: "unknown" })).toBe("after-restart");
   });
 
-  it("classifies before the pairing's own mint counts as the process's first issuance", () => {
+  it("labels a second tab after a restart as after-restart, not as a replaced credential", () => {
     const channel = createCodingAppSessionChannel({
       registry: createSessionRegistry(),
       pairingPort: createFakeSessionPairingPort(),
     });
     const foreign = `sess_${"d".repeat(24)}.secret`;
     const first = channel.pair(fakePairingRequestBody(), foreign);
-    const second = channel.pair(fakePairingRequestBody(), foreign);
+    const second = channel.pair(fakePairingRequestBody(), `sess_${"e".repeat(24)}.secret`);
     expect(first.paired && first.reconnect).toBe("after-restart");
-    expect(second.paired && second.reconnect).toBe("replaced-credential");
+    // The process has issued a session by now; the second tab's credential is still from before.
+    expect(second.paired && second.reconnect).toBe("after-restart");
+  });
+
+  it("labels an idle-expired credential as ended, the case of the 2026-11-08 incident", () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, idleTtlMs: 100 });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const own = registry.mint("own");
+    now = 101;
+    const paired = channel.pair(fakePairingRequestBody(), own.cookieToken);
+    expect(paired.paired && paired.reconnect).toBe("ended-credential");
+  });
+
+  it("labels a held valid session, and no credential at all", () => {
+    const registry = createSessionRegistry();
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const own = registry.mint("own");
+    const live = channel.pair(fakePairingRequestBody(), own.cookieToken);
+    const none = channel.pair(fakePairingRequestBody());
+    expect(live.paired && live.reconnect).toBe("live-credential");
+    expect(none.paired && none.reconnect).toBe("no-credential");
   });
 });

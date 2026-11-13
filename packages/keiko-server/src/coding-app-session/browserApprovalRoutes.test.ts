@@ -173,8 +173,8 @@ describe("browser approval on the real mounted BFF", () => {
         event.op === "coding-app-session.browser-approval.state" && event.extra?.action === "prove",
     );
     expect(proves.map((event) => event.extra?.reconnect)).toEqual([
-      "first-pairing",
-      "replaced-credential",
+      "no-credential",
+      "after-restart",
       "live-credential",
     ]);
     expect(JSON.stringify(proves)).not.toContain("credential-of-an-earlier-process");

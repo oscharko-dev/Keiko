@@ -6,17 +6,35 @@
 // value lives only in this tab's session storage; it is not a credential and grants nothing. When it
 // is absent, unreadable or not the closed shape, no restart is claimed and the ordinary wording shows.
 
+import { isServerInstanceId } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { fetchHealth } from "./api";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 
 const STORAGE_KEY = "keiko.connected-server-instance";
-const INSTANCE_ID = /^[a-f0-9]{32}$/u;
+
+// Blocked tab storage is an ordinary state (a restricted profile), but never a silent one: it is
+// reported once per page, body-free, and the ordinary wording shows instead of a restart claim.
+let storageFailureReported = false;
+
+function reportStorageFailure(error: unknown): void {
+  if (storageFailureReported) return;
+  storageFailureReported = true;
+  reportClientDiagnostic("Tab storage for the server instance is unavailable.", {
+    errorKind: bffRequestErrorKind(error),
+  });
+}
+
+/** Test seam: the once-per-page report resets with the module state between cases. */
+export function resetServerRestartStorageReport(): void {
+  storageFailureReported = false;
+}
 
 function tabStorage(): Storage | undefined {
   try {
     return window.sessionStorage;
-  } catch {
+  } catch (error) {
+    reportStorageFailure(error);
     return undefined;
   }
 }
@@ -24,7 +42,7 @@ function tabStorage(): Storage | undefined {
 async function currentInstance(): Promise<string | undefined> {
   try {
     const { instanceId } = await fetchHealth();
-    return instanceId !== undefined && INSTANCE_ID.test(instanceId) ? instanceId : undefined;
+    return isServerInstanceId(instanceId) ? instanceId : undefined;
   } catch (error) {
     reportClientDiagnostic("Server instance could not be read.", {
       errorKind: bffRequestErrorKind(error),
@@ -39,8 +57,8 @@ export async function noteConnectedServerInstance(): Promise<void> {
   if (instance === undefined) return;
   try {
     tabStorage()?.setItem(STORAGE_KEY, instance);
-  } catch {
-    // Storage is a convenience: without it the ordinary wording shows instead of a restart claim.
+  } catch (error) {
+    reportStorageFailure(error);
   }
 }
 
@@ -49,11 +67,11 @@ export async function sessionEndedByRestart(): Promise<boolean> {
   let remembered: string | null | undefined;
   try {
     remembered = tabStorage()?.getItem(STORAGE_KEY);
-  } catch {
+  } catch (error) {
+    reportStorageFailure(error);
     return false;
   }
-  if (remembered === null || remembered === undefined || !INSTANCE_ID.test(remembered))
-    return false;
+  if (!isServerInstanceId(remembered)) return false;
   const current = await currentInstance();
   return current !== undefined && current !== remembered;
 }

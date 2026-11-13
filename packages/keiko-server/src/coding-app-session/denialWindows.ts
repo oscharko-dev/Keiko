@@ -117,6 +117,12 @@ class LocalSessionDenialWindow {
     if (emit !== undefined && summary.count > 0) emit(summary);
   }
 
+  /** Report the pending window's summary instead of dropping it, then release the timer. */
+  flush(): void {
+    if (this.timer !== undefined) this.close();
+    this.reset();
+  }
+
   reset(): void {
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
@@ -152,11 +158,15 @@ export class CodingAppSessionDenialWindows {
     this.localSession.record(now, reason, emit);
   }
 
-  /** Disposal hook (deps.ts `createUiHandlerDispose`): drop counters so nothing outlives the graph. */
+  /**
+   * Disposal hook (deps.ts `createUiHandlerDispose`): nothing outlives the graph. The pending
+   * local-session window is reported first, so a refusal counted in the last minute before
+   * shutdown reaches the log instead of vanishing with the process.
+   */
   reset(): void {
     Object.assign(this.pairing, freshWindow());
     Object.assign(this.rotate, freshWindow());
-    this.localSession.reset();
+    this.localSession.flush();
   }
 }
 

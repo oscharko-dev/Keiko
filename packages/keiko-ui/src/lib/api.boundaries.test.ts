@@ -297,6 +297,26 @@ describe("API BFF boundary helpers", () => {
     } satisfies Partial<ApiError>);
   });
 
+  it.each([
+    { sent: "a".repeat(32), kept: true },
+    { sent: "A".repeat(32), kept: false },
+    { sent: "a".repeat(31), kept: false },
+    { sent: 42, kept: false },
+  ])(
+    "keeps a health instance identity only in its closed shape (#4370): $sent",
+    async ({ sent, kept }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(jsonResponse({ status: "ok", version: "1.0.0", instanceId: sent })),
+        ),
+      );
+      const health = await fetchHealth();
+      expect(health.instanceId).toBe(kept ? sent : undefined);
+      expect("instanceId" in health).toBe(kept);
+    },
+  );
+
   it("fails closed when a run-start governance projection violates its response contract", async () => {
     vi.stubGlobal(
       "fetch",

@@ -122,13 +122,16 @@ export interface SessionRegistry {
 
 /**
  * What a registry knows about a proof a browser presented, without verifying its secret.
- * `unregistered` after `mintedSessionCount === 0` can only be a credential from another process.
+ * `valid` names a session that would still verify; `ended` a session this process issued that is no
+ * longer valid (expired and not yet swept, expired and swept, revoked or evicted); `unknown` a
+ * session id this process never issued: an earlier process, or a foreign value.
  */
 export interface SessionProofStanding {
-  readonly presented: "absent" | "malformed" | "registered" | "unregistered";
-  /** Sessions this process has minted since it started (rotation excluded). */
-  readonly mintedSessionCount: number;
+  readonly presented: "absent" | "malformed" | "valid" | "ended" | "unknown";
 }
+
+/** Session ids kept only to tell an ended credential from one this process never issued. */
+const MAX_REMEMBERED_SESSION_IDS = 4_096;
 
 /** Browser identity approval caps session validity; it grants no task or autonomy authority. */
 export interface SessionApprovalBinding {
@@ -174,7 +177,8 @@ interface RegistryState {
   readonly activityLog?: ServerLogSink | undefined;
   readonly observeApprovalExpiry?: ((observedAtMs: number) => void) | undefined;
   readonly sessions: Map<string, StoredSession>;
-  mintedSessionCount: number;
+  /** Ids (never secrets) of the sessions this process issued, bounded, oldest forgotten first. */
+  readonly issuedSessionIds: Set<string>;
   readonly now: () => number;
   readonly idleTtlMs: number;
   readonly absoluteTtlMs: number;
@@ -464,10 +468,11 @@ function mintSession(
   const issuedAtMs = state.now();
   assertApprovalBinding(approval, issuedAtMs);
   const capacityDecision = evictOldestIfFull(state);
-  state.mintedSessionCount += 1;
+  const sessionId = state.mintSessionId();
+  rememberIssuedSessionId(state, sessionId);
   return {
     ...storeSession(state, {
-      sessionId: state.mintSessionId(),
+      sessionId,
       principalLabel,
       rotationCount: 0,
       issuedAtMs,
@@ -556,18 +561,26 @@ function verifyForCookieRepair(
   );
 }
 
+function rememberIssuedSessionId(state: RegistryState, sessionId: string): void {
+  state.issuedSessionIds.add(sessionId);
+  if (state.issuedSessionIds.size <= MAX_REMEMBERED_SESSION_IDS) return;
+  const oldest = state.issuedSessionIds.values().next();
+  if (oldest.done !== true) state.issuedSessionIds.delete(oldest.value);
+}
+
+// Non-touching and non-mutating: an expired entry that nothing has swept yet is `ended`, never `valid`,
+// and the lookup removes nothing, so reconnect evidence cannot change what it describes.
 function proofStanding(
   state: RegistryState,
   cookieToken: string | undefined,
 ): SessionProofStanding {
-  const mintedSessionCount = state.mintedSessionCount;
-  if (cookieToken === undefined) return { presented: "absent", mintedSessionCount };
+  if (cookieToken === undefined) return { presented: "absent" };
   const parsed = parseCookieToken(cookieToken);
-  if (parsed === undefined) return { presented: "malformed", mintedSessionCount };
-  return {
-    presented: state.sessions.has(parsed.sessionId) ? "registered" : "unregistered",
-    mintedSessionCount,
-  };
+  if (parsed === undefined) return { presented: "malformed" };
+  const stored = state.sessions.get(parsed.sessionId);
+  if (stored !== undefined)
+    return { presented: isExpired(state, stored, state.now()) ? "ended" : "valid" };
+  return { presented: state.issuedSessionIds.has(parsed.sessionId) ? "ended" : "unknown" };
 }
 
 function inspectOwnedSession(state: RegistryState, sessionId: string): AppSession | undefined {
@@ -639,7 +652,7 @@ function beginSessionOperation(
 function createRegistryState(deps: SessionRegistryDeps): RegistryState {
   return {
     sessions: new Map<string, StoredSession>(),
-    mintedSessionCount: 0,
+    issuedSessionIds: new Set<string>(),
     activityLog: deps.activityLog,
     observeApprovalExpiry: deps.observeApprovalExpiry,
     now: deps.now ?? Date.now,

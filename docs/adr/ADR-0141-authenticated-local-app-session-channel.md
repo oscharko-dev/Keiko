@@ -175,48 +175,12 @@ finds its session gone, it compares the random server instance identity that `GE
 reports (`instanceId`, regenerated at every process start, not a credential) with the one it
 remembered in its own tab storage while it was connected. Only a different identity makes the page
 say, in plain words and without error styling, that Keiko was restarted, that one click on the
-existing Connect control reconnects, and that the open Chat and its draft are kept. An absent,
-unreadable or malformed identity makes no restart claim and the ordinary wording shows.
-
-The Connect control also offers the existing remember opt-in at connect time: an unchecked choice,
-default off, with one sentence that the browser then continues after a restart for up to 30 days. It
-changes nothing on the connect request. Only after the connection succeeded, and only when the person
-chose it, the page requests a remembered approval for its own new key, approves it with the session it
-now holds, proves possession and stores the non-extractable key through the same server protocol,
-limits (30 days, never sliding, 32 records) and key store as the two-browser approval. No comparison
-code is needed because requester and approver are the same page. A failure leaves the connection
-usable and says so.
-
-A mutation refused with HTTP 401, or HTTP 403 carrying `DENIED`, `FORBIDDEN` or `UNAUTHORIZED`,
-requests a fresh browser-session inspection through the existing notification port. For a 404,
-`NOT_FOUND` triggers inspection only on the session-concealing skill-library, Chat skill-selection,
-private-draft and run-control routes; per-run Coding runtime mutations use
-`CODING_RUNTIME_RUN_NOT_FOUND`. An ordinary missing Chat or Pod does not invalidate the held session
-inspection. A 404 alone never proves missing session authority or a missing resource.
-
-Requests join one inspection notification in flight and publish at most once every five seconds,
-including its diagnostic. The banner follows a fresh authoritative inventory read. The original
-refusal is preserved and no mutation is replayed. Follow-up GET/HEAD reads never publish another
-notification, so an unpaired skill or draft read cannot cause a refresh loop. The core API transport
-uses this notification for the closed trigger set above, including `403 DENIED`; the shared satellite
-HTTP transport instead keeps `403 DENIED` on its existing bounded session-confirmation and read-only
-repair/replay path. Diagnostic delivery opts out of both mechanisms and counts its own refusals
-without recursively reporting them through the failing transport.
-
-The destination is an exact HTTP loopback origin on the server-owned public UI port; no supplied
-URL, path, executable, principal or additional arguments are admitted. Browser selection uses a
-closed target list and fixed native application identifiers/commands with no shell. Calls are
-serialized and limited to one per ten seconds per server graph, and native launch is bounded to
-five seconds. Child processes receive only desktop environment fields. Native errors and proof-bearing
-arguments never enter responses or logs; the Activity Log records the closed handoff outcome.
-A local HTTP client can at most cause a bounded browser window to open: it cannot obtain that
-browser's proof or read authority. Missing launcher configuration, unsupported browser, opener
-failure and blocked profile delivery leave protected APIs closed and present a retry. Private or
-nondefault browser profiles may require reopening Keiko through their normal launcher profile.
-
-The older explicit cross-browser approval protocol below remains available to its existing
-management/renewal consumers, but the ordinary desktop entry point does not invoke it. Remembering
-is still opt-in; this change does not silently persist browser keys or extend any session lifetime.
+existing Connect control reconnects, that the open Chat and its draft are kept, and that a browser
+remembered under Settings → Security → Browser approvals reconnects on its own. While the session is
+valid the page keeps the remembered identity current (on every active read and every thirty seconds),
+so a restart the session survived is not blamed for a later, unrelated loss. An absent, unreadable or
+malformed identity makes no restart claim and the ordinary wording shows. The notice offers no way to
+remember a browser: remembering stays the explicit two-sided approval below.
 
 #### Explicit browser approval (#4043)
 
@@ -389,7 +353,9 @@ refusal reason (`approval`, `inactivity`, `invalid-clock`, `lifetime`, `proof-ma
 server: a warning alert when the pairing-denial threshold is reached (`windowClosed` false) and a
 summary when the window closes (`windowClosed` true; information below the threshold), so a single
 refusal below the threshold is counted under its reason instead of leaving no line (#4370). The
-histogram total equals `count`. It contains no identity, cookie or caller-provided content. A
+histogram total equals `count`. A write that fails takes the structured diagnostic path instead of
+escaping the window timer, and graph disposal writes the pending window's summary instead of
+dropping it. It contains no identity, cookie or caller-provided content. A
 missing, malformed, foreign or wrong proof and an absent channel are caller-controlled: any page that
 reaches the loopback server can repeat them without limit, so they never write a line per request and
 remain only in that aggregate. A refusal
@@ -406,12 +372,15 @@ swept yet are not counted (#4370). Repeated observations of the same
 HTTP request reuse its canonical generated correlation.
 
 Reconnect evidence (#4370): `coding-app-session.paired` and the `prove` action of
-`coding-app-session.browser-approval.state` record a closed `reconnect` class that relates the
-issuance to the credential the browser presented. `first-pairing` presented none; `live-credential`
-still held a registered session; `after-restart` held a session this process never issued while it had
-issued none at all, so it can only come from an earlier process; `replaced-credential` held one this
-process no longer knows (expired, revoked, evicted or rotated away). The class is computed by a
-non-touching registry lookup of the session id before the mint, verifies no secret and grants nothing. These diagnostics do not widen authority
+`coding-app-session.browser-approval.state` record a closed `reconnect` class that says what happened
+to the credential the browser presented. `no-credential` presented none (or an unreadable one);
+`live-credential` still held a valid session; `ended-credential` held a session this process issued
+that is no longer valid (expired, including an entry nothing has swept yet, revoked or evicted);
+`after-restart` held a session id this process never issued, which an earlier process explains (a
+foreign value looks the same, so the class is evidence, not proof). The registry classifies by validity
+through a non-touching, non-mutating lookup before the mint, against a bounded set of the ids (never
+secrets) it issued, so a second tab after a restart is `after-restart` as well. It verifies no secret
+and grants nothing. These diagnostics do not widen authority
 or refresh rejected proofs. Pairing acknowledgement semantics remain unchanged.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation

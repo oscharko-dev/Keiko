@@ -103,15 +103,6 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.cmpRememberChoice {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.cmpRememberChoice .cmpRemember {
-  margin: 0;
-}
 .cmpRemember {
   display: flex;
   gap: 8px;

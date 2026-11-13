@@ -414,25 +414,52 @@ describe("valid session count and proof standing (#4370)", () => {
   it("classifies a presented proof without verifying or touching anything", () => {
     const clock = fixedClock(0);
     const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100 });
-    expect(registry.proofStanding(undefined)).toEqual({
-      presented: "absent",
-      mintedSessionCount: 0,
-    });
-    expect(registry.proofStanding("nonsense").presented).toBe("malformed");
+    expect(registry.proofStanding(undefined)).toEqual({ presented: "absent" });
+    expect(registry.proofStanding("nonsense")).toEqual({ presented: "malformed" });
     const foreign = `sess_${"f".repeat(24)}.secret`;
-    expect(registry.proofStanding(foreign)).toEqual({
-      presented: "unregistered",
-      mintedSessionCount: 0,
-    });
+    expect(registry.proofStanding(foreign)).toEqual({ presented: "unknown" });
     const mint = registry.mint("p");
-    expect(registry.proofStanding(mint.cookieToken)).toEqual({
-      presented: "registered",
-      mintedSessionCount: 1,
-    });
-    // A wrong secret is still `registered`: standing says whose session it names, nothing more.
-    const wrong = `${mint.session.sessionId}.wrong`;
-    expect(registry.proofStanding(wrong).presented).toBe("registered");
-    clock.advance(1_000);
-    expect(registry.proofStanding(mint.cookieToken).presented).toBe("registered");
+    expect(registry.proofStanding(mint.cookieToken)).toEqual({ presented: "valid" });
+    // A wrong secret still names a valid session: standing says whose session it is, nothing more.
+    expect(registry.proofStanding(`${mint.session.sessionId}.wrong`).presented).toBe("valid");
+    // Looking is not touching: asking never renewed the idle window.
+    clock.advance(99);
+    expect(registry.proofStanding(mint.cookieToken).presented).toBe("valid");
+    clock.advance(1);
+    expect(registry.verify(mint.cookieToken)).toBeUndefined();
+  });
+
+  it("labels an idle-expired credential as ended even while the entry is still in the map (#4370)", () => {
+    // The incident's shape: the session is no longer valid, yet nothing has swept the stored entry.
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100 });
+    const mint = registry.mint("p");
+    clock.advance(101);
+    expect(registry.proofStanding(mint.cookieToken)).toEqual({ presented: "ended" });
+    // The lookup removed nothing and logged nothing; a later observation still sees an ended one.
+    expect(registry.verify(mint.cookieToken)).toBeUndefined();
+    expect(registry.proofStanding(mint.cookieToken)).toEqual({ presented: "ended" });
+  });
+
+  it.each(["revoked", "evicted"] as const)(
+    "labels a %s credential as ended, never as one this process did not issue",
+    (how) => {
+      const clock = fixedClock(0);
+      const registry = createSessionRegistry({ now: clock.now, maxSessions: 1 });
+      const first = registry.mint("first");
+      if (how === "revoked") registry.revoke(first.session.sessionId);
+      else registry.mint("second");
+      expect(registry.proofStanding(first.cookieToken)).toEqual({ presented: "ended" });
+    },
+  );
+
+  it("forgets the oldest issued ids beyond its bound, which then read as unknown", () => {
+    const registry = createSessionRegistry({ maxSessions: 5_000 });
+    const first = registry.mint("first");
+    registry.revoke(first.session.sessionId);
+    expect(registry.proofStanding(first.cookieToken).presented).toBe("ended");
+    for (let index = 0; index < 4_100; index += 1)
+      registry.revoke(registry.mint("m").session.sessionId);
+    expect(registry.proofStanding(first.cookieToken).presented).toBe("unknown");
   });
 });

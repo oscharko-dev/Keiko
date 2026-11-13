@@ -7,7 +7,6 @@ import {
   type BrowserApprovalRequestDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
-  approveBrowserRequest,
   inspectBrowserApprovals,
   proveBrowserApproval,
   requestBrowserApproval,
@@ -36,7 +35,6 @@ import {
 const API = {
   inspect: inspectBrowserApprovals,
   request: requestBrowserApproval,
-  approve: approveBrowserRequest,
   challenge: requestBrowserChallenge,
   prove: proveBrowserApproval,
 };
@@ -78,16 +76,7 @@ export interface BrowserApprovalClient {
     signal?: AbortSignal,
   ) => Promise<BrowserApprovalCompletion>;
   readonly restore: (signal?: AbortSignal) => Promise<boolean>;
-  /**
-   * Remember this already connected browser after an explicit human choice (#4370): the page asks
-   * for a remembered approval of its own new key and approves it with the session it already holds,
-   * then proves possession and stores the non-extractable key. Same server protocol and limits as
-   * the two-browser approval; nothing is stored unless the human chose it.
-   */
-  readonly rememberCurrent: (signal?: AbortSignal) => Promise<BrowserRememberOutcome>;
 }
-
-export type BrowserRememberOutcome = "stored" | "unconfirmed" | "unavailable";
 
 function withRenewalLock(task: () => Promise<boolean>): Promise<boolean> {
   if (typeof navigator === "undefined" || navigator.locks === undefined) return task();
@@ -284,29 +273,6 @@ async function completeApproval(
   return { state: "active", persistence };
 }
 
-async function rememberCurrentBrowser(
-  state: ClientState,
-  signal?: AbortSignal,
-): Promise<BrowserRememberOutcome> {
-  const attempt = await beginApproval(state, true, signal);
-  if (attempt === undefined) return "unavailable";
-  const decision = await state.api.approve(
-    {
-      requestId: attempt.request.requestId,
-      comparisonCode: attempt.request.comparisonCode,
-      remember: true,
-    },
-    signal,
-    attempt.correlationId,
-  );
-  if (decision.state !== "accepted") return "unavailable";
-  const proof = await proveAttempt(state, attempt, signal);
-  if (proof.state !== "proved") return "unavailable";
-  const persistence = await rememberAttempt(state, attempt, proof);
-  state.sessionChanged();
-  return persistence === "stored" ? "stored" : "unconfirmed";
-}
-
 async function restoreUnderLock(
   state: ClientState,
   correlationId: string,
@@ -376,7 +342,6 @@ export function createBrowserApprovalClient(
     begin: (remember, signal) => beginApproval(state, remember, signal),
     complete: (attempt, signal) => completeApproval(state, attempt, signal),
     restore: (signal) => restoreApproval(state, signal),
-    rememberCurrent: (signal) => rememberCurrentBrowser(state, signal),
   };
 }
 

@@ -19,6 +19,7 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import {
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
@@ -112,7 +113,7 @@ const CODING_APP_SESSION_PAIRED_OPERATION = defineActivityLogOperation({
     reconnect: {
       type: "string",
       dataClass: "closed-enum",
-      values: ["first-pairing", "live-credential", "after-restart", "replaced-credential"],
+      values: ["no-credential", "live-credential", "ended-credential", "after-restart"],
       required: false,
     },
   },
@@ -267,6 +268,30 @@ function writeLocalSessionDenial(
   );
 }
 
+// The summary is written from a window timer, from the next denial after the window and from graph
+// disposal. None of those may let a failing sink escape as an uncaught exception, so a write that
+// throws takes the existing structured diagnostic path under the denial's correlation (#4370).
+function writeLocalSessionDenialGuarded(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  summary: LocalSessionDenialSummary,
+): void {
+  try {
+    writeLocalSessionDenial(deps, correlationId, summary);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "coding-app-session.local-session.denied",
+        source: "coding-app-session-routes",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
+  }
+}
+
 function localSessionDenied(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -277,7 +302,7 @@ function localSessionDenied(
     Date.now(),
     reason,
     (summary) => {
-      writeLocalSessionDenial(deps, correlationId, summary);
+      writeLocalSessionDenialGuarded(deps, correlationId, summary);
     },
   );
   // An unpaired browser, a stale cookie and an absent channel are ordinary states of a page load:

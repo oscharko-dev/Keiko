@@ -83,14 +83,26 @@ describe("local-session denial window (#4370)", () => {
     windows.reset();
   });
 
-  it("drops its pending window on disposal so nothing outlives the graph", () => {
+  it("reports its pending window on disposal instead of dropping it, then releases the timer", () => {
     vi.useFakeTimers();
     const windows = new CodingAppSessionDenialWindows();
     const { summaries, emit } = collector();
     windows.recordLocalSessionDenial(Date.now(), "proof-missing", emit);
+    windows.recordLocalSessionDenial(Date.now(), "inactivity", emit);
     windows.reset();
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ count: 2, windowClosed: true });
+    expect(summaries[0]?.histogram["proof-missing"]).toBe(1);
+    expect(summaries[0]?.histogram.inactivity).toBe(1);
     vi.advanceTimersByTime(120_000);
-    expect(summaries).toEqual([]);
+    expect(summaries).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("writes nothing on disposal when no refusal was counted", () => {
+    vi.useFakeTimers();
+    const windows = new CodingAppSessionDenialWindows();
+    windows.reset();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

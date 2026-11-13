@@ -43,7 +43,6 @@ function client(): BrowserApprovalClient {
     begin: vi.fn().mockResolvedValue(attempt),
     complete: vi.fn().mockResolvedValue({ state: "active", persistence: "session" }),
     restore: vi.fn().mockResolvedValue(false),
-    rememberCurrent: vi.fn().mockResolvedValue("unavailable"),
   };
 }
 

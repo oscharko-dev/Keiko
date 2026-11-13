@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
-import { noteConnectedServerInstance, sessionEndedByRestart } from "./server-restart";
+import {
+  noteConnectedServerInstance,
+  resetServerRestartStorageReport,
+  sessionEndedByRestart,
+} from "./server-restart";
 
 const FIRST = "a".repeat(32);
 const SECOND = "b".repeat(32);
@@ -15,6 +19,7 @@ function health(instanceId: string | undefined): void {
 }
 
 beforeEach(() => {
+  resetServerRestartStorageReport();
   window.sessionStorage.clear();
   setClientDiagnosticWriter(() => undefined);
 });
@@ -66,8 +71,10 @@ describe("recognizing that Keiko was restarted (#4370)", () => {
     expect(JSON.stringify(writer.mock.calls)).not.toContain(FIRST);
   });
 
-  it("makes no claim when tab storage is unavailable", async () => {
+  it("makes no claim when tab storage is unavailable, and reports it once without a value", async () => {
     health(FIRST);
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
@@ -77,5 +84,8 @@ describe("recognizing that Keiko was restarted (#4370)", () => {
     await expect(noteConnectedServerInstance()).resolves.toBeUndefined();
     health(SECOND);
     await expect(sessionEndedByRestart()).resolves.toBe(false);
+    await expect(noteConnectedServerInstance()).resolves.toBeUndefined();
+    expect(writer).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(writer.mock.calls)).not.toContain(FIRST);
   });
 });

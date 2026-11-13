@@ -62,7 +62,6 @@ function harness(): {
   const api = {
     inspect: vi.fn().mockResolvedValue({ state: "unavailable" }),
     request: vi.fn().mockResolvedValue({ state: "pending", request: request() }),
-    approve: vi.fn().mockResolvedValue({ state: "accepted" }),
     challenge: vi.fn().mockResolvedValue({ state: "challenge", challenge: challenge() }),
     prove: vi.fn().mockResolvedValue({ state: "active", approval: approval() }),
   };
@@ -352,79 +351,5 @@ describe("browser approval client orchestration", () => {
     });
     expect(h.store.save).not.toHaveBeenCalled();
     expect(h.changed).toHaveBeenCalledOnce();
-  });
-});
-
-describe("remembering an already connected browser (#4370)", () => {
-  beforeEach(async () => {
-    const keys = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, [
-      "sign",
-      "verify",
-    ]);
-    vi.stubGlobal("crypto", webcrypto);
-    vi.stubGlobal("CryptoKey", keys.privateKey.constructor);
-    setClientDiagnosticWriter(() => undefined);
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    resetClientDiagnosticWriter();
-  });
-
-  function connected(): ReturnType<typeof harness> {
-    const h = harness();
-    vi.mocked(h.api.inspect).mockResolvedValue({ state: "active", requests: [], approvals: [] });
-    vi.mocked(h.api.challenge).mockResolvedValue({ state: "challenge", challenge: challenge() });
-    return h;
-  }
-
-  it("asks for a remembered approval, approves it with the held session, proves it and stores the key", async () => {
-    const h = connected();
-    await expect(createBrowserApprovalClient(h.options).rememberCurrent()).resolves.toBe("stored");
-    expect(vi.mocked(h.api.request).mock.calls[0]?.[0]).toMatchObject({ remember: true });
-    expect(vi.mocked(h.api.approve).mock.calls[0]?.[0]).toEqual({
-      requestId: request().requestId,
-      comparisonCode: request().comparisonCode,
-      remember: true,
-    });
-    expect(h.api.prove).toHaveBeenCalledOnce();
-    expect(h.store.save).toHaveBeenCalledOnce();
-    expect(h.changed).toHaveBeenCalledOnce();
-  });
-
-  it("stores nothing when the server does not accept the approval", async () => {
-    const h = connected();
-    vi.mocked(h.api.approve).mockResolvedValue({ state: "unavailable" });
-    await expect(createBrowserApprovalClient(h.options).rememberCurrent()).resolves.toBe(
-      "unavailable",
-    );
-    expect(h.api.prove).not.toHaveBeenCalled();
-    expect(h.store.save).not.toHaveBeenCalled();
-  });
-
-  it("stores nothing when possession cannot be proved", async () => {
-    const h = connected();
-    vi.mocked(h.api.prove).mockResolvedValue({ state: "unavailable" });
-    await expect(createBrowserApprovalClient(h.options).rememberCurrent()).resolves.toBe(
-      "unavailable",
-    );
-    expect(h.store.save).not.toHaveBeenCalled();
-  });
-
-  it("reports an unconfirmed result, never a stored one, when the key cannot be saved", async () => {
-    const h = connected();
-    vi.mocked(h.store.save).mockRejectedValue(new Error("quota"));
-    await expect(createBrowserApprovalClient(h.options).rememberCurrent()).resolves.toBe(
-      "unconfirmed",
-    );
-  });
-
-  it("does not start when the request itself is refused", async () => {
-    const h = connected();
-    vi.mocked(h.api.request).mockResolvedValue({ state: "unavailable" });
-    await expect(createBrowserApprovalClient(h.options).rememberCurrent()).resolves.toBe(
-      "unavailable",
-    );
-    expect(h.api.approve).not.toHaveBeenCalled();
   });
 });

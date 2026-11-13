@@ -2624,14 +2624,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Verbinde diesen Browser, um private Entwürfe zu speichern und geschützte Funktionen zu verwenden.",
   "browserApproval.launchNotice": "Keiko öffnet ein verbundenes Fenster in diesem Browser.",
   "browserApproval.restarted":
-    "Keiko wurde neu gestartet, deshalb muss dieser Browser erneut verbunden werden. Ein Klick auf „Browser verbinden“ genügt. Dein geöffneter Chat und sein Entwurf bleiben erhalten.",
-  "browserApproval.rememberChoice": "Diesen Browser merken",
-  "browserApproval.rememberDescription":
-    "Dieser Browser läuft dann nach einem Neustart bis zu 30 Tage weiter.",
-  "browserApproval.rememberDone":
-    "Dieser Browser bleibt nach einem Neustart bis zu 30 Tage verbunden.",
-  "browserApproval.rememberNotDone":
-    "Dieser Browser ist verbunden, konnte aber nicht gemerkt werden. Verbinde ihn nach einem Neustart erneut.",
+    "Keiko wurde neu gestartet, deshalb muss dieser Browser erneut verbunden werden. Ein Klick auf „Browser verbinden“ genügt. Dein geöffneter Chat und sein Entwurf bleiben erhalten. Ein Browser, den du unter Einstellungen → Sicherheit → Browser-Freigaben gemerkt hast, verbindet sich von selbst wieder.",
   "browserApproval.launchFailed":
     "Keiko konnte diesen Browser nicht verbinden. Versuche es erneut oder öffne Keiko über den Starter.",
   "browserApproval.open": "Browser verbinden",
