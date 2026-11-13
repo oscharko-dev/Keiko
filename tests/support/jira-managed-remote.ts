@@ -133,6 +133,10 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
       total: 1,
       issues: [{ key: "SYN-1", id: "10001", fields: { summary: state.fields.summary } }],
     });
+  // The identity a creation is judged by: a template governs a project and an issue type (#4354).
+  if (path.endsWith("/project/10000")) return response({ id: "10000", key: "SYN" });
+  const issueType = /\/issuetype\/(\d{1,10})$/u.exec(path);
+  if (issueType !== null) return response({ id: issueType[1], name: "Task" });
   if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
   if (path.endsWith("/issue/SYN-1"))
     return response({ id: "10001", key: "SYN-1", fields: state.fields });

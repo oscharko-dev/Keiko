@@ -2426,6 +2426,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.rule.label-count": "The issue has too few labels.",
   "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
   "chat.jira.outcome.rule.template-unreadable": "The template “{subject}” could not be read.",
+  "chat.jira.outcome.rule.template-missing":
+    "No template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save the template, then ask again.",
+  "chat.jira.outcome.rule.template-not-activated":
+    "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",

@@ -260,16 +260,6 @@ function dryRunAccess(
   return current.ok ? { factory, current } : undefined;
 }
 
-/** Whether any template, or any unreadable one, could govern the creation of a draft's items. */
-function templatesGovernCreate(store: PreflightDeps["store"]): boolean {
-  const set = jiraIssueTemplateSource(store)();
-  return (
-    set.unreadable > 0 ||
-    set.templates.some((template) =>
-      template.activations.some((activation) => activation.kind === "create"),
-    )
-  );
-}
 function itemsOf(args: CatalogJsonObject): readonly Readonly<Record<string, unknown>>[] {
   const items: unknown = args.items;
   return Array.isArray(items) ? (items as readonly Readonly<Record<string, unknown>>[]) : [];
@@ -338,9 +328,11 @@ async function draftItemsRefusal(
     access.current,
   );
   try {
-    const template = templatesGovernCreate(ports.deps.store)
-      ? await firstJiraDraftTemplateRefusal(itemsOf(draftArguments), invocation, connection)
-      : undefined;
+    const template = await firstJiraDraftTemplateRefusal(
+      itemsOf(draftArguments),
+      invocation,
+      connection,
+    );
     if (template !== undefined) return templateDraftRefusal(template, context.correlationId);
     const items = parseJiraDraft(draftArguments)?.items ?? [];
     const fields = await jiraDraftFieldRefusals(items, invocation, connection, { reconcile: true });

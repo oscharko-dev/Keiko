@@ -96,6 +96,17 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { specification } from "../_requirementSupport.js";
+import { seedPermissiveJiraTemplates } from "../../../../tests/support/jira-test-templates.js";
+
+// Release 1 switches the attachment operations off (#4354); this file exercises their review and
+// upload mechanics, which stay in the code for Release 2, so the switch is on here. That they are
+// not offered is pinned in jiraChatCatalogRuntime.test.ts and codingJiraPodBinding.test.ts.
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+  >()),
+  jiraOperationInReleaseScope: (): boolean => true,
+}));
 
 // Pass-through spies: the turn's completeness check and its log line run as in production unless a
 // test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
@@ -505,6 +516,8 @@ function fixture(
   });
   configure(deps);
   preselectFixtureCatalog(deps);
+  // A creation needs a template of its type (#4354); the writes below are about the turn, not a rule.
+  seedPermissiveJiraTemplates(deps.store, ["SYN"], ["Story"]);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic Jira", MODEL);
   // An unselected Chat resolves the default (Full access); every other fixture pins Ask for approval

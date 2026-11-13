@@ -6,6 +6,7 @@ import {
 import {
   checkJiraIssueTemplate,
   checkJiraIssueTemplates,
+  evaluateJiraTemplateChange,
   jiraTemplateValuePresent,
   jiraTemplateValueText,
   jiraTemplateViolationGuidance,
@@ -357,6 +358,112 @@ describe("activation and matching", () => {
     ).toHaveLength(1);
     expect(matchingJiraIssueTemplates([every], subject({}))).toHaveLength(0);
     expect(matchingJiraIssueTemplates([every], subject({}, { operation: "edit" }))).toHaveLength(0);
+  });
+});
+
+describe("a plain activation governs creating and editing, never a transition (#4354)", () => {
+  const withActivation = (activateOn: string): JiraIssueTemplate => {
+    const result = parseJiraIssueTemplate(
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: ABC",
+        "issueType: Story",
+        `activateOn: [${activateOn}]`,
+        "summaryMinLength: 3",
+        "---",
+        "# T",
+      ].join("\n"),
+    );
+    if (!result.ok) throw new Error("fixture template must parse");
+    return result.template;
+  };
+  const governed = (activateOn: string, operation: JiraTemplateSubject["operation"]): number =>
+    matchingJiraIssueTemplates(
+      [withActivation(activateOn)],
+      subject(
+        {},
+        { operation, transition: { id: "31", name: "Start", targetStatusName: "Ready" } },
+      ),
+    ).length;
+
+  it.each(["create", "edit"])("lets %s govern creating and editing, not a transition", (word) => {
+    expect(governed(word, "create")).toBe(1);
+    expect(governed(word, "edit")).toBe(1);
+    expect(governed(word, "transition")).toBe(0);
+  });
+  it("lets a transition activation govern only the transition it names", () => {
+    expect(governed("transition:Ready", "transition")).toBe(1);
+    expect(governed("transition:Done", "transition")).toBe(0);
+    expect(governed("transition:Ready", "create")).toBe(0);
+    expect(governed("transition:Ready", "edit")).toBe(0);
+  });
+});
+
+describe("evaluating a change against its before-state and after-state (#4354)", () => {
+  const template = parsed(["summaryMinLength: 10", "requiredLabels: [reviewed]"], "# T");
+  const evaluate = (
+    before: Record<string, unknown> | undefined,
+    after: Record<string, unknown>,
+    touched: readonly string[],
+  ): ReturnType<typeof evaluateJiraTemplateChange> =>
+    evaluateJiraTemplateChange({
+      templates: [template],
+      before: before === undefined ? undefined : subject(before, { operation: "edit" }),
+      after: subject(after, { operation: before === undefined ? "create" : "edit" }),
+      touched: new Set(touched),
+      catalog: CATALOG,
+    });
+  const ids = (list: readonly { ruleId: string }[]): string[] =>
+    list.map((violation) => violation.ruleId);
+
+  it("judges a creation on its after-state alone: everything blocks", () => {
+    const verdict = evaluate(undefined, { summary: "short", labels: [] }, ["summary"]);
+    expect(ids(verdict.blocking)).toEqual(["summary-too-short", "label-missing"]);
+    expect(verdict.notices).toEqual([]);
+  });
+  it("blocks an edit that breaks a field it touches and notices what was already broken elsewhere", () => {
+    const before = { summary: "A long enough summary", labels: [] };
+    const verdict = evaluate(before, { ...before, summary: "short" }, ["summary"]);
+    expect(ids(verdict.blocking)).toEqual(["summary-too-short"]);
+    expect(ids(verdict.notices)).toEqual(["label-missing"]);
+  });
+  it("lets an edit through when every rule it fails already failed in an untouched field", () => {
+    const before = { summary: "short", labels: [] };
+    const verdict = evaluate(before, { ...before, description: "x" }, ["description"]);
+    expect(verdict.blocking).toEqual([]);
+    expect(ids(verdict.notices)).toEqual(["summary-too-short", "label-missing"]);
+  });
+  it("blocks an edit that touches a field that was already broken and stays broken", () => {
+    const before = { summary: "short", labels: ["reviewed"] };
+    const verdict = evaluate(before, { ...before, summary: "tiny" }, ["summary"]);
+    expect(ids(verdict.blocking)).toEqual(["summary-too-short"]);
+  });
+  it("blocks a violation the edit introduces even in a field it did not list as touched", () => {
+    const verdict = evaluate(
+      { summary: "A long enough summary", labels: ["reviewed"] },
+      { summary: "A long enough summary", labels: [] },
+      [],
+    );
+    expect(ids(verdict.blocking)).toEqual(["label-missing"]);
+  });
+  it("counts labels and links as touched fields", () => {
+    const before = { summary: "A long enough summary", labels: [] };
+    const verdict = evaluate(before, before, ["labels"]);
+    expect(ids(verdict.blocking)).toEqual(["label-missing"]);
+  });
+  it("keeps a rule about a field the instance lacks a notice when the edit does not set it", () => {
+    const unreadable = parsed(["requiredFields: [Story Points]"], "# T");
+    const verdict = evaluateJiraTemplateChange({
+      templates: [unreadable],
+      before: subject({}, { operation: "edit" }),
+      after: subject({}, { operation: "edit" }),
+      touched: new Set(),
+      catalog: [],
+    });
+    expect(verdict.blocking.map((violation) => violation.ruleId)).toEqual([]);
+    expect(verdict.notices.map((violation) => violation.ruleId)).toEqual(["field-unavailable"]);
   });
 });
 

@@ -4,6 +4,10 @@ import {
   BULK_CREATE_ARGUMENTS as ARGS,
   bulkCreateFixture,
 } from "../../../tests/support/jira-bulk-create-fixture.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../tests/support/jira-test-templates.js";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { executeJiraBulkCreate, type JiraBulkCreatePorts } from "./jira-managed-bulk-create.js";
 import { prepareJiraCreate } from "./jira-managed-mutations.js";
@@ -20,7 +24,12 @@ function preparedFixture(
         args: Parameters<typeof prepareJiraCreate>[1],
         trace: Parameters<typeof prepareJiraCreate>[3],
       ): ReturnType<typeof prepareJiraCreate> =>
-        prepareJiraCreate(native.request, args, templates, trace),
+        prepareJiraCreate(
+          native.request,
+          args,
+          templates ?? (() => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES)),
+          trace,
+        ),
     },
   };
 }

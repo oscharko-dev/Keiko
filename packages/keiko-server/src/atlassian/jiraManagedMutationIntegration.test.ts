@@ -113,6 +113,10 @@ import { verifyStoredCredential } from "./credentialVerification.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../../tests/support/jira-test-templates.js";
 
 const cleanup: (() => void | Promise<void>)[] = [];
 const BASE_URL = "https://203.0.113.10/context";
@@ -626,7 +630,11 @@ async function fixture(
       arguments: args,
       deselected: [],
       context,
-      connection: { deployment: "data-center", baseUrl: BASE_URL },
+      connection: {
+        deployment: "data-center",
+        baseUrl: BASE_URL,
+        issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+      },
     });
   };
   // A case offers its actual operation and the explicit next write used to prove that an
@@ -642,6 +650,7 @@ async function fixture(
         throw new Error("Mutation must use the journal-owned HTTP port");
       }),
       emailTemplates: emailTemplateFixtureAdmission(),
+      issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
       attachmentSource: (): ReturnType<JiraAttachmentSource> => {
         const sha256 = createHash("sha256").update(ATTACHED).digest("hex");
         return Promise.resolve({

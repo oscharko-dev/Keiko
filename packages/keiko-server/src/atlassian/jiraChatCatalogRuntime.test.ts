@@ -23,6 +23,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_READ_TOOL_FAMILIES,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { isCoreMutationTool } from "./jiraManagedMutationDescriptors.js";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
@@ -47,7 +48,6 @@ const CURATED_JIRA_ALIASES = [
   "jira_assign",
   "jira_comment",
   "jira_transition",
-  "jira_attach",
   "jira_draft",
 ] as const;
 
@@ -126,6 +126,8 @@ function expectedDefaultCatalogTools(): Set<string> {
   );
   const writes = JIRA_MUTATION_OPERATIONS.filter((tool) => {
     if (!isCoreMutationTool(tool)) return false;
+    // Attachments are outside Release 1 (#4354): the derivation follows the same switch.
+    if (!jiraOperationInReleaseScope(tool)) return false;
     const definition = jiraOperationForTool(tool)?.definition;
     return (
       definition?.kind === "composite" ||
@@ -141,6 +143,16 @@ function expectedDefaultCatalogTools(): Set<string> {
     ...KNOWLEDGE_CHAT_TOOLS,
   ]);
 }
+
+describe("attachments are left out of Release 1 (#4354)", () => {
+  it("offers neither attachment operation, in the base set or through discovery", () => {
+    const base = expectedDefaultCatalogTools();
+    expect(base.has("jira.attach")).toBe(false);
+    expect(base.has("jira.delete-attachment")).toBe(false);
+    expect(JIRA_DEFAULT_CATALOG_TOOLS).not.toContain("jira.attach");
+    expect(JIRA_DEFAULT_CATALOG_TOOLS).not.toContain("jira.delete-attachment");
+  });
+});
 
 describe("default Jira catalog set", () => {
   it("equals the set derived from the owning contract constants", () => {

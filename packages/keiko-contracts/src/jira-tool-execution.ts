@@ -733,6 +733,11 @@ export type JiraMutationAttempt =
       /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
       readonly descriptionConvertedHeadingCount?: number;
       readonly descriptionProjection?: "supported-markdown";
+      /**
+       * Template rules the issue already broke in fields this edit did not touch. They did not block
+       * the write; the person is told (#4354).
+       */
+      readonly templateNotices?: readonly JiraTemplateViolation[];
     }
   | {
       readonly ok: false;

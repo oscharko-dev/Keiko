@@ -210,6 +210,8 @@ const RULE_MESSAGES = {
   "parent-missing": "chat.jira.outcome.rule.parent-missing",
   "parent-type-mismatch": "chat.jira.outcome.rule.parent-type-mismatch",
   "template-unreadable": "chat.jira.outcome.rule.template-unreadable",
+  "template-missing": "chat.jira.outcome.rule.template-missing",
+  "template-not-activated": "chat.jira.outcome.rule.template-not-activated",
 } as const satisfies Readonly<Record<JiraOutcomeRule["ruleId"], string>>;
 const VALIDATION_MESSAGES = {
   "required-field": "chat.jira.outcome.validation.required-field",

@@ -155,21 +155,20 @@ describe("Agile issue changes retain the existing issue-template gate", () => {
       1,
     );
   });
+  // #4354: moving an issue touches its sprint or epic field only. A summary rule the issue already
+  // broke does not block the move; the move itself is still judged against the Sprint rule below.
   it.each(["jira.sprint-move-issues", "jira.epic-move-issues"] as const)(
-    "checks every edited issue before %s and permits corrected content",
+    "moves an issue that already breaks a rule in an untouched field for %s",
     async (operation) => {
       const args =
         operation === "jira.sprint-move-issues"
           ? { sprintId: "9", issues: ["APP-12"] }
           : { epicIdOrKey: "APP-11", issues: ["APP-12"] };
-      const blocked = fixture("Wrong");
-      expect(await blocked.run(operation, args)).toMatchObject({
-        ok: false,
-        reason: "field-validation",
-      });
-      expect(blocked.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(
-        0,
-      );
+      const existing = fixture("Wrong");
+      expect(await existing.run(operation, args)).toMatchObject({ ok: true });
+      expect(
+        existing.http.mock.calls.filter(([request]) => request.method === "POST"),
+      ).toHaveLength(1);
       const corrected = fixture("Approved membership");
       expect(await corrected.run(operation, args)).toMatchObject({ ok: true });
     },

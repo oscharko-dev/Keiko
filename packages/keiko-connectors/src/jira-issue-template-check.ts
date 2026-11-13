@@ -90,8 +90,10 @@ function activationMatches(
   activation: JiraTemplateActivation,
   subject: JiraTemplateSubject,
 ): boolean {
-  if (activation.kind !== subject.operation) return false;
-  if (activation.kind !== "transition" || activation.target === undefined) return true;
+  // A plain activation governs creating and editing; it never governs a transition (#4354).
+  if (activation.kind !== "transition") return subject.operation !== "transition";
+  if (subject.operation !== "transition" || activation.target === undefined)
+    return subject.operation === "transition";
   const { target } = activation;
   const transition = subject.transition;
   return (
@@ -327,6 +329,78 @@ export function checkJiraIssueTemplates(
   return violations.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
 }
 
+/** The wire field ids a violation is about; an empty result means it is not about one field. */
+function violationFieldIds(
+  violation: JiraTemplateViolation,
+  catalog: readonly JiraFieldCatalogEntry[],
+): ReadonlySet<string> {
+  switch (violation.ruleId) {
+    case "summary-too-short":
+    case "summary-too-long":
+    case "summary-pattern":
+      return new Set(["summary"]);
+    case "section-missing":
+    case "section-empty":
+      return new Set(["description"]);
+    case "label-missing":
+    case "label-pattern":
+    case "label-count":
+      return new Set(["labels"]);
+    case "parent-missing":
+    case "parent-type-mismatch": {
+      const field = violation.subject.split(":")[0]?.trim() ?? "";
+      return new Set([
+        "parent",
+        "issuelinks",
+        field,
+        ...resolveJiraTemplateFieldIds(field, catalog),
+      ]);
+    }
+    default:
+      return new Set([
+        violation.subject,
+        ...resolveJiraTemplateFieldIds(violation.subject, catalog),
+      ]);
+  }
+}
+
+const violationId = (violation: JiraTemplateViolation): string =>
+  `${violation.template}|${violation.ruleId}|${violation.subject}`;
+
+/**
+ * What a write may leave behind, judged on one before-state and one after-state (#4354).
+ * Creation and transitions are judged on the after-state alone: everything must conform. An edit must
+ * not make things worse: a violation that is new, or that lies in a field the edit touches, blocks it;
+ * a violation that already existed in an untouched field does not block and is returned as a notice.
+ */
+export function evaluateJiraTemplateChange(input: {
+  readonly templates: readonly JiraIssueTemplate[];
+  readonly after: JiraTemplateSubject;
+  /** The state before an edit; absent for creation and transition, where the after-state decides. */
+  readonly before: JiraTemplateSubject | undefined;
+  /** Wire field ids the write sets; labels and links count as `labels` and `issuelinks`. */
+  readonly touched: ReadonlySet<string>;
+  readonly catalog: readonly JiraFieldCatalogEntry[];
+}): {
+  readonly blocking: readonly JiraTemplateViolation[];
+  readonly notices: readonly JiraTemplateViolation[];
+} {
+  const after = checkJiraIssueTemplates(input.templates, input.after, input.catalog);
+  if (input.before === undefined || after.length === 0) return { blocking: after, notices: [] };
+  const existing = new Set(
+    checkJiraIssueTemplates(input.templates, input.before, input.catalog).map(violationId),
+  );
+  const blocking: JiraTemplateViolation[] = [];
+  const notices: JiraTemplateViolation[] = [];
+  for (const violation of after) {
+    const about = violationFieldIds(violation, input.catalog);
+    const touches =
+      violation.ruleId === "template-unreadable" || [...about].some((id) => input.touched.has(id));
+    (existing.has(violationId(violation)) && !touches ? notices : blocking).push(violation);
+  }
+  return { blocking, notices };
+}
+
 export const JIRA_TEMPLATE_FINDING_CODES = [
   "unknown-project",
   "unknown-issue-type",
@@ -445,6 +519,24 @@ function parentTypeFindings(
   );
 }
 
+/**
+ * A write no template governs is not fixed by correcting it: the person needs a template first.
+ * The words name the way out the product already has (propose a template from an existing project)
+ * and forbid a retry that cannot succeed.
+ */
+function missingTemplateGuidance(violation: JiraTemplateViolation): string {
+  const only =
+    violation.ruleId === "template-not-activated"
+      ? " Templates exist for it, but only for entering a status, which does not govern creating an issue."
+      : "";
+  return (
+    `Nothing was changed: no saved issue template governs ${violation.template}.${only} ` +
+    "Keiko creates an issue only when a template for its project and issue type exists. Do not retry or change the request. " +
+    "Tell the person that a template for this project and issue type has to be created first, and where: " +
+    "Skills, Jira template, propose templates from an existing project, review and save. Offer to write the same issue once it exists."
+  );
+}
+
 const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
   "section-missing",
   "section-empty",
@@ -457,6 +549,11 @@ export function jiraTemplateViolationGuidance(
   violations: readonly JiraTemplateViolation[],
 ): string | undefined {
   if (violations.length === 0) return undefined;
+  const missing = violations.find(
+    (violation) =>
+      violation.ruleId === "template-missing" || violation.ruleId === "template-not-activated",
+  );
+  if (missing !== undefined) return missingTemplateGuidance(missing);
   if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
     return (
       "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +

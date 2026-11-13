@@ -117,13 +117,13 @@ describe("fixed sprint lifecycle effects", () => {
     expect(f.calls.filter(({ method }) => method !== "GET")).toHaveLength(1);
   });
 
-  it.each(CASES)("rejects stale actor or sprint snapshots before $name", async ({ name, args }) => {
+  it.each(CASES)("rejects a foreign actor key before $name", async ({ name, args }) => {
     const f = sprintLifecycleFixture();
     f.actor.key = "different-actor";
-    expect(await executeJiraSprintLifecycleMutation(name, args, f.ports)).toMatchObject({
-      ok: false,
-      reason: "conflict",
-    });
+    // #4354: a key that is not the connected user's is refused before the effect, naming its source.
+    const refused = await executeJiraSprintLifecycleMutation(name, args, f.ports);
+    expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(JSON.stringify(refused)).toContain("must be the key jira.myself returns");
     expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
   });
 

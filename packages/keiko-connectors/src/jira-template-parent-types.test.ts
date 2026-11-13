@@ -163,10 +163,10 @@ describe("native parent issue-type admission", () => {
       await gateJiraMutationByTemplates({
         request,
         source: () => ({ templates: [], unreadable: 0 }),
-        operation: "create",
+        operation: "edit",
         metadata: [],
         validated: { fields: { parent: { key: "SYN-2" } }, update: {} },
-        target: { projectId: "10000", issueTypeId: "10003" },
+        target: { issueKey: "SYN-1" },
       }),
     ).toEqual({ ok: true });
     expect(request).not.toHaveBeenCalled();

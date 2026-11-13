@@ -1537,9 +1537,11 @@ the approval.
   backtrack and an accepted pattern is always matchable. Matched text is at most 255 characters.
 - **One pure checker** (`keiko-connectors` `jira-issue-template-check.ts`) judges the state after
   the write: the proposed values merged over the issue's current values, resolved against the
-  instance's field names. For an edit and for a transition the whole merged state is checked, not
-  only the changed fields, so an issue that already violates a template is refused on its next
-  edit until the edit also repairs it. A transition whose template names a transition or target
+  instance's field names. A creation and a transition are judged on that state as a whole. An edit
+  is judged by one function over the issue's before-state and after-state (#4354,
+  `evaluateJiraTemplateChange`): a rule broken in a field the edit touches, or a rule the edit newly
+  breaks, refuses it; a rule the issue already broke in a field the edit does not touch does not
+  block and is returned as a `templateNotices` list that names it to the person. A transition whose template names a transition or target
   status that Jira's metadata does not name fails closed instead of passing unchecked. Write admission, the backlog draft and the compliance report share it. It
   is deterministic, performs no I/O and emits closed rule ids (`summary-too-short`,
   `section-missing`, `field-missing`, `field-unavailable`, `label-missing`, `parent-missing`, ...)
@@ -1551,8 +1553,9 @@ the approval.
   sent; the journal records it as `rejected` and the model receives `outcome: rejected`,
   `reason: field-validation` and the bounded `violations` list, with tool guidance to correct
   exactly those violations. A source that throws propagates to the executor's correlated
-  diagnostic, so the write is still not sent. When no template governs the write, no request is
-  added. Jira takes one `issuelinks` operation per request, so a `parentLink` rule is judged on the
+  diagnostic, so the write is still not sent. When no template governs an edit or a transition, no
+  request is added; a creation with no governing template is refused (see "Templates are required to
+  create"). Jira takes one `issuelinks` operation per request, so a `parentLink` rule is judged on the
   link that rides on the create or edit itself, never on one written afterwards: the gate puts a link
   of a required type first, and a state that the primary write cannot make conforming is refused
   before any request. (2) In every autonomy mode Chat additionally runs the same pipeline as a
@@ -1618,6 +1621,54 @@ the approval.
   `assignee` field and is. Organization-wide
   distribution is the skill library's import and export. No fixed hierarchy or issue model is
   built in.
+- **Templates are required to create, and govern every edit of their type (#4354, owner decision
+  2026-11-13).** Creating an issue (`jira.create`, each item of `jira.create-issues` and of a
+  `jira.draft`, a sub-task included) needs a saved template whose project and issue type (by name or
+  numeric id, whatever the instance calls it) govern it, and the new issue must conform fully. With no
+  library, no template for the type, or only `transition:<target>` templates, the gate refuses before
+  any effect with the closed rule ids `template-missing` or `template-not-activated` (naming
+  `PROJECT/Issue type`), and the guidance leads the person to Skills, "Propose from project" (the
+  proposal from an existing project) to create one. Any plain activation (`create` or `edit`) governs
+  both creating and editing the issues of its type; the word only records the era the file was
+  written for, no stored file changes and nothing migrates. `transition:<target>` only adds rules when
+  an issue enters that status, and a plain activation never governs a transition. An edit of an issue
+  whose type has no template always works. Comments, watchers and votes are never template-checked.
+  An edit that carries `project` or `issuetype` is refused before any request with the way out (Jira's
+  Move, or create the issue again): the template is chosen by those two, so Keiko does not change them.
+  **Attachments are not part of Release 1:** `jira.attach` and `jira.delete-attachment` stay in the
+  code and the registry behind one switch (`JIRA_ATTACHMENTS_AVAILABLE`, `jira-release-scope.ts`),
+  are not offered (Chat base set, discovery, describe, Coding) and are refused with a readable
+  message and no request in the executor and its dry run; Release 2 flips the switch.
+  **Removal, named plainly:** the legacy `POST /api/atlassian-connectors/credentials/:authRef/actions`
+  Jira actions (`create-issue`, `update-issue-fields`, `transition-issue`, `add-issue-comment`) and
+  `jira-write-actions.ts` are removed in this change. They created and changed issues with no template
+  gate, had no caller in the product (UI, CLI, SDK, MCP, scripts), and Jira Cloud, whose REST shape
+  they used, is outside the supported scope; the Confluence actions of the same route are unchanged.
+- **Write-path inventory (#4354).** 224 mutation operations. Every operation that creates or changes
+  the fields or relations of an issue reaches `gateJiraMutationByTemplates` through the managed
+  executor `executeJiraManagedMutation`, the only production caller of which is `mutationTool`
+  (`jira-managed-tools.ts`), shared by Chat and by the Coding Workbench Jira Pod in every autonomy
+  mode (the gate sits below the modes). Operation to gate call site: `jira.create`, each item of
+  `jira.create-issues` and `jira.draft` (`createTemplateGate` in `jira-managed-mutations.ts`);
+  `jira.edit`, `jira.transition` (`admitFieldMutation`); `jira.assign` (`admitAssignment`);
+  `create-issue-link`, `delete-issue-link` (`jira-managed-issue-link-mutations.ts`); the four remote
+  link operations (`jira-managed-remote-link-mutations.ts`); `create-reciprocal-remote-link`
+  (`jira-managed-reciprocal-link.ts`); `create-worklog`, `update-worklog`, `delete-worklog`
+  (`jira-worklog-templates.ts`); `sprint-move-issues`, `backlog-move-issues`, `epic-move-issues`,
+  `epic-update` (`jira-agile-templates.ts`); `epic-remove-issues`, `rank-epic`, `rank-issues`,
+  `set-issue-estimation` (`jira-agile-planning-admission.ts`). Thirteen operations change issues in
+  bulk or remove them under the rule-impact gates (`gateJiraBulkReferenceChange`,
+  `gateJiraSchemaRuleImpact`): they refuse when a saved rule names the field they re-reference or
+  the issue they delete, and they never write a template-governed value into an issue. Four operations
+  have no template check because they change no governed field: `archive-issues`, `archive-issue`,
+  `restore-issue` (archive state) and `move-subtask` (position among siblings). Not template-governed,
+  by reason: comments, attachments (off), watchers, votes, notifications and entity properties carry no
+  field a template describes; the 168 administration operations (projects, versions, components,
+  workflows, schemes, users, groups, filters, boards, screens, instance, cluster, avatars) touch no
+  issue field. In Chat the same pipeline also runs as a dry run before any approval is asked; the
+  Coding Workbench raises its approval in OpenCode's own permission hook, where Keiko runs the
+  same dry run before it asks (see the Coding paragraph below), and the executor gate stays
+  authoritative in both.
 
 **Deterministic project report (#4181, 2026-10-31).** `jira.report` is a tenth read tool (low risk,
 `issue-tracker.read`) and the one place where Keiko, not the model, produces project numbers. For a

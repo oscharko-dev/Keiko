@@ -14,6 +14,7 @@ import {
   ToolCatalogError,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { jiraOperationInReleaseScope } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { object, text } from "./jiraManagedSchemas.js";
 
@@ -52,6 +53,7 @@ interface Summary extends CatalogJsonObject {
 function summaries(options: DiscoveryOptions): readonly Summary[] {
   return jiraOperationDefinitions()
     .filter((definition) => options.tools === undefined || options.tools.has(definition.tool))
+    .filter((definition) => jiraOperationInReleaseScope(definition.tool))
     .map((definition) => ({
       identity: definition.identity,
       tool:
@@ -125,9 +127,16 @@ function canonicalIdentities(
   options: DiscoveryOptions,
 ): readonly string[] | undefined {
   const listed = jiraOperationDefinitions().filter(
-    (definition) => options.tools === undefined || options.tools.has(definition.tool),
+    (definition) =>
+      (options.tools === undefined || options.tools.has(definition.tool)) &&
+      jiraOperationInReleaseScope(definition.tool),
   );
-  const known = new Set(jiraOperationDefinitions().map((definition) => definition.identity));
+  // An operation outside this release's scope is not an identity a model may select.
+  const known = new Set(
+    jiraOperationDefinitions()
+      .filter((definition) => jiraOperationInReleaseScope(definition.tool))
+      .map((definition) => definition.identity),
+  );
   const resolved: string[] = [];
   for (const entry of requested) {
     const identity = known.has(entry) ? entry : namedOperation(listed, entry, options)?.identity;

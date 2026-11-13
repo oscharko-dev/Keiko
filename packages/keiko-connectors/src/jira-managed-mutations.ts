@@ -2,6 +2,7 @@ import {
   executeJiraAnonymizationUnlock,
   isJiraAnonymizationUnlock,
 } from "./jira-managed-anonymization-unlock.js";
+import { withJiraTemplateNotices } from "./jira-template-notices.js";
 import {
   executeJiraAvatarMutation,
   isJiraAvatarMutation,
@@ -159,7 +160,9 @@ import {
 } from "./jira-managed-attachment-mutations.js";
 import { executeJiraWorklogDelete, isJiraWorklogDelete } from "./jira-managed-worklog-delete.js";
 import {
+  JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
   isSafeAtlassianIdentifier,
+  jiraOperationInReleaseScope,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
@@ -979,7 +982,27 @@ async function fieldMutation(
   );
   return withDescriptionFormatting(attempt, formatting);
 }
+/**
+ * An existing issue keeps its project and issue type through every edit and transition (#4354, L6):
+ * the template that governs it is chosen by them, so a change would have to be judged by a template
+ * of the target type. Jira moves an issue through its own Move operation; Keiko does not, and says so.
+ */
+function routingChangeRefusal(args: CatalogJsonObject): Refusal | undefined {
+  const fields = asRecord(args.fields);
+  const named = ["project", "issuetype"].find(
+    (id) => fields !== undefined && Object.hasOwn(fields, id),
+  );
+  return named === undefined
+    ? undefined
+    : refusedArgument(
+        named,
+        "unsupported-field",
+        "An edit does not change the project or the issue type of an issue. Change it in Jira (Move), or create the issue again in the right project and issue type.",
+      );
+}
 function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {
+  const routing = routingChangeRefusal(args);
+  if (routing !== undefined) return routing;
   const fields = fieldsInput(args.fields ?? {});
   const updates = asArray(args.updates ?? []);
   const links = parseJiraIssueLinks(args.links);
@@ -1038,6 +1061,8 @@ async function transitionIssue(
   policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const transitionId = args.transitionId;
+  const routing = routingChangeRefusal(args);
+  if (routing !== undefined) return routing;
   const refused = argumentRefusal(
     args,
     ["issueKey", "transitionId", "fields", "updates"],
@@ -1939,6 +1964,19 @@ export function executeJiraManagedMutation(
   connection: JiraManagedConnection,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
+  return withJiraTemplateNotices(() =>
+    executeJiraManagedMutationInner(operation, source, context, connection, trace),
+  );
+}
+/** The executor proper; the exported entry only adds the notices its gate collected. */
+function executeJiraManagedMutationInner(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  if (!jiraOperationInReleaseScope(operation)) return Promise.resolve(OUT_OF_RELEASE_SCOPE);
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
   if (isJiraAgileMutation(operation))
@@ -1958,6 +1996,15 @@ export function executeJiraManagedMutation(
   );
 }
 
+/**
+ * An operation outside this release's scope (attachments in Release 1) is the closed `unavailable`
+ * disposition with a readable message; it never reaches a request, in the executor or its dry run.
+ */
+const OUT_OF_RELEASE_SCOPE: JiraMutationAttempt = {
+  ok: false,
+  reason: "unavailable",
+  detail: { messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE] },
+};
 const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
   "jira.create",
   "jira.edit",
@@ -1977,6 +2024,7 @@ function checkedAttempt(
   connection: JiraManagedConnection,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
+  if (!jiraOperationInReleaseScope(operation)) return Promise.resolve(OUT_OF_RELEASE_SCOPE);
   if (isJiraAgileMutation(operation))
     return checkJiraAgileMutation(operation, structuredClone(source), context, connection);
   if (connection.deployment !== "data-center") return Promise.resolve({ ok: true, receipt: {} });
@@ -2088,6 +2136,12 @@ export async function checkJiraManagedMutation(
   connection: JiraManagedConnection,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationCheckResult> {
+  if (!jiraOperationInReleaseScope(operation))
+    return {
+      ok: false,
+      reason: "unavailable",
+      detail: { messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE] },
+    };
   const attempt = await checkedAttempt(operation, source, context, connection, trace);
   if (attempt.ok) return { ok: true };
   if (attempt.violations !== undefined)

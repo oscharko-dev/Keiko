@@ -1892,6 +1892,18 @@
               "required": false
             },
             {
+              "name": "templateMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateNotActivatedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "templateUnreadableCount",
               "type": "integer",
               "dataClass": "count",
@@ -2145,6 +2157,18 @@
             },
             {
               "name": "summaryTooShortCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateNotActivatedCount",
               "type": "integer",
               "dataClass": "count",
               "required": false

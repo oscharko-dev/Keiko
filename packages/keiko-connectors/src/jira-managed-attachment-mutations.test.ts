@@ -12,6 +12,16 @@ import {
 } from "./jira-managed-attachment-mutations.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 
+// Release 1 switches the attachment operations off (#4354); these tests are about their mechanics,
+// which stay in the code for Release 2, so the switch is on here. The switch itself is proven in
+// jira-release-scope.test.ts.
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+  >()),
+  jiraOperationInReleaseScope: (): boolean => true,
+}));
+
 const ID = "9007199254740993";
 const INPUT = { issueKey: "SYN-7", attachmentId: ID, filename: "Review.pdf", size: 42 };
 const FILE = {

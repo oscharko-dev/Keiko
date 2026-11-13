@@ -94,10 +94,11 @@ describe("fixed Agile planning effects", () => {
   it.each(CASES)("refuses changed actor before $name", async ({ name, args }) => {
     const f = agilePlanningFixture();
     f.actor.key = "other-actor";
-    expect(await executeJiraAgilePlanningMutation(name, args, f.ports)).toMatchObject({
-      ok: false,
-      reason: "conflict",
-    });
+    // #4354: before the effect a key that is not the connected user's is an argument to correct,
+    // and the refusal names where the key comes from; nothing was sent, so nothing is "unconfirmed".
+    const refused = await executeJiraAgilePlanningMutation(name, args, f.ports);
+    expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(JSON.stringify(refused)).toContain("must be the key jira.myself returns");
     expect(writes(f)).toEqual([]);
   });
   it("preserves original post-ACK defects and cancellation with known receipt", async () => {

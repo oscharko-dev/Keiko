@@ -1116,12 +1116,25 @@ describe("the dry run before approval", () => {
     });
   });
 
-  it("does nothing without proposed arguments or a governing template", async () => {
+  it("does nothing without proposed arguments", async () => {
     expect(await preflight(TEMPLATE, undefined).run()).toBeUndefined();
+  });
+
+  // #4354: this was the pass-through pin "does nothing without a governing template". The owner
+  // decided on 2026-11-13 that nothing is created without one, so a creation no template governs
+  // is refused here, before any approval is asked, in every mode; the refusal names the way out.
+  it("refuses a creation that no template governs before any approval, naming the way out", async () => {
     const f = preflight("# Ordinary skill\n", CREATE);
-    expect(await f.run()).toBeUndefined();
-    const paths = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
-    expect(paths.some((path) => /\/(project|issuetype)\//u.test(path))).toBe(false);
+    const refusal = await f.run();
+    expect(refusal).toMatchObject({
+      outcome: "rejected",
+      reason: "field-validation",
+      violations: [{ ruleId: "template-missing", template: "SYN/Story" }],
+    });
+    expect(JSON.stringify(refusal)).toMatch(
+      /Propose templates from an existing project|propose templates from an existing project/u,
+    );
+    expect(f.http.mock.calls.some(([request]) => request.method !== "GET")).toBe(false);
   });
 
   describe("a backlog draft (#4178)", () => {

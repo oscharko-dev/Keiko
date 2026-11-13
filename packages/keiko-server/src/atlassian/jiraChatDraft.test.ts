@@ -46,6 +46,7 @@ import {
   observedJiraDraftOutcome,
   type JiraChatDraftExecution,
 } from "./jiraChatDraft.js";
+import { permissiveJiraTemplates } from "../../../../tests/support/jira-test-templates.js";
 
 const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
@@ -131,7 +132,11 @@ function execution(
       signal: new AbortController().signal,
       beforeEffect: () => true,
     },
-    connection: { baseUrl: BASE_URL, deployment: "data-center" },
+    connection: {
+      baseUrl: BASE_URL,
+      deployment: "data-center",
+      issueTemplates: () => permissiveJiraTemplates(["SYN"], ["Story"]),
+    },
     httpPortFactory: (lifecycle) =>
       createGatewayAtlassianHttpBodyPort({
         ...lifecycle,
@@ -580,7 +585,11 @@ describe("executeJiraChatDraft (#4178)", () => {
       );
       const last = activity.at(-1);
       expect(last?.phase).toBe("executed");
-      expect(last?.readReusedCount).toBe(5);
+      // The project and issue-type reads that name a creation's template are served once too (#4354):
+      // five more items each reuse the create metadata, the project and the issue type.
+      expect(countOf(urls, "/project/10000")).toBe(1);
+      expect(countOf(urls, "/issuetype/10001")).toBe(1);
+      expect(last?.readReusedCount).toBe(15);
       expect(last?.readCount).toBe(urls.length);
     });
 

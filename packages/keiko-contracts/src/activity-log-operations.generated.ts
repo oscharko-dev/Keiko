@@ -1335,6 +1335,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      templateMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateNotActivatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       settledCount: {
         type: "integer",
         dataClass: "count",
@@ -1573,6 +1583,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       templateUnreadableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateNotActivatedCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -34605,7 +34625,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["pre-approval", "dispatch"],
+        values: ["pre-approval", "dispatch", "notice"],
       },
       violationCount: {
         type: "integer",
@@ -34630,6 +34650,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "parent-missing",
           "parent-type-mismatch",
           "template-unreadable",
+          "template-missing",
+          "template-not-activated",
         ],
         maxItems: 25,
       },

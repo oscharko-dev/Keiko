@@ -853,11 +853,18 @@ function attemptReceipt(
   if (attempt.ok) return outcome === "succeeded" ? attempt.receipt : {};
   return attempt.receipt ?? {};
 }
+/**
+ * Fixed words for a change that succeeded although the issue already broke template rules in fields
+ * the change did not touch: the change is not undone and not blocked, and the person is told.
+ */
+const TEMPLATE_NOTICE_GUIDANCE =
+  "The change was made. The issue already broke these template rules in fields this change did not touch (templateNotices: ruleId, subject). " +
+  "Tell the person plainly what is still missing and offer to repair it; do not repeat the change.";
 export function jiraAttemptToolResult(
   outcome: JiraMutationOutcome,
   attempt: JiraMutationAttempt,
 ): ManagedMcpToolResult {
-  return jiraMutationToolResult(
+  const result = jiraMutationToolResult(
     outcome,
     attempt.ok ? undefined : attempt.reason,
     attemptReceipt(outcome, attempt),
@@ -866,4 +873,14 @@ export function jiraAttemptToolResult(
     attempt.links,
     attempt.ok ? undefined : attempt.violations,
   );
+  const notices = attempt.ok ? boundedViolations(attempt.templateNotices) : undefined;
+  if (notices === undefined || outcome !== "succeeded") return result;
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      guidance: TEMPLATE_NOTICE_GUIDANCE,
+      templateNotices: notices.map((item) => ({ ...item })),
+    },
+  };
 }

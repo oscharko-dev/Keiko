@@ -2094,6 +2094,7 @@ export {
   isJiraIssueTemplateDocument,
   mentionsJiraIssueTemplateMarker,
   jiraIssueTemplateLabel,
+  jiraTemplateGovernsWrites,
   jiraTemplatePatternIssue,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
@@ -2105,6 +2106,13 @@ export {
   type JiraTemplateRuleId,
   type JiraTemplateViolation,
 } from "./jira-issue-template.js";
+export {
+  JIRA_ATTACHMENTS_AVAILABLE,
+  JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_ATTACHMENT_OPERATIONS,
+  jiraOperationInReleaseScope,
+  type JiraAttachmentOperation,
+} from "./jira-release-scope.js";
 export {
   JIRA_HEADING_LINE_CHARS_MAX,
   readJiraDescriptionSections,

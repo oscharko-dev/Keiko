@@ -38,6 +38,8 @@ const RULE_COUNT_NAMES = {
   "parent-missing": "parentMissingCount",
   "parent-type-mismatch": "parentTypeMismatchCount",
   "template-unreadable": "templateUnreadableCount",
+  "template-missing": "templateMissingCount",
+  "template-not-activated": "templateNotActivatedCount",
 } as const satisfies Readonly<Record<JiraTemplateRuleId, string>>;
 type RuleCountField = (typeof RULE_COUNT_NAMES)[JiraTemplateRuleId];
 
@@ -55,6 +57,8 @@ export const JIRA_TEMPLATE_RULE_COUNT_FIELDS = {
   parentMissingCount: RULE_COUNT,
   parentTypeMismatchCount: RULE_COUNT,
   templateUnreadableCount: RULE_COUNT,
+  templateMissingCount: RULE_COUNT,
+  templateNotActivatedCount: RULE_COUNT,
 } satisfies Readonly<Record<RuleCountField, typeof RULE_COUNT>>;
 
 export function jiraTemplateRuleCountFields(
@@ -199,7 +203,7 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["pre-approval", "dispatch"],
+      values: ["pre-approval", "dispatch", "notice"],
     },
     violationCount: { type: "integer", dataClass: "count", required: true },
     ruleIds: {
@@ -221,6 +225,8 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
         "parent-missing",
         "parent-type-mismatch",
         "template-unreadable",
+        "template-missing",
+        "template-not-activated",
       ],
       maxItems: 25,
     },
@@ -357,7 +363,7 @@ export function recordJiraTemplateRefusal(
   correlationId: string | undefined,
   input: {
     readonly operation: string;
-    readonly stage: "pre-approval" | "dispatch";
+    readonly stage: "pre-approval" | "dispatch" | "notice";
     readonly violations: readonly { readonly ruleId: JiraTemplateRuleId }[];
   },
 ): void {
@@ -366,7 +372,10 @@ export function recordJiraTemplateRefusal(
   processServerLogSink().write(
     activityLogEvent(
       TEMPLATE_ADMISSION,
-      { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "warn" },
+      {
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        level: input.stage === "notice" ? "info" : "warn",
+      },
       {
         operation,
         stage: input.stage,
@@ -492,7 +501,15 @@ export function recordJiraTemplateAttempt(
   operation: string,
   attempt: JiraMutationAttempt,
 ): void {
-  if (attempt.ok) return;
+  if (attempt.ok) {
+    if (attempt.templateNotices !== undefined && attempt.templateNotices.length > 0)
+      recordJiraTemplateRefusal(correlationId, {
+        operation,
+        stage: "notice",
+        violations: attempt.templateNotices,
+      });
+    return;
+  }
   if (attempt.reason === "field-validation")
     recordDispatchFieldRefusal(correlationId, operation, attempt);
   if (attempt.violations === undefined) return;

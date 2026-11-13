@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../tests/support/jira-test-templates.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import {
   JIRA_DRAFT_IDENTITY_PREFIX,
@@ -293,6 +297,11 @@ function syntheticJira(options: {
     options.description === true ? [...BASE_FIELDS, field("description", "string")] : BASE_FIELDS;
   const createFields = options.labels ? [...base, LABELS] : base;
   const read = (url: URL): ReturnType<AtlassianHttpBodyPort> => {
+    // The identity a creation is judged by: a template governs a project and an issue type (#4354).
+    if (url.pathname.endsWith("/project/10000"))
+      return Promise.resolve(response({ id: "10000", key: "SYN" }));
+    const type = /\/issuetype\/(\d{1,10})$/u.exec(url.pathname);
+    if (type !== null) return Promise.resolve(response({ id: type[1], name: "Task" }));
     if (url.pathname.includes("createmeta"))
       return Promise.resolve(
         response({
@@ -367,7 +376,12 @@ function runItem(
       signal: new AbortController().signal,
       beforeEffect: () => true,
     },
-    { deployment: "data-center", baseUrl: "https://jira.example.invalid", http: jira.http },
+    {
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid",
+      http: jira.http,
+      issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+    },
     trace,
   );
 }

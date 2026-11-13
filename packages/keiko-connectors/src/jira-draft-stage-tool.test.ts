@@ -7,6 +7,10 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../tests/support/jira-test-templates.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { parseJiraDraft } from "./jira-draft.js";
 import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
@@ -98,7 +102,8 @@ function connection(
     baseUrl: "https://jira.example.invalid/context",
     identity: "credential-1",
     http,
-    ...(templates === undefined ? {} : { issueTemplates: (): JiraIssueTemplateSet => templates }),
+    issueTemplates: (): JiraIssueTemplateSet =>
+      templates ?? permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
   };
 }
 function harness(

@@ -55,6 +55,7 @@ import {
   JIRA_MUTATION_OPERATIONS,
   JIRA_READ_TOOL_FAMILIES,
   isJiraAvatarUploadOperation,
+  jiraOperationInReleaseScope,
   type JiraAvatarUploadMutation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
@@ -135,7 +136,7 @@ const JIRA_BASE_TOOLS = [
       (definition?.kind === "native" && /\/issue(?:\/|$)/u.test(definition.pathTemplate))
     );
   }),
-] satisfies typeof JIRA_CHAT_TOOLS;
+].filter((tool) => jiraOperationInReleaseScope(tool)) satisfies typeof JIRA_CHAT_TOOLS;
 const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
 const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(
   JIRA_BATCH_TOOLS.map((tool) => toolAlias(tool)),
