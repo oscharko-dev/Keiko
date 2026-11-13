@@ -309,8 +309,9 @@ controls and is unchanged.
 ### Seed runs after the first gate result
 
 Each later change to the review pipeline was followed by a seed run with the same pair. The seed
-set runs as often as needed; none of these runs read a holdout pull request. No run found every
-required seed.
+set runs as often as needed; none of these runs read a holdout pull request. No run of a tree
+under review found every required seed. Two runs of prompt variants on local branches did; the last
+reading bullet names them.
 
 | Date       | Tree                                                                                          | Required found | Required seeds not found                                                    | False alarms on clean controls | Settlements                 |
 | ---------- | --------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------- | ------------------------------ | --------------------------- |
@@ -360,13 +361,28 @@ Reading of these runs:
   seed as `evidence-mismatch`, and the Reviewer's report call for the workspace-relative seed was
   invalid twice, so the turn failed with `invalid-tool-call` and the session ended without a
   candidate.
-- Two prompt variants were run twice each on top of `0929b4ed0` in the same night, on local
-  branches: a Counter-checker rule that an overstated consequence is still a defect, and a Reviewer
-  step that works out one concrete input before it reports. Each variant found 13 of 13 once and 12
-  of 13 once, and each had one false alarm on a clean control in its two runs. A clean control drew
-  a candidate in 1 of 6 reviews on the unchanged tree, in 2 of 6 with the Counter-checker rule and
-  in 5 of 6 with the Reviewer step. Two runs per variant do not separate either from the unchanged
-  tree, so neither is adopted.
+- The evidence of the two runs on `0929b4ed0` is `evidence.json` with sha256
+  `734b3deae6cd9851c2fec9b2d3fae4956155c62848ef3ab05897622995cdcd2f` (first run) and
+  `cd3275152373104874c8ead3cb6aad0cd7f498e23854d84b0cf78991ec8015a1` (second run).
+- A session that the read allowance stops without an accepted report settles its run
+  `incomplete/budget-exhausted` (R4130-054). That rule costs complete reviews: in the 418 stored
+  reviews of the 4-bit gate runs, 30 of the 84 complete reviews made more than 24 model calls, and
+  9 of those 30 had no accepted report. Model calls include reports, so at most 9 of the 84 would
+  have settled `incomplete` under the rule. Development iteration 7 is read against that number.
+- Two prompt variants were run twice each in the same night. Each is one local commit on top of
+  `0929b4ed0`. The branches are kept on the lab machine and are not pushed, so these four runs are
+  lab evidence that this repository cannot reproduce, and none of them is a gate verdict.
+
+  | Variant                                                                                                          | Local head  | Run | Required found | Required seed not found                                   | False alarm on a clean control | `evidence.json` sha256                                             |
+  | ---------------------------------------------------------------------------------------------------------------- | ----------- | --- | -------------- | --------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------ |
+  | Counter-checker: an overstated consequence is still a defect when the reported lines misbehave for another input | `5e17e26f9` | 1   | 13 of 13       | none                                                      | synthetic-clean-added-test     | `e2af883a76960ac1ddb6d868e57c3ecd23b51b9eec76a41c6e5a5cbe0458c83d` |
+  | same                                                                                                             | `5e17e26f9` | 2   | 12 of 13       | secretbox-authentication incomplete (`deadline-exceeded`) | none                           | `78459bd2c5cf30f1f00440ae660689e2a94ff46e2fb12d732bfa71c49f0da7b3` |
+  | Reviewer: work one input through the head and the base before reporting                                          | `6c8899b3b` | 1   | 13 of 13       | none                                                      | none                           | `d8cc6efb489b55df7c4359fa134b7f18c0f99e7dda8754c77cf5b77942d5b30a` |
+  | same                                                                                                             | `6c8899b3b` | 2   | 12 of 13       | secretbox-binary-envelope-boundary missed                 | synthetic-clean-rename         | `4ab8063b5c8372cc32d3a02d5436e968397976e7afe4724f34e722890f8bf128` |
+
+  A clean control drew a candidate in 1 of 6 reviews on the unchanged tree, in 2 of 6 with the
+  Counter-checker variant and in 5 of 6 with the Reviewer variant. Two runs per variant do not
+  separate either from the unchanged tree, so neither is adopted.
 
 ## Decision
 

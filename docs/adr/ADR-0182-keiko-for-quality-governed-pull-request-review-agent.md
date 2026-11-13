@@ -79,9 +79,15 @@ every changed hunk of the part, so the allowance bounds only how much surroundin
 fetches. A session that was refused a read and then ends its turn is judged by what it filed
 (R4130-054). With at least one accepted report it is a completed session, and its part counts as
 reviewed. Without one, Keiko cut its reading short and nothing shows what it examined, so its part
-fails with `budget-exhausted` and the run settles `incomplete` (D6). Before the allowance the same
-session ran out of prompt budget and settled the same way, so the allowance never turns unfinished
-work into a clean review. Each `review.run.part` line records the read calls the allowance let
+fails with `budget-exhausted` and the run settles `incomplete` (D6). The allowance can therefore
+turn a clean review into an incomplete one, never an unfinished review into a clean one. A session
+that kept reading until its prompt budget ran out settled `incomplete` before the allowance as
+well. A session that would have read on, found nothing and completed now settles `incomplete` too,
+because the prompt forbids a report that says there is no defect, so a stopped session and a
+session with nothing to report look the same. In the 418 stored reviews, 30 of the 84 complete ones
+made more than 24 model calls, and 9 of those 30 had no accepted report. Model calls include
+reports, so 9 of 84 is an upper bound on the complete reviews this rule would have settled
+`incomplete`. Each `review.run.part` line records the read calls the allowance let
 through to admission and the ones it refused (`readCallCount`, `refusedReadCallCount`). A call
 counts when the allowance lets it through, whether or not a later check then answers it `busy` or
 denies it, because each one costs the Reviewer a model call. The
