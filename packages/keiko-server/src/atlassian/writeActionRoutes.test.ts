@@ -130,6 +130,7 @@ function guardWith(
     },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
+    releaseVerification: (): boolean => false,
     observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create not exercised");
