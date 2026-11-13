@@ -368,8 +368,19 @@ such a run would refuse the next start, so the next review of the repository doe
 instance is set aside untouched (no early release, acknowledgement or shutdown; it stays quarantined
 until its own idle stop, and `release` does not end it) and a fresh instance is composed beside it,
 recorded as `placement: beside-quarantined` on `review.run.runtime-started`. One review per
-repository at a time still holds. At most one quarantined instance per repository: a review that
-would need a second one is refused as `runtime-unavailable` and settles `skipped/model-unavailable`.
+repository at a time still holds. At most one quarantined instance per repository. When the serving
+instance has to be set aside while an older one is still quarantined, the older one is ended first:
+it serves no review, so this is its idle stop brought forward, recorded as
+`review.run.runtime-stopped` with trigger `quarantine-replaced` under the correlation of the review
+that needed the place (Issue #4130). The reason is a review in several parts (D1): every part is its
+own session, and on macOS every session leaves its instance holding such a run, so a review needs a
+fresh instance per part. Before this rule a part that needed a second quarantined instance was
+refused. In the first review of development iteration 7 (58 files in four parts) the fourth part
+started 4 minutes after the second had ended, found the second part's instance still quarantined
+and was refused, and the review lost that part. Only a quarantined instance that cannot be ended
+still refuses the session as `runtime-unavailable` (`quarantine-limit`), with the failed stop on
+the diagnostic sink (`review.run.runtime-stop`): the first part's refusal settles the review
+`skipped/model-unavailable`, a later part's `incomplete/model-failed`.
 Every instance that cannot be started is logged as `review.run.runtime-stopped` with trigger
 `start-failed` under the review's correlation and a closed `startFailure`: the coding runtime's
 activation reason, `host-unavailable`, or `quarantine-limit` (R4130-019). An out-of-range

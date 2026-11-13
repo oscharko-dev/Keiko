@@ -24,12 +24,23 @@ import type { ServerLogSink } from "../../observability/index.js";
 import { correlationIdOrUnknown } from "../../correlation.js";
 import { reviewEvidenceDigest } from "../activity-log.js";
 
-export type ReviewRuntimeStopTrigger = "idle" | "shutdown" | "start-failed";
+/**
+ * Why a review instance stopped. `quarantine-replaced` (#4130): a quarantined instance was ended
+ * before its idle stop, because the repository's serving instance had to be quarantined in its
+ * place.
+ */
+const REVIEW_RUNTIME_STOP_TRIGGERS = [
+  "idle",
+  "shutdown",
+  "start-failed",
+  "quarantine-replaced",
+] as const;
+export type ReviewRuntimeStopTrigger = (typeof REVIEW_RUNTIME_STOP_TRIGGERS)[number];
 
 /**
  * Why a review instance could not be started (R4130-019): the activation's closed unavailable
- * reason, a runtime host that could not be created, or a repository that already holds its one
- * quarantined instance.
+ * reason, a runtime host that could not be created, or a repository whose one quarantined instance
+ * could not be ended to make room for the next (`quarantine-limit`).
  */
 const REVIEW_RUNTIME_START_FAILURES = [
   "runtime-disabled",
@@ -106,7 +117,7 @@ const REVIEW_RUN_RUNTIME_STOPPED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["idle", "shutdown", "start-failed"],
+      values: REVIEW_RUNTIME_STOP_TRIGGERS,
     },
     idleDurationMs: { type: "integer", dataClass: "duration", required: true },
     runCount: { type: "integer", dataClass: "count", required: true },

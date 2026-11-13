@@ -257,14 +257,67 @@ describe("createReviewRuntimeService", () => {
     expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
   });
 
-  it("refuses a review that would need a second quarantined instance", async () => {
+  // #4130: every part of a review in several parts is its own session, and on macOS each session
+  // leaves its instance holding a recovery-required run. The third part within the idle period
+  // found the quarantine taken and was refused (`quarantine-limit`), so the review settled
+  // `incomplete/model-failed` with its remaining parts unreviewed (development iteration 7, first
+  // review, part 4 of 4). The older quarantined instance is now ended to make room.
+  it("ends the quarantined instance when the serving one has to be set aside too", async () => {
     const { repo, base, head } = headRepository();
     const unproven: ScriptedReviewRun = {
       reports: [],
       terminal: "recovery-required",
       reapUnproven: true,
     };
-    const { subject, compose, observed, log } = service([unproven, unproven, { reports: [] }]);
+    const { subject, compose, observed, log } = service(unproven);
+    const instanceCounts: number[] = [];
+
+    for (const part of [1, 2, 3, 4]) {
+      const result = await subject.run(
+        request(repo, base, head, {
+          reviewRunId: `review-run-${String(part)}`,
+          correlationId: `corr-part-${String(part)}`,
+        }),
+      );
+      expect(result, `part ${String(part)}`).toMatchObject({
+        ok: true,
+        outcome: "completed",
+        runtimeCleanup: "unproven",
+      });
+      instanceCounts.push(subject.instanceCount());
+    }
+
+    // One serving and at most one quarantined instance, however many sessions follow each other.
+    expect(instanceCounts).toEqual([1, 2, 2, 2]);
+    expect(compose).toHaveBeenCalledTimes(4);
+    expect(observed.starts).toHaveLength(4);
+    expect(observed).toMatchObject({ shutdowns: 2, closes: 2 });
+    const stopped = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(stopped).toHaveLength(2);
+    expect(stopped.map((event) => [event.correlationId, event.level, event.extra])).toEqual([
+      ["corr-part-3", "info", expect.objectContaining({ trigger: "quarantine-replaced" })],
+      ["corr-part-4", "info", expect.objectContaining({ trigger: "quarantine-replaced" })],
+    ]);
+    expect(stopped.every((event) => event.extra?.runCount === 1)).toBe(true);
+  });
+
+  // The bound of #4136 stays: a quarantined instance that cannot be ended is never joined by a
+  // second one. The session is refused, and both the refusal and its cause are recorded.
+  it("refuses a session when the quarantined instance cannot be ended", async () => {
+    const { repo, base, head } = headRepository();
+    const stuck: ScriptedReviewRun = {
+      reports: [],
+      terminal: "recovery-required",
+      reapUnproven: true,
+      shutdownFails: true,
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (record): void => {
+        records.push(record);
+      },
+    };
+    const { subject, compose, observed, log } = service(stuck, { diagnostics });
 
     await subject.run(request(repo, base, head));
     await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
@@ -275,8 +328,7 @@ describe("createReviewRuntimeService", () => {
     expect(third).toEqual({ ok: false, reason: "runtime-unavailable", rules: "absent" });
     expect(compose).toHaveBeenCalledTimes(2);
     expect(observed.starts).toHaveLength(2);
-    expect(observed).toMatchObject({ shutdowns: 0, closes: 0 });
-    expect(subject.instanceCount()).toBe(2);
+    expect(subject.instanceCount()).toBeLessThanOrEqual(2);
     // R4130-019: the refusal names its cause under the review's correlation.
     const failed = log.events.filter((event) => event.op === "review.run.runtime-stopped");
     expect(failed).toHaveLength(1);
@@ -284,6 +336,11 @@ describe("createReviewRuntimeService", () => {
       correlationId: "corr-review-3",
       level: "warn",
       extra: { trigger: "start-failed", startFailure: "quarantine-limit", runCount: 0 },
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "review.run.runtime-stop",
+      correlationId: "corr-review-3",
     });
   });
 

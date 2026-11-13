@@ -34923,7 +34923,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["idle", "shutdown", "start-failed"],
+        values: ["idle", "shutdown", "start-failed", "quarantine-replaced"],
       },
       idleDurationMs: {
         type: "integer",

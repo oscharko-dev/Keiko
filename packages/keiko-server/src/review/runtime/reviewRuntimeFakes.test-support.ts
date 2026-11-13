@@ -31,6 +31,8 @@ export interface ScriptedReviewRun {
   readonly reapUnproven?: boolean | undefined;
   /** The failed turn's own failure code beside an unproven reap (#4138). */
   readonly turnFailureCode?: string | undefined;
+  /** The instance's orchestrator fails its shutdown. */
+  readonly shutdownFails?: boolean | undefined;
 }
 
 export interface ReviewRuntimeObservations {
@@ -111,7 +113,9 @@ function scriptedOrchestrator(
     stop: (): Promise<unknown> => Promise.resolve({ ok: true }),
     shutdown: (): Promise<unknown> => {
       observed.shutdowns += 1;
-      return Promise.resolve({ ok: true });
+      return script.shutdownFails === true
+        ? Promise.reject(new Error("scripted shutdown failure"))
+        : Promise.resolve({ ok: true });
     },
   };
 }

@@ -3,7 +3,9 @@
 // One review instance per repository, started on demand when a review starts and stopped after an
 // idle period (default five minutes). An instance left holding a recovery-required run is set aside
 // quarantined until its own idle stop, and a fresh one serves the repository (at most one
-// quarantined instance per repository, #4136). Each instance is its own composition of the coding runtime
+// quarantined instance per repository, #4136). When the serving instance has to be set aside while
+// an older one is still quarantined, the older one is ended first (#4130): a review in several
+// parts needs a fresh instance per part. Each instance is its own composition of the coding runtime
 // (`composition.ts`) with its own orchestrator and run slot, so it serves one review run at a time
 // and never touches the user's Coding Workbench run, active workspace, run list or history.
 //
@@ -271,6 +273,23 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
     this.quarantined.set(key, live);
   }
 
+  /**
+   * Ends the repository's quarantined instance now, because the serving instance needs its place
+   * (#4130). It serves no review, so this is its idle stop brought forward. `false` when it could
+   * not be ended; the failure is on the diagnostic sink.
+   */
+  public async endQuarantined(key: string, correlationId?: string): Promise<boolean> {
+    const live = this.quarantined.get(key);
+    if (live === undefined) return true;
+    try {
+      await this.stopLive(key, live, "quarantine-replaced", correlationId);
+      return true;
+    } catch (error) {
+      reportReviewFailure("review.run.runtime-stop", correlationId, error, this.deps.diagnostics);
+      return false;
+    }
+  }
+
   public start(
     key: string,
     correlationId?: string,
@@ -383,7 +402,10 @@ export function createReviewRuntimeService(deps: ReviewRuntimeServiceDeps): Revi
 interface ServiceContext {
   readonly deps: ReviewRuntimeServiceDeps;
   readonly instances: Map<string, LiveInstance>;
-  /** At most one quarantined instance per repository, kept until its own idle stop (#4136). */
+  /**
+   * At most one quarantined instance per repository, kept until its own idle stop (#4136) or until
+   * the serving instance needs its place (#4130).
+   */
   readonly quarantined: Map<string, LiveInstance>;
   /** Repositories with a review in preparation or in flight. */
   readonly reserved: Set<string>;
@@ -393,6 +415,7 @@ interface ServiceContext {
     placement?: ReviewRuntimePlacement,
   ): LiveInstance | undefined;
   quarantine(key: string, live: LiveInstance): void;
+  endQuarantined(key: string, correlationId?: string): Promise<boolean>;
   startFailed(
     instanceId: string,
     startFailure: ReviewRuntimeStartFailure,
@@ -402,22 +425,27 @@ interface ServiceContext {
 }
 
 /**
- * The instance the next review of a repository runs on (#4136). An instance whose orchestrator
- * still holds a run that never reached a terminal state (a Reviewer run left recovery-required,
- * such as every macOS gateway-profile run whose end could not be proven) would refuse the next
- * start, so it is set aside, quarantined exactly as it is until its own idle stop, and a fresh
- * instance is composed beside it. At most one quarantined instance per repository: a second one is
- * refused (`undefined`, settled `skipped/model-unavailable`) instead of growing without bound.
+ * The instance the next Reviewer session of a repository runs on (#4136). An instance whose
+ * orchestrator still holds a run that never reached a terminal state (a Reviewer run left
+ * recovery-required, such as every macOS gateway-profile run whose end could not be proven) would
+ * refuse the next start, so it is set aside, quarantined exactly as it is until its own idle stop,
+ * and a fresh instance is composed beside it.
+ *
+ * At most one quarantined instance per repository. When one is already quarantined, it is ended
+ * first (#4130): every part of a review in several parts is its own session, so on macOS each part
+ * leaves its instance holding such a run, and the third part within the idle period found the
+ * place taken and was refused. Only a quarantined instance that cannot be ended still refuses the
+ * session (`undefined`, `quarantine-limit`), so the instances never grow without bound.
  */
-function acquireInstance(
+async function acquireInstance(
   context: ServiceContext,
   request: ReviewRuntimeRunRequest,
-): LiveInstance | undefined {
+): Promise<LiveInstance | undefined> {
   const key = request.repositoryRoot;
   const live = context.instances.get(key);
   if (live === undefined) return context.start(key, request.correlationId);
   if (!live.composition.controlPlane.orchestrator.hasLiveRun()) return live;
-  if (context.quarantined.has(key)) {
+  if (!(await context.endQuarantined(key, request.correlationId))) {
     context.startFailed(randomUUID(), "quarantine-limit", request.correlationId);
     return undefined;
   }
@@ -494,7 +522,7 @@ async function prepareAndRun(
     part: request.diffPart,
   });
   if (!task.ok) return { ok: false, reason: "task-too-large", rules: rules.outcome };
-  const instance = acquireInstance(context, request);
+  const instance = await acquireInstance(context, request);
   if (instance === undefined) {
     return { ok: false, reason: "runtime-unavailable", rules: rules.outcome };
   }
