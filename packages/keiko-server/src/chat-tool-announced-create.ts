@@ -31,8 +31,11 @@ const ISSUE_OBJECTS = [
   /\bfehlermeldung(?:en)?\b/iu,
 ] as const;
 /** Something else was made: a summary, a report, a list, a comment, a file. */
-const NOT_AN_ISSUE =
-  /(?<!\p{L})(?:summary|overview|report|list|comment|note|file|document|draft|plan|table|übersicht|uebersicht|tabelle|bericht|liste|zusammenfassung|kommentar|notiz|datei|dokument|entwurf)(?!\p{L})/iu;
+const NOT_AN_ISSUE = [
+  /(?<!\p{L})(?:summary|overview|report|list|comment|note|file|document|draft|plan|table)(?!\p{L})/iu,
+  /(?<!\p{L})(?:übersicht|uebersicht|tabelle|bericht|liste|zusammenfassung)(?!\p{L})/iu,
+  /(?<!\p{L})(?:kommentar|notiz|datei|dokument|entwurf)(?!\p{L})/iu,
+] as const;
 const WINDOW_CHARS = 60;
 /** Words and phrases that make a sentence a refusal, a question, a plan or a condition. */
 const NEGATING_WORDS: ReadonlySet<string> = new Set([
@@ -113,13 +116,16 @@ function createsAnIssue(sentence: string): boolean {
     const match = pattern.exec(sentence);
     if (match === null) return false;
     const window = objectWindow(sentence, match, object);
-    return !NOT_AN_ISSUE.test(window) && ISSUE_OBJECTS.some((noun) => noun.test(window));
+    return (
+      !NOT_AN_ISSUE.some((other) => other.test(window)) &&
+      ISSUE_OBJECTS.some((noun) => noun.test(window))
+    );
   });
 }
 
 function namesKnownKey(sentence: string, known: () => string): boolean {
   const keys = sentence.match(ISSUE_KEY) ?? [];
-  return keys.length > 0 && keys.some((key) => known().includes(key));
+  return keys.some((key) => known().includes(key));
 }
 
 function announces(sentence: string, known: () => string): boolean {

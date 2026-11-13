@@ -834,11 +834,32 @@ interface ExpandedKeys {
   readonly shown: readonly JiraOutcomeIssue[];
   readonly count: number;
 }
+interface KeyExpansion {
+  readonly shown: Map<string, JiraOutcomeIssue>;
+  readonly room: number;
+  readonly taken: ReadonlySet<string>;
+  readonly existing: boolean;
+  /** Keys past the room and parts that name no key: counted, never dropped silently. */
+  count: number;
+}
+function admitKey(expansion: KeyExpansion, key: string): void {
+  if (expansion.shown.has(key) || expansion.taken.has(key)) return;
+  if (expansion.shown.size >= expansion.room) expansion.count += 1;
+  else expansion.shown.set(key, expansion.existing ? { key, existing: true } : { key });
+}
+/** One `KEY-3` or `KEY-3..KEY-9` part; a part that is neither (descending, mixed prefixes) counts as one. */
+function expandPart(expansion: KeyExpansion, part: string): void {
+  const run = runOf(part);
+  if (run === undefined) {
+    if (ISSUE_KEY.test(part)) admitKey(expansion, part);
+    else expansion.count += 1;
+    return;
+  }
+  for (let n = run.from; n <= run.to; n += 1) admitKey(expansion, `${run.project}-${String(n)}`);
+}
 /**
- * The compact result's `KEY-3`, `KEY-3..KEY-9` and comma-joined parts, expanded into distinct keys
- * (an overlapping range lists a key once). A key past the room is counted; a part that names no key
- * or run (a descending range, two different prefixes, an over-long project key) is counted as one
- * unreadable part instead of vanishing.
+ * The compact result's comma-joined parts, expanded into distinct keys (an overlapping range lists a
+ * key once, a key already taken by the created list is not listed again as found).
  */
 function expandKeyEntries(
   entries: readonly string[],
@@ -846,25 +867,10 @@ function expandKeyEntries(
   taken: ReadonlySet<string>,
   existing: boolean,
 ): ExpandedKeys {
-  const shown = new Map<string, JiraOutcomeIssue>();
-  const issue = (key: string): JiraOutcomeIssue => (existing ? { key, existing: true } : { key });
-  let count = 0;
-  for (const part of entries.flatMap((entry) => entry.split(",")).map((entry) => entry.trim())) {
-    const run = runOf(part);
-    if (run === undefined) {
-      if (taken.has(part)) continue;
-      if (ISSUE_KEY.test(part) && shown.size < room) shown.set(part, issue(part));
-      else count += 1;
-      continue;
-    }
-    for (let n = run.from; n <= run.to; n += 1) {
-      const key = `${run.project}-${String(n)}`;
-      if (shown.has(key) || taken.has(key)) continue;
-      if (shown.size < room) shown.set(key, issue(key));
-      else count += 1;
-    }
-  }
-  return { shown: [...shown.values()], count };
+  const expansion: KeyExpansion = { shown: new Map(), room, taken, existing, count: 0 };
+  for (const entry of entries)
+    for (const part of entry.split(",")) expandPart(expansion, part.trim());
+  return { shown: [...expansion.shown.values()], count: expansion.count };
 }
 /** A listed key opens under the result's own browse prefix; without a web prefix it stays plain. */
 function linked(issue: JiraOutcomeIssue, prefix: unknown): JiraOutcomeIssue {
