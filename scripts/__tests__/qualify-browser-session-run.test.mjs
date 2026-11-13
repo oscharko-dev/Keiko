@@ -4,6 +4,7 @@ import {
   DEFAULT_SCHEDULE,
   judge,
   validateSchedule,
+  verdictOf,
 } from "../qualify-browser-session-run.mjs";
 
 describe("the two-hour browser session run (#4370 AC2)", () => {
@@ -96,5 +97,12 @@ describe("the two-hour browser session run (#4370 AC2)", () => {
       expect(judge([op("coding-app-session.paired")], bad).failures.join(" ")).toMatch(
         /minute 31/u,
       );
+  });
+
+  it("names the verdict: a smoke run never reads as qualification evidence", () => {
+    expect(verdictOf(true, false)).toBe("PASS");
+    expect(verdictOf(true, true)).toBe("SMOKE-PASS");
+    expect(verdictOf(false, false)).toBe("FAIL");
+    expect(verdictOf(false, true)).toBe("FAIL");
   });
 });

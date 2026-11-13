@@ -242,10 +242,16 @@ function conclude(report, smoke) {
   report.activity = judge(events, report.reloads);
   report.smoke = smoke;
   const passed = report.activity.failures.length === 0 && report.session === "active";
-  report.verdict = passed ? (smoke ? "SMOKE-PASS" : "PASS") : "FAIL";
+  report.verdict = verdictOf(passed, smoke);
   writeFileSync(join(out, "session-run-report.json"), `${JSON.stringify(report, null, 2)}\n`);
   process.stdout.write(`${report.verdict}: ${JSON.stringify(report.activity)}\n`);
   return passed;
+}
+
+/** A smoke run proves only the harness: it can pass as SMOKE-PASS but never as qualification evidence. */
+export function verdictOf(passed, smoke) {
+  if (!passed) return "FAIL";
+  return smoke ? "SMOKE-PASS" : "PASS";
 }
 
 async function main() {
