@@ -95,6 +95,10 @@ export const DE_MESSAGES = {
     "Memory ist bis zur Reparatur des lokalen Tresors nicht verfügbar. Chat bleibt verfügbar. Behebe die Ursache und starte Keiko neu.",
   "memory.readiness.unreadable":
     "Der gespeicherte Memory-Tresor konnte nicht geöffnet werden. Prüfe den verfügbaren Schlüssel und starte Keiko neu. Chat bleibt verfügbar.",
+  "credentialCustody.exposed":
+    "Der Schlüssel, der deine gespeicherten Zugangsdaten schützt, war für ein anderes Konto auf diesem Computer lesbar. Keiko hat ihn jetzt geschützt, die Zugangsdaten können aber gelesen worden sein. Ersetze sie: Erstelle ein neues Jira-Token und verbinde den Jira Pod neu, und ersetze den Gateway-Schlüssel unter Einstellungen > Modelle.",
+  "credentialCustody.unattested":
+    "Keiko konnte nicht prüfen, ob deine gespeicherten Zugangsdaten vor anderen Konten auf diesem Computer geschützt sind. Sie funktionieren weiter. Bitte deine Administration, Windows PowerShell für dein Konto zuzulassen, und starte Keiko danach neu.",
   "supportReport.create": "Fehlerbericht erstellen",
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.download": "Bericht herunterladen",

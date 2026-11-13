@@ -2832,6 +2832,27 @@ export function isServerInstanceId(value: unknown): value is string {
   return typeof value === "string" && SERVER_INSTANCE_ID_PATTERN.test(value);
 }
 
+/**
+ * How the credential vaults this server opened from a key file are kept on Windows (#4358,
+ * ADR-0182 D5). Closed; absent on other platforms and before any vault key was read.
+ *   attested    key file and directory are private to the current account.
+ *   protected   the directory was not private and Keiko made it private; the key was not readable.
+ *   exposed     a key file was readable by another account before Keiko protected it: stored
+ *               secrets, such as a Jira token, should be replaced.
+ *   unattested  Windows could not be asked; nothing is known. Never the same as `attested`.
+ */
+export const CREDENTIAL_CUSTODY_STATES = [
+  "attested",
+  "protected",
+  "exposed",
+  "unattested",
+] as const;
+export type CredentialCustodyState = (typeof CREDENTIAL_CUSTODY_STATES)[number];
+
+export function isCredentialCustodyState(value: unknown): value is CredentialCustodyState {
+  return (CREDENTIAL_CUSTODY_STATES as readonly unknown[]).includes(value);
+}
+
 /** The `GET /api/health` body. Readiness projections are additive; `status` stays server liveness. */
 export interface HealthResponse {
   readonly status: "ok";
@@ -2845,6 +2866,8 @@ export interface HealthResponse {
    * while connected recognize a restart; it is not a credential and grants nothing.
    */
   readonly instanceId?: string;
+  /** Credential custody on Windows; see {@link CredentialCustodyState}. */
+  readonly credentialCustody?: CredentialCustodyState;
 }
 
 const READINESS_STATE_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_STATES);

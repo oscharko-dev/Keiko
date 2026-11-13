@@ -41,7 +41,9 @@ import {
   CLIENT_VOICE_CAPTURE_REASONS,
   CLIENT_VOICE_CAPTURE_ERRORS,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
+  CREDENTIAL_CUSTODY_STATES,
   isActivityLogReadinessSnapshot,
+  isCredentialCustodyState,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
   isClientGitRetryAttemptIngestRequest,
@@ -845,6 +847,21 @@ describe("client diagnostic loss counts", () => {
 });
 
 // #3532: the readiness `/api/health` reports and `keiko status` prints.
+describe("isCredentialCustodyState", () => {
+  it("admits exactly the four closed states", () => {
+    expect(CREDENTIAL_CUSTODY_STATES).toEqual(["attested", "protected", "exposed", "unattested"]);
+    for (const state of CREDENTIAL_CUSTODY_STATES)
+      expect(isCredentialCustodyState(state)).toBe(true);
+  });
+
+  it.each([undefined, null, "", "ATTESTED", "attested ", "refused", "ok", true, 0, ["attested"]])(
+    "refuses %j",
+    (value) => {
+      expect(isCredentialCustodyState(value)).toBe(false);
+    },
+  );
+});
+
 describe("isActivityLogReadinessSnapshot", () => {
   const ready = { readiness: "ready", reasons: [], writer: "production-file", lostEvents: 0 };
   it("preserves truthful retained stock above a newly governing admission capacity", () => {

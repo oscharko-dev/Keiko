@@ -89,6 +89,10 @@ export const EN_MESSAGES = {
     "Memory is unavailable until its local vault is repaired. Chat remains available. Resolve the cause and restart Keiko.",
   "memory.readiness.unreadable":
     "The saved Memory vault could not be opened. Check the available key and restart Keiko. Chat remains available.",
+  "credentialCustody.exposed":
+    "The key that protects your stored credentials was readable by another account on this computer. Keiko has now made it private, but the credentials may have been read. Replace them: create a new Jira token and reconnect the Jira Pod, and replace the gateway key in Settings > Models.",
+  "credentialCustody.unattested":
+    "Keiko could not check whether your stored credentials are protected from other accounts on this computer. They keep working. Ask your administrator to allow Windows PowerShell for your account, then restart Keiko.",
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.download": "Download report",

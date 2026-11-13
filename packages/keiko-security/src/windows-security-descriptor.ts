@@ -20,7 +20,25 @@
 // writer.
 
 export type WindowsOwnerPrivateRefusal =
-  "malformed-descriptor" | "foreign-owner" | "null-dacl" | "foreign-write" | "unsupported-ace";
+  | "malformed-descriptor"
+  | "foreign-owner"
+  | "null-dacl"
+  | "foreign-write"
+  | "foreign-access"
+  | "unsupported-ace";
+
+/**
+ * What an untrusted principal may still hold on the object.
+ *
+ * - `read`: the integrity policy of an operator-controlled input (ADR-0182 D1). Nobody else may
+ *   change the object; reading it is not refused.
+ * - `none`: the confidentiality policy of secret material (#4358: the secret vault's key file and
+ *   its directory). Any allow ACE for a principal other than the token user, SYSTEM or
+ *   Administrators is refused, whatever it grants. Inherit-only ACEs are evaluated too, because
+ *   they decide who can reach what is later created below a directory.
+ *   SYSTEM and Administrators are accepted as owner for any process, see isAcceptedOwner.
+ */
+export type WindowsForeignAccess = "read" | "none";
 
 export type WindowsDescriptorVerdict =
   | { readonly kind: "owner-private" }
@@ -288,23 +306,43 @@ function isAclHeaderInBounds(bytes: Uint8Array, offset: number): boolean {
   );
 }
 
-function isAcceptedOwner(owner: string, principal: WindowsDescriptorPrincipal): boolean {
+// The integrity policy accepts SYSTEM or Administrators as owner only for an elevated process,
+// mirroring the native coordinator. The confidentiality policy accepts them for any process: its
+// DACL rule already trusts both with full control, so their ownership adds no principal that could
+// read the secret, and a key file created by one elevated run must not lock the same person out
+// of their vault afterwards (#4358).
+function isAcceptedOwner(
+  owner: string,
+  principal: WindowsDescriptorPrincipal,
+  foreignAccess: WindowsForeignAccess,
+): boolean {
   if (owner === principal.userSid) return true;
-  return ELEVATED_OWNER_SIDS.has(owner) && owner === principal.tokenOwnerSid;
+  if (!ELEVATED_OWNER_SIDS.has(owner)) return false;
+  return foreignAccess === "none" || owner === principal.tokenOwnerSid;
+}
+
+function foreignAllowRefusal(
+  mask: number,
+  foreignAccess: WindowsForeignAccess,
+): WindowsOwnerPrivateRefusal | undefined {
+  if ((mask & WINDOWS_WRITE_ACCESS_MASK) !== 0) return "foreign-write";
+  return foreignAccess === "none" && mask !== 0 ? "foreign-access" : undefined;
 }
 
 function evaluateDacl(
   dacl: readonly ParsedAce[],
   principal: WindowsDescriptorPrincipal,
+  foreignAccess: WindowsForeignAccess,
 ): WindowsOwnerPrivateRefusal | undefined {
-  const trustedWriters = new Set([principal.userSid, LOCAL_SYSTEM_SID, BUILTIN_ADMINISTRATORS_SID]);
+  const trusted = new Set([principal.userSid, LOCAL_SYSTEM_SID, BUILTIN_ADMINISTRATORS_SID]);
   for (const ace of dacl) {
-    // An inherit-only ACE does not apply to this object; a deny ACE can only restrict access.
-    if (ace.inheritOnly || ace.kind === "deny") continue;
+    // A deny ACE can only restrict access. An inherit-only ACE does not apply to this object, so
+    // the integrity policy skips it; the confidentiality policy reads it (see WindowsForeignAccess).
+    if (ace.kind === "deny" || (ace.inheritOnly && foreignAccess === "read")) continue;
     if (ace.kind === "unsupported") return "unsupported-ace";
-    if ((ace.mask & WINDOWS_WRITE_ACCESS_MASK) !== 0 && !trustedWriters.has(ace.sid)) {
-      return "foreign-write";
-    }
+    if (trusted.has(ace.sid)) continue;
+    const refusal = foreignAllowRefusal(ace.mask, foreignAccess);
+    if (refusal !== undefined) return refusal;
   }
   return undefined;
 }
@@ -312,16 +350,18 @@ function evaluateDacl(
 /**
  * Decides whether a self-relative security descriptor makes its object private to `principal`.
  * Structural validation runs first, then the owner rule, then the DACL rules. Never throws: any
- * inconsistent offset, size, or SID is "malformed-descriptor".
+ * inconsistent offset, size, or SID is "malformed-descriptor". `foreignAccess` defaults to the
+ * integrity policy; secret material passes `"none"`.
  */
 export function evaluateWindowsSecurityDescriptor(
   descriptor: Uint8Array,
   principal: WindowsDescriptorPrincipal,
+  foreignAccess: WindowsForeignAccess = "read",
 ): WindowsDescriptorVerdict {
   const parsed = parseDescriptor(descriptor);
   if (parsed === undefined) return refused("malformed-descriptor");
-  if (!isAcceptedOwner(parsed.owner, principal)) return refused("foreign-owner");
+  if (!isAcceptedOwner(parsed.owner, principal, foreignAccess)) return refused("foreign-owner");
   if (parsed.dacl === null) return refused("null-dacl");
-  const refusal = evaluateDacl(parsed.dacl, principal);
+  const refusal = evaluateDacl(parsed.dacl, principal, foreignAccess);
   return refusal === undefined ? OWNER_PRIVATE : refused(refusal);
 }

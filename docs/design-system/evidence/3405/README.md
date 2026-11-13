@@ -141,6 +141,14 @@ the Linux gates container (`--init`, Node 24.18.0): **9 passed (1.9m)**, and
 captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
 assertion or numerical ceiling changed. This remains updater fixture evidence.
 
+Integrating the Windows readiness work (#4358) on the Release 1 integration branch changed `api.ts` and
+the message catalogs, so the freshness gate rejected their digests. On 2026-11-13 (UTC) the complete
+original nine-case producer ran on the combined sources in the Linux gates container (`--init`,
+Node 24.18.0): **9 passed (1.9m)**, and `npm run check:update-ui-evidence` passes. Only the three
+records were kept; its fallback-font captures were discarded and the 14 committed captures are
+unchanged. No updater behavior, fixture, assertion or numerical ceiling changed. This remains updater
+fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
