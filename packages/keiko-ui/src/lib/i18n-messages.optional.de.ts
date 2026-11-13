@@ -2572,9 +2572,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.rule.template-unreadable":
     "Die Vorlage „{subject}“ konnte nicht gelesen werden.",
   "chat.jira.outcome.rule.template-missing":
-    "Für den Vorgangstyp „{subject}“ gibt es keine Vorlage, deshalb wurde nichts angelegt. Öffnen Sie Skills, wählen Sie „Aus Projekt vorschlagen“, prüfen und speichern Sie die Vorlage und fragen Sie dann erneut.",
+    "Für den Vorgangstyp „{subject}“ gibt es keine Vorlage, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere die Vorlage und frage dann erneut.",
   "chat.jira.outcome.rule.template-not-activated":
-    "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffnen Sie Skills, wählen Sie „Aus Projekt vorschlagen“, prüfen und speichern Sie eine Vorlage zum Anlegen und fragen Sie dann erneut.",
+    "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere eine Vorlage zum Anlegen und frage dann erneut.",
   "chat.jira.tool": "Jira-Aktion",
   "chat.jira.catalog.discover": "Jira-Aktionen finden",
   "chat.jira.catalog.describe": "Jira-Aktionen auswählen",

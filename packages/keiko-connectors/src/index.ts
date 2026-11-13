@@ -210,20 +210,7 @@ export {
 export {
   JIRA_ISSUE_LABELS_MAX_ENTRIES,
   JIRA_SUMMARY_MAX_CHARS,
-  addJiraIssueComment,
-  createJiraIssue,
-  transitionJiraIssue,
-  updateJiraIssueFields,
-  type AddJiraIssueCommentInput,
-  type AddJiraIssueCommentResult,
   type AtlassianWriteActionFailure,
-  type CreateJiraIssueInput,
-  type CreateJiraIssueResult,
-  type JiraWriteActionDeps,
-  type TransitionJiraIssueInput,
-  type TransitionJiraIssueResult,
-  type UpdateJiraIssueFieldsInput,
-  type UpdateJiraIssueFieldsResult,
 } from "./jira-write-actions.js";
 export {
   CONFLUENCE_TITLE_MAX_CHARS,

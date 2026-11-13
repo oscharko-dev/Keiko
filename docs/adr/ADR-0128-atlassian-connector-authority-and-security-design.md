@@ -1645,11 +1645,17 @@ the approval.
   code and the registry behind one switch (`JIRA_ATTACHMENTS_AVAILABLE`, `jira-release-scope.ts`),
   are not offered (Chat base set, discovery, describe, Coding) and are refused with a readable
   message and no request in the executor and its dry run; Release 2 flips the switch.
-  **Removal, named plainly:** the legacy `POST /api/atlassian-connectors/credentials/:authRef/actions`
-  Jira actions (`create-issue`, `update-issue-fields`, `transition-issue`, `add-issue-comment`) and
-  `jira-write-actions.ts` are removed in this change. They created and changed issues with no template
-  gate, had no caller in the product (UI, CLI, SDK, MCP, scripts), and Jira Cloud, whose REST shape
-  they used, is outside the supported scope; the Confluence actions of the same route are unchanged.
+  **Retirement, named plainly:** the four legacy Jira write actions of
+  `POST /api/atlassian-connectors/credentials/:authRef/actions` (`create-issue`,
+  `update-issue-fields`, `transition-issue`, `add-issue-comment`) are retired in this change. The
+  route answers each of them, for every caller and in every autonomy mode, with the closed denial
+  `connector-write-denied` before any approval is created, any budget is reserved or any request is sent, and
+  records one body-free activity record. Their executors (`jira-write-actions.ts`) are deleted. They
+  created and changed issues with no template gate, had no caller in the product (UI, CLI, SDK, MCP,
+  scripts) and used the Jira Cloud REST shape, which is outside the supported scope. The action names
+  and their policy-class rows stay: the governed Jira tools map onto the same rows (`jira.create` is
+  `create-issue`, and so on), and the contract types are removed only after Release 1. The Confluence
+  actions of the same route are unchanged.
 - **Write-path inventory (#4354).** 224 mutation operations. Every operation that creates or changes
   the fields or relations of an issue reaches `gateJiraMutationByTemplates` through the managed
   executor `executeJiraManagedMutation`, the only production caller of which is `mutationTool`

@@ -661,7 +661,7 @@ describe("jira.draft-stage (#4178)", () => {
         isError: true,
         data: {
           ref: "a",
-          violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task" }],
+          violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task (found: Story)" }],
         },
       });
       expect(h.deps.store.size()).toBe(0);

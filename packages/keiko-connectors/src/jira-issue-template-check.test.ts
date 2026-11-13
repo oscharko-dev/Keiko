@@ -19,6 +19,57 @@ import {
 } from "./jira-issue-template-check.js";
 import { deriveJiraTemplateSections } from "./jira-issue-template-instance.js";
 
+// #4354: a model that passes the refusal text through must pass words a bank clerk can read, not
+// `parent-type-mismatch` and `parent: Task`. The structured rule id stays for the card and the log;
+// the guidance and the subject carry the allowed and the actual parent type in plain words.
+describe("the plain words of a parent refusal (#4354)", () => {
+  const withParent = parsed(["parentField: Epic Link", "parentIssueTypes: [Epic]"], "# Story");
+  const catalog: readonly JiraFieldCatalogEntry[] = [
+    { id: "customfield_10014", name: "Epic Link" },
+  ];
+  const subject: JiraTemplateSubject = {
+    operation: "create",
+    project: "ABC",
+    issueType: "Story",
+    fields: { customfield_10014: "ABC-5" },
+    parentIssueTypes: { customfield_10014: { id: "1", name: "Task" } },
+  };
+
+  it("names the allowed and the actual parent type in the violation subject", () => {
+    const violations = checkJiraIssueTemplate(withParent, subject, catalog);
+    expect(violations).toEqual([
+      expect.objectContaining({
+        ruleId: "parent-type-mismatch",
+        subject: "Epic Link: Epic (found: Task)",
+      }),
+    ]);
+  });
+
+  it("tells the model to explain in plain words, never to quote the rule id or a field id", () => {
+    const guidance = jiraTemplateViolationGuidance([
+      {
+        ruleId: "parent-type-mismatch",
+        subject: "Epic Link: Epic (found: Task)",
+        template: "ABC/Story",
+      },
+    ]);
+    expect(guidance).toContain("parent");
+    expect(guidance).toContain("allowed");
+    expect(guidance).toContain("actually");
+    expect(guidance).toMatch(/never quote the rule id/iu);
+    // The bare rule id is not the explanation the guidance offers.
+    expect(guidance?.replaceAll("parent-type-mismatch", "")).toContain("plain words");
+  });
+
+  it("says the same for a missing parent: which parent the issue needs, in words", () => {
+    const guidance = jiraTemplateViolationGuidance([
+      { ruleId: "parent-missing", subject: "Epic Link", template: "ABC/Story" },
+    ]);
+    expect(guidance).toMatch(/needs a parent/iu);
+    expect(guidance).toMatch(/never quote the rule id/iu);
+  });
+});
+
 describe("the hint when no template governs a write (#4354)", () => {
   it("is fixed words that never carry remote text, and takes one observed sentence", () => {
     const plain = jiraNoGoverningTemplateGuidance({ ruleId: "template-missing" });

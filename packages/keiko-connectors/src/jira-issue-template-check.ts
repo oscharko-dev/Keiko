@@ -261,7 +261,11 @@ function checkParentType(context: Context): void {
   const observed = observedParentType(context, field);
   if (observed === undefined) raise(context, "template-unreadable", field);
   else if (!issueTypes.some((type) => type === observed.id || same(observed.name, type)))
-    raise(context, "parent-type-mismatch", `${field}: ${issueTypes.join(", ")}`);
+    raise(
+      context,
+      "parent-type-mismatch",
+      `${field}: ${issueTypes.join(", ")} (found: ${observed.name.slice(0, 60)})`,
+    );
 }
 
 function observedParentType(
@@ -546,11 +550,7 @@ function parentRelationFindings(
   if (named === undefined) return [];
   const actual = actualParentField(type, instance.fields);
   if (actual === undefined || named.id === actual.id) return [];
-  const foreign =
-    named.schemaCustom === EPIC_LINK_TYPE || named.schemaCustom === PARENT_LINK_TYPE
-      ? type.subtask || named.schemaCustom === PARENT_LINK_TYPE
-      : false;
-  return foreign
+  return isForeignRelationField(type, named)
     ? [
         {
           code: "wrong-parent-field",
@@ -559,6 +559,15 @@ function parentRelationFindings(
       ]
     : [];
 }
+/** A relation field the instance declares to belong to another kind of issue than this type. */
+function isForeignRelationField(
+  type: { readonly subtask: boolean },
+  named: JiraFieldCatalogEntry,
+): boolean {
+  if (named.schemaCustom === PARENT_LINK_TYPE) return true;
+  return named.schemaCustom === EPIC_LINK_TYPE && type.subtask;
+}
+
 function actualParentField(
   type: { readonly name: string; readonly subtask: boolean },
   fields: readonly JiraFieldCatalogEntry[],
@@ -602,6 +611,10 @@ export function jiraNoGoverningTemplateGuidance(
   );
 }
 
+const PARENT_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
+  "parent-missing",
+  "parent-type-mismatch",
+]);
 const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
   "section-missing",
   "section-empty",
@@ -626,6 +639,11 @@ export function jiraTemplateViolationGuidance(
       "Missing evidence does not establish a rule violation or permission to write."
     );
   }
+  const parents = violations.some((violation) => PARENT_RULES.has(violation.ruleId))
+    ? " A parent rule is about the issue this one hangs under: say in plain words which parent types this" +
+      " kind of issue may have, as allowed in the subject, and what type the named parent actually is," +
+      " or that it needs a parent; then ask for or choose a fitting parent."
+    : "";
   const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
     ? " A section is a line of its own, h2. Title, with its text below; subject is its title." +
       " Write the section text yourself from the request, the issue and the Chat's sources;" +
@@ -633,6 +651,7 @@ export function jiraTemplateViolationGuidance(
     : "";
   return (
     "Nothing was changed: this breaks the issue template of the project. " +
-    `Correct what violations name (ruleId, subject), then send it again.${sections}`
+    `Correct what violations name (ruleId, subject), then send it again.${parents}${sections}` +
+    " When you explain a refusal to the person, say in plain words what is wrong and what to change; never quote the rule id or a field id as the explanation."
   );
 }

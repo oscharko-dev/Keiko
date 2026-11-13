@@ -73,6 +73,9 @@ function confluenceWriteRoute(
   if (p.endsWith("/wiki/api/v2/pages") && method === "POST") {
     return { status: 200, body: '{"id":"123","version":{"number":1}}' };
   }
+  if (p.endsWith("/wiki/api/v2/footer-comments") && method === "POST") {
+    return { status: 201, body: '{"id":"20001"}' };
+  }
   if (p.endsWith("/wiki/api/v2/pages/123") && method === "PUT") {
     return { status: 409, body: "{}" };
   }
@@ -132,12 +135,6 @@ function jiraRoute(url: URL, method: string): { status: number; body: string } |
         isLast: true,
       }),
     };
-  }
-  if (p.endsWith("/rest/api/3/issue") && method === "POST") {
-    return { status: 201, body: '{"id":"10001","key":"PROJ-9"}' };
-  }
-  if (/\/rest\/api\/3\/issue\/[^/]+\/comment$/u.test(p) && method === "POST") {
-    return { status: 201, body: '{"id":"20001"}' };
   }
   if (/\/rest\/api\/3\/issue\/[^/]+\/comment$/u.test(p)) {
     return {
@@ -426,18 +423,25 @@ beforeAll(async () => {
   await runSync(deps, jira.authRef, { projectKeys: ["PROJ"] }, sink); // happy jira
   await runAction(
     deps,
-    jira.authRef,
-    { type: "add-issue-comment", issueKey: "PROJ-1", commentText: MARKER.token },
+    confluence.authRef,
+    { type: "add-page-comment", pageId: "1", commentText: MARKER.token },
     WRITE_SCOPES,
     sink,
   ); // allowed
   await runAction(
     deps,
-    jira.authRef,
-    { type: "create-issue", projectKey: "PROJ", issueTypeId: "10004", summary: MARKER.token },
+    confluence.authRef,
+    { type: "create-page", spaceId: "100", title: MARKER.token, bodyText: MARKER.token },
     [],
     sink,
-  ); // denied
+  ); // denied (no write scope)
+  await runAction(
+    deps,
+    jira.authRef,
+    { type: "create-issue", projectKey: "PROJ", issueTypeId: "10004", summary: MARKER.token },
+    WRITE_SCOPES,
+    sink,
+  ); // denied (retired legacy Jira write, #4354)
   await runAction(
     deps,
     confluence.authRef,
@@ -454,8 +458,8 @@ beforeAll(async () => {
   ); // live
   await runReviewRequiredAction(
     deps,
-    jira.authRef,
-    { type: "create-issue", projectKey: "PROJ", issueTypeId: "10004", summary: "S" },
+    confluence.authRef,
+    { type: "create-page", spaceId: "100", title: "S", bodyText: "B" },
     sink,
   );
   for (const credential of [jira, confluence]) {
@@ -506,7 +510,7 @@ describe("token-redaction sweep (Issue #2246 Scope 1, ADR-0128 D2/D6)", () => {
       expect(sink.buckets.has(bucket), `missing artifact class ${bucket}`).toBe(true);
     }
     expect((sink.buckets.get("sync-poll-payloads") ?? []).length).toBeGreaterThanOrEqual(3);
-    expect((sink.buckets.get("action-responses") ?? []).length).toBeGreaterThanOrEqual(4);
+    expect((sink.buckets.get("action-responses") ?? []).length).toBeGreaterThanOrEqual(5);
   });
 
   it("FAILS the build if a produced artifact class is not enumerated in the scanned set", () => {

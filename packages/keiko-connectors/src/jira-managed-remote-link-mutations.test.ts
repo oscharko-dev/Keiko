@@ -527,13 +527,10 @@ it.each([
   async (operation, args) => {
     for (const check of [false, true]) {
       const request = fixture({ existing: operation !== "jira.upsert-remote-link" });
-      const refused = await executeJiraRemoteLinkMutation(
-        operation,
-        args as CatalogJsonObject,
-        request,
-        check,
-        () => ({ templates: [], unreadable: 1 }),
-      );
+      const refused = await executeJiraRemoteLinkMutation(operation, args, request, check, () => ({
+        templates: [],
+        unreadable: 1,
+      }));
       expect(refused).toMatchObject({
         ok: false,
         reason: "field-validation",

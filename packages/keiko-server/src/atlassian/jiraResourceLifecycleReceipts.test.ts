@@ -45,7 +45,8 @@ describe("strict issue/project lifecycle receipts", () => {
     });
     expect(
       validJiraMutationAttempt(
-        { ok: true, receipt: { ...selected.receipt, issuePresent: true } },
+        // The type forbids `issuePresent: true`; the runtime check must too.
+        { ok: true, receipt: { ...selected.receipt, issuePresent: true } as never },
         selected.name,
       ),
     ).toMatchObject({ ok: false });

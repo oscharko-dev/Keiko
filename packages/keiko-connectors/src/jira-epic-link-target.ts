@@ -17,7 +17,9 @@ import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/
 const EPIC_LINK_FIELD_TYPE = "com.pyxis.greenhopper.jira:gh-epic-link";
 const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d{1,10}$/u;
 const CUSTOM_FIELD = /^customfield_\d{1,32}$/u;
-const AGILE = new AsyncLocalStorage<JiraMutationRequest>();
+// The agile request is built on first use: building it opens a bounded timeout phase, and a write
+// that never sets an Epic Link must not open one.
+const AGILE = new AsyncLocalStorage<() => JiraMutationRequest>();
 
 /** Runs one admission or write with the invocation's agile request available to its checks. */
 export function withJiraEpicLinkTargetCheck<T>(
@@ -25,7 +27,11 @@ export function withJiraEpicLinkTargetCheck<T>(
   context: ManagedMcpInvocationContext,
   run: () => Promise<T>,
 ): Promise<T> {
-  return AGILE.run(jiraAgileRequest(connection, context), run);
+  let built: JiraMutationRequest | undefined;
+  return AGILE.run(
+    (): JiraMutationRequest => (built ??= jiraAgileRequest(connection, context)),
+    run,
+  );
 }
 
 type Refusal = Extract<JiraMutationAttempt, { ok: false }>;
@@ -55,12 +61,12 @@ export async function epicLinkTargetRefusal(
   request: JiraMutationRequest,
   fields: Readonly<Record<string, unknown>>,
 ): Promise<Refusal | undefined> {
-  const agile = AGILE.getStore();
-  if (agile === undefined || !candidateKeys(fields)) return undefined;
+  const agileRequest = AGILE.getStore();
+  if (agileRequest === undefined || !candidateKeys(fields)) return undefined;
   const fieldId = await epicLinkFieldId(request);
   const target = fieldId === undefined ? undefined : fields[fieldId];
   if (fieldId === undefined || typeof target !== "string") return undefined;
-  const response = await agile(`epic/${encodeURIComponent(target)}`);
+  const response = await agileRequest()(`epic/${encodeURIComponent(target)}`);
   // Only the instance's own "no such epic" answer refuses; any other failure proves nothing.
   const notAnEpic = !response.ok && response.reason === "not-found";
   if (!notAnEpic) return undefined;

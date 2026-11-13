@@ -320,6 +320,12 @@ restated:
 | `update-page`         | Confluence | `knowledge-base.write` | medium | review-required  | review-required      | allowed     |
 | `add-page-comment`    | Confluence | `knowledge-base.write` | low    | review-required  | review-required      | allowed     |
 
+The four Jira write rows (`create-issue`, `update-issue-fields`, `transition-issue`,
+`add-issue-comment`) are the policy classes of the governed Jira tools. Sent to the actions route
+directly they are retired: the route answers `denied` with the reason `connector-write-denied` in every mode,
+before any approval or request (#4354). Jira writes go through the governed Jira tools, which stand
+behind the saved issue templates.
+
 How to read this per mode:
 
 - **Ask for approval** — Cloud sync/actions are `review-required`. A Jira Live Pod in Chat reads

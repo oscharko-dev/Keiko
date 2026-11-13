@@ -100,7 +100,7 @@ describe("native parent issue-type admission", () => {
       expect(await gate(wrong, rule(), { key: "SYN-2" }, operation)).toMatchObject({
         ok: false,
         reason: "field-validation",
-        violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task" }],
+        violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task (found: Epic)" }],
       });
       expect(wrong.mock.calls.every(([, method]) => method === undefined || method === "GET")).toBe(
         true,
