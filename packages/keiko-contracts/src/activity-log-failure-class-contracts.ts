@@ -1279,6 +1279,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-knowledge-catalog-refresh",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["client.knowledge-catalog.refreshed"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.knowledge-catalog.refreshed"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.knowledge-catalog.refreshed"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.knowledge-catalog.refreshed"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-editor-line-ending",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

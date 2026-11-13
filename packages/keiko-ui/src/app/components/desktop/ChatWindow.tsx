@@ -34,6 +34,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useId,
   useMemo,
   useRef,
@@ -2129,6 +2130,10 @@ interface ComposerBarProps {
   readonly voiceDialogActive: boolean;
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+  // #4371 — the composer's own handling of the running answer: a send refused while it runs, and
+  // where focus goes when the stop control that held it disappears.
+  readonly onSendRefusedWhileRunning?: () => void;
+  readonly onStopFocusReleased?: () => void;
 }
 
 interface VoiceDialogComposerControlsProps {
@@ -2413,16 +2418,61 @@ function cancelComposerSend(event: SyntheticEvent, cancelSend: () => void): void
   });
 }
 
+// #4371 — a send attempted while an answer runs (Enter in the composer, or a click on the inert Send)
+// is refused with a visible, politely announced reason, and leaves the draft alone. The refusal lasts
+// until the answer ends; the evidence is closed and body-free.
+function useRunningSendRefusal(sending: boolean): {
+  readonly refused: boolean;
+  readonly refuse: () => void;
+} {
+  const [refused, setRefused] = useState(false);
+  useEffect(() => {
+    if (!sending) setRefused(false);
+  }, [sending]);
+  const refuse = useCallback((): void => {
+    setRefused(true);
+    reportClientDiagnostic("Keiko composer refused a send while a response runs.", {
+      composerActivity: "send-refused-while-running",
+    });
+  }, []);
+  return { refused: refused && sending, refuse };
+}
+
 // The stop control while an answer runs. It is its own element, never the Send button re-labelled:
 // a Send that turned into Cancel in place let a double click, or a key press on the still focused
 // button, cancel the answer the first activation had just started. It looks like what it does — a
 // stop square in neutral chrome — and sits beside the inert Send, not in its place.
-function ComposerStopButton({ cancelSend }: { readonly cancelSend: () => void }): ReactNode {
+//
+// Focus follows the person: when Send held it as the answer started, Stop takes it, so a keyboard
+// user can stop without hunting; when Stop held it as the answer ended (or was stopped), it moves to
+// the composer input instead of being lost with the unmounted button.
+function ComposerStopButton({
+  cancelSend,
+  takeFocus,
+  onFocusReleased,
+}: {
+  readonly cancelSend: () => void;
+  readonly takeFocus: boolean;
+  readonly onFocusReleased: (() => void) | undefined;
+}): ReactNode {
   const t = useTranslate();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (takeFocus) buttonRef.current?.focus();
+    // Only the mount decides: a later render must not pull focus back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useLayoutEffect(() => {
+    const node = buttonRef.current;
+    return (): void => {
+      if (node !== null && document.activeElement === node) onFocusReleased?.();
+    };
+  }, [onFocusReleased]);
   return (
     <button
+      ref={buttonRef}
       type="button"
-      className="cmp-stop cmp-tip-end"
+      className={styles.cmpStop}
       aria-label={t("chat.send.cancel")}
       data-tip={t("chat.send.cancel")}
       onClick={(event) => cancelComposerSend(event, cancelSend)}
@@ -2433,8 +2483,9 @@ function ComposerStopButton({ cancelSend }: { readonly cancelSend: () => void })
 }
 
 // Extracted from ComposerBar (SonarCloud S3776) — the primary action button. While a response runs
-// it stays in place as an inert control (aria-disabled, never a submit) that says why it cannot
-// send; the cancel control is the separate ComposerStopButton (#4371).
+// it stays in place, as the same element, as an inert control (aria-disabled, never a submit) that
+// says why it cannot send and records the refusal; the cancel control is the separate
+// ComposerStopButton (#4371).
 function ComposerSendButton({
   sending,
   cancelSend,
@@ -2442,6 +2493,8 @@ function ComposerSendButton({
   noEligibleModels,
   loading,
   sendDescribedBy,
+  onRefusedWhileRunning,
+  onFocusReleased,
 }: {
   readonly sending: boolean;
   readonly cancelSend: () => void;
@@ -2449,37 +2502,37 @@ function ComposerSendButton({
   readonly noEligibleModels: boolean;
   readonly loading: boolean;
   readonly sendDescribedBy: string | undefined;
+  readonly onRefusedWhileRunning: (() => void) | undefined;
+  readonly onFocusReleased: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
-  if (sending) {
-    return (
-      <>
-        <ComposerStopButton cancelSend={cancelSend} />
-        <button
-          type="button"
-          className="cmp-send cmp-tip-end"
-          data-on={false}
-          data-tip={t("chat.send.running")}
-          aria-disabled
-          aria-label={t("chat.send.running")}
-        >
-          <ArrowUpIcon size={16} />
-        </button>
-      </>
-    );
-  }
+  const sendFocusedRef = useRef(false);
+  const inert = sendBlocked || sending;
+  const runningLabel = t("chat.send.running");
   return (
-    <button
-      type={sendBlocked ? "button" : "submit"}
-      className="cmp-send cmp-tip-end"
-      data-on={!sendBlocked}
-      data-tip={sendButtonTip(noEligibleModels, loading, t)}
-      aria-disabled={sendBlocked}
-      aria-describedby={sendDescribedBy}
-      aria-label={t("chat.send.label")}
-    >
-      <ArrowUpIcon size={16} />
-    </button>
+    <>
+      {sending ? (
+        <ComposerStopButton
+          cancelSend={cancelSend}
+          takeFocus={sendFocusedRef.current}
+          onFocusReleased={onFocusReleased}
+        />
+      ) : null}
+      <button
+        type={inert ? "button" : "submit"}
+        className="cmp-send cmp-tip-end"
+        data-on={!inert}
+        data-tip={sending ? runningLabel : sendButtonTip(noEligibleModels, loading, t)}
+        aria-disabled={inert}
+        aria-describedby={sending ? undefined : sendDescribedBy}
+        aria-label={sending ? runningLabel : t("chat.send.label")}
+        onFocus={() => (sendFocusedRef.current = true)}
+        onBlur={() => (sendFocusedRef.current = false)}
+        onClick={sending ? onRefusedWhileRunning : undefined}
+      >
+        <ArrowUpIcon size={16} />
+      </button>
+    </>
   );
 }
 
@@ -2505,6 +2558,8 @@ function ComposerBar({
   voiceDialogActive,
   onToggleVoiceDialog,
   voiceDialogButtonRef,
+  onSendRefusedWhileRunning,
+  onStopFocusReleased,
 }: ComposerBarProps): ReactNode {
   const t = useTranslate();
   const { draft, noEligibleModels, loading, sending, cancelSend } = session;
@@ -2583,6 +2638,8 @@ function ComposerBar({
           noEligibleModels={noEligibleModels}
           loading={loading}
           sendDescribedBy={sendDescribedBy}
+          onRefusedWhileRunning={onSendRefusedWhileRunning}
+          onFocusReleased={onStopFocusReleased}
         />
       </div>
       {sendDescribedBy === SKILL_SEND_HINT_ID ? (
@@ -2694,16 +2751,16 @@ function sendLifecycleStatusLabel(status: SendStatus, t: I18nTranslate): string 
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({
   status,
-  draftWaiting = false,
+  sendRefused = false,
 }: {
   readonly status: SendStatus;
-  /** A next message is typed while the answer runs: say why it is not sent (#4371). */
-  readonly draftWaiting?: boolean;
+  /** A send was attempted while the answer runs: say why it was not sent, at that moment (#4371). */
+  readonly sendRefused?: boolean;
 }): ReactNode {
   const t = useTranslate();
   const base = sendLifecycleStatusLabel(status, t);
   const label =
-    draftWaiting && isInFlight(status) ? `${base} ${t("chat.send.runningHint")}`.trim() : base;
+    sendRefused && isInFlight(status) ? `${base} ${t("chat.send.runningHint")}`.trim() : base;
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -2936,20 +2993,20 @@ function composerDictationVisibility(
 function ComposerStatusRow({
   voiceDialogActive,
   sendStatus,
-  draftWaiting,
+  sendRefused,
   voiceDictationVisible,
   dictation,
 }: {
   readonly voiceDialogActive: boolean;
   readonly sendStatus: SendStatus;
-  readonly draftWaiting: boolean;
+  readonly sendRefused: boolean;
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
 }): ReactNode {
   return (
     <>
       {voiceDialogActive ? null : (
-        <SendLifecycleStatus status={sendStatus} draftWaiting={draftWaiting} />
+        <SendLifecycleStatus status={sendStatus} sendRefused={sendRefused} />
       )}
       {!voiceDialogActive && voiceDictationVisible ? (
         <VoiceDictationComposerStatus error={dictation.error} emptyResult={dictation.emptyResult} />
@@ -3263,6 +3320,7 @@ function ComposerCoreImpl({
   // auto-grow, attachment intake, mention autocomplete, voice-capability gating) up to
   // 60×/s while a reply streams.
   const session = useChatSessionComposer();
+  const { refused: sendRefused, refuse: refuseSend } = useRunningSendRefusal(session.sending);
   const {
     draft,
     sending,
@@ -3802,11 +3860,14 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      if (composerEnterSubmits(event)) {
-        void sendMessage({ text: value, clearDraftOnAdmission: true });
-      }
+      if (!composerEnterSubmits(event)) return;
+      // A send while an answer runs is refused with a reason, and the draft stays (#4371).
+      if (sending) refuseSend();
+      else void sendMessage({ text: value, clearDraftOnAdmission: true });
     },
     [
+      refuseSend,
+      sending,
       pickRepositoryResult,
       repositoryHighlightedIndex,
       repositoryPickerOpen,
@@ -3920,7 +3981,7 @@ function ComposerCoreImpl({
               <ComposerStatusRow
                 voiceDialogActive={voiceDialogActive}
                 sendStatus={sendStatus}
-                draftWaiting={draft.trim().length > 0}
+                sendRefused={sendRefused}
                 voiceDictationVisible={voiceDictationVisible}
                 dictation={dictation}
               />
@@ -3945,6 +4006,8 @@ function ComposerCoreImpl({
               voiceDialogActive={false}
               onToggleVoiceDialog={toggleVoiceDialog}
               voiceDialogButtonRef={normalVoiceDialogButtonRef}
+              onSendRefusedWhileRunning={refuseSend}
+              onStopFocusReleased={() => inputRef.current?.focus()}
             />
           }
         />

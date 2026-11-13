@@ -381,3 +381,57 @@ article.cmpUserMessage[data-role="user"][data-layout="turn"] > .cmpUserMessageBu
     max-width: 88%;
   }
 }
+
+/* #4371 — the stop control is its own element beside the inert Send, never Send re-styled in
+   place: neutral chrome and a stop square say "stop"; the hover tints toward --feedback-danger. */
+.cmpStop {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--surface-elevated);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--border-strong);
+}
+
+.cmpStop:hover {
+  color: var(--feedback-danger);
+  background: color-mix(in oklab, var(--feedback-danger) 12%, var(--surface-elevated));
+  border-color: color-mix(in oklab, var(--feedback-danger) 60%, var(--border-strong));
+}
+
+.cmpStop:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmpStop[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  max-width: min(180px, calc(100vw - 24px));
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface-primary);
+  border: 1px solid var(--popover-border);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: right;
+  box-shadow: var(--popover-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: var(--z-tooltip);
+}
+
+.cmpStop[data-tip]:hover::after,
+.cmpStop[data-tip]:focus-visible::after {
+  opacity: 1;
+}

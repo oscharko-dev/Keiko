@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a81b4a5b3986e6e5ce725df386c54caec3935a2e1ca01698cf147768850a2efa"
+    "catalogDigest": "2188c002e98aa1d3298b9c0fabd4b04a6abf8483fe0dae11e48c69a5e1c7db62"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 695,
-    "proofCount": 718,
-    "resolvedProofCount": 718,
-    "failureClassCount": 401,
+    "operationCount": 696,
+    "proofCount": 719,
+    "resolvedProofCount": 719,
+    "failureClassCount": 402,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -225,6 +225,7 @@
         "client.git-operation.settled",
         "client.jira-fields.presented",
         "client.jira-result.presented",
+        "client.knowledge-catalog.refreshed",
         "client.knowledge-catalog.unavailable",
         "client.markdown.layout",
         "client.scope.notice",
@@ -928,6 +929,7 @@
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
     "client-update-notice": ["client-diagnostics.dependency-failure"],
+    "client-knowledge-catalog-refresh": ["client-diagnostics.dependency-failure"],
     "client-editor-line-ending": ["client-diagnostics.dependency-failure"],
     "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
@@ -1623,6 +1625,9 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.jira-result.presented.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.knowledge-catalog.refreshed.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.knowledge-catalog.unavailable.line": [

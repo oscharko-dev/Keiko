@@ -522,7 +522,7 @@ describe("useKnowledgeCatalog refresh keeps the last good snapshot", () => {
     await flush();
   });
 
-  it("reports a slow refresh with a closed duration bucket and no pod data", async () => {
+  it("reports a slow refresh as typed closed evidence with no pod data", async () => {
     vi.useFakeTimers();
     let settle: (response: CapsulesResponse) => void = () => undefined;
     fetchCapsulesMock.mockResolvedValueOnce({
@@ -546,10 +546,49 @@ describe("useKnowledgeCatalog refresh keeps the last good snapshot", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    const slow = diagnostics.filter((entry) => entry.message.includes("settled slowly"));
-    expect(slow.map((entry) => entry.message)).toEqual([
-      "Keiko knowledge catalog refresh settled slowly (outcome=ok, duration=5s-10s).",
-    ]);
+    const reports = diagnostics.filter(
+      (entry) => entry.meta?.knowledgeCatalogRefresh !== undefined,
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.meta?.knowledgeCatalogRefresh).toEqual({
+      outcome: "ok",
+      duration: "5s-10s",
+    });
+    expect(reports[0]?.meta?.correlationId).toEqual(expect.any(String));
+    expect(JSON.stringify(reports)).not.toContain("secret");
+  });
+
+  it("reports the slow request a later refresh superseded", async () => {
+    vi.useFakeTimers();
+    const settlers: ((response: CapsulesResponse) => void)[] = [];
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [wireCapsule("cap-1", "test", "ready")] });
+    const unbound: readonly ChatLocalKnowledgeScope[] = [];
+    const { result } = renderHook(() => useKnowledgeCatalog(unbound));
+    await flush();
+    fetchCapsulesMock.mockReturnValueOnce(
+      new Promise<CapsulesResponse>((resolve) => {
+        settlers.push(resolve);
+      }),
+    );
+    act(() => {
+      result.current.refresh();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    // The person reopens the picker: a newer foreground refresh replaces the pending one.
+    act(() => {
+      result.current.refresh();
+    });
+    await act(async () => {
+      settlers[0]?.({ capsules: [wireCapsule("cap-1", "test", "ready")] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const outcomes = diagnostics
+      .map((entry) => entry.meta?.knowledgeCatalogRefresh)
+      .filter((report) => report !== undefined);
+    expect(outcomes).toContainEqual({ outcome: "superseded", duration: "1s-5s" });
   });
 
   it("stays silent for a refresh that answers promptly", async () => {
@@ -561,7 +600,9 @@ describe("useKnowledgeCatalog refresh keeps the last good snapshot", () => {
       result.current.refresh();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(diagnostics.some((entry) => entry.message.includes("settled slowly"))).toBe(false);
+    expect(diagnostics.some((entry) => entry.meta?.knowledgeCatalogRefresh !== undefined)).toBe(
+      false,
+    );
   });
 });
 

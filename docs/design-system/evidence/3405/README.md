@@ -474,10 +474,11 @@ changed. This remains updater fixture evidence.
 ## Chat shell picker and composer wording — 2026-11-13 (#4371)
 
 The Knowledge Pod picker no longer hides known pods during a refresh, and the Chat composer's stop
-control is a separate element beside an inert Send. Both added messages to the optional catalogs and
-changed `globals.css`, so the freshness gate rejected those digests. The complete original nine-case
-producer ran with `KEIKO_WRITE_TRACKED_EVIDENCE=1` in the Linux arm64 gates container (Node 24.18.0):
-**9 passed (1.8m)**, including the real BFF stop and restart, and `npm run check:update-ui-evidence`
-passes. Only the source digests and `generatedAt` in the three records were taken from this run; its
+control is a separate element beside an inert Send. Both added messages to the optional catalogs, so
+the freshness gate rejected their digests (the stop control's styles live in a component CSS module,
+not in `globals.css`). The complete original nine-case producer ran with
+`KEIKO_WRITE_TRACKED_EVIDENCE=1` in the Linux arm64 gates container (Node 24.18.0): **9 passed
+(2.0m)**, including the real BFF stop and restart, and `npm run check:update-ui-evidence` passes.
+Only the source digests and `generatedAt` in the three records were taken from this run; its
 fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.

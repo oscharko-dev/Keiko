@@ -22,10 +22,11 @@ import type {
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActivityLogErrorKind, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type { ClientKnowledgeCatalogRefresh } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
-import { responseCorrelationIdOf } from "@/lib/bff-correlation";
+import { newClientCorrelationId, responseCorrelationIdOf } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
 
 import {
@@ -289,23 +290,30 @@ function pageIsVisible(): boolean {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
 }
 
-// A refresh that outlasts this is reported (body-free): the picker no longer waits on it, but the
-// time the BFF took to answer stays reconstructable.
+// A refresh that outlasts this is reported (body-free, closed outcome and duration bucket): the
+// picker no longer waits on it, but the time the BFF took to answer stays reconstructable, and so
+// does a request a later refresh superseded.
 const SLOW_REFRESH_REPORT_MS = 1_000;
-const SLOW_REFRESH_BUCKETS_MS: readonly (readonly [number, string])[] = [
+const SLOW_REFRESH_BUCKETS_MS: readonly (readonly [
+  number,
+  ClientKnowledgeCatalogRefresh["duration"],
+])[] = [
   [10_000, "10s-plus"],
   [5_000, "5s-10s"],
   [SLOW_REFRESH_REPORT_MS, "1s-5s"],
 ];
 
-function reportSlowRefresh(startedAt: number, next: KnowledgeCatalogSnapshot): void {
+function reportSlowRefresh(
+  startedAt: number,
+  outcome: ClientKnowledgeCatalogRefresh["outcome"],
+): void {
   const elapsed = Date.now() - startedAt;
-  const bucket = SLOW_REFRESH_BUCKETS_MS.find(([floor]) => elapsed >= floor)?.[1];
-  if (bucket === undefined) return;
-  const outcome = next.loadError === null ? "ok" : "failed";
-  reportClientDiagnostic(
-    `Keiko knowledge catalog refresh settled slowly (outcome=${outcome}, duration=${bucket}).`,
-  );
+  const duration = SLOW_REFRESH_BUCKETS_MS.find(([floor]) => elapsed >= floor)?.[1];
+  if (duration === undefined) return;
+  reportClientDiagnostic("Keiko knowledge catalog refresh settled.", {
+    correlationId: newClientCorrelationId(),
+    knowledgeCatalogRefresh: { outcome, duration },
+  });
 }
 
 // A transient background failure must not blank a catalog the person is already using.
@@ -357,8 +365,11 @@ function useCatalogSnapshotState(): CatalogSnapshotState {
     setLoading(true);
     const startedAt = Date.now();
     void load().then((next) => {
-      if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) return;
-      reportSlowRefresh(startedAt, next);
+      if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) {
+        reportSlowRefresh(startedAt, "superseded");
+        return;
+      }
+      reportSlowRefresh(startedAt, next.loadError === null ? "ok" : "failed");
       setSnapshot(next);
       setLoading(false);
     });

@@ -35,6 +35,7 @@ const closed = [
       notReadyCount: 0,
     },
   },
+  { knowledgeCatalogRefresh: { outcome: "ok", duration: "1s-5s" } },
   { answerCopy: { outcome: "copied", grounded: true, strippedGroupCount: 0, keptGroupCount: 1 } },
   { answerSpeech: { grounded: true, strippedGroupCount: 0, keptGroupCount: 1 } },
   { citationActivation: { reason: "matched", outcome: "opened", rootCount: 1, matchCount: 1 } },

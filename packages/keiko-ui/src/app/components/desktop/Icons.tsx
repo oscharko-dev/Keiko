@@ -180,7 +180,7 @@ export const Icons = {
   ),
   stop: (p: IcoProps): ReactNode => (
     <Ico {...p}>
-      <rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" />
+      <rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none" />
     </Ico>
   ),
   arrowUp: (p: IcoProps): ReactNode => <Ico {...p} d="M12 19V5M6 11l6-6 6 6" />,

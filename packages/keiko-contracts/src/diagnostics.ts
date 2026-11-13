@@ -446,6 +446,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "send-failure-skipped-draft",
   "send-failure-skipped-unproven",
   "send-cancel-requested",
+  "send-refused-while-running",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",
@@ -630,6 +631,33 @@ function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolea
   );
 }
 
+// #4371: a Knowledge Pod catalog refresh that outlasted the picker's patience, or that a later
+// refresh superseded. Routine evidence, closed outcome and closed duration bucket only: the picker
+// keeps its last good snapshot meanwhile, so this is how a slow BFF answer stays reconstructable.
+export const CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES = ["ok", "failed", "superseded"] as const;
+export const CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS = ["1s-5s", "5s-10s", "10s-plus"] as const;
+export interface ClientKnowledgeCatalogRefresh {
+  readonly outcome: (typeof CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES)[number];
+  readonly duration: (typeof CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS)[number];
+}
+const KNOWLEDGE_CATALOG_REFRESH_OUTCOMES: ReadonlySet<unknown> = new Set(
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES,
+);
+const KNOWLEDGE_CATALOG_REFRESH_DURATIONS: ReadonlySet<unknown> = new Set(
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS,
+);
+
+function hasValidKnowledgeCatalogRefreshContext(value: Record<string, unknown>): boolean {
+  const report = value.knowledgeCatalogRefresh;
+  if (report === undefined) return true;
+  if (!isRecord(report) || !isActivityLogCorrelationId(value.correlationId)) return false;
+  return (
+    Object.keys(report).length === 2 &&
+    KNOWLEDGE_CATALOG_REFRESH_OUTCOMES.has(report.outcome) &&
+    KNOWLEDGE_CATALOG_REFRESH_DURATIONS.has(report.duration)
+  );
+}
+
 function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
   const notice = value.updateNotice;
   if (notice === undefined) return true;
@@ -696,6 +724,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly updateNotice?: ClientUpdateNotice | undefined;
   // The Editor's model adopted the line ending of text Keiko wrote into it (#4123).
   readonly editorLineEnding?: ClientEditorLineEnding | undefined;
+  readonly knowledgeCatalogRefresh?: ClientKnowledgeCatalogRefresh | undefined;
   // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
   // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
   // and how many were cut, never a message, path or run name.
@@ -919,6 +948,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "filesScopeDecision",
   "updateNotice",
   "editorLineEnding",
+  "knowledgeCatalogRefresh",
   "codingRunRestore",
   "codingWorkbenchInteraction",
   "codingRequestTimeout",
@@ -1015,7 +1045,8 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
     hasValidGitContext(value) &&
     hasValidHealthDiagnostic(value) &&
     hasValidUpdateNoticeContext(value) &&
-    hasValidEditorLineEndingContext(value)
+    hasValidEditorLineEndingContext(value) &&
+    hasValidKnowledgeCatalogRefreshContext(value)
   );
 }
 

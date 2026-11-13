@@ -95,6 +95,8 @@ import {
   CLIENT_UPDATE_NOTICE_KINDS,
   CLIENT_UPDATE_NOTICE_PRESENTATIONS,
   CLIENT_EDITOR_LINE_ENDINGS,
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS,
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES,
   CLIENT_EDITOR_LINE_ENDING_SOURCES,
   CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
@@ -1675,6 +1677,40 @@ const CLIENT_EDITOR_LINE_ENDING_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #4371: a Knowledge Pod catalog refresh the picker did not wait for, because it kept its last good
+// snapshot: a slow answer, a failure, or a request a later refresh superseded. Routine, closed
+// outcome and duration bucket only.
+const CLIENT_KNOWLEDGE_CATALOG_REFRESH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.knowledge-catalog.refreshed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientKnowledgeCatalogRefresh",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES,
+    },
+    duration: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-knowledge-catalog-refresh"],
+  proofIds: ["client.knowledge-catalog.refreshed.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -2466,6 +2502,27 @@ function logClientEditorLineEnding(
   return true;
 }
 
+function logClientKnowledgeCatalogRefresh(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const report = request.knowledgeCatalogRefresh;
+  if (report === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_KNOWLEDGE_CATALOG_REFRESH_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        outcome: report.outcome,
+        duration: report.duration,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 // The closed presentation reports: an update notice, or an Editor line-ending adoption.
 function logPresentationClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -2481,7 +2538,8 @@ function logPresentationClientReport(
       request.jiraResultPresentation,
       clientDiagnosticCorrelation(request, correlationId),
     ) ||
-    logClientEditorLineEnding(request, correlationId)
+    logClientEditorLineEnding(request, correlationId) ||
+    logClientKnowledgeCatalogRefresh(request, correlationId)
   );
 }
 
@@ -3318,6 +3376,11 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
 
 // The closed support, scope, citation, restored-run and Coding Workbench interaction reports:
 // routine evidence, never a failure.
+// The Editor's line-ending adoption and a Knowledge Pod catalog refresh: closed, routine evidence.
+function isRoutineClientSurfaceReport(report: ClientDiagnosticIngestRequest): boolean {
+  return report.editorLineEnding !== undefined || report.knowledgeCatalogRefresh !== undefined;
+}
+
 function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
   return (
     report.codingWorkbenchInteraction !== undefined ||
@@ -3325,7 +3388,7 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||
     report.updateNotice !== undefined ||
-    report.editorLineEnding !== undefined ||
+    isRoutineClientSurfaceReport(report) ||
     report.codingRunRestore !== undefined ||
     report.scopeNotice !== undefined ||
     report.citationActivation !== undefined ||
