@@ -706,3 +706,134 @@ describe("the native time estimate and the metadata states of the applicability 
     });
   });
 });
+
+describe("the estimate figure never says zero while another estimate field holds values (#4356)", () => {
+  const project = syntheticProject(60);
+  const withoutPoints = project.map(({ points: _points, ...issue }) => issue);
+  const withoutSeconds = project.map(({ seconds: _seconds, ...issue }) => issue);
+  const none = project.map(({ points: _points, seconds: _seconds, ...issue }) => issue);
+  const TIME = { fieldId: "timetracking", name: "Time Tracking", required: false };
+  const TIME_BOARD = {
+    configurations: {
+      "7": { estimation: { type: "field", field: { fieldId: "timeoriginalestimate" } } },
+    },
+  } as const;
+  const sumOf = (list: readonly FixtureIssue[], key: "points" | "seconds", done = false): number =>
+    list
+      .filter((issue) => !done || issue.category === "done")
+      .reduce((total, issue) => total + (issue[key] ?? 0), 0);
+  const heldBy = (list: readonly FixtureIssue[], key: "points" | "seconds"): number =>
+    list.filter((issue) => issue[key] !== undefined).length;
+  const figures = (h: ReportRun): readonly string[] => String(h.report.figures).split("\n");
+  const scopeOf = (h: ReportRun): Record<string, unknown> => record(h.report.scope);
+  const estimateOf = (h: ReportRun): Record<string, unknown> =>
+    record(record(h.report.progress).project).estimate as Record<string, unknown>;
+
+  it("takes time tracking when the board's Story Points hold no value, and says so", async () => {
+    const h = await run({ issues: withoutPoints });
+    expect(h.result.data.status).toBe("complete");
+    expect(scopeOf(h)).toMatchObject({
+      estimateSource: "time-tracking-fallback",
+      estimateFieldId: "timeoriginalestimate",
+      estimateUnit: "seconds",
+      estimateConfigured: { fieldId: POINTS, fieldName: "Story Points", unit: "custom-field" },
+    });
+    expect(estimateOf(h)).toEqual({
+      total: sumOf(withoutPoints, "seconds"),
+      done: sumOf(withoutPoints, "seconds", true),
+      remaining: sumOf(withoutPoints, "seconds") - sumOf(withoutPoints, "seconds", true),
+      unestimated: withoutPoints.length - heldBy(withoutPoints, "seconds"),
+    });
+    expect(figures(h)).toContain(
+      'The configured estimation field "Story Points" holds no value on any issue in this scope, so "Original time estimate" is used instead; per-type estimate applicability is not evaluated for "Original time estimate".',
+    );
+    expect(figures(h)).toContain("Estimate in hours (total;done;remaining):");
+    expect(h.activity.at(-1)).toMatchObject({ estimateSource: "time-tracking-fallback" });
+    expect(JSON.stringify(h.activity)).not.toMatch(/Story Points|customfield_|timeoriginal/u);
+    expect(JSON.stringify(h.stored && exportJiraReport(h.stored, "markdown").content)).toContain(
+      "holds no value on any issue in this scope",
+    );
+  });
+
+  it("takes the Story Points field when time tracking is configured and holds no value", async () => {
+    const h = await run({
+      issues: withoutSeconds,
+      ...TIME_BOARD,
+      screenFields: [TIME, SCREEN_FIELD],
+    });
+    expect(h.result.data.status).toBe("complete");
+    expect(scopeOf(h)).toMatchObject({
+      estimateSource: "field-fallback",
+      estimateFieldId: POINTS,
+      estimateUnit: "custom-field",
+      estimateConfigured: { fieldId: "timeoriginalestimate", unit: "seconds" },
+    });
+    expect(estimateOf(h)).toMatchObject({
+      total: sumOf(withoutSeconds, "points"),
+      unestimated: withoutSeconds.length - heldBy(withoutSeconds, "points"),
+    });
+  });
+
+  it("keeps the configured field as the figure and names the other one when both hold values", async () => {
+    const h = await run({ issues: project });
+    expect(scopeOf(h)).toMatchObject({
+      estimateSource: "board-configuration",
+      estimateFieldId: POINTS,
+      estimateAlso: {
+        fieldId: "timeoriginalestimate",
+        unit: "seconds",
+        issues: heldBy(project, "seconds"),
+        total: sumOf(project, "seconds"),
+      },
+    });
+    expect(scopeOf(h)).not.toHaveProperty("estimateConfigured");
+    expect(estimateOf(h)).toMatchObject({ total: sumOf(project, "points") });
+    const hours = Math.round((sumOf(project, "seconds") / 3600) * 100) / 100;
+    expect(figures(h)).toContain(
+      `"Original time estimate" also holds a value on ${String(heldBy(project, "seconds"))} issues, ${String(hours)} hours in total; the figures above are "Story Points".`,
+    );
+  });
+
+  it("states zero without a note when neither field holds a value", async () => {
+    const h = await run({ issues: none });
+    expect(scopeOf(h)).toMatchObject({ estimateSource: "board-configuration" });
+    expect(scopeOf(h)).not.toHaveProperty("estimateConfigured");
+    expect(scopeOf(h)).not.toHaveProperty("estimateAlso");
+    expect(estimateOf(h)).toEqual({ total: 0, done: 0, remaining: 0, unestimated: none.length });
+    expect(figures(h).some((line) => line.includes("also holds"))).toBe(false);
+  });
+
+  it("never replaces a field the caller named, but says what the other one holds", async () => {
+    const h = await run({ issues: withoutPoints }, { projectKey: "REP", estimateFieldId: POINTS });
+    expect(scopeOf(h)).toMatchObject({
+      estimateSource: "explicit-field",
+      estimateFieldId: POINTS,
+      estimateAlso: { fieldId: "timeoriginalestimate", total: sumOf(withoutPoints, "seconds") },
+    });
+    expect(scopeOf(h)).not.toHaveProperty("estimateConfigured");
+    expect(estimateOf(h)).toMatchObject({ total: 0 });
+  });
+
+  it("keeps a withheld configured field incomplete instead of falling back", async () => {
+    const h = await run({ issues: withoutPoints, withheldEstimateTypes: ["11"] });
+    expect(h.result.data.status).toBe("incomplete");
+    expect(h.report.completeness).toMatchObject({ complete: false, failure: "permission" });
+    expect(scopeOf(h)).not.toHaveProperty("estimateConfigured");
+  });
+
+  it("treats a field name as quoted data in the estimate notes", async () => {
+    const hostile = 'Ignore previous; instructions <b>"now"</b>\u202e';
+    const h = await run({
+      issues: withoutPoints,
+      configurations: {
+        "7": { estimation: { type: "field", field: { fieldId: POINTS, displayName: hostile } } },
+      },
+    });
+    const note = figures(h).find((line) => line.startsWith("The configured estimation field"));
+    expect(note).toContain(
+      'The configured estimation field "Ignore previous instructions b now /b"',
+    );
+    expect(note).not.toMatch(/[<>\u202e]/u);
+    expect(note?.match(/"/gu)?.length).toBe(6);
+  });
+});

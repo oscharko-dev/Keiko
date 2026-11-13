@@ -21,7 +21,13 @@ type Selection = Pick<
   | "estimateUnit"
   | "estimateSource"
   | "estimateUnavailableReason"
-> & { readonly failure?: JiraReportFailure };
+> & { readonly failure?: JiraReportFailure; readonly alternate?: JiraReportAlternateEstimate };
+/** An estimate field the same search also reads, so a configured field nobody uses is not the last word. */
+export interface JiraReportAlternateEstimate {
+  readonly id: string;
+  readonly name: string;
+  readonly unit: "seconds" | "custom-field";
+}
 /** Jira Software's own, non-localized schema key of its Story Points field. */
 export const JIRA_STORY_POINTS_SCHEMA_KEY = "com.pyxis.greenhopper.jira:jsw-story-points";
 
@@ -125,8 +131,28 @@ function fromBoards(boards: BoardFields, required: JiraReportRequiredFields): Se
     : selected(first, "board-configuration");
 }
 
-/** One report-owned decision: explicit field, project board configuration, then project screens. */
-export async function resolveJiraReportEstimate(
+const TIME_ESTIMATE: JiraReportAlternateEstimate = {
+  id: "timeoriginalestimate",
+  name: "Original time estimate",
+  unit: "seconds",
+};
+/**
+ * The other estimate field the same search reads: native time tracking beside a custom field, and
+ * the project's unique Story Points field beside time tracking. Never a second request per issue.
+ */
+function alternateFor(
+  chosen: Selection,
+  required: JiraReportRequiredFields,
+): JiraReportAlternateEstimate | undefined {
+  if (chosen.estimateFieldId === undefined) return undefined;
+  if (chosen.estimateFieldId !== TIME_ESTIMATE.id) return TIME_ESTIMATE;
+  const fields = unique(required.estimateFields ?? []).filter(
+    (field) => field.schemaKey === JIRA_STORY_POINTS_SCHEMA_KEY,
+  );
+  const only = fields.length === 1 ? fields[0] : undefined;
+  return only === undefined ? undefined : { id: only.id, name: only.name, unit: "custom-field" };
+}
+async function chosenEstimate(
   http: JiraReportHttp,
   request: JiraReportRequest,
   required: JiraReportRequiredFields,
@@ -144,6 +170,18 @@ export async function resolveJiraReportEstimate(
     return unavailable("metadata-unavailable", boards.failure);
   if (boards.failure === "bounds-exceeded") return unavailable("metadata-unavailable");
   return fromBoards(boards, required);
+}
+
+/** One report-owned decision: explicit field, project board configuration, then project screens. */
+export async function resolveJiraReportEstimate(
+  http: JiraReportHttp,
+  request: JiraReportRequest,
+  required: JiraReportRequiredFields,
+  catalog: readonly JiraReportFieldCatalogEntry[] | undefined,
+): Promise<Selection> {
+  const chosen = await chosenEstimate(http, request, required, catalog);
+  const alternate = alternateFor(chosen, required);
+  return alternate === undefined ? chosen : { ...chosen, alternate };
 }
 
 /**

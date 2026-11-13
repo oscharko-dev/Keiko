@@ -40,6 +40,8 @@ export interface JiraReportIssue {
    * estimable, which is not the same as not yet estimated. Absent otherwise.
    */
   readonly estimateNotCarried?: true;
+  /** The value of the alternate estimate field (see `JiraReportScope.estimateAlso`), when held. */
+  readonly alternateEstimate?: number;
   readonly deviations: readonly JiraReportDeviation[];
   /**
    * Whether at least one issue template applied to this issue and judged it (#4181). `false` when
@@ -209,6 +211,12 @@ export interface JiraReportCompleteness {
   readonly pageCount: number;
 }
 
+export interface JiraReportEstimateFieldRef {
+  readonly fieldId: string;
+  readonly fieldName: string;
+  readonly unit: JiraReportEstimateUnit;
+}
+
 export interface JiraReportScope {
   readonly projectKey?: string;
   /** The Epic a report was scoped to; `jql` states the clause that selects it and its members. */
@@ -225,6 +233,19 @@ export interface JiraReportScope {
   readonly estimateUnavailableReason?: JiraReportEstimateUnavailableReason;
   /** Seconds of original time estimate, or the named field's own unit. */
   readonly estimateUnit: JiraReportEstimateUnit;
+  /**
+   * Set when the report took another estimate field than the configured one because the
+   * configured field holds no value on any issue in scope: the configured field, named here.
+   */
+  readonly estimateConfigured?: JiraReportEstimateFieldRef;
+  /**
+   * Set when a second estimate field also holds values beside the one the figures use, so nothing
+   * is hidden: that field, how many issues hold a value in it and their total in its own unit.
+   */
+  readonly estimateAlso?: JiraReportEstimateFieldRef & {
+    readonly issues: number;
+    readonly total: number;
+  };
   /** The date overdue is judged against, in `timeZone`. */
   readonly asOf: string;
   readonly timeZone: "UTC";

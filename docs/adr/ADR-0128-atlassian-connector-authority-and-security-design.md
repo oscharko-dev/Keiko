@@ -1682,10 +1682,10 @@ and denied effect admission still stop the read. A JQL-only scope without a proj
 original-time-estimate default in seconds. The summary and card name the selected field; model
 figures, exports and the report comment disclose unavailable estimates. The existing
 `atlassian.jira-report` line records `estimateSource` (`explicit-field`, `board-configuration`,
-`project-screen`, `time-tracking`, `unavailable`) and an optional closed
+`project-screen`, `time-tracking`, `time-tracking-fallback`, `field-fallback`, `unavailable`) and an optional closed
 `estimateUnavailableReason`, with no field id or display name.
 
-**Complete and truthful reports (#4356, 2026-11-13).** Five rules keep a figure from
+**Complete and truthful reports (#4356, 2026-11-13).** Seven rules keep a figure from
 overstating what Jira allowed Keiko to read.
 (1) *Estimate applicability.* The report requests the selected estimate field for every hit, but
 Jira leaves a field out of a hit for two different reasons: the issue's type does not have it at
@@ -1743,6 +1743,29 @@ carries identifiers and counts only.
 issue of the type holds a value (a value on such an issue still counts in the sums and the type is
 not flagged), so the answer can
 say "not estimable" where an issue type that carries the field has issues nobody estimated yet.
+(6) *The estimate figure never says zero for one field while another estimate field in use
+holds values, without saying so (2026-11-13).* The same search that reads the configured field
+also reads one alternate estimate field, never a request per issue: native `timeoriginalestimate`
+beside a custom field, and the project's unique numeric Story Points screen field beside time
+tracking. After the last page, on the issues read: when the configured field holds a value on at
+least one issue it stays the figure, and when the alternate also holds values one line names it
+(`scope.estimateAlso`: field, issue count, total, the hours computed once in the figures from the
+seconds); when the configured field holds none and the alternate does, the alternate becomes the
+figure under the closed source `time-tracking-fallback` or `field-fallback`, the configured field
+is named as unused (`scope.estimateConfigured`), and the per-type `not-carried` flags are not
+evaluated for the fallback field, which the sentence says; when neither holds a value the figure is
+as before (zero estimated, every issue unestimated). A field the caller named
+(`estimateFieldId`) is never replaced, only accompanied; a withheld configured field still ends the
+report incomplete; an alternate a hit omits is simply no value. The sentences carry counts and
+neutralised, quoted field names only, appear in `report.figures`, the Markdown export and the
+comment, and the Activity Log records only the closed source value.
+(7) *A continuation may repeat its scope.* A call naming a `reportId` takes `reportId`, `section`,
+`startAt` and `maxResults` and may repeat `projectKey`, `jql` or `epicKey`. The invariant is that a
+continuation can never change a report's scope: a repeat is accepted only when each supplied value
+equals, character for character, the scope the report was started with, and then answers exactly
+like the call without it; a different value, or a scope the report did not have, is refused as
+`invalid-input` naming the argument with a plain-words message. Owner binding, bounds and every
+other refusal are unchanged.
 Known limits: derived ids are salted by the document's identity, so the same text in two formats
 gets two derived ids (explicit ids are identical); a statement cell without a modal verb yields no
 unit for a row without an identifier; an Epic report does not follow sub-tasks of sub-tasks;

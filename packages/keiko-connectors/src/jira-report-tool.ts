@@ -138,7 +138,7 @@ function optionalActivity(session: JiraReportSession): Partial<JiraReportActivit
       ? {}
       : { failure: session.failure }),
     ...(total === undefined ? {} : { issuesTotal: total }),
-    estimateSource: session.scope.estimateSource ?? "unavailable",
+    estimateSource: (session.report?.scope ?? session.scope).estimateSource ?? "unavailable",
     ...(session.scope.estimateUnavailableReason === undefined
       ? {}
       : { estimateUnavailableReason: session.scope.estimateUnavailableReason }),
@@ -378,7 +378,8 @@ function admission(
 }
 
 const CONTINUATION_HINT =
-  "A call that names a reportId takes only reportId, section, startAt and maxResults. Leave out projectKey, jql and epicKey: the report already has its scope.";
+  "A call that names a reportId takes reportId, section, startAt and maxResults. A repeated projectKey, jql or epicKey must equal the report's own scope and a different one is refused: leave the scope out.";
+const CONTINUATION_SCOPE: ReadonlySet<string> = new Set(["projectKey", "jql", "epicKey"]);
 /** A scope repeated beside a reportId is the one mistake a model can fix without asking anyone. */
 function continuationHint(
   rawArgs: CatalogJsonObject,
@@ -388,7 +389,20 @@ function continuationHint(
     ? CONTINUATION_HINT
     : undefined;
 }
-const CONTINUATION_SCOPE: ReadonlySet<string> = new Set(["projectKey", "jql", "epicKey"]);
+/**
+ * The scope arguments of a continuation that differ from the scope the report was computed for. A
+ * continuation can never change a report's scope: a repeat is accepted only when each argument
+ * equals what the report was started with, character for character, and a scope the report did
+ * not have is a difference too.
+ */
+function scopeDifferences(args: JiraReportArgs, session: JiraReportSession): readonly string[] {
+  if (args.kind !== "continue") return [];
+  const given: Readonly<Record<string, string | undefined>> = session.request.given ?? {};
+  return Object.entries(args.scope)
+    .filter(([key, value]) => given[key] !== value)
+    .map(([key]) => key)
+    .sort(compareCodePoints);
+}
 
 /** `jira.report`: start a report, resume one that is still reading, or page a finished one. */
 export async function executeJiraReportTool<Context extends ManagedMcpInvocationContext>(
@@ -424,5 +438,8 @@ export async function executeJiraReportTool<Context extends ManagedMcpInvocation
     fingerprint,
   );
   if (typeof admitted === "string") return refuse(deps, context, admitted, startedAt);
+  const different = scopeDifferences(args, admitted);
+  if (different.length > 0)
+    return refuse(deps, context, "invalid-input", startedAt, different, CONTINUATION_HINT);
   return runSession(admitted, args, context, connection, deps);
 }

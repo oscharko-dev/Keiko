@@ -12,6 +12,7 @@ import {
   retractRejectedParents,
   type JiraReportFieldPlan,
 } from "./jira-report-issue.js";
+import { jiraReportEstimateOutcome } from "./jira-report-estimate-outcome.js";
 import { resolveJiraReportEpicScope } from "./jira-report-epic.js";
 import { reportJql, jqlClause } from "./jira-report-jql.js";
 import { fetchJiraReportPage } from "./jira-report-page.js";
@@ -71,6 +72,7 @@ function fieldPlan(
     parentProposals: new Map(),
     omittedFields: new Set(),
     estimateFieldId: session.scope.estimateFieldId,
+    alternateEstimateFieldId: session.alternateEstimate?.id,
     estimateNotApplicableTypes: jiraReportEstimateNotApplicableTypes(
       required,
       session.scope.estimateFieldId,
@@ -101,9 +103,14 @@ function reportInput(
   reason: JiraReportIncompleteReason | undefined,
 ): JiraReportInput {
   const { request } = session;
+  const estimate = jiraReportEstimateOutcome(
+    [...session.issues.values()],
+    session.scope,
+    session.alternateEstimate,
+  );
   return {
-    issues: [...session.issues.values()],
-    scope: session.scope,
+    issues: estimate.issues,
+    scope: estimate.scope,
     completeness: completenessOf(session, reason),
     hierarchy: jiraReportHierarchyOf(session),
     requiredFieldRules:
@@ -224,7 +231,7 @@ async function initialize(
   }
   const checker = bindChecker(deps.checker, hierarchy.catalog);
   session.checker = checkerState(checker);
-  const { failure, ...estimate } = await resolveJiraReportEstimate(
+  const { failure, alternate, ...estimate } = await resolveJiraReportEstimate(
     http,
     session.request,
     required,
@@ -232,6 +239,7 @@ async function initialize(
   );
   const { estimateUnavailableReason: _previousReason, ...scope } = session.scope;
   session.scope = { ...scope, ...estimate };
+  session.alternateEstimate = alternate;
   if (failure !== undefined) {
     session.failure = jiraReportFailure(failure, false);
     finish(session, deps, "read-failed");

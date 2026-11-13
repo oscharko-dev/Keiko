@@ -1724,6 +1724,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "board-configuration",
           "project-screen",
           "time-tracking",
+          "time-tracking-fallback",
+          "field-fallback",
           "unavailable",
         ],
       },

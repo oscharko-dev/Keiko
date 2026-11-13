@@ -13,6 +13,7 @@ function plan(): JiraReportFieldPlan {
     parentProposals: new Map(),
     omittedFields: new Set(),
     estimateFieldId: "timeoriginalestimate",
+    alternateEstimateFieldId: undefined,
     estimateNotApplicableTypes: new Set(),
     requirementIds: new Set(),
     requiredByType: new Map([

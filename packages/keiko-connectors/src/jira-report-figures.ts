@@ -44,7 +44,36 @@ export function jiraReportEstimateSummary(report: JiraReport): string {
     return `Estimate: unavailable (${ESTIMATE_REASONS[report.scope.estimateUnavailableReason ?? "metadata-unavailable"]})`;
   const unit = report.scope.estimateUnit === "seconds" ? "seconds" : "field units";
   const field = report.scope.estimateFieldId ?? "timeoriginalestimate";
-  return `Estimate (${unit}, field ${field}): ${String(estimate.total)} total, ${String(estimate.done)} done, ${String(estimate.remaining)} remaining; ${String(estimate.unestimated)} issues without an estimate`;
+  const base = `Estimate (${unit}, field ${field}): ${String(estimate.total)} total, ${String(estimate.done)} done, ${String(estimate.remaining)} remaining; ${String(estimate.unestimated)} issues without an estimate`;
+  return [base, ...estimateNotes(report)].join("; ");
+}
+/** A total in the unit of its field: hours beside seconds, the field's own unit otherwise. */
+function inUnit(total: number, unit: string): string {
+  return unit === "seconds" ? `${String(hours(total))} hours` : `${String(total)} (field units)`;
+}
+/**
+ * What the estimate figures leave unsaid without these sentences: a configured field no issue of
+ * the scope uses, or a second field that also holds values (#4356). Never a silent fallback.
+ */
+function estimateNotes(report: JiraReport): readonly string[] {
+  const { estimateConfigured, estimateAlso, estimateFieldName, estimateFieldId } = report.scope;
+  const used = fieldLabel(estimateFieldName ?? estimateFieldId ?? "timeoriginalestimate");
+  return [
+    ...(estimateConfigured === undefined
+      ? []
+      : [
+          `The configured estimation field ${fieldLabel(estimateConfigured.fieldName)} holds no value on any issue in this scope, so ${used} is used instead; per-type estimate applicability is not evaluated for ${used}`,
+        ]),
+    ...(estimateAlso === undefined
+      ? []
+      : [
+          `${fieldLabel(estimateAlso.fieldName)} also holds a value on ${String(estimateAlso.issues)} issues, ${inUnit(estimateAlso.total, estimateAlso.unit)} in total; the figures above are ${used}`,
+        ]),
+  ];
+}
+/** A field name is data like any other name: neutralised and quoted, never a bare instruction. */
+function fieldLabel(name: string): string {
+  return `"${jiraReportDataText(name)}"`;
 }
 
 /** Lines per list; the sections page the rest, and the block says how many it left out. */
@@ -111,6 +140,7 @@ function estimateLines(report: JiraReport): readonly string[] {
         ]
       : []),
     `Issues without an estimate: ${String(unestimated)}`,
+    ...estimateNotes(report).map((note) => `${note}.`),
   ];
 }
 

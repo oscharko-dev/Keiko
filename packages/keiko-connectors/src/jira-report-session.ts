@@ -3,6 +3,7 @@ import type {
   JiraReportIncompleteReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { JiraReportHttpDeps } from "./jira-report-http.js";
+import type { JiraReportAlternateEstimate } from "./jira-report-estimate.js";
 import type { JiraReportFieldPlan } from "./jira-report-issue.js";
 import { jqlClause, reportJql } from "./jira-report-jql.js";
 import type {
@@ -22,6 +23,8 @@ export { reportJql, stripJqlOrdering } from "./jira-report-jql.js";
 export interface JiraReportRequest {
   readonly projectKey: string | undefined;
   readonly jql: string | undefined;
+  /** The scope arguments exactly as the caller sent them, for recognising a repeat of them. */
+  readonly given?: Readonly<Partial<Record<"projectKey" | "jql" | "epicKey", string>>> | undefined;
   /**
    * An Epic whose members and their sub-tasks form the scope. Keiko composes the JQL from it and
    * states the clause it composed in the report's scope; it narrows the scope further, never widens.
@@ -44,6 +47,8 @@ export interface JiraReportSession {
   readonly fingerprint: string;
   readonly request: JiraReportRequest;
   scope: JiraReportScope;
+  /** The other estimate field the search reads beside the configured one (#4356). */
+  alternateEstimate: JiraReportAlternateEstimate | undefined;
   /** The query being read: the first window, or the current one of an Epic scope. */
   jql: string;
   /**
@@ -179,6 +184,7 @@ export function createJiraReportSession(input: {
     fingerprint: input.fingerprint,
     request,
     scope: initialScope(request, input.now),
+    alternateEstimate: undefined,
     jql: reportJql(request.projectKey, request.jql),
     windows: [],
     windowIndex: 0,

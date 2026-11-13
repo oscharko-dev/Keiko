@@ -19,6 +19,7 @@ import type {
   JiraReport,
   JiraReportProgress,
   JiraReportRequirementCoverage,
+  JiraReportScope,
   JiraReportTypeProgress,
 } from "./jira-report-types.js";
 import type { JiraReportSession } from "./jira-report-session.js";
@@ -184,6 +185,15 @@ function requirementsSummary(report: JiraReport): CatalogJsonValue {
   };
 }
 
+/** The scope as plain JSON: the nested estimate field references are copied, not shared. */
+function scopeView(scope: JiraReportScope): CatalogJsonObject {
+  const { estimateConfigured, estimateAlso, ...flat } = scope;
+  return {
+    ...flat,
+    ...(estimateConfigured === undefined ? {} : { estimateConfigured: { ...estimateConfigured } }),
+    ...(estimateAlso === undefined ? {} : { estimateAlso: { ...estimateAlso } }),
+  };
+}
 function completenessView(report: JiraReport): CatalogJsonObject {
   const { completeness } = report;
   return {
@@ -217,7 +227,7 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
     digest: report.digest,
     generatedAt: report.generatedAt,
     figures: jiraReportFigures(report),
-    scope: { ...report.scope },
+    scope: scopeView(report.scope),
     completeness: completenessView(report),
     hierarchy: { ...report.hierarchy },
     progress: {
