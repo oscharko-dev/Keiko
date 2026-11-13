@@ -71,6 +71,32 @@ describe("recognizing that Keiko was restarted (#4370)", () => {
     expect(JSON.stringify(writer.mock.calls)).not.toContain(FIRST);
   });
 
+  it("records the instance only when the confirmation says the session is still active", async () => {
+    health(FIRST);
+    await noteConnectedServerInstance(async () => true);
+    health(SECOND);
+    await noteConnectedServerInstance(async () => false);
+    // The refused confirmation kept the previous identity, so the restart stays visible.
+    await expect(sessionEndedByRestart()).resolves.toBe(true);
+    await noteConnectedServerInstance(async () => true);
+    await expect(sessionEndedByRestart()).resolves.toBe(false);
+  });
+
+  it("keeps the previous instance, and reports once body-free, when the confirmation cannot be read", async () => {
+    health(FIRST);
+    await noteConnectedServerInstance();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    health(SECOND);
+    await expect(
+      noteConnectedServerInstance(async () => {
+        throw new Error("offline");
+      }),
+    ).resolves.toBeUndefined();
+    expect(writer).toHaveBeenCalledTimes(1);
+    await expect(sessionEndedByRestart()).resolves.toBe(true);
+  });
+
   it("makes no claim when tab storage is unavailable, and reports it once without a value", async () => {
     health(FIRST);
     const writer = vi.fn();
