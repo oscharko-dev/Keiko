@@ -1392,6 +1392,7 @@
     "keiko-server/atlassian/jiraChatCatalogConsumer",
     "keiko-server/atlassian/jiraChatCatalogRuntime",
     "keiko-server/atlassian/jiraChatCatalogWrite",
+    "keiko-server/atlassian/jiraChatConnectionIdentity",
     "keiko-server/atlassian/jiraChatDraft",
     "keiko-server/atlassian/jiraChatDraftArguments",
     "keiko-server/atlassian/jiraChatHumanInput",
