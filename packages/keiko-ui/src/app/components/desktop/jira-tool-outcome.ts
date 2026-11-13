@@ -219,7 +219,7 @@ interface JiraOutcomeProblem {
   readonly message: string;
 }
 /** Why Keiko refused a whole draft before sending it: a closed code and the item it concerns. */
-export interface JiraOutcomeDraftProblem {
+interface JiraOutcomeDraftProblem {
   readonly problem: JiraDraftProblemCode;
   readonly position?: number;
 }

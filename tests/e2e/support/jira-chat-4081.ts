@@ -51,7 +51,7 @@ export const JIRA_BROWSER_COPY = {
   },
   de: {
     hub: "Lokales Wissen",
-    create: "Jira-Pod erstellen",
+    create: "Jira Pod erstellen",
     label: "Bezeichnung",
     url: "Basis-URL",
     token: "API-Token",

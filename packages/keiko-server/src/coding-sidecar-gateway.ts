@@ -5150,6 +5150,30 @@ function probeCuresShortfall(reason: CodingWorkbenchSidecarGatewayUnavailableRea
   );
 }
 
+// The proofs a profile read waits for, by what asked: only `check=1` dispatches one.
+function profileChecksFor(
+  checkParam: string | null,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  subject: string | undefined,
+): readonly Promise<unknown>[] {
+  if (checkParam === "1") {
+    return [
+      Promise.all([
+        // A person's pick or Start asks: a probe the gateway never answered runs again. The
+        // model picked is the one proven, even while its own shortfall (a lapsed or missing
+        // tool-call proof) keeps it unavailable; without a pick, the model elected now. No
+        // other listed model receives a request.
+        ensureCodingWorkbenchContextWindows(deps, subject, ctx.correlationId, true),
+        electedConversationReadiness(ctx, deps, subject),
+      ]),
+    ];
+  }
+  // A window opening (`check=use`) waits, bounded, for a proof that already runs; a read that
+  // asks nothing answers at once with the state it has.
+  return checkParam === "use" ? [joinRunningWorkbenchProof(deps, subject)] : [];
+}
+
 export async function handleCodingSidecarGatewayProfile(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -5164,7 +5188,6 @@ export async function handleCodingSidecarGatewayProfile(
   // already runs and report the state: Workbench choices and page loads never initiate provider
   // work (#4351).
   const checkParam = ctx.url.searchParams.get("check");
-  const checkRequested = checkParam === "1";
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
@@ -5174,26 +5197,7 @@ export async function handleCodingSidecarGatewayProfile(
     // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
     // answer with the projection (`model-verification-pending` while the probe runs) and let
     // the Workbench read again — never leave the read hanging until the browser gives up.
-    await settleProfileChecks(
-      ctx,
-      deps,
-      checkRequested
-        ? [
-            Promise.all([
-              // A person's pick or Start asks: a probe the gateway never answered runs again. The
-              // model picked is the one proven, even while its own shortfall (a lapsed or missing
-              // tool-call proof) keeps it unavailable; without a pick, the model elected now. No
-              // other listed model receives a request.
-              ensureCodingWorkbenchContextWindows(deps, subject, ctx.correlationId, true),
-              electedConversationReadiness(ctx, deps, subject),
-            ]),
-          ]
-        : // A window opening (`check=use`) waits, bounded, for a proof that already runs; a read that
-          // asks nothing answers at once with the state it has.
-          checkParam === "use"
-          ? [joinRunningWorkbenchProof(deps, subject)]
-          : [],
-    );
+    await settleProfileChecks(ctx, deps, profileChecksFor(checkParam, ctx, deps, subject));
   }
   return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
 }
