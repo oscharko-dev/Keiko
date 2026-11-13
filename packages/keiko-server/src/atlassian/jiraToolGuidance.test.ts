@@ -16,6 +16,13 @@ describe("shared Jira tool guidance", () => {
     expect(JIRA_TOOL_GUIDANCE).toMatch(/cannot be called until jira\.describe has selected it/u);
   });
 
+  // remote-link lane 2026-11-13: three of four attempts were refused by the write guard after the
+  // model looked for the connected user's key in assignable-users instead of jira.myself.
+  it("tells a model where a guarded write's actor key and review evidence come from", () => {
+    expect(JIRA_TOOL_GUIDANCE).toMatch(/expectedActorKey \(the key jira\.myself returns\)/u);
+    expect(JIRA_TOOL_GUIDANCE).toMatch(/select the read and the write in one jira\.describe/u);
+  });
+
   // The Jira 400 for a localized issue type name ("Der Wert 'Aufgabe' existiert nicht") is the
   // normal case on a German Jira; the id is language independent.
   it("tells a model to name an issue type in JQL by its id", () => {
