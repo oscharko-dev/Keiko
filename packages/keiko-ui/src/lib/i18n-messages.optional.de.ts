@@ -2548,33 +2548,39 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.itemOrdinal": "Eintrag {position}",
   "chat.jira.outcome.notCreated": "Nicht angelegt: {count}",
   "chat.jira.outcome.draftProblem.draft-shape":
-    "Der Entwurf hat kein lesbares Format. Bitten Sie Keiko, die Vorgänge neu zu entwerfen.",
+    "Der Entwurf hat kein lesbares Format. Bitte Keiko, die Vorgänge neu zu entwerfen.",
   "chat.jira.outcome.draftProblem.items-missing":
-    "Der Entwurf enthält keine Vorgänge. Bitten Sie Keiko, die anzulegenden Vorgänge zu nennen.",
+    "Der Entwurf enthält keine Vorgänge. Bitte Keiko, die anzulegenden Vorgänge zu nennen.",
   "chat.jira.outcome.draftProblem.item-shape":
-    "enthält Angaben, die Keiko nicht lesen kann. Bitten Sie Keiko, diesen Vorgang neu zu formulieren.",
+    "enthält Angaben, die Keiko nicht lesen kann. Bitte Keiko, diesen Vorgang neu zu formulieren.",
   "chat.jira.outcome.draftProblem.item-ref":
-    "hat keinen verwendbaren Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen kurzen Namen zu geben.",
+    "hat keinen verwendbaren Namen. Bitte Keiko, jedem Vorgang einen eigenen kurzen Namen zu geben.",
   "chat.jira.outcome.draftProblem.item-ids":
-    "hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wählen Sie Projekt und Vorgangstyp erneut aus.",
+    "hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wähle Projekt und Vorgangstyp erneut aus.",
   "chat.jira.outcome.draftProblem.item-fields":
-    "braucht eine Zusammenfassung und darf kein anderes Projekt oder keinen anderen Vorgangstyp nennen. Bitten Sie Keiko, die Felder zu vervollständigen.",
+    "braucht eine Zusammenfassung und darf kein anderes Projekt oder keinen anderen Vorgangstyp nennen. Bitte Keiko, die Felder zu vervollständigen.",
   "chat.jira.outcome.draftProblem.item-parent":
-    "hat einen übergeordneten Vorgang, den Keiko nicht lesen kann. Bitten Sie Keiko, den übergeordneten Vorgang erneut zu nennen.",
+    "hat einen übergeordneten Vorgang, den Keiko nicht lesen kann. Bitte Keiko, den übergeordneten Vorgang erneut zu nennen.",
   "chat.jira.outcome.draftProblem.item-links":
-    "hat eine Verknüpfung, die Keiko nicht lesen kann. Bitten Sie Keiko, Verknüpfungstyp, Richtung und Ziel erneut zu nennen.",
+    "hat eine Verknüpfung, die Keiko nicht lesen kann. Bitte Keiko, Verknüpfungstyp, Richtung und Ziel erneut zu nennen.",
   "chat.jira.outcome.draftProblem.item-requirements":
-    "hat Anforderungsverweise, die Keiko nicht lesen kann. Bitten Sie Keiko, sie erneut aufzulisten.",
+    "hat Anforderungsverweise, die Keiko nicht lesen kann. Bitte Keiko, sie erneut aufzulisten.",
   "chat.jira.outcome.draftProblem.ref-duplicate":
-    "Zwei Vorgänge haben denselben Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen Namen zu geben.",
+    "Zwei Vorgänge haben denselben Namen. Bitte Keiko, jedem Vorgang einen eigenen Namen zu geben.",
   "chat.jira.outcome.draftProblem.ref-self":
-    "nennt sich selbst als übergeordneten Vorgang oder Verknüpfungsziel. Bitten Sie Keiko, auf einen anderen Vorgang zu verweisen.",
+    "nennt sich selbst als übergeordneten Vorgang oder Verknüpfungsziel. Bitte Keiko, auf einen anderen Vorgang zu verweisen.",
   "chat.jira.outcome.draftProblem.ref-unknown":
-    "verweist auf einen Vorgang, der nicht im Entwurf steht. Fügen Sie ihn dem Entwurf hinzu oder nennen Sie einen vorhandenen Vorgangsschlüssel.",
+    "verweist auf einen Vorgang, der nicht im Entwurf steht. Füge ihn dem Entwurf hinzu oder nenne einen vorhandenen Vorgangsschlüssel.",
   "chat.jira.outcome.draftProblem.ref-cycle":
-    "Die Beziehungen zwischen übergeordneten Vorgängen und Verknüpfungen bilden einen Kreis. Bitten Sie Keiko, jeden übergeordneten Vorgang so zu wählen, dass er nicht von seinem Unterpunkt abhängt.",
+    "Die Beziehungen zwischen übergeordneten Vorgängen und Verknüpfungen bilden einen Kreis. Bitte Keiko, jeden übergeordneten Vorgang so zu wählen, dass er nicht von seinem Unterpunkt abhängt.",
   "chat.jira.outcome.draftItem": "Eintrag {position}",
   "chat.jira.outcome.draftItemUnknown": "Ein Eintrag",
+  "chat.jira.outcome.draftRefusal.draft-not-found":
+    "Der Entwurf ist nicht mehr verfügbar, deshalb wurde nichts geändert. Bitte Keiko, die Vorgänge neu zu entwerfen.",
+  "chat.jira.outcome.draftRefusal.draft-changed":
+    "Der Entwurf hat sich geändert, seit du ihn geprüft hast. Deshalb wurde nichts geändert. Prüfe den aktuellen Entwurf und gib ihn erneut frei.",
+  "chat.jira.outcome.draftRefusal.connection-changed":
+    "Die Jira-Verbindung hat sich geändert, seit dieser Entwurf erstellt wurde. Deshalb wurde nichts geändert. Erstelle den Entwurf erneut für das aktuelle Jira.",
   "chat.jira.outcome.itemUnlisted": "Eintrag, der nicht in Ihrer Anfrage stand",
   "chat.jira.outcome.more": "und {count} weitere",
   "chat.jira.outcome.newTab": "(öffnet Jira in einem neuen Tab)",

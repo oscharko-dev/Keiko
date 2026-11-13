@@ -1,10 +1,13 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { JIRA_DRAFT_PROBLEMS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_DRAFT_PROBLEMS,
+  JIRA_DRAFT_REFUSALS,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { JiraChatTools } from "./JiraChatTools";
-import { jiraToolOutcomeView } from "./jira-tool-outcome";
+import { JIRA_DRAFT_REFUSAL_MESSAGES, jiraToolOutcomeView } from "./jira-tool-outcome";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
@@ -307,6 +310,76 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(document.body.textContent).not.toMatch(/chat\.jira\./u);
   });
 
+  // #4355 AC5: a draft refused for a reason that is not a field problem says so, in the person's
+  // language, instead of "Review the required Jira fields". Each sentence is a literal.
+  const REFUSALS_EN: Readonly<Record<string, string>> = {
+    "draft-not-found":
+      "The draft is no longer available, so nothing was changed. Ask Keiko to draft the issues again.",
+    "draft-changed":
+      "The draft changed after you reviewed it, so nothing was changed. Review the current draft and approve it again.",
+    "connection-changed":
+      "The Jira connection changed since this draft was made, so nothing was changed. Create the draft again for the current Jira.",
+  };
+  const REFUSALS_DE: Readonly<Record<string, string>> = {
+    "draft-not-found":
+      "Der Entwurf ist nicht mehr verfügbar, deshalb wurde nichts geändert. Bitte Keiko, die Vorgänge neu zu entwerfen.",
+    "draft-changed":
+      "Der Entwurf hat sich geändert, seit du ihn geprüft hast. Deshalb wurde nichts geändert. Prüfe den aktuellen Entwurf und gib ihn erneut frei.",
+    "connection-changed":
+      "Die Jira-Verbindung hat sich geändert, seit dieser Entwurf erstellt wurde. Deshalb wurde nichts geändert. Erstelle den Entwurf erneut für das aktuelle Jira.",
+  };
+  const refusedDraft = (draftRefusal: string): ChatToolExchange =>
+    draft("jira_draft", {
+      outcome: "rejected",
+      reason: "field-validation",
+      draftRefusal,
+      guidance: "Model-facing guidance that the person never reads.",
+      items: [],
+    });
+
+  it("has a card sentence for every draft refusal the contract declares", () => {
+    for (const reason of JIRA_DRAFT_REFUSALS) {
+      // draft-invalid is named by its problem; every other refusal has its own sentence.
+      if (reason === "draft-invalid") continue;
+      expect(Object.hasOwn(JIRA_DRAFT_REFUSAL_MESSAGES, reason), reason).toBe(true);
+    }
+  });
+
+  it.each(Object.keys(REFUSALS_EN))("says what happened and what to do for %s", async (reason) => {
+    await show(refusedDraft(reason));
+    expect(screen.getByText(REFUSALS_EN[reason] ?? "")).toBeVisible();
+    expect(document.body.textContent).not.toContain("Review the required Jira fields");
+    expect(document.body.textContent).not.toContain("Model-facing guidance");
+    expect(document.body.textContent).not.toMatch(/chat\.jira\./u);
+  });
+
+  it.each(Object.keys(REFUSALS_DE))(
+    "says it in German for %s and passes the accessibility check",
+    async (reason) => {
+      await Promise.all([loadLocaleMessages("de"), loadOptionalWidgetMessages("de")]);
+      localStorage.setItem(I18N_STORAGE_KEY, "de");
+      const { container } = render(
+        <I18nProvider>
+          <JiraChatTools
+            transcript={{ schemaVersion: 1, exchanges: [refusedDraft(reason)] }}
+            turnState="completed"
+          />
+        </I18nProvider>,
+      );
+      expect(screen.getByText(REFUSALS_DE[reason] ?? "")).toBeVisible();
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+
+  it("keeps the generic field advice for a refusal it has no sentence for", async () => {
+    await show(refusedDraft("draft-invalid"));
+    expect(
+      screen.getByText(
+        "Review the required Jira fields and template rules before requesting the change again.",
+      ),
+    ).toBeVisible();
+  });
+
   it("never says Item 0: without a position the sentence says An item", async () => {
     await show(
       draft("jira_draft", {
@@ -349,7 +422,7 @@ describe("Jira draft results as the production draft tool reports them", () => {
     );
     expect(
       screen.getByText(
-        "Eintrag 3 hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wählen Sie Projekt und Vorgangstyp erneut aus.",
+        "Eintrag 3 hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wähle Projekt und Vorgangstyp erneut aus.",
       ),
     ).toBeVisible();
     expect(await axe(container)).toHaveNoViolations();
@@ -369,6 +442,7 @@ describe("Jira draft results as the production draft tool reports them", () => {
       "chat.jira.outcome.moreResultsOne",
       "chat.jira.outcome.draftItem",
       "chat.jira.outcome.draftItemUnknown",
+      ...Object.values(JIRA_DRAFT_REFUSAL_MESSAGES),
       ...JIRA_DRAFT_PROBLEMS.map((problem) => `chat.jira.outcome.draftProblem.${problem}`),
     ] as const;
     const placeholders = (text: string): string[] => text.match(/\{\w+\}/gu)?.sort() ?? [];

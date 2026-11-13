@@ -2434,6 +2434,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The parent and link relations form a cycle. Ask Keiko to make each parent an issue that does not depend on its child.",
   "chat.jira.outcome.draftItem": "Item {position}",
   "chat.jira.outcome.draftItemUnknown": "An item",
+  "chat.jira.outcome.draftRefusal.draft-not-found":
+    "The draft is no longer available, so nothing was changed. Ask Keiko to draft the issues again.",
+  "chat.jira.outcome.draftRefusal.draft-changed":
+    "The draft changed after you reviewed it, so nothing was changed. Review the current draft and approve it again.",
+  "chat.jira.outcome.draftRefusal.connection-changed":
+    "The Jira connection changed since this draft was made, so nothing was changed. Create the draft again for the current Jira.",
   "chat.jira.outcome.itemUnlisted": "Item not in your request",
   "chat.jira.outcome.more": "and {count} more",
   "chat.jira.outcome.newTab": "(opens Jira in a new tab)",

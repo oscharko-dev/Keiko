@@ -223,6 +223,17 @@ interface JiraOutcomeProblem {
   readonly field?: string;
   readonly message: string;
 }
+/**
+ * One card sentence per draft refusal that is not a field problem, by `data.draftRefusal`: the
+ * draft was not found, it changed after review, or the Jira connection changed. A refusal that
+ * `draft-invalid` carries is named by its problem instead. The test walks JIRA_DRAFT_REFUSALS, so a
+ * refusal the contract gains without a sentence here fails there.
+ */
+export const JIRA_DRAFT_REFUSAL_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
+  "draft-not-found": "chat.jira.outcome.draftRefusal.draft-not-found",
+  "draft-changed": "chat.jira.outcome.draftRefusal.draft-changed",
+  "connection-changed": "chat.jira.outcome.draftRefusal.connection-changed",
+};
 /** Why Keiko refused a whole draft before sending it: a closed code and the item it concerns. */
 interface JiraOutcomeDraftProblem {
   readonly problem: JiraDraftProblemCode;
@@ -247,6 +258,8 @@ export interface JiraToolOutcomeView {
   readonly problems: readonly JiraOutcomeProblem[];
   /** Absent unless the draft itself was refused; a person reads what to change from it. */
   readonly draftProblem?: JiraOutcomeDraftProblem;
+  /** The sentence for a refusal that is not a field problem (not found, changed, connection). */
+  readonly draftRefusal?: WidgetMessageKey;
   readonly rules: readonly JiraOutcomeRule[];
   readonly validation: JiraFieldValidationFailure | undefined;
   /** Keiko's own field check refused these draft items; each is named by its summary. */
@@ -1047,6 +1060,12 @@ function notCreatedOf(data: UnknownRecord): number | undefined {
     : rows.filter((row) => NOT_CREATED_STATES.has(record(row)?.state)).length;
   return total > 0 ? total : undefined;
 }
+function draftRefusalOf(data: UnknownRecord | undefined): WidgetMessageKey | undefined {
+  const reason = text(data?.draftRefusal);
+  return reason !== undefined && Object.hasOwn(JIRA_DRAFT_REFUSAL_MESSAGES, reason)
+    ? JIRA_DRAFT_REFUSAL_MESSAGES[reason]
+    : undefined;
+}
 function draftProblemOf(data: UnknownRecord | undefined): JiraOutcomeDraftProblem | undefined {
   const problem = JIRA_DRAFT_PROBLEMS.find((value) => value === data?.draftProblem);
   if (problem === undefined) return undefined;
@@ -1627,8 +1646,6 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const knowledge = knowledgeToolOutcomeView(exchange);
   if (knowledge !== undefined) return knowledge;
   const data = storedOutcomeData(exchange);
-  const draftProblem = draftProblemOf(data);
-  const notCreatedCount = notCreatedOf(data);
   return {
     ...resultItemsView(exchange, data),
     ...pageCounts(data, exchange.call.name, reviewedItems(exchange)),
@@ -1645,10 +1662,28 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     itemValidations: privateAccount(exchange.call.name)
       ? []
       : itemValidationsOf(data, reviewedItems(exchange)),
+    ...draftViews(exchange, data),
+  };
+}
+/**
+ * What a refused or partial draft tells the person: the named problem or refusal, which replaces
+ * the generic "review the fields" advice, and the issues that were not created.
+ */
+function draftViews(
+  exchange: ChatToolExchange,
+  data: UnknownRecord,
+): Pick<JiraToolOutcomeView, "draftProblem" | "draftRefusal" | "notCreatedCount" | "failure"> {
+  const draftProblem = draftProblemOf(data);
+  const notCreatedCount = notCreatedOf(data);
+  const draftRefusal = draftProblem === undefined ? draftRefusalOf(data) : undefined;
+  return {
     ...(draftProblem === undefined ? {} : { draftProblem }),
     ...(notCreatedCount === undefined ? {} : { notCreatedCount }),
-    // A named draft problem replaces the generic "review the fields" advice.
-    failure: draftProblem === undefined ? failureMessage(exchange, data) : undefined,
+    ...(draftRefusal === undefined ? {} : { draftRefusal }),
+    failure:
+      draftProblem === undefined && draftRefusal === undefined
+        ? failureMessage(exchange, data)
+        : undefined,
   };
 }
 function resultsLabelOf(

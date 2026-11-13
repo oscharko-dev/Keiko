@@ -382,7 +382,8 @@ const ITEM_DRAFT_PROBLEMS: ReadonlySet<JiraDraftProblemCode> = new Set([
 /** What to change in a refused draft, in one sentence per closed problem. */
 function JiraDraftProblemLine({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
-  const { draftProblem } = view;
+  const { draftProblem, draftRefusal } = view;
+  if (draftRefusal !== undefined) return <p>{t(draftRefusal)}</p>;
   if (draftProblem === undefined) return null;
   const sentence = t(DRAFT_PROBLEM_MESSAGES[draftProblem.problem]);
   if (!ITEM_DRAFT_PROBLEMS.has(draftProblem.problem)) return <p>{sentence}</p>;
