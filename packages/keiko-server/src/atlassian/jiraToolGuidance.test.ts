@@ -19,11 +19,17 @@ const declaring = (matches: (name: string) => boolean): readonly JiraOperationCo
 
 describe("shared Jira tool guidance", () => {
   // #4357: a deployment model told the person that no delete operation exists although
-  // jira.delete-issue is selectable through discovery. A base catalog cannot list every operation,
-  // so the one shared instruction says where the rest are and forbids claiming one absent unseen.
-  it("says further operations exist behind discovery and must not be claimed absent unseen", () => {
-    expect(JIRA_TOOL_GUIDANCE).toMatch(/\(delete, move, administer\) are behind jira\.discover/u);
-    expect(JIRA_TOOL_GUIDANCE).toMatch(/never say an operation does not exist/u);
+  // jira.delete-issue is selectable through discovery, and models answered "who am I" and "project
+  // statuses" with a different visible tool instead of searching. A base catalog cannot list every
+  // operation, so the one shared instruction says WHEN to search: whenever no offered tool does what
+  // was asked, before saying it cannot be done, and never to substitute another tool's result.
+  it("says when to search, forbids claiming an operation absent unseen, and forbids substituting a result", () => {
+    expect(JIRA_TOOL_GUIDANCE).toMatch(
+      /If no offered tool does what was asked, search with jira\.discover before saying it cannot be done/u,
+    );
+    expect(JIRA_TOOL_GUIDANCE).toMatch(/never present another tool's result as the answer/u);
+    // Discovery is no longer framed as the route for a few named operations only.
+    expect(JIRA_TOOL_GUIDANCE).not.toMatch(/\(delete, move, administer\)/u);
   });
 
   // 2026-11-13 lane: nine calls named a tool the model had not selected (`invalid-identity`).
@@ -64,7 +70,7 @@ describe("shared Jira tool guidance", () => {
 
   // The Jira catalog is sent every turn. The owner's 8,192-token overflow pins in
   // grounded-jira-mixed.public-handler.test.ts guard the whole prompt; this instruction is part of it,
-  // so its growth is capped on its own. Measured on 2026-11-13: 1,212 bytes before #4357, 1,661 after.
+  // so its growth is capped on its own. Measured on 2026-11-13: 1,212 bytes before #4357, 1,661 after, 1,677 with the when-to-search sentence.
   it("stays within its byte budget; new text replaces text instead of adding to it", () => {
     expect(Buffer.byteLength(JIRA_TOOL_GUIDANCE)).toBeLessThanOrEqual(1700);
   });

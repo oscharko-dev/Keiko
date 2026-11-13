@@ -490,9 +490,7 @@ describe("arguments", () => {
     [{ projectKey: "REP", requirementIds: ["ok", "has space"] }],
     [{ projectKey: "REP", unknown: true }],
     [{ reportId: "not-a-uuid" }],
-    [{ reportId: "00000000-0000-4000-8000-000000000000", projectKey: "bad key" }],
-    [{ reportId: "00000000-0000-4000-8000-000000000000", jql: 5 }],
-    [{ reportId: "00000000-0000-4000-8000-000000000000", estimateFieldId: "customfield_1" }],
+    [{ reportId: "00000000-0000-4000-8000-000000000000", projectKey: "REP" }],
     [{ reportId: "00000000-0000-4000-8000-000000000000", section: "nope" }],
   ] as const)("refuses %j", (args) => {
     expect(parseJiraReportArgs(args as CatalogJsonObject)).toBeUndefined();
@@ -505,66 +503,6 @@ describe("arguments", () => {
     expect(result.data.reason).toBe("invalid-input");
     expect(h.fixture.requests).toEqual([]);
     expect(h.activity).toMatchObject([{ phase: "refused", refusal: "invalid-input" }]);
-  });
-
-  /*
-   * Invariant these pins guard: a continuation can never change the scope of the report it pages.
-   * A repeat of the scope the report was started with is harmless and answers exactly like the
-   * call without it; any other scope, or a scope the report did not have, is refused by name.
-   */
-  it("accepts the scope a report was started with, byte-identical to the page without it (#4356)", async () => {
-    const h = harness({ issues: syntheticProject(10) });
-    const first = await h.run({ projectKey: "REP" });
-    const plain = await h.run({ reportId: idOf(first), section: "epics" });
-    for (const scope of [{ projectKey: "REP" }]) {
-      const repeated = await h.run({ reportId: idOf(first), section: "epics", ...scope });
-      expect(repeated.isError).toBeUndefined();
-      expect(JSON.stringify(repeated)).toBe(JSON.stringify(plain));
-    }
-    const sql = await h.run({ jql: "project = REP ORDER BY key" });
-    const sqlPlain = await h.run({ reportId: idOf(sql), section: "epics" });
-    const sqlRepeated = await h.run({
-      reportId: idOf(sql),
-      section: "epics",
-      jql: "project = REP ORDER BY key",
-    });
-    expect(JSON.stringify(sqlRepeated)).toBe(JSON.stringify(sqlPlain));
-  });
-
-  it("refuses a different or additional scope beside a reportId, naming the argument (#4356)", async () => {
-    const h = harness({ issues: syntheticProject(10) });
-    const first = await h.run({ projectKey: "REP" });
-    const cases: readonly [Record<string, string>, readonly string[]][] = [
-      [{ projectKey: "OTHER" }, ["projectKey"]],
-      [{ projectKey: "rep" }, ["projectKey"]],
-      [{ jql: "project = REP" }, ["jql"]],
-      [{ epicKey: "REP-1" }, ["epicKey"]],
-      [{ projectKey: "REP", epicKey: "REP-1", jql: "x = 1" }, ["epicKey", "jql"]],
-    ];
-    for (const [scope, names] of cases) {
-      const refused = await h.run({ reportId: idOf(first), section: "epics", ...scope });
-      expect(refused.isError).toBe(true);
-      expect(refused.data.reason).toBe("invalid-input");
-      expect(refused.data.invalidArguments).toEqual(names);
-      const { message } = refused.data;
-      expect(typeof message === "string" ? message : "").toContain("a different one is refused");
-    }
-    // A report started by jql does not own a projectKey, and a repeat must match character for character.
-    const byJql = await h.run({ jql: "project = REP" });
-    for (const scope of [{ projectKey: "REP" }, { jql: "project = REP ORDER BY key" }]) {
-      const refused = await h.run({ reportId: idOf(byJql), section: "epics", ...scope });
-      expect(refused.data.invalidArguments).toEqual([Object.keys(scope)[0]]);
-    }
-    // Another invalid argument beside a reportId gets no scope hint.
-    const other = await h.run({ reportId: idOf(first), section: "nope" });
-    expect(other.data.invalidArguments).toEqual(["section"]);
-    expect(other.data.message).toBeUndefined();
-    // The owner binding stays: another Chat's report is not found, with or without a scope.
-    const foreign = await h.run(
-      { reportId: idOf(first), projectKey: "REP" },
-      { identity: "credential-2" },
-    );
-    expect(foreign.data.reason).toBe("connection-changed");
   });
 
   it("names the arguments a refused call has to fix, never their values (#4181)", async () => {
@@ -582,11 +520,7 @@ describe("arguments", () => {
     [{ projectKey: "REP", asOf: "2026-02-30" }, ["asOf"]],
     [{ projectKey: "REP", startAt: -1, maxResults: 101 }, ["maxResults", "startAt"]],
     [{ projectKey: "REP", "bad key!": 1 }, ["(unnamed)"]],
-    [{ reportId: "00000000-0000-4000-8000-000000000000", projectKey: "bad key" }, ["projectKey"]],
-    [
-      { reportId: "00000000-0000-4000-8000-000000000000", estimateFieldId: "customfield_1" },
-      ["estimateFieldId"],
-    ],
+    [{ reportId: "00000000-0000-4000-8000-000000000000", projectKey: "REP" }, ["projectKey"]],
     [{ reportId: "not-a-uuid" }, ["reportId"]],
   ] as const)("names the invalid arguments of %j", (args, invalid) => {
     expect(parseJiraReportArgs(args as CatalogJsonObject)).toBeUndefined();

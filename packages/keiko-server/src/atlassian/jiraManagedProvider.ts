@@ -410,7 +410,7 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
   },
   "jira.issue": {
     description:
-      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Totals across many issues come from jira.report, not from reading issues one by one.",
+      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Progress, estimates and template compliance across many issues come from jira.report, not from reading issues one by one.",
     arguments: { issueKey: text(128), fields: FIELD_IDS },
     required: ["issueKey"],
     paged: false,

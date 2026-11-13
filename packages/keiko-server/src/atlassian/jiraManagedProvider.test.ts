@@ -217,7 +217,17 @@ it("points figures across many issues to jira.report without attracting every pr
     expect(describe(name), name).toMatch(/across many issues come from jira\.report/u);
     expect(describe(name), name).toMatch(/not from (paging results|reading issues one by one)/u);
   }
-  expect(describe("jira.search")).toMatch(/progress, estimates and template compliance/iu);
+  // What a description promises the report computes must be in the report's own documented coverage:
+  // "totals across many issues" sent logged-time questions there, which the report does not answer.
+  const reportCoverage = describe("jira.report");
+  for (const name of ["jira.search", "jira.search-post", "jira.issue"]) {
+    expect(describe(name), name).toMatch(
+      /progress, estimates and template compliance across many issues come from jira\.report/iu,
+    );
+    expect(describe(name), name).not.toMatch(/\btotals across\b/iu);
+  }
+  for (const metric of ["progress", "estimates", "template compliance"])
+    expect(reportCoverage).toContain(metric);
   const report = provider.tools().find((tool) => tool.name === "jira.report");
   // Both attempts of the selection lane asked for project statuses and were answered by the report.
   expect(report?.descriptor.description).not.toMatch(

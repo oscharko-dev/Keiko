@@ -1854,6 +1854,9 @@
     }
   },
   "src/lib/coding-workbench-runtime-actions.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
     "max-lines-per-function": {
       "count": 2
     }

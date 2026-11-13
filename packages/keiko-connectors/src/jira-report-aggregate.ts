@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { compareIssueKeys } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import { jiraReportDataText } from "./jira-report-data-text.js";
 import { compareCodePoints } from "./jira-report-order.js";
 
 export { compareCodePoints };
@@ -15,7 +14,6 @@ import type {
   JiraReportIssueClass,
   JiraReportProgress,
   JiraReportRequirementCoverage,
-  JiraReportRequirementSet,
   JiraReportRow,
   JiraReportScope,
   JiraReportStatusCount,
@@ -31,7 +29,6 @@ export interface JiraReportInput {
   readonly requiredFieldRules: JiraReport["compliance"]["requiredFieldRules"];
   readonly checker: JiraReport["compliance"]["checker"];
   readonly declaredRequirements: readonly string[];
-  readonly requirementLabels: Readonly<Record<string, string>>;
   readonly now: Date;
 }
 
@@ -215,14 +212,10 @@ function byTypeOf(
   issues: readonly JiraReportIssue[],
   estimatesAvailable: boolean,
 ): readonly JiraReportTypeProgress[] {
-  const types = new Map<
-    string,
-    { total: number; done: number; unestimated: number; notCarried: number }
-  >();
+  const types = new Map<string, { total: number; done: number; unestimated: number }>();
   for (const issue of issues) {
-    const entry = types.get(issue.typeName) ?? { total: 0, done: 0, unestimated: 0, notCarried: 0 };
+    const entry = types.get(issue.typeName) ?? { total: 0, done: 0, unestimated: 0 };
     entry.total += 1;
-    if (issue.estimateNotCarried === true) entry.notCarried += 1;
     if (issue.category === "done") entry.done += 1;
     // The same test as the project's estimate, so the per-type counts sum to its figure.
     if (issue.estimate === undefined) entry.unestimated += 1;
@@ -230,15 +223,12 @@ function byTypeOf(
   }
   return [...types.entries()]
     .sort(([left], [right]) => compareCodePoints(left, right))
-    .map(([typeName, { total, done, unestimated, notCarried }]) => ({
+    .map(([typeName, { total, done, unestimated }]) => ({
       typeName,
       total,
       done,
       estimated: estimatesAvailable ? total - unestimated : null,
       unestimated: estimatesAvailable ? unestimated : null,
-      ...(estimatesAvailable && notCarried === total
-        ? { estimateField: "not-carried" as const }
-        : {}),
     }));
 }
 
@@ -391,12 +381,14 @@ function requirementItems(graph: Graph, coveredBy: readonly string[]): readonly 
   for (const key of coveredBy) items.delete(key);
   return [...items.values()];
 }
-function coverageSetOf(
+function requirementsOf(
   graph: Graph,
   issues: readonly JiraReportIssue[],
-  ids: readonly string[],
+  declared: readonly string[],
   estimatesAvailable: boolean,
-): JiraReportRequirementSet {
+): JiraReport["coverage"]["requirements"] {
+  if (declared.length === 0) return undefined;
+  const ids = [...new Set(declared)].sort((left, right) => compareCodePoints(left, right));
   const coverers = new Map<string, string[]>();
   for (const issue of issues)
     for (const id of issue.requirementIds) {
@@ -425,49 +417,6 @@ function coverageSetOf(
     });
   }
   return { declared: ids.length, covered: items.length, items, uncovered };
-}
-function namesOf(
-  ids: readonly string[],
-  labels: Readonly<Record<string, string>>,
-): Readonly<Record<string, string>> {
-  return Object.fromEntries(
-    ids.flatMap((id): [string, string][] => {
-      const label = Object.hasOwn(labels, id) ? jiraReportDataText(labels[id] ?? "") : "";
-      return label.length === 0 ? [] : [[id, label]];
-    }),
-  );
-}
-/**
- * The identifiers Keiko derived for statements without one are named in `labels`. With explicit
- * identifiers declared they are the headline and the derived units are reported beside it; with
- * none, the derived units are the requirements and form the headline, as before.
- */
-function requirementsOf(
-  graph: Graph,
-  issues: readonly JiraReportIssue[],
-  declared: readonly string[],
-  labels: Readonly<Record<string, string>>,
-  estimatesAvailable: boolean,
-): JiraReport["coverage"]["requirements"] {
-  if (declared.length === 0) return undefined;
-  const ids = [...new Set(declared)].sort((left, right) => compareCodePoints(left, right));
-  const derivedIds = ids.filter((id) => Object.hasOwn(labels, id));
-  const explicitIds = ids.filter((id) => !Object.hasOwn(labels, id));
-  const headline = explicitIds.length === 0 ? ids : explicitIds;
-  const set = coverageSetOf(graph, issues, headline, estimatesAvailable);
-  const beside = explicitIds.length > 0 && derivedIds.length > 0;
-  return {
-    ...set,
-    uncoveredLabels: namesOf(set.uncovered, labels),
-    ...(beside
-      ? {
-          derived: {
-            ...coverageSetOf(graph, issues, derivedIds, estimatesAvailable),
-            names: namesOf(derivedIds, labels),
-          },
-        }
-      : {}),
-  };
 }
 
 function classOf(graph: Graph, issue: JiraReportIssue): JiraReportIssueClass {
@@ -537,13 +486,7 @@ export function buildJiraReport(input: JiraReportInput): JiraReport {
         )
         .map((issue) => issue.key),
       orphans: rows.filter((row) => row.classification === "orphan").map((row) => row.issue.key),
-      requirements: requirementsOf(
-        graph,
-        issues,
-        input.declaredRequirements,
-        input.requirementLabels,
-        estimatesAvailable,
-      ),
+      requirements: requirementsOf(graph, issues, input.declaredRequirements, estimatesAvailable),
     },
     rows,
   });

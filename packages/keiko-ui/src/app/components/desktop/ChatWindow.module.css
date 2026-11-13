@@ -381,17 +381,3 @@ article.cmpUserMessage[data-role="user"][data-layout="turn"] > .cmpUserMessageBu
     max-width: 88%;
   }
 }
-
-.cmpModelCheck {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-
-.cmpModelCheckFailed {
-  color: var(--feedback-danger);
-}

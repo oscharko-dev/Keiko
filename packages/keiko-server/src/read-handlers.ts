@@ -52,7 +52,6 @@ import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   awaitPendingConversationReadiness,
-  isConversationReadinessCheckRunning,
   isToolCallingRenewalPending,
   pendingConversationReadiness,
 } from "./gateway-readiness.js";
@@ -101,9 +100,6 @@ export function handleModels(
           return {
             ...model,
             ...(conversationReady === undefined ? {} : { conversationReady }),
-            ...(isConversationReadinessCheckRunning(deps, model.id)
-              ? { conversationCheckPending: true as const }
-              : {}),
             ...(isToolCallingRenewalPending(config, model.id)
               ? { toolCallingRenewalPending: true as const }
               : {}),

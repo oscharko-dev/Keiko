@@ -1674,102 +1674,13 @@ configuration cannot be read, the report selects a unique numeric Story Points f
 project's screens, then screen-backed `timetracking` as `timeoriginalestimate` in seconds.
 A global field name alone does not establish applicability. Without an applicable field, or when
 the board inventory exceeds its bound, the report records a closed unavailability reason and
-`estimate: null` and per-type `estimated`/`unestimated` of `null`, never invented zero totals or an
-invented unestimated-issue count (#4356: with a selected field, `unestimated` counts every issue
-without a numeric estimate, an issue of a type that carries no estimate field included; the project
-figure and the per-type counts use that one test and sum). Cancellation
+`estimate: null`, never invented zero totals or an invented unestimated-issue count. Cancellation
 and denied effect admission still stop the read. A JQL-only scope without a project preserves the
 original-time-estimate default in seconds. The summary and card name the selected field; model
 figures, exports and the report comment disclose unavailable estimates. The existing
 `atlassian.jira-report` line records `estimateSource` (`explicit-field`, `board-configuration`,
-`project-screen`, `time-tracking`, `time-tracking-fallback`, `field-fallback`, `unavailable`) and an optional closed
+`project-screen`, `time-tracking`, `unavailable`) and an optional closed
 `estimateUnavailableReason`, with no field id or display name.
-
-**Complete and truthful reports (#4356, 2026-11-13).** Seven rules keep a figure from
-overstating what Jira allowed Keiko to read.
-(1) *Estimate applicability.* The report requests the selected estimate field for every hit, but
-Jira leaves a field out of a hit for two different reasons: the issue's type does not have it at
-all, or the account may not see it. The first is an unestimated issue; only the second makes the
-read incomplete (`omittedFields`, reason `read-failed`, failure `permission`; an unreadable
-estimate never becomes a complete zero, an explicit `null` stays unestimated and a numeric zero is
-a measured zero). Keiko decides from the create metadata it already reads per issue type
-(`estimateByType`): a hit that lacks the field is exempt only when that type's create screen was
-read and does not list the field while another type's does. A field no screen lists, such as an
-explicit `estimateFieldId` unknown to the metadata, exempts no type, and nothing is exempt unless
-the whole metadata read succeeded: a partial, denied or failed read leaves the read strict. Only the independently measured prefix is kept when a later page
-withholds the field.
-(2) *An incomplete report says so first.* `report.figures` of an incomplete report opens with one
-`INCOMPLETE REPORT: <read> of <total> issues were read (<closed cause>)` line that states every
-figure below covers only the issues read; a complete report is unchanged. The export, comment
-and card already carry the status; an unavailable estimate stays `unavailable`, never zero.
-(3) *Epic scope.* `epicKey` is an additive scope (activity `scopeKind` `epic`), combinable with
-`projectKey` and `jql`, which it never widens. Keiko addresses the Epic Link field by its id,
-resolved from the instance's field list through Jira's own schema key
-(`com.pyxis.greenhopper.jira:gh-epic-link`) as `cf[N]`, never by a display name that an instance
-may localize or rename. The Epic and its members are read through `key = E OR cf[N] = E OR parent
-= E`. A field list that holds no such field (an instance whose Epics are parents) is read by
-`parent` alone and the scope says `epicLink: absent`; an unreadable or ambiguous field list, or a
-clause the instance refuses, is an initialization failure and ends the report incomplete after the
-bounded retry; it is never read by a narrower clause. No single JQL clause names the sub-tasks of
-an Epic's members, so Keiko reads the members that can hold sub-tasks first and then selects their
-sub-tasks with `parent in (<member keys>)`, in as many queries ("windows") as the 2,500 character
-bound of one GET requires; the windows are read one after another, an issue selected twice counts
-once, and the total is the sum of the windows' totals less those duplicates. The scope states the
-clause that selects the Epic and its members (`scope.jql`), the member count and the digest of the
-member keys (`epicMemberCount`, `epicMembersDigest`), which is what a reader needs to reconcile
-the sub-task windows. The member read is complete or it is not a success: pages must start where
-asked and hold no more than the total leaves, an empty page before the stated total, a total that
-changes between pages, a repeated key and an enumerated count other than the total end the report
-incomplete (`read-failed`, or `scope-changed` for a moved list). Inside one window a repeated key
-still ends the read as `scope-changed` (a drifted offset); only a key an earlier window selected
-counts as a duplicate. A field list cut at its bound is unreadable, never "no Epic Link". An Epic that is not visible fails as `not-found`, one beyond 10,000 members
-as `bounds-exceeded`; neither becomes an empty or silently narrowed scope.
-(4) *Derived requirement handles are reported beside the headline.* A `DRV-` handle is detected
-from a statement without an identifier, so a context sentence that contains an obligation phrase
-can become one. With explicit requirement identifiers in the documents the coverage figure counts
-those only; the derived units are reported beside it (`coverage.requirements.derived`, with their
-own covered and uncovered counts and their names), never mixed into the headline and never
-dropped. A document with no explicit identifier has the derived units as its requirements and they
-form the figure as before. The rule is deterministic and needs no language detector. A derived
-handle's name (section and the start of its statement, redacted like other model-visible content)
-is untrusted document text: it is neutralised as data (control, format and line-break characters,
-markup and the report's delimiters removed, at most 120 characters) and rendered as one quoted
-value, `id;"statement"`, under a header that calls it data and never an instruction. It appears in
-`report.figures`, on the requirement section page (`derived: true`, `label`), in the Markdown
-export, in the CSV (kind `derived-requirement`, name in the `summary` column); the Jira comment
-carries identifiers and counts only.
-(5) *Per-type estimates.* A type whose create screen carries no estimate field reads
-`estimateField: "not-carried"` in `progress.byType` beside the unestimated count, only when no
-issue of the type holds a value (a value on such an issue still counts in the sums and the type is
-not flagged), so the answer can
-say "not estimable" where an issue type that carries the field has issues nobody estimated yet.
-(6) *The estimate figure never says zero for one field while another estimate field in use
-holds values, without saying so (2026-11-13).* The same search that reads the configured field
-also reads one alternate estimate field, never a request per issue: native `timeoriginalestimate`
-beside a custom field, and the project's unique numeric Story Points screen field beside time
-tracking. After the last page, on the issues read: when the configured field holds a value on at
-least one issue it stays the figure, and when the alternate also holds values one line names it
-(`scope.estimateAlso`: field, issue count, total, the hours computed once in the figures from the
-seconds); when the configured field holds none and the alternate does, the alternate becomes the
-figure under the closed source `time-tracking-fallback` or `field-fallback`, the configured field
-is named as unused (`scope.estimateConfigured`), and the per-type `not-carried` flags are not
-evaluated for the fallback field, which the sentence says; when neither holds a value the figure is
-as before (zero estimated, every issue unestimated). A field the caller named
-(`estimateFieldId`) is never replaced, only accompanied; a withheld configured field still ends the
-report incomplete; an alternate a hit omits is simply no value. The sentences carry counts and
-neutralised, quoted field names only, appear in `report.figures`, the Markdown export and the
-comment, and the Activity Log records only the closed source value.
-(7) *A continuation may repeat its scope.* A call naming a `reportId` takes `reportId`, `section`,
-`startAt` and `maxResults` and may repeat `projectKey`, `jql` or `epicKey`. The invariant is that a
-continuation can never change a report's scope: a repeat is accepted only when each supplied value
-equals, character for character, the scope the report was started with, and then answers exactly
-like the call without it; a different value, or a scope the report did not have, is refused as
-`invalid-input` naming the argument with a plain-words message. Owner binding, bounds and every
-other refusal are unchanged.
-Known limits: derived ids are salted by the document's identity, so the same text in two formats
-gets two derived ids (explicit ids are identical); a statement cell without a modal verb yields no
-unit for a row without an identifier; an Epic report does not follow sub-tasks of sub-tasks;
-board and sprint scope belong to the Agile surface and no history is invented.
 
 `requirementsFromPods: true` makes Keiko list the requirement identifiers of the Chat's
 Knowledge Pods itself (the read `knowledge.requirements` serves; stable derived `DRV-` handles are

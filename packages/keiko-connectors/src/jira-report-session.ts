@@ -3,7 +3,6 @@ import type {
   JiraReportIncompleteReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { JiraReportHttpDeps } from "./jira-report-http.js";
-import type { JiraReportAlternateEstimate } from "./jira-report-estimate.js";
 import type { JiraReportFieldPlan } from "./jira-report-issue.js";
 import { jqlClause, reportJql } from "./jira-report-jql.js";
 import type {
@@ -23,20 +22,11 @@ export { reportJql, stripJqlOrdering } from "./jira-report-jql.js";
 export interface JiraReportRequest {
   readonly projectKey: string | undefined;
   readonly jql: string | undefined;
-  /** The scope arguments exactly as the caller sent them, for recognising a repeat of them. */
-  readonly given?: Readonly<Partial<Record<"projectKey" | "jql" | "epicKey", string>>> | undefined;
-  /**
-   * An Epic whose members and their sub-tasks form the scope. Keiko composes the JQL from it and
-   * states the clause it composed in the report's scope; it narrows the scope further, never widens.
-   */
-  readonly epicKey?: string | undefined;
   readonly estimateFieldId: string | undefined;
   /** The date overdue is judged against (UTC); the date of the first call when absent. */
   readonly asOf: string | undefined;
   readonly parentFieldIds: readonly string[];
   readonly requirementIds: readonly string[];
-  /** Readable names Keiko listed for derived requirement identifiers; see `JiraReportRequirementIds`. */
-  readonly requirementLabels?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface JiraReportSession {
@@ -47,26 +37,7 @@ export interface JiraReportSession {
   readonly fingerprint: string;
   readonly request: JiraReportRequest;
   scope: JiraReportScope;
-  /** The other estimate field the search reads beside the configured one (#4356). */
-  alternateEstimate: JiraReportAlternateEstimate | undefined;
-  /** Jira withheld the configured estimate field on an issue: unreadable, never an empty value. */
-  estimateWithheld: boolean;
-  /** The query being read: the first window, or the current one of an Epic scope. */
-  jql: string;
-  /**
-   * The queries of a scope that no single query can hold (an Epic's members, then the sub-tasks of
-   * its members in chunks); empty for every other scope. They are read one after another and an
-   * issue counts once however many queries select it.
-   */
-  windows: readonly string[];
-  windowIndex: number;
-  /** The keys the current window selected, to tell a repeat in it from a key of an earlier window. */
-  windowKeys: Set<string>;
-  /** The total the current window stated; a change while it is read means the scope moved. */
-  windowTotal: number | undefined;
-  /** The totals of the windows already read, and the issues they selected a second time. */
-  settledTotal: number;
-  duplicates: number;
+  readonly jql: string;
   readonly startedAt: number;
   phase: "new" | "reading" | "finished";
   busy: boolean;
@@ -158,20 +129,6 @@ export function jiraReportProposalCost(plan: JiraReportFieldPlan, key: string): 
   );
 }
 
-function initialScope(request: JiraReportRequest, now: number): JiraReportScope {
-  return {
-    ...(request.projectKey === undefined ? {} : { projectKey: request.projectKey }),
-    ...(request.epicKey === undefined ? {} : { epicKey: request.epicKey }),
-    jql: request.jql === undefined ? "" : (jqlClause(request.jql) ?? ""),
-    ...(request.estimateFieldId === undefined ? {} : { estimateFieldId: request.estimateFieldId }),
-    estimateUnit: "unavailable",
-    estimateSource: "unavailable",
-    estimateUnavailableReason: "metadata-unavailable",
-    asOf: request.asOf ?? new Date(now).toISOString().slice(0, 10),
-    timeZone: "UTC",
-  };
-}
-
 export function createJiraReportSession(input: {
   readonly id: string;
   readonly owner: string;
@@ -185,16 +142,19 @@ export function createJiraReportSession(input: {
     owner: input.owner,
     fingerprint: input.fingerprint,
     request,
-    scope: initialScope(request, input.now),
-    alternateEstimate: undefined,
-    estimateWithheld: false,
+    scope: {
+      ...(request.projectKey === undefined ? {} : { projectKey: request.projectKey }),
+      jql: request.jql === undefined ? "" : (jqlClause(request.jql) ?? ""),
+      ...(request.estimateFieldId === undefined
+        ? {}
+        : { estimateFieldId: request.estimateFieldId }),
+      estimateUnit: "unavailable",
+      estimateSource: "unavailable",
+      estimateUnavailableReason: "metadata-unavailable",
+      asOf: request.asOf ?? new Date(input.now).toISOString().slice(0, 10),
+      timeZone: "UTC",
+    },
     jql: reportJql(request.projectKey, request.jql),
-    windows: [],
-    windowIndex: 0,
-    windowKeys: new Set(),
-    windowTotal: undefined,
-    settledTotal: 0,
-    duplicates: 0,
     startedAt: input.now,
     phase: "new",
     busy: false,

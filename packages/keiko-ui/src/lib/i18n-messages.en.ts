@@ -241,8 +241,7 @@ export const EN_MESSAGES = {
   "gatewaySetup.unusable.unsupported": " Not used (mode declared by the gateway): {models}.",
   "gatewaySetup.unusable.dropped": " Embedding verification failed, not stored: {models}.",
   "gatewaySetup.unusable.unverified": " Kept but unverified as embedding models: {models}.",
-  "gatewaySetup.unusable.unverifiedChat":
-    " Kept, but not verified as chat models: {models}. Choose one in Chat or the Coding Workbench to check it, or verify it in Settings > Models.",
+  "gatewaySetup.unusable.unverifiedChat": " Kept but unverified as chat models: {models}.",
   // The shell undo stack records panel toggles only — no window move/resize/maximize/close reaches
   // it — so the empty-stack labels name that scope instead of promising window changes.
   "shell.command.undo.target": "Undo: {target}",

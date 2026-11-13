@@ -2296,30 +2296,10 @@ function ComposerContextControls({
           }}
         />
       </div>
-      <ModelCheckNotice model={selectedModelCapability} />
       <ChatContextMeterContainer session={session} />
       <ChatSkillControl session={session} />
       <ComposerConnectorsControl session={session} />
     </div>
-  );
-}
-
-// #4351: a model nobody had checked is checked once when a person picks it. The person sees that it
-// is being checked, then nothing when it is ready, or a readable reason when it is not.
-function ModelCheckNotice({ model }: { readonly model: ModelCapability | undefined }): ReactNode {
-  const t = useTranslate();
-  if (model === undefined) return null;
-  if (model.conversationCheckPending === true)
-    return (
-      <output className={styles.cmpModelCheck}>
-        {t("chat.model.checking", { model: model.id })}
-      </output>
-    );
-  if (model.conversationReady !== false) return null;
-  return (
-    <output className={`${styles.cmpModelCheck} ${styles.cmpModelCheckFailed}`}>
-      {t("chat.model.notReady", { model: model.id })}
-    </output>
   );
 }
 

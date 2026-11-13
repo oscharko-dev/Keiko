@@ -153,7 +153,7 @@ import {
 } from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
-import { handleGatewayReadiness, handleGatewaySelectionCheck } from "./gateway-readiness.js";
+import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleApplyGatewayVerifiedCapabilities, handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
@@ -1793,12 +1793,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
   ...JIRA_REPORT_ROUTE_GROUP,
   ...JIRA_DRAFT_ROUTE_GROUP,
-  // #4351: a person's explicit pick of a chat model starts the one check of that model.
-  {
-    method: "POST",
-    pattern: "/api/gateway/readiness/selection",
-    handler: handleGatewaySelectionCheck,
-  },
 ];
 
 interface PreparedRoute {

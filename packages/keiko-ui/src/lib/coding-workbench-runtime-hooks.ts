@@ -21,7 +21,6 @@ import type {
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
-  type CodingWorkbenchModelCheck,
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
 import {
@@ -61,7 +60,7 @@ type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 type SourceRefresh = (
   catalogAlreadyCurrent?: boolean,
   parentCorrelationId?: string,
-  checkModel?: CodingWorkbenchModelCheck,
+  checkModel?: boolean,
 ) => Promise<void>;
 
 interface RefreshSequences {
@@ -181,7 +180,7 @@ async function refreshManagedGatewaySource(
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
   catalogAlreadyCurrent: boolean,
-  model: { readonly id: string | null; readonly check: CodingWorkbenchModelCheck },
+  model: { readonly id: string | null; readonly check: boolean },
   parentCorrelationId?: string,
 ): Promise<void> {
   const correlationId = newClientCorrelationId();
@@ -277,7 +276,7 @@ function useSourceRefresh(
     async (
       catalogAlreadyCurrent = false,
       parentCorrelationId?: string,
-      checkModel: CodingWorkbenchModelCheck = false,
+      checkModel = false,
     ): Promise<void> => {
       const sequence = (sequenceRef.current += 1);
       const preference = stateRef.current.runtimePreference;
@@ -398,11 +397,7 @@ function useRunRefresh(
       do {
         followUp.current = false;
         runSequence.current += 1;
-        await /* NOSONAR typescript:S9382 -- coalesced re-reads run one after another by design. */ readRun(
-          runSequence.current,
-          runSequence,
-          dispatch,
-        );
+        await readRun(runSequence.current, runSequence, dispatch);
       } while (followUp.current);
     })();
     runRefresh.current = pending;

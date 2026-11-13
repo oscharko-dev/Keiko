@@ -165,33 +165,6 @@ async function coverage(
   return (result?.data.section as { readonly items: readonly unknown[] }).items;
 }
 
-/** The coverage headline of the summary `jira.report` serves, as the person sees it. */
-async function headline(
-  f: PodFixture,
-  issues: readonly SyntheticIssue[],
-  scope: CatalogJsonObject,
-): Promise<Record<string, unknown>> {
-  const provider = createJiraProviderForCatalog<RequirementsToolContext>(
-    () => ({
-      deployment: "data-center",
-      baseUrl: "https://jira.example.invalid/context",
-      identity: "credential-1",
-      http: jiraReading(issues),
-    }),
-    ["jira.report"],
-    undefined,
-    {
-      store: createJiraReportStore(),
-      owner: (invocation) => invocation.chatId,
-      requirements: (invocation) => chatReportRequirementIds(f.deps, invocation),
-    },
-  );
-  const result = await provider.tools()[0]?.execute({ projectKey: "SYN", ...scope }, context(f));
-  expect(result?.isError).toBeUndefined();
-  const report = result?.data.report as { coverage: { requirements: Record<string, unknown> } };
-  return report.coverage.requirements;
-}
-
 describe("the requirement list Keiko hands jira.report", () => {
   it("lists the explicit identifiers of every Pod once, in the detected order", async () => {
     const f = await fixture([
@@ -202,7 +175,6 @@ describe("the requirement list Keiko hands jira.report", () => {
     expect(chatReportRequirementIds(f.deps, context(f))).toEqual({
       ok: true,
       ids: ["LH-001", "LH-002", "LH-003", "FR-001", "FR-002"],
-      labels: {},
     });
   });
 
@@ -212,13 +184,10 @@ describe("the requirement list Keiko hands jira.report", () => {
     const detected = await detectedUnits(f);
 
     expect(detected.map((unit) => unit.idOrigin)).toEqual(["explicit", "explicit", "derived"]);
-    const listed = chatReportRequirementIds(f.deps, context(f));
-    expect(listed).toMatchObject({ ok: true, ids: detected.map((unit) => unit.id) });
-    // Only the derived handle is named; it carries its section and the start of its statement.
-    expect(Object.keys(listed.ok ? (listed.labels ?? {}) : {})).toEqual([detected[2]?.id]);
-    expect(listed.ok ? listed.labels?.[detected[2]?.id ?? ""] : undefined).toMatch(
-      /^Ohne Kennung: Das Portal muss Belege/u,
-    );
+    expect(chatReportRequirementIds(f.deps, context(f))).toEqual({
+      ok: true,
+      ids: detected.map((unit) => unit.id),
+    });
   });
 
   it("lists a Pod whose requirements all carry derived handles", async () => {
@@ -227,14 +196,13 @@ describe("the requirement list Keiko hands jira.report", () => {
     const detected = await detectedUnits(f);
 
     expect(detected.map((unit) => unit.idOrigin)).toEqual(["derived"]);
-    const listed = chatReportRequirementIds(f.deps, context(f));
-    expect(listed).toMatchObject({ ok: true, ids: [detected[0]?.id] });
-    expect(listed.ok ? listed.labels?.[detected[0]?.id ?? ""] : undefined).toContain(
-      "Das Portal muss Belege",
-    );
+    expect(chatReportRequirementIds(f.deps, context(f))).toEqual({
+      ok: true,
+      ids: [detected[0]?.id],
+    });
   });
 
-  it("keeps every unit and covered state of the explicit-id control, the derived one beside the headline", async () => {
+  it("keeps the same denominator and uncovered requirement as the explicit-id control in the automatic report", async () => {
     const text = `${specification(1).text}\n### Ohne Kennung\n\nDas Portal muss Belege innerhalb von 5 Minuten verarbeiten.\n`;
     const f = await fixture([{ capsuleId: "cap-a", text }]);
     const detected = await detectedUnits(f);
@@ -245,23 +213,11 @@ describe("the requirement list Keiko hands jira.report", () => {
     const automatic = await coverage(f, issues, { requirementsFromPods: true });
     const control = await coverage(f, issues, { requirementIds: [explicit, derived] });
 
-    // Every item of the explicit-id control is still there, compared whole (coveredBy, itemCount,
-    // byType …): the derived unit differs only by being flagged and named beside the headline.
-    const plain = automatic.map((item) => {
-      const { label: _label, derived: _derived, ...rest } = item as Record<string, unknown>;
-      return rest;
-    });
-    expect(plain).toEqual(control);
-    expect(automatic[0]).toMatchObject({ id: explicit, covered: true, coveredBy: ["SYN-1"] });
-    expect(automatic[1]).toMatchObject({ id: derived, covered: false, derived: true });
-    expect((automatic[1] as { label?: string }).label).toContain("Das Portal muss Belege");
-    // The figure the person sees: the headline counts the explicit identifier only, the derived
-    // unit is counted beside it and not in the denominator.
-    expect(await headline(f, issues, { requirementsFromPods: true })).toMatchObject({
-      declared: 1,
-      covered: 1,
-      derived: { declared: 1, covered: 0 },
-    });
+    expect(automatic).toEqual(control);
+    expect(automatic).toEqual([
+      expect.objectContaining({ id: explicit, covered: true, coveredBy: ["SYN-1"] }),
+      { id: derived, covered: false },
+    ]);
   });
 
   it("covers the derived requirement once an issue carries its production trace", async () => {
@@ -274,15 +230,9 @@ describe("the requirement list Keiko hands jira.report", () => {
       requirementsFromPods: true,
     });
 
-    // The explicit headline first, then the derived unit beside it, covered by its trace.
     expect(items).toEqual([
+      expect.objectContaining({ id: detected[1]?.id, covered: true, coveredBy: ["SYN-2"] }),
       { id: detected[0]?.id, covered: false },
-      expect.objectContaining({
-        id: detected[1]?.id,
-        covered: true,
-        derived: true,
-        coveredBy: ["SYN-2"],
-      }),
     ]);
   });
 

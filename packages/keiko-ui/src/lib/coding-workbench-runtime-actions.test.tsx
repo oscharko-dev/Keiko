@@ -49,7 +49,6 @@ function renderActions(dispatch: Dispatch<CodingWorkbenchRuntimeStateAction>): {
       dispatch,
       resources,
       mutations: mutations(),
-      intent: { current: { pickedModelId: null, startWait: null } },
     });
   });
   if (resources === undefined) throw new Error("resources were not initialized");

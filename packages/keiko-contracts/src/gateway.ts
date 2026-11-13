@@ -193,12 +193,6 @@ export interface ModelCapability {
    * proof, a verification that gave up, and a model the server never renews (#3905).
    */
   readonly toolCallingRenewalPending?: true | undefined;
-  /**
-   * Transient server observation, never persisted: a basic-chat check of this model is running now,
-   * for example the one a person's first explicit pick of it started (#4351). It lets the picker say
-   * that the model is being checked. Absent when no check of it runs.
-   */
-  readonly conversationCheckPending?: true | undefined;
   /** Observed repository-citation behavior; absent means unknown and grants no execution authority. */
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   /**

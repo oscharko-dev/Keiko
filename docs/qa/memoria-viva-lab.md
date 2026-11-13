@@ -225,10 +225,9 @@ kind): the explicit route stores in project scope today, which is why the oracle
   records, so a provider added half way through a long run ends it. Everything a run reads and
   writes stays on the machine.
 - The same configuration may name no chat model the run does not measure, so every model gets its own
-  file. Until #4351 the product checked each configured chat model at every start; it now checks only the
-  model in use and a model a person picks, and the lab still starts one instance per unit: a second
-  model stayed loaded beside the measured one (39 GB in the run that found this) and took the GPU from
-  it, in every timing of the run and in no line of its evidence. A provider of another
+  file. The product checks each configured chat model at every start, and a lab run starts one instance
+  per unit: a second model stayed loaded beside the measured one (39 GB in the run that found this) and
+  took the GPU from it, in every timing of the run and in no line of its evidence. A provider of another
   kind, such as an embedding model, is not affected.
 - Every instance reads a **private copy** of that file (`<state>/gateway.json`, mode 0600), never the
   operator's file: the product writes its configuration back (credentials it persists at start, a

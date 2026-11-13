@@ -175,18 +175,10 @@ function readDeadlineSignal(): AbortSignal {
   return AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
 }
 
-// `true` is a person's pick or Start: the server may check any configured model. `"use"` is a window
-// opening or a restored selection: it asks only for the model the server elects itself.
-export type CodingWorkbenchModelCheck = boolean | "use";
-
-function sidecarGatewayProfilePath(
-  modelId: string | undefined,
-  checkModel: CodingWorkbenchModelCheck,
-): string {
+function sidecarGatewayProfilePath(modelId: string | undefined, checkModel: boolean): string {
   const query = new URLSearchParams();
   if (modelId !== undefined) query.set("modelId", modelId);
-  if (checkModel === "use") query.set("check", "use");
-  else if (checkModel) query.set("check", "1");
+  if (checkModel) query.set("check", "1");
   const search = query.toString();
   return search.length === 0
     ? "/api/coding-sidecar/gateway/profile"
@@ -196,7 +188,7 @@ function sidecarGatewayProfilePath(
 async function readSidecarGatewayProfile(
   correlationId?: string,
   modelId?: string,
-  checkModel: CodingWorkbenchModelCheck = false,
+  checkModel = false,
 ): Promise<CodingWorkbenchSidecarGatewayResult> {
   return bffFetchJson(
     sidecarGatewayProfilePath(modelId, checkModel),
@@ -213,7 +205,7 @@ async function readSidecarGatewayProfile(
 export async function fetchCodingWorkbenchSidecarGatewayProfile(
   correlationId?: string,
   modelId?: string,
-  checkModel: CodingWorkbenchModelCheck = false,
+  checkModel = false,
 ): Promise<CodingWorkbenchSidecarGatewayResult> {
   // The client starts no probe. The server verifies what the Workbench needs on this read itself
   // (an expired tool-call proof, an unproven context window), bounded and logged (ADR-0173), for

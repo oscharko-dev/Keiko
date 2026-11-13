@@ -18,11 +18,7 @@ import type {
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import {
-  isActivityLogReadinessSnapshot,
-  isServerInstanceId,
-} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { SERVER_INSTANCE_ID } from "./server-instance.js";
+import { isActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   currentActivityLogReadiness,
   createServerLogger,
@@ -166,17 +162,12 @@ describe("GET /api/health", () => {
     const res = await fetchRaw("/api/health");
     expect(res.status).toBe(200);
     const body: unknown = JSON.parse(res.text);
-    // The in-process server answers from the same readiness module the test reads. The instance
-    // identity is regenerated at every process start, so it is checked against its owner and shape
-    // instead of being restated here (#4370).
-    const { instanceId, ...rest } = body as Record<string, unknown>;
-    expect(rest).toEqual({
+    // The in-process server answers from the same readiness module the test reads.
+    expect(body).toEqual({
       status: "ok",
       version: SDK_VERSION,
       diagnostics: currentActivityLogReadiness(),
     });
-    expect(isServerInstanceId(instanceId)).toBe(true);
-    expect(instanceId).toBe(SERVER_INSTANCE_ID);
     expect(isActivityLogReadinessSnapshot(Reflect.get(body as object, "diagnostics"))).toBe(true);
     expect(res.headers.get("cache-control")).toBe("no-store");
   });
