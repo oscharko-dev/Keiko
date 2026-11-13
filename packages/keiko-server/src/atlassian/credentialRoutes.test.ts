@@ -1183,9 +1183,11 @@ describe("end-to-end verify through the gateway transport adapter", () => {
           return true;
         },
       });
+      // The identity route is the one definitive 401; any other 401 is decided by the identity
+      // probe after the original response has been consumed (#4353).
       await http({
         method: "GET",
-        url: `${metadata.baseUrl}/rest/api/2/project`,
+        url: `${metadata.baseUrl}/rest/api/2/myself`,
         timeoutMs: 1000,
         maxBodyBytes: 4096,
       });

@@ -324,14 +324,17 @@ function observedPort<
   lifecycle: AtlassianCredentialHttpOptions,
   create: (options: CreateAtlassianHttpPortOptions) => (request: TRequest) => Promise<TResult>,
 ): (request: TRequest) => Promise<TResult> {
-  const port = create(credentialTransportOptions(owner, metadata, correlationId, lifecycle));
+  // Every 401 may be decided by the identity probe, so the observation binds the credential
+  // generation and verification revision by value: a caller mutating its metadata object later
+  // cannot move what this port observes.
+  const pinned = structuredClone(metadata);
+  const port = create(credentialTransportOptions(owner, pinned, correlationId, lifecycle));
   if (lifecycle.purpose === "verification") return port;
   return withJiraAuthenticationObservation(
-    metadata,
+    pinned,
     port,
-    () =>
-      currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef)),
-    identityObservation(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID, lifecycle),
+    () => currentJiraAuthenticationObservation(pinned, owner.custody.getMetadata(pinned.authRef)),
+    identityObservation(owner, pinned, correlationId ?? UNKNOWN_CORRELATION_ID, lifecycle),
   );
 }
 
