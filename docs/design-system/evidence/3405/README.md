@@ -600,3 +600,12 @@ passed (1.6m)**. Only the catalog digests and `generatedAt` in the three records
 this run; its fallback-font captures were discarded and the 14 committed captures are unchanged. No
 updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
 evidence.
+
+## Jira connection German wording, informal address — 2026-11-13 (#4353)
+
+The German connection-refusal messages now address the person informally, like their neighbours, so
+the freshness gate rejected the two German catalog digests. The complete original nine-case producer
+ran in the Linux arm64 gates container (Node 24.18.0): all nine passed. Only the catalog digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
+numerical ceiling changed. This remains updater fixture evidence.
