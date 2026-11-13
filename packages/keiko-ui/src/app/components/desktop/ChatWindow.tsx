@@ -177,7 +177,7 @@ import type {
   OpenEditorFileResult,
   WorkspaceLinkedGitChangeComparison,
 } from "./hooks/useWorkspace.types";
-import { fetchFilesSearch } from "@/lib/api";
+import { ApiError, fetchFilesSearch } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
@@ -4192,6 +4192,10 @@ function hasGroundingScope(chat: Chat | undefined): boolean {
   );
 }
 
+function isKnowledgePodUnavailable(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "KNOWLEDGE_POD_UNAVAILABLE";
+}
+
 function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
   return formatUserError(error, t("chat.error.scopeUpdate"));
@@ -4614,6 +4618,9 @@ function LocalKnowledgeScopeControl({
       await applyLocalKnowledgeScopeChange(value, chat, t, onChatChanged);
     } catch (error_) {
       setError(formatScopeUpdateError(error_, t));
+      // The list offered a pod the server no longer has: the scope stays as it was, and the list is
+      // read again so the pod disappears from it (#4371).
+      if (isKnowledgePodUnavailable(error_)) refresh();
     } finally {
       setBusy(false);
     }

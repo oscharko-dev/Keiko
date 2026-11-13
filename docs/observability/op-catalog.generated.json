@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "810efa776990a41fc8b9fb9ba78fae7d20e4872d044f5ed68ed1ea05683c0b68",
+    "catalogDigest": "ecc3cf3dc12b07671d0244c05ca7c17eeee5b9ffce938ae71a499e2f2b19c522",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3558,6 +3558,17 @@
             "required": true,
             "values": ["applied", "conflict", "cancellation-requested", "denied"]
           },
+          "refusalReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "knowledge-pod-missing",
+              "knowledge-pod-set-missing",
+              "knowledge-pod-deleting",
+              "knowledge-store-unavailable"
+            ]
+          },
           "expectedScopeDigest": {
             "type": "string",
             "dataClass": "digest",
@@ -3629,8 +3640,8 @@
         "failureClasses": ["chat-admission"],
         "proofIds": ["chat.scope.update.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-scope-update-log.ts:14",
-        "emitterSites": ["packages/keiko-server/src/chat-scope-update-log.ts:69"]
+        "registrationSite": "packages/keiko-server/src/chat-scope-update-log.ts:23",
+        "emitterSites": ["packages/keiko-server/src/chat-scope-update-log.ts:85"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -40074,8 +40085,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:114",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:557"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:115",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:558"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -65865,6 +65876,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "refusalReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "resultScopeDigest",
@@ -118499,7 +118516,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1349",
+      "site": "packages/keiko-server/src/store-handlers.ts:1366",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119029,7 +119046,7 @@
     {
       "op": "chat.scope.update",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-scope-update-log.ts:17",
+      "site": "packages/keiko-server/src/chat-scope-update-log.ts:26",
       "package": "keiko-server"
     },
     {
@@ -122288,20 +122305,20 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:430",
+      "site": "packages/keiko-server/src/store-handlers.ts:431",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:117",
+      "site": "packages/keiko-server/src/store-handlers.ts:118",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:573",
+      "site": "packages/keiko-server/src/store-handlers.ts:574",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

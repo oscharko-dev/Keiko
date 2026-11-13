@@ -3436,6 +3436,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["applied", "conflict", "cancellation-requested", "denied"],
       },
+      refusalReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "knowledge-pod-missing",
+          "knowledge-pod-set-missing",
+          "knowledge-pod-deleting",
+          "knowledge-store-unavailable",
+        ],
+      },
       expectedScopeDigest: {
         type: "string",
         dataClass: "digest",

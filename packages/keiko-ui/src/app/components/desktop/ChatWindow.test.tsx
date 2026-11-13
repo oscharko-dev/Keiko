@@ -1952,6 +1952,43 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getByRole("option", { name: "Knowledge Pod: Known requirements" })).toBeEnabled();
   });
 
+  it("keeps the scope, shows the server's reason and re-reads the list when the selected Knowledge Pod vanished (#4371)", async () => {
+    const user = userEvent.setup();
+    const stays = {
+      id: makeCapsuleId("cap-stays"),
+      displayName: "Stays",
+      lifecycleState: "ready" as const,
+      sourceCount: 1,
+      updatedAt: 1,
+    };
+    const vanishing = { ...stays, id: makeCapsuleId("cap-vanishing"), displayName: "Vanishing" };
+    fetchCapsulesMock
+      .mockResolvedValueOnce({ capsules: [stays, vanishing] })
+      .mockResolvedValue({ capsules: [stays] });
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+    updateChatMock.mockRejectedValueOnce(
+      new ApiError(
+        "KNOWLEDGE_POD_UNAVAILABLE",
+        "The selected Knowledge Pod no longer exists.",
+        409,
+      ),
+    );
+    renderWindow(makeSession({ activeChat: makeChat() }));
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Vanishing");
+
+    expect(await screen.findByText(/The selected Knowledge Pod no longer exists/)).toBeVisible();
+    // The scope is exactly what it was, and the list was read again.
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+      "Model only",
+    );
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
+    await openCombobox(user, "Grounding mode");
+    expect(await screen.findByRole("option", { name: "Knowledge Pod: Stays" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Knowledge Pod: Vanishing" })).toBeNull();
+  });
+
   it("clears stale options on a reopen failure and recovers on the next reopen", async () => {
     const user = userEvent.setup();
     const staleCapsuleId = makeCapsuleId("cap-failed-refresh");
