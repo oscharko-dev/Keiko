@@ -7,6 +7,11 @@ const creations = new Map();
 // Filters the api actor can read by identity; every other identity answers 400, as Jira does for a
 // filter that is absent or not visible. The run's own two (9 and 10) are always readable.
 const filterRows = new Map();
+// The run's own two filters, which Jira also lists among the visible filters by name.
+const OWN_NAMES = { 9: "Gemeinsam", 10: "Favorit" };
+const suggested = (...names) => ({
+  results: [...Object.values(OWN_NAMES), ...names].map((name) => ({ value: JSON.stringify(name) })),
+});
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
   actorDetails: (actor) => ({ name: `keiko-${actor}` }),
   basicAuth: (_session, actor) => `auth:${actor}`,
@@ -26,7 +31,7 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
     if (method === "GET" && filter !== null && !statuses.has(path)) {
       if (filterRows.has(filter[1])) return { status: 200, value: filterRows.get(filter[1]) };
       const own = ["9", "10"].includes(filter[1]);
-      return { status: own ? 200 : 400, value: { id: filter[1], name: path } };
+      return { status: own ? 200 : 400, value: { id: filter[1], name: OWN_NAMES[filter[1]] } };
     }
     return { status: statuses.get(path) ?? (method === "GET" ? 200 : 204), value: { name: path } };
   }),
@@ -100,8 +105,9 @@ describe("scopeSnapshot", () => {
     requests.length = 0;
     statuses.clear();
     filterRows.clear();
+    delete created.filterIdHighWater;
     reads.set("/rest/api/2/filter/favourite", []);
-    reads.set("/rest/api/2/jql/autocompletedata/suggestions", { results: [] });
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggested());
     reads.set("/rest/api/2/project/KEIKO/components", []);
     reads.set("/rest/api/2/project/KEIKO/versions", []);
     reads.set("/rest/api/2/search", { total: 2, issues: [{ key: "K-1" }, { key: "K-2" }] });
@@ -161,8 +167,9 @@ describe("scopeSnapshot content", () => {
     requests.length = 0;
     statuses.clear();
     filterRows.clear();
+    delete created.filterIdHighWater;
     reads.set("/rest/api/2/filter/favourite", []);
-    reads.set("/rest/api/2/jql/autocompletedata/suggestions", { results: [] });
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggested());
     reads.set("/rest/api/2/project/KEIKO/", []);
     reads.set("/rest/api/2/search", { total: 2, issues: [{ key: "K-1" }, { key: "K-2" }] });
     for (const key of ["K-1", "K-2"]) {
@@ -196,6 +203,7 @@ describe("scopeSnapshot content", () => {
       jql: "project = KEIKO",
       owner: { name: "keiko-api" },
     });
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggested("Extra"));
     const after = await scopeSnapshot({}, { project: "KEIKO" }, created);
     const stray = strayWrites(before, after, [], "Auswahl t");
     expect(stray).toMatchObject({ changed: 1 });
@@ -205,14 +213,15 @@ describe("scopeSnapshot content", () => {
   it("leaves a filter another user owns in place and reports it as foreign", async () => {
     const before = await scopeSnapshot({}, { project: "KEIKO" }, created);
     filterRows.set("11", { id: "11", name: "Fremd", jql: "", owner: { name: "keiko-admin" } });
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggested("Fremd"));
     const after = await scopeSnapshot({}, { project: "KEIKO" }, created);
     expect(strayWrites(before, after, [], "Auswahl t")).toMatchObject({ foreign: 1, remove: [] });
   });
 
   it("refuses a filter list it cannot prove complete", async () => {
-    const suggestions = (length) => ({
-      results: Array.from({ length }, (_, id) => ({ value: `"Filter ${id}"` })),
-    });
+    // The run's own two filters take two of Jira's fifteen answers.
+    const suggestions = (length) =>
+      suggested(...Array.from({ length: length - 2 }, (_, id) => `Filter ${id}`));
     reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggestions(14));
     await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).resolves.toBeDefined();
     reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggestions(15));
@@ -221,9 +230,48 @@ describe("scopeSnapshot content", () => {
     );
     reads.set("/rest/api/2/jql/autocompletedata/suggestions", {});
     await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow("not a list");
-    reads.set("/rest/api/2/jql/autocompletedata/suggestions", { results: [] });
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggested());
     reads.set("/rest/api/2/filter/favourite", {});
     await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow("not a list");
+  });
+
+  it("matches a repeated name occurrence by occurrence and reports the surplus as foreign", async () => {
+    // Jira lets two owners use one name: another user's filter below the identity range is named
+    // like the stray the api actor created, so the second suggestion must not be explained away.
+    const before = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    filterRows.set("11", { id: "11", name: "Doppelt", jql: "", owner: { name: "keiko-api" } });
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggested("Doppelt", "Doppelt"));
+    const after = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    const stray = strayWrites(before, after, [], "Auswahl t");
+    expect(stray).toMatchObject({ foreign: 1 });
+    expect(stray.remove).toEqual([{ path: "/rest/api/2/filter/11", actor: "api" }]);
+    // A name the own filters carry is no exception either.
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", suggested("Doppelt", "Favorit"));
+    const again = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    expect(strayWrites(before, again, [], "Auswahl t")).toMatchObject({ foreign: 1 });
+  });
+
+  it("refuses a filter readable by identity that no suggestion accounts for", async () => {
+    filterRows.set("11", { id: "11", name: "Unsichtbar", jql: "", owner: { name: "keiko-api" } });
+    await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow(
+      "missing from the filter suggestions",
+    );
+  });
+
+  it.each([[undefined], ["abc"], [""], [null], [0], ["0"], ["-3"]])(
+    "refuses a favourite filter row whose identity is %j",
+    async (id) => {
+      reads.set("/rest/api/2/filter/favourite", [{ id, name: "Favorit" }]);
+      await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).rejects.toThrow(
+        "no numeric identity",
+      );
+    },
+  );
+
+  it("keeps reading the identity range after a favourite row with a numeric identity", async () => {
+    reads.set("/rest/api/2/filter/favourite", [{ id: "10", name: "Favorit" }]);
+    await expect(scopeSnapshot({}, { project: "KEIKO" }, created)).resolves.toBeDefined();
+    expect(created.filterIdHighWater).toBe(10);
   });
 
   it("fails closed when a filter read answers neither a filter nor an absence", async () => {

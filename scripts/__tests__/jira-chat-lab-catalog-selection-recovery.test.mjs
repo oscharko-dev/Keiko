@@ -7,6 +7,7 @@ const failing = new Set();
 const stuck = new Set();
 // The filters the api actor can read by identity. Jira answers 400 for any other identity.
 let filters = [];
+const FIXTURE_NAMES = { 9: "Gemeinsam" };
 const FIXTURE_FILTER_IDS = new Set(["9", "10"]);
 const api = { name: "keiko-api" };
 // What Jira answers for one filter identity: a removal takes effect unless it is stuck, and an
@@ -19,7 +20,7 @@ function filterAnswer(method, path, id) {
   }
   if (row !== undefined) return { status: 200, value: row };
   return FIXTURE_FILTER_IDS.has(id)
-    ? { status: 200, value: { id, name: path } }
+    ? { status: 200, value: { id, name: FIXTURE_NAMES[id] ?? "Auswahl Favorit" } }
     : { status: 400, value: {} };
 }
 
@@ -71,7 +72,11 @@ describe("recoverScope", () => {
     stuck.clear();
     filters = [{ id: 10, name: "Auswahl Favorit", owner: api }];
     reads.set("/rest/api/2/filter/favourite", []);
-    reads.set("/rest/api/2/jql/autocompletedata/suggestions", { results: [] });
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", () => ({
+      results: [...filters.map((entry) => entry.name), ...Object.values(FIXTURE_NAMES)]
+        .filter((name, index, all) => all.indexOf(name) === index)
+        .map((name) => ({ value: JSON.stringify(name) })),
+    }));
     reads.set("/rest/api/2/project/KEIKO/", []);
     reads.set("/rest/api/2/search", { total: 2, issues: [{ key: "K-1" }, { key: "K-2" }] });
     for (const key of ["K-1", "K-2"]) {

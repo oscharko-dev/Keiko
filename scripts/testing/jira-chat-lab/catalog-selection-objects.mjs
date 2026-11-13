@@ -412,6 +412,41 @@ const filterRow = (row) => {
     : [path, { owned: false, label }];
 };
 
+/** A filter row's identity as a number; a row without a numeric identity cannot be addressed. */
+function filterIdentity(row) {
+  const id = typeof row?.id === "string" || typeof row?.id === "number" ? String(row.id) : "";
+  if (!/^[1-9]\d{0,15}$/u.test(id)) throw new TypeError("A filter row carries no numeric identity");
+  return Number(id);
+}
+
+/**
+ * Visible filters the identities do not explain, by name. Jira lets two owners use one name, so a
+ * name is matched occurrence by occurrence: each filter read by identity accounts for one
+ * suggestion, and every further one is a filter known by name only. A filter read by identity that
+ * no suggestion accounts for means the two views disagree, which the snapshot refuses.
+ */
+function nameOnlyRows(names, addressed) {
+  const explained = new Map();
+  for (const row of addressed) explained.set(row.name, (explained.get(row.name) ?? 0) + 1);
+  const seen = new Map();
+  const rows = [];
+  for (const name of names) {
+    const left = explained.get(name) ?? 0;
+    if (left > 0) explained.set(name, left - 1);
+    else {
+      const occurrence = (seen.get(name) ?? 0) + 1;
+      seen.set(name, occurrence);
+      rows.push([
+        `filter-name:${name}#${occurrence}`,
+        { owned: false, label: contentDigest(name) },
+      ]);
+    }
+  }
+  if ([...explained.values()].some((count) => count > 0))
+    throw new TypeError("A filter readable by identity is missing from the filter suggestions");
+  return rows;
+}
+
 /**
  * The filters visible to the api actor beyond the run's own two, which is where a model's mistaken
  * filter creation lands. One this run could address by identity (starred, or within the identities
@@ -437,22 +472,19 @@ async function filterScope(session, created) {
   const known = Math.max(
     Number(created.favouriteFilterId),
     Number(created.filterIdHighWater ?? 0),
-    ...favourites.map((row) => Number(row.id)),
+    ...favourites.map((row) => filterIdentity(row)),
   );
   const inRange = await filtersInRange(
     session,
     Number(created.sharedFilterId),
     known + FILTER_ID_WINDOW,
   );
-  const byId = new Map([...favourites, ...inRange].map((row) => [String(row.id), row]));
-  created.filterIdHighWater = Math.max(known, ...[...byId.keys()].map(Number));
+  const byId = new Map(
+    [...favourites, ...inRange].map((row) => [String(filterIdentity(row)), row]),
+  );
+  created.filterIdHighWater = Math.max(known, ...[...byId.keys()].map((id) => Number(id)));
   const rows = [...byId].filter(([id]) => !own.has(id)).map(([, row]) => filterRow(row));
-  const addressed = new Set([...byId.values()].map((row) => row.name));
-  const ownNames = new Set([created.filterName, `${created.boardName} filter`]);
-  const nameOnly = names
-    .filter((name) => !addressed.has(name) && !ownNames.has(name))
-    .map((name) => [`filter-name:${name}`, { owned: false, label: contentDigest(name) }]);
-  return [...rows, ...nameOnly];
+  return [...rows, ...nameOnlyRows(names, byId.values())];
 }
 
 /**
