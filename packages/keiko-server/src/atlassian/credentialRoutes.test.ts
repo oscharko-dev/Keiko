@@ -1315,6 +1315,12 @@ describe("end-to-end verify through the gateway transport adapter", () => {
   });
 });
 
+function pendingReadGrantFor(chat: Chat): string {
+  const grantId = randomUUID();
+  retainedChatReadGrant(chat, false, grantId);
+  return grantId;
+}
+
 async function readyJiraPod(): Promise<string> {
   await rebuild({
     ...wiring,
@@ -1522,6 +1528,36 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     expect(response.status).toBe(200);
     expect(authorities.map((resolve) => resolve().ok)).toEqual([false, false, true]);
     expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
+  });
+
+  it("switching a Chat to another Pod revokes the previous binding's authority and read grant (#4353)", async () => {
+    const podId = await readyJiraPod();
+    const otherPodId = await readyJiraPod();
+    const switched = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const bystander = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const authority = retainedChatAuthority(switched);
+    const pending = retainedChatReadGrant(switched, false);
+    const granted = retainedChatReadGrant(switched);
+    const bystanderAuthority = retainedChatAuthority(bystander);
+    expect([authority().ok, pending(), granted()]).toEqual([true, "pending", "granted"]);
+    const moved = await updatedJiraChat(switched, { jiraPodId: otherPodId });
+    expect(moved.jiraPodBinding?.podId).toBe(otherPodId);
+    expect(authority()).toEqual({ ok: false, reason: "revoked" });
+    expect([pending(), granted()]).toEqual(["revoked", "revoked"]);
+    expect(bystanderAuthority().ok).toBe(true);
+  });
+
+  it("an expired Chat authority no longer admits pending Jira work (#4353)", async () => {
+    const podId = await readyJiraPod();
+    const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const pending = pendingReadGrantFor(bound);
+    expect(isCurrentRetainedReadGrant(pending)).toBe(true);
+    const entry = fixtureApprovalRegistry.getChatReadGrant(pending);
+    if (entry === undefined) throw new Error("Expected pending grant");
+    const afterExpiry = new Date(entry.grant.expiresAt + 1).toISOString();
+    expect(
+      isCurrentJiraChatReadGrant(baseDeps(wiring), entry, afterExpiry, "authority-expired"),
+    ).toBe(false);
   });
 
   it("direct credential deletion disconnects matching Chats and cancels only their active turns", async () => {
@@ -1809,6 +1845,69 @@ describe("authenticated Live Pod credential updates", () => {
     );
     expect(response.status).toBe(403);
     expect(wiring.custody.getMetadata(credential.authRef)).toEqual(credential);
+  });
+
+  it("keeps the verified private target binding through a token rotation on the real custody and route path", async () => {
+    const privateBase = "https://10.23.45.67:8443/context";
+    const authorizations: string[] = [];
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      fetchImpl: (input, init): Promise<Response> => {
+        const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
+        authorizations.push(headers.get("authorization") ?? "");
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        return Promise.resolve(
+          Response.json(
+            url.pathname.endsWith("/serverInfo")
+              ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Data Center" }
+              : { name: "synthetic-user", key: "synthetic-key", active: true },
+          ),
+        );
+      },
+    });
+    await rebuild(real);
+    const created = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({
+        ...livePodCreateInput(),
+        baseUrl: privateBase,
+        livePodCreationRequestId: randomUUID(),
+      }),
+    });
+    expect(created.status).toBe(200);
+    const { authRef } = (await created.json()) as AtlassianCredentialMetadata;
+    expect(authorizations).toEqual([]);
+    expect(await (await verifyCredentialRequest(authRef)).json()).toMatchObject({ status: "ok" });
+    const binding = { baseUrl: privateBase, addressClass: "private" };
+    const store = createAtlassianCredentialMetadataStore({ configPath });
+    const verified = real.custody.getMetadata(authRef);
+    if (verified === undefined) throw new Error("Expected verified credential");
+    expect(store.getTargetAdmission(verified)).toEqual(binding);
+
+    const rotated = await updateJiraCredential(authRef, {
+      expectedGeneration: 1,
+      apiToken: `${SYNTHETIC_TOKEN}-rotated`,
+    });
+    expect(rotated.status).toBe(200);
+    const current = real.custody.getMetadata(authRef);
+    if (current === undefined) throw new Error("Expected rotated credential");
+    expect(current).toMatchObject({ generation: 2, livePod: { verificationStatus: "unverified" } });
+    // The binding survives the rotation: no URL, configuration entry or second admission is needed.
+    expect(store.getTargetAdmission(current)).toEqual(binding);
+    expect(
+      await real.httpBodyPortFactory(current)({
+        method: "GET",
+        url: `${privateBase}/rest/api/2/project`,
+        timeoutMs: 1000,
+        maxBodyBytes: 4096,
+      }),
+    ).toMatchObject({ kind: "response", status: 200 });
+    expect(authorizations.at(-1)).toBe(`Bearer ${SYNTHETIC_TOKEN}-rotated`);
+    expect(await (await verifyCredentialRequest(authRef)).json()).toMatchObject({ status: "ok" });
+    expect(store.getTargetAdmission(real.custody.getMetadata(authRef) ?? current)).toEqual(binding);
   });
 
   it("renames and replaces tokens without losing the Pod association or exposing private state", async () => {

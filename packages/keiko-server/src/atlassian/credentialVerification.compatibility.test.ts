@@ -17,6 +17,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
+import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
 import { verifyStoredCredential } from "./credentialVerification.js";
 import {
   AtlassianCredentialMetadataStoreError,
@@ -219,6 +220,39 @@ describe("Jira compatibility through stored credential verification", () => {
     },
   );
 
+  it("refuses an anonymous identity at verification and retains no compatibility (#4289 AC1)", async () => {
+    const f = fixture();
+    const anonymous = withPort(
+      f,
+      createGatewayAtlassianHttpBodyPort({
+        baseUrl: BASE_URL,
+        authRef: f.metadata.authRef,
+        credentials: {
+          resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-credential" }),
+        },
+        fetchImpl: (input) => {
+          const url = input instanceof Request ? input.url : input.toString();
+          const body = url.endsWith("/serverInfo")
+            ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Data Center" }
+            : IDENTITY;
+          return Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: url.endsWith("/myself") ? { "X-AUSERNAME": "anonymous" } : {},
+            }),
+          );
+        },
+      }),
+    );
+    expect(await verifyStoredCredential(anonymous, currentMetadata(f), CORRELATION_ID)).toBe(
+      "auth-failed",
+    );
+    const current = currentMetadata(f);
+    assert(current.deployment === "data-center" && current.livePod !== undefined);
+    expect(current.livePod.verificationStatus).toBe("auth-failed");
+    expect(current.livePod).not.toHaveProperty("compatibility");
+  });
+
   it("clears successful facts when a recheck throws", async () => {
     const f = fixture();
     expect(await verifyStoredCredential(f.deps, f.metadata, CORRELATION_ID)).toBe("ok");
@@ -366,6 +400,26 @@ describe("private Jira compatibility metadata after restart", () => {
       [11, 3, 13],
     );
     expect(JSON.stringify(restarted.list())).not.toContain(IDENTITY.name);
+  });
+
+  it("never invents compatibility for legacy metadata and an identity verification claims no Agile capability (#4289 AC3)", async () => {
+    const f = fixture([11, 3, 13], createAtlassianCredentialMetadataStore({ configPath }));
+    expect(await verifyStoredCredential(f.deps, f.metadata, CORRELATION_ID)).toBe("ok");
+    const verified = currentMetadata(f);
+    assert(verified.deployment === "data-center" && verified.livePod !== undefined);
+    const { compatibility: observed, ...legacyPod } = verified.livePod;
+    expect(observed).toMatchObject({ restApi: "v2", agileApi: "unverified" });
+    writeFileSync(
+      atlassianCredentialMetadataPath(configPath),
+      JSON.stringify({
+        version: 1,
+        credentials: { [verified.authRef]: { ...verified, livePod: legacyPod } },
+      }),
+    );
+    const restarted = createAtlassianCredentialMetadataStore({ configPath }).get(verified.authRef);
+    assert(restarted?.deployment === "data-center" && restarted.livePod !== undefined);
+    expect(restarted.livePod).not.toHaveProperty("compatibility");
+    expect(JSON.stringify(restarted)).not.toMatch(/agileApi|restApi|versionNumbers/u);
   });
 
   it.each([

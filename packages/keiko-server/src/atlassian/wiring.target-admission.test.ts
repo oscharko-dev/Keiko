@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -301,6 +301,58 @@ describe("stored Data Center admission through real custody, wiring and verifica
         expect(line).not.toContain(SYNTHETIC_TOKEN);
         expect(line).not.toContain("Bearer ");
       }
+    },
+  );
+
+  // #4260: private and loopback literals are admitted from the person's own URL and a verified
+  // binding. A legacy `atlassian.privateTargets` block in the configuration file is parsed and
+  // preserved, but it neither grants nor revokes any access.
+  it("never lets a legacy privateTargets entry grant access to an unverified private Pod", async () => {
+    const f = fixture();
+    writeFileSync(
+      join(f.directory, "keiko.config.json"),
+      JSON.stringify({
+        atlassian: { privateTargets: [{ baseUrl: PRIVATE_BASE, addressClass: "private" }] },
+      }),
+    );
+    const deps = f.build();
+    const created = createDataCenter(deps, PRIVATE_BASE);
+    expect(await deps.httpPortFactory(created)(request(PRIVATE_BASE))).toEqual({
+      kind: "network-error",
+    });
+    expect(await deps.httpBodyPortFactory(created)(request(PRIVATE_BASE))).toEqual({
+      kind: "network-error",
+    });
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+    expect(f.store.getTargetAdmission(created)).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "lists another target",
+      { privateTargets: [{ baseUrl: "https://10.99.99.99:8443/other", addressClass: "private" }] },
+    ],
+    ["lists no target", { privateTargets: [] }],
+    ["is absent", undefined],
+  ] as const)(
+    "keeps a verified private Pod admitted across restart when the legacy block %s",
+    async (_name, block) => {
+      const f = fixture();
+      const configPath = join(f.directory, "keiko.config.json");
+      const deps = f.build();
+      const created = createDataCenter(deps, PRIVATE_BASE);
+      expect(await verifyStoredCredential(deps, created, "synthetic-legacy-block")).toBe("ok");
+      writeFileSync(configPath, JSON.stringify(block === undefined ? {} : { atlassian: block }));
+      const restarted = f.build();
+      const restored = selected(restarted, created.authRef);
+      expect(f.store.getTargetAdmission(restored)).toEqual({
+        baseUrl: PRIVATE_BASE,
+        addressClass: "private",
+      });
+      expect(await restarted.httpBodyPortFactory(restored)(request(PRIVATE_BASE))).toMatchObject({
+        kind: "response",
+        status: 200,
+      });
     },
   );
 
