@@ -99,6 +99,15 @@ export function jiraDraftProblemGuidance(
   return `${named} ${DRAFT_REFUSED}`;
 }
 
+/** The fixed sentence a refusal carries, if its closed reason or problem has one. */
+function refusalGuidance(
+  refusal: Extract<ChatDraftArguments, { ok: false }>,
+): { readonly guidance: string } | Record<string, never> {
+  if (refusal.problem !== undefined)
+    return { guidance: jiraDraftProblemGuidance(refusal.problem, refusal.item) };
+  return refusal.reason === "connection-changed" ? { guidance: CONNECTION_CHANGED_GUIDANCE } : {};
+}
+
 /**
  * The structured refusal the model corrects. An invalid draft carries the fixed sentence for its
  * closed problem and item number, so the model learns what to correct; it never echoes a field
@@ -111,11 +120,7 @@ export function draftRefusalData(
     outcome: "rejected",
     reason: "field-validation",
     draftRefusal: refusal.reason,
-    ...(refusal.problem === undefined
-      ? refusal.reason === "connection-changed"
-        ? { guidance: CONNECTION_CHANGED_GUIDANCE }
-        : {}
-      : { guidance: jiraDraftProblemGuidance(refusal.problem, refusal.item) }),
+    ...refusalGuidance(refusal),
     items: [],
   };
 }
