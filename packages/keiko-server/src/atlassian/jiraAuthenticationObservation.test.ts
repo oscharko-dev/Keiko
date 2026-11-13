@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -360,7 +360,7 @@ it.each(["revision", "generation"] as const)(
 );
 // Deliberate reversal (#4353 audit round 3, point 3). The old pin read
 //   it("uses the remaining original time and tears down the identity request on cancellation", ...)
-//   expect(budgets).toEqual([1000, JIRA_IDENTITY_PROBE_DEADLINE_MS]);
+//   expect(budgets).toEqual([1000, 200]);
 // and guarded one incident: an identity read that outlives its caller's time and cancellation. The
 // shared identity read now has its own bounded deadline (JIRA_IDENTITY_PROBE_DEADLINE_MS), so the
 // first number is unchanged and the second is the flight's deadline. Cancellation still tears the
@@ -390,7 +390,7 @@ it("gives the shared identity read its own deadline and tears it down when its o
     },
   })({ ...request(), signal: controller.signal });
   expect(f.urls).toHaveLength(2);
-  expect(budgets).toEqual([1000, 200]);
+  expect(budgets).toEqual([1000, JIRA_IDENTITY_PROBE_DEADLINE_MS]);
   expect(f.current()).toEqual(f.metadata);
 });
 it("does not accept an oversized identity response or replay the primary request", async () => {
@@ -1613,8 +1613,8 @@ it("explains a shared result with its cause and a link to the caller that starte
     }
     return response({}, 401);
   });
-  const calls = ["leader", "second", "third"].map((id) =>
-    f.deps.httpBodyPortFactory(f.metadata, id)(request(`s/${id}`)),
+  const calls = [randomUUID(), randomUUID(), randomUUID()].map((id, index) =>
+    f.deps.httpBodyPortFactory(f.metadata, id)(request(`s/${String(index)}`)),
   );
   await vi.waitFor(() => {
     expect(myselfCount(f)).toBe(1);
