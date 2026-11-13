@@ -70,6 +70,7 @@ const ZERO_FINDING_SCOPES = {
     "workspace",
   ]),
   "anti-slop/require-safety-comment-for-type-assertion": zeroFindingScopes([
+    "evaluations",
     "git",
     "memory-capture",
     "memory-consolidation",

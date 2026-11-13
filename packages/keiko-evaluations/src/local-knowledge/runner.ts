@@ -20,7 +20,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
-  CapsuleSetId,
   ChunkId,
   DocumentId,
   KnowledgeCapsuleId,
@@ -198,7 +197,7 @@ function buildRetrievalQuery(
   if (query.scope.kind === "capsule") {
     return { ...baseQuery, capsuleId: query.scope.capsuleId };
   }
-  return { ...baseQuery, capsuleSetId: query.scope.capsuleSetId as CapsuleSetId };
+  return { ...baseQuery, capsuleSetId: query.scope.capsuleSetId };
 }
 
 // Prepends the query topic marker to the EMBEDDING input only. Inputs that already carry an
