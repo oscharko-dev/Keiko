@@ -97,6 +97,7 @@
   "client.git-operation.settled": "client-diagnostics",
   "client.jira-fields.presented": "client-diagnostics",
   "client.jira-result.presented": "client-diagnostics",
+  "client.knowledge-catalog.refreshed": "client-diagnostics",
   "client.knowledge-catalog.unavailable": "client-diagnostics",
   "client.markdown.layout": "client-diagnostics",
   "client.scope.notice": "client-diagnostics",

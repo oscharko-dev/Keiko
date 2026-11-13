@@ -532,6 +532,42 @@ describe("isClientDiagnosticIngestRequest", () => {
   });
 });
 
+// #4371: a catalog refresh the picker did not wait for is a closed outcome and a closed duration
+// bucket, under a correlation id; nothing else rides along.
+describe("knowledgeCatalogRefresh report", () => {
+  const withCorrelation = { ...validRequest(), correlationId: "ui_catalog-refresh-0001" };
+  it("accepts exactly the closed outcome and duration bucket", () => {
+    for (const outcome of ["ok", "failed", "superseded"]) {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...withCorrelation,
+          knowledgeCatalogRefresh: { outcome, duration: "1s-5s" },
+        }),
+      ).toBe(true);
+    }
+    for (const invalid of [
+      { outcome: "slow", duration: "1s-5s" },
+      { outcome: "ok", duration: "3s" },
+      { outcome: "ok" },
+      { outcome: "ok", duration: "1s-5s", podName: "Customer contracts" },
+      "ok",
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...withCorrelation, knowledgeCatalogRefresh: invalid }),
+      ).toBe(false);
+    }
+  });
+
+  it("requires a correlation id", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        knowledgeCatalogRefresh: { outcome: "ok", duration: "1s-5s" },
+      }),
+    ).toBe(false);
+  });
+});
+
 // #3876 review: a restored coding run reports where its messages went as counts — never a message,
 // a path or a run name — and the counts must describe one restoration.
 describe("client coding run restore evidence", () => {

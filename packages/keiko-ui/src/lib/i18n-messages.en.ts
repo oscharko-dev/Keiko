@@ -536,6 +536,30 @@ export const EN_MESSAGES = {
   "chat.error.jiraAuthentication.message": "The Jira connection could not be authenticated.",
   "chat.error.jiraAuthentication.remediation":
     "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira.",
+  "chat.error.knowledgePodUnavailable.title": "Knowledge Pod unavailable",
+  "chat.error.knowledgePodUnavailable.message":
+    "The selected Knowledge Pod no longer exists or is being deleted. Choose another Knowledge Pod.",
+  "chat.error.knowledgePodUnavailable.remediation":
+    "The list has been refreshed. Pick a Knowledge Pod from it.",
+  "chat.error.knowledgeStoreUnavailable.title": "Knowledge Pods cannot be checked",
+  "chat.error.knowledgeStoreUnavailable.message":
+    "The Knowledge Pod store is unavailable, so the selection could not be checked. Try again in a moment.",
+  "chat.error.knowledgeStoreUnavailable.remediation": "If this keeps happening, restart Keiko.",
+  "chat.error.jiraPodUnavailable.title": "Jira Pod no longer available",
+  "chat.error.jiraPodUnavailable.message":
+    "The Jira Pod bound to this chat is no longer available. Choose a Jira Pod again.",
+  "chat.error.jiraPodUnavailable.remediation":
+    "Open the Data sources menu above the conversation and choose a Jira Pod, then send your message again.",
+  "chat.error.jiraPodVerification.title": "Jira Pod needs verification",
+  "chat.error.jiraPodVerification.message":
+    "The Jira Pod must be verified again before this chat can use it. Verify it in the Knowledge Pods Hub.",
+  "chat.error.jiraPodVerification.remediation":
+    "Open the Knowledge Pods Hub, verify the Jira connection, then send your message again.",
+  "chat.error.jiraPodConnectionChanged.title": "Jira connection changed",
+  "chat.error.jiraPodConnectionChanged.message":
+    "The Jira connection changed after this chat chose its Jira Pod. Choose the Jira Pod again.",
+  "chat.error.jiraPodConnectionChanged.remediation":
+    "Open the Data sources menu above the conversation and choose the Jira Pod again, then send your message again.",
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",

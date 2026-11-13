@@ -11,6 +11,7 @@
 //      cancelSend's effect on the live request, and the failed-error mapping
 //      that preserves the user prompt but never persists a fake assistant.
 
+import type { ReactElement } from "react";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -306,6 +307,341 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     const user = userEvent.setup();
     await user.click(cancel);
     expect(cancelSend).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Send inert and visibly distinct from the stop control while a response runs (#4371)", async () => {
+    const cancelSend = vi.fn();
+    const sendMessage = vi.fn();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        models: [chatModelCapability("example-chat-model")],
+        messages: [userMessage("hi")],
+        draft: "next prompt",
+        sendStatus: "streaming",
+        sending: true,
+        cancelSend,
+        sendMessage,
+      }),
+    );
+    const user = userEvent.setup();
+    const stop = screen.getByRole("button", { name: "Cancel response" });
+    const inertSend = screen.getByRole("button", {
+      name: "Send is unavailable while a response is running",
+    });
+
+    // Two separate elements: the stop control is not the Send button re-labelled.
+    expect(stop).not.toBe(inertSend);
+    expect(stop).not.toHaveClass("cmp-send");
+    expect(inertSend).toHaveClass("cmp-send");
+    expect(inertSend).toHaveAttribute("aria-disabled", "true");
+    expect(inertSend).toHaveAttribute("type", "button");
+
+    // A double click, or a key press, on the place Send occupied cannot cancel or submit.
+    await user.dblClick(inertSend);
+    inertSend.focus();
+    await user.keyboard("{Enter}{ }");
+    expect(cancelSend).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    // Only the stop control cancels.
+    await user.click(stop);
+    expect(cancelSend).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the Send element in place when the answer starts, so focus on it is not lost (#4371)", () => {
+    const idle = makeSession({
+      activeChat: makeChat(),
+      models: [chatModelCapability("example-chat-model")],
+      messages: [userMessage("hi")],
+      draft: "next prompt",
+    });
+    const { rerender } = renderWindow(idle);
+    const send = screen.getByRole("button", { name: "Send message" });
+    send.focus();
+
+    rerender(
+      <ChatSessionProvider
+        value={{ ...idle, sendStatus: "contacting", sending: true, cancelSend: vi.fn() }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    const inert = screen.getByRole("button", {
+      name: "Send is unavailable while a response is running",
+    });
+    expect(inert).toBe(send);
+  });
+
+  it("hands keyboard focus from Send to Stop when the answer starts (#4371)", () => {
+    const idle = makeSession({
+      activeChat: makeChat(),
+      models: [chatModelCapability("example-chat-model")],
+      messages: [userMessage("hi")],
+      draft: "next prompt",
+    });
+    const { rerender } = renderWindow(idle);
+    screen.getByRole("button", { name: "Send message" }).focus();
+
+    rerender(
+      <ChatSessionProvider
+        value={{ ...idle, sendStatus: "contacting", sending: true, cancelSend: vi.fn() }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Cancel response" })).toHaveFocus();
+  });
+
+  it("does not pull focus to Stop when Send did not hold it (#4371)", () => {
+    const idle = makeSession({
+      activeChat: makeChat(),
+      models: [chatModelCapability("example-chat-model")],
+      messages: [userMessage("hi")],
+      draft: "next prompt",
+    });
+    const { rerender } = renderWindow(idle);
+    screen.getByRole("textbox", { name: "Chat message" }).focus();
+
+    rerender(
+      <ChatSessionProvider
+        value={{ ...idle, sendStatus: "contacting", sending: true, cancelSend: vi.fn() }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Cancel response" })).not.toHaveFocus();
+  });
+
+  it("moves focus into the composer when the focused Stop control disappears (#4371)", () => {
+    const running = makeSession({
+      activeChat: makeChat(),
+      models: [chatModelCapability("example-chat-model")],
+      messages: [userMessage("hi")],
+      draft: "next prompt",
+      sendStatus: "streaming",
+      sending: true,
+    });
+    const { rerender } = renderWindow(running);
+    screen.getByRole("button", { name: "Cancel response" }).focus();
+
+    rerender(
+      <ChatSessionProvider value={{ ...running, sendStatus: "completed", sending: false }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Cancel response" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
+  });
+
+  it("keeps focus on Stop through every update while the answer runs, and moves it to the input only when the turn ends (#4371)", () => {
+    const base = makeSession({
+      activeChat: makeChat(),
+      models: [chatModelCapability("example-chat-model")],
+      messages: [userMessage("hi")],
+      draft: "",
+      sendStatus: "contacting",
+      sending: true,
+    });
+    const view = (session: ChatSessionApi): ReactElement => (
+      <ChatSessionProvider value={session}>
+        <ChatWindow />
+      </ChatSessionProvider>
+    );
+    const { rerender } = renderWindow(base);
+    const stop = screen.getByRole("button", { name: "Cancel response" });
+    stop.focus();
+    // React puts focus back after a commit that moved it, so the active element alone cannot show
+    // that Stop was asked to let go: the input must never be told to take focus while Stop holds it.
+    const focusCalls = vi.spyOn(HTMLElement.prototype, "focus");
+    try {
+      const composerInput = screen.getByRole("textbox", { name: "Chat message" });
+
+      // contacting -> streaming, then further chunks: new session objects, new messages.
+      rerender(view({ ...base, sendStatus: "streaming" }));
+      expect(stop).toHaveFocus();
+      rerender(
+        view({ ...base, sendStatus: "streaming", messages: [userMessage("hi"), userMessage("a")] }),
+      );
+      rerender(
+        view({
+          ...base,
+          sendStatus: "streaming",
+          messages: [userMessage("hi"), userMessage("ab")],
+        }),
+      );
+      // A composer re-render for any other reason (the next draft being typed) does not release it.
+      rerender(view({ ...base, sendStatus: "streaming", draft: "next" }));
+      rerender(view({ ...base, sendStatus: "streaming", draft: "next m" }));
+      expect(screen.getByRole("button", { name: "Cancel response" })).toHaveFocus();
+      expect(focusCalls.mock.contexts.filter((target) => target === composerInput)).toHaveLength(0);
+    } finally {
+      focusCalls.mockRestore();
+    }
+    expect(screen.getByRole("textbox", { name: "Chat message" })).not.toHaveFocus();
+
+    rerender(view({ ...base, sendStatus: "completed", sending: false }));
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
+  });
+
+  it("announces a repeated refused send again, by a new node, and records the refusal once per running turn (#4371)", async () => {
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    try {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          models: [chatModelCapability("example-chat-model")],
+          messages: [userMessage("hi")],
+          draft: "next prompt",
+          sendStatus: "streaming",
+          sending: true,
+        }),
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("textbox", { name: "Chat message" }));
+      const status = document.querySelector('[data-send-status="streaming"]');
+
+      await user.keyboard("{Enter}");
+      const first = status?.querySelector("[data-send-refusal]");
+      await user.keyboard("{Enter}");
+      const second = status?.querySelector("[data-send-refusal]");
+      await user.keyboard("{Enter}{Enter}{Enter}");
+
+      // The polite region announces what is inserted: the first node is removed from it and a new
+      // node carrying the same words is added, so a repeated refusal is heard again.
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(second).not.toBe(first);
+      expect(first?.isConnected).toBe(false);
+      expect(second?.textContent).toBe(first?.textContent);
+      expect(status?.querySelectorAll("[data-send-refusal]")).toHaveLength(1);
+      expect(
+        reports.filter((entry) => entry.meta?.composerActivity === "send-refused-while-running"),
+      ).toHaveLength(1);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("leaves focus alone when the answer ends while Stop was not focused (#4371)", () => {
+    const running = makeSession({
+      activeChat: makeChat(),
+      models: [chatModelCapability("example-chat-model")],
+      messages: [userMessage("hi")],
+      draft: "next prompt",
+      sendStatus: "streaming",
+      sending: true,
+    });
+    const { rerender } = renderWindow(running);
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+
+    rerender(
+      <ChatSessionProvider value={{ ...running, sendStatus: "completed", sending: false }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(elsewhere).toHaveFocus();
+    elsewhere.remove();
+  });
+
+  it("refuses Enter while a response runs with a visible, announced reason and keeps the draft (#4371)", async () => {
+    const sendMessage = vi.fn();
+    const setDraft = vi.fn();
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    try {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          models: [chatModelCapability("example-chat-model")],
+          messages: [userMessage("hi")],
+          draft: "next prompt",
+          sendStatus: "streaming",
+          sending: true,
+          sendMessage,
+          setDraft,
+        }),
+      );
+      const status = document.querySelector('[data-send-status="streaming"]');
+      // Typing alone is not a refusal: the reason is shown when a send is attempted.
+      expect(status).not.toHaveTextContent("next message");
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("textbox", { name: "Chat message" }));
+      await user.keyboard("{Enter}");
+
+      expect(status).toHaveAttribute("aria-live", "polite");
+      expect(status).toHaveAttribute("role", "status");
+      expect(status).toHaveTextContent(
+        "Receiving response… Your next message can be sent when this response is complete, or cancel the response first.",
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(setDraft).not.toHaveBeenCalledWith("");
+      expect(
+        reports.filter((entry) => entry.meta?.composerActivity === "send-refused-while-running"),
+      ).toEqual([
+        {
+          message: "Keiko composer refused a send while a response runs.",
+          meta: { composerActivity: "send-refused-while-running" },
+        },
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("refuses a click on the inert Send with the same reason (#4371)", async () => {
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    try {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          models: [chatModelCapability("example-chat-model")],
+          messages: [userMessage("hi")],
+          draft: "next prompt",
+          sendStatus: "streaming",
+          sending: true,
+        }),
+      );
+      const user = userEvent.setup();
+      await user.click(
+        screen.getByRole("button", { name: "Send is unavailable while a response is running" }),
+      );
+
+      expect(document.querySelector('[data-send-status="streaming"]')).toHaveTextContent(
+        "Your next message can be sent when this response is complete",
+      );
+      expect(
+        reports.some((entry) => entry.meta?.composerActivity === "send-refused-while-running"),
+      ).toBe(true);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("keeps the running reason out of the status until a send is attempted (#4371)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        models: [chatModelCapability("example-chat-model")],
+        messages: [userMessage("hi")],
+        draft: "",
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    const status = document.querySelector('[data-send-status="streaming"]');
+    expect(status).toHaveTextContent("Receiving response…");
+    expect(status).not.toHaveTextContent("next message");
   });
 
   it("falls back to the Send button when sending=false", () => {

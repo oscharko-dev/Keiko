@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 402,
-  "completeClassCount": 402,
+  "supportedClassCount": 403,
+  "completeClassCount": 403,
   "completeness": "complete",
   "classes": [
     {
@@ -3713,6 +3713,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "refusalReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "resultScopeDigest",
@@ -8674,6 +8680,62 @@
             "causeChain": false
           },
           "proofIds": ["client.knowledge-catalog.unavailable.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "client-knowledge-catalog-refresh",
+      "requirementContract": "client-knowledge-catalog-refresh",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["client.knowledge-catalog.refreshed"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "client.knowledge-catalog.refreshed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["client.knowledge-catalog.refreshed"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "client.knowledge-catalog.refreshed",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "duration",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["client.knowledge-catalog.refreshed.line"],
           "replayReferences": [],
           "missingObligations": []
         }
