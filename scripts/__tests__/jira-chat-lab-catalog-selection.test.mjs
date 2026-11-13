@@ -778,6 +778,19 @@ describe("refusalTrace", () => {
     ]);
   });
 
+  it("bounds the closed status, outcome and reason like the other fields", () => {
+    const long = "x".repeat(500);
+    const [entry] = refusalTrace([
+      {
+        call: { name: "jira.issue" },
+        result: { status: long, data: { outcome: long, reason: long } },
+      },
+    ]);
+    expect(entry.status).toHaveLength(64);
+    expect(entry.outcome).toHaveLength(64);
+    expect(entry.reason).toHaveLength(64);
+  });
+
   it("is carried by every graded attempt", () => {
     const turn = { exchanges: [ok], gateway: { unrecovered: 0, rejected: {} } };
     expect(gradeSelection(READ, turn, { tokens: ["High"] }).refusals).toEqual([]);

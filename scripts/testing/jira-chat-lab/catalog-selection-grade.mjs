@@ -191,7 +191,8 @@ export function refusalTrace(exchanges) {
   return exchanges.filter((exchange) => !succeeded(exchange)).map(refusalEntry);
 }
 
-const closedOf = (...values) => String(values.find((value) => value !== undefined) ?? "none");
+const closedOf = (...values) =>
+  String(values.find((value) => value !== undefined) ?? "none").slice(0, REFUSAL_NAME_CHARS);
 
 function refusalEntry(exchange) {
   const { result } = exchange;
