@@ -2311,13 +2311,13 @@ function ModelCheckNotice({ model }: { readonly model: ModelCapability | undefin
   if (model === undefined) return null;
   if (model.conversationCheckPending === true)
     return (
-      <span className="cmp-model-check" role="status">
+      <span className={styles.cmpModelCheck} role="status">
         {t("chat.model.checking", { model: model.id })}
       </span>
     );
   if (model.conversationReady !== false) return null;
   return (
-    <span className="cmp-model-check cmp-model-check-failed" role="status">
+    <span className={`${styles.cmpModelCheck} ${styles.cmpModelCheckFailed}`} role="status">
       {t("chat.model.notReady", { model: model.id })}
     </span>
   );

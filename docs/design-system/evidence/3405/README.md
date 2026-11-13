@@ -117,6 +117,16 @@ run; its fallback-font captures were discarded and the 14 committed captures are
 updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
 evidence.
 
+Checking only the models in use (#4351) adds the Chat picker's "checking" and "not ready" notice, its
+two English and German optional-catalog strings and the selection request in `api.ts`, so the
+unchanged freshness gate rejected those digests. The notice style lives in the existing
+`ChatWindow.module.css`, so `globals.css` and the #1300 evidence stay untouched. On 2026-11-13 (UTC)
+the complete original nine-case producer ran in the Linux gates container (`--init`, Node 24.18.0):
+**9 passed (1.6m)**, including the real BFF stop and restart. Only the declared source digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were discarded
+and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or numerical
+ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
