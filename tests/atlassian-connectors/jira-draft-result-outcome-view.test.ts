@@ -223,7 +223,7 @@ describe("jira.draft result as the Chat outcome card reads it", () => {
     const items: DraftItemResult[] = [
       ...created(2),
       { ref: "f", state: "failed" },
-      { ref: "s", state: "skipped", blockedBy: ["f"] },
+      { ref: "s", state: "skipped" },
     ];
     expect(viewOf(items).notCreatedCount).toBe(2);
     expect(viewOf(created(3)).notCreatedCount).toBeUndefined();
