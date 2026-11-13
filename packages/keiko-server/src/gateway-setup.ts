@@ -6974,7 +6974,11 @@ async function walkChatCandidates(
   for (const [index, id] of order.entries()) {
     input.signal?.throwIfAborted();
     try {
-      const tested = await input.tester(candidateConfig, [id, ...asserted]);
+      const tested =
+        await /* NOSONAR typescript:S9382 -- one model at a time by design (#4351). */ input.tester(
+          candidateConfig,
+          [id, ...asserted],
+        );
       return chatAdmissionFromTest(tested, order.slice(index + 1), dropped);
     } catch (error) {
       if (temporaryGatewaySetupFailure(error) || definitiveGatewaySetupFailure(error)) throw error;
@@ -7182,7 +7186,12 @@ async function admitEmbeddingCandidates(
   let answeredId: string | undefined;
   for (const id of ordered) {
     input.signal?.throwIfAborted();
-    const answered = new Set(await input.embeddingProbe(probeConfig, [id]));
+    const answered = new Set(
+      await /* NOSONAR typescript:S9382 -- one model at a time by design (#4351). */ input.embeddingProbe(
+        probeConfig,
+        [id],
+      ),
+    );
     if (answered.has(id)) {
       answeredId = id;
       break;
