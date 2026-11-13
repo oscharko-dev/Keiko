@@ -1454,7 +1454,7 @@ it("lets every sharer see a rejection of the one shared identity read", async ()
     http(request(`resource/${String(index)}`)),
   );
   await vi.waitFor(() => {
-    expect(f.urls.filter((url) => url.endsWith("/myself")).length).toBe(1);
+    expect(f.urls.filter((url) => url.endsWith("/myself"))).toHaveLength(1);
   });
   release();
   for (const result of await Promise.all(calls))
