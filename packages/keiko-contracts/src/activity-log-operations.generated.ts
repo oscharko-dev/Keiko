@@ -37274,6 +37274,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "portable.setup-notice.requested",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "portable-launch-notifier.emitSetupNoticeRequested",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["portable-setup-notice"],
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["windows-alert-spawn"],
+    proofIds: ["portable.setup-notice.requested.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "portable.windows-alert.spawn-failed",
     category: "diagnostic",
     owner: "keiko-cli",
@@ -37293,7 +37325,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["portable-failure-alert"],
+        values: ["portable-failure-alert", "portable-setup-notice"],
       },
       failureKind: {
         type: "string",

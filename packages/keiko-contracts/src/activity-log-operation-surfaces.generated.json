@@ -530,6 +530,7 @@
   "portable.normal-startup-recovery.completed": "runtime-packages",
   "portable.normal-startup-recovery.required": "runtime-packages",
   "portable.runtime.native-helper-bound": "tools-workflows",
+  "portable.setup-notice.requested": "lifecycle-crash",
   "portable.windows-alert.spawn-failed": "lifecycle-crash",
   "portable.windows-authenticode.system-binary-refused": "runtime-packages",
   "pr-description.apply.blocked": "editor-delivery",

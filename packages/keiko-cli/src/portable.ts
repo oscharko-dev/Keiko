@@ -15,7 +15,9 @@ import {
 } from "./portable-macos-activation.js";
 import {
   notifyPortableLaunchFailure,
+  notifyPortableSetupStarted,
   type PortableFailureNotifierFn,
+  type PortableSetupNoticeFn,
 } from "./portable-launch-notifier.js";
 import {
   attestedPortableInstallRecord,
@@ -111,6 +113,7 @@ export interface PortableSetupDeps {
   readonly lifecycleFn?: LifecycleFn | undefined;
   readonly activateMacosRuntimeFn?: MacosRuntimeActivationFn | undefined;
   readonly notifyFailureFn?: PortableFailureNotifierFn | undefined;
+  readonly notifySetupStartedFn?: PortableSetupNoticeFn | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
   readonly recoverNormalStartupFn?: PortableNormalStartupRecoveryFn | undefined;
   readonly encodeRecoveredLaunchFn?:
@@ -131,6 +134,7 @@ interface PortableRuntimeDeps extends PortableArgDeps {
   readonly activateMacosRuntimeFn: MacosRuntimeActivationFn;
   readonly recoverNormalStartupFn: PortableNormalStartupRecoveryFn;
   readonly encodeRecoveredLaunchFn: (descriptor: PortableRecoveredLaunchDescriptor) => string;
+  readonly notifySetupStartedFn: PortableSetupNoticeFn | undefined;
 }
 
 type PortableUpgradeDeps = Pick<
@@ -452,12 +456,36 @@ async function setupAndLaunchManaged(
   return await launchManaged(managedLaunchOptions(options, setup.layout, io, env), deps);
 }
 
+// A double-click on the downloaded Windows launcher shows no window, and the first installation
+// below runs for minutes before the browser opens (#4358). The launcher says so once, here, where
+// that installation begins: never for the launch of the installed copy, an upgrade or a dry run,
+// and never on a platform whose launcher is visible while it works.
+function announcePortableSetup(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: Pick<PortableRuntimeDeps, "platform" | "notifySetupStartedFn">,
+): void {
+  if (options.dryRun || options.target !== "windows-x64") return;
+  const notify =
+    deps.notifySetupStartedFn ??
+    ((noticeEnv: EnvSource): void => {
+      notifyPortableSetupStarted(noticeEnv, {
+        platform: deps.platform,
+        reportAlertFailure: io.err,
+        securityLogSink: options.securityLogSink,
+      });
+    });
+  notify(env);
+}
+
 function setupDownloadedPortable(
   options: PortableCliOptions,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<PortableRuntimeDeps, "now" | "spawnFn">,
+  deps: Pick<PortableRuntimeDeps, "now" | "spawnFn" | "platform" | "notifySetupStartedFn">,
 ): number {
+  announcePortableSetup(options, io, env, deps);
   const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
   if (setup.code !== 0 || setup.layout === undefined || options.noRelaunch) return setup.code;
   spawnManagedLauncher(setup.layout, deps.spawnFn);
@@ -476,6 +504,8 @@ async function launchPortable(
     | "lifecycleFn"
     | "recoverNormalStartupFn"
     | "encodeRecoveredLaunchFn"
+    | "platform"
+    | "notifySetupStartedFn"
   >,
 ): Promise<number> {
   try {
@@ -612,6 +642,7 @@ function resolvedDeps(deps: PortableSetupDeps): PortableRuntimeDeps {
     spawnFn: deps.spawnFn ?? spawn,
     lifecycleFn: deps.lifecycleFn ?? runLifecycleCli,
     activateMacosRuntimeFn: deps.activateMacosRuntimeFn ?? activateMacosPortableRuntime,
+    notifySetupStartedFn: deps.notifySetupStartedFn,
     ...resolvedPortableRecoveryDeps(deps),
   };
 }

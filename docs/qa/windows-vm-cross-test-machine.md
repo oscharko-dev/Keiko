@@ -447,12 +447,29 @@ measurement; its first host step only reached "waiting for a free slot".
   minutes under memory pressure) and run heavy host steps through the machine guard.
 - **Edition.** The guest is Windows 11 IoT Enterprise LTSC 2024 (24H2 servicing), not Windows 11
   Enterprise 26H2. Quote that edition in every result.
-- **Host load.** Shut the guest down (`utmctl stop <machine> --request`) when it is not in use.
-  Never give it more than 8 cores and 16 GB.
+- **Host load.** The guest (8 cores, 16 GB) is not run beside a model run: it runs only when the
+  machine guard's state line (`~/.keiko-lab/governor/watchdog.state`) shows headroom (load <= 8,
+  availGB >= 24, compGB <= 18), never while a performance-evidence measurement is running or queued, and it is
+  shut down (`utmctl stop <machine> --request`) as soon as it is not in use. A guest of 16 GB beside
+  a local model plus Docker exceeds the host's memory, so "below 90 % of processor and memory with
+  guest and lab together" is not demonstrated; this rule is what is enforced.
+- **Snapshot restore (one measurement, upper bound).** On 2026-11-13, `restore` of `clean-updated`
+  plus `utmctl start`: SSH answered after 191 s and the interactive desktop session after 203 s. The
+  snapshot holds no Keiko, so fetching, verifying and extracting the v1.4.0 release (appendix E)
+  took 298 s and `keiko start --start-timeout 240` reported a healthy UI after a further 104 s:
+  605 s from start to a healthy Keiko. The host was busy: the 1-minute load average rose from 7 at
+  the start to about 15 during the run (other heavy jobs were running), so these are upper bounds,
+  not a representative value. Repeat once on a quiet host with the 1-minute load recorded at start
+  and end.
+- **Real hardware.** What this machine cannot show is checked by a contributor on an Intel or AMD
+  computer: [Windows on real hardware: contributor checks](windows-real-hardware-handover.md).
 - **Clock.** Without `RealTimeIsUniversal` the guest runs an hour behind. Never move the clock back
   to extend the evaluation.
 
 ## Rebuild checklist
+
+**Status:** documented, not proven by a rebuild; due at the latest when the evaluation license
+expires on 2027-02-11.
 
 1. Install UTM 5.0.8 (free build). Download the guest tools ISO and check its digest.
 2. Register on Microsoft's evaluation site and download the IoT Enterprise LTSC 2024 evaluation ARM64
