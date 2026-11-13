@@ -5,11 +5,11 @@
 // from a workflow report. Keeping these here keeps runner.ts focused on orchestration and under the
 // LOC limit.
 
-import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import type { ChildProcess } from "node:child_process";
+import { ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type {
   UnitTestTarget,
@@ -86,11 +86,14 @@ export function recordingSink(): RecordingSink {
   };
 }
 
-interface FakeChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  pid: number;
-  kill: (signal?: NodeJS.Signals) => boolean;
+// A real ChildProcess that never spawns. The verification runner reads its pid, streams and close
+// event exactly as it reads a spawned child, so the fake needs no cast to ChildProcess.
+class ScriptedChildProcess extends ChildProcess {
+  override readonly pid = 4242;
+
+  override kill(): boolean {
+    return true;
+  }
 }
 
 // A deterministic fake SpawnFn (ported from tests/verification/_support.ts): every spawned command
@@ -98,18 +101,17 @@ interface FakeChild extends EventEmitter {
 // runVerification produces a deterministic VerificationAuditSummary offline with no real process.
 export function fakeSpawn(exitCode: number, stdout = ""): SpawnFn {
   return (): ChildProcess => {
-    const child = new EventEmitter() as FakeChild;
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.pid = 4242;
-    child.kill = (): boolean => true;
+    const child = new ScriptedChildProcess();
+    const output = new PassThrough();
+    child.stdout = output;
+    child.stderr = new PassThrough();
     queueMicrotask(() => {
       if (stdout.length > 0) {
-        child.stdout.emit("data", Buffer.from(stdout, "utf8"));
+        output.emit("data", Buffer.from(stdout, "utf8"));
       }
       child.emit("close", exitCode, null);
     });
-    return child as unknown as ChildProcess;
+    return child;
   };
 }
 

@@ -51,6 +51,7 @@ const ZERO_FINDING_SCOPES = {
     "activity-log",
     "cli",
     "connectors",
+    "evaluations",
     "git",
     "harness",
     "mcp",
