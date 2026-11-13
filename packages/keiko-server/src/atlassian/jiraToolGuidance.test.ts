@@ -8,7 +8,12 @@ describe("shared Jira tool guidance", () => {
   it("says further operations exist behind discovery and must not be claimed absent unseen", () => {
     expect(JIRA_TOOL_GUIDANCE).toMatch(/behind jira\.discover and jira\.describe/u);
     expect(JIRA_TOOL_GUIDANCE).toMatch(/deleting, moving or administering/u);
-    expect(JIRA_TOOL_GUIDANCE).toMatch(/never tell the user an operation does not exist/u);
+    expect(JIRA_TOOL_GUIDANCE).toMatch(/Never tell the user an operation does not exist/u);
+  });
+
+  // 2026-11-13 lane: nine calls named a tool the model had not selected (`invalid-identity`).
+  it("says a tool must be selected with jira.describe before it can be called", () => {
+    expect(JIRA_TOOL_GUIDANCE).toMatch(/cannot be called until jira\.describe has selected it/u);
   });
 
   // The Jira 400 for a localized issue type name ("Der Wert 'Aufgabe' existiert nicht") is the

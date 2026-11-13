@@ -18,7 +18,8 @@ type Context = CatalogHandlerContext<JiraChatCatalogConsumer>;
 type Tool = ReturnType<ReturnType<typeof createJiraCatalogDiscoveryProvider>["tools"]>[number];
 const INVALID_DESCRIPTION_ARGS: readonly CatalogJsonObject[] = [
   { identities: ["https://private.invalid/path"] },
-  { identities: ["jira.create"] },
+  { identities: ["jira.unknown-operation"] },
+  { identities: ["jira_create_nothing"] },
   { identities: ["GET /rest/api/2/project", "GET /rest/api/2/project"] },
   { identities: ["GET /rest/api/2/project", "GET /rest/api/2/unknown"] },
   { identities: "GET /rest/api/2/project" },
@@ -176,6 +177,37 @@ describe("local Jira operation discovery", () => {
       ["GET /rest/api/2/project", "POST /rest/api/2/project"],
       mixed.data,
     );
+  });
+
+  it("accepts the dotted registry name Keiko's own descriptions use for the same operation", async () => {
+    // Measured 2026-11-13: after only discover's `jira_priorities` was accepted, the model still
+    // called `jira.priorities` first in 6 of 15 discovery turns and succeeded once the separator changed.
+    const f = fixture();
+    for (const name of ["jira.priorities", "jira_priorities"]) {
+      f.select.mockClear();
+      const result = await f.describe.execute({ identities: [name] }, f.context);
+      expect(result.isError, name).toBeUndefined();
+      expect(result.data.items, name).toEqual([
+        { identity: "GET /rest/api/2/priority", tool: "jira_priorities" },
+      ]);
+      expect(f.select).toHaveBeenCalledWith(["GET /rest/api/2/priority"], result.data);
+    }
+    const hyphenated = await f.describe.execute(
+      { identities: ["jira.project-statuses"] },
+      f.context,
+    );
+    expect(hyphenated.data.items).toEqual([
+      expect.objectContaining({ tool: "jira_project_statuses" }),
+    ]);
+    const both = await f.describe.execute(
+      { identities: ["jira.priorities", "jira_priorities"] },
+      f.context,
+    );
+    expect(both.isError).toBe(true);
+    for (const refused of ["jira.priorities.", "jira priorities", "JIRA.PRIORITIES"]) {
+      const result = await f.describe.execute({ identities: [refused] }, f.context);
+      expect(result.isError, refused).toBe(true);
+    }
   });
 
   it("accepts the dotted tool name only where jira.discover returns it, and never twice for one operation", async () => {
@@ -394,7 +426,7 @@ describe("local Jira operation discovery", () => {
     if (binding === undefined) throw new TypeError("Missing describe binding");
     const identities = ["GET /rest/api/2/project"];
     const cases: readonly [string, Error | undefined, CatalogJsonObject][] = [
-      ["invalid-arguments", undefined, { identities: ["jira.create"] }],
+      ["invalid-arguments", undefined, { identities: ["jira.unknown-operation"] }],
       ["selection-too-large", new ToolCatalogError("input-bound"), { identities }],
       ["selection-unavailable", new ToolCatalogError("invalid-schema"), { identities }],
       ["budget-exhausted", new CatalogDispatchFault("denied", "budget-exhausted"), { identities }],
