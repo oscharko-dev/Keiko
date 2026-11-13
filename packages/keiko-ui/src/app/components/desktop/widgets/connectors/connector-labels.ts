@@ -41,6 +41,7 @@ export function providerLabelKey(provider: AtlassianConnectorProvider): MessageK
 const VERIFY_LABEL: Readonly<Record<AtlassianConnectorVerifyStatus, MessageKey>> = {
   ok: "atlassianConnectors.verify.ok.label",
   "auth-failed": "atlassianConnectors.verify.auth-failed.label",
+  "auth-unverified": "atlassianConnectors.verify.auth-unverified.label",
   forbidden: "atlassianConnectors.verify.forbidden.label",
   unreachable: "atlassianConnectors.verify.unreachable.label",
   timeout: "atlassianConnectors.verify.timeout.label",
@@ -53,6 +54,7 @@ const VERIFY_LABEL: Readonly<Record<AtlassianConnectorVerifyStatus, MessageKey>>
 const VERIFY_COPY: Readonly<Record<AtlassianConnectorVerifyStatus, MessageKey>> = {
   ok: "atlassianConnectors.verify.ok.copy",
   "auth-failed": "atlassianConnectors.verify.auth-failed.copy",
+  "auth-unverified": "atlassianConnectors.verify.auth-unverified.copy",
   forbidden: "atlassianConnectors.verify.forbidden.copy",
   unreachable: "atlassianConnectors.verify.unreachable.copy",
   timeout: "atlassianConnectors.verify.timeout.copy",
@@ -65,6 +67,7 @@ const VERIFY_COPY: Readonly<Record<AtlassianConnectorVerifyStatus, MessageKey>> 
 const VERIFY_TONE: Readonly<Record<AtlassianConnectorVerifyStatus, ConnectorTone>> = {
   ok: "ok",
   "auth-failed": "danger",
+  "auth-unverified": "warning",
   forbidden: "danger",
   unreachable: "warning",
   timeout: "warning",
@@ -114,6 +117,7 @@ export function syncStatusBadgeState(status: AtlassianSyncJobStatus): ConnectorB
 
 const SYNC_REASON: Readonly<Record<AtlassianSyncFailureReason, MessageKey>> = {
   "auth-failed": "atlassianConnectors.sync.reason.auth-failed",
+  "auth-unverified": "atlassianConnectors.sync.reason.auth-unverified",
   "permission-denied": "atlassianConnectors.sync.reason.permission-denied",
   "rate-limited": "atlassianConnectors.sync.reason.rate-limited",
   timeout: "atlassianConnectors.sync.reason.timeout",
@@ -166,6 +170,7 @@ export function reviewReasonCopyKey(reason: AtlassianConnectorActionReviewReason
 
 const WRITE_FAILURE_REASON: Readonly<Record<AtlassianConnectorWriteFailureReason, MessageKey>> = {
   "auth-failed": "atlassianConnectors.result.reason.auth-failed",
+  "auth-unverified": "atlassianConnectors.result.reason.auth-unverified",
   "permission-denied": "atlassianConnectors.result.reason.permission-denied",
   "effect-denied": "atlassianConnectors.result.reason.effect-denied",
   cancelled: "atlassianConnectors.result.reason.cancelled",

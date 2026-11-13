@@ -826,6 +826,8 @@ describe("executeJiraChatDraft (#4178)", () => {
         reason: "field-validation",
         guidance:
           "Item 1 names itself as its parent or link target. Nothing was changed. Correct the draft and send it once.",
+        draftProblem: "ref-self",
+        draftItem: 1,
         items: [],
       },
       isError: true,

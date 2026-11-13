@@ -108,6 +108,7 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
       values: [
         "ok",
         "auth-failed",
+        "auth-unverified",
         "forbidden",
         "unreachable",
         "timeout",
@@ -117,7 +118,42 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
         "tls-failed",
         "sync-unsupported",
         "verification-aborted",
+        "probe-inconclusive",
       ],
+    },
+    // What decided the credential's fate: the identity route's own 401, the same-generation
+    // identity read that follows a 401 from any other route, or its short positive window.
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["identity-route", "probe", "probe-window", "probe-shared"],
+    },
+    // Why an identity read left a 401 unsettled (outcome `probe-inconclusive`).
+    probeCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "timeout",
+        "network",
+        "http-429",
+        "http-4xx",
+        "http-5xx",
+        "redirect",
+        "invalid-body",
+        "foreign-401",
+        "captcha",
+        "stale",
+        "cancelled-or-expired",
+        "probe-error",
+      ],
+    },
+    routeClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["identity", "other"],
     },
     verificationState: {
       type: "string",
@@ -158,24 +194,53 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+export type ProbeCause =
+  | "timeout"
+  | "network"
+  | "http-429"
+  | "http-4xx"
+  | "http-5xx"
+  | "redirect"
+  | "invalid-body"
+  | "foreign-401"
+  | "captcha"
+  | "stale"
+  | "cancelled-or-expired"
+  | "probe-error";
+
+export interface ConnectionCheckDetail {
+  readonly decision: "identity-route" | "probe" | "probe-window" | "probe-shared";
+  readonly routeClass: "identity" | "other";
+  readonly probeCause?: ProbeCause;
+  /** The correlation of the caller whose identity read this line shares. */
+  readonly parentCorrelationId?: string;
+}
+
 export function recordConnectionCheck(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
   correlationId: string,
-  result: AtlassianConnectionVerificationStatus | "sync-unsupported" | "verification-aborted",
+  result:
+    | AtlassianConnectionVerificationStatus
+    | "sync-unsupported"
+    | "verification-aborted"
+    | "probe-inconclusive",
   verificationState?: "applied" | "stale",
   source: "verify" | "request" = "verify",
   jiraCompatibility?: "verified" | "unverified",
+  detail?: ConnectionCheckDetail,
 ): void {
+  const { parentCorrelationId, ...fields } = detail ?? {};
   try {
     deps.activityLog?.write(
       activityLogEvent(
         ATLASSIAN_CONNECTION_CHECKED_OPERATION,
-        { correlationId },
+        { correlationId, ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }) },
         {
           action: result === "sync-unsupported" ? "sync" : source,
           outcome: result,
           ...(verificationState === undefined ? {} : { verificationState }),
           ...(jiraCompatibility === undefined ? {} : { jiraCompatibility }),
+          ...fields,
           ...(jiraCompatibility === "verified" ? { restApi: "v2", agileApi: "unverified" } : {}),
           completeness: "complete",
           loss: "none",

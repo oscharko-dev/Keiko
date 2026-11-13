@@ -89,6 +89,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     emitterPrefix: "client-diagnostics-routes",
     surface: "client-diagnostics",
   },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "client-diagnostics-catalog-refresh",
+    surface: "client-diagnostics",
+  },
   { owner: "keiko-server", emitterPrefix: "client-jira-fields-log", surface: "client-diagnostics" },
   { owner: "keiko-server", emitterPrefix: "client-jira-result-log", surface: "client-diagnostics" },
   { owner: "keiko-server", emitterPrefix: "coding-app-session", surface: "tools-workflows" },

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type MouseEventHandler, type ReactNode } f
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import { openLauncherBrowser } from "@/lib/launcher-browser-client";
+import { inspectBrowserApprovals } from "@/lib/browser-approval-api";
 import { noteConnectedServerInstance, sessionEndedByRestart } from "@/lib/server-restart";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -68,6 +69,8 @@ function useSessionAvailabilityChange(state: string | undefined): void {
 // While connected the page keeps the server instance it last saw current, so a restart that the
 // session survived (a remembered browser renews on its own) is not blamed for a later, unrelated loss.
 const CONNECTED_INSTANCE_REFRESH_MS = 30_000;
+const sessionStillActive = async (): Promise<boolean> =>
+  (await inspectBrowserApprovals()).state === "active";
 
 /**
  * Whether the session ended because Keiko was restarted. While connected the page remembers which
@@ -82,9 +85,11 @@ function useServerRestarted(
   useEffect(() => {
     if (state !== "active") return;
     setRestarted(false);
+    // A result that just arrived is itself a fresh active observation. The timer is not: after a
+    // restart nothing may have inspected yet, so each tick confirms the session before it records.
     void noteConnectedServerInstance();
     const timer = setInterval(() => {
-      void noteConnectedServerInstance();
+      void noteConnectedServerInstance(sessionStillActive);
     }, CONNECTED_INSTANCE_REFRESH_MS);
     return (): void => clearInterval(timer);
   }, [state, result]);

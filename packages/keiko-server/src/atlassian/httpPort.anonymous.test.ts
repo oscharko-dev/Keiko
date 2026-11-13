@@ -78,7 +78,9 @@ describe("authenticated Atlassian reads", () => {
         ? await createGatewayAtlassianHttpBodyPort(options)(request)
         : await createGatewayAtlassianHttpPort(options)(request);
       expect(result).toMatchObject({ kind: "response", status: 401 });
-      expect(onResponse).toHaveBeenCalledWith(request, 401);
+      // The rewritten 401 also reports its origin: this mock sends only the anonymous marker, so no
+      // Jira request id reached the transport and the origin is foreign.
+      expect(onResponse).toHaveBeenCalledWith(request, 401, "foreign");
       expect(result).not.toHaveProperty("headers");
       if (body) expect(result).toMatchObject({ bodyText: "", bodyBytes: 0, truncated: false });
     },

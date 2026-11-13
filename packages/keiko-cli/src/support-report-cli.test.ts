@@ -403,6 +403,57 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+// #4358: the Windows vault custody outcome is a registered, closed line. A support report carries
+// it as context of a vault key-resolution failure in the same process (the refused case); the
+// standing place to read the custody state is `keiko status` and `/api/health`.
+describe("support report around a refused vault key file", () => {
+  function seedRefusedVaultKey(): void {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    const segment = writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, {
+        op: "security.vault.custody",
+        level: "error",
+        errorKind: "unsafe-target",
+        fields: { outcome: "refused", target: "keyfile", reason: "foreign-access" },
+      }),
+      fixtureLine(process, now + 1, {
+        op: "security.vault.key-resolution-failed",
+        level: "error",
+        correlationId: CORRELATION,
+        errorKind: "unsafe-target",
+        fields: { failureKind: "unsafe-target" },
+      }),
+    ]);
+    utimesSync(segment, now / 1000, now / 1000);
+  }
+
+  it("exports the custody line, validates offline and shows the line in the JSON analysis", async () => {
+    seedRefusedVaultKey();
+    await exportReport();
+    // Offline validation of the exported report: a report that does not validate throws here.
+    expect(() => analyzeSupportReport(readSupportReportFile(path))).not.toThrow();
+    // The report's evidence is compressed, so the line is read through the validated analysis.
+    const analysis = await analyze(["--json"]);
+    expect(analysis.code, analysis.errors.join("")).toBe(0);
+    const projected = analysis.output.join("");
+    expect(projected).toContain("security.vault.custody");
+    expect(projected).toContain("security.vault.key-resolution-failed");
+    // The analysis projects a line's operation, level and error kind, not its fields: an error
+    // line of this operation with `unsafe-target` is the refused outcome. `target` and `reason`
+    // stay in the report's evidence and are not shown.
+    const events = projected.split('"op":"security.vault.custody"');
+    expect(events).toHaveLength(2);
+    expect(projected).toContain('"errorKind":"unsafe-target"');
+    expect(projected).not.toContain("foreign-access");
+    // Nothing but closed values: no path, account or security identifier.
+    expect(projected).not.toMatch(/S-1-5-\d/u);
+    expect(projected).not.toMatch(/[A-Za-z]:\\\\Users/u);
+    expect(projected).not.toContain(root);
+  });
+});
+
 describe("support report CLI and private publication", () => {
   it("reuses the incident seed and leaves unnecessary lifecycle validators unloaded", async () => {
     seedGatewayFailure();

@@ -29,6 +29,7 @@ export type JiraReportIncompleteReason = (typeof JIRA_REPORT_INCOMPLETE_REASONS)
 export const JIRA_REPORT_FAILURE_REASONS = [
   "invalid-jql",
   "auth",
+  "auth-unverified",
   "permission",
   "effect-denied",
   "cancelled",

@@ -202,7 +202,13 @@ The destination is an exact HTTP loopback origin on the server-owned public UI p
 URL, path, executable, principal or additional arguments are admitted. Browser selection uses a
 closed target list and fixed native application identifiers/commands with no shell. Calls are
 serialized and limited to one per ten seconds per server graph, and native launch is bounded to
-five seconds. Child processes receive only desktop environment fields. Native errors and proof-bearing
+five seconds. On Windows that bound applies to the launch itself (`Start-Process`), counted from the
+first statement of the fixed opener program and enforced inside it; the inbox PowerShell host that
+runs the program has a separate start allowance of sixty seconds, so the server waits at most
+sixty-five seconds for the opener (amended 2026-11-13, #4358, ADR-0182 D6: a host that needed
+longer than five seconds to start was otherwise ended before it could launch anything). The
+destination and target-list guards above are unchanged. Child processes receive only desktop
+environment fields. Native errors and proof-bearing
 arguments never enter responses or logs; the Activity Log records the closed handoff outcome.
 A local HTTP client can at most cause a bounded browser window to open: it cannot obtain that
 browser's proof or read authority. Missing launcher configuration, unsupported browser, opener

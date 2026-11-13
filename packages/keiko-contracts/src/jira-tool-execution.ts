@@ -418,6 +418,27 @@ export const JIRA_DRAFT_REFUSALS = [
   "connection-changed",
 ] as const;
 export type JiraDraftRefusalReason = (typeof JIRA_DRAFT_REFUSALS)[number];
+/**
+ * Why a draft that resolves is still invalid, as a closed code: the person reads one localized
+ * sentence per code that names what to change (#4355). The model-facing guidance sentence is its
+ * own text; this code carries no draft content.
+ */
+export const JIRA_DRAFT_PROBLEMS = [
+  "draft-shape",
+  "items-missing",
+  "item-shape",
+  "item-ref",
+  "item-ids",
+  "item-fields",
+  "item-parent",
+  "item-links",
+  "item-requirements",
+  "ref-duplicate",
+  "ref-self",
+  "ref-unknown",
+  "ref-cycle",
+] as const;
+export type JiraDraftProblemCode = (typeof JIRA_DRAFT_PROBLEMS)[number];
 /** A model-chosen local reference that relations between draft items use before keys exist. */
 export const JIRA_DRAFT_REF_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,31}$";
 const DRAFT_REF = new RegExp(JIRA_DRAFT_REF_PATTERN, "u");

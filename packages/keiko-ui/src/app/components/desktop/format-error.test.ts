@@ -23,13 +23,13 @@ describe("formatUserError", () => {
         );
         expect(notice.message).toBe(
           locale === "en"
-            ? "The Jira connection could not be authenticated."
-            : "Die Jira-Verbindung konnte nicht authentifiziert werden.",
+            ? "Jira rejected the token of this connection. It may have expired or been revoked."
+            : "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
         );
         expect(notice.remediation).toBe(
           locale === "en"
-            ? "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira."
-            : "Prüfe die Jira-Verbindung erneut im Knowledge Pods Hub. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+            ? "Open the Knowledge Pods Hub, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira."
+            : "Öffne den Knowledge Pods Hub, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
         );
         const restored = toUserErrorNotice(
           formatUserError(error, "Could not send message."),
@@ -47,6 +47,59 @@ describe("formatUserError", () => {
       }
     },
   );
+  // The server's English text is a fallback for other clients: the UI reads these closed codes
+  // through the catalogs, so a German clerk reads German and the next step (#4371).
+  it.each(
+    (["en", "de"] as const).flatMap((locale) =>
+      (
+        [
+          "KNOWLEDGE_POD_UNAVAILABLE",
+          "KNOWLEDGE_STORE_UNAVAILABLE",
+          "JIRA_POD_UNAVAILABLE",
+          "JIRA_POD_VERIFICATION_REQUIRED",
+          "JIRA_POD_CONNECTION_CHANGED",
+        ] as const
+      ).map((code) => [locale, code] as const),
+    ),
+  )("shows %s %s from the catalog, with a title and a next step", async (locale, code) => {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    try {
+      const serverText = "Server English fallback text that must not be shown";
+      const error = new ApiError(code, serverText, 409);
+      const notice = toUserErrorNotice(error, "Could not send message.");
+
+      expect(notice.message).not.toBe(serverText);
+      expect(notice.title).not.toBe("Request failed");
+      expect(notice.remediation).toBeDefined();
+      expect(formatUserError(error, "fallback")).toBe(`${notice.message} (${code})`);
+      if (locale === "de") {
+        expect(`${notice.title} ${notice.message}`).toMatch(/[äöüÄÖÜ]|nicht|Wähle|Prüfe|Versuche/u);
+      }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+  it("falls back to the server's text for a refusal code the catalogs do not know", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const error = new ApiError("JIRA_POD_SOMETHING_NEW", "Plain server text.", 409);
+      const notice = toUserErrorNotice(error, "Could not send message.");
+
+      expect(notice.message).toBe("Plain server text.");
+      expect(notice.title).toBe("Request failed");
+      expect(notice.remediation).toBeUndefined();
+      expect(formatUserError(error, "fallback")).toBe(
+        "Plain server text. (JIRA_POD_SOMETHING_NEW)",
+      );
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+
   it.each(["en", "de"] as const)(
     "explains unavailable Chat capabilities without service-specific checks in %s",
     async (locale) => {

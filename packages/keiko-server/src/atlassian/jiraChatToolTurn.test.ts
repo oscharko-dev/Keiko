@@ -78,6 +78,7 @@ import {
 import { field, multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
 import {
   omittedReportFindingKeys,
+  rawReportKeys,
   reportCoverageMismatches,
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
@@ -105,6 +106,7 @@ vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
   return {
     ...actual,
     omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys),
+    rawReportKeys: vi.fn(actual.rawReportKeys),
     reportCoverageMismatches: vi.fn(actual.reportCoverageMismatches),
     unsupportedIssueKeys: vi.fn(actual.unsupportedIssueKeys),
   };
@@ -218,7 +220,13 @@ function configure(deps: UiHandlerDeps, proof: ToolProof = true, contextWindow?:
     runtime.generation(),
   );
 }
-function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
+function metadata(
+  deps: UiHandlerDeps,
+  overrides: {
+    readonly generation?: number;
+    readonly verificationStatus?: "ok" | "unverified";
+  } = {},
+): AtlassianCredentialMetadata {
   const ownerDigest = jiraChatActorDigest(deps);
   if (ownerDigest === undefined) throw new Error("Missing principal");
   return {
@@ -227,7 +235,7 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     displayName: "Synthetic Jira",
     baseUrl: "https://jira.example.invalid",
     createdAt: 1,
-    generation: 1,
+    generation: overrides.generation ?? 1,
     provider: "jira",
     deployment: "data-center",
     authScheme: "bearer-pat",
@@ -237,7 +245,7 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
       creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
       verificationRevision: 1,
       verificationInProgress: false,
-      verificationStatus: "ok",
+      verificationStatus: overrides.verificationStatus ?? "ok",
     },
   };
 }
@@ -1247,6 +1255,73 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
     },
   );
+  // The refusal tells the person what happened and what to do, with a closed code the UI localizes;
+  // nothing about the Pod beyond that closed state is revealed, and nothing is called (#4371).
+  it.each([
+    {
+      name: "a removed Jira Pod",
+      list: (): AtlassianCredentialMetadata[] => [],
+      code: "JIRA_POD_UNAVAILABLE",
+      readiness: "pod-unavailable",
+    },
+    {
+      name: "a Jira Pod that needs verifying again",
+      list: (deps: UiHandlerDeps): AtlassianCredentialMetadata[] => [
+        metadata(deps, { verificationStatus: "unverified" }),
+      ],
+      code: "JIRA_POD_VERIFICATION_REQUIRED",
+      readiness: "verification-required",
+    },
+    {
+      name: "a Jira connection that changed since the Pod was chosen",
+      list: (deps: UiHandlerDeps): AtlassianCredentialMetadata[] => [
+        metadata(deps, { generation: 2 }),
+      ],
+      code: "JIRA_POD_CONNECTION_CHANGED",
+      readiness: "generation-changed",
+    },
+  ])(
+    "refuses a turn bound to $name with its own code, before any model or Jira call",
+    async ({ list, code, readiness }) => {
+      const f = fixture();
+      const credentials = f.deps.atlassianConnectorCredentials;
+      if (credentials === undefined) throw new Error("Missing credential owner");
+      const listSpy = vi.spyOn(credentials.custody, "list").mockImplementation(() => list(f.deps));
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const result = await send(f, "refused-pod-turn");
+
+        expect(result.status, JSON.stringify(result.body)).toBe(409);
+        expect(result.body).toMatchObject({ error: { code } });
+        expect(f.calls).toHaveLength(0);
+        expect(f.requests()).toBe(0);
+        // The refusal line carries the closed readiness, like the other authority call site.
+        const registered = sink.events.filter(
+          (event) =>
+            event.op === "chat.tool-authority.operation" && event.extra?.phase === "register",
+        );
+        expect(registered.map((event) => event.extra?.readiness)).toContain(readiness);
+      } finally {
+        listSpy.mockRestore();
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("keeps the generic refusal when the authority registry is unavailable", async () => {
+    const f = fixture();
+    // Not a Pod state: nothing about the Pod is revealed.
+    Object.assign(f.deps, { agentAuthorityRegistry: undefined });
+
+    const result = await send(f, "registry-unavailable-turn");
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "FORBIDDEN" } });
+    expect(f.calls).toHaveLength(0);
+    expect(f.requests()).toBe(0);
+  });
+
   it("preserves ordinary unbound Chat without tool-calling proof", async () => {
     const f = fixture();
     f.deps.store.updateChat(f.chatId, { jiraPodId: null });
@@ -1555,6 +1630,46 @@ describe.each([false, true])(
       });
       expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
         /LH-0|RPT-/u,
+      );
+    });
+  },
+);
+
+// #4355: a report answer that prints the report's internal result keys ("issuesChecked: 33") gets
+// ONE further round asking for plain language; the model writes the final answer, and neither the
+// keys nor their values reach the Activity Log (the detection is proven in
+// chat-tool-report-coverage.test.ts; this fixture scripts one comment call, not a report result).
+describe.each([false, true])(
+  "an answer that prints the report's internal result keys (stream=%s)",
+  (stream) => {
+    it("gets one round asking for plain language, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      vi.mocked(rawReportKeys).mockReturnValueOnce(["issuesChecked", "issuesJudged"]);
+      const f = fixture();
+      const ctx = sendContext(f, `raw-report-key-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await awaitReadGrantedForWrite(f);
+      await pending;
+
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("prints 2 internal result key(s)");
+      expect(correction(f.calls[2])).toContain("issuesChecked, issuesJudged");
+      expect(correction(f.calls[3])).not.toContain("internal result key(s)");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "raw-report-key",
+        rawReportKeyCount: 2,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
+        /issuesChecked|issuesJudged/u,
       );
     });
   },
@@ -2793,40 +2908,85 @@ it("drains a real buffered HTTP disconnect while the write approval is pending",
   }
 });
 
-type PreparationFailure = "tool-proof" | "authority" | "catalog";
+type PreparationFailure =
+  | "tool-proof"
+  | "authority"
+  | "catalog"
+  | "pod-unavailable"
+  | "pod-verification"
+  | "pod-connection-changed";
 const PREPARATION_RESPONSES: Record<PreparationFailure, readonly [number, string]> = {
   "tool-proof": [400, toolProofRefusal(false)[1]],
   authority: [403, "FORBIDDEN"],
   catalog: [503, "CHAT_TOOL_UNAVAILABLE"],
+  // A Pod that cannot serve the Chat has its own refusals (#4371); every settlement assertion below
+  // holds for them too, over every transport.
+  "pod-unavailable": [409, "JIRA_POD_UNAVAILABLE"],
+  "pod-verification": [409, "JIRA_POD_VERIFICATION_REQUIRED"],
+  "pod-connection-changed": [409, "JIRA_POD_CONNECTION_CHANGED"],
 };
+const POD_FAILURE_METADATA = {
+  "pod-verification": { verificationStatus: "unverified" },
+  "pod-connection-changed": { generation: 2 },
+} as const;
 function preparationFailureDeps(
   f: ReturnType<typeof fixture>,
   failure: PreparationFailure,
   record: NonNullable<UiHandlerDeps["diagnostics"]>["record"],
+  restores: (() => void)[],
 ): UiHandlerDeps {
   const deps: UiHandlerDeps = {
     ...f.deps,
     diagnostics: { record },
-    ...(failure === "authority" ? { atlassianConnectorCredentials: undefined } : {}),
+    // A generic authority denial that says nothing about the Pod.
+    ...(failure === "authority" ? { agentAuthorityRegistry: undefined } : {}),
+    // The Pod's credential is gone altogether.
+    ...(failure === "pod-unavailable" ? { atlassianConnectorCredentials: undefined } : {}),
   };
+  if (failure === "pod-verification" || failure === "pod-connection-changed") {
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing credential owner");
+    const spy = vi
+      .spyOn(credentials.custody, "list")
+      .mockImplementation(() => [metadata(f.deps, POD_FAILURE_METADATA[failure])]);
+    restores.push(() => {
+      spy.mockRestore();
+    });
+  }
   if (failure === "tool-proof") configure(deps, false);
   if (failure === "catalog") {
     if (deps.jiraChatCatalog === undefined) throw new Error("Missing catalog runtime");
-    vi.spyOn(deps.jiraChatCatalog, "get").mockRejectedValueOnce(
-      new CatalogDispatchFault("failed", "handler-unavailable", new Error("Bearer fixture-secret")),
-    );
+    const spy = vi
+      .spyOn(deps.jiraChatCatalog, "get")
+      .mockRejectedValueOnce(
+        new CatalogDispatchFault(
+          "failed",
+          "handler-unavailable",
+          new Error("Bearer fixture-secret"),
+        ),
+      );
+    restores.push(() => {
+      spy.mockRestore();
+    });
   }
   return deps;
 }
 
 describe.each([false, true])("Jira preparation failure settlement (stream=%s)", (stream) => {
   describe.each([false, true])("legacy request=%s", (legacy) => {
-    it.each(["tool-proof", "authority", "catalog"] as const)(
-      "settles %s rejection before any provider output",
-      async (failure) => {
-        const f = fixture();
-        const record = vi.fn();
-        const deps = preparationFailureDeps(f, failure, record);
+    it.each([
+      "tool-proof",
+      "authority",
+      "catalog",
+      "pod-unavailable",
+      "pod-verification",
+      "pod-connection-changed",
+    ] as const)("settles %s rejection before any provider output", async (failure) => {
+      const f = fixture();
+      const record = vi.fn();
+      const restores: (() => void)[] = [];
+      try {
+        const deps = preparationFailureDeps(f, failure, record, restores);
         const before = deps.store.findChatById(f.chatId);
         const body = sendBody(f, "preparation-failed-turn");
         if (legacy) delete body.clientTurnId;
@@ -2846,8 +3006,10 @@ describe.each([false, true])("Jira preparation failure settlement (stream=%s)", 
         else expect(messages[0]?.turnState).toBe("failed");
         expect(record).toHaveBeenCalledTimes(failure === "tool-proof" ? 0 : 1);
         expect(JSON.stringify([result, record.mock.calls])).not.toContain("fixture-secret");
-      },
-    );
+      } finally {
+        for (const restore of restores) restore();
+      }
+    });
   });
 });
 

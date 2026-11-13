@@ -75,7 +75,16 @@ async function probe(
     maxBodyBytes: ATLASSIAN_VERIFY_MAX_BYTES,
     signal: cancellation,
   });
-  return cancellation.aborted ? { failure: "timeout" } : parseAtlassianVerificationProbe(result);
+  if (cancellation.aborted) return { failure: "timeout" };
+  // Data Center only: a 401 that Jira itself did not author (a sign-in proxy, a captcha check)
+  // proves nothing about the token, so it is never reported as a rejection.
+  if (
+    result.kind === "response" &&
+    result.status === 401 &&
+    result.authenticationFailure !== "jira"
+  )
+    return { failure: "auth-unverified" };
+  return parseAtlassianVerificationProbe(result);
 }
 
 function jiraRestRoot(baseUrl: string): string {

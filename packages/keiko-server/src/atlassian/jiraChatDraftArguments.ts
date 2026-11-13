@@ -4,7 +4,10 @@ import {
   type JiraDraftProblem,
   type JiraDraftStore,
 } from "@oscharko-dev/keiko-connectors";
-import type { JiraDraftRefusalReason } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraDraftProblemCode,
+  JiraDraftRefusalReason,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 /**
@@ -99,13 +102,28 @@ export function jiraDraftProblemGuidance(
   return `${named} ${DRAFT_REFUSED}`;
 }
 
-/** The fixed sentence a refusal carries, if its closed reason or problem has one. */
+/** The fixed sentence of a refusal that names no draft problem, if its closed reason has one. */
 function refusalGuidance(
-  refusal: Extract<ChatDraftArguments, { ok: false }>,
+  reason: JiraDraftRefusalReason,
 ): { readonly guidance: string } | Record<string, never> {
-  if (refusal.problem !== undefined)
-    return { guidance: jiraDraftProblemGuidance(refusal.problem, refusal.item) };
-  return refusal.reason === "connection-changed" ? { guidance: CONNECTION_CHANGED_GUIDANCE } : {};
+  return reason === "connection-changed" ? { guidance: CONNECTION_CHANGED_GUIDANCE } : {};
+}
+
+/**
+ * What a refused draft reports about its problem: the model's guidance sentence, and the closed
+ * problem code and 1-based item the person's card turns into one localized sentence (#4355). The
+ * assignment checks that every problem the draft check can name is a code the contract declares.
+ */
+export function draftProblemData(
+  problem: JiraDraftProblem,
+  item: number | undefined,
+): CatalogJsonObject {
+  const draftProblem: JiraDraftProblemCode = problem;
+  return {
+    guidance: jiraDraftProblemGuidance(problem, item),
+    draftProblem,
+    ...(item === undefined ? {} : { draftItem: item }),
+  };
 }
 
 /**
@@ -120,7 +138,9 @@ export function draftRefusalData(
     outcome: "rejected",
     reason: "field-validation",
     draftRefusal: refusal.reason,
-    ...refusalGuidance(refusal),
+    ...(refusal.problem === undefined
+      ? refusalGuidance(refusal.reason)
+      : draftProblemData(refusal.problem, refusal.item)),
     items: [],
   };
 }

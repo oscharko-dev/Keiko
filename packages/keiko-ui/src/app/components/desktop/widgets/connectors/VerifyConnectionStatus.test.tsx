@@ -16,6 +16,7 @@ const EXPECTED: Record<
 > = {
   ok: { label: "Connection verified", tone: "ok" },
   "auth-failed": { label: "Authentication failed", tone: "danger" },
+  "auth-unverified": { label: "Could not confirm", tone: "warning" },
   forbidden: { label: "Access forbidden", tone: "danger" },
   unreachable: { label: "Site unreachable", tone: "warning" },
   timeout: { label: "Connection timed out", tone: "warning" },
