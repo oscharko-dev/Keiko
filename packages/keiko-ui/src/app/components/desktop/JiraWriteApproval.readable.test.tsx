@@ -5,7 +5,6 @@ import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { JiraWriteApproval } from "./JiraWriteApproval";
-import { jiraReadableText } from "./jira-readable-text";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
@@ -901,10 +900,16 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
       const review = await reviewed(operation, args);
       const canonical = projectJiraDescriptionInput(fields.description);
       if (canonical === undefined) throw new TypeError("Missing canonical description projection");
-      // #4355: the preview reads the canonical projection that will be sent (never the model's
-      // own markdown) as the person reads it: its headings and bullets, without the wiki markers.
-      expect(review.text).toContain(jiraReadableText(canonical.text));
-      expect(review.text).not.toMatch(/h[1-6]\.\s/u);
+      // #4355: what Keiko sends is the canonical wiki text (pinned literally), and the preview shows
+      // that text as a person reads it. Both sides are literals, so a helper that drops or rewrites
+      // content, or a preview that shows the model's own markdown, cannot agree with them.
+      expect(canonical.text).toBe(
+        "h2. Requirement\nExact\nh2. Criteria\n* one\n* two\n* three\n* four\n* five\nh2. Source\nExact source",
+      );
+      expect(review.text).toContain(
+        "Requirement\nExact\nCriteria\n• one\n• two\n• three\n• four\n• five\nSource\nExact source",
+      );
+      expect(review.text).not.toMatch(/h[1-6]\.\s|## |\* one/u);
       expect(JSON.stringify(args)).toBe(before);
       expect(fields.description).toEqual({ format: "markdown", text: description });
     },
@@ -946,13 +951,14 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
       projectId: "10000",
       issueTypeId: "10002",
       fields: {
-        summary: "Synthetic story",
-        description: "h2. Ziel\n* erster *wichtiger* Punkt",
+        summary: "*URGENT* fix",
+        description: "h2. Ziel\n* erster *wichtiger* Punkt\n{panel:title=Hinweis}\nTeil\n{panel}",
       },
     });
-    expect(review.text).toContain("Ziel");
-    expect(review.text).toContain("• erster wichtiger Punkt");
-    expect(review.text).not.toMatch(/h2\.|\*wichtiger\*/u);
+    // A summary is stored with its asterisks, so the preview shows them; only the description is read.
+    expect(review.text).toContain("*URGENT* fix");
+    expect(review.text).toContain("Ziel\n• erster wichtiger Punkt\nHinweis\nTeil");
+    expect(review.text).not.toMatch(/h2\.|\*wichtiger\*|\{panel/u);
     expectNoJson(review);
     expect(await axe(review.container)).toHaveNoViolations();
   });

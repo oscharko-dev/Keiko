@@ -24,10 +24,16 @@ interface ItemProps {
   readonly toggle: (ref: string) => void;
 }
 
-function CollapsibleText({ text: raw }: { readonly text: string }): ReactNode {
+function CollapsibleText({
+  text: raw,
+  readable,
+}: {
+  readonly text: string;
+  readonly readable: boolean;
+}): ReactNode {
   const t = useTranslate();
   const [open, setOpen] = useState(false);
-  const text = jiraReadableText(raw);
+  const text = readable ? jiraReadableText(raw) : raw;
   const characters = Array.from(text);
   if (characters.length <= COLLAPSE_AT)
     return (
@@ -54,11 +60,20 @@ function CollapsibleText({ text: raw }: { readonly text: string }): ReactNode {
   );
 }
 
-function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
+/** Only these fields hold wiki text; a summary or a label is shown exactly as it is stored. */
+const WIKI_TEXT_FIELDS: ReadonlySet<string> = new Set(["description", "comment", "body"]);
+
+function DraftValue({
+  value,
+  readable = false,
+}: {
+  readonly value: JiraDraftValue;
+  readonly readable?: boolean;
+}): ReactNode {
   const t = useTranslate();
   switch (value.kind) {
     case "text":
-      return <CollapsibleText text={value.text} />;
+      return <CollapsibleText text={value.text} readable={readable} />;
     case "cleared":
       return <span className={styles.cmpDraftNote}>{t("chat.jira.draft.cleared")}</span>;
     case "empty":
@@ -67,6 +82,7 @@ function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
       return (
         <DraftFields
           fields={value.members.map((member) => ({ id: member.name, value: member.value }))}
+          readable={readable}
         />
       );
     case "list":
@@ -74,7 +90,7 @@ function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
         <ul className={styles.cmpDraftList}>
           {value.items.map((entry) => (
             <li key={entry.position}>
-              <DraftValue value={entry.value} />
+              <DraftValue value={entry.value} readable={readable} />
             </li>
           ))}
         </ul>
@@ -83,7 +99,13 @@ function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
 }
 
 /** Named values as a definition list: a field id (or argument name) and what it is set to. */
-export function DraftFields({ fields }: { readonly fields: readonly JiraDraftField[] }): ReactNode {
+export function DraftFields({
+  fields,
+  readable = false,
+}: {
+  readonly fields: readonly JiraDraftField[];
+  readonly readable?: boolean;
+}): ReactNode {
   const t = useTranslate();
   const reported = useRef(false);
   useEffect(() => {
@@ -103,7 +125,7 @@ export function DraftFields({ fields }: { readonly fields: readonly JiraDraftFie
         <div key={field.id}>
           <dt>{field.label ?? field.id}</dt>
           <dd>
-            <DraftValue value={field.value} />
+            <DraftValue value={field.value} readable={readable || WIKI_TEXT_FIELDS.has(field.id)} />
           </dd>
         </div>
       ))}

@@ -288,7 +288,11 @@ function JiraItemName({ item }: { readonly item: JiraOutcomeItemName }): ReactNo
   const t = useTranslate();
   return (
     <strong>
-      {item.summary ?? t("chat.jira.outcome.itemOrdinal", { position: item.position })}{" "}
+      {item.summary === undefined
+        ? t("chat.jira.outcome.itemOrdinal", { position: item.position })
+        : item.ambiguous === true
+          ? `${item.summary} (${String(item.position)})`
+          : item.summary}{" "}
     </strong>
   );
 }

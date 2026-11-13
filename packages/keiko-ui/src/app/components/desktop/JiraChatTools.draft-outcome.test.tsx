@@ -132,6 +132,73 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(document.body.textContent).not.toMatch(/REQOBA001A1|bug1/u);
   });
 
+  it("tells refused items with the same summary apart by their place in the call", async () => {
+    await show(
+      draft(
+        "jira_draft",
+        {
+          outcome: "partial",
+          items: [
+            { ref: "a", state: "failed", validation: "required-field" },
+            { ref: "b", state: "failed", validation: "required-field" },
+            { ref: "c", state: "failed", validation: "required-field" },
+          ],
+        },
+        {
+          items: [
+            { ref: "a", fields: { summary: "Pay" } },
+            { ref: "b", fields: { summary: "Pay" } },
+            { ref: "c", fields: { summary: "Send receipt" } },
+          ],
+        },
+      ),
+    );
+    expect(screen.getByText("Pay (1)")).toBeVisible();
+    expect(screen.getByText("Pay (2)")).toBeVisible();
+    expect(screen.getByText("Send receipt")).toBeVisible();
+  });
+
+  it("marks a reference the call lists twice with its first place", async () => {
+    await show(
+      draft(
+        "jira_draft",
+        {
+          outcome: "partial",
+          items: [{ ref: "x", state: "failed", validation: "required-field" }],
+        },
+        {
+          items: [
+            { ref: "x", fields: { summary: "First" } },
+            { ref: "x", fields: { summary: "Second" } },
+          ],
+        },
+      ),
+    );
+    expect(screen.getByText("First (1)")).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/Second/u);
+  });
+
+  it("takes the place from the call's order, not from the result array", async () => {
+    await show(
+      draft(
+        "jira_draft",
+        {
+          outcome: "partial",
+          items: [{ ref: "c", state: "failed", validation: "required-field" }],
+        },
+        {
+          items: [
+            { ref: "a", fields: { summary: "A" } },
+            { ref: "b", fields: {} },
+            { ref: "c", fields: {} },
+          ],
+        },
+      ),
+    );
+    expect(screen.getByText(/Item 3/u)).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/Item 1/u);
+  });
+
   it("shows a description written in Jira wiki markup as readable text", () => {
     const view = jiraToolOutcomeView(
       draft("jira_search", {

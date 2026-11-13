@@ -183,8 +183,11 @@ interface JiraOutcomeIssue {
  * model's own item reference never reaches the screen (#4355).
  */
 export interface JiraOutcomeItemName {
+  /** 1-based place in the draft as the call listed it (the result's order when the call lists none). */
   readonly position: number;
   readonly summary?: string;
+  /** Another item of the draft carries the same summary or reference, so the place is shown too. */
+  readonly ambiguous?: true;
 }
 /** One draft item Keiko's own field check refused before Jira saw it. */
 interface JiraOutcomeItemValidation {
@@ -546,6 +549,19 @@ function presentable(entries: readonly unknown[], source: UnknownRecord): boolea
     (text(source.ref) !== undefined && itemLabels(source).length > 0)
   );
 }
+/** The body of a row and how it is shown: a description or a comment is wiki text, other text is not. */
+function itemBody(
+  tool: string,
+  source: UnknownRecord,
+  others: readonly unknown[],
+): { readonly body: string | undefined; readonly shown: string | undefined } {
+  const nativeBody = tool === "jira_comments" ? source.body : source.description;
+  const body = firstText([...others, nativeBody]);
+  return {
+    body,
+    shown: body !== undefined && body === text(nativeBody) ? jiraReadableText(body) : body,
+  };
+}
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined || refusedRow(source)) return undefined;
@@ -575,12 +591,7 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
     author.displayName,
     author.name,
   ]);
-  const body = firstText([
-    collaboration.body,
-    agile.body,
-    tool === "jira_comments" ? source.body : source.description,
-  ]);
-  const readableBody = body === undefined ? undefined : jiraReadableText(body);
+  const { body, shown: readableBody } = itemBody(tool, source, [collaboration.body, agile.body]);
   const facts = [...agile.facts, ...collaboration.facts, ...participation.facts];
   if (!presentable([key, name, body, ...facts], source)) return undefined;
   const status = firstText([source.status, source.to].map((value) => record(value)?.name));
@@ -717,9 +728,9 @@ function outcomeItems(
   const collaboration = collaborationItems(exchange.call.name, data, items);
   if (collaboration !== undefined) return collaboration;
   const seen = new Set<string>();
-  const summaries = reviewedSummaries(exchange);
+  const reviewed = reviewedItems(exchange);
   return source.flatMap((entry) => {
-    const item = outcomeItem(withReviewedSummary(entry, summaries), exchange.call.name);
+    const item = outcomeItem(withReviewedSummary(entry, reviewed), exchange.call.name);
     if (item === undefined) return [];
     // A journal fallback and a final receipt can describe the same draft item.
     const identity = item.key;
@@ -848,25 +859,58 @@ function problemsOf(
     }),
   ];
 }
-/** The summaries the person reviewed, by the model's item reference, from the call's own draft. */
-function reviewedSummaries(exchange: ChatToolExchange): ReadonlyMap<string, string> {
-  const items: readonly unknown[] = Array.isArray(exchange.call.arguments.items)
+interface ReviewedItem {
+  readonly position: number;
+  readonly summary?: string;
+  readonly ambiguous: boolean;
+}
+function summaryCounts(
+  items: readonly { readonly summary: string | undefined }[],
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const { summary } of items)
+    if (summary !== undefined) counts.set(summary, (counts.get(summary) ?? 0) + 1);
+  return counts;
+}
+/** A reference the call lists again keeps its first place and is marked, like a repeated summary. */
+function reviewedEntry(
+  first: ReviewedItem | undefined,
+  listed: { readonly summary: string | undefined; readonly position: number },
+  counts: ReadonlyMap<string, number>,
+): ReviewedItem {
+  const summary = first?.summary ?? listed.summary;
+  return {
+    position: first?.position ?? listed.position,
+    ...(summary === undefined ? {} : { summary }),
+    ambiguous: first !== undefined || (counts.get(listed.summary ?? "") ?? 0) > 1,
+  };
+}
+/** The draft as the call listed it: each item's place and the summary the person reviewed. */
+function reviewedItems(exchange: ChatToolExchange): ReadonlyMap<string, ReviewedItem> {
+  const entries: readonly unknown[] = Array.isArray(exchange.call.arguments.items)
     ? (exchange.call.arguments.items as readonly unknown[])
     : [];
-  const summaries = new Map<string, string>();
-  for (const entry of items) {
+  const listed = entries.map((entry, index) => {
     const item = record(entry);
-    const summary = text(record(item?.fields)?.summary);
-    const ref = text(item?.ref);
-    if (ref !== undefined && summary !== undefined) summaries.set(ref, summary);
+    return {
+      ref: text(item?.ref),
+      summary: text(record(item?.fields)?.summary),
+      position: index + 1,
+    };
+  });
+  const counts = summaryCounts(listed);
+  const reviewed = new Map<string, ReviewedItem>();
+  for (const { ref, summary, position } of listed) {
+    if (ref !== undefined)
+      reviewed.set(ref, reviewedEntry(reviewed.get(ref), { summary, position }, counts));
   }
-  return summaries;
+  return reviewed;
 }
 /** A result row the model's reference names gets the summary the person reviewed for it. */
-function withReviewedSummary(entry: unknown, summaries: ReadonlyMap<string, string>): unknown {
+function withReviewedSummary(entry: unknown, reviewed: ReadonlyMap<string, ReviewedItem>): unknown {
   const source = record(entry);
   const ref = text(source?.ref);
-  const summary = ref === undefined ? undefined : summaries.get(ref);
+  const summary = ref === undefined ? undefined : reviewed.get(ref)?.summary;
   return source === undefined || summary === undefined || text(source.summary) !== undefined
     ? entry
     : { ...source, summary };
@@ -874,30 +918,34 @@ function withReviewedSummary(entry: unknown, summaries: ReadonlyMap<string, stri
 function itemName(
   entry: unknown,
   index: number,
-  summaries: ReadonlyMap<string, string>,
+  reviewed: ReadonlyMap<string, ReviewedItem>,
 ): JiraOutcomeItemName | undefined {
   const ref = text(record(entry)?.ref);
   if (ref === undefined) return undefined;
-  const summary = summaries.get(ref);
-  return { position: index + 1, ...(summary === undefined ? {} : { summary }) };
+  const known = reviewed.get(ref);
+  return {
+    position: known?.position ?? index + 1,
+    ...(known?.summary === undefined ? {} : { summary: known.summary }),
+    ...(known?.ambiguous === true ? { ambiguous: true as const } : {}),
+  };
 }
 /** Jira's words for each refused draft item, tied to the item as the person knows it. */
 function itemProblemsOf(
   data: UnknownRecord | undefined,
-  summaries: ReadonlyMap<string, string>,
+  reviewed: ReadonlyMap<string, ReviewedItem>,
 ): JiraOutcomeProblem[] {
   const items = Array.isArray(data?.items) ? data.items : [];
   return items.flatMap((entry, index) =>
-    problemsOf(record(entry), itemName(entry, index, summaries)),
+    problemsOf(record(entry), itemName(entry, index, reviewed)),
   );
 }
 function itemValidationsOf(
   data: UnknownRecord | undefined,
-  summaries: ReadonlyMap<string, string>,
+  reviewed: ReadonlyMap<string, ReviewedItem>,
 ): JiraOutcomeItemValidation[] {
   const items = Array.isArray(data?.items) ? data.items : [];
   return items.flatMap((entry, index): JiraOutcomeItemValidation[] => {
-    const item = itemName(entry, index, summaries);
+    const item = itemName(entry, index, reviewed);
     const validation = JIRA_FIELD_VALIDATION_FAILURES.find(
       (value) => value === record(entry)?.validation,
     );
@@ -1021,7 +1069,7 @@ function failureMessage(
 function pageCounts(
   data: UnknownRecord,
   tool: string,
-  summaries: ReadonlyMap<string, string>,
+  reviewed: ReadonlyMap<string, ReviewedItem>,
 ): Pick<JiraToolOutcomeView, "returnedCount" | "total" | "unreadableCount"> {
   const items = returnedEntries(data, tool);
   if (items === undefined)
@@ -1043,7 +1091,7 @@ function pageCounts(
       omitted +
       items.filter(
         (item) =>
-          outcomeItem(withReviewedSummary(item, summaries), tool) === undefined &&
+          outcomeItem(withReviewedSummary(item, reviewed), tool) === undefined &&
           !refusedRow(record(item) ?? {}),
       ).length,
   };
@@ -1395,7 +1443,7 @@ function problemViews(
   // Private credential/session validators expose only closed reasons and violation counts.
   const all = privateAccount(exchange.call.name)
     ? []
-    : [...problemsOf(data), ...itemProblemsOf(data, reviewedSummaries(exchange))];
+    : [...problemsOf(data), ...itemProblemsOf(data, reviewedItems(exchange))];
   return {
     problems: all.slice(0, JIRA_OUTCOME_PROBLEMS_SHOWN),
     hiddenProblemCount: Math.max(0, all.length - JIRA_OUTCOME_PROBLEMS_SHOWN),
@@ -1452,7 +1500,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const data = storedOutcomeData(exchange);
   return {
     ...resultItemsView(exchange, data),
-    ...pageCounts(data, exchange.call.name, reviewedSummaries(exchange)),
+    ...pageCounts(data, exchange.call.name, reviewedItems(exchange)),
     ...(exchange.call.name === "jira_describe" &&
     data.outcome === "succeeded" &&
     data.selectedFor === "next-round"
@@ -1465,7 +1513,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     validation: JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === data.validation),
     itemValidations: privateAccount(exchange.call.name)
       ? []
-      : itemValidationsOf(data, reviewedSummaries(exchange)),
+      : itemValidationsOf(data, reviewedItems(exchange)),
     failure: failureMessage(exchange, data),
   };
 }
