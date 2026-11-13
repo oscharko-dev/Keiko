@@ -1157,8 +1157,7 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     };
   }
 
-  // Waits for the check's answer to land in the session (an observable event), then drains the
-  // continuation that follows it: a bounded number of microtask turns, not a sleep.
+  // Waits for the check's answer to land in the session: an observable event, no sleep.
   async function answerCheckReady(
     check: { readonly resolve: (value: { state: "ready" }) => void },
     sessionRef: SessionRef,
@@ -1171,9 +1170,25 @@ describe("first use of an unchecked model on Send (#4351)", () => {
         sessionRef.current?.models.find((model) => model.id === UNCHECKED)?.conversationReady,
       ).toBe(true);
     });
-    await act(async () => {
-      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  }
+
+  interface SentInput {
+    readonly content: string;
+    readonly attachments?: readonly unknown[];
+  }
+
+  // The positive control of every "nothing was sent" claim: once the model is ready, a second Send
+  // goes out exactly once and carries the CURRENT draft and attachments. Had the first Send gone out
+  // with its old text, it would still be in flight, block this one, and the content would be old.
+  async function sendAgainAndReadTheOne(
+    rig: ComposerRig,
+    spies: { readonly sent: () => number; readonly inputs: () => readonly unknown[] },
+  ): Promise<SentInput> {
+    await waitFor(async () => {
+      await rig.send("button");
+      expect(spies.sent()).toBe(1);
     });
+    return spies.inputs()[0] as SentInput;
   }
 
   it.each(["button", "Enter"] as const)(
@@ -1194,6 +1209,9 @@ describe("first use of an unchecked model on Send (#4351)", () => {
       expect(spies.sent()).toBe(0);
       expect(rig.box()).toHaveTextContent("hello");
       expect(rig.box()).toHaveTextContent("and more");
+      const sent = await sendAgainAndReadTheOne(rig, spies);
+      expect(sent.content).toContain("hello");
+      expect(sent.content).toContain("and more");
     },
   );
 
@@ -1214,6 +1232,10 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     await answerCheckReady(check, rig.sessionRef);
     expect(spies.sent()).toBe(0);
     expect(rig.box()).toHaveTextContent("hello");
+    const sent = await sendAgainAndReadTheOne(rig, spies);
+    expect(sent.content).toBe("hello");
+    // The removed attachment is not on the wire.
+    expect(sent.attachments ?? []).toHaveLength(0);
   });
 
   it("sends nothing and clears nothing when an attachment was added during the check", async () => {
@@ -1231,6 +1253,10 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     expect(spies.sent()).toBe(0);
     expect(rig.box()).toHaveTextContent("hello");
     expect(screen.getByRole("button", { name: "Remove attachment late.txt" })).toBeInTheDocument();
+    const sent = await sendAgainAndReadTheOne(rig, spies);
+    expect(sent.content).toBe("hello");
+    // The attachment added during the wait is on the second send, not on a send that never was.
+    expect(sent.attachments ?? []).toHaveLength(1);
   });
 
   it.each([

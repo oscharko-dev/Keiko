@@ -759,12 +759,18 @@ describe("useCodingWorkbenchRuntime", () => {
 
     it("keeps waiting when the same model is picked again, and starts that model when it answers", async () => {
       const { view, first } = await pendingStart();
+      const profile = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile);
+      const readsBefore = profile.mock.calls.length;
       act(() => view.result.current.actions.setSelectedModel("model-redacted"));
+      // The re-pick itself asks nothing more: the Start already runs the check.
+      expect(profile.mock.calls.length).toBe(readsBefore);
       // The model answers at the Start's own next poll: the wait survived the re-pick, and the run
       // starts on the model the Start was pressed for.
-      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue(verifiedAvailable);
+      profile.mockResolvedValue(verifiedAvailable);
       await first;
       expect(startCodingWorkbenchRuntime).toHaveBeenCalledOnce();
+      // Exactly one read followed: the wait's own poll, never one the re-pick caused.
+      expect(profile.mock.calls.length).toBe(readsBefore + 1);
       view.unmount();
     }, 20_000);
 
