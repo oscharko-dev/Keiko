@@ -461,6 +461,10 @@ const FIXTURE_OPERATION_TOOLS: ReadonlySet<string> = new Set([
   "jira.transition",
   "jira.draft",
   "jira.attach",
+  // The base additions of #4357.
+  "jira.myself",
+  "jira.watch",
+  "jira.unwatch",
 ]);
 function preselectFixtureCatalog(deps: UiHandlerDeps): void {
   // These lower-level lifecycle fixtures start with an explicitly selected set. The demand-entry

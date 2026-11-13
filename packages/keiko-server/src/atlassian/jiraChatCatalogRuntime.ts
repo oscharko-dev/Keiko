@@ -122,6 +122,13 @@ const JIRA_BASE_READS: ReadonlySet<string> = new Set([
   ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
   ...JIRA_READ_TOOL_FAMILIES.localCompositions,
 ]);
+/**
+ * What a person's first requests need before any search: who they are (a guarded write's
+ * `expectedActorKey` is the key `jira.myself` returns) and watching or unwatching an issue (#4357).
+ * `jira.watchers` (the read) stays discoverable: with it the catalog leaves too little room for the
+ * operations a turn selects through jira.describe.
+ */
+const JIRA_BASE_EXTRA_TOOLS = ["jira.myself", "jira.watch", "jira.unwatch"] as const;
 /** Curated issue writes and local composition stay available alongside selected native tools. */
 const JIRA_BASE_TOOLS = [
   ...JIRA_MANAGED_READ_TOOLS.filter(
@@ -135,6 +142,7 @@ const JIRA_BASE_TOOLS = [
       (definition?.kind === "native" && /\/issue(?:\/|$)/u.test(definition.pathTemplate))
     );
   }),
+  ...JIRA_BASE_EXTRA_TOOLS,
 ] satisfies typeof JIRA_CHAT_TOOLS;
 const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
 const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(
