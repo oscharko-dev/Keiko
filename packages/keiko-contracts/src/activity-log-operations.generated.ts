@@ -12629,6 +12629,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "cancelled",
           "unavailable",
           "authority-refused",
+          "template-refused",
         ],
       },
       sessionRelation: {

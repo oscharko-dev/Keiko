@@ -222,9 +222,11 @@ describe("one native bulk effect", () => {
   it("does not dispatch after a current actor change", async () => {
     const native = bulkCreateFixture();
     native.controls.actorChangesBefore = true;
-    expect(
-      await execute("jira.create-issues", ARGS, native.request, preparedPorts()),
-    ).toMatchObject({ ok: false, reason: "conflict" });
+    // The invariant is unchanged: nothing is dispatched after the actor changed. Before any effect
+    // the refusal now says what to do (#4354 audit): the key must be the one jira.myself returns.
+    const refused = await execute("jira.create-issues", ARGS, native.request, preparedPorts());
+    expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(JSON.stringify(refused)).toContain("jira.myself");
     expect(native.snapshot()).toEqual({ effects: 0 });
   });
 });
