@@ -1249,7 +1249,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["staged", "submitted", "refused", "progress", "executed", "named"],
+        values: ["staged", "submitted", "refused", "progress", "executed", "named", "held"],
       },
       refusal: {
         type: "string",
@@ -1267,6 +1267,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "draft-changed",
           "draft-invalid",
           "requirements-untraced",
+          "approval-expired",
         ],
       },
       newDraft: {

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "59fafcc2352e11cd352343edd0877f2a5b8e9bb016d9b9e82cd89245418d051c",
+    "catalogDigest": "3a6e0628839ed99c919f5f0b97bfdc88e9e93adbef7f5d63dc759c4faa1b7102",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1310,7 +1310,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["staged", "submitted", "refused", "progress", "executed", "named"]
+            "values": ["staged", "submitted", "refused", "progress", "executed", "named", "held"]
           },
           "refusal": {
             "type": "string",
@@ -1327,7 +1327,8 @@
               "invalid-fields",
               "draft-changed",
               "draft-invalid",
-              "requirements-untraced"
+              "requirements-untraced",
+              "approval-expired"
             ]
           },
           "newDraft": {
@@ -1462,8 +1463,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-draft.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:20",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:116"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:21",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:121"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -119373,7 +119374,7 @@
     {
       "op": "atlassian.jira-draft",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:23",
+      "site": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:24",
       "package": "keiko-server"
     },
     {
@@ -120164,7 +120165,7 @@
     {
       "op": "coding-runtime.composition.retired-setting",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:6443",
+      "site": "packages/keiko-server/src/deps.ts:6446",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121533,7 +121534,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1702",
+      "site": "packages/keiko-server/src/deps.ts:1703",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122549,7 +122550,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2474",
+      "site": "packages/keiko-server/src/deps.ts:2475",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123134,7 +123135,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4805",
+      "site": "packages/keiko-server/src/deps.ts:4806",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123300,7 +123301,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3377",
+      "site": "packages/keiko-server/src/deps.ts:3378",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
