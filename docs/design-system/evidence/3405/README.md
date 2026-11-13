@@ -164,6 +164,14 @@ producer ran on the combined sources in the Linux gates container (`--init`, Nod
 its fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
 
+The readable Jira result rows, the approval preview and the refusal hints of the results work (#4355)
+added catalog keys to both optional catalogs, so the freshness gate rejected their digests. On
+2026-11-13 (UTC) the complete original nine-case producer ran on the merged sources in the Linux
+gates container (`--init`, Node 24.18.0): **9 passed**, and `npm run check:update-ui-evidence`
+passes. Only the three records were kept; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

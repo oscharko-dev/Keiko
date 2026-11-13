@@ -2848,6 +2848,7 @@
     "keiko-ui/app/components/desktop/jira-project-metadata-presentation",
     "keiko-ui/app/components/desktop/jira-property-mutation-presentation",
     "keiko-ui/app/components/desktop/jira-property-presentation",
+    "keiko-ui/app/components/desktop/jira-readable-text",
     "keiko-ui/app/components/desktop/jira-release-lifecycle-presentation",
     "keiko-ui/app/components/desktop/jira-release-presentation",
     "keiko-ui/app/components/desktop/jira-remote-version-link-presentation",
