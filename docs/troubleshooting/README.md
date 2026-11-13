@@ -1002,7 +1002,9 @@ keiko status            # the standing place for the custody state
 `security.vault.custody` line only when it belongs to the reported incident's evidence: around a
 vault key-resolution failure (the refused case), or in a report filed at that moment. An
 `unattested` or `exposed` state on an otherwise healthy start is not in a support report; read it
-from `keiko status`. `keiko support analyze <report.json> --json` shows the line's closed fields.
+from `keiko status`. `keiko support analyze <report.json> --json` shows the line with its level and error kind (an
+`error` line with `unsafe-target` is the refused outcome); the line's `target` and `reason` are not
+projected.
 
 **Resolution**
 
