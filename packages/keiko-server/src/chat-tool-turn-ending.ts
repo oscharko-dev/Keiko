@@ -490,42 +490,33 @@ interface ChatToolTurnCorrectionInput {
   readonly pendingKnowledgePageCount?: number;
 }
 
-/** The optional body-free counts of one correction line. */
+type CorrectionCountField =
+  | "omittedFindingCount"
+  | "mismatchedRequirementCount"
+  | "unsupportedKeyCount"
+  | "rawReportKeyCount"
+  | "announcementCount"
+  | "pendingKnowledgePageCount";
+
+/** The optional body-free counts of one correction line: the ones the caller supplied. */
 function correctionCounts(
   input: ChatToolTurnCorrectionInput,
-): Readonly<
-  Partial<
-    Record<
-      | "omittedFindingCount"
-      | "mismatchedRequirementCount"
-      | "unsupportedKeyCount"
-      | "rawReportKeyCount"
-      | "announcementCount"
-      | "pendingKnowledgePageCount",
-      number
-    >
-  >
-> {
-  return {
-    ...(input.omittedFindingCount === undefined
-      ? {}
-      : { omittedFindingCount: input.omittedFindingCount }),
-    ...(input.mismatchedRequirementCount === undefined
-      ? {}
-      : { mismatchedRequirementCount: input.mismatchedRequirementCount }),
-    ...(input.unsupportedKeyCount === undefined
-      ? {}
-      : { unsupportedKeyCount: input.unsupportedKeyCount }),
-    ...(input.rawReportKeyCount === undefined
-      ? {}
-      : { rawReportKeyCount: input.rawReportKeyCount }),
-    ...(input.announcementCount === undefined
-      ? {}
-      : { announcementCount: input.announcementCount }),
-    ...(input.pendingKnowledgePageCount === undefined
-      ? {}
-      : { pendingKnowledgePageCount: input.pendingKnowledgePageCount }),
+): Readonly<Partial<Record<CorrectionCountField, number>>> {
+  const supplied: Readonly<Record<CorrectionCountField, number | undefined>> = {
+    omittedFindingCount: input.omittedFindingCount,
+    mismatchedRequirementCount: input.mismatchedRequirementCount,
+    unsupportedKeyCount: input.unsupportedKeyCount,
+    rawReportKeyCount: input.rawReportKeyCount,
+    announcementCount: input.announcementCount,
+    pendingKnowledgePageCount: input.pendingKnowledgePageCount,
   };
+  const counts: Partial<Record<CorrectionCountField, number>> = {};
+  for (const [name, value] of Object.entries(supplied) as [
+    CorrectionCountField,
+    number | undefined,
+  ][])
+    if (value !== undefined) counts[name] = value;
+  return counts;
 }
 
 /**

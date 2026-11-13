@@ -237,6 +237,11 @@ const VALIDATION_MESSAGES = {
   "bounds-exceeded": "chat.jira.outcome.validation.bounds-exceeded",
 } as const;
 
+/** The issues a partial draft write left uncreated. */
+function JiraNotCreatedLine({ count }: { readonly count: number | undefined }): ReactNode {
+  const t = useTranslate();
+  return count === undefined ? null : <p>{t("chat.jira.outcome.notCreated", { count })}</p>;
+}
 function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   return (
@@ -259,9 +264,7 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
               })}
         </p>
       )}
-      {view.notCreatedCount === undefined ? null : (
-        <p>{t("chat.jira.outcome.notCreated", { count: view.notCreatedCount })}</p>
-      )}
+      <JiraNotCreatedLine count={view.notCreatedCount} />
       {view.stagedCount === undefined ? null : (
         <p>{t("chat.jira.outcome.staged", { count: view.stagedCount })}</p>
       )}

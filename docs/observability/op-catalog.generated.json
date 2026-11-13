@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "80114a6f552961905d63663394d69e2c734274cd755cf50c82b861526d2167d5",
+    "catalogDigest": "8287d7c77cb518ae9ca969d90e2c872147ea49412d578ff568a7bb396639195d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4240,8 +4240,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:568",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:615"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:559",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:606"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4370,7 +4370,7 @@
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:391",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:550"]
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:541"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -119651,7 +119651,7 @@
     {
       "op": "chat.tool-turn.batch-draft-offer",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:571",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:562",
       "package": "keiko-server"
     },
     {
