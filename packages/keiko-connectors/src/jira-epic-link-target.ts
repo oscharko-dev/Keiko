@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraAgileRequest } from "./jira-agile-request.js";
+import { JIRA_DRAFT_STAND_IN_KEY } from "./jira-draft.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -19,7 +20,13 @@ const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d{1,10}$/u;
 const CUSTOM_FIELD = /^customfield_\d{1,32}$/u;
 // The agile request is built on first use: building it opens a bounded timeout phase, and a write
 // that never sets an Epic Link must not open one.
-const AGILE = new AsyncLocalStorage<() => JiraMutationRequest>();
+interface EpicCheck {
+  readonly agile: () => JiraMutationRequest;
+  /** One field-list read and one read per target for the invocation, even when asked concurrently. */
+  fieldId: Promise<string | undefined> | undefined;
+  readonly targets: Map<string, Promise<boolean>>;
+}
+const AGILE = new AsyncLocalStorage<EpicCheck>();
 
 /** Runs one admission or write with the invocation's agile request available to its checks. */
 export function withJiraEpicLinkTargetCheck<T>(
@@ -28,10 +35,12 @@ export function withJiraEpicLinkTargetCheck<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   let built: JiraMutationRequest | undefined;
-  return AGILE.run(
-    (): JiraMutationRequest => (built ??= jiraAgileRequest(connection, context)),
-    run,
-  );
+  const check: EpicCheck = {
+    agile: (): JiraMutationRequest => (built ??= jiraAgileRequest(connection, context)),
+    fieldId: undefined,
+    targets: new Map(),
+  };
+  return AGILE.run(check, run);
 }
 
 type Refusal = Extract<JiraMutationAttempt, { ok: false }>;
@@ -61,15 +70,14 @@ export async function epicLinkTargetRefusal(
   request: JiraMutationRequest,
   fields: Readonly<Record<string, unknown>>,
 ): Promise<Refusal | undefined> {
-  const agileRequest = AGILE.getStore();
-  if (agileRequest === undefined || !candidateKeys(fields)) return undefined;
-  const fieldId = await epicLinkFieldId(request);
+  const check = AGILE.getStore();
+  if (check === undefined || !candidateKeys(fields)) return undefined;
+  check.fieldId ??= epicLinkFieldId(request);
+  const fieldId = await check.fieldId;
   const target = fieldId === undefined ? undefined : fields[fieldId];
-  if (fieldId === undefined || typeof target !== "string") return undefined;
-  const response = await agileRequest()(`epic/${encodeURIComponent(target)}`);
-  // Only the instance's own "no such epic" answer refuses; any other failure proves nothing.
-  const notAnEpic = !response.ok && response.reason === "not-found";
-  if (!notAnEpic) return undefined;
+  if (fieldId === undefined || typeof target !== "string" || target === JIRA_DRAFT_STAND_IN_KEY)
+    return undefined;
+  if (!(await isUnknownEpic(check, target))) return undefined;
   return {
     ok: false,
     reason: "field-validation",
@@ -77,8 +85,19 @@ export async function epicLinkTargetRefusal(
       fieldId,
       validation: "invalid-field",
       messages: [
-        `${target} is not an Epic, so it cannot be the Epic Link. Link to the key of an existing Epic of this project, or create the Epic first. Nothing was changed.`,
+        `${target} is not an Epic, or this account cannot see it, so it cannot be the Epic Link. Link to the key of an existing Epic of this project that you can see, or create the Epic first. Nothing was changed.`,
       ],
     },
   };
+}
+/** Only the instance's own "no such epic" answer refuses; any other failure proves nothing. */
+function isUnknownEpic(check: EpicCheck, target: string): Promise<boolean> {
+  let known = check.targets.get(target);
+  if (known === undefined) {
+    known = check
+      .agile()(`epic/${encodeURIComponent(target)}`)
+      .then((response) => !response.ok && response.reason === "not-found");
+    check.targets.set(target, known);
+  }
+  return known;
 }

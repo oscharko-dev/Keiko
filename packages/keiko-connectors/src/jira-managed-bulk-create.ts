@@ -131,7 +131,7 @@ async function dispatch(
   prepared: readonly PreparedJiraCreate[],
   receipt: JiraBulkCreateReceipt,
 ): Promise<JiraBulkCreateFailure> {
-  const actor = await readSavedActor(request, input.actor, { beforeEffect: true });
+  const actor = await readSavedActor(request, input.actor);
   if (!actor.ok) return preparationFailure(actor);
   const response = await request(
     "issue/bulk",

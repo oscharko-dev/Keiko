@@ -890,6 +890,13 @@ async function admitFieldMutation(
 ): Promise<FieldAdmission> {
   const notAnEpic = await epicLinkTargetRefusal(request, linked.validated.fields);
   if (notAnEpic !== undefined) return { stop: notAnEpic };
+  // The status change itself is free (only explicit transition rules govern it); the fields a
+  // transition carries are an edit of exactly those fields and are judged as one (#4354).
+  const carried =
+    purpose === "transition"
+      ? await carriedFieldsGate(request, metadata, linked, issueKey, policy)
+      : undefined;
+  if (carried !== undefined && !carried.ok) return { stop: carried };
   const gate = await gateJiraMutationByTemplates({
     request,
     source: policy.templates,
@@ -902,6 +909,25 @@ async function admitFieldMutation(
   });
   if (!gate.ok) return { stop: gate };
   return policy.check ? { stop: CHECKED } : { links: gate.links ?? linked.links };
+}
+/** The edit rule over the fields a transition carries, or undefined when it carries none. */
+function carriedFieldsGate(
+  request: JiraMutationRequest,
+  metadata: readonly JiraFieldMetadata[],
+  linked: Extract<LinkedFieldChanges, { ok: true }>,
+  issueKey: string,
+  policy: MutationPolicy,
+): ReturnType<typeof gateJiraMutationByTemplates> | undefined {
+  const { fields, update } = linked.validated;
+  if (Object.keys(fields).length === 0 && update.labels === undefined) return undefined;
+  return gateJiraMutationByTemplates({
+    request,
+    source: policy.templates,
+    operation: "edit",
+    metadata,
+    validated: linked.validated,
+    target: { issueKey },
+  });
 }
 /** Only links that take their own call change nothing on the issue request: none is sent. */
 function changesOnlyThroughLinkCalls(
@@ -1356,7 +1382,18 @@ function draftItemInput(
  * reconciled against the issue its draft identity already names before anything is created.
  * A reconciled item sends no mutation; the server's journal records that nothing was dispatched.
  */
-export async function executeJiraDraftItem(
+export function executeJiraDraftItem(
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  return withJiraEpicLinkTargetCheck(connection, context, () =>
+    executeJiraDraftItemInner(item, keys, context, connection, trace),
+  );
+}
+async function executeJiraDraftItemInner(
   item: JiraDraftItem,
   keys: ReadonlyMap<string, string>,
   context: ManagedMcpInvocationContext,
@@ -1452,6 +1489,18 @@ function draftItemFieldFailure(
   );
   return validated.ok ? undefined : validationFailure(validated).detail;
 }
+/** An Epic Link of a draft item that is not an Epic; a link to another draft item is judged at its run. */
+async function draftItemEpicFailure(
+  request: JiraMutationRequest,
+  item: JiraDraftItem,
+  metadata: readonly JiraFieldMetadata[],
+): Promise<JiraMutationFailureDetail | undefined> {
+  const keys = new Map(jiraDraftDependencies(item).map((ref) => [ref, JIRA_DRAFT_STAND_IN_KEY]));
+  const input = draftItemInput(item, keys, undefined);
+  if (!input.ok) return undefined;
+  const prepared = draftItemCreateFields(item, input.fields, metadata, undefined);
+  return prepared.ok ? (await epicLinkTargetRefusal(request, prepared.fields))?.detail : undefined;
+}
 const draftTypeKey = (item: JiraDraftItem): string => `${item.projectId}/${item.issueTypeId}`;
 /** The create fields of each issue type a draft uses, so its size costs no further read. */
 async function draftItemMetadata(
@@ -1508,16 +1557,30 @@ export async function jiraDraftFieldRefusals(
   options: { readonly reconcile: boolean },
 ): Promise<JiraDraftFieldRefusals> {
   if (connection.deployment !== "data-center") return { refusals: [], total: 0 };
-  const request = requestFor(connection, context);
-  const metadata = await draftItemMetadata(request, items);
-  const candidates = items.flatMap((item): readonly DraftFieldCandidate[] => {
-    const fields = metadata.get(draftTypeKey(item));
-    const detail = fields === undefined ? undefined : draftItemFieldFailure(item, fields);
-    return fields === undefined || detail === undefined
-      ? []
-      : [{ ref: item.ref, detail, item, metadata: fields }];
+  return withJiraEpicLinkTargetCheck(connection, context, async () => {
+    const request = requestFor(connection, context);
+    const metadata = await draftItemMetadata(request, items);
+    const candidates = (
+      await Promise.all(
+        items.map(async (item): Promise<readonly DraftFieldCandidate[]> => {
+          const fields = metadata.get(draftTypeKey(item));
+          if (fields === undefined) return [];
+          const detail =
+            draftItemFieldFailure(item, fields) ??
+            (await draftItemEpicFailure(request, item, fields));
+          return detail === undefined ? [] : [{ ref: item.ref, detail, item, metadata: fields }];
+        }),
+      )
+    ).flat();
+    return draftFieldRefusalsOf(request, candidates, options.reconcile);
   });
-  if (!options.reconcile)
+}
+async function draftFieldRefusalsOf(
+  request: JiraMutationRequest,
+  candidates: readonly DraftFieldCandidate[],
+  reconcile: boolean,
+): Promise<JiraDraftFieldRefusals> {
+  if (!reconcile)
     return {
       refusals: candidates
         .slice(0, DRAFT_FIELD_REFUSALS_MAX)

@@ -29,8 +29,8 @@ describe("the plain words of a parent refusal (#4354)", () => {
   ];
   const subject: JiraTemplateSubject = {
     operation: "create",
-    project: "ABC",
-    issueType: "Story",
+    projectKey: "ABC",
+    issueType: { name: "Story" },
     fields: { customfield_10014: "ABC-5" },
     parentIssueTypes: { customfield_10014: { id: "1", name: "Task" } },
   };

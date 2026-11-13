@@ -1,0 +1,131 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  parseJiraIssueTemplate,
+  type JiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  field,
+  fixtureRead,
+  fixtureWrite,
+  response,
+  type SyntheticJira,
+} from "../../../tests/support/jira-managed-remote.js";
+import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
+import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+
+// #4354 (owner rule, audit): a status change is free; the fields a transition carries are an edit
+// of exactly those fields, judged by the edit rule (never worse), and with no governing template
+// they pass.
+function template(...rules: readonly string[]): JiraIssueTemplate {
+  const result = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Task",
+      "activateOn: [create, edit]",
+      ...rules,
+      "---",
+      "# Task",
+    ].join("\n"),
+  );
+  if (!result.ok) throw new TypeError("fixture template must parse");
+  return result.template;
+}
+function run(
+  args: CatalogJsonObject,
+  templates: readonly JiraIssueTemplate[],
+): {
+  readonly result: ReturnType<typeof executeJiraManagedMutation>;
+  readonly writes: () => number;
+} {
+  const state: SyntheticJira = {
+    fields: {
+      summary: "A sufficiently long summary of this synthetic issue",
+      status: { id: "1" },
+      labels: ["initial"],
+      project: { id: "10000", key: "SYN" },
+      issuetype: { id: "3", name: "Task" },
+    },
+    comment: "",
+  };
+  const http = vi.fn<AtlassianHttpBodyPort>((request) => {
+    const path = new URL(request.url).pathname;
+    if (request.method !== "GET")
+      return Promise.resolve(fixtureWrite(path, request.bodyJson, state, request.upload));
+    if (path.endsWith("/transitions"))
+      return Promise.resolve(
+        response({
+          transitions: [
+            {
+              id: "31",
+              name: "Done",
+              to: { id: "3", name: "Done" },
+              fields: { summary: field("summary", "string") },
+            },
+          ],
+        }),
+      );
+    return Promise.resolve(fixtureRead(path, state));
+  });
+  const controller = new AbortController();
+  return {
+    result: executeJiraManagedMutation(
+      "jira.transition",
+      args,
+      {
+        invocationId: "synthetic",
+        correlationId: "synthetic",
+        signal: controller.signal,
+        beforeEffect: () => true,
+      },
+      {
+        deployment: "data-center",
+        baseUrl: "https://jira.example.invalid/context",
+        http,
+        issueTemplates: () => ({ templates, unreadable: 0 }),
+      },
+    ),
+    writes: (): number => http.mock.calls.filter(([request]) => request.method !== "GET").length,
+  };
+}
+const GOVERNING = [template("summaryMinLength: 40")];
+const TRANSITION: CatalogJsonObject = { issueKey: "SYN-1", transitionId: "31" };
+
+describe("the fields a transition carries (#4354)", () => {
+  it("refuses a transition whose carried field would violate the governing edit template, before any effect", async () => {
+    const jira = run({ ...TRANSITION, fields: { summary: "Too short" } }, GOVERNING);
+    expect(await jira.result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "summary-too-short" }],
+    });
+    expect(jira.writes()).toBe(0);
+  });
+
+  it("lets the same transition through without fields: the status change is free", async () => {
+    const jira = run(TRANSITION, GOVERNING);
+    expect(await jira.result).toMatchObject({ ok: true });
+    expect(jira.writes()).toBe(1);
+  });
+
+  it("lets a transition through whose carried field conforms", async () => {
+    const jira = run(
+      {
+        ...TRANSITION,
+        fields: { summary: "A sufficiently long summary that satisfies the rule of the template" },
+      },
+      GOVERNING,
+    );
+    expect(await jira.result).toMatchObject({ ok: true });
+    expect(jira.writes()).toBe(1);
+  });
+
+  it("lets a transition with a carried field through when no template governs it", async () => {
+    const jira = run({ ...TRANSITION, fields: { summary: "Too short" } }, []);
+    expect(await jira.result).toMatchObject({ ok: true });
+    expect(jira.writes()).toBe(1);
+  });
+});

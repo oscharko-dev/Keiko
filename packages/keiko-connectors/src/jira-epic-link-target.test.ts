@@ -12,8 +12,15 @@ import {
   permissiveJiraTemplates,
   SYNTHETIC_ISSUE_TYPES,
 } from "../../../tests/support/jira-test-templates.js";
+import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
-import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import type { JiraManagedConnection } from "./jira-managed-connection.js";
+import { parseJiraDraft, type JiraDraftItem } from "./jira-draft.js";
+import {
+  executeJiraDraftItem,
+  executeJiraManagedMutation,
+  jiraDraftFieldRefusals,
+} from "./jira-managed-mutations.js";
 
 // #4354 AC2: an Epic Link that points to an issue that is not an Epic passed the preflight and was
 // then rejected by Jira for every item (gh.epic.error.not.found). Keiko now asks the instance's own
@@ -27,6 +34,8 @@ const TASK = "SYN-5";
 
 function remote(epicEndpoint: "answers" | "forbidden" = "answers"): {
   readonly http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  readonly connection: JiraManagedConnection;
+  readonly context: ManagedMcpInvocationContext;
   readonly writes: () => number;
   readonly run: (
     operation: "jira.create" | "jira.edit",
@@ -70,8 +79,22 @@ function remote(epicEndpoint: "answers" | "forbidden" = "answers"): {
     return Promise.resolve(fixtureRead(path, state));
   });
   const controller = new AbortController();
+  const context: ManagedMcpInvocationContext = {
+    invocationId: "synthetic",
+    correlationId: "synthetic",
+    signal: controller.signal,
+    beforeEffect: () => true,
+  };
+  const connection: JiraManagedConnection = {
+    deployment: "data-center",
+    baseUrl: "https://jira.example.invalid/context",
+    http,
+    issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+  };
   return {
     http,
+    connection,
+    context,
     writes: (): number => http.mock.calls.filter(([request]) => request.method !== "GET").length,
     run: (operation, args): ReturnType<typeof executeJiraManagedMutation> =>
       executeJiraManagedMutation(
@@ -148,5 +171,80 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
     // An unreadable epic check proves nothing by itself, so it never blocks: Jira decides.
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(jira.writes()).toBe(1);
+  });
+
+  // #4354 audit: the draft path is where the defect lived: an item with an Epic Link to a Task
+  // passed staging and the review card, and Jira rejected it at run time.
+  describe("a backlog draft item", () => {
+    const DRAFT_ITEM = (epic: string): Record<string, unknown> => ({
+      ref: "a",
+      projectId: "10000",
+      issueTypeId: "3",
+      fields: { summary: "A story under an epic", customfield_10000: "x", customfield_10014: epic },
+    });
+    const draftOf = (...items: readonly Record<string, unknown>[]): readonly JiraDraftItem[] => {
+      const parsed = parseJiraDraft({ items });
+      if (parsed === undefined) throw new TypeError("Expected a parsable draft");
+      return parsed.items;
+    };
+
+    it("is refused before the review card when its Epic Link points to a Task", async () => {
+      const jira = remote();
+      const refusals = await jiraDraftFieldRefusals(
+        draftOf(DRAFT_ITEM(TASK)),
+        jira.context,
+        jira.connection,
+        { reconcile: false },
+      );
+      expect(refusals.refusals).toHaveLength(1);
+      expect(JSON.stringify(refusals.refusals[0])).toContain("not an Epic");
+      expect(jira.writes()).toBe(0);
+    });
+
+    it("is not refused when its Epic Link points to an Epic, or to another item of the draft", async () => {
+      const jira = remote();
+      const toEpic = await jiraDraftFieldRefusals(
+        draftOf(DRAFT_ITEM(EPIC)),
+        jira.context,
+        jira.connection,
+        { reconcile: false },
+      );
+      expect(toEpic.refusals).toEqual([]);
+      const other = { ...DRAFT_ITEM("DRAFT-1"), ref: "b", parent: undefined };
+      const toItem = await jiraDraftFieldRefusals(
+        draftOf(DRAFT_ITEM(EPIC), other),
+        jira.context,
+        jira.connection,
+        { reconcile: false },
+      );
+      expect(toItem.refusals).toEqual([]);
+    });
+
+    it("reads the field list and each target once, however many items name it", async () => {
+      const jira = remote();
+      await jiraDraftFieldRefusals(
+        draftOf(
+          { ...DRAFT_ITEM(TASK), ref: "a" },
+          { ...DRAFT_ITEM(TASK), ref: "b" },
+          { ...DRAFT_ITEM(TASK), ref: "c" },
+        ),
+        jira.context,
+        jira.connection,
+        { reconcile: false },
+      );
+      const urls = jira.http.mock.calls.map(([request]) => new URL(request.url).pathname);
+      expect(urls.filter((path) => path.endsWith("/rest/api/2/field"))).toHaveLength(1);
+      expect(urls.filter((path) => path.includes("/rest/agile/1.0/epic/"))).toHaveLength(1);
+    });
+
+    it("is refused at its run too, and nothing is written", async () => {
+      const jira = remote();
+      const [item] = draftOf(DRAFT_ITEM(TASK));
+      if (item === undefined) throw new TypeError("Expected one draft item");
+      const result = await executeJiraDraftItem(item, new Map(), jira.context, jira.connection);
+      expect(result).toMatchObject({ ok: false, reason: "field-validation" });
+      expect(JSON.stringify(result)).toContain("not an Epic");
+      expect(jira.writes()).toBe(0);
+    });
   });
 });

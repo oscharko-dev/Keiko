@@ -15,7 +15,7 @@ export interface JiraTestTemplateSet {
  * this so the write is not refused for a reason the test is not about. Never use it to prove a
  * refusal: a test of the gate builds the template it needs.
  */
-export function permissiveJiraTemplate(project: string, issueType: string): JiraIssueTemplate {
+function permissiveJiraTemplate(project: string, issueType: string): JiraIssueTemplate {
   return {
     project: project.toUpperCase(),
     issueType,
