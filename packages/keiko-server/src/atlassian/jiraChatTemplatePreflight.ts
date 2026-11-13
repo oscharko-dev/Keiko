@@ -2,6 +2,7 @@ import { jiraChatPrivatePorts } from "./jiraChatPrivatePorts.js";
 import {
   checkJiraManagedMutation,
   firstJiraDraftTemplateRefusal,
+  JIRA_DRAFT_TEMPLATE_UNREADABLE,
   jiraDraftFieldRefusals,
   jiraTemplateViolationGuidance,
   parseJiraDraft,
@@ -11,6 +12,7 @@ import {
   type JiraDraftTemplateRefusal,
   type JiraManagedConnection,
   type JiraTraceRequest,
+  withJiraDraftReadMemo,
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_ENTITY_PROPERTY_MUTATIONS,
@@ -307,8 +309,8 @@ function draftFieldRefusalData(
 }
 /**
  * Every item of a draft runs the checks its create will run, so a human is never asked to approve
- * known-invalid items: the templates active for its creation (#4178; each item reads Jira, so only
- * while one can govern), then the field validation (S05 of #4173; its size costs no further read).
+ * known-invalid items: the templates active for its creation (#4178; the Jira reads every item shares are
+ * made once), then the field validation (S05 of #4173; its size costs no further read).
  * Per-item checks also ran when an item was staged; templates may have changed since, and an inline
  * draft was never staged.
  */
@@ -328,14 +330,19 @@ async function draftItemsRefusal(
     access.current,
   );
   try {
+    // Every item of one project and type reads the same few Jira resources; they are read once.
+    const reads = withJiraDraftReadMemo(connection, invocation, { made: 0, reused: 0 });
     const template = await firstJiraDraftTemplateRefusal(
       itemsOf(draftArguments),
       invocation,
-      connection,
+      reads,
     );
+    // A Jira that cannot be read leaves the decision to the write; the field check would wait for
+    // the same unreadable metadata a second time, so it is not run.
+    if (template === JIRA_DRAFT_TEMPLATE_UNREADABLE) return undefined;
     if (template !== undefined) return templateDraftRefusal(template, context.correlationId);
     const items = parseJiraDraft(draftArguments)?.items ?? [];
-    const fields = await jiraDraftFieldRefusals(items, invocation, connection, { reconcile: true });
+    const fields = await jiraDraftFieldRefusals(items, invocation, reads, { reconcile: true });
     if (fields.refusals.length === 0) return undefined;
     recordJiraFieldRefusal(context.correlationId, {
       operation: "jira.draft",

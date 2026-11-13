@@ -1665,10 +1665,23 @@ the approval.
   by reason: comments, attachments (off), watchers, votes, notifications and entity properties carry no
   field a template describes; the 168 administration operations (projects, versions, components,
   workflows, schemes, users, groups, filters, boards, screens, instance, cluster, avatars) touch no
-  issue field. In Chat the same pipeline also runs as a dry run before any approval is asked; the
-  Coding Workbench raises its approval in OpenCode's own permission hook, where Keiko runs the
-  same dry run before it asks (see the Coding paragraph below), and the executor gate stays
-  authoritative in both.
+  issue field. In Chat the same pipeline also runs as a dry run before any approval is asked. The
+  Coding Workbench raises its approval in OpenCode's own permission hook: when the autonomy mode
+  would ask the human about a write of the run's bound Jira Pod, the composition first calls the
+  Pod's `preflightWrite` (`checkJiraManagedMutation` with the template library, logged as stage
+  `pre-approval`), and a refusal becomes the model's deny message with the closed policy outcome
+  `template-refused`, so no card is raised for a write that cannot proceed. In Full access nothing
+  is asked and the dry run is skipped. A dry run that cannot complete decides nothing: the card is
+  asked and the executor gate refuses afterwards. The executor gate stays authoritative everywhere.
+  `JIRA_TEMPLATE_GOVERNANCE` (`jira-template-governance.ts` in `keiko-contracts`) classifies every
+  registered mutation exactly once (`create`, `create-batch`, `draft`, `edit`, `transition`,
+  `bulk-impact`, or `not-governed` with a closed reason) as a `Record` over the operation union, so
+  an unclassified operation does not compile; archive, restore, delete and `move-subtask` (which
+  reorders the subtasks of one parent and never reparents) are named there as `issue-lifecycle`.
+  A template skill that no longer parses refuses every governed write and names the skill in the
+  refusal; it is repaired in Skills. A `transition:<target>` activation compares the target status
+  name Jira reports, so an instance in another language (German "In Bearbeitung") needs the
+  localized name in the template.
 
 **Deterministic project report (#4181, 2026-10-31).** `jira.report` is a tenth read tool (low risk,
 `issue-tracker.read`) and the one place where Keiko, not the model, produces project numbers. For a

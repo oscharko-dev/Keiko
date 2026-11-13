@@ -457,7 +457,7 @@ it.each([
   ],
 ] as const)("names the rule an upsert broke: %#", async (args, rule) => {
   const request = fixture();
-  const result = await run(request, "jira.upsert-remote-link", args as CatalogJsonObject);
+  const result = await run(request, "jira.upsert-remote-link", args);
   expect(result).toMatchObject({ ok: false, reason: "field-validation" });
   expect(JSON.stringify(result)).toMatch(rule);
   expect(request).not.toHaveBeenCalled();

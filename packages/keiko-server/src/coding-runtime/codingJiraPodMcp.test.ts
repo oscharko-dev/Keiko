@@ -1092,6 +1092,65 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     expect(writes(h)).toBe(1);
   });
 
+  describe("the dry run before the human is asked (#4354 L4)", () => {
+    const LONG_SUMMARY =
+      "A summary that is long enough for the forty character minimum of the rule";
+
+    it("hands the model the refusal of a write that breaks a template and sends nothing", async () => {
+      const h = harness({ template: EDIT_TEMPLATE });
+      const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+        tool: "jira.edit",
+        arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+      });
+      expect(refusal).toContain("Nothing was changed");
+      expect(refusal).toContain("summary");
+      expect(writes(h)).toBe(0);
+    });
+
+    it("leaves a conforming write, and a write no template governs, to the human's card", async () => {
+      const governed = harness({ template: EDIT_TEMPLATE });
+      await expect(
+        governed.pods.preflightWrite(bound(governed), runAuthority(governed), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: LONG_SUMMARY } },
+        }),
+      ).resolves.toBeUndefined();
+      const free = harness();
+      await expect(
+        free.pods.preflightWrite(bound(free), runAuthority(free), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        }),
+      ).resolves.toBeUndefined();
+      expect(writes(governed) + writes(free)).toBe(0);
+    });
+
+    it("refuses a creation no template governs, naming the way out, before any card", async () => {
+      const h = harness();
+      const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+        tool: "jira.create",
+        arguments: {
+          projectId: "10000",
+          issueTypeId: "3",
+          fields: { summary: LONG_SUMMARY, customfield_10000: "x" },
+        },
+      });
+      expect(refusal).toContain("template-missing");
+      expect(writes(h)).toBe(0);
+    });
+
+    it("does nothing for a name that is not a registered Jira write", async () => {
+      const h = harness({ template: EDIT_TEMPLATE });
+      await expect(
+        h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.search",
+          arguments: { jql: "project = SYN" },
+        }),
+      ).resolves.toBeUndefined();
+      expect(h.http).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses requirement references a Coding run cannot trace, and still writes without them", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));

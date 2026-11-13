@@ -2050,7 +2050,10 @@ export async function checkJiraManagedMutationTemplates(
   connection: JiraManagedConnection,
 ): Promise<JiraTemplateGateResult> {
   const attempt = await checkedAttempt(operation, source, context, connection);
-  if (attempt.ok || attempt.violations === undefined) return { ok: true };
+  if (attempt.ok) return { ok: true };
+  // A Jira that cannot be read is told apart from a pass, so a caller can stop reading it.
+  if (attempt.violations === undefined)
+    return attempt.reason === "unavailable" ? { ok: false, reason: "unavailable" } : { ok: true };
   return { ok: false, reason: attempt.reason, violations: attempt.violations };
 }
 export type JiraMutationCheckResult =

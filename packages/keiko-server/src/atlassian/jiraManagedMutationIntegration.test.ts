@@ -34,6 +34,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gateway";
 import {
   JIRA_MUTATION_OPERATIONS,
+  jiraOperationInReleaseScope,
   jiraRequiredConnectorScope,
   type JiraMutationOperation,
   type JiraLivePodMetadata,
@@ -123,8 +124,11 @@ const BASE_URL = "https://203.0.113.10/context";
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
+// The attachment operations are switched off for Release 1 (#4354); their mechanics are proved
+// at the connector with the switch forced on, and the refusal is pinned where the switch lives.
 const SINGLE_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation): operation is SingleMutation => operation !== "jira.draft",
+  (operation): operation is SingleMutation =>
+    operation !== "jira.draft" && jiraOperationInReleaseScope(operation),
 );
 const ADMIN_MUTATIONS = SINGLE_MUTATIONS.filter(
   (operation) => jiraRequiredConnectorScope(operation) === "issue-tracker.admin",
@@ -246,6 +250,36 @@ function verificationProbe(path: string): ReturnType<typeof response> | undefine
   }
   return undefined;
 }
+/**
+ * A template gate learns which project and type an issue is by asking for those two fields by name
+ * (#4354). Whatever the operation's own fixture answers for that issue is kept, and the two fields
+ * are added to it, so every other read of the same issue is unchanged.
+ */
+function withIssueIdentity(
+  url: string,
+  path: string,
+  answer: ReturnType<typeof fixtureRead>,
+): ReturnType<typeof fixtureRead> {
+  // An issue is read by key or, from a worklog, by its numeric id.
+  const match = /^\/context\/rest\/api\/2\/issue\/(?:SYN-(\d{1,3})|1000(\d))$/u.exec(path);
+  const number = match?.[1] ?? match?.[2];
+  const requested = new URL(url).searchParams.get("fields")?.split(",") ?? [];
+  if (number === undefined || !requested.includes("issuetype")) return answer;
+  const base =
+    answer.kind === "response" && answer.status === 200
+      ? (JSON.parse(answer.bodyText) as { fields?: Record<string, unknown> })
+      : {};
+  return response({
+    id: String(10000 + Number(number)),
+    key: `SYN-${number}`,
+    ...base,
+    fields: {
+      ...base.fields,
+      project: { id: "10000", key: "SYN" },
+      issuetype: { id: "3", name: "Task" },
+    },
+  });
+}
 async function fixtureReadResult(
   mode: RemoteMode,
   url: string,
@@ -262,6 +296,16 @@ async function fixtureReadResult(
       throw new TypeError("Missing independent configured URL observation");
     return observed;
   }
+  const answer = await fixtureOperationRead(url, path, state, lifecycle);
+  // Only the gate's read before the write is given an identity; a readback shows what was written.
+  return writes === 0 ? withIssueIdentity(url, path, answer) : answer;
+}
+async function fixtureOperationRead(
+  url: string,
+  path: string,
+  state: MutationRemoteState,
+  lifecycle: ReturnType<typeof lifecycleRemoteFixture>,
+): Promise<ReturnType<typeof fixtureRead>> {
   return (
     verificationProbe(path) ??
     (await lifecycle.read(url)) ??
@@ -488,6 +532,19 @@ function privateFixturePod(metadata: AtlassianCredentialMetadata): JiraLivePodMe
     throw new TypeError("Missing real private Pod binding");
   return metadata.livePod;
 }
+/**
+ * Every write is judged against a template of its type (#4354), so the fixture holds a rule-free
+ * template for each synthetic issue type. Deleting an issue type that a template names is refused
+ * on purpose (a saved rule would change meaning), so that one case holds a template of a type the
+ * deletion does not touch.
+ */
+function integrationTemplates(
+  operation: JiraMutationOperation | undefined,
+): ReturnType<typeof permissiveJiraTemplates> {
+  return operation === "jira.delete-issue-type"
+    ? permissiveJiraTemplates(["SYN"], ["Epic"])
+    : permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES);
+}
 async function fixture(
   mode: RemoteMode = "confirmed",
   afterAcknowledgement?: "binding-revoked" | "cancelled",
@@ -633,7 +690,8 @@ async function fixture(
       connection: {
         deployment: "data-center",
         baseUrl: BASE_URL,
-        issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+        issueTemplates: (): ReturnType<typeof integrationTemplates> =>
+          integrationTemplates(initialOperation),
       },
     });
   };
@@ -650,7 +708,8 @@ async function fixture(
         throw new Error("Mutation must use the journal-owned HTTP port");
       }),
       emailTemplates: emailTemplateFixtureAdmission(),
-      issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+      issueTemplates: (): ReturnType<typeof integrationTemplates> =>
+        integrationTemplates(initialOperation),
       attachmentSource: (): ReturnType<JiraAttachmentSource> => {
         const sha256 = createHash("sha256").update(ATTACHED).digest("hex");
         return Promise.resolve({
@@ -1321,8 +1380,10 @@ it.each([51, 100])(
 
 it("keeps an independent complete argument/state/receipt case for every registered native mutation", () => {
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
-  expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
+  const inScope = (names: readonly string[]): string[] =>
+    names.filter((name) => jiraOperationInReleaseScope(name)).sort();
+  expect(inScope(Object.keys(REMOTE_STATE))).toEqual([...SINGLE_MUTATIONS].sort());
+  expect(inScope(Object.keys(SUCCESS_RECEIPTS))).toEqual([...SINGLE_MUTATIONS].sort());
   expect(ADMIN_MUTATIONS).toHaveLength(139);
   expect(Object.keys(FINAL_EXPECTED_OUTCOMES)).toHaveLength(42);
   expect(

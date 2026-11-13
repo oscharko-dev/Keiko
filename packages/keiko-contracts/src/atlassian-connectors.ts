@@ -2114,6 +2114,13 @@ export {
   type JiraAttachmentOperation,
 } from "./jira-release-scope.js";
 export {
+  JIRA_NOT_GOVERNED_REASONS,
+  JIRA_TEMPLATE_GOVERNANCE,
+  jiraTemplateGovernanceOf,
+  type JiraNotGovernedReason,
+  type JiraTemplateGovernance,
+} from "./jira-template-governance.js";
+export {
   JIRA_HEADING_LINE_CHARS_MAX,
   readJiraDescriptionSections,
   readJiraDescriptionBlocks,

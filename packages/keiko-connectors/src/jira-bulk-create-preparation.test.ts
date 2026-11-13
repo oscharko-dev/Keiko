@@ -27,7 +27,9 @@ function preparedFixture(
         prepareJiraCreate(
           native.request,
           args,
-          templates ?? (() => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES)),
+          templates ??
+            ((): ReturnType<typeof permissiveJiraTemplates> =>
+              permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES)),
           trace,
         ),
     },

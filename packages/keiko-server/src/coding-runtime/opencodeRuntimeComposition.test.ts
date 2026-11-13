@@ -757,6 +757,8 @@ interface StartBridgeControl {
   /** The managed MCP relay and the servers the human chose for the run (a Jira Pod). */
   readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
   readonly mcpGrantedServers?: ReadonlySet<string>;
+  /** The dry run of the run's Jira writes before the human is asked (#4354 L4). */
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
   readonly mcpPlatform?: NodeJS.Platform;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
@@ -1103,6 +1105,14 @@ function optionalRepositoryItems(control: StartBridgeControl | undefined): {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
 } {
   return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
+}
+
+function optionalJiraPreflight(control: StartBridgeControl | undefined): {
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
+} {
+  return control?.jiraWritePreflight === undefined
+    ? {}
+    : { jiraWritePreflight: control.jiraWritePreflight };
 }
 
 function optionalMcp(control: StartBridgeControl | undefined): {
@@ -1608,6 +1618,7 @@ async function startBridgeFixture(
     ...optionalRepositoryItems(control),
     ...optionalOperatorPlugins(control),
     ...optionalMcp(control),
+    ...optionalJiraPreflight(control),
     ...optionalMcpPlatform(control),
     ...optionalRepositoryInstructions(control),
     ...optionalNativeWorktrees(control),
@@ -3602,6 +3613,47 @@ describe("private OpenCode run control", () => {
   });
 });
 
+/** The Jira Pods service with the custody graph attached for one bound, verified Pod. */
+function attachedJiraPods(binding: {
+  readonly podId: string;
+  readonly authenticationGeneration: number;
+  readonly verificationRevision: number;
+}): ReturnType<typeof createCodingJiraPods> {
+  const pods = createCodingJiraPods(undefined);
+  pods.attach({
+    store: templateFreeStore(),
+    serverPrincipal: () => "operator-principal",
+    atlassianConnectorCredentials: {
+      custody: {
+        list: () => [
+          {
+            schemaVersion: "1",
+            authRef: "synthetic-credential",
+            displayName: "Synthetic Jira",
+            baseUrl: "https://jira.example.invalid",
+            createdAt: 1,
+            generation: binding.authenticationGeneration,
+            provider: "jira",
+            deployment: "data-center",
+            authScheme: "bearer-pat",
+            livePod: {
+              podId: binding.podId,
+              ownerDigest: createHash("sha256").update("operator-principal").digest("hex"),
+              creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
+              verificationRevision: binding.verificationRevision,
+              verificationInProgress: false,
+              verificationStatus: "ok",
+            },
+          },
+        ],
+      } as unknown as NonNullable<CodingJiraPodDeps["atlassianConnectorCredentials"]>["custody"],
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.resolve({ kind: "network-error" }),
+    },
+  });
+  return pods;
+}
+
 describe("native policy asks on the tool bridge (#3897 review)", () => {
   const completed = {
     status: "completed" as const,
@@ -4472,6 +4524,91 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       await pods.close();
     }
   });
+
+  // #4354 L4: a managed Jira write the human would be asked about is dry-run first, so a write that
+  // breaks the customer's templates ends as the model's refusal and no approval card is raised.
+  it.each([
+    {
+      mode: "governed-assist",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "deny",
+    },
+    { mode: "governed-assist", refusal: undefined, expected: "ask" },
+    // Full access never asks, so the executor gate is the authority and the dry run is not run.
+    {
+      mode: "autonomous-delivery",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "allow",
+    },
+  ] as const)(
+    "dry-runs a managed Jira write before the card: $mode with $refusal is $expected",
+    async ({ mode, refusal, expected }) => {
+      const binding = {
+        podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        authenticationGeneration: 3,
+        verificationRevision: 1,
+      };
+      const pods = attachedJiraPods(binding);
+      const preflight = vi.fn(() => Promise.resolve(refusal));
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode,
+        readToolProfile: () => "native",
+        mcpServers: () => withCodingJiraServer([], binding),
+        mcpRelay: {
+          relay: createMcpCredentialRelay(),
+          origin: "http://127.0.0.1:1983",
+          secrets: {},
+          managed: pods.connections(undefined, binding, {
+            runId: FIXTURE_RUN_ID,
+            currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+          }),
+        },
+        mcpGrantedServers: new Set(["jira"]),
+        jiraWritePreflight: preflight,
+      });
+      try {
+        const pending = fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: JSON.stringify({
+            action: "native-policy",
+            runId: FIXTURE_RUN_ID,
+            sessionID: "ses_tool",
+            permission: "jira_jira_edit",
+            resources: ["*"],
+            mcpInput: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+            source: { type: "tool", messageID: "msg_1", id: "call_jira_edit" },
+            configured: "ask",
+          }),
+        });
+        if (expected === "ask") {
+          // The card is raised: the call stays open until a human decides, so it is not awaited.
+          await vi.waitFor(() => {
+            expect(preflight).toHaveBeenCalledOnce();
+          });
+          return;
+        }
+        const answer = await pending;
+        expect(answer.status).toBe(200);
+        if (expected === "allow") {
+          // Full access asks nobody: the dry run is not run, and the executor gate decides.
+          expect(preflight).not.toHaveBeenCalled();
+          return;
+        }
+        // The remaining case: the dry run refused, the runtime is told why and no card was raised.
+        expect(answer.body).toContain('"effect":"deny"');
+        expect(answer.body).toContain("this breaks the issue template");
+        expect(preflight).toHaveBeenCalledOnce();
+        expect(preflight).toHaveBeenCalledWith({
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        });
+      } finally {
+        await fixture.stop();
+        await pods.close();
+      }
+    },
+  );
 
   it("leaves the run's Jira tools out entirely when the Pod is no longer the one chosen at launch", async () => {
     const binding = {

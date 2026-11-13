@@ -147,6 +147,18 @@ const TEMPLATE = [
   "# Story",
   "## Acceptance criteria",
 ].join("\n");
+// A template with no rule beyond its existence: a creation is refused without one (#4354).
+const PERMISSIVE_STORY = [
+  "---",
+  "keiko: jira-issue-template",
+  "version: 1",
+  "project: SYN",
+  "issueType: Story",
+  "activateOn: [create]",
+  "summaryMinLength: 1",
+  "---",
+  "# Story",
+].join("\n");
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const close of cleanup.splice(0)) close();
@@ -727,7 +739,9 @@ describe("the dry run before approval", () => {
           response({ issues, startAt: 0, maxResults: 100, total: issues.length }),
         );
       }
-      if (jira.metadataFails === true) return Promise.resolve(response({}, 503));
+      // A 403 is not retried; a 5xx would be read again with backoff by every stage that needs the
+      // metadata (the template check and the field check), which a test must not wait for.
+      if (jira.metadataFails === true) return Promise.resolve(response({}, 403));
       const extra = jira.fields ?? [];
       const overridden = (id: string): boolean =>
         extra.some((candidate) => (candidate as { fieldId?: unknown }).fieldId === id);
@@ -1297,11 +1311,7 @@ describe("the dry run before approval", () => {
     it("tells the model which item of an invalid draft to correct, in fixed words (S07 of #4173)", async () => {
       const sink = logs();
       const orphan = { ...item("story", GOOD), parent: { fieldId: "customfield_10101" } };
-      const f = preflight(
-        "# Ordinary skill\n",
-        { items: [item("epic", GOOD), orphan] },
-        "jira.draft",
-      );
+      const f = preflight(PERMISSIVE_STORY, { items: [item("epic", GOOD), orphan] }, "jira.draft");
       expect(await f.run()).toEqual({
         outcome: "rejected",
         reason: "field-validation",
@@ -1329,17 +1339,37 @@ describe("the dry run before approval", () => {
 
     it("reads one issue type's fields once however large the draft, and no item", async () => {
       const f = preflight(
-        "# Ordinary skill\n",
+        PERMISSIVE_STORY,
         { items: [item("epic", "nothing"), item("story", "nothing"), item("bug", "nothing")] },
         "jira.draft",
       );
       expect(await f.run()).toBeUndefined();
-      expect(f.http).toHaveBeenCalledTimes(1);
+      const urls = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
+      // One issue type's fields however many items; the identity reads a creation is judged by
+      // (#4354) are one project and one type per item at most, and no item is read.
+      expect(urls.filter((path) => path.includes("/createmeta/"))).toHaveLength(1);
+      expect(
+        urls.filter((path) => /\/(project|issuetype)\/[^/]+$/u.test(path)).length,
+      ).toBeLessThanOrEqual(6);
+      expect(urls.some((path) => path.includes("/issue/") && !path.includes("/createmeta/"))).toBe(
+        false,
+      );
     });
 
     describe("an item Keiko itself would refuse (S05 of #4173)", () => {
       const EPIC_NAME = field("customfield_10103", "string", true);
-      const ORDINARY = "# Ordinary skill\n";
+      // A template with no rules of its own: what these items are refused for is not a template rule.
+      const ORDINARY = [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        "issueType: Story",
+        "activateOn: [create]",
+        "summaryMinLength: 1",
+        "---",
+        "# Story",
+      ].join("\n");
 
       it("names every such item before any approval and never writes", async () => {
         const sink = logs();
@@ -1454,7 +1484,7 @@ describe("the dry run before approval", () => {
 
   it("refuses a single write Keiko itself would refuse before any approval", async () => {
     const sink = logs();
-    const f = preflight("# Ordinary skill\n", CREATE, "jira.create", {
+    const f = preflight(PERMISSIVE_STORY, CREATE, "jira.create", {
       fields: [field("customfield_10103", "string", true)],
     });
     expect(await f.run()).toEqual({

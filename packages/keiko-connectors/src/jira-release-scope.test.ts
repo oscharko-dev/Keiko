@@ -4,7 +4,6 @@ import {
   JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
   JIRA_ATTACHMENT_OPERATIONS,
   jiraOperationInReleaseScope,
-  type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { checkJiraManagedMutation, executeJiraManagedMutation } from "./jira-managed-mutations.js";
@@ -47,14 +46,14 @@ describe("the Release 1 scope switch for attachments", () => {
         detail: { messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE] },
       };
       const executed = await executeJiraManagedMutation(
-        operation as JiraMutationOperation,
+        operation,
         ARGS[operation] as never,
         CONTEXT,
         connection,
       );
       expect(executed).toEqual(refusal);
       const checked = await checkJiraManagedMutation(
-        operation as JiraMutationOperation,
+        operation,
         ARGS[operation] as never,
         CONTEXT,
         connection,

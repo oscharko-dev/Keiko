@@ -130,17 +130,19 @@ function unreadableRefusal(names: readonly string[] | undefined): JiraTemplateGa
 }
 function identityRefusal(
   failure: Extract<JiraTemplateGateResult, { ok: false }>,
-  templates: readonly JiraIssueTemplate[],
 ): JiraTemplateGateResult {
   // Preserve the closed native failure, but also keep the refusal visible to the existing
   // template-only dry run. It must not reinterpret unbound rule selection as a successful check.
+  // One violation: the refusal is about the unbound identity, so it names no candidate template.
   return {
     ...failure,
-    violations: templates.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
-      ruleId: "template-unreadable",
-      subject: "native project and issue-type identity",
-      template: jiraIssueTemplateLabel(template),
-    })),
+    violations: [
+      {
+        ruleId: "template-unreadable",
+        subject: "native project and issue-type identity",
+        template: "*",
+      },
+    ],
   };
 }
 
@@ -715,24 +717,43 @@ export async function gateJiraMutationByTemplates(
   // diagnostic and an unavailable outcome, so the write still never reaches Jira.
   const set = input.source?.();
   if (set === undefined) return input.operation === "create" ? jiraNoTemplateLibraryRefusal() : OK;
-  if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
+  const early = admissionWithoutIdentity(input, set);
+  if (early !== undefined) return early;
   const candidates = set.templates.filter((template) =>
     governsOperation(template, input.operation),
   );
-  if (candidates.length === 0 && input.operation !== "create") return OK;
   const first =
     input.operation === "create"
       ? await createIdentity(input.request, input.target)
       : await issueIdentity(input.request, input.target.issueKey);
-  if ("ok" in first) return identityRefusal(first, candidates);
-  if (input.operation === "create" && !candidates.some((t) => sameTemplateType(t, first)))
-    return missingTemplateRefusal(
-      set.templates.some((t) => sameTemplateType(t, first))
-        ? "template-not-activated"
-        : "template-missing",
-      first,
-    );
-  return checkCandidates(input, candidates, first);
+  if ("ok" in first) return identityRefusal(first);
+  return (
+    (input.operation === "create" ? createWithoutTemplate(set, candidates, first) : undefined) ??
+    checkCandidates(input, candidates, first)
+  );
+}
+/** What is decided before any identity is read: an unreadable library, or nothing that governs. */
+function admissionWithoutIdentity(
+  input: JiraTemplateGateInput,
+  set: JiraIssueTemplateSet,
+): JiraTemplateGateResult | undefined {
+  if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
+  const governing = set.templates.some((template) => governsOperation(template, input.operation));
+  return governing || input.operation === "create" ? undefined : OK;
+}
+/** A creation whose type has no template activated for it is refused, naming why. */
+function createWithoutTemplate(
+  set: JiraIssueTemplateSet,
+  candidates: readonly JiraIssueTemplate[],
+  identity: Identity,
+): JiraTemplateGateResult | undefined {
+  if (candidates.some((template) => sameTemplateType(template, identity))) return undefined;
+  return missingTemplateRefusal(
+    set.templates.some((template) => sameTemplateType(template, identity))
+      ? "template-not-activated"
+      : "template-missing",
+    identity,
+  );
 }
 
 function sameType(left: string, right: string): boolean {
@@ -766,7 +787,7 @@ async function checkCandidates(
   if (matching.length === 0) return OK;
   const catalog = await completeCatalog(input, matching);
   const identity = await completeIdentity(input, first, catalog, matching);
-  if ("ok" in identity) return identityRefusal(identity, matching);
+  if ("ok" in identity) return identityRefusal(identity);
   const ordered = requiredLinksFirst(input.links ?? [], matching);
   // Only the link that rides on the request itself exists in the state this write leaves.
   const primary = planJiraIssueLinks(ordered, identity.prior.issuelinks).inline;

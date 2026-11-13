@@ -329,39 +329,34 @@ export function checkJiraIssueTemplates(
   return violations.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
 }
 
+/** The one wire field a rule is about, when the rule id alone names it. */
+const FIXED_RULE_FIELD: Readonly<Partial<Record<JiraTemplateViolation["ruleId"], string>>> = {
+  "summary-too-short": "summary",
+  "summary-too-long": "summary",
+  "summary-pattern": "summary",
+  "section-missing": "description",
+  "section-empty": "description",
+  "label-missing": "labels",
+  "label-pattern": "labels",
+  "label-count": "labels",
+};
+function parentFieldIds(
+  violation: JiraTemplateViolation,
+  catalog: readonly JiraFieldCatalogEntry[],
+): ReadonlySet<string> {
+  const field = violation.subject.split(":")[0]?.trim() ?? "";
+  return new Set(["parent", "issuelinks", field, ...resolveJiraTemplateFieldIds(field, catalog)]);
+}
 /** The wire field ids a violation is about; an empty result means it is not about one field. */
 function violationFieldIds(
   violation: JiraTemplateViolation,
   catalog: readonly JiraFieldCatalogEntry[],
 ): ReadonlySet<string> {
-  switch (violation.ruleId) {
-    case "summary-too-short":
-    case "summary-too-long":
-    case "summary-pattern":
-      return new Set(["summary"]);
-    case "section-missing":
-    case "section-empty":
-      return new Set(["description"]);
-    case "label-missing":
-    case "label-pattern":
-    case "label-count":
-      return new Set(["labels"]);
-    case "parent-missing":
-    case "parent-type-mismatch": {
-      const field = violation.subject.split(":")[0]?.trim() ?? "";
-      return new Set([
-        "parent",
-        "issuelinks",
-        field,
-        ...resolveJiraTemplateFieldIds(field, catalog),
-      ]);
-    }
-    default:
-      return new Set([
-        violation.subject,
-        ...resolveJiraTemplateFieldIds(violation.subject, catalog),
-      ]);
-  }
+  const fixed = FIXED_RULE_FIELD[violation.ruleId];
+  if (fixed !== undefined) return new Set([fixed]);
+  if (violation.ruleId === "parent-missing" || violation.ruleId === "parent-type-mismatch")
+    return parentFieldIds(violation, catalog);
+  return new Set([violation.subject, ...resolveJiraTemplateFieldIds(violation.subject, catalog)]);
 }
 
 const violationId = (violation: JiraTemplateViolation): string =>
@@ -530,7 +525,7 @@ function missingTemplateGuidance(violation: JiraTemplateViolation): string {
       ? " Templates exist for it, but only for entering a status, which does not govern creating an issue."
       : "";
   return (
-    `Nothing was changed: no saved issue template governs ${violation.template}.${only} ` +
+    `Nothing was changed: no saved issue template governs this project and issue type; the violation names them.${only} ` +
     "Keiko creates an issue only when a template for its project and issue type exists. Do not retry or change the request. " +
     "Tell the person that a template for this project and issue type has to be created first, and where: " +
     "Skills, Jira template, propose templates from an existing project, review and save. Offer to write the same issue once it exists."

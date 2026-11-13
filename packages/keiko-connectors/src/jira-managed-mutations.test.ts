@@ -63,7 +63,7 @@ function fixture(attachmentSource?: JiraAttachmentSource): {
     controller,
     beforeEffect,
     http,
-    run: (operation, args) => {
+    run: (operation, args): ReturnType<typeof executeJiraManagedMutation> => {
       // A creation needs a template of its type (#4354); the edits and transitions below are
       // about their own mechanics, and a library with no template leaves them on the plain path.
       templates =

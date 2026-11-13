@@ -131,7 +131,7 @@ async function dispatch(
   prepared: readonly PreparedJiraCreate[],
   receipt: JiraBulkCreateReceipt,
 ): Promise<JiraBulkCreateFailure> {
-  const actor = await readSavedActor(request, input.actor);
+  const actor = await readSavedActor(request, input.actor, { beforeEffect: true });
   if (!actor.ok) return preparationFailure(actor);
   const response = await request(
     "issue/bulk",
@@ -174,7 +174,7 @@ export async function executeJiraBulkCreate(
     );
   if (!bulkCreateReceiptFits(input)) return { ok: false, reason: "bounds-exceeded" };
   const receipt = bulkCreateReceipt(input);
-  const actor = await readSavedActor(request, input.actor);
+  const actor = await readSavedActor(request, input.actor, { beforeEffect: true });
   if (!actor.ok) return preparationFailure(actor);
   const prepared = await prepareBatch(input, ports);
   if (!prepared.ok) return prepared;

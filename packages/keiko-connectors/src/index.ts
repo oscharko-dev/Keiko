@@ -394,6 +394,7 @@ export {
 export {
   executeJiraDraftStageTool,
   firstJiraDraftTemplateRefusal,
+  JIRA_DRAFT_TEMPLATE_UNREADABLE,
   parseJiraDraftReference,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
@@ -403,7 +404,11 @@ export {
   type JiraDraftResolution,
   type JiraDraftToolDeps,
 } from "./jira-draft-stage-tool.js";
-export { withJiraCreateMetadataMemo, type JiraDraftReadCounts } from "./jira-draft-read-memo.js";
+export {
+  withJiraCreateMetadataMemo,
+  withJiraDraftReadMemo,
+  type JiraDraftReadCounts,
+} from "./jira-draft-read-memo.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
 export type {
   JiraReportActivity,
