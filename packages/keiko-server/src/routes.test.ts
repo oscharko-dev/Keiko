@@ -16,6 +16,7 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
+import { SERVER_INSTANCE_ID } from "./server-instance.js";
 import {
   checkActivityLogReadiness,
   currentActivityLogReadiness,
@@ -682,7 +683,12 @@ describe("health handler", () => {
     const result = await route?.handler(emptyCtx, stubDeps);
     expect(result).toEqual({
       status: 200,
-      body: { status: "ok", version: SDK_VERSION, diagnostics: currentActivityLogReadiness() },
+      body: {
+        status: "ok",
+        version: SDK_VERSION,
+        diagnostics: currentActivityLogReadiness(),
+        instanceId: SERVER_INSTANCE_ID,
+      },
     });
     if (result === undefined || result === STREAMING) throw new Error("expected a RouteResult");
     expect(isActivityLogReadinessSnapshot(Reflect.get(result.body as object, "diagnostics"))).toBe(

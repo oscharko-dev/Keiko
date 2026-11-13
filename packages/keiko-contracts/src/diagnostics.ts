@@ -2833,6 +2833,11 @@ export interface HealthResponse {
   readonly memory?: MemoryReadinessSnapshot;
   /** The server-owned instance identity, when this process was started by a modern launcher. */
   readonly launchId?: string;
+  /**
+   * A random value regenerated at every server process start (#4370). It lets a page that saw it
+   * while connected recognize a restart; it is not a credential and grants nothing.
+   */
+  readonly instanceId?: string;
 }
 
 const READINESS_STATE_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_STATES);

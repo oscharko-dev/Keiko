@@ -166,6 +166,27 @@ redeems the attestation. Other tabs in the same browser profile then observe the
 After a server restart the same action reconnects; `dev:start` can also request this handoff from an
 already running server without restarting it or recovering its private secret.
 
+**Restart behaviour (owner-delegated decision, #4370).** A server restart ends every launcher-paired
+session by design, because the registry holds no durable bearer (D5); nothing is added to what the
+server keeps across a restart, and no trust boundary changes. A browser the person explicitly
+remembered continues after the restart without a manual step: the existing remembered-browser
+renewal (below) runs after the next refused repair. Every other browser needs one click. When a tab
+finds its session gone, it compares the random server instance identity that `GET /api/health`
+reports (`instanceId`, regenerated at every process start, not a credential) with the one it
+remembered in its own tab storage while it was connected. Only a different identity makes the page
+say, in plain words and without error styling, that Keiko was restarted, that one click on the
+existing Connect control reconnects, and that the open Chat and its draft are kept. An absent,
+unreadable or malformed identity makes no restart claim and the ordinary wording shows.
+
+The Connect control also offers the existing remember opt-in at connect time: an unchecked choice,
+default off, with one sentence that the browser then continues after a restart for up to 30 days. It
+changes nothing on the connect request. Only after the connection succeeded, and only when the person
+chose it, the page requests a remembered approval for its own new key, approves it with the session it
+now holds, proves possession and stores the non-extractable key through the same server protocol,
+limits (30 days, never sliding, 32 records) and key store as the two-browser approval. No comparison
+code is needed because requester and approver are the same page. A failure leaves the connection
+usable and says so.
+
 A mutation refused with HTTP 401, or HTTP 403 carrying `DENIED`, `FORBIDDEN` or `UNAUTHORIZED`,
 requests a fresh browser-session inspection through the existing notification port. For a 404,
 `NOT_FOUND` triggers inspection only on the session-concealing skill-library, Chat skill-selection,
@@ -311,7 +332,8 @@ appears hashed.
 ### D5 — Sessions are process-scoped and fail closed on restart, rotation, revocation, and expiry
 
 The session registry is in process memory and holds no durable bearer material, so a server restart
-invalidates every prior session by construction (restart expiry). A session additionally expires on
+invalidates every prior session by construction (restart expiry). That is deliberate and unchanged (#4370): a restart ends launcher-paired sessions, and only a
+browser the person explicitly remembered continues, through the existing public-key renewal. A session additionally expires on
 explicit revocation (launcher revocation or sign-out), or when its inactivity or absolute lifetime
 limit is reached; rotation issues a fresh secret and invalidates the prior one. In every one
 of these cases the prior cookie immediately yields the content-free projection. There is exactly one
