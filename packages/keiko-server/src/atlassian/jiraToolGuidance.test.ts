@@ -32,6 +32,29 @@ describe("shared Jira tool guidance", () => {
     expect(JIRA_TOOL_GUIDANCE).not.toMatch(/\(delete, move, administer\)/u);
   });
 
+  // The old pin forbade saying an operation does not exist before searching. The wording is now
+  // conditional, so the negative form is pinned too: no sentence of the guidance lets a model declare
+  // an operation absent or impossible without the search in the same sentence.
+  it("never lets a model declare an operation absent or impossible without searching first", () => {
+    const sentences = JIRA_TOOL_GUIDANCE.split(/(?<=\.)\s+/u);
+    const declaring = sentences.filter((sentence) =>
+      /cannot be done|does not exist|not exist|not available|unavailable|impossible/iu.test(
+        sentence,
+      ),
+    );
+    expect(declaring.length).toBeGreaterThan(0);
+    for (const sentence of declaring)
+      expect(sentence).toMatch(/search with jira\.discover before/u);
+  });
+
+  // The watch, unwatch and myself descriptions no longer repeat the retry rule (the shared rule that
+  // no Jira tool description may restate); the one place that gives it must keep giving it.
+  it("keeps the shared rule against retrying an unconfirmed write, which tool descriptions rely on", () => {
+    expect(JIRA_TOOL_GUIDANCE).toContain(
+      "never retry a pending, unknown or succeeded-unconfirmed outcome",
+    );
+  });
+
   // 2026-11-13 lane: nine calls named a tool the model had not selected (`invalid-identity`).
   it("says a tool must be selected with jira.describe before it can be called", () => {
     expect(JIRA_TOOL_GUIDANCE).toMatch(/select a tool with jira\.describe before calling it/u);
