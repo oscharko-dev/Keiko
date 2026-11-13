@@ -2634,6 +2634,18 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: transparent;
   color: var(--text-secondary);
 }
+.cmp-model-check {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.cmp-model-check-failed {
+  color: var(--feedback-danger);
+}
 .cmp-pill-standard {
   flex: 0 0 176px;
   width: 176px;

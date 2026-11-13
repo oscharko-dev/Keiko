@@ -468,7 +468,7 @@ describe("startup check without request-time recovery", () => {
     },
   );
 
-  it("bounds startup fan-out and skips queued probes after replacement", async () => {
+  it("sends startup requests only to the elected model and none to the unselected catalog, also after replacement", async () => {
     const { deps } = probeableDeps("invalid", {});
     const originalHolder = deps.gatewayConfig;
     const base = originalHolder?.current();
@@ -478,7 +478,7 @@ describe("startup check without request-time recovery", () => {
     let generation = originalHolder.generation();
     const releases: (() => void)[] = [];
     const fetch = vi.fn(
-      () =>
+      (_url: unknown, _init?: RequestInit) =>
         new Promise<Response>((resolve) => {
           releases.push(() => {
             resolve(
@@ -503,21 +503,21 @@ describe("startup check without request-time recovery", () => {
     const queued = { ...deps, gatewayConfig: holder, gatewayReadinessFetch: fetch };
     initializeConfiguredConversationReadiness(queued, "corr-config-change");
     await vi.waitFor(() => {
-      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
     generation++;
     initializeConfiguredConversationReadiness(queued, "corr-next-change");
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
     releases.splice(0).forEach((release) => {
       release();
     });
-    await vi.waitFor(() => {
-      expect(fetch).toHaveBeenCalledTimes(4);
-    });
-    expect(releases).toHaveLength(2);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    // #4351: eight listed models, one request. The seven models nobody uses receive none.
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const requested = fetch.mock.calls.map(([, init]) =>
+      typeof init?.body === "string" ? (JSON.parse(init.body) as { model?: string }).model : "",
+    );
+    expect(requested).toEqual(["m0"]);
     generation++;
-    releases.splice(0).forEach((release) => {
-      release();
-    });
   });
 });

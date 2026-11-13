@@ -11,6 +11,10 @@ Settings verification and connection replacement remain the refresh boundaries. 
 reloads also reuse completed catalog discovery and never restart an exhausted startup burst.
 Amended 2026-11-08: interactive tool-calling refusals distinguish unsupported capability from
 missing, expired or configuration-invalidated proof through the existing error and admission owners.
+Amended 2026-11-13 (owner decision, #4351): D2 checks only models a person uses. Listing a gateway's
+models stays free; every check sends an inference request and makes the gateway load the model, so
+startup checks the elected default (walking the election order only after a definitive refusal),
+and a person's first explicit pick of a model without a current observation starts one check of it.
 
 ## Context
 
@@ -68,8 +72,19 @@ credential-setup chat checks populate the same generation-bound ledger and are r
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization. A successful result remains usable for that configured connection and current
 process; elapsed age alone never invalidates it. Malformed or future successful timestamps remain
-unknown. Configuration initialization checks each configured chat model once per connection,
-through the same generation/model in-flight map and two slots. A connection is the provider entry
+unknown. Configuration initialization checks the chat model in use once per connection (#4351):
+the elected default, through the same generation/model in-flight map and two slots. Only a
+definitive refusal of that model walks the election order one model at a time and stops at the first
+ready model; a check that ended without a verdict (timeout, busy or unreachable gateway) moves
+nothing on, because it says nothing against the model. A person's first explicit pick of a chat
+model with no current observation, in the Chat or Coding Workbench picker, starts exactly one check
+of that model through the same single-model owner, and in the Workbench its tool-calling proof; a
+model already answered for, ready or refused, starts nothing, so a refused model stays refused until
+explicit verification. Startup probes only the embedding model in use, and Gateway Setup verifies only
+the model that becomes the default and the embedding model in use; the other listed models are
+configured as listed and unverified. The typed `gateway.readiness.scope` operation records, with
+closed values and counts, how many models were listed and checked and why (`startup`, `fallback`,
+`selection`); `gateway.readiness.automatic.started` carries the same `checkReason`. A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
 interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.
@@ -78,7 +93,8 @@ wait across all candidate models, including the selected model. Its deadline onl
 caller's wait and never authorizes an unverified model or cancels the configuration-owned probe.
 
 Chat create, send, regeneration, grounded questions, model lists, page loads and passive Workbench
-profile reads consume the stored result without scheduling provider readiness work. This includes
+profile reads consume the stored result without scheduling provider readiness work; the explicit
+selection above is a deliberate human action, not a passive read. This includes
 old failed results and unavailable observations. A passive profile read does not await background
 verification. Failed startup remains visible until explicit Settings verification, connection
 replacement or a process restart performs another check; the person can therefore retry a

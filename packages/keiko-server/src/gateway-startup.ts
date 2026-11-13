@@ -12,7 +12,9 @@ import {
   cancellableConversationProbeDeps,
   initializeConfiguredConversationReadiness,
   initializeConfiguredEmbeddingReadiness,
+  conversationModelInUse,
   initializeLiteLlmCodingReadiness,
+  settleStartupConversationReadiness,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
@@ -197,11 +199,7 @@ class GatewayStartupChecks {
     if (!this.currentGeneration(generation)) return;
     this.initializeConversationReadiness(deps, correlationId, parentCorrelationId);
     const coding = codingStartupEnabled(deps);
-    if (coding)
-      await initializeLiteLlmCodingReadiness(
-        cancellableConversationProbeDeps(deps, this.controller.signal),
-        correlationId,
-      );
+    if (coding) await this.initializeCodingReadiness(deps, correlationId, generation);
     if (!this.currentGeneration(generation)) return;
     // Only catalog discovery is retried on a timer. Basic-chat readiness retains its startup
     // result until explicit Settings verification or connection replacement.
@@ -212,6 +210,22 @@ class GatewayStartupChecks {
       clearTimeout(this.retry);
       this.retry = undefined;
     }
+  }
+
+  // The tool-calling proof follows the chat model in use (#4351). It starts for the model elected
+  // now; when the startup walk then moved to another model because the default was refused, that
+  // model gets its proof too, and a model the first pass already proved is never proven again.
+  private async initializeCodingReadiness(
+    deps: UiHandlerDeps,
+    correlationId: string,
+    generation: number,
+  ): Promise<void> {
+    const probeDeps = cancellableConversationProbeDeps(deps, this.controller.signal);
+    const first = conversationModelInUse(deps);
+    await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
+    await settleStartupConversationReadiness(deps);
+    if (!this.currentGeneration(generation) || conversationModelInUse(deps) === first) return;
+    await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
   }
 
   private scheduleRetry(

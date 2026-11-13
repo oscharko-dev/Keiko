@@ -73,6 +73,7 @@ import {
   regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
+  startChatModelSelectionCheck,
   uploadConversationAttachment,
   deleteConversationAttachment,
   updateChat,
@@ -781,10 +782,11 @@ export function notifyChatDeleted(chatId: string): void {
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
 // `conversationReady` is TRI-STATE on the wire: absent means "never probed in this server
-// process" (the store is volatile — after every restart everything is unknown), and the server
-// verifies unknown models on demand at create/send. Treating unknown as unusable dead-locked the
-// whole picker after each restart until a manual probe plus reload (customer field incident,
-// 0.3.11). Preference: verified models first, then unknown — both in the shared
+// process" (the store is volatile — after every restart everything is unknown). The server checks
+// only the model in use at startup; a model nobody has checked is checked once when a person
+// explicitly picks it (`startChatModelSelectionCheck`), never at create or send. Treating unknown as
+// unusable dead-locked the whole picker after each restart until a manual probe plus reload
+// (customer field incident, 0.3.11). Preference: verified models first, then unknown — both in the shared
 // conversationDefaultRank order, so a mode-less OCR model never outranks a declared chat model.
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
   return electConversationDefault(
@@ -1897,6 +1899,31 @@ function adoptStartupModelSettlement(
 
 // One shared follow-up consumes already-running startup observations. No timer, focus listener,
 // provider check or retry is introduced, and configuration changes discard this observation.
+async function requestModelSelectionCheck(
+  modelId: string,
+  setState: Dispatch<SetStateAction<SessionState>>,
+): Promise<void> {
+  const correlationId = newClientCorrelationId();
+  try {
+    const { state } = await startChatModelSelectionCheck(modelId, correlationId);
+    if (state !== "checking") return;
+    // The server marks the model while its check runs; the shared settlement read adopts the result.
+    setState((previous) => ({
+      ...previous,
+      models: previous.models.map((model) =>
+        model.id === modelId ? { ...model, conversationCheckPending: true } : model,
+      ),
+      startupReadinessPending: true,
+    }));
+  } catch (error) {
+    reportClientDiagnostic("The selection check of a chat model could not be started.", {
+      correlationId,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+  }
+}
+
 function joinStartupModelSettlement(): () => void {
   let entry = startupModelSettlement;
   if (entry === undefined) {
@@ -4146,6 +4173,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         ),
       };
     });
+    // #4351: a model that nobody has checked is checked once, because a person picked it. The request
+    // answers at once; the settlement follow-up below joins the running check and adopts its result.
+    const picked = modelsRef.current.find((model) => model.id === id);
+    if (
+      picked?.kind === "chat" &&
+      picked.conversationReady === undefined &&
+      picked.conversationCheckPending !== true
+    ) {
+      launchChatWork(requestModelSelectionCheck(id, setState));
+    }
     // COMP-5: drop pending attachments the newly selected model can no longer
     // accept so an image chip queued under an image-capable model doesn't persist
     // after switching to a text-only model (the "blocked" invariant).

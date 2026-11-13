@@ -881,6 +881,28 @@ export async function runGatewayReadiness(
   });
 }
 
+/**
+ * A person's explicit pick of a chat model (#4351). The server starts the one check of that model
+ * when it has no current observation and answers at once, so the picker can say the model is being
+ * checked; the result arrives through the models read, which joins the running check. It is the only
+ * request a model pick sends: listing and passive reads never start provider work.
+ */
+export async function startChatModelSelectionCheck(
+  modelId: string,
+  correlationId?: string,
+): Promise<{ readonly state: "checking" | "ready" | "not-ready" | "unchecked" }> {
+  const response = await fetchJson<{
+    readonly state: "checking" | "ready" | "not-ready" | "unchecked";
+  }>(
+    "/api/gateway/readiness/selection",
+    { method: "POST", body: JSON.stringify({ modelId }) },
+    undefined,
+    correlationId,
+  );
+  resetModelRequestCache();
+  return response;
+}
+
 export type VerifiedGatewayCapabilityFields = Partial<
   Pick<
     ModelCapability,

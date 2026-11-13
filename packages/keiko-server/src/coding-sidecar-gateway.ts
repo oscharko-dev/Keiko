@@ -102,6 +102,7 @@ import { readJsonObject } from "./files.js";
 import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
   awaitInitializedConversationReadiness,
+  checkSelectedConversationModel,
   ensureCodingWorkbenchContextWindows,
   isAnyCodingWorkbenchProbePending,
   isAnyCodingWorkbenchProbeUnanswered,
@@ -5140,6 +5141,12 @@ function logReadinessShortfall(
   );
 }
 
+// A picked model nobody has checked yet reads as not ready: the person's pick is what starts its one
+// check (#4351), so this shortfall is cured by the explicit read like a lapsed tool-call proof.
+function awaitsConversationCheck(reason: CodingWorkbenchSidecarGatewayUnavailableReason): boolean {
+  return reason === "conversation-not-ready" || reason === "model-verification-pending";
+}
+
 function probeCuresShortfall(reason: CodingWorkbenchSidecarGatewayUnavailableReason): boolean {
   return (
     reason === "tool-calling-unverified" ||
@@ -5157,11 +5164,17 @@ export async function handleCodingSidecarGatewayProfile(
   const modelId = profileModelId(ctx, deps);
   const elected = resolveGatewayProfile(deps, modelId).result;
   const checkRequested = profileCheckRequested(ctx);
+  const subject = modelId ?? (elected.status === "available" ? elected.modelAlias : undefined);
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
   // one, and a refuted or non-chat model never does.
-  if (checkRequested && (elected.status === "available" || probeCuresShortfall(elected.reason))) {
+  if (
+    checkRequested &&
+    (elected.status === "available" ||
+      probeCuresShortfall(elected.reason) ||
+      awaitsConversationCheck(elected.reason))
+  ) {
     // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
     // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
     // answer with the projection (`model-verification-pending` while the probe runs) and let
@@ -5172,11 +5185,14 @@ export async function handleCodingSidecarGatewayProfile(
         // again. A passive re-read never retries one (customer 1.3.4).
         ensureCodingWorkbenchContextWindows(
           deps,
-          elected.status === "available" ? elected.modelAlias : undefined,
+          // The model a person picked is the one proven, even while its own shortfall (a lapsed or
+          // missing tool-call proof) keeps it unavailable; without a pick, the model elected now
+          // (#4351). No other listed model receives a request.
+          subject,
           ctx.correlationId,
           checkRequested,
         ),
-        electedConversationReadiness(ctx, deps, elected, checkRequested),
+        electedConversationReadiness(ctx, deps, subject, checkRequested),
       ]),
       boundedProfileWait(),
     ]);
@@ -5184,21 +5200,24 @@ export async function handleCodingSidecarGatewayProfile(
   return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
 }
 
-// A picker selection (`check=1`) may join configuration-owned startup verification. Every other
-// read describes cached readiness immediately; neither path starts a basic-chat health check.
+// A picker selection (`check=1`) starts the one check of the picked model when it has no current
+// observation and joins a check that already runs (#4351). Every other read describes cached
+// readiness immediately and starts no basic-chat health check.
 function electedConversationReadiness(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  elected: CodingWorkbenchSidecarGatewayResult,
+  subjectModelId: string | undefined,
   checkRequested: boolean,
 ): Promise<void> {
   if (
     !checkRequested ||
-    elected.status !== "available" ||
-    currentConversationReadinessObservation(deps, elected.modelAlias) === true
+    subjectModelId === undefined ||
+    currentConversationReadinessObservation(deps, subjectModelId) === true
   )
     return Promise.resolve();
-  return awaitInitializedConversationReadiness(deps, elected.modelAlias, ctx.correlationId);
+  // The person picked this model: the explicit choice starts one check of it when it has no current
+  // observation, or joins the check that is already running (#4351).
+  return checkSelectedConversationModel(deps, subjectModelId, ctx.correlationId);
 }
 
 function profileCheckRequested(ctx: RouteContext): boolean {

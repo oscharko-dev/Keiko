@@ -4385,6 +4385,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.model.unavailable": "Model list unavailable",
   "chat.model.noEligible": "No conversation-eligible model",
   "chat.model.change": "Change model",
+  "chat.model.checking": "Checking {model}…",
+  "chat.model.notReady":
+    "{model} is not ready. Pick another model or check it in Settings > Models.",
   "chat.noModelAlert":
     "No conversation model is currently available. Check gateway and model status in Settings.",
   "chat.loadingGateway": "Connecting to your gateway...",

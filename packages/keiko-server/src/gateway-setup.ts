@@ -61,6 +61,7 @@ import {
   isChatCompatibleDeclaredMode,
   isLikelyRerankModelId,
   modelKindForDeclaredMode,
+  preferredConversationModelOrder,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
@@ -6933,23 +6934,73 @@ function definitiveGatewaySetupFailure(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
+// #4351: a gateway that lists many chat models is verified through the one that becomes the default.
+// Models a person named explicitly are verified as before; a discovered listing is walked in the
+// election order, one model at a time, until one answers. A model the walk never reaches is
+// configured as listed and unverified, with no inference request: its first explicit selection
+// checks it, and a rejection surfaces there. Rejected candidates of the walk are dropped, exactly
+// as the full round drops them.
 async function admitChatCandidates(
   input: SetupVerificationInput,
   candidateModels: SetupCandidateModels,
   candidateConfig: GatewayConfig,
 ): Promise<ChatAdmission> {
-  const testResult = normalizeSetupTestResult(
-    await input.tester(candidateConfig, candidateModels.chatModelIds),
+  const ids = candidateModels.chatModelIds;
+  // A model the request itself asserts a capability for is a model the person named: it is tested
+  // with the default, so no claim is ever stored for a model that was not tested.
+  const asserted = input.imageInputModelIdsProvided
+    ? input.imageInputModelIds.filter((id) => ids.includes(id))
+    : [];
+  if (input.deploymentNames.length > 0 || ids.length <= 1 || asserted.length >= ids.length) {
+    return chatAdmissionFromTest(await input.tester(candidateConfig, ids));
+  }
+  const ordered = preferredConversationModelOrder(
+    listConfiguredCapabilities(candidateConfig).filter((model) => model.kind === "chat"),
+  ).map((model) => model.id);
+  const order = [...ordered, ...ids.filter((id) => !ordered.includes(id))].filter(
+    (id) => !asserted.includes(id),
   );
+  return walkChatCandidates(input, candidateConfig, order, asserted);
+}
+
+async function walkChatCandidates(
+  input: SetupVerificationInput,
+  candidateConfig: GatewayConfig,
+  order: readonly string[],
+  asserted: readonly string[],
+): Promise<ChatAdmission> {
+  const dropped: string[] = [];
+  let lastError: unknown;
+  for (const [index, id] of order.entries()) {
+    input.signal?.throwIfAborted();
+    try {
+      const tested = await input.tester(candidateConfig, [id, ...asserted]);
+      return chatAdmissionFromTest(tested, order.slice(index + 1), dropped);
+    } catch (error) {
+      if (temporaryGatewaySetupFailure(error) || definitiveGatewaySetupFailure(error)) throw error;
+      lastError = error;
+      dropped.push(id);
+    }
+  }
+  throw lastError;
+}
+
+function chatAdmissionFromTest(
+  result: readonly string[] | GatewaySetupTestResult,
+  listedUnverified: readonly string[] = [],
+  droppedInWalk: readonly string[] = [],
+): ChatAdmission {
+  const testResult = normalizeSetupTestResult(result);
   const unverifiedModelIds = testResult.unverifiedModelIds ?? [];
   return {
     testResult,
     // A candidate kept unverified (timeout/transport) is still CONFIGURED, exactly like an
-    // asserted embedding model that failed its probe (#3591).
-    configuredModelIds: [...testResult.testedModelIds, ...unverifiedModelIds],
+    // asserted embedding model that failed its probe (#3591). A listed model the walk never
+    // reached is configured the same way, without having received a request.
+    configuredModelIds: [...testResult.testedModelIds, ...unverifiedModelIds, ...listedUnverified],
     unverifiedModelIds,
     skippedModelIds: testResult.skippedModelIds ?? [],
-    droppedModelIds: testResult.droppedModelIds ?? [],
+    droppedModelIds: [...(testResult.droppedModelIds ?? []), ...droppedInWalk],
   };
 }
 
@@ -7119,10 +7170,35 @@ async function admitEmbeddingCandidates(
   // NAMES are deliberately NOT exempt — naming a deployment states its identity, not its role; the
   // role there still comes from Keiko's own id heuristic, which is exactly what the probe corrects.
   const asserted = new Set([...input.storedEmbeddingModelIds, ...input.submittedEmbeddingModelIds]);
-  const answered = new Set(await input.embeddingProbe(probeConfig, candidates));
-  const admitted = candidates.filter((id) => answered.has(id) || asserted.has(id));
+  // #4351: only the embedding model in use sends a request. The model a person already chose
+  // (stored or submitted) comes first; the rest of the listing is probed only while no model has
+  // answered, one at a time, and what a person never reaches is admitted as listed and unverified.
+  // A first-use proof settles it when a Knowledge Pod actually selects it.
+  const ordered = [
+    ...candidates.filter((id) => asserted.has(id)),
+    ...candidates.filter((id) => !asserted.has(id)),
+  ];
+  const failed: string[] = [];
+  let answeredId: string | undefined;
+  for (const id of ordered) {
+    input.signal?.throwIfAborted();
+    const answered = new Set(await input.embeddingProbe(probeConfig, [id]));
+    if (answered.has(id)) {
+      answeredId = id;
+      break;
+    }
+    failed.push(id);
+    // A model the person already chose that does not answer is flagged, never replaced by a model
+    // nobody chose: a transient outage must not load another model on a shared gateway.
+    if (asserted.has(id)) break;
+  }
+  const reached = answeredId === undefined ? failed.length : failed.length + 1;
+  const untried =
+    answeredId === undefined && failed.length === ordered.length ? [] : ordered.slice(reached);
+  const admitted = candidates.filter(
+    (id) => id === answeredId || untried.includes(id) || asserted.has(id),
+  );
   // Split the failures: an asserted model stays configured and is flagged; an inferred one is gone.
-  const failed = candidates.filter((id) => !answered.has(id));
   return {
     admitted,
     retainedUnverified: failed.filter((id) => asserted.has(id)),

@@ -4610,6 +4610,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.model.unavailable": "Modellliste nicht verfügbar",
   "chat.model.noEligible": "Kein dialogfähiges Modell",
   "chat.model.change": "Modell wechseln",
+  "chat.model.checking": "{model} wird geprüft…",
+  "chat.model.notReady":
+    "{model} ist nicht bereit. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle.",
   "chat.noModelAlert":
     "Derzeit ist kein dialogfähiges Modell verfügbar. Prüfe den Gateway- und Modellstatus in den Einstellungen.",
   "chat.loadingGateway": "Verbindung zum Gateway wird hergestellt…",

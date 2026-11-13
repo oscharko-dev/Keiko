@@ -749,3 +749,101 @@ vi.mock("@/lib/markdown-skills-api", () => ({
     .mockResolvedValue({ availability: "none", selection: { revision: 0, skill: null } }),
   changeMarkdownSkillSelection: vi.fn(),
 }));
+
+// ---------------------------------------------------------------------------
+// #4351 — a model nobody checked is checked once, because a person picked it
+// ---------------------------------------------------------------------------
+
+describe("explicit model selection starts exactly one check (#4351)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.resetModelRequestCache();
+    mockBootstrapModels(["model-a"]);
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [
+        chatModel("model-a"),
+        { ...chatModel("model-unchecked"), conversationReady: undefined },
+        {
+          ...chatModel("model-running"),
+          conversationReady: undefined,
+          conversationCheckPending: true,
+        },
+        { ...chatModel("model-failed"), conversationReady: false },
+      ],
+    });
+    vi.spyOn(api, "updateChat").mockImplementation((_id, patch) =>
+      Promise.resolve(
+        chatResponse(makeHookChat({ selectedModel: patch.selectedModel ?? "model-a" })),
+      ),
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("asks the server to check a picked model that has no observation, once", async () => {
+    const start = vi
+      .spyOn(api, "startChatModelSelectionCheck")
+      .mockResolvedValue({ state: "checking" });
+    const view = await bootChatHook();
+    expect(start).not.toHaveBeenCalled();
+    act(() => {
+      view.result.current.setSelectedModel("model-unchecked");
+    });
+    await waitFor(() => {
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+    expect(start).toHaveBeenCalledWith("model-unchecked", expect.any(String));
+    // The shared settlement read joins the running check and adopts its result.
+    await waitFor(() => {
+      expect(api.fetchModels).toHaveBeenCalledWith(
+        expect.any(String),
+        false,
+        expect.objectContaining({ waitForStartup: true }),
+      );
+    });
+  });
+
+  it.each(["model-a", "model-running", "model-failed"])(
+    "starts no check when the picked model %s is already answered or being checked",
+    async (modelId) => {
+      const start = vi
+        .spyOn(api, "startChatModelSelectionCheck")
+        .mockResolvedValue({ state: "checking" });
+      const view = await bootChatHook();
+      act(() => {
+        view.result.current.setSelectedModel(modelId);
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows that a picked model is being checked, then a readable reason when it is not ready", () => {
+    const checking = { ...chatModel("model-b"), conversationCheckPending: true as const };
+    const { rerender } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          activeChat: makeChat(),
+          selectedModel: "model-b",
+          models: [chatModel("model-a"), checking],
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getByText("Checking model-b…")).toBeInTheDocument();
+    rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          activeChat: makeChat(),
+          selectedModel: "model-b",
+          models: [chatModel("model-a"), { ...chatModel("model-b"), conversationReady: false }],
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getByText(/model-b is not ready\./)).toBeInTheDocument();
+  });
+});

@@ -152,7 +152,7 @@ import {
 } from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
-import { handleGatewayReadiness } from "./gateway-readiness.js";
+import { handleGatewayReadiness, handleGatewaySelectionCheck } from "./gateway-readiness.js";
 import { handleApplyGatewayVerifiedCapabilities, handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
@@ -595,6 +595,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/voice/speak", handler: handleVoiceSpeak },
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
+  // #4351: a person's explicit pick of a chat model starts the one check of that model.
+  {
+    method: "POST",
+    pattern: "/api/gateway/readiness/selection",
+    handler: handleGatewaySelectionCheck,
+  },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   {
     method: "PATCH",

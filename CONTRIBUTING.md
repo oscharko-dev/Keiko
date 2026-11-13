@@ -204,7 +204,20 @@ and invalid timestamps without recording model names, requests or answers. An un
 consumes no physical synthesis attempt or uncertain output reservation; actual interrupted provider
 calls retain conservative accounting.
 
-Each chat model is checked once per connection at startup. Nothing renews or recovers a model on a
+Keiko lists every model a gateway offers through metadata requests, which cost nothing, and sends
+an inference request only to a model a person uses (#4351, owner decision 2026-11-13): a check loads
+the model, which on a shared gateway evicts a model somebody else is using. Startup checks the chat
+model in use once per connection, the elected default; only a definitive refusal of that model moves
+the walk one model at a time along the election order to the first ready model, and a check that
+ended without a verdict (a timeout, a busy gateway) moves nothing on. A person's first explicit
+pick of a chat model that has no current observation (the Chat or Coding Workbench picker) starts
+exactly one check of that model, and in the Workbench its tool-calling proof; the picker shows that
+it is being checked. Startup also probes only the embedding model in use, and Gateway Setup verifies
+only the model that becomes the default and the embedding model in use: the other listed models are
+configured as listed and unverified, and a rejection surfaces at their first selection.
+`gateway.readiness.scope` records how many models were listed and checked and why, and
+`gateway.readiness.automatic.started` carries the closed `checkReason` (`startup`, `fallback`,
+`selection`). Nothing renews or recovers a model on a
 timer or passive read. Explicit Settings verification may retry an unsuccessful check. Startup-owned
 work can be observed with a bounded, cancellable metadata wait; disconnecting a browser does not
 cancel shared discovery or start another provider call. The Workbench profile describes the model

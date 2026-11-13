@@ -412,6 +412,12 @@ function voiceElectionProviders(): readonly Record<string, unknown>[] {
   ];
 }
 
+function verifiedLiteLlmModels(explicit: boolean): readonly string[] {
+  return explicit
+    ? ["litellm-chat-large", "litellm-vision-chat", "litellm-unknown-mode"]
+    : ["litellm-chat-large"];
+}
+
 describe("handleGatewaySetup", () => {
   it("applies only a generation-current live capability observation after an explicit request", async () => {
     const uiDir = await tempDir("keiko-gw-capability-apply-ui-");
@@ -1264,7 +1270,7 @@ describe("handleGatewaySetup", () => {
       if (href.endsWith("/models")) {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ data: [{ id: "discovered-fast" }, { id: "discovered-slow" }] }),
+            JSON.stringify({ data: [{ id: "discovered-slow" }, { id: "discovered-fast" }] }),
             { status: 200, headers: { "content-type": "application/json" } },
           ),
         );
@@ -1316,9 +1322,11 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
+      // #4351: setup verifies the model that becomes the default. The hung default is classified
+      // within its own smoke timeout; the listed model behind it received no request at all.
       expect(result.body).toMatchObject({
-        testedModelIds: ["discovered-fast"],
-        unverifiedChatModelIds: ["discovered-slow"],
+        testedModelIds: [],
+        unverifiedChatModelIds: ["discovered-slow", "discovered-fast"],
       });
       const config = requiredGatewayConfig(deps);
       expect(config.providers.map((provider) => provider.modelId).sort()).toEqual([
@@ -2217,7 +2225,9 @@ describe("handleGatewaySetup", () => {
     expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
       "example-chat-model-large",
     ]);
-    expect(currentGatewayConfig(deps)?.providers).toHaveLength(1);
+    // #4351: the default is the only model verified; the other listed chat models are configured as
+    // listed and unverified, without an inference request.
+    expect(currentGatewayConfig(deps)?.providers).toHaveLength(3);
     expect(deps.gatewayConfig?.present()).toBe(true);
     const savedPath = deps.gatewayConfig?.storagePath;
     expect(savedPath).toBeDefined();
@@ -2228,8 +2238,9 @@ describe("handleGatewaySetup", () => {
     expect(saved).toContain("apiKeySecretRef");
     expect(saved).toContain("cred:example-chat-model-large");
     expect(saved).toContain("example-chat-model-large");
-    expect(saved).not.toContain("example-chat-model-fast");
-    expect(saved).not.toContain("example-vision-model");
+    // Listed, unverified models are persisted as listed: no secret rides with them.
+    expect(saved).toContain("example-chat-model-fast");
+    expect(saved).toContain("example-vision-model");
     // The credential lives in the encrypted vault next to the config — sealed, never plaintext.
     const vaultStore = readFileSync(
       join(uiDir, "credentials", "provider-credentials.vault"),
@@ -6457,6 +6468,7 @@ describe("handleGatewaySetup", () => {
     // new Knowledge Pod and indexing wrote zero vectors with no earlier signal.
     const uiDir = await tempDir("keiko-gw-ui-embed-probe-");
     const evidenceDir = await tempDir("keiko-gw-ev-embed-probe-");
+    const probedEmbeddings: string[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
@@ -6469,8 +6481,10 @@ describe("handleGatewaySetup", () => {
           embeddingModelIds: ["works-vectorizer", "broken-vectorizer"],
         }),
       // Only one of the two declared embedding models actually answers /embeddings.
-      gatewayEmbeddingProbe: (_config, ids) =>
-        Promise.resolve(ids.filter((id) => id !== "broken-vectorizer")),
+      gatewayEmbeddingProbe: (_config, ids) => {
+        probedEmbeddings.push(...ids);
+        return Promise.resolve(ids.filter((id) => id !== "broken-vectorizer"));
+      },
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -6482,7 +6496,46 @@ describe("handleGatewaySetup", () => {
     expect(result.status).toBe(200);
     const storedIds = currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId);
     expect(storedIds).toContain("works-vectorizer");
+    // #4351: the embedding model in use answered; the other listed alias received no request.
+    expect(probedEmbeddings).toEqual(["works-vectorizer"]);
+    expect(selectEmbeddingModelId(currentGatewayConfig(deps))).toBe("works-vectorizer");
+    deps.store.close();
+  });
+
+  it("never persists a NEW embedding model that cannot answer as the model in use, and walks to the next", async () => {
+    // The original invariant of the pin above: an embedding model that cannot embed must never be
+    // bound to a Knowledge Pod. The walk probes one model at a time, in listed order, until one
+    // answers; a model that did not answer is dropped.
+    const uiDir = await tempDir("keiko-gw-ui-embed-walk-");
+    const evidenceDir = await tempDir("keiko-gw-ev-embed-walk-");
+    const probedEmbeddings: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve({
+          modelIds: ["example-chat", "broken-vectorizer", "works-vectorizer", "later-vectorizer"],
+          chatModelIds: ["example-chat"],
+          embeddingModelIds: ["broken-vectorizer", "works-vectorizer", "later-vectorizer"],
+        }),
+      gatewayEmbeddingProbe: (_config, ids) => {
+        probedEmbeddings.push(...ids);
+        return Promise.resolve(ids.filter((id) => id !== "broken-vectorizer"));
+      },
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const storedIds = currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId);
     expect(storedIds).not.toContain("broken-vectorizer");
+    expect(storedIds).toContain("works-vectorizer");
+    expect(probedEmbeddings).toEqual(["broken-vectorizer", "works-vectorizer"]);
+    expect(selectEmbeddingModelId(currentGatewayConfig(deps))).toBe("works-vectorizer");
     deps.store.close();
   });
 
@@ -9244,22 +9297,13 @@ describe("handleGatewaySetup", () => {
         expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
         expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
         expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(!explicit);
-        expect(seenModels).toEqual([
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-        ]);
-        expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-        ]);
+        // #4351: explicitly named deployments are all verified; a discovered listing verifies only
+        // the model that becomes the default (three requests), the rest enters as listed.
+        const verified = verifiedLiteLlmModels(explicit);
+        expect(seenModels).toEqual([...verified, ...verified, ...verified]);
+        expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual(
+          verified,
+        );
         expect(
           seenAuthHeaders.every(
             (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
@@ -9686,17 +9730,15 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
+      // #4351: only the model that becomes the default is verified (three requests); the second
+      // listed chat model is configured as listed and unverified and receives none.
       expect(seenModels).toEqual([
         "example-chat-model-large",
-        "example-chat-model-fast",
         "example-chat-model-large",
-        "example-chat-model-fast",
         "example-chat-model-large",
-        "example-chat-model-fast",
       ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "example-chat-model-large",
-        "example-chat-model-fast",
       ]);
       expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
         "example-chat-model-large",
