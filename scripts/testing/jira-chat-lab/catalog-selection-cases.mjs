@@ -438,7 +438,7 @@ const issueRows = async (s, project, type, summary) => {
  * tool; the effect is the new issue Jira holds, removed again afterwards. A Sub-task is created
  * under the lane's owned issue, and a parent other than that is a wrong value.
  */
-function createCase(type, { project, id }) {
+function createCase(type, { project, id, workProject = false }) {
   const summaryOf = (m) => `${m} ${type}`;
   const under = (f) => (type === "Sub-task" ? ` unter dem Vorgang ${f.selection.issueKey}` : "");
   return {
@@ -446,6 +446,9 @@ function createCase(type, { project, id }) {
     tool: "jira.create",
     alternatives: ["jira.draft"],
     catalog: "base",
+    // A case that writes the requirements lab's work project holds its lock, so a journey's reset of
+    // that project cannot race with it.
+    workProject,
     prompt: (f, m) =>
       `Lege im Jira-Projekt ${project(f)} einen Vorgang vom Typ ${type} mit der Zusammenfassung „${summaryOf(m)}“${under(f)} an.`,
     verify: async (s, f, m) => {
@@ -466,9 +469,9 @@ function createCase(type, { project, id }) {
 const CREATE_WRITES = [
   createCase("Task", { id: "create-task", project: (f) => f.project }),
   createCase("Sub-task", { id: "create-subtask", project: (f) => f.project }),
-  createCase("Epic", { id: "create-epic", project: () => "REQ" }),
-  createCase("Story", { id: "create-story", project: () => "REQ" }),
-  createCase("Bug", { id: "create-bug", project: () => "REQ" }),
+  createCase("Epic", { id: "create-epic", project: () => "REQ", workProject: true }),
+  createCase("Story", { id: "create-story", project: () => "REQ", workProject: true }),
+  createCase("Bug", { id: "create-bug", project: () => "REQ", workProject: true }),
 ];
 
 export const SELECTION_CASES = Object.freeze([

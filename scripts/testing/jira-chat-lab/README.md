@@ -1444,3 +1444,71 @@ English and German card checks, and leaves out the sprint-at-scale package (Agil
 closed verdict per step. Because a package was left out, its overall verdict is `partial`, never `green`:
 the printed line and the orchestrator record carry `steps: "without-sprint"`, `partial: true` and the skipped
 step names, and only a full set can end `green`.
+
+## Composer lane: Jira writes from the Chat composer (Release 1, #4369)
+
+A second lane inside this lab, not a second lab: same Jira, fixtures, template helpers, native oracles,
+scorecard, coverage, repeat and validity machinery. It needs **no Knowledge Pod and no requirements
+document** and **assumes no model**: it runs with any lab gateway configuration. Its Chats are bound to the
+Jira Pod only (no Knowledge scope, no structure skill, no `prepareDataPod`), and its scenarios have their own
+ids, `C01`–`C09`. `S01`–`S20` and the document lane are unchanged; the lane adds only parameters and exports
+to existing modules, and a hermetic test pins that a run without `--set composer` still prepares the Pod
+and binds it.
+
+```sh
+# The whole lane, three rounds each (a reachable Jira and a model slot are required)
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session \
+  --project REQ --set composer --model <chat-model-id> --repeat 3
+
+# One scenario, one type, one mode (a first functional pass on any gateway)
+... scorecard.mjs /absolute/private/session --project REQ --set composer --model <id> \
+  --only C02 --types task --modes ask
+```
+
+`--only` takes only ids of the selected set (`C01`…`C09` with `--set composer`); anything else is a usage
+error, never an empty report. `--types` (`epic,story,task,sub-task,bug`) and `--modes`
+(`ask,supervised,full-access`) narrow C01, C02 and C03; obligations of what was not selected stay uncovered,
+so the scenario reads `partial`. The report goes to `<session>/composer-scorecard/<model id>/` (`latest.md`,
+a JSON report and `trend.tsv`), apart from `requirements-scorecard/`, and its header names the model.
+
+Every journey empties the work project REQ first and creates its own parents natively (an Epic and a Task;
+required fields are read from REQ's own create metadata). From `requirements-truth.json` the lane reads only
+`fieldIds.epicName` and `fieldIds.epicLink`; C07 (S10 and S11) needs the whole file. A template of the
+work project that this lane did not create stops the journey as a lab state (`invalid`), a leftover of this
+lane (named `…-Composer-<Type>`) is removed at journey start, and a template named as a baseline is allowed for
+the types a journey governs itself. C03 and C04 prove a missing template, so the scorecard runs them in their
+own product start with `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off`.
+
+| Id  | Obligation (graded from Jira, never from the product's answer)                                                                                                                                                                                                                                                                                                                      |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | With templates for Epic, Story, Task, Sub-task and Bug active at once, a plain titled instruction creates each type conformant (Story, Task and Bug in the named Epic, the Sub-task under the named Task, the Bug linked to it); one request creates three Tasks: all exist natively and every key is listed in the answer or the result card                                       |
+| C02 | A request that violates the template is refused before any approval card and before any effect, per type and in each of the three autonomy modes; the corrected request then succeeds. A violating issue that exists in Jira is red whatever the tool trace says (15 runs)                                                                                                          |
+| C03 | No template for the type: nothing is written (any type), the create was refused by the gate, no card was shown for a write that can never pass, and the answer tells the person to create a template; per type and mode. **Red on today's product** (#4354)                                                                                                                         |
+| C04 | The edit rules, compared natively before and after: a breaking edit (clear a section, remove the parent) is refused through any tool; an edit of an issue with a pre-existing violation in an untouched field passes and the answer names it; an edit of a type without template and a status change without template pass. The breaking-edit obligations are red until #4354 lands |
+| C05 | The same create request (a Task) from a Chat that remembers nothing leaves exactly one issue with the title                                                                                                                                                                                                                                                                         |
+| C06 | The three modes and a readable approval, with the document lane's S18 grader and a plain Bug request                                                                                                                                                                                                                                                                                |
+| C07 | S10 and S11 unchanged, in a Jira-Pod-only Chat                                                                                                                                                                                                                                                                                                                                      |
+| C08 | "Add me as a watcher", "write this comment" and "remove me again" by plain instruction: the native watcher list, the comment body and its author; no template involved                                                                                                                                                                                                              |
+| C09 | A request to attach a file: nothing reaches Jira and the answer says attachments are not part of this release. Red until #4354 lands; no attachment case exists anywhere else                                                                                                                                                                                                       |
+
+Reused by parameter, not copied: `templateMarkdown` (`activateOn`), `gradeTemplateRepair` (`conforms`),
+`templateRefusals`, `modesAndReadableApproval` (`promptFor`, `query`), `runJourneys` (`set: "composer"`),
+`JOURNEYS.S10`/`S11`. A grade of `red` is a product finding, never `invalid`: only a lab outage, a transport
+failure, a lab state (a foreign template) or missing gateway evidence makes a run `invalid`.
+
+The selection lane (`catalog-selection.mjs`) holds one create case per issue type: `create-task` and
+`create-subtask` in the fixture project, and `create-epic`, `create-story` and `create-bug` in the Scrum
+work project REQ (the fixture project offers only Task and Sub-task; a session without REQ makes those three
+invalid, never wrong). The REQ cases hold the work-project lock a journey's reset takes.
+
+**S10 and the product's estimate rule.** S10 derives its expected estimate from native data: the board's
+configured estimation field is the figure when any issue holds a value in it; otherwise the other field
+(Original Estimate, or Story Points) becomes a labelled fallback and the configured field is stated unused;
+when both hold values the other field's count and sum are named; when neither does the figure is zero of N.
+The prompt asks for the statements as `QUELLE;…`, `UNGENUTZT;…` and `WEITERES;…` lines, graded as the
+obligations `estimate-source-labelled`, `configured-unused-stated` and `other-estimate-field-named`.
+`requirements/seed-estimate-cases.mjs` seeds one project per case (`ESF` fallback, `ESR` reverse, `ESB` both,
+`ESN` neither; configuring the board for `ESR` uses Jira's greenhopper estimation endpoint and fails closed
+when the board does not report the field afterwards) and `KEIKO_JIRA_LAB_ESTIMATE_PROJECT=ESF` points S10 at
+one of them. A lab context without a native reader keeps the truth file's estimate.

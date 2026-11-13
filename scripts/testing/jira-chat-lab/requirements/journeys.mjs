@@ -464,41 +464,68 @@ async function composerChat(ctx, session, modelId, toolMode) {
 }
 
 /** The two journey lanes: how a journey's Chat is bound, and which table its id is looked up in. */
+// The journey tables are read when a journey runs, not when this module loads: progress-report.mjs
+// imports this module, so the tables may still be initializing while the import graph is built.
 const DOCUMENT_LANE = Object.freeze({
-  journeys: JOURNEYS,
+  get journeys() {
+    return JOURNEYS;
+  },
   bind: (ctx, session, modelId, capsuleId, mode) =>
     freshBoundChat(ctx, session, modelId, capsuleId, mode),
 });
 const COMPOSER_LANE = Object.freeze({
-  journeys: COMPOSER_JOURNEYS,
+  get journeys() {
+    return COMPOSER_JOURNEYS;
+  },
   bind: (ctx, session, modelId, _capsuleId, mode) => composerChat(ctx, session, modelId, mode),
 });
 
-/** The field the lab's required fixture field needs on a native create, if the session has one. */
-function requiredFixtureField(session) {
-  try {
-    return JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"))
-      .requiredFieldId;
-  } catch {
-    return undefined;
-  }
+const SYNTHETIC_VALUE = "Synthetic required value";
+
+/**
+ * The required fields a native create must still fill, read from the project's own create metadata
+ * for the issue type (never from another project's fixture): a text field gets a synthetic value, a
+ * field with allowed values its first one. Anything else fails closed.
+ */
+export async function requiredFieldValues(session, fields) {
+  const auth = basicAuth(session, "admin");
+  const project = fields.project.key;
+  const base = `/rest/api/2/issue/createmeta/${encodeURIComponent(project)}/issuetypes`;
+  const types = await checked(session, "composer-create-types", "GET", base, auth);
+  const type = (types.values ?? []).find((entry) => entry.name === fields.issuetype.name);
+  if (type === undefined)
+    throw new TypeError(`${project} has no issue type ${fields.issuetype.name}`);
+  const meta = await checked(
+    session,
+    "composer-create-meta",
+    "GET",
+    `${base}/${type.id}?maxResults=200`,
+    auth,
+  );
+  const missing = (meta.values ?? []).filter(
+    (field) => field.required && !Object.hasOwn(fields, field.fieldId),
+  );
+  return Object.fromEntries(missing.map((field) => [field.fieldId, requiredValue(project, field)]));
+}
+
+/** A text field gets a synthetic value, a field with allowed values its first one; else fail closed. */
+function requiredValue(project, field) {
+  if (field.schema?.type === "string") return SYNTHETIC_VALUE;
+  if (Array.isArray(field.allowedValues) && field.allowedValues.length > 0)
+    return { id: String(field.allowedValues[0].id) };
+  throw new TypeError(`A required field of ${project} cannot be filled natively`);
 }
 
 /** A native admin create (fixtures of the Composer lane); returns the new issue key. */
 async function createNativeIssue(session, fields) {
-  const required = requiredFixtureField(session);
+  const required = await requiredFieldValues(session, fields);
   const created = await checked(
     session,
     "composer-fixture",
     "POST",
     "/rest/api/2/issue",
     basicAuth(session, "admin"),
-    {
-      fields: {
-        ...(required === undefined ? {} : { [required]: "Synthetic required value" }),
-        ...fields,
-      },
-    },
+    { fields: { ...required, ...fields } },
   );
   return String(created.key);
 }
@@ -719,8 +746,11 @@ async function runLane(live, options, checks) {
   // The Composer lane has no Knowledge Pod: nothing is prepared and no Pod is bound (#4369).
   const composer = options.set === "composer";
   const capsuleId = composer ? undefined : await prepareDocumentLane(ctx, session, modelId);
-  if (composer)
+  if (composer) {
     ctx.freshChat = async (toolMode) => (await composerChat(ctx, session, modelId, toolMode)).chat;
+    // The types and modes this run selected (`--types`, `--modes`); empty means all of them.
+    ctx.composerSelection = options.composerSelection ?? {};
+  }
   const guard = licenseGuard(session, directory);
   const run = { ctx, session, modelId, capsuleId, lane: composer ? COMPOSER_LANE : DOCUMENT_LANE };
   const ports = {

@@ -26,6 +26,7 @@ import {
 } from "./catalog-selection-objects.mjs";
 import { loadSession, requireLicense } from "./lab-client.mjs";
 import { readGatewayFailures, readToolRejections } from "./requirements/validity.mjs";
+import { withWorkProjectLock } from "./requirements/work-project-lock.mjs";
 
 const TURN_LIMIT_MS = 480_000;
 const MEMORY_OFF = { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} };
@@ -224,7 +225,11 @@ async function attempt(context, run, entry, round) {
     send: () =>
       selectionTurn(context, chat, entry.prompt(run.fixture, marker, tag, turnFor.subject)),
   };
-  const outcome = await (write ? writeAttempt : readAttempt)(context, run, entry, turnFor);
+  const attemptOf = () => (write ? writeAttempt : readAttempt)(context, run, entry, turnFor);
+  // A write into the shared work project holds the lock the journeys' reset takes (#4369).
+  const outcome = entry.workProject
+    ? await withWorkProjectLock(context.session.directory, `selection-${entry.id}`, attemptOf)
+    : await attemptOf();
   const verdict = gradeSelection(entry, outcome.turn, outcome.proof);
   stage("attempt", { id: entry.id, round, status: verdict.status, path: verdict.path });
   return {

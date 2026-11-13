@@ -197,7 +197,7 @@ async function defineTemplate(http, markdown, name) {
 }
 
 /** Deletes a template skill at the revision the import returned. */
-async function removeTemplate(http, skill) {
+export async function removeTemplate(http, skill) {
   await http(
     "template-delete",
     `/api/skills/${encodeURIComponent(skill.id)}`,

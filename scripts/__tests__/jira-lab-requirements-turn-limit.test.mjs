@@ -256,7 +256,17 @@ describe("requirements lab turn-limit provenance", () => {
     it("leaves the document lane exactly as it was: Pod, skill and a Pod-bound Chat", async () => {
       fixture.mode = "completed";
       await observedTurn();
-      expect(names()).toEqual(expect.arrayContaining(["pod-create", "pod-index", "skill-import"]));
+      // prepareDataPod and the Knowledge Pod binding, exactly as before the Composer lane existed.
+      expect(names()).toEqual(
+        expect.arrayContaining([
+          "pod-create",
+          "pod-connect",
+          "pod-index",
+          "skill-import",
+          "skill-select",
+        ]),
+      );
+      expect(names().filter((name) => name === "pod-create")).toHaveLength(1);
       const bind = fixture.requests.find((request) => request.name === "bind");
       expect(bind.body.localKnowledgeScopes).toHaveLength(1);
     });

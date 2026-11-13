@@ -221,15 +221,19 @@ export function gradeApprovals(records) {
 const modePrompt = (requirements) =>
   `Lege im Jira-Projekt REQ für die Anforderungen ${requirements.join(" und ")} aus dem Lastenheft je ein Epic nach der Strukturvorgabe an. Melde die Vorgangsschlüssel oder den genauen Fehler.`;
 
-async function modeRun(ctx, entry, { promptFor = (run) => modePrompt(run.requirements) } = {}) {
+async function modeRun(
+  ctx,
+  entry,
+  { promptFor = (run) => modePrompt(run.requirements), query = EPIC_QUERY } = {},
+) {
   const chat = await ctx.freshChat(entry.mode);
-  const before = await snapshotBefore(ctx, EPIC_QUERY);
+  const before = await snapshotBefore(ctx, query);
   const turn = await ctx.turn(chat, promptFor(entry), {
-    observeBeforeApproval: () => ctx.search(EPIC_QUERY, "summary,labels"),
+    observeBeforeApproval: () => ctx.search(query, "summary,labels"),
   });
   const epics = turnIssues({
     before,
-    issues: await ctx.search(EPIC_QUERY, "summary,labels"),
+    issues: await ctx.search(query, "summary,labels"),
     exchanges: turn.toolExchanges,
   });
   const [first] = turn.approvals.records ?? [];

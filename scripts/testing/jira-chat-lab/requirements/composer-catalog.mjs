@@ -14,8 +14,12 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     id: "C01",
     requirement: "composer",
     issue: 4354,
-    title: "Every issue type is created conformant by a plain instruction",
-    obligations: slugs.map((slug) => `create-conformant-${slug}`),
+    title: "Every issue type is created conformant by a plain instruction, also several at once",
+    obligations: [
+      ...slugs.map((slug) => `create-conformant-${slug}`),
+      "multi-create-all-created",
+      "multi-create-keys-listed",
+    ],
   },
   {
     id: "C02",
@@ -30,15 +34,25 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     id: "C03",
     requirement: "composer",
     issue: 4354,
-    title: "No template for the type: refused, with the hint to create one",
-    obligations: slugs.map((slug) => `no-template-refused-${slug}`),
+    title:
+      "No template for the type: the create is refused by the gate, with the hint, in every mode",
+    obligations: slugs.flatMap((slug) =>
+      COMPOSER_MODES.map((mode) => `no-template-${slug}-${mode.key}`),
+    ),
   },
   {
     id: "C04",
     requirement: "composer",
     issue: 4354,
-    title: "An edit that breaks conformance is refused",
-    obligations: ["edit-clear-required-refused", "edit-parent-refused"],
+    title:
+      "Edits: a breaking edit is refused; a pre-existing violation, a missing template and a status change do not block",
+    obligations: [
+      "edit-breaking-refused-clear-field",
+      "edit-breaking-refused-parent",
+      "edit-preexisting-notice",
+      "edit-no-template-passes",
+      "status-change-no-template-passes",
+    ],
   },
   {
     id: "C05",
@@ -60,5 +74,19 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     issue: 4356,
     title: "Progress and compliance reports on a Jira-Pod-only Chat",
     obligations: [...new Set([...obligationsOf("S10"), ...obligationsOf("S11")])],
+  },
+  {
+    id: "C08",
+    requirement: "composer",
+    issue: 4354,
+    title: "A watcher and a comment by plain instruction, verified natively",
+    obligations: ["watcher-added", "comment-written", "watcher-removed"],
+  },
+  {
+    id: "C09",
+    requirement: "composer",
+    issue: 4354,
+    title: "An attachment request is refused readably and nothing reaches Jira",
+    obligations: ["attachment-refused"],
   },
 ]);
