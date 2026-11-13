@@ -4,7 +4,13 @@
 // `unverified` only when the native state is clean. A product that wrote what it should have refused
 // is red whatever its trace says.
 import { relatedKeys } from "./hierarchy.mjs";
-import { gradeTemplateRepair, templateRefusals, wroteIssue } from "./templates.mjs";
+import {
+  editRefusals,
+  gradeTemplateRepair,
+  succeededEdits,
+  templateRefusals,
+  wroteIssue,
+} from "./templates.mjs";
 import { toolExchangeOf } from "./tool-exchanges.mjs";
 
 const ISSUE_KEY = /\b[A-Z][A-Z0-9_]+-\d+\b/gu;
@@ -33,8 +39,28 @@ export function composerRelation(type, { epicLink, epic, task }) {
   };
 }
 
-/** Obligation a) — exactly one new conformant issue of the type, with the named relation. */
-export function gradeComposerCreate({ type, issues, conforms, related }) {
+/** The issues of one type among those a turn created (the graders of a type judge only that type). */
+export const ofType = (issues, type) => ({
+  ...issues,
+  credited: issues.credited.filter((issue) => issue.fields?.issuetype?.name === type),
+  created: issues.created.filter((issue) => issue.fields?.issuetype?.name === type),
+});
+
+/** The issues a turn created that are NOT of the requested type: a write nobody asked for. */
+const strayTypes = (issues, type) =>
+  issues.created.filter((issue) => issue.fields?.issuetype?.name !== type);
+
+const strayDetail = (strays) =>
+  `${strays.length} issues of another type were created: ${strays.map((issue) => `${issue.key} (${issue.fields?.issuetype?.name})`).join(", ")}`;
+
+/**
+ * Obligation a) — exactly one new conformant issue of the type, with the named relation, and no issue
+ * of another type created by the same turn. `issues` is everything the turn created, of every type.
+ */
+export function gradeComposerCreate({ type, issues: all, conforms, related }) {
+  const strays = strayTypes(all, type);
+  if (strays.length > 0) return { status: "red", detail: strayDetail(strays) };
+  const issues = ofType(all, type);
   const [issue] = issues.created;
   if (issues.created.length !== 1 || issues.credited.length !== 1 || issues.duplicates.length > 0)
     return {
@@ -58,16 +84,36 @@ export function keysListed(created, answer, exchanges) {
   return created.filter((issue) => !named.has(issue.key));
 }
 
-/** Obligation a) — one request creates several issues: all exist natively, every key is listed. */
-export function gradeMultiCreate({ expected, issues, conforms, related, answer, exchanges }) {
+/** Whether the issues carry exactly the requested titles, each once. */
+const hasTitles = (made, titles) => {
+  const wanted = [...titles].sort();
+  const found = made.map((issue) => String(issue.fields?.summary ?? "")).sort();
+  return found.length === wanted.length && found.every((title, i) => title === wanted[i]);
+};
+
+/**
+ * Obligation a) — one request creates several issues of one type: exactly the requested titles exist
+ * natively (each once, conformant, with its relation) and every key is listed.
+ */
+export function gradeMultiCreate({
+  type,
+  titles,
+  issues: all,
+  conforms,
+  related,
+  answer,
+  exchanges,
+}) {
+  const strays = strayTypes(all, type);
+  const issues = ofType(all, type);
   const made = issues.created;
+  const expected = titles.length;
   const good = made.filter((issue) => conforms(issue) && related(issue));
+  const sameTitles = hasTitles(made, titles);
+  const complete = sameTitles && good.length === expected && issues.duplicates.length === 0;
   const created = {
-    status:
-      made.length === expected && good.length === expected && issues.duplicates.length === 0
-        ? "green"
-        : "red",
-    detail: `${made.length} created natively of ${expected} requested, ${good.length} conformant with their relation`,
+    status: strays.length === 0 && complete ? "green" : "red",
+    detail: `${made.length} created natively of ${expected} requested, ${good.length} conformant with their relation, ${sameTitles ? "the titles are the requested ones" : "the titles differ from the request"}${strays.length > 0 ? `; ${strayDetail(strays)}` : ""}`,
   };
   const missing = keysListed(made, answer, exchanges);
   const listed =
@@ -89,20 +135,22 @@ export function gradeMultiCreate({ expected, issues, conforms, related, answer, 
  * issue of the type that exists afterwards is red whatever the tool trace says.
  */
 export function gradeComposerRefusal({ type, exchanges, created, template, conforms }) {
-  const ofType = created.filter((issue) => issue.fields?.issuetype?.name === type);
-  const violating = ofType.filter((issue) => !conforms(issue));
+  const stray = created.filter((issue) => issue.fields?.issuetype?.name !== type);
+  if (stray.length > 0) return { status: "red", detail: strayDetail(stray) };
+  const own = created.filter((issue) => issue.fields?.issuetype?.name === type);
+  const violating = own.filter((issue) => !conforms(issue));
   if (violating.length > 0)
     return {
       status: "red",
       detail: `${violating.length} violating ${type} exists in Jira: ${violating.map((issue) => issue.key).join(", ")}`,
     };
-  const repair = gradeTemplateRepair({ exchanges, issues: ofType, template, conforms });
+  const repair = gradeTemplateRepair({ exchanges, issues: own, template, conforms });
   const cards = templateRefusals(exchanges).filter((refusal) =>
     askedForApproval(exchanges[refusal.index]),
   ).length;
-  const detail = `${repair.refusals} refusals (${repair.ruleIds.join(", ")}), ${cards} with an approval card, ${repair.receipts} with a receipt, ${ofType.length} ${type} in Jira, none violating`;
+  const detail = `${repair.refusals} refusals (${repair.ruleIds.join(", ")}), ${cards} with an approval card, ${repair.receipts} with a receipt, ${own.length} ${type} in Jira, none violating`;
   if (!repair.detected)
-    return ofType.length === 0
+    return own.length === 0
       ? {
           status: "unverified",
           detail: `no refusal and nothing written; the gate was not exercised (${detail})`,
@@ -115,7 +163,7 @@ export function gradeComposerRefusal({ type, exchanges, created, template, confo
     return { status: "red", detail: `${detail}; a card was shown for a refused write` };
   if (repair.receipts > 0)
     return { status: "red", detail: `${detail}; a refusal carries a receipt` };
-  return ofType.length === 1
+  return own.length === 1
     ? { status: "green", detail }
     : { status: "red", detail: `${detail}; exactly one conformant ${type} was expected` };
 }
@@ -125,10 +173,22 @@ const HINT_VERB = /anleg|\blege\b|\blegen\b|erstell|definier|hinterleg|einricht|
 export const hasTemplateHint = (answer) =>
   HINT_NOUN.test(answer ?? "") && HINT_VERB.test(answer ?? "");
 
+/** The rule ids a gate refusal of a create names when no template governs the type (#4354). */
+export const NO_TEMPLATE_RULES = Object.freeze(["template-missing", "template-not-activated"]);
+
+const namesRule = (refusals, ruleIds) =>
+  refusals.filter((refusal) => refusal.violations.some((item) => ruleIds.includes(item.ruleId)));
+const ruleNames = (refusals) =>
+  [...new Set(refusals.flatMap((refusal) => refusal.violations.map((item) => item.ruleId)))].join(
+    ", ",
+  );
+
 /**
- * Obligation c) — no template for the type: nothing is written (native, for every type), the refusal
- * came from the gate (a refused create in the trace), no card was shown for a write that can never
- * pass, and the answer tells the person to create a template.
+ * Obligation c) — no template for the type: nothing is written (native, for every type), the gate
+ * refused the create with the rule that says no template governs the type (a traced refusal naming
+ * `template-missing` or `template-not-activated`; any other failure of the call proves nothing about
+ * the gate), no card was shown for a write that can never pass, and the answer tells the person to
+ * create a template (the second condition, over the answer's words).
  */
 export function gradeNoTemplate({ created, exchanges, answer }) {
   if (created.length > 0)
@@ -149,12 +209,20 @@ export function gradeNoTemplate({ created, exchanges, answer }) {
       status: "red",
       detail: `nothing written, but ${cards} approval cards were shown for a write that can never pass`,
     };
+  const refused = namesRule(templateRefusals(exchanges), NO_TEMPLATE_RULES);
+  if (refused.length === 0)
+    return {
+      status: "unverified",
+      detail: `nothing written and a create was attempted, but no traced refusal names ${NO_TEMPLATE_RULES.join(" or ")}; the gate was not shown to be the cause`,
+    };
   if (!hasTemplateHint(answer))
-    return { status: "red", detail: "refused, but the answer gives no hint to create a template" };
+    return {
+      status: "red",
+      detail: `refused by the gate (${ruleNames(refused)}), but the answer gives no hint to create a template`,
+    };
   return {
     status: "green",
-    detail:
-      "nothing written, refused by the gate, no card, the answer tells the person to create a template",
+    detail: `nothing written, refused by the gate (${ruleNames(refused)}), no card, the answer tells the person to create a template`,
   };
 }
 
@@ -167,43 +235,85 @@ const changed = (before, after, fields) =>
 
 /**
  * Obligation d1) — an edit that would make a conformant issue non-conformant is refused: compared
- * natively before and after, through whichever tool it happened.
+ * natively before and after, through whichever tool it happened, and refused BY THE GATE — a traced
+ * `jira.edit` rejection naming one of `ruleIds`. An edit that failed for another reason, or never
+ * ran, leaves the issue unchanged without proving the gate, so it is `unverified`, never green.
  */
-export function gradeEditBreaking({ before, after, attempted, conforms }) {
+export function gradeEditBreaking({ before, after, exchanges, conforms, ruleIds }) {
   if (!conforms(before))
     return { status: "unverified", detail: "the fixture issue was not conformant before the edit" };
   if (!conforms(after))
     return { status: "red", detail: "the edit was applied and the issue is no longer conformant" };
-  return attempted
-    ? { status: "green", detail: "the edit was refused; the issue is still conformant" }
-    : {
-        status: "unverified",
-        detail:
-          "the issue is unchanged, but no jira.edit call was made; the gate was not exercised",
-      };
+  const refused = namesRule(editRefusals(exchanges), ruleIds);
+  if (refused.length > 0)
+    return {
+      status: "green",
+      detail: `the gate refused the edit (${ruleNames(refused)}); the issue is still conformant`,
+    };
+  const edits = (Array.isArray(exchanges) ? exchanges : []).filter((exchange) =>
+    toolExchangeOf(exchange, "jira.edit"),
+  );
+  return {
+    status: "unverified",
+    detail:
+      edits.length === 0
+        ? "the issue is unchanged, but no jira.edit call was made; the gate was not exercised"
+        : `the issue is unchanged, but no traced edit refusal names ${ruleIds.join(" or ")}; the gate was not shown to be the cause`,
+  };
 }
 
+/** The fields other than the targeted one that differ between two reads of the same issue. */
+const untouchedChanges = (before, after, touched) =>
+  [...new Set([...Object.keys(before.fields ?? {}), ...Object.keys(after.fields ?? {})])].filter(
+    (field) => field !== touched && changed(before, after, [field]),
+  );
+
+const escapePattern = (text) => String(text).replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+
 /**
- * Obligation d2) — an edit of an issue with a pre-existing violation in an UNTOUCHED field passes
- * and the answer names the remaining violation.
+ * Obligation d2) — an edit of an issue with a pre-existing violation in an UNTOUCHED field passes,
+ * no other field changed, and the product says so in the trace (a succeeded `jira.edit` carrying a
+ * template notice for `remainingRule`); the answer naming the remaining violation is a second
+ * condition over the model's words, never the evidence of the notice.
  */
-export function gradeEditPreexisting({ before, after, touched, expected, remaining, answer }) {
+export function gradeEditPreexisting({
+  before,
+  after,
+  touched,
+  expected,
+  remaining,
+  remainingRule,
+  exchanges,
+  answer,
+}) {
   if (!changed(before, after, [touched]) || String(after.fields?.[touched]) !== expected)
     return {
       status: "red",
       detail: `the edit of ${touched} did not apply; a pre-existing violation elsewhere blocked it`,
     };
-  if (changed(before, after, ["description"]))
-    return { status: "red", detail: "the untouched field changed as well" };
-  const named = new RegExp(
-    String(remaining).replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`),
-    "iu",
-  ).test(answer ?? "");
-  return named
-    ? { status: "green", detail: "the edit passed and the answer names the remaining violation" }
+  const others = untouchedChanges(before, after, touched);
+  if (others.length > 0)
+    return { status: "red", detail: `untouched fields changed as well: ${others.join(", ")}` };
+  const edits = succeededEdits(exchanges);
+  if (edits.length === 0)
+    return {
+      status: "unverified",
+      detail:
+        "the edit applied, but no succeeded jira.edit is in the trace; the notice cannot be read",
+    };
+  if (!edits.some((edit) => edit.notices.some((item) => item.ruleId === remainingRule)))
+    return {
+      status: "red",
+      detail: `the edit passed, but the product reported no template notice for ${remainingRule}`,
+    };
+  return new RegExp(escapePattern(remaining), "iu").test(answer ?? "")
+    ? {
+        status: "green",
+        detail: `the edit passed, the product reported ${remainingRule} and the answer names the remaining violation`,
+      }
     : {
         status: "red",
-        detail: "the edit passed, but the answer does not name the remaining violation",
+        detail: "the edit passed and the notice was reported, but the answer does not name it",
       };
 }
 
@@ -255,8 +365,15 @@ export function gradeWatcher({ watchers, actor, expectPresent }) {
       };
 }
 
-/** A comment written by plain instruction: its body and author, read natively. */
-export function gradeComment({ comments, actor, body }) {
+/**
+ * A comment written by plain instruction: its body and author on the named issue, read natively. The
+ * same text on any other fixture issue (`elsewhere`, read natively too) is a comment on the wrong
+ * issue and red.
+ */
+export function gradeComment({ comments, elsewhere = [], actor, body }) {
+  const wrong = elsewhere.filter((comment) => comment.body === body);
+  if (wrong.length > 0)
+    return { status: "red", detail: `${wrong.length} comments carry the text on another issue` };
   const matches = (comments ?? []).filter((comment) => comment.body === body);
   if (matches.length === 0)
     return { status: "red", detail: "no comment with the requested text exists natively" };
@@ -271,14 +388,32 @@ const ATTACHMENT_NOUN = /anh(?:ä|ae)nge|anhang|attachment|datei/iu;
 const NOT_PART =
   /nicht\s+(?:teil|bestandteil|unterst(?:ü|ue)tzt|m(?:ö|oe)glich|verf(?:ü|ue)gbar)|(?:kein|keine)\s+\w*\s*(?:unterst(?:ü|ue)tzung|anh(?:ä|ae)nge)|not\s+(?:part|supported|available)/iu;
 
-/** An attachment request: nothing reaches Jira and the answer says attachments are not part of the release. */
-export function gradeAttachmentRefusal({ before, after, answer }) {
+/** Every settled write of the turn, whatever its tool: the product's closed `outcome` is `succeeded`. */
+const succeededWrites = (exchanges) =>
+  (Array.isArray(exchanges) ? exchanges : []).filter(
+    (exchange) => exchange?.result?.data?.outcome === "succeeded",
+  );
+
+/**
+ * An attachment request: nothing reaches Jira (the native attachment count) and no write of any kind
+ * succeeded in the turn's trace (the catalog has no attachment write, so there is no refusal reason to
+ * bind; a succeeded write would be a different effect passed off as the file). The answer saying that
+ * attachments are not part of the release is the second condition, over the model's words.
+ */
+export function gradeAttachmentRefusal({ before, after, answer, exchanges }) {
   if (after > before)
     return { status: "red", detail: `${after - before} attachments reached Jira` };
+  const writes = succeededWrites(exchanges);
+  if (writes.length > 0)
+    return {
+      status: "red",
+      detail: `${writes.length} writes succeeded in a turn that asked only for an attachment`,
+    };
   return ATTACHMENT_NOUN.test(answer ?? "") && NOT_PART.test(answer ?? "")
     ? {
         status: "green",
-        detail: "nothing reached Jira and the answer says attachments are not part of this release",
+        detail:
+          "nothing reached Jira, no write succeeded, and the answer says attachments are not part of this release",
       }
     : {
         status: "red",

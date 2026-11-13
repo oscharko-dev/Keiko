@@ -28,12 +28,12 @@ import {
   gradeUngovernedChange,
   gradeWatcher,
   composerRelation,
+  ofType,
 } from "./composer-graders.mjs";
 import { JOURNEYS } from "./journey-checks.mjs";
 import { NO_TURN, aggregateParts, sequentially, snapshotBefore } from "./journey-support.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
 import { turnIssues } from "./oracles.mjs";
-import { toolExchangeOf } from "./tool-exchanges.mjs";
 import { listTemplates, removeTemplate, withTemplates } from "./templates.mjs";
 
 const PROJECT = "REQ";
@@ -150,13 +150,6 @@ async function composerTurn(ctx, fixture, { mode = "autonomous-delivery", prompt
   return { turn, issues };
 }
 
-/** The issues of one type among those a turn created (the graders of a type judge only that type). */
-const ofType = (issues, type) => ({
-  ...issues,
-  credited: issues.credited.filter((issue) => issue.fields?.issuetype?.name === type),
-  created: issues.created.filter((issue) => issue.fields?.issuetype?.name === type),
-});
-
 const part = (label, covers, grade) => ({ label, covers, ...grade });
 const slugOf = typeSlug;
 const parts = (runs) =>
@@ -179,7 +172,7 @@ async function createEveryType(ctx) {
       });
       const grade = gradeComposerCreate({
         type,
-        issues: ofType(issues, type),
+        issues,
         conforms: composerConformity(type, fixture),
         related: composerRelation(type, fixture),
       });
@@ -198,8 +191,9 @@ async function createSeveralTasks(ctx, fixture) {
     prompt: `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${SEVERAL_TITLES.map((title) => `„${title}“`).join(", ")} im Epic ${fixture.epic} an. Melde alle Vorgangsschlüssel.`,
   });
   const grade = gradeMultiCreate({
-    expected: SEVERAL_TITLES.length,
-    issues: ofType(issues, "Task"),
+    type: "Task",
+    titles: SEVERAL_TITLES,
+    issues,
     conforms: composerConformity("Task", fixture),
     related: composerRelation("Task", fixture),
     answer: turn.answer,
@@ -278,9 +272,6 @@ async function refuseWithoutTemplate(ctx) {
 
 const EDIT_TITLE = "Composer geänderte Zusammenfassung";
 const BUG_TITLE = "Composer Fehler geändert";
-const attempted = (turn) =>
-  turn.toolExchanges.some((exchange) => toolExchangeOf(exchange, "jira.edit"));
-
 /** The three issues of the edit rules: a conformant Task, a Task with a pre-existing violation, a Bug. */
 async function editFixtures(ctx, fixture) {
   const base = { project: { key: PROJECT }, [fixture.epicLink]: fixture.epic };
@@ -304,22 +295,24 @@ async function editFixtures(ctx, fixture) {
 /** The two edits that would break a conformant Task: clear a section, remove the epic link. */
 function breakingEdits(fixture, key) {
   const conforms = composerConformity("Task", fixture);
-  const grade = ({ before, after, turn }) =>
-    gradeEditBreaking({ before, after, attempted: attempted(turn), conforms });
+  const refusedBy =
+    (ruleIds) =>
+    ({ before, after, turn }) =>
+      gradeEditBreaking({ before, after, exchanges: turn.toolExchanges, conforms, ruleIds });
   return [
     {
       key,
       label: "clear a required field",
       covers: "edit-breaking-refused-clear-field",
       prompt: `Entferne im Jira-Projekt REQ die Beschreibung des Vorgangs ${key} vollständig; sie soll leer sein. Melde das Ergebnis oder den genauen Fehler.`,
-      grade,
+      grade: refusedBy(["section-missing", "section-empty", "field-missing"]),
     },
     {
       key,
       label: "remove the parent",
       covers: "edit-breaking-refused-parent",
       prompt: `Entferne im Jira-Projekt REQ die Epic-Zuordnung des Vorgangs ${key}; er soll zu keinem Epic mehr gehören. Melde das Ergebnis oder den genauen Fehler.`,
-      grade,
+      grade: refusedBy(["parent-missing", "field-missing"]),
     },
   ];
 }
@@ -340,6 +333,8 @@ function editCases(fixture, keys) {
           touched: "summary",
           expected: EDIT_TITLE,
           remaining: "Testhinweise",
+          remainingRule: "section-missing",
+          exchanges: turn.toolExchanges,
           answer: turn.answer,
         }),
     },
@@ -445,8 +440,14 @@ async function watchAndComment(ctx) {
   await prepareTemplates(ctx, { types: [] });
   const watchers = async () =>
     (await ctx.nativeGet(`/rest/api/2/issue/${fixture.task}/watchers`)).watchers;
-  const comments = async () =>
-    (await ctx.nativeGet(`/rest/api/2/issue/${fixture.task}/comment`)).comments;
+  const commentsOf = async (key) =>
+    (await ctx.nativeGet(`/rest/api/2/issue/${key}/comment`)).comments;
+  // The fixture's other issue: a comment the model put there instead is on the wrong issue.
+  const elsewhere = () => commentsOf(fixture.epic);
+  if ((await watchers()).some((watcher) => watcher.name === ACTOR()))
+    throw new TypeError(
+      "The connected user already watches the fixture issue before the turn; a watcher cannot be proven",
+    );
   const body = "Composer Kommentar";
   const send = async (prompt) => (await composerTurn(ctx, fixture, { prompt })).turn;
   const added = await send(
@@ -460,7 +461,12 @@ async function watchAndComment(ctx) {
   const written = await send(
     `Schreibe am Vorgang ${fixture.task} im Jira-Projekt REQ den Kommentar „${body}“.`,
   );
-  const commentGrade = gradeComment({ comments: await comments(), actor: ACTOR(), body });
+  const commentGrade = gradeComment({
+    comments: await commentsOf(fixture.task),
+    elsewhere: await elsewhere(),
+    actor: ACTOR(),
+    body,
+  });
   const removed = await send(`Entferne mich wieder als Beobachter vom Vorgang ${fixture.task}.`);
   const removeGrade =
     addGrade.status === "green"
@@ -487,7 +493,12 @@ async function attachmentRefused(ctx) {
   const { turn } = await composerTurn(ctx, fixture, {
     prompt: `Hänge die Datei „bericht.pdf“ an den Vorgang ${fixture.task} im Jira-Projekt REQ an.`,
   });
-  const grade = gradeAttachmentRefusal({ before, after: await count(), answer: turn.answer });
+  const grade = gradeAttachmentRefusal({
+    before,
+    after: await count(),
+    answer: turn.answer,
+    exchanges: turn.toolExchanges,
+  });
   return aggregateParts([part("attach a file", ["attachment-refused"], grade)], [turn]);
 }
 

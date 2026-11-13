@@ -352,6 +352,32 @@ export function templateRefusals(exchanges) {
   );
 }
 
+/**
+ * Every `jira.edit` the gate refused with template violations (the same structured rejection a
+ * create carries). An edit that failed for another reason carries no violation and is not listed.
+ */
+export function editRefusals(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) => {
+    if (!toolExchangeOf(exchange, "jira.edit")) return [];
+    const data = exchange.result.data;
+    const violations = data?.outcome === "rejected" ? violationsIn(data.violations) : [];
+    return violations.length === 0 ? [] : [{ index, violations }];
+  });
+}
+
+/**
+ * Every succeeded `jira.edit` with the template notices it carried: the rules an issue already
+ * broke in fields the edit did not touch (the product's closed account, never its wording).
+ */
+export function succeededEdits(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : [])
+    .filter(
+      (exchange) =>
+        toolExchangeOf(exchange, "jira.edit") && exchange.result.data?.outcome === "succeeded",
+    )
+    .map((exchange) => ({ notices: violationsIn(exchange.result.data?.templateNotices) }));
+}
+
 /** Whether an exchange wrote an issue: a succeeded create or a draft item in state created. */
 export function wroteIssue(exchange) {
   if (completedToolExchange(exchange, "jira.create"))

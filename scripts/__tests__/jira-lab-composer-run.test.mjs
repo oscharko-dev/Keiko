@@ -1,5 +1,7 @@
 // The Composer lane's command line and native fixtures (#4369): selection errors, baseline grouping,
 // report directory, required fields read from the project's own metadata, and the work-project lock.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const reads = vi.hoisted(() => new Map());
@@ -12,6 +14,7 @@ import { COMPOSER_SCENARIOS } from "../testing/jira-chat-lab/requirements/compos
 import {
   composerGroups,
   composerSelectionOf,
+  composerTruth,
   reportDirectoryName,
   selectedScenarios,
   withBaselineSetting,
@@ -87,6 +90,37 @@ describe("baseline grouping and settings", () => {
       ),
     ).rejects.toThrow("x");
     expect(Object.hasOwn(bare, "KEIKO_JIRA_LAB_BASELINE_TEMPLATES")).toBe(false);
+  });
+});
+
+describe("the truth record a group of journeys takes", () => {
+  const record = {
+    schemaVersion: 1,
+    projects: { work: "REQ", report: "RPT", large: "LRG" },
+    fieldIds: { epicName: "cf-1", epicLink: "cf-2", storyPoints: "cf-3" },
+    uncoveredRequirements: ["LH-010"],
+    issues: [{ key: "RPT-1", deviations: [] }],
+  };
+
+  it("hands only the work project and the two parent fields to journeys that grade nothing else", () => {
+    const narrowed = composerTruth(record, ["C01", "C02", "C08"]);
+    expect(narrowed).toEqual({
+      projects: { work: "REQ" },
+      fieldIds: { epicName: "cf-1", epicLink: "cf-2" },
+    });
+    expect(JSON.stringify(narrowed)).not.toMatch(/RPT|LH-010|storyPoints/u);
+  });
+
+  it("keeps the whole record for the group that runs the document lane's S10 and S11 oracles", () => {
+    expect(composerTruth(record, ["C05", "C07"])).toBe(record);
+  });
+
+  it("is wired into the scorecard per group, for the Composer lane only", () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, "../testing/jira-chat-lab/requirements/scorecard.mjs"),
+      "utf8",
+    );
+    expect(source).toContain("truth: composer ? composerTruth(truth, group.ids) : truth");
   });
 });
 

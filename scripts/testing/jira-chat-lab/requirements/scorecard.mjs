@@ -31,6 +31,7 @@ import { COMPOSER_JOURNEY_IDS } from "./composer.mjs";
 import {
   composerGroups,
   composerSelectionOf,
+  composerTruth,
   reportDirectoryName,
   selectedScenarios,
   withBaselineSetting,
@@ -135,7 +136,13 @@ if (values.model) {
   for (const group of groups)
     Object.assign(
       journeys,
-      await withBaselineSetting(group.baseline, () => runJourneys({ ...lane, ids: group.ids })),
+      await withBaselineSetting(group.baseline, () =>
+        runJourneys({
+          ...lane,
+          truth: composer ? composerTruth(truth, group.ids) : truth,
+          ids: group.ids,
+        }),
+      ),
     );
 }
 for (const scenario of scenarios) report.results.push(await runChecks(scenario, journeys));

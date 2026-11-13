@@ -1558,3 +1558,23 @@ obligations `estimate-source-labelled`, `configured-unused-stated` and `other-es
 `ESN` neither; configuring the board for `ESR` uses Jira's greenhopper estimation endpoint and fails closed
 when the board does not report the field afterwards) and `KEIKO_JIRA_LAB_ESTIMATE_PROJECT=ESF` points S10 at
 one of them. A lab context without a native reader keeps the truth file's estimate.
+
+**Comparability of S10 (from 2026-11-13).** S10 always receives the estimate-rule prompt and carries three more
+obligations (`estimate-source-labelled`, `configured-unused-stated`, `other-estimate-field-named`) in the document
+lane and in C07. Its results are not comparable with any run before 2026-11-13.
+
+**What a Composer verdict rests on.** A refusal is the gate's, shown by the closed fields of the tool trace, never by
+the model's words: C03 requires a traced create or draft refusal naming `template-missing` or
+`template-not-activated` (any other failure of the call leaves the obligation `unverified`); the two breaking edits of
+C04 require a traced `jira.edit` rejection naming a content rule of the template (`section-missing`,
+`section-empty`, `parent-missing`, `field-missing`); the pre-existing violation of C04 requires a succeeded
+`jira.edit` carrying a `templateNotices` entry for `section-missing`, and no other field of the issue may change.
+The wording of the answer (the template hint, naming the remaining violation, saying attachments are not part of
+the release) is a second condition for green, evaluated only after the closed outcome. The catalog has no
+attachment write, so C09 binds to the native attachment count and to the absence of any succeeded write in the
+trace instead of a refusal reason. A create of any other type than the requested one is red in C01 and C02. C01's
+several-at-once request is graded on the three requested titles. C08 reads the watcher list before the turn
+(the user already watching is an `invalid` lab state) and a comment on the fixture's other issue is red.
+The Composer lane takes from `requirements-truth.json` only the work project and the two parent field ids
+(`projects.work`, `fieldIds.epicName`, `fieldIds.epicLink`); a group that contains C07 receives the whole record
+because S10 and S11 compare against it.

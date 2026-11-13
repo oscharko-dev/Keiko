@@ -52,6 +52,21 @@ export function composerGroups(ids) {
   ];
 }
 
+/**
+ * What a group of Composer journeys reads from the session's `requirements-truth.json`. Only C07
+ * runs the document lane's S10 and S11 oracles, which compare against the whole record; every other
+ * journey needs the work project and the two custom field ids it creates parents with. The rest of
+ * the record (the expected issues, deviations and uncovered requirements of the document lane)
+ * never reaches a journey that does not grade them.
+ */
+export function composerTruth(truth, ids) {
+  if (ids.includes("C07")) return truth;
+  return {
+    projects: { work: truth.projects.work },
+    fieldIds: { epicName: truth.fieldIds.epicName, epicLink: truth.fieldIds.epicLink },
+  };
+}
+
 /** The report directory of a model: its id, made safe, so two models never share a report. */
 export function reportDirectoryName(model) {
   const safe = String(model ?? "no-model")

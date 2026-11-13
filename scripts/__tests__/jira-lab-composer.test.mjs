@@ -202,6 +202,13 @@ describe("obligation a) creation, one and several", () => {
     });
   };
 
+  it("is red when the turn also created an issue of ANOTHER type, however conformant", () => {
+    const result = grade("Task", [conformant("REQ-5", "Task"), conformant("REQ-6", "Bug")]);
+    expect(result.status).toBe("red");
+    expect(result.detail).toContain("REQ-6 (Bug)");
+    expect(grade("Task", [conformant("REQ-6", "Story")]).status).toBe("red");
+  });
+
   it("is green for one conformant issue with its relation, red otherwise", () => {
     expect(grade("Task", [conformant("REQ-5", "Task")]).status).toBe("green");
     expect(grade("Task", []).status).toBe("red");
@@ -216,16 +223,20 @@ describe("obligation a) creation, one and several", () => {
     );
   });
 
+  const TITLES = ["Titel A", "Titel B", "Titel C"];
   const several = (made, answer = "", exchanges = []) =>
     gradeMultiCreate({
-      expected: 3,
+      type: "Task",
+      titles: TITLES,
       issues: turnOf(made),
       conforms: composerConformity("Task", FIXTURE),
       related: (issue) => issue.fields[LINK] === FIXTURE.epic,
       answer,
       exchanges,
     });
-  const three = ["REQ-5", "REQ-6", "REQ-7"].map((key) => conformant(key, "Task"));
+  const three = ["REQ-5", "REQ-6", "REQ-7"].map((key, i) =>
+    conformant(key, "Task", `Titel ${"ABC"[i]}`),
+  );
 
   it("creates all natively and lists every key in the answer", () => {
     const grade = several(three, "Angelegt: REQ-5, REQ-6 und REQ-7");
@@ -237,6 +248,25 @@ describe("obligation a) creation, one and several", () => {
     const bad = [...three];
     bad[2] = { ...bad[2], fields: { ...bad[2].fields, description: "" } };
     expect(several(bad, "REQ-5 REQ-6 REQ-7").created.status).toBe("red");
+  });
+
+  it("is red when the three issues exist but carry other titles than the request, or a fourth of another type", () => {
+    const retitled = three.map((issue, i) => ({
+      ...issue,
+      fields: { ...issue.fields, summary: `Anderer ${i}` },
+    }));
+    const grade = several(retitled, "REQ-5 REQ-6 REQ-7");
+    expect(grade.created.status).toBe("red");
+    expect(grade.created.detail).toContain("titles differ");
+    const twice = [
+      three[0],
+      { ...three[1], fields: { ...three[1].fields, summary: "Titel A" } },
+      three[2],
+    ];
+    expect(several(twice, "REQ-5 REQ-6 REQ-7").created.status).toBe("red");
+    const stray = several([...three, conformant("REQ-8", "Bug")], "REQ-5 REQ-6 REQ-7 REQ-8");
+    expect(stray.created.status).toBe("red");
+    expect(stray.created.detail).toContain("REQ-8 (Bug)");
   });
 
   it("is red when a created key is missing from the answer and the result, green via the result card", () => {
@@ -272,8 +302,31 @@ const refusal = (type, extra = {}, data = {}) =>
     extra,
   );
 const success = (key) => createExchange({ outcome: "succeeded", issueKey: key }, "completed");
-const refusedNoTemplate = (extra = {}) =>
-  createExchange({ outcome: "rejected", reason: "template-required" }, "failed", extra);
+/** The gate's refusal of a create when no template governs the type (#4354): its rule ids, no receipt. */
+const refusedNoTemplate = (extra = {}, ruleId = "template-missing") =>
+  createExchange(
+    { outcome: "rejected", reason: "field-validation", violations: [{ ruleId }] },
+    "failed",
+    extra,
+  );
+/** A create that failed for another reason: the product's closed refusal is not a gate refusal. */
+const failedElsewhere = () =>
+  createExchange({ outcome: "failed", reason: "unavailable" }, "failed");
+const editResult = (data, status = "failed") => ({
+  call: { id: "e", name: "jira_edit", arguments: {} },
+  result: { toolRef: { canonicalId: "keiko.jira.edit", contractVersion: 3 }, status, data },
+});
+const refusedEdit = (ruleId) =>
+  editResult({
+    outcome: "rejected",
+    reason: "field-validation",
+    violations: [{ ruleId, template: "REQ/Task" }],
+  });
+const succeededEdit = (notices) =>
+  editResult(
+    { outcome: "succeeded", ...(notices ? { templateNotices: notices } : {}) },
+    "completed",
+  );
 
 describe("obligation b) refusal before any card or effect, decided by the native state", () => {
   const grade = (type, exchanges, created) =>
@@ -306,6 +359,17 @@ describe("obligation b) refusal before any card or effect, decided by the native
     expect(
       grade("Task", [refusal("Task"), success("REQ-5")], [violating("REQ-5", "Task")]).status,
     ).toBe("red");
+  });
+
+  it("is red when the refused request left an issue of ANOTHER type behind", () => {
+    const result = grade(
+      "Task",
+      [refusal("Task"), success("REQ-5")],
+      [conformant("REQ-5", "Task"), conformant("REQ-6", "Story")],
+    );
+    expect(result.status).toBe("red");
+    expect(result.detail).toContain("REQ-6 (Story)");
+    expect(grade("Task", [refusal("Task")], [conformant("REQ-6", "Bug")]).status).toBe("red");
   });
 
   it("is red when a card was shown for the refused write, or the refusal carries a receipt", () => {
@@ -351,9 +415,26 @@ describe("obligation c) no template: nothing written, the gate refused, no card,
     ).created;
 
   it("is green only when all four claims hold", () => {
-    expect(
-      gradeNoTemplate({ created: [], exchanges: [refusedNoTemplate()], answer: hint }).status,
-    ).toBe("green");
+    for (const ruleId of ["template-missing", "template-not-activated"])
+      expect(
+        gradeNoTemplate({
+          created: [],
+          exchanges: [refusedNoTemplate({}, ruleId)],
+          answer: hint,
+        }).status,
+      ).toBe("green");
+  });
+
+  it("is unverified, never green, when the create failed for another reason or the rule is another one", () => {
+    for (const exchanges of [
+      [failedElsewhere()],
+      [refusedNoTemplate({}, "section-missing")],
+      [success("REQ-5")],
+    ]) {
+      const grade = gradeNoTemplate({ created: [], exchanges, answer: hint });
+      expect(grade.status).toBe("unverified");
+      expect(grade.detail).toContain("template-missing");
+    }
   });
 
   it("is red when anything was written, of any type", () => {
@@ -371,6 +452,7 @@ describe("obligation c) no template: nothing written, the gate refused, no card,
     expect(gradeNoTemplate({ created: [], exchanges: [], answer: hint }).status).toBe("unverified");
     const card = refusedNoTemplate({ approval: { state: "pending", approvalId: "a" } });
     expect(gradeNoTemplate({ created: [], exchanges: [card], answer: hint }).status).toBe("red");
+    // The hint is a second condition: without it a traced gate refusal alone is still red.
     for (const answer of ["Das war nicht möglich.", "", undefined, "Es gibt eine Vorlage"])
       expect(
         gradeNoTemplate({ created: [], exchanges: [refusedNoTemplate()], answer }).status,
@@ -384,22 +466,31 @@ describe("obligation d) the owner's edit rules, decided by native before and aft
   const cleared = { ...good, fields: { ...good.fields, description: "" } };
   const orphan = { ...good, fields: { ...good.fields, [LINK]: null } };
 
-  it("breaking edit: red when applied through ANY tool, green when refused, unverified only when untouched and untried", () => {
-    expect(
-      gradeEditBreaking({ before: good, after: cleared, attempted: false, conforms }).status,
-    ).toBe("red");
-    expect(
-      gradeEditBreaking({ before: good, after: orphan, attempted: true, conforms }).status,
-    ).toBe("red");
-    expect(gradeEditBreaking({ before: good, after: good, attempted: true, conforms }).status).toBe(
-      "green",
-    );
-    expect(
-      gradeEditBreaking({ before: good, after: good, attempted: false, conforms }).status,
-    ).toBe("unverified");
-    expect(
-      gradeEditBreaking({ before: cleared, after: cleared, attempted: true, conforms }).status,
-    ).toBe("unverified");
+  const RULES = ["section-missing", "section-empty"];
+  const breaking = (before, after, exchanges) =>
+    gradeEditBreaking({ before, after, exchanges, conforms, ruleIds: RULES });
+
+  it("breaking edit: red when applied through ANY tool, green only when the gate refused it", () => {
+    expect(breaking(good, cleared, []).status).toBe("red");
+    expect(breaking(good, orphan, [refusedEdit("section-missing")]).status).toBe("red");
+    const refused = breaking(good, good, [refusedEdit("section-missing")]);
+    expect(refused.status).toBe("green");
+    expect(refused.detail).toContain("section-missing");
+    expect(breaking(cleared, cleared, [refusedEdit("section-missing")]).status).toBe("unverified");
+  });
+
+  it("breaking edit: an unchanged issue proves the gate only through a traced refusal naming the rule", () => {
+    const untried = breaking(good, good, []);
+    expect(untried.status).toBe("unverified");
+    expect(untried.detail).toContain("no jira.edit call was made");
+    // A call that failed for an unrelated reason leaves the issue unchanged and proves nothing.
+    const unrelated = breaking(good, good, [
+      editResult({ outcome: "failed", reason: "unavailable" }),
+    ]);
+    expect(unrelated.status).toBe("unverified");
+    expect(unrelated.detail).toContain("section-missing or section-empty");
+    // A refusal for another rule than the one the request breaks is not the gate refusing this edit.
+    expect(breaking(good, good, [refusedEdit("parent-missing")]).status).toBe("unverified");
   });
 
   const damaged = {
@@ -408,24 +499,50 @@ describe("obligation d) the owner's edit rules, decided by native before and aft
   };
   const edited = { ...damaged, fields: { ...damaged.fields, summary: "Neu" } };
 
-  it("pre-existing violation: the edit passes and the answer names the remaining violation", () => {
-    const grade = (after, answer) =>
-      gradeEditPreexisting({
-        before: damaged,
-        after,
-        touched: "summary",
-        expected: "Neu",
-        remaining: "Testhinweise",
-        answer,
-      });
-    expect(grade(edited, "Geändert. Es fehlt noch der Abschnitt Testhinweise.").status).toBe(
+  const notice = [{ ruleId: "section-missing", subject: "Testhinweise" }];
+  const preexisting = (after, answer, exchanges = [succeededEdit(notice)]) =>
+    gradeEditPreexisting({
+      before: damaged,
+      after,
+      touched: "summary",
+      expected: "Neu",
+      remaining: "Testhinweise",
+      remainingRule: "section-missing",
+      exchanges,
+      answer,
+    });
+
+  it("pre-existing violation: green needs the product's notice in the trace AND the answer naming it", () => {
+    expect(preexisting(edited, "Geändert. Es fehlt noch der Abschnitt Testhinweise.").status).toBe(
       "green",
     );
-    expect(grade(damaged, "Abgelehnt").status).toBe("red");
-    expect(grade(edited, "Geändert.").status).toBe("red");
-    expect(
-      grade({ ...edited, fields: { ...edited.fields, description: "" } }, "Testhinweise").status,
-    ).toBe("red");
+    expect(preexisting(damaged, "Abgelehnt").status).toBe("red");
+    expect(preexisting(edited, "Geändert.").status).toBe("red");
+  });
+
+  it("pre-existing violation: the notice is read from the trace, never from the wording", () => {
+    const named = "Geändert. Es fehlt noch der Abschnitt Testhinweise.";
+    const silent = preexisting(edited, named, [succeededEdit(undefined)]);
+    expect(silent.status).toBe("red");
+    expect(silent.detail).toContain("no template notice for section-missing");
+    expect(preexisting(edited, named, [succeededEdit([{ ruleId: "label-missing" }])]).status).toBe(
+      "red",
+    );
+    expect(preexisting(edited, named, []).status).toBe("unverified");
+  });
+
+  it("pre-existing violation: any other changed field is red, not only the description", () => {
+    const named = "Geändert. Es fehlt noch der Abschnitt Testhinweise.";
+    for (const [field, value] of [
+      ["description", ""],
+      ["labels", ["neu"]],
+      ["priority", { name: "High" }],
+      ["parent", { key: "REQ-99" }],
+    ]) {
+      const grade = preexisting({ ...edited, fields: { ...edited.fields, [field]: value } }, named);
+      expect(grade.status).toBe("red");
+      expect(grade.detail).toContain(field);
+    }
   });
 
   it("an ungoverned edit and a status change pass; unchanged or wrong values are red", () => {
@@ -537,14 +654,56 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     ).toBe("red");
   });
 
-  it("attachment: nothing reaches Jira and the answer says it is not part of this release", () => {
+  it("comment: the same text on another fixture issue is red, even when the right issue has it too", () => {
+    const comment = (name, body = "Text") => ({ body, author: { name } });
+    for (const comments of [[], [comment("keiko-api")]]) {
+      const grade = gradeComment({
+        comments,
+        elsewhere: [comment("keiko-api")],
+        actor: "keiko-api",
+        body: "Text",
+      });
+      expect(grade.status).toBe("red");
+      expect(grade.detail).toContain("another issue");
+    }
+    expect(
+      gradeComment({
+        comments: [comment("keiko-api")],
+        elsewhere: [comment("keiko-api", "Anderer")],
+        actor: "keiko-api",
+        body: "Text",
+      }).status,
+    ).toBe("green");
+  });
+
+  it("attachment: nothing reaches Jira, no write succeeded, and the answer says it is not part of this release", () => {
     const answer = "Anhänge sind nicht Teil dieses Releases.";
-    expect(gradeAttachmentRefusal({ before: 0, after: 0, answer }).status).toBe("green");
-    expect(gradeAttachmentRefusal({ before: 0, after: 1, answer }).status).toBe("red");
-    expect(gradeAttachmentRefusal({ before: 0, after: 0, answer: "Das geht nicht." }).status).toBe(
+    expect(gradeAttachmentRefusal({ before: 0, after: 0, answer, exchanges: [] }).status).toBe(
+      "green",
+    );
+    expect(gradeAttachmentRefusal({ before: 0, after: 1, answer, exchanges: [] }).status).toBe(
       "red",
     );
-    expect(gradeAttachmentRefusal({ before: 0, after: 0, answer: "Erledigt." }).status).toBe("red");
+    for (const text of ["Das geht nicht.", "Erledigt."])
+      expect(
+        gradeAttachmentRefusal({ before: 0, after: 0, answer: text, exchanges: [] }).status,
+      ).toBe("red");
+  });
+
+  it("attachment: a write that succeeded in the turn is red even with the right words and no file", () => {
+    const answer = "Anhänge sind nicht Teil dieses Releases.";
+    const written = gradeAttachmentRefusal({
+      before: 0,
+      after: 0,
+      answer,
+      exchanges: [succeededEdit(undefined)],
+    });
+    expect(written.status).toBe("red");
+    expect(written.detail).toContain("1 writes succeeded");
+    expect(
+      gradeAttachmentRefusal({ before: 0, after: 0, answer, exchanges: [failedElsewhere()] })
+        .status,
+    ).toBe("green");
   });
 });
 
@@ -910,26 +1069,35 @@ describe("C03 without a template", () => {
 });
 
 describe("C04 edit rules, through whichever tool", () => {
-  const applyEdits = ({ content, ctx, add }) => {
-    const key = /REQ-\d+/u.exec(content)?.[0];
-    const issue = ctx.issues.find((entry) => entry.key === key);
+  /** The effect of one edit request on the issue it names (a product that applies it by any tool). */
+  const applyTo = (issue, content) => {
     if (/Beschreibung/u.test(content)) issue.fields.description = "";
     else if (/Epic-Zuordnung/u.test(content)) issue.fields[LINK] = null;
     else if (/Zusammenfassung/u.test(content)) issue.fields.summary = /„([^“]+)“/u.exec(content)[1];
     else if (/Bearbeitung/u.test(content))
       issue.fields.status = { name: "In Arbeit", statusCategory: { key: "indeterminate" } };
-    return add === undefined
-      ? {}
-      : { answer: "Erledigt. Es fehlt noch der Abschnitt Testhinweise." };
   };
-  const editExchange = {
-    call: { id: "e", name: "jira_edit", arguments: {} },
-    result: {
-      toolRef: { canonicalId: "keiko.jira.edit", contractVersion: 3 },
-      status: "failed",
-      data: { outcome: "rejected" },
-    },
+  /** The product reports the rule the untouched part still breaks: the broken Task whose summary changes. */
+  const reportsNotice = (issue, content) =>
+    /Zusammenfassung/u.test(content) &&
+    issue.fields.issuetype.name === "Task" &&
+    !issue.fields.description.includes("Testhinweise");
+  const applyEdits = ({ content, ctx, add, notice = true }) => {
+    const issue = ctx.issues.find((entry) => entry.key === /REQ-\d+/u.exec(content)?.[0]);
+    applyTo(issue, content);
+    if (add === undefined) return {};
+    const reported = notice && reportsNotice(issue, content);
+    return {
+      answer: "Erledigt. Es fehlt noch der Abschnitt Testhinweise.",
+      toolExchanges: [
+        succeededEdit(
+          reported ? [{ ruleId: "section-missing", subject: "Testhinweise" }] : undefined,
+        ),
+      ],
+    };
   };
+  const refusedCall = (content) =>
+    refusedEdit(/Epic-Zuordnung/u.test(content) ? "parent-missing" : "section-missing");
 
   it("is red on a product that applies a breaking edit by any tool, even without a jira.edit call", async () => {
     const applying = lane({ act: applyEdits });
@@ -941,7 +1109,8 @@ describe("C04 edit rules, through whichever tool", () => {
   it("is green on a product that refuses the breaking edits and lets the other three pass", async () => {
     const rules = lane({
       act: ({ content, ctx, add }) => {
-        if (/Beschreibung|Epic-Zuordnung/u.test(content)) return { toolExchanges: [editExchange] };
+        if (/Beschreibung|Epic-Zuordnung/u.test(content))
+          return { toolExchanges: [refusedCall(content)] };
         return applyEdits({ content, ctx, add });
       },
     });
@@ -962,7 +1131,7 @@ describe("C04 edit rules, through whichever tool", () => {
     const blocking = lane({
       act: ({ content, ctx, add }) =>
         /Beschreibung|Epic-Zuordnung|Zusammenfassung|Bearbeitung/u.test(content)
-          ? { toolExchanges: [editExchange] }
+          ? { toolExchanges: [editResult({ outcome: "rejected", reason: "unavailable" })] }
           : applyEdits({ content, ctx, add }),
     });
     const check = await COMPOSER_JOURNEYS.C04(blocking, undefined);
@@ -976,9 +1145,43 @@ describe("C04 edit rules, through whichever tool", () => {
   });
 
   it("is red when the edit passes but the answer does not name the remaining violation", async () => {
-    const silent = lane({ act: ({ content, ctx }) => void applyEdits({ content, ctx }) });
+    const silent = lane({
+      act: ({ content, ctx, add }) => ({
+        ...applyEdits({ content, ctx, add }),
+        answer: "Erledigt.",
+      }),
+    });
     const check = await COMPOSER_JOURNEYS.C04(silent, undefined);
     expect(check.detail).toContain("pre-existing violation in an untouched field: red");
+  });
+
+  it("is red when the edit passes and the answer names the violation but the product reported no notice", async () => {
+    const wordsOnly = lane({
+      act: ({ content, ctx, add }) => {
+        if (/Beschreibung|Epic-Zuordnung/u.test(content))
+          return { toolExchanges: [refusedCall(content)] };
+        return applyEdits({ content, ctx, add, notice: false });
+      },
+    });
+    const check = await COMPOSER_JOURNEYS.C04(wordsOnly, undefined);
+    expect(check.detail).toContain("pre-existing violation in an untouched field: red");
+    expect(check.detail).toContain("reported no template notice");
+  });
+
+  it("is unverified, never green, when the breaking edit leaves the issue unchanged without a gate refusal", async () => {
+    const unrelated = lane({
+      act: ({ content, ctx, add }) => {
+        if (/Beschreibung|Epic-Zuordnung/u.test(content))
+          return { toolExchanges: [editResult({ outcome: "failed", reason: "unavailable" })] };
+        return applyEdits({ content, ctx, add });
+      },
+    });
+    const check = await COMPOSER_JOURNEYS.C04(unrelated, undefined);
+    // The unproven obligations are not covered, so the scenario cannot turn green on them.
+    expect(check.covers).not.toContain("edit-breaking-refused-clear-field");
+    expect(check.covers).not.toContain("edit-breaking-refused-parent");
+    expect(check.detail).toContain("clear a required field: unverified");
+    expect(check.detail).toContain("remove the parent: unverified");
   });
 });
 
@@ -1163,6 +1366,44 @@ describe("C08 watcher and comment, C09 attachment", () => {
     const check = await COMPOSER_JOURNEYS.C08(ctx, undefined);
     expect(check.status).toBe("red");
     expect(check.detail).toContain("remove the watcher: unverified");
+  });
+
+  it("C08 stops as a lab state when the connected user already watches the issue, before any turn", async () => {
+    const ctx = lane({ act: () => ({}) });
+    const nativeGet = ctx.nativeGet;
+    ctx.nativeGet = async (path) =>
+      path.endsWith("/watchers") ? { watchers: [{ name: "keiko-api" }] } : nativeGet(path);
+    await expect(COMPOSER_JOURNEYS.C08(ctx, undefined)).rejects.toThrow("already watches");
+    expect(ctx.calls.turns).toHaveLength(0);
+  });
+
+  it("C08 is red when the comment went to the fixture's other issue instead of the named one", async () => {
+    const ctx = lane({
+      act: ({ content, store }) => {
+        if (!/Kommentar/u.test(content)) return;
+        // REQ-1 is the fixture's parent Epic; the model commented there, not on the Task (REQ-2).
+        (store.comments["REQ-1"] ??= []).push({
+          body: "Composer Kommentar",
+          author: { name: "keiko-api" },
+        });
+      },
+    });
+    const check = await COMPOSER_JOURNEYS.C08(ctx, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("write a comment: red");
+    expect(check.detail).toContain("another issue");
+  });
+
+  it("C09 is red when a write succeeded in the turn although no file reached Jira", async () => {
+    const ctx = lane({
+      act: () => ({
+        answer: "Anhänge sind nicht Teil dieses Releases.",
+        toolExchanges: [succeededEdit(undefined)],
+      }),
+    });
+    const check = await COMPOSER_JOURNEYS.C09(ctx, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("writes succeeded");
   });
 
   it("C09 is green when nothing reaches Jira and the answer says so, red otherwise", async () => {
