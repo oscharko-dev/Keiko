@@ -59,8 +59,8 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     id: "C05",
     requirement: "composer",
     issue: 4354,
-    title: "No duplicates on re-run of the same create request",
-    obligations: ["rerun-creates-no-duplicates"],
+    title: "Reload and a repeated order in one conversation never duplicate a write",
+    obligations: ["reload-reconciles-without-duplicate", "repeat-in-chat-no-duplicate"],
   },
   {
     id: "C06",

@@ -75,12 +75,12 @@ const quoted = (title) => `„${title}“`;
 const sectionContent = (name) => `${name}: Synthetischer Inhalt zum Abschnitt ${name}.`;
 
 /** The content every section and required field of the type's template asks for, said in the request. */
-function contentRequest(type) {
+export function contentRequest(type, each = "die") {
   const sections = requiredSections(type)
     .map((name) => sectionContent(name))
     .join(" ");
   const priority = type === "Bug" ? " Die Priorität ist High." : "";
-  return `Die Beschreibung enthält diese Abschnitte, jeweils unter einer eigenen Überschrift: ${sections}${priority}`;
+  return `${each === "die" ? "Die Beschreibung" : "Die Beschreibung jeder Aufgabe"} enthält diese Abschnitte, jeweils unter einer eigenen Überschrift: ${sections}${priority}`;
 }
 
 /**

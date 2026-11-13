@@ -38,6 +38,8 @@ export function rehearsalContext(base, selection) {
   return Object.assign(base, {
     turn: async () => EMPTY_TURN,
     freshChat: async (mode) => ({ id: `rehearsal-${(chats += 1)}`, mode }),
+    // A reload reads back the conversation so far: the user and assistant message of one turn.
+    reloadChat: async () => 2,
     composerSelection: selection ?? {},
   });
 }

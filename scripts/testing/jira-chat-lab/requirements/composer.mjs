@@ -10,6 +10,7 @@ import {
   composerConformity,
   composerFields,
   composerTemplates,
+  contentRequest,
   createPrompt,
   requiredSections,
   typeSlug,
@@ -21,10 +22,11 @@ import {
   gradeComment,
   gradeComposerCreate,
   gradeComposerRefusal,
-  gradeComposerRerun,
   gradeEditBreaking,
   gradeEditPreexisting,
   gradeMultiCreate,
+  gradeReloadReconcile,
+  gradeRepeatInChat,
   gradeNoTemplate,
   gradeUnrepairable,
   gradeUngovernedChange,
@@ -148,8 +150,12 @@ export async function prepareTemplates(ctx, { types, ungoverned = [] }) {
 const templatesOf = (fixture, options) => composerTemplates(PROJECT, fixture.epicLink, options);
 
 /** One fresh composer Chat and one turn; every issue the project gained is read natively. */
-async function composerTurn(ctx, fixture, { mode = "autonomous-delivery", prompt, during }) {
-  const chat = await ctx.freshChat(mode);
+async function composerTurn(
+  ctx,
+  fixture,
+  { mode = "autonomous-delivery", prompt, during, chat: given },
+) {
+  const chat = given ?? (await ctx.freshChat(mode));
   const before = await snapshotBefore(ctx, `project = ${PROJECT}`);
   const turn = await ctx.turn(chat, prompt, during);
   const issues = turnIssues({
@@ -217,7 +223,7 @@ const SEVERAL_TITLES = ["Composer Teil A", "Composer Teil B", "Composer Teil C"]
 /** One request, three Tasks under the named Epic: all created natively, every key listed. */
 async function createSeveralTasks(ctx, fixture) {
   const { turn, issues } = await composerTurn(ctx, fixture, {
-    prompt: `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${SEVERAL_TITLES.map((title) => `„${title}“`).join(", ")} im Epic ${fixture.epic} an. Melde alle Vorgangsschlüssel.`,
+    prompt: `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${SEVERAL_TITLES.map((title) => `„${title}“`).join(", ")} im Epic ${fixture.epic} an. ${contentRequest("Task", "jede")} Melde alle Vorgangsschlüssel.`,
   });
   const grade = gradeMultiCreate({
     type: "Task",
@@ -411,26 +417,44 @@ async function editRules(ctx) {
   );
 }
 
-/** C05: the same create request from a Chat that remembers nothing creates no duplicate (a Task). */
-async function rerunCreatesNoDuplicate(ctx) {
+/** C05 (one conversation): create, reload, ask in the same chat, send the same order again. */
+async function reloadAndRepeat(ctx) {
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
   const task = templatesOf(fixture).filter((entry) => entry.issueType === "Task");
   return withTemplates(ctx.http, task, async () => {
     const title = "Composer Wiederholung";
     const prompt = createPrompt("Task", title, fixture);
-    const one = await composerTurn(ctx, fixture, { prompt });
-    const two = await composerTurn(ctx, fixture, { prompt });
-    const afterSecond = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
-    const grade = gradeComposerRerun({
-      title,
-      afterSecond,
-      first: ofType(one.issues, "Task"),
-      second: ofType(two.issues, "Task"),
+    const chat = await ctx.freshChat("autonomous-delivery");
+    const one = await composerTurn(ctx, fixture, { prompt, chat });
+    const reloadedMessages = await ctx.reloadChat(chat);
+    const two = await composerTurn(ctx, fixture, {
+      prompt: `Ist der Auftrag mit dem Titel ${`„${title}“`} im Jira-Projekt REQ schon erledigt? Nenne mir den Vorgangsschlüssel.`,
+      chat,
     });
+    const three = await composerTurn(ctx, fixture, { prompt, chat });
+    const created = ofType(one.issues, "Task").created.filter(
+      (issue) => issue.fields?.summary === title,
+    );
     return aggregateParts(
-      [part("rerun", ["rerun-creates-no-duplicates"], grade)],
-      [one.turn, two.turn],
+      [
+        part(
+          "reload and ask",
+          ["reload-reconciles-without-duplicate"],
+          gradeReloadReconcile({
+            created,
+            reloadedMessages,
+            asked: two.issues,
+            answer: two.turn.answer,
+          }),
+        ),
+        part(
+          "same order again in the same chat",
+          ["repeat-in-chat-no-duplicate"],
+          gradeRepeatInChat({ created, repeated: three.issues, answer: three.turn.answer }),
+        ),
+      ],
+      [one.turn, two.turn, three.turn],
     );
   });
 }
@@ -536,7 +560,7 @@ export const COMPOSER_JOURNEYS = Object.freeze({
   C02: refuseViolations,
   C03: refuseWithoutTemplate,
   C04: editRules,
-  C05: rerunCreatesNoDuplicate,
+  C05: reloadAndRepeat,
   C06: modesAndApproval,
   C07: reportsOnJiraPodOnly,
   C08: watchAndComment,

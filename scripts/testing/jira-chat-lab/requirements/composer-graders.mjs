@@ -382,17 +382,60 @@ export function gradeUngovernedChange({ before, after, field, expected }) {
     : { status: "red", detail: `the ${field} changed to ${value}, not ${expected}` };
 }
 
-/** Obligation e) — the same request twice leaves exactly one issue with its title. */
-export function gradeComposerRerun({ title, afterSecond, first, second }) {
-  const same = afterSecond.filter((issue) => issue.fields?.summary === title);
-  if (first.created.length === 0)
-    return { status: "unverified", detail: "the first run created no issue; nothing was shown" };
-  if (same.length > 1 || second.created.length > 0 || second.duplicates.length > 0)
+const keyIn = (answer, key) => new RegExp(String.raw`\b${key}\b`, "u").test(String(answer ?? ""));
+const keysOf = (issues) => issues.map((issue) => issue.key).join(", ");
+
+/**
+ * Obligation e1) — one conversation: an order creates one issue, the conversation is reloaded and
+ * answers a question about it in the same chat: exactly one issue exists, the question created
+ * nothing and the answer names its key. `created` are the Tasks of the first turn with the title,
+ * `asked` is everything the question turn created, `reloadedMessages` what the reload read back.
+ */
+export function gradeReloadReconcile({ created, reloadedMessages, asked, answer }) {
+  if (created.length === 0)
+    return { status: "unverified", detail: "the order created no issue; nothing to reconcile" };
+  if (created.length > 1)
     return {
       status: "red",
-      detail: `${same.length} issues carry the title; the second run created ${second.created.length}`,
+      detail: `the order created ${created.length} issues: ${keysOf(created)}`,
     };
-  return { status: "green", detail: "one issue carries the title; the second run created none" };
+  if (reloadedMessages < 2)
+    return {
+      status: "red",
+      detail: `the conversation did not survive the reload (${reloadedMessages} messages read back)`,
+    };
+  if (asked.created.length > 0)
+    return {
+      status: "red",
+      detail: `the question after the reload created ${asked.created.length} issues: ${keysOf(asked.created)}`,
+    };
+  return keyIn(answer, created[0].key)
+    ? {
+        status: "green",
+        detail: `one issue (${created[0].key}); the answer after the reload names it`,
+      }
+    : { status: "red", detail: `the answer after the reload does not name ${created[0].key}` };
+}
+
+/**
+ * Obligation e2) — the same order sent again in the same conversation: the answer refers to the issue
+ * created in this conversation. A second issue counts red only because the person did not ask for
+ * another one in that turn; it is a model finding, and the trace shows what it searched for first.
+ */
+export function gradeRepeatInChat({ created, repeated, answer }) {
+  if (created.length !== 1)
+    return { status: "unverified", detail: "the first order did not create exactly one issue" };
+  if (repeated.created.length > 0)
+    return {
+      status: "red",
+      detail: `the repeated order created ${keysOf(repeated.created)} although the person did not ask for another issue (model; see the trace)`,
+    };
+  return keyIn(answer, created[0].key)
+    ? { status: "green", detail: `created nothing; the answer refers to ${created[0].key}` }
+    : {
+        status: "red",
+        detail: `created nothing, but the answer does not refer to ${created[0].key}`,
+      };
 }
 
 /** Watcher added or removed, read from the native watcher list. */

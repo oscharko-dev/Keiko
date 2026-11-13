@@ -590,6 +590,9 @@ export function journeyContext(live, session, truth) {
     ...live,
     truth,
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
+    // A page reload re-reads the conversation from the product; the count of messages it holds.
+    reloadChat: async (chat) =>
+      (await api(ctx, "reload", messagesPath(ctx, chat), undefined, "GET")).messages.length,
     search: (query, fields) => jql(session, query, fields),
     searchPages: (query, fields) => pagedJql(session, query, fields),
     count: (query) => jqlCount(session, query),

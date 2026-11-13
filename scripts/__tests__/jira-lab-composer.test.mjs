@@ -16,10 +16,11 @@ import {
   gradeComment,
   gradeComposerCreate,
   gradeComposerRefusal,
-  gradeComposerRerun,
   gradeEditBreaking,
   gradeEditPreexisting,
   gradeMultiCreate,
+  gradeReloadReconcile,
+  gradeRepeatInChat,
   gradeNoTemplate,
   gradeUnrepairable,
   gradeUngovernedChange,
@@ -683,21 +684,54 @@ describe("obligation d) the owner's edit rules, decided by native before and aft
 describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
   const title = "Composer Wiederholung";
   const task = (key) => conformant(key, "Task", title);
-  const rerun = ({ first, after, second }) =>
-    gradeComposerRerun({ title, afterSecond: after, first: turnOf(first), second: turnOf(second) });
+  const reload = (overrides) =>
+    gradeReloadReconcile({
+      created: turnOf([task("REQ-5")]).created,
+      reloadedMessages: 2,
+      asked: turnOf([]),
+      answer: "Ja, der Auftrag ist erledigt: REQ-5.",
+      ...overrides,
+    });
+  const repeat = (overrides) =>
+    gradeRepeatInChat({
+      created: turnOf([task("REQ-5")]).created,
+      repeated: turnOf([]),
+      answer: "Den Vorgang gibt es schon: REQ-5.",
+      ...overrides,
+    });
 
-  it("re-run: green with one issue, red with a duplicate, unverified when nothing was written", () => {
-    expect(rerun({ first: [task("REQ-5")], after: [task("REQ-5")], second: [] }).status).toBe(
-      "green",
+  it("reload: green when one issue exists, the question created nothing and the answer names the key", () => {
+    expect(reload({}).status).toBe("green");
+  });
+
+  it("reload: red for a lost conversation, a created issue, an answer without the key or several issues", () => {
+    expect(reload({ reloadedMessages: 0 }).detail).toContain("did not survive the reload");
+    const created = reload({ asked: turnOf([task("REQ-6")]) });
+    expect(created.status).toBe("red");
+    expect(created.detail).toContain("REQ-6");
+    expect(reload({ answer: "Ja, erledigt." }).detail).toContain("does not name REQ-5");
+    // A key that only contains the digits of another one does not name it.
+    expect(reload({ answer: "Ja: REQ-55." }).status).toBe("red");
+    expect(reload({ created: turnOf([task("REQ-5"), task("REQ-6")]).created }).detail).toContain(
+      "created 2 issues",
     );
-    expect(
-      rerun({
-        first: [task("REQ-5")],
-        after: [task("REQ-5"), task("REQ-6")],
-        second: [task("REQ-6")],
-      }).status,
-    ).toBe("red");
-    expect(rerun({ first: [], after: [], second: [] }).status).toBe("unverified");
+  });
+
+  it("reload: unverified when the order created nothing", () => {
+    expect(reload({ created: [] }).status).toBe("unverified");
+  });
+
+  it("repeat: green when the same order again creates nothing and the answer refers to the issue", () => {
+    expect(repeat({}).status).toBe("green");
+  });
+
+  it("repeat: red, as a model finding, when a second issue was created without being asked for", () => {
+    const duplicated = repeat({ repeated: turnOf([task("REQ-6")]) });
+    expect(duplicated.status).toBe("red");
+    expect(duplicated.detail).toContain("REQ-6");
+    expect(duplicated.detail).toContain("did not ask for another issue");
+    expect(repeat({ answer: "Erledigt." }).status).toBe("red");
+    expect(repeat({ created: [] }).status).toBe("unverified");
   });
 
   it("watcher: read from the native list in both directions", () => {
@@ -828,7 +862,7 @@ function lane({ act, library = [], selection } = {}) {
   const issues = [];
   const store = { watchers: {}, comments: {}, attachments: {} };
   let counter = 0;
-  const calls = { turns: [], fresh: [], http: [], deleted: [] };
+  const calls = { turns: [], fresh: [], http: [], deleted: [], reloads: 0 };
   const ctx = {
     calls,
     issues,
@@ -890,6 +924,10 @@ function lane({ act, library = [], selection } = {}) {
         );
       }
       return {};
+    },
+    reloadChat: async () => {
+      calls.reloads += 1;
+      return 2;
     },
     freshChat: async (mode) => {
       calls.fresh.push(mode);
@@ -1057,6 +1095,17 @@ describe("C01 creates every type, also several at once", () => {
     );
     expect(good.calls.http.filter((name) => name === "template-import")).toHaveLength(5);
     expect(good.calls.http.filter((name) => name === "template-delete")).toHaveLength(5);
+  });
+
+  it("asks for the three Tasks with the content of every section of the Task template", async () => {
+    const ctx = lane({ act: ({ content, add }) => void add(typeOfPrompt(content)) });
+    await COMPOSER_JOURNEYS.C01(ctx, undefined);
+    const several = ctx.calls.turns.find((turn) => turn.content.includes("drei Aufgaben")).content;
+    const { markdown } = composerTemplates("REQ", LINK).find((entry) => entry.issueType === "Task");
+    const sections = [...markdown.matchAll(/^## (.+)$/gmu)].map((match) => match[1].trim());
+    expect(sections.length).toBeGreaterThan(0);
+    for (const name of sections) expect(several).toContain(`${name}: Synthetischer Inhalt`);
+    expect(several).not.toContain("genauen Fehler");
   });
 
   it("is red when a type is created non-conformant, and when one request creates only two of three", async () => {
@@ -1316,25 +1365,62 @@ describe("C04 edit rules, through whichever tool", () => {
   });
 });
 
-describe("C05 re-run (a Task) and C06 modes (a Bug)", () => {
-  it("C05 is green when the second Chat reconciles and red when it duplicates", async () => {
-    const reconciling = lane({
-      act: ({ add, ctx }) => {
-        if (
-          !ctx.issues.some(
-            (entry) =>
-              entry.fields.summary === "Composer Wiederholung" &&
-              entry.fields.issuetype.name === "Task" &&
-              entry.key !== "REQ-2",
-          )
-        )
-          add("Task", {}, "Composer Wiederholung");
+describe("C05 reload and repeat in one conversation, and C06 modes (a Bug)", () => {
+  const title = "Composer Wiederholung";
+  /** The product's reply to the three turns of C05: create once, then answer from what exists. */
+  const conversation = (replies) =>
+    lane({
+      act: ({ content, ctx, add, chat }) => {
+        const known = ctx.issues.find(
+          (entry) => entry.fields.summary === title && entry.fields.issuetype.name === "Task",
+        );
+        if (/schon erledigt/u.test(content)) return { answer: replies.ask(known?.key) };
+        if (known !== undefined) return replies.again({ add, known });
+        add("Task", {}, title);
+        return { answer: "Angelegt.", chat };
       },
     });
-    expect((await COMPOSER_JOURNEYS.C05(reconciling, undefined)).status).toBe("green");
-    expect(reconciling.calls.turns[0].content).toContain("Aufgabe");
-    const duplicating = lane({ act: ({ add }) => void add("Task", {}, "Composer Wiederholung") });
-    expect((await COMPOSER_JOURNEYS.C05(duplicating, undefined)).status).toBe("red");
+  const reconcile = {
+    ask: (key) => `Ja, der Auftrag ist erledigt: ${key}.`,
+    again: ({ known }) => ({ answer: `Den Vorgang gibt es schon: ${known.key}.` }),
+  };
+
+  it("is green when the conversation reconciles after the reload and does not duplicate on a repeat", async () => {
+    const ctx = conversation(reconcile);
+    const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
+    expect(check.status).toBe("green");
+    expect(check.covers).toEqual([
+      "reload-reconciles-without-duplicate",
+      "repeat-in-chat-no-duplicate",
+    ]);
+    // One conversation: a single Chat carries all three turns, and the reload read it back once.
+    expect(ctx.calls.fresh).toHaveLength(1);
+    expect(new Set(ctx.calls.turns.map((turn) => turn.chat.id)).size).toBe(1);
+    expect(ctx.calls.reloads).toBe(1);
+    expect(ctx.calls.turns[0].content).toContain("Aufgabe");
+    expect(ctx.calls.turns[1].content).toContain(title);
+  });
+
+  it("is red, as a model finding, when the repeated order creates a second issue", async () => {
+    const ctx = conversation({
+      ...reconcile,
+      again: ({ add }) => {
+        add("Task", {}, title);
+        return { answer: "Angelegt." };
+      },
+    });
+    const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("did not ask for another issue");
+  });
+
+  it("is red when the answer after the reload does not name the issue", async () => {
+    const check = await COMPOSER_JOURNEYS.C05(
+      conversation({ ...reconcile, ask: () => "Ja, das ist erledigt." }),
+      undefined,
+    );
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("does not name");
   });
 
   const asking = (mode) => mode !== "autonomous-delivery";
