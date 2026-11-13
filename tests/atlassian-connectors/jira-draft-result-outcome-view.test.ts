@@ -18,7 +18,6 @@ const SCHEMA = jiraMutationDeclaration("jira.draft").descriptor.resultSchema;
 const UI_OUTCOME_MODULE = "../../packages/keiko-ui/src/app/components/desktop/jira-tool-outcome.ts";
 
 interface OutcomeView {
-  readonly issues: readonly { readonly key: string; readonly href?: string }[];
   readonly items: readonly {
     readonly key?: string;
     readonly href?: string;
@@ -29,7 +28,6 @@ interface OutcomeView {
   readonly notCreatedCount?: number;
   readonly problems: readonly unknown[];
   readonly itemValidations: readonly unknown[];
-  readonly hiddenIssueCount?: number;
 }
 type OutcomeViewer = (exchange: ChatToolExchange) => OutcomeView;
 
@@ -77,7 +75,7 @@ describe("jira.draft result as the Chat outcome card reads it", () => {
       { ref: "epic", state: "created", issueKey: "SYN-1" },
       { ref: "story", state: "existing", issueKey: "SYN-2" },
     ]);
-    expect(view.issues).toEqual([
+    expect(view.items.map((item) => ({ key: item.key, href: item.href }))).toEqual([
       { key: "SYN-1", href: "https://jira.example.test/browse/SYN-1" },
       { key: "SYN-2", href: "https://jira.example.test/browse/SYN-2" },
     ]);
@@ -152,26 +150,6 @@ describe("jira.draft result as the Chat outcome card reads it", () => {
     ]);
     const shown = JSON.stringify(view);
     for (const ref of ["story-7", "task-9", "bug-4"]) expect(shown).not.toContain(ref);
-  });
-
-  it("lists the keys of a compact large draft with links and counts the rest", () => {
-    const items: DraftItemResult[] = Array.from({ length: 1200 }, (_, index) => ({
-      ref: `item-${String(index)}`,
-      state: "created",
-      issueKey: `SYN-${String(index + 1)}`,
-    }));
-    const { data } = draftResult(BASE_URL, items);
-    expect(data).toMatchObject({ compact: true, items: [] });
-    const view = viewOf(items);
-    expect(view.issues.map((issue) => issue.key)).toEqual([
-      "SYN-1",
-      "SYN-2",
-      "SYN-3",
-      "SYN-4",
-      "SYN-5",
-    ]);
-    expect(view.issues[0]?.href).toBe("https://jira.example.test/browse/SYN-1");
-    expect(view.hiddenIssueCount).toBe(1195);
   });
 
   // #4355 AC1: every key the result carries is a row with its link, whatever the batch size; the
@@ -259,6 +237,15 @@ describe("a compact result with unreadable key ranges", () => {
     });
     expect(view.items.map((item) => item.key)).toEqual(["SYN-1"]);
     expect(view.unlistedItemCount).toBe(3);
+  });
+  it("returns at once for a range that claims a quadrillion keys", () => {
+    const started = performance.now();
+    const view = compactView({ createdRanges: ["SYN-1..SYN-999999999999999"] });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(view.items).toHaveLength(5000);
+    expect(view.items.at(-1)?.key).toBe("SYN-5000");
+    // The rest of the span is counted (up to a fixed ceiling), never expanded.
+    expect(view.unlistedItemCount).toBe(1_000_000_000);
   });
   it("lists a key once when ranges overlap", () => {
     const view = compactView({ createdRanges: ["SYN-1..SYN-5", "SYN-3..SYN-8"] });

@@ -373,11 +373,40 @@ function describeFixtureOperation(
   };
 }
 // A test may script the text of the next FINAL answer (#4355); it is used once.
-const scriptedFinalAnswer = vi.hoisted(() => ({ next: undefined as string | undefined }));
+const scriptedFinalAnswer = vi.hoisted(() => ({
+  next: undefined as string | undefined,
+  /** The final answer after `next`, for a model that repeats its claim in the correction round. */
+  after: undefined as string | undefined,
+  /** A model that answers the tool-less correction round with a tool call. */
+  callInToollessRound: false,
+}));
 function finalAnswer(response: NormalizedResponse): NormalizedResponse {
   const content = scriptedFinalAnswer.next;
-  scriptedFinalAnswer.next = undefined;
+  scriptedFinalAnswer.next = scriptedFinalAnswer.after;
+  scriptedFinalAnswer.after = undefined;
   return content === undefined ? response : { ...response, content };
+}
+/** The round that carries a claimed-action correction offers no tool; a hostile model calls one anyway. */
+function answerWithoutCatalog(
+  request: GatewayCallRequest,
+  base: NormalizedResponse,
+): NormalizedResponse {
+  return toolCallWithoutCatalog(request, base) ?? finalAnswer(base);
+}
+function toolCallWithoutCatalog(
+  request: GatewayCallRequest,
+  base: NormalizedResponse,
+): NormalizedResponse | undefined {
+  const correcting = request.messages.some((message) =>
+    JSON.stringify(message.content).includes("do not create or change anything now"),
+  );
+  if (!scriptedFinalAnswer.callInToollessRound || !correcting) return undefined;
+  return {
+    ...base,
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [{ id: "unoffered-call", name: "jira_create", arguments: {} }],
+  };
 }
 function syntheticModel(
   calls: GatewayCallRequest[],
@@ -408,7 +437,7 @@ function syntheticModel(
       },
     };
     reservation?.settle(base.usage, true, "observed");
-    if (request.toolCatalog?.kind !== "bound") return finalAnswer(base);
+    if (request.toolCatalog?.kind !== "bound") return answerWithoutCatalog(request, base);
     expect(reservation).toBeDefined();
     const tool = request.toolCatalog.projection.tools.find(
       (entry) => entry.toolRef.canonicalId === offeredTool(mutation, draft),
@@ -1724,6 +1753,50 @@ describe.each([false, true])(
           );
         } finally {
           scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+          scriptedFinalAnswer.callInToollessRound = false;
+        }
+      },
+    );
+  },
+);
+
+// #4355 AC4: when the correction round cannot correct the claim (the model calls a tool in the
+// tool-less round, or repeats the claim), the published answer carries ONE fixed Keiko sentence,
+// and nothing is executed.
+describe.each([false, true])(
+  "a claimed create the correction round could not correct (stream=%s)",
+  (stream) => {
+    it.each([
+      ["calls a tool in the tool-less round", { callInToollessRound: true }],
+      ["repeats the claim", { after: "I created the Epic REQ-1 again." }],
+    ] as const)(
+      "publishes the claim with the fixed notice when the model %s",
+      async (_name, script) => {
+        scriptedFinalAnswer.next = "I created the Epic REQ-1 for you.";
+        scriptedFinalAnswer.after = "after" in script ? script.after : undefined;
+        scriptedFinalAnswer.callInToollessRound = "callInToollessRound" in script;
+        try {
+          const f = fixture();
+          const ctx = sendContext(f, `uncorrected-${String(stream)}-${String(_name.length)}`);
+          const pending = stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps);
+          void pending.catch(() => undefined);
+          await awaitReadGrantedForWrite(f);
+          await pending;
+          const [, assistant] = f.deps.store.listMessages(f.chatId);
+          expect(assistant?.content).toContain("REQ-1");
+          expect(assistant?.content).toContain(
+            "Note from Keiko: no Jira issue was created in this turn.",
+          );
+          // The notice is one sentence, once, and nothing was written.
+          expect(assistant?.content.match(/Note from Keiko/gu)).toHaveLength(1);
+          expect(f.writes()).toBe(0);
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+          scriptedFinalAnswer.callInToollessRound = false;
         }
       },
     );

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import {
   JIRA_DRAFT_PROBLEMS,
@@ -540,11 +541,8 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(linkedKeys()).toEqual(keysOf(25));
   });
 
-  const openMore = (): void => {
-    const details = screen.getByText(/^Show \d+ more results?$/u).closest("details");
-    if (details === null) throw new TypeError("Missing disclosure");
-    details.open = true;
-    fireEvent(details, new Event("toggle"));
+  const openMore = async (): Promise<void> => {
+    await userEvent.click(screen.getByText(/^Show \d+ more results?$/u));
   };
   const createdRows = (count: number): Record<string, unknown>[] =>
     keysOf(count).map((key, index) => ({
@@ -559,8 +557,31 @@ describe("Jira draft results as the production draft tool reports them", () => {
       draft("jira_draft", { outcome: "succeeded", items: createdRows(200), createdCount: 200 }),
     );
     expect(linkedKeys()).toEqual(keysOf(60));
-    openMore();
-    expect(linkedKeys()).toEqual(keysOf(200));
+    await openMore();
+    await waitFor(() => {
+      expect(linkedKeys()).toEqual(keysOf(200));
+    });
+  });
+
+  // The listing follows the shape of the result (rows by state, or key ranges), not a tool name.
+  it("lists every created row of another tool that reports draft rows by state", () => {
+    const view = jiraToolOutcomeView(
+      draft("jira_bulk_import", {
+        outcome: "partial",
+        items: [...createdRows(70), { ref: "x", state: "failed" }],
+      }),
+    );
+    expect(view.items.filter((item) => item.key !== undefined)).toHaveLength(70);
+    expect(view.visibleItems).toBe(60);
+    expect(view.notCreatedCount).toBe(1);
+  });
+
+  it("keeps the counted five-row card for a read that reports no draft rows", () => {
+    const view = jiraToolOutcomeView(
+      draft("jira_search", { outcome: "succeeded", items: keysOf(70).map((key) => ({ key })) }),
+    );
+    expect(view.visibleItems).toBeUndefined();
+    expect(view.overflow).toBe("count");
   });
 
   it("says Show 1 more result for a single row past the open ones", async () => {
@@ -664,7 +685,7 @@ describe("Jira draft results as the production draft tool reports them", () => {
     const view = jiraToolOutcomeView(
       draft("jira_search", { outcome: "succeeded", items: [{ key: "KER-1" }, { key: "KER-2" }] }),
     );
-    expect(view.issues.map((issue) => issue.key)).toEqual(["KER-1", "KER-2"]);
+    expect(view.items.map((item) => item.key)).toEqual(["KER-1", "KER-2"]);
   });
 
   it("counts the requirements a draft batch could not draft", async () => {

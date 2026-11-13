@@ -77,6 +77,8 @@ import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuatio
 import {
   announcedCreateCorrection,
   announcedCreateCount,
+  claimNotice,
+  correctionRoundOffersTools,
   toolCallAsTextCorrection,
   toolCallsWrittenAsText,
 } from "./chat-tool-announced-create.js";
@@ -504,6 +506,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private correction: GatewayMessage | undefined;
   /** A correction about a claimed action is answered without any tool: it can never write. */
   private correctionWithoutTools = false;
+  /** The claimed actions a correction round was asked about, and who to tell in which language. */
+  private claimedKinds: readonly ("announced-create" | "tool-call-as-text")[] = [];
+  private claimedPersonText = "";
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
   private correctedSinceProgress = false;
   /** The first admission of a correction round follows an attempt the turn could not use. */
@@ -1288,8 +1293,31 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       return undefined;
     const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
-    this.endedAnswer = this.knowledgeAnswer(answer);
+    // The correction round failed: the original answer is published, and a false claim in it is
+    // followed by one fixed sentence that says so.
+    this.endedAnswer = this.knowledgeAnswer(this.withClaimNotice(answer, true));
     return this.endedAnswer;
+  }
+
+  private stillClaims(kind: "announced-create" | "tool-call-as-text", content: string): boolean {
+    return kind === "announced-create"
+      ? announcedCreateCount(this.settledExchanges, content) > 0
+      : toolCallsWrittenAsText(content) > 0;
+  }
+
+  /**
+   * After a claimed-action correction, a published answer that still claims it (or is the original
+   * one because the correction round failed) carries one fixed Keiko sentence; nowhere else.
+   */
+  private withClaimNotice(answer: NormalizedResponse, original: boolean): NormalizedResponse {
+    const still = original
+      ? this.claimedKinds
+      : this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
+    if (still.length === 0) return answer;
+    return {
+      ...answer,
+      content: `${answer.content}\n\n${claimNotice(still, this.claimedPersonText)}`,
+    };
   }
 
   /**
@@ -1677,7 +1705,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           completionTokens: this.completionTokens,
         },
       };
-      return this.correctAnswer(answer, request) ? undefined : this.knowledgeAnswer(answer);
+      return this.correctAnswer(answer, request)
+        ? undefined
+        : this.knowledgeAnswer(this.withClaimNotice(answer, false));
     }
     requireDispatch(
       response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
@@ -1818,10 +1848,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.uncorrectedExchangeCount = this.transcriptExchangeCount();
     this.continuation.push({ role: "assistant", content: answer.content });
     this.correction = { role: "system", content: correction.content };
-    this.correctionWithoutTools = correction.logs.some(
-      (log) =>
-        log.correctionKind === "announced-create" || log.correctionKind === "tool-call-as-text",
+    const kinds = correction.logs.map((log) => log.correctionKind);
+    this.correctionWithoutTools = !correctionRoundOffersTools(kinds);
+    this.claimedKinds = correction.logs.flatMap((log) =>
+      log.correctionKind === "announced-create" || log.correctionKind === "tool-call-as-text"
+        ? [log.correctionKind]
+        : [],
     );
+    this.claimedPersonText = lastPersonText(request.messages);
     for (const log of correction.logs)
       recordChatToolTurnCorrected(processServerLogSink(), {
         correlationId: this.options.correlationId,
@@ -1921,6 +1955,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.correctionWithoutTools = false;
     this.correctionAdmissionPending = false;
   }
+}
+
+/** The text of the person's last message, for the language of a fixed notice. */
+function lastPersonText(messages: readonly GatewayMessage[]): string {
+  const last = [...messages].reverse().find((message) => message.role === "user");
+  return typeof last?.content === "string" ? last.content : "";
 }
 
 /**
