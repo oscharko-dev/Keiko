@@ -3,7 +3,7 @@ import { evidenceLines } from "./coverage.mjs";
 
 /** Limits of two oracles that a reader of a report containing them must know. */
 const ORACLE_LIMITS = Object.freeze({
-  S10: "S10 derives its estimate expectation from native data read as the lab administrator; the case of an account that cannot read the estimate field is not graded.",
+  S10: "S10 derives its estimate expectation from native data read as the lab administrator (in a German-language session as the product's own actor, so names match what the product sees); the case of an account that cannot read the estimate field is not graded, and reading as the product's own actor hides a visibility or permission defect of the product from the oracle.",
   S11: "S11's unavailable-report case is graded partly on the product's own statement that the report is unavailable.",
 });
 

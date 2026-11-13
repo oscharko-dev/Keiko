@@ -589,6 +589,8 @@ export function journeyContext(live, session, truth) {
   const ctx = {
     ...live,
     truth,
+    // The account the oracles read Jira as (the administrator unless the session is German).
+    oracleReader: oracleReader(session),
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
     // A page reload re-reads the conversation from the product; the count of messages it holds.
     reloadChat: async (chat) =>

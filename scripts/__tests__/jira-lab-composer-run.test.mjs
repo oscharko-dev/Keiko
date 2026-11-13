@@ -83,6 +83,16 @@ describe("a German-language session", () => {
   });
 });
 
+describe("an empty selection never runs", () => {
+  it.each([
+    [{ types: "" }, "--types needs at least one value"],
+    [{ modes: "," }, "--modes needs at least one value"],
+    [{ parts: "" }, "--parts needs at least one value"],
+  ])("refuses %j", (selection, message) => {
+    expect(() => composerSelectionOf(selection)).toThrow(message);
+  });
+});
+
 describe("the reports C07 runs", () => {
   it("takes S10 alone, S11 alone or both, and refuses another name", () => {
     expect(composerSelectionOf({ parts: "s10" })).toEqual({ parts: ["s10"] });

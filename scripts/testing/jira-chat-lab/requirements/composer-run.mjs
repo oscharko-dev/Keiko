@@ -4,8 +4,14 @@
 import { COMPOSER_MODES, COMPOSER_WITHOUT_BASELINE } from "./composer.mjs";
 import { COMPOSER_TYPES, typeSlug } from "./composer-templates.mjs";
 
-const csv = (value) =>
-  value === undefined ? undefined : value.split(",").filter((item) => item !== "");
+/** A comma list; with a `label`, a given but empty list is refused (an empty selection must never run). */
+function csv(value, label) {
+  if (value === undefined) return undefined;
+  const items = value.split(",").filter((item) => item !== "");
+  if (items.length === 0 && label !== undefined)
+    throw new TypeError(`${label} needs at least one value`);
+  return items;
+}
 
 /** Refuses an id that is not in the selected set: an empty "valid" report must never result. */
 export function selectedScenarios(catalog, only, setName) {
@@ -26,9 +32,9 @@ export const REPORT_PARTS = Object.freeze(["s10", "s11"]);
 /** The types and modes the run selected, validated against the closed vocabularies. */
 export function composerSelectionOf({ types, modes, parts }) {
   const selection = {
-    types: csv(types),
-    modes: csv(modes),
-    parts: csv(parts),
+    types: csv(types, "--types"),
+    modes: csv(modes, "--modes"),
+    parts: csv(parts, "--parts"),
   };
   const vocabularies = {
     types: ["--types", new Set(COMPOSER_TYPES.map(typeSlug))],

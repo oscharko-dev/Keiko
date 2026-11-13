@@ -319,6 +319,42 @@ describe("requirements lab turn-limit provenance", () => {
     expect(JSON.stringify(result.S14)).not.toContain("litellm.internal.example");
   });
 
+  describe("the Composer lane goes through the same gates (#4369)", () => {
+    const composerRun = (extra = {}) =>
+      runJourneys({
+        set: "composer",
+        session: { directory },
+        directory,
+        modelId: "synthetic-model",
+        truth: {},
+        ids: ["C05"],
+        ...extra,
+      });
+    const up = async () => ({ state: "licensed", remaining: 9999 });
+
+    it("grades a journey during a lab outage invalid with that cause, never red or green", async () => {
+      fixture.mode = "completed";
+      const result = await composerRun({ labState: async () => ({ state: "unreachable" }) });
+      expect(result.C05.status).toBe("invalid");
+      expect(result.C05.reason).toBe("lab-outage");
+      expect(fixture.sends).toBe(0);
+    });
+
+    it("never turns a scenario that could not prove anything green", async () => {
+      fixture.mode = "completed";
+      const result = await composerRun({ labState: up });
+      expect(fixture.sends).toBe(1);
+      expect(result.C05.status).toBe("unverified");
+    });
+
+    it("never turns a failed model turn into a green scenario", async () => {
+      fixture.mode = "product-failure";
+      const result = await composerRun({ labState: up });
+      expect(result.C05.status).not.toBe("green");
+      expect(result.C05.reason).not.toBe("lab-outage");
+    });
+  });
+
   it("runs a journey --repeat times in fresh Chats and aggregates the runs", async () => {
     fixture.mode = "completed";
     const turn = await observedTurn({ repeat: 3 });

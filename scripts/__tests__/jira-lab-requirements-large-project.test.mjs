@@ -494,6 +494,17 @@ describe("the large-project step", () => {
     expect(turn.durationMs).toBe(1);
   });
 
+  it("is not graded on a German-language session, with the reason, and spends no turn", async () => {
+    const ctx = stepContext(world, { answer: answerLines(world), exchanges });
+    ctx.oracleReader = "api";
+    const { part, turn } = await largeProjectPart(ctx);
+    expect(part.status).toBe("unverified");
+    expect(part.covers).toEqual([]);
+    expect(part.detail).toContain("German-language session");
+    expect(ctx.turns).toHaveLength(0);
+    expect(turn.durationMs).toBe(0);
+  });
+
   it.each([
     [
       "a wrong epic line",

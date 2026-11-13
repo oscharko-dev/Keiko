@@ -1548,6 +1548,18 @@ The selection lane (`catalog-selection.mjs`) holds one create case per issue typ
 work project REQ (the fixture project offers only Task and Sub-task; a session without REQ makes those three
 invalid, never wrong). The REQ cases hold the work-project lock a journey's reset takes.
 
+**What the REQ create cases ask of the product.** `create-epic`, `create-story` and `create-bug` name only the issue type
+and the summary. REQ's own required fields are the Epic Name (Epic) and, on every type, the system field `reporter`. The
+product's creates in the Azure pass of 2026-11-13 carried no `reporter` and succeeded, so the product path needs none; the
+lab's own native fixture creates fill it with the creating account. The Epic Name is not filled by the product: finding it
+through `jira.create-fields` and supplying it is part of what the case asks the model, and a refusal that names it is
+recoverable in the same turn. The baseline templates of the lab add no rule (see "Baseline templates"), so no template
+refuses these prompts.
+
+**German session and the Composer graders.** The Composer graders compare English issue type names. Jira shows the
+reading account its own names (in `de_DE` the Task type reads `Aufgabe`, the Sub-task type `Sub-Task`), so a German
+session runs only `--only C07 --parts s10`; any other Composer selection on it is refused before a journey starts.
+
 **S10 and the product's estimate rule.** S10 derives its expected estimate from native data: the board's
 configured estimation field is the figure when any issue holds a value in it; otherwise the other field
 (Original Estimate, or Story Points) becomes a labelled fallback and the configured field is stated unused;

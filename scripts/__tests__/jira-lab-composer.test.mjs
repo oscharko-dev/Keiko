@@ -22,6 +22,7 @@ import {
   gradeReloadReconcile,
   gradeRepeatInChat,
   gradeNoTemplate,
+  hasTemplateHint,
   gradeUnrepairable,
   gradeUngovernedChange,
   gradeWatcher,
@@ -452,6 +453,40 @@ describe("obligation b) refusal before any card or effect, decided by the native
   });
 });
 
+describe("the template hint is a template-creation phrase, not a refusal to create the issue", () => {
+  it.each([
+    "Dafür gibt es keine Vorlage. Bitte lege zuerst eine Vorlage an.",
+    "Lege zuerst eine Vorlage für diesen Vorgangstyp an.",
+    "Erstelle bitte eine Vorlage, dann lege ich den Vorgang an.",
+    "There is no template for this type; please create a template first.",
+    "Es fehlt eine Vorlage, sie müsste definiert werden.",
+  ])("accepts: %s", (answer) => {
+    expect(hasTemplateHint(answer)).toBe(true);
+  });
+
+  it.each([
+    "Ich konnte den Vorgang nicht anlegen.",
+    "Ich konnte den Vorgang nicht anlegen, weil keine Vorlage existiert.",
+    "I could not create the issue because there is no template.",
+    "Das Anlegen ist nicht möglich.",
+    "Die Vorlage ist leider nicht verfügbar.",
+    "",
+    undefined,
+  ])("refuses: %s", (answer) => {
+    expect(hasTemplateHint(answer)).toBe(false);
+  });
+
+  it("a plain refusal to create the issue is not the hint in the no-template grader", () => {
+    const grade = gradeNoTemplate({
+      created: [],
+      exchanges: [refusedNoTemplate()],
+      answer: "Ich konnte den Vorgang nicht anlegen, weil es keine Vorlage gibt.",
+    });
+    expect(grade.status).toBe("red");
+    expect(grade.detail).toContain("no hint to create a template");
+  });
+});
+
 describe("obligation c) no template: nothing written, the gate refused, no card, the hint", () => {
   const hint = "Dafür gibt es keine Vorlage. Bitte lege zuerst eine Vorlage an.";
   const created = (count) =>
@@ -539,6 +574,22 @@ describe("the unrepairable request: refused by the gate, said in plain words", (
       expect(grade({ answer }).status).toBe("red");
     expect(grade({ answer: "Das hat leider nicht geklappt." }).status).toBe("red");
     expect(grade({ answer: "" }).status).toBe("red");
+  });
+
+  it("is red when the answer names only the request's own words or only the relation, not the needed parent type", () => {
+    for (const answer of [
+      "Die Teilaufgabe wurde abgelehnt, die Eltern-Beziehung passt nicht.",
+      "Ein Sub-task kann dort nicht angelegt werden, der Parent ist falsch.",
+      "Die Teilaufgabe braucht einen anderen übergeordneten Vorgang.",
+      "Eine Aufgabe ist nötig.",
+    ])
+      expect(grade({ answer }).status, answer).toBe("red");
+    for (const answer of [
+      "Die Teilaufgabe braucht eine Aufgabe als Eltern.",
+      "A sub-task needs a Task as its parent.",
+      "Die Teilaufgabe muss unter einer Aufgabe liegen, nicht unter einer Story.",
+    ])
+      expect(grade({ answer }).status, answer).toBe("green");
   });
 
   it("is unverified when no traced refusal names parent-type-mismatch", () => {
@@ -690,6 +741,7 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
       reloadedMessages: 2,
       asked: turnOf([]),
       answer: "Ja, der Auftrag ist erledigt: REQ-5.",
+      askedTurn: { answer: "Ja, der Auftrag ist erledigt: REQ-5.", toolExchanges: [] },
       ...overrides,
     });
   const repeat = (overrides) =>
@@ -697,6 +749,7 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
       created: turnOf([task("REQ-5")]).created,
       repeated: turnOf([]),
       answer: "Den Vorgang gibt es schon: REQ-5.",
+      repeatedTurn: { answer: "Den Vorgang gibt es schon: REQ-5.", toolExchanges: [] },
       ...overrides,
     });
 
@@ -719,6 +772,20 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
 
   it("reload: unverified when the order created nothing", () => {
     expect(reload({ created: [] }).status).toBe("unverified");
+  });
+
+  it("reload and repeat: unverified, never green, when the step after the order did not run", () => {
+    const failed = { answer: "Ja: REQ-5.", toolExchanges: [], failure: { kind: "gateway" } };
+    const silent = { answer: "", toolExchanges: [] };
+    const toolOnly = { answer: "", toolExchanges: [success("REQ-9")] };
+    for (const turn of [undefined, failed, silent]) {
+      expect(reload({ askedTurn: turn }).status).toBe("unverified");
+      expect(repeat({ repeatedTurn: turn }).status).toBe("unverified");
+    }
+    // A turn that only called a tool did run; what it created is judged as before.
+    expect(repeat({ repeatedTurn: toolOnly }).status).toBe("green");
+    expect(reload({ askedTurn: failed }).detail).toContain("the turn failed");
+    expect(reload({ askedTurn: silent }).detail).toContain("empty answer, no tool call");
   });
 
   it("repeat: green when the same order again creates nothing and the answer refers to the issue", () => {
@@ -1401,6 +1468,45 @@ describe("C05 reload and repeat in one conversation, and C06 modes (a Bug)", () 
     expect(ctx.calls.turns[1].content).toContain(title);
   });
 
+  it("a leftover issue with the same title never changes the verdict of C05", async () => {
+    const taskFields = {
+      project: { key: "REQ" },
+      issuetype: { name: "Task" },
+      summary: title,
+      description: "Altlast",
+    };
+    // A product that creates its own issue: the leftover is neither a duplicate nor proof.
+    const creating = lane({
+      act: ({ content, ctx, add }) => {
+        const own = ctx.issues.filter((entry) => entry.fields.summary === title).at(-1);
+        if (/schon erledigt/u.test(content)) return { answer: `Ja: ${own.key}.` };
+        if (ctx.issues.filter((entry) => entry.fields.summary === title).length > 1)
+          return { answer: `Das gibt es schon: ${own.key}.` };
+        add("Task", {}, title);
+        return { answer: "Angelegt." };
+      },
+    });
+    await creating.nativeCreate(taskFields);
+    expect((await COMPOSER_JOURNEYS.C05(creating, undefined)).status).toBe("green");
+    // A product that creates nothing because it sees the leftover proves nothing either.
+    const idle = lane({ act: () => ({ answer: "Gibt es schon." }) });
+    await idle.nativeCreate(taskFields);
+    expect((await COMPOSER_JOURNEYS.C05(idle, undefined)).status).toBe("unverified");
+  });
+
+  it("a leftover Epic with the title never makes C01 green for a product that created nothing", async () => {
+    const ctx = lane({ selection: { types: ["epic"] }, act: () => ({ answer: "Fertig." }) });
+    await ctx.nativeCreate({
+      project: { key: "REQ" },
+      issuetype: { name: "Epic" },
+      summary: "Composer Epic",
+      description: wiki(SECTIONS.Epic),
+    });
+    const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("0 Epic created");
+  });
+
   it("is red, as a model finding, when the repeated order creates a second issue", async () => {
     const ctx = conversation({
       ...reconcile,
@@ -1607,6 +1713,18 @@ describe("C08 watcher and comment, C09 attachment", () => {
     ctx.nativeGet = async (path) =>
       path.endsWith("/watchers") ? { watchers: [{ name: "keiko-api" }] } : nativeGet(path);
     await expect(COMPOSER_JOURNEYS.C08(ctx, undefined)).rejects.toThrow("already watches");
+    expect(ctx.calls.turns).toHaveLength(0);
+  });
+
+  it("C08 stops as a lab error, not a verdict, when the watcher list cannot be read", async () => {
+    const ctx = lane({ act: () => ({}) });
+    const nativeGet = ctx.nativeGet;
+    ctx.nativeGet = async (path) => {
+      if (path.endsWith("/watchers"))
+        throw new TypeError("Laboratory API rejected the native-read operation");
+      return nativeGet(path);
+    };
+    await expect(COMPOSER_JOURNEYS.C08(ctx, undefined)).rejects.toThrow("rejected");
     expect(ctx.calls.turns).toHaveLength(0);
   });
 

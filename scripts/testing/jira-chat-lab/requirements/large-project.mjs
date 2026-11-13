@@ -423,6 +423,13 @@ export async function largeProjectPart(ctx) {
       NO_TURN,
       "the laboratory has no large project; run seed-projects.mjs --only LRG",
     );
+  // The figures are compared by English type and status names; a German-language session shows
+  // the reading account other names, so the step is not graded there instead of failing on a lab reason.
+  if (ctx.oracleReader !== undefined && ctx.oracleReader !== "admin")
+    return NOT_CREDITED(
+      NO_TURN,
+      "the large-project step compares English type and status names and is not graded on a German-language session",
+    );
   if (ctx.freshChat === undefined || ctx.count === undefined)
     return NOT_CREDITED(
       NO_TURN,

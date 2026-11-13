@@ -74,23 +74,26 @@ const repeat = Number(values.repeat);
 if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 20) {
   throw new TypeError("--repeat must be an integer from 1 to 20");
 }
-const session = loadSession(directory);
-// `--set composer` selects the Composer lane (#4369): its own scenarios C01-C07, no Knowledge Pod.
+// `--set composer` selects the Composer lane (#4369): its own scenarios C01-C09, no Knowledge Pod.
 if (!["documents", "composer"].includes(values.set))
   throw new TypeError("--set must be documents or composer");
 const composer = values.set === "composer";
 const catalog = composer ? COMPOSER_SCENARIOS : SCENARIOS;
 const scenarios = selectedScenarios(catalog, values.only, values.set);
 const composerSelection = composerSelectionOf(values);
+// `--rehearse` runs every journey of the selected Composer scenarios with an empty model turn.
+if (values.rehearse && (!composer || values.model))
+  throw new TypeError("--rehearse needs --set composer and takes no --model: it runs no model");
+// A Composer run without a model and without a rehearsal would grade nothing and call it valid.
+if (composer && !values.model && !values.rehearse)
+  throw new TypeError("--set composer needs --model (a run) or --rehearse (no model)");
+const session = loadSession(directory);
 if (composer)
   assertComposerLanguageFit(
     oracleReader(session),
     scenarios.map((scenario) => scenario.id),
     composerSelection,
   );
-// `--rehearse` runs every journey of the selected Composer scenarios with an empty model turn.
-if (values.rehearse && (!composer || values.model))
-  throw new TypeError("--rehearse needs --set composer and takes no --model: it runs no model");
 
 async function runChecks(scenario, journeys) {
   const checks = [];

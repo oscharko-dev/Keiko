@@ -169,9 +169,33 @@ export function gradeComposerRefusal({ type, exchanges, created, template, confo
 }
 
 const HINT_NOUN = /vorlage|template/iu;
-const HINT_VERB = /anleg|\blege\b|\blegen\b|erstell|definier|hinterleg|einricht|create|define/iu;
+const HINT_VERB =
+  /anleg\w*|\blege\b|\blegen\b|erstell\w*|definier\w*|hinterleg\w*|einricht\w*|\bcreate\b|\bdefine\b|set up/giu;
+/** The two words before a verb that turn "create" into "could not create". */
+const NEGATION_BEFORE =
+  /(?:\bnicht|\bnot|\bcannot|can't|couldn't|unable to|\bkann nicht|\bkonnte nicht)\s+(?:\w+\s+)?$/iu;
+
+/**
+ * Whether one clause tells the person to create a TEMPLATE: a creation verb that is not negated
+ * ("ich konnte den Vorgang nicht anlegen" is a refusal, not a hint) within a few words of the
+ * template noun.
+ */
+function clauseHints(clause) {
+  const noun = HINT_NOUN.exec(clause);
+  if (noun === null) return false;
+  for (const verb of clause.matchAll(HINT_VERB)) {
+    const near = Math.abs(verb.index - noun.index) <= 60;
+    const negated = NEGATION_BEFORE.test(clause.slice(0, verb.index));
+    if (near && !negated) return true;
+  }
+  return false;
+}
+
+/** The answer tells the person to create a template: a non-negated creation phrase around the noun. */
 export const hasTemplateHint = (answer) =>
-  HINT_NOUN.test(answer ?? "") && HINT_VERB.test(answer ?? "");
+  String(answer ?? "")
+    .split(/[.!?;\n]+/u)
+    .some((clause) => clauseHints(clause));
 
 /** The rule ids a gate refusal of a create names when no template governs the type (#4354). */
 export const NO_TEMPLATE_RULES = Object.freeze(["template-missing", "template-not-activated"]);
@@ -240,6 +264,11 @@ const RAW_IDENTIFIERS = Object.freeze([
   "jira_draft",
 ]);
 
+/** The parent type the Sub-task template needs, as its own word: "Teilaufgabe" and "Sub-task" are the request's words. */
+const NEEDED_PARENT_TYPE = /(?<![\p{L}-])(?:aufgaben?|tasks?)(?![\p{L}])/iu;
+/** The answer says it is about the parent relation. */
+const PARENT_RELATION = /\beltern|\bparent|übergeordnet|\bunter\b|\bzugeordnet/iu;
+
 /**
  * A request nobody can repair alone (a Sub-task under a Story): the template refuses it with
  * `parent-type-mismatch` (a traced refusal of the gate, else the gate was not exercised), nothing is
@@ -263,7 +292,7 @@ export function gradeUnrepairable({ created, exchanges, answer }) {
   const shown = RAW_IDENTIFIERS.filter((id) => text.includes(id));
   if (shown.length > 0)
     return { status: "red", detail: `the answer shows machine identifiers: ${shown.join(", ")}` };
-  return /aufgabe|task/iu.test(text)
+  return NEEDED_PARENT_TYPE.test(text) && PARENT_RELATION.test(text)
     ? {
         status: "green",
         detail: "refused by the gate; the answer names the needed parent type in plain words",
@@ -382,6 +411,22 @@ export function gradeUngovernedChange({ before, after, field, expected }) {
     : { status: "red", detail: `the ${field} changed to ${value}, not ${expected}` };
 }
 
+/**
+ * "Nothing was created" proves nothing when the turn never ran: a failed turn, or one that answered
+ * nothing and called no tool, leaves the obligation unverified. Undefined means the step ran.
+ */
+function stepProof(turn, name) {
+  if (turn === undefined)
+    return { status: "unverified", detail: `${name} was not observed; nothing is proven` };
+  const silent = String(turn.answer ?? "").trim() === "" && (turn.toolExchanges ?? []).length === 0;
+  if (turn.failure !== undefined || silent)
+    return {
+      status: "unverified",
+      detail: `${name} did not run to an answer (${turn.failure === undefined ? "empty answer, no tool call" : "the turn failed"}); nothing is proven`,
+    };
+  return undefined;
+}
+
 const keyIn = (answer, key) => new RegExp(String.raw`\b${key}\b`, "u").test(String(answer ?? ""));
 const keysOf = (issues) => issues.map((issue) => issue.key).join(", ");
 
@@ -391,9 +436,11 @@ const keysOf = (issues) => issues.map((issue) => issue.key).join(", ");
  * nothing and the answer names its key. `created` are the Tasks of the first turn with the title,
  * `asked` is everything the question turn created, `reloadedMessages` what the reload read back.
  */
-export function gradeReloadReconcile({ created, reloadedMessages, asked, answer }) {
+export function gradeReloadReconcile({ created, reloadedMessages, asked, answer, askedTurn }) {
   if (created.length === 0)
     return { status: "unverified", detail: "the order created no issue; nothing to reconcile" };
+  const proof = stepProof(askedTurn, "the question after the reload");
+  if (proof !== undefined) return proof;
   if (created.length > 1)
     return {
       status: "red",
@@ -422,9 +469,11 @@ export function gradeReloadReconcile({ created, reloadedMessages, asked, answer 
  * created in this conversation. A second issue counts red only because the person did not ask for
  * another one in that turn; it is a model finding, and the trace shows what it searched for first.
  */
-export function gradeRepeatInChat({ created, repeated, answer }) {
+export function gradeRepeatInChat({ created, repeated, answer, repeatedTurn }) {
   if (created.length !== 1)
     return { status: "unverified", detail: "the first order did not create exactly one issue" };
+  const proof = stepProof(repeatedTurn, "the repeated order");
+  if (proof !== undefined) return proof;
   if (repeated.created.length > 0)
     return {
       status: "red",
