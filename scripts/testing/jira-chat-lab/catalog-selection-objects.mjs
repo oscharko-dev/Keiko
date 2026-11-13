@@ -339,40 +339,159 @@ export function orphanedIssues(snapshot, created) {
   ).length;
 }
 
-// Jira answers the actor's filters in one unpaged list; leftovers of earlier lab runs stay under this.
-const FILTERS_MAX = 1000;
+// Jira Data Center cannot list a user's filters. `filter/my` and `filter/search` are Jira Cloud
+// paths that 10.3.26 answers with 404 (observed 2026-11-13), and `GET /filter` allows POST only.
+// What it does offer: `filter/favourite` (starred filters only), the JQL autocomplete for the
+// `filter` field (every filter the actor can see, by name only, capped by Jira at 15 answers) and
+// one read per filter identity. The three are combined, so the snapshot sees what the api actor
+// creates, starred or not, and fails closed instead of guessing when it cannot prove its view.
+const FILTER_SUGGESTION_BOUND = 15;
+// Identities are allocated upward by one sequence, so a filter created after the run's own is above
+// them; a window past the highest one seen covers filters a model created and removed meanwhile.
+const FILTER_ID_WINDOW = 64;
+const FILTER_ID_CHUNK = 32;
+const FILTER_ID_SPAN_MAX = 4_096;
 
-/**
- * The api actor's own filters, which is where a model's mistaken filter creation lands. Any filter
- * beyond the run's own favourite is a stray write the lane removes as that actor; a collection
- * that cannot be read completely makes the snapshot, and so the attempt, unavailable.
- */
-async function filterScope(session, created) {
-  const filters = await checked(
+/** The name in a JQL autocomplete value, which quotes a name that needs it. */
+function suggestedName(value) {
+  if (typeof value !== "string") throw new TypeError("A filter suggestion carries no value");
+  if (!value.startsWith('"')) return value;
+  const name = JSON.parse(value);
+  if (typeof name !== "string") throw new TypeError("A filter suggestion carries no name");
+  return name;
+}
+
+/** The names of every filter the api actor can see; complete only below Jira's suggestion cap. */
+async function visibleFilterNames(session) {
+  const answer = await checked(
     session,
     "catalog-selection-scope",
     "GET",
-    "/rest/api/2/filter/my?includeFavourites=true",
+    "/rest/api/2/jql/autocompletedata/suggestions?fieldName=filter&fieldValue=",
     basicAuth(session, "api"),
   );
-  if (!Array.isArray(filters))
-    throw new TypeError("The api actor's filter collection is not a list");
-  if (filters.length >= FILTERS_MAX)
-    throw new RangeError(`The api actor's ${filters.length} filters reach the snapshot bound`);
-  return filters
-    .filter((row) => String(row.id) !== created.favouriteFilterId)
-    .map((row) => {
-      const path = `/rest/api/2/filter/${row.id}`;
-      const label = contentDigest(row.name, row.jql, row.favourite);
-      return [path, { owned: true, label, removal: { path, actor: "api" } }];
-    });
+  if (!Array.isArray(answer?.results))
+    throw new TypeError("The filter suggestions of the api actor are not a list");
+  if (answer.results.length >= FILTER_SUGGESTION_BOUND)
+    throw new RangeError(
+      `The api actor sees ${answer.results.length} filters, which reaches the suggestion bound`,
+    );
+  return answer.results.map((row) => suggestedName(row.value));
+}
+
+/** The filters of a native identity range the api actor can read; an unreadable one is absent. */
+async function filtersInRange(session, first, last) {
+  if (last - first > FILTER_ID_SPAN_MAX)
+    throw new RangeError("The filter identity range exceeds the snapshot bound");
+  const rows = [];
+  for (let from = first; from <= last; from += FILTER_ID_CHUNK) {
+    const ids = Array.from(
+      { length: Math.min(FILTER_ID_CHUNK, last - from + 1) },
+      (_, i) => from + i,
+    );
+    const answers = await Promise.all(
+      ids.map((id) =>
+        labRequest(session, "GET", `/rest/api/2/filter/${id}`, basicAuth(session, "api")),
+      ),
+    );
+    for (const answer of answers) {
+      // Jira answers 400 for a filter the actor may not see and 404 for one that does not exist.
+      if (answer.status === 200) rows.push(answer.value);
+      else if (answer.status !== 400 && answer.status !== 404)
+        throw new TypeError(`Selection scope read failed (${answer.status})`);
+    }
+  }
+  return rows;
+}
+
+const filterRow = (row) => {
+  const path = `/rest/api/2/filter/${row.id}`;
+  const label = contentDigest(row.name, row.jql, row.favourite);
+  return row.owner?.name === actorDetails("api").name
+    ? [path, { owned: true, label, removal: { path, actor: "api" } }]
+    : [path, { owned: false, label }];
+};
+
+/** A filter row's identity as a number; a row without a numeric identity cannot be addressed. */
+function filterIdentity(row) {
+  const id = typeof row?.id === "string" || typeof row?.id === "number" ? String(row.id) : "";
+  if (!/^[1-9]\d{0,15}$/u.test(id)) throw new TypeError("A filter row carries no numeric identity");
+  return Number(id);
+}
+
+/**
+ * Visible filters the identities do not explain, by name. Jira lets two owners use one name, so a
+ * name is matched occurrence by occurrence: each filter read by identity accounts for one
+ * suggestion, and every further one is a filter known by name only. A filter read by identity that
+ * no suggestion accounts for means the two views disagree, which the snapshot refuses.
+ */
+function nameOnlyRows(names, addressed) {
+  const explained = new Map();
+  for (const row of addressed) explained.set(row.name, (explained.get(row.name) ?? 0) + 1);
+  const seen = new Map();
+  const rows = [];
+  for (const name of names) {
+    const left = explained.get(name) ?? 0;
+    if (left > 0) explained.set(name, left - 1);
+    else {
+      const occurrence = (seen.get(name) ?? 0) + 1;
+      seen.set(name, occurrence);
+      rows.push([
+        `filter-name:${name}#${occurrence}`,
+        { owned: false, label: contentDigest(name) },
+      ]);
+    }
+  }
+  if ([...explained.values()].some((count) => count > 0))
+    throw new TypeError("A filter readable by identity is missing from the filter suggestions");
+  return rows;
+}
+
+/**
+ * The filters visible to the api actor beyond the run's own two, which is where a model's mistaken
+ * filter creation lands. One this run could address by identity (starred, or within the identities
+ * allocated since the run's first filter) is read in full, and an owned one is removed as that
+ * actor. A visible filter below that range (the seed's board filters, an earlier run's, another
+ * user's) is known by name only: its appearance counts as a foreign object, and its content, a
+ * rename or a removal cannot be seen. A filter the api actor cannot see cannot be seen at all.
+ */
+async function filterScope(session, created) {
+  const [names, favourites] = await Promise.all([
+    visibleFilterNames(session),
+    checked(
+      session,
+      "catalog-selection-scope",
+      "GET",
+      "/rest/api/2/filter/favourite",
+      basicAuth(session, "api"),
+    ),
+  ]);
+  if (!Array.isArray(favourites))
+    throw new TypeError("The api actor's favourite filters are not a list");
+  const own = new Set([created.sharedFilterId, created.favouriteFilterId]);
+  const known = Math.max(
+    Number(created.favouriteFilterId),
+    Number(created.filterIdHighWater ?? 0),
+    ...favourites.map((row) => filterIdentity(row)),
+  );
+  const inRange = await filtersInRange(
+    session,
+    Number(created.sharedFilterId),
+    known + FILTER_ID_WINDOW,
+  );
+  const byId = new Map(
+    [...favourites, ...inRange].map((row) => [String(filterIdentity(row)), row]),
+  );
+  created.filterIdHighWater = Math.max(known, ...[...byId.keys()].map((id) => Number(id)));
+  const rows = [...byId].filter(([id]) => !own.has(id)).map(([, row]) => filterRow(row));
+  return [...rows, ...nameOnlyRows(names, byId.values())];
 }
 
 /**
  * The run's own board, sprint and filters by content. One that disappeared reads as absent, so its
  * removal counts. Agile objects a model created by mistake are not enumerated, so such a stray write
- * escapes this snapshot (filters are, through `filterScope`). The favourite filter is private to the api actor, so it is read
- * as that actor.
+ * escapes this snapshot (filters are, through `filterScope`). The favourite filter is private to
+ * the api actor, so it is read as that actor.
  */
 async function agileScope(session, created) {
   const entries = [

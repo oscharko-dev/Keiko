@@ -391,6 +391,44 @@ it("refuses to infer default templates and binds the explicit baseline to the na
   await expect(requireEmailDefault(context, f)).rejects.toThrow();
 });
 
+it("verifies an unconfirmed upload without chaining a second write into its turn", async () => {
+  // The product refuses any further write in the turn of an unconfirmed one (`not-dispatched` /
+  // `conflict`), so an apply chained into the upload's turn could never run (#4352).
+  const zip = createZip([{ name: "templates/issue.vm", data: "Native active" }]);
+  const active = await assetPack(zip);
+  const f = state();
+  f.assetEmailPrior = active;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+    String(url).endsWith("/email-templates")
+      ? new globalThis.Response(zip)
+      : globalThis.Response.json({ key: f.adminActorKey }),
+  );
+  const chained = [];
+  context.heldQualificationFixture = async (entry) => {
+    chained.push(entry.tool);
+    throw new Error("The product refuses a write behind an uncertain one of the same turn");
+  };
+  const recipe = selected("jira.upload-email-template-pack");
+  const data = {
+    userKey: f.adminActorKey,
+    emailTemplateAction: "upload",
+    uploadSha256: f.assetEmailFile.expectedFile.sha256,
+    uploadBytes: f.assetEmailFile.expectedFile.sizeBytes,
+    outcome: "succeeded-unconfirmed",
+  };
+  const verified =
+    recipe.verifyInvocation === undefined
+      ? await recipe.readback(context, data, f)
+      : await recipe.verifyInvocation(context, f, data);
+  expect(verified).toMatchObject({ matched: true });
+  expect(chained).toEqual([]);
+  expect(recipe.prerequisiteTools ?? []).toEqual([]);
+  // The staged bytes are observed only through the apply case, which uploads in a turn of its own.
+  expect(selected("jira.apply-email-template-pack").prerequisiteTools ?? []).toEqual([]);
+  f.assetEmailPrior = { manifestSha256: sha };
+  await expect(recipe.readback(context, data, f)).rejects.toThrow();
+});
+
 it("requires revert to change a distinct synthetic pack back to the complete verified default", async () => {
   const zip = createZip([{ name: "templates/issue.vm", data: "Native default" }]);
   const defaults = await assetPack(zip);
