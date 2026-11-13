@@ -519,13 +519,18 @@ function parentTypeFindings(
  * The words name the way out the product already has (propose a template from an existing project)
  * and forbid a retry that cannot succeed.
  */
-function missingTemplateGuidance(violation: JiraTemplateViolation): string {
+export function jiraNoGoverningTemplateGuidance(
+  violation: Pick<JiraTemplateViolation, "ruleId">,
+  /** One further fixed sentence, for a case the caller has observed and this owner cannot (for example that stored templates name another project). */
+  observed?: string,
+): string {
   const only =
     violation.ruleId === "template-not-activated"
       ? " Templates exist for it, but only for entering a status, which does not govern creating an issue."
       : "";
+  const further = observed === undefined ? "" : ` ${observed}`;
   return (
-    `Nothing was changed: no saved issue template governs this project and issue type; the violation names them.${only} ` +
+    `Nothing was changed: no saved issue template governs this project and issue type; the violation names them.${only}${further} ` +
     "Keiko creates an issue only when a template for its project and issue type exists. Do not retry or change the request. " +
     "Tell the person that a template for this project and issue type has to be created first, and where: " +
     "Skills, Jira template, propose templates from an existing project, review and save. Offer to write the same issue once it exists."
@@ -548,7 +553,7 @@ export function jiraTemplateViolationGuidance(
     (violation) =>
       violation.ruleId === "template-missing" || violation.ruleId === "template-not-activated",
   );
-  if (missing !== undefined) return missingTemplateGuidance(missing);
+  if (missing !== undefined) return jiraNoGoverningTemplateGuidance(missing);
   if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
     return (
       "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +

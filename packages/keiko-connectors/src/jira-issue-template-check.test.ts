@@ -8,6 +8,7 @@ import {
   checkJiraIssueTemplates,
   evaluateJiraTemplateChange,
   jiraTemplateValuePresent,
+  jiraNoGoverningTemplateGuidance,
   jiraTemplateValueText,
   jiraTemplateViolationGuidance,
   matchingJiraIssueTemplates,
@@ -17,6 +18,23 @@ import {
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
 import { deriveJiraTemplateSections } from "./jira-issue-template-instance.js";
+
+describe("the hint when no template governs a write (#4354)", () => {
+  it("is fixed words that never carry remote text, and takes one observed sentence", () => {
+    const plain = jiraNoGoverningTemplateGuidance({ ruleId: "template-missing" });
+    expect(plain).toContain("Nothing was changed");
+    expect(plain).toContain("propose templates from an existing project");
+    const further = jiraNoGoverningTemplateGuidance(
+      { ruleId: "template-missing" },
+      "Stored templates exist, but they name another project.",
+    );
+    expect(further).toContain("Stored templates exist, but they name another project.");
+    expect(further.startsWith(plain.slice(0, 60))).toBe(true);
+    expect(jiraNoGoverningTemplateGuidance({ ruleId: "template-not-activated" })).toContain(
+      "only for entering a status",
+    );
+  });
+});
 
 describe("formal admission guidance", () => {
   it("asks for complete evidence rather than alleging a rule violation when native data is unreadable", () => {

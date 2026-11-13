@@ -354,6 +354,7 @@ export {
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
   jiraTemplateViolationGuidance,
+  jiraNoGoverningTemplateGuidance,
   validateJiraIssueTemplateAgainstInstance,
   type JiraFieldCatalogEntry,
   type JiraTemplateFinding,

@@ -2,6 +2,7 @@ import {
   executeJiraAnonymizationUnlock,
   isJiraAnonymizationUnlock,
 } from "./jira-managed-anonymization-unlock.js";
+import { epicLinkTargetRefusal, withJiraEpicLinkTargetCheck } from "./jira-epic-link-target.js";
 import { withJiraTemplateNotices } from "./jira-template-notices.js";
 import {
   executeJiraAvatarMutation,
@@ -756,6 +757,8 @@ async function prepareCreateWithMetadata(
 ): Promise<JiraCreatePreparation> {
   const validated = createFieldState(metadata, create, true);
   if (!validated.ok) return createRefusal(request, create, metadata, templates, validated);
+  const notAnEpic = await epicLinkTargetRefusal(request, validated.fields);
+  if (notAnEpic !== undefined) return notAnEpic;
   const gate = await createTemplateGate(request, create, metadata, templates, validated);
   if (!gate.ok) return gate;
   // The link a template requires rides on the create itself where the screen offers it.
@@ -885,6 +888,8 @@ async function admitFieldMutation(
   { purpose, issueKey, transition }: FieldTarget,
   policy: MutationPolicy,
 ): Promise<FieldAdmission> {
+  const notAnEpic = await epicLinkTargetRefusal(request, linked.validated.fields);
+  if (notAnEpic !== undefined) return { stop: notAnEpic };
   const gate = await gateJiraMutationByTemplates({
     request,
     source: policy.templates,
@@ -1965,7 +1970,9 @@ export function executeJiraManagedMutation(
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
   return withJiraTemplateNotices(() =>
-    executeJiraManagedMutationInner(operation, source, context, connection, trace),
+    withJiraEpicLinkTargetCheck(connection, context, () =>
+      executeJiraManagedMutationInner(operation, source, context, connection, trace),
+    ),
   );
 }
 /** The executor proper; the exported entry only adds the notices its gate collected. */
@@ -2018,6 +2025,17 @@ const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
  */
 /** Checks native prerequisites without writing; comment updates preserve observed visibility. */
 function checkedAttempt(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  return withJiraEpicLinkTargetCheck(connection, context, () =>
+    checkedAttemptInner(operation, source, context, connection, trace),
+  );
+}
+function checkedAttemptInner(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
   context: ManagedMcpInvocationContext,
