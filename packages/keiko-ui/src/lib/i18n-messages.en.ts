@@ -528,9 +528,10 @@ export const EN_MESSAGES = {
   "chat.error.scopeChanged.remediation":
     "Check the Chat's current sources, then send your request again.",
   "chat.error.jiraAuthentication.title": "Jira authentication failed",
-  "chat.error.jiraAuthentication.message": "The Jira connection could not be authenticated.",
+  "chat.error.jiraAuthentication.message":
+    "Jira rejected the token of this connection. It may have expired or been revoked.",
   "chat.error.jiraAuthentication.remediation":
-    "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira.",
+    "Open the Knowledge Pods Hub, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira.",
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",

@@ -2333,7 +2333,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.rule.parent-type-mismatch":
     "Das übergeordnete Issue muss einen erlaubten Vorgangstyp haben ({subject}).",
   "chat.jira.outcome.failure.auth":
-    "Prüfe die Verbindung des Jira-Pods und seine Zugangsdaten, bevor du es erneut versuchst.",
+    "Jira hat das Token abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Ersetze es am Jira-Pod, verifiziere die Verbindung und versuche es erneut.",
   "chat.jira.outcome.failure.permission":
     "Prüfe die Berechtigung des Jira-Kontos für das angeforderte Projekt und die Aktion.",
   "chat.jira.outcome.failure.notFound":
@@ -5482,7 +5482,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
   "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
   "atlassianConnectors.verify.auth-failed.copy":
-    "Prüfe das Konto und das Token. Prüfe die Verbindung danach erneut.",
+    "Das Token wurde abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Erstelle in Jira ein neues Token, ersetze es hier und verifiziere erneut.",
   "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
   "atlassianConnectors.verify.forbidden.copy":
     "Atlassian hat den Zugriff verweigert. Prüfe die Kontoberechtigungen sowie Einschränkungen der Website oder Lizenz. Prüfe die Verbindung danach erneut.",
@@ -5500,10 +5500,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Jira meldet eine nicht unterstützte Bereitstellung oder Version oder widersprüchliche Versionsangaben. Prüfe die Adresse und den REST-v2-Zugriff auf Jira Server oder Data Center ab Version 10.3 und verifiziere erneut.",
+    "Keiko benötigt Jira Data Center ab Version 10.3.0. Jira meldet eine ältere oder nicht unterstützte Version oder widersprüchliche Versionsangaben. Aktualisiere Jira auf 10.3.0 oder neuer oder gib die Adresse einer unterstützten Instanz ein und verifiziere erneut.",
   "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
   "atlassianConnectors.verify.tls-failed.copy":
-    "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
+    "Keiko vertraut diesem Zertifikat nicht. Prüfe Gültigkeit und Hostname. Setze bei einer privaten Zertifizierungsstelle KEIKO_CA_BUNDLE_PATH auf deren PEM-Datei, starte Keiko neu und verifiziere erneut. Schalte die Zertifikatsprüfung niemals ab.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
   "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",

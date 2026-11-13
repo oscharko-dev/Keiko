@@ -23,13 +23,13 @@ describe("formatUserError", () => {
         );
         expect(notice.message).toBe(
           locale === "en"
-            ? "The Jira connection could not be authenticated."
-            : "Die Jira-Verbindung konnte nicht authentifiziert werden.",
+            ? "Jira rejected the token of this connection. It may have expired or been revoked."
+            : "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
         );
         expect(notice.remediation).toBe(
           locale === "en"
-            ? "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira."
-            : "Prüfe die Jira-Verbindung erneut im Knowledge Pods Hub. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+            ? "Open the Knowledge Pods Hub, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira."
+            : "Öffne den Knowledge Pods Hub, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
         );
         const restored = toUserErrorNotice(
           formatUserError(error, "Could not send message."),

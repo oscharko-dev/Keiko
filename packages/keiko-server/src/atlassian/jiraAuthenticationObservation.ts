@@ -1,5 +1,4 @@
 import { decodeCanonicalUriSegment } from "./canonicalUriSegment.js";
-import { maintenancePathNode } from "@oscharko-dev/keiko-connectors";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyRequest,
@@ -9,147 +8,26 @@ import type {
 
 type Request = AtlassianHttpRequest | AtlassianHttpBodyRequest;
 
-// Retained Jira 11.3 API: these GETs document 401 for missing WebSudo or view permission
-// as well as authentication. The exact tab writes and native issue-link operations below also
-// document permission401. Other resources/methods remain definitive; no write is retried.
-const AMBIGUOUS_PATHS: readonly (readonly string[])[] = [
-  ["issueLink", "id"],
-  ["index-snapshot"],
-  ["user", "columns"],
-  ["cluster", "nodes"],
-  ["cluster", "zdu", "state"],
-  ["index-snapshot", "isRunning"],
-  ["workflow"],
-  ["screens"],
-  ["workflowscheme", "id"],
-  ["workflowscheme", "id", "default"],
-  ["workflowscheme", "id", "draft"],
-  ["workflowscheme", "id", "draft", "default"],
-  ["workflowscheme", "id", "issuetype", "id"],
-  ["workflowscheme", "id", "draft", "issuetype", "id"],
-  ["workflowscheme", "id", "workflow"],
-  ["workflowscheme", "id", "draft", "workflow"],
-  ["screens", "id", "tabs"],
-  ["screens", "id", "tabs", "id", "fields"],
-  ["screens", "id", "availableFields"],
-];
-// Retained 11.3 POST /screens/{screenId}/tabs and PUT/DELETE /screens/{screenId}/tabs/{tabId}.
-// The same existing identity probe preserves the original synchronous status and absolute deadline.
-function ambiguousTabWrite(method: Request["method"], parts: readonly string[]): boolean {
-  if (parts[0] !== "screens" || parts[2] !== "tabs" || !/^[1-9]\d{0,18}$/u.test(parts[1] ?? ""))
-    return false;
-  if (method === "POST") return parts.length === 3;
-  return (
-    (method === "PUT" || method === "DELETE") &&
-    parts.length === 4 &&
-    /^[1-9]\d{0,18}$/u.test(parts[3] ?? "")
-  );
+// Structural rule (ADR-0128): Jira Data Center answers 401 for a missing WebSudo or administrator
+// permission as well as for a failed authentication, and the model reaches about 450 operations
+// through discovery, so no hand-maintained route list can be complete. Every 401 from the
+// instance except the identity route itself is therefore decided by the existing same-generation
+// identity probe: only a probe that itself answers 401 discards the credential. The identity route
+// is the one place where no further evidence can exist, so its 401 stays definitive. A positive
+// probe never grants a permission, retries a write or borrows another route's facts.
+const IDENTITY_SEGMENTS: readonly string[] = ["rest", "api", "2", "myself"];
+
+// An encoded separator can never name a Jira resource; such a request is refused before dispatch.
+function canonicalSegment(part: string): boolean {
+  if (part.length === 0) return true;
+  const decoded = decodeCanonicalUriSegment(part);
+  return decoded !== undefined && !/[\\/]/u.test(decoded);
 }
 
-// Retained 11.3 explicitly uses 401 for missing Link Issues permission on these two identities.
-// Remote links have a different authentication contract and do not join this observation.
-function ambiguousIssueLinkWrite(method: Request["method"], parts: readonly string[]): boolean {
-  if (parts[0] !== "issueLink") return false;
-  if (method === "POST") return parts.length === 1;
-  return method === "DELETE" && parts.length === 2 && /^[1-9]\d{0,18}$/u.test(parts[1] ?? "");
-}
-
-// Pinned 11.3 documents permission/WebSudo401 for these exact implemented mutations.
-// A current same-generation positive identity probe preserves the refusal without revoking a
-// valid credential; it never grants permission, retries a write or borrows another route's facts.
-const AMBIGUOUS_NATIVE_WRITES: readonly (readonly [Request["method"], readonly string[]])[] = [
-  ["PUT", ["applicationrole"]],
-  ["PUT", ["applicationrole", "$segment"]],
-  ["DELETE", ["user", "columns"]],
-  ["PUT", ["cluster", "index-snapshot", "$node"]],
-  ["DELETE", ["cluster", "node", "$node"]],
-  ["PUT", ["cluster", "node", "$node", "offline"]],
-  ["POST", ["cluster", "zdu", "approve"]],
-  ["POST", ["cluster", "zdu", "cancel"]],
-  ["POST", ["cluster", "zdu", "retryUpgrade"]],
-  ["POST", ["cluster", "zdu", "start"]],
-  ["POST", ["index-snapshot"]],
-  ["POST", ["reindex", "request"]],
-  ["POST", ["workflowscheme"]],
-  ["PUT", ["workflowscheme", "$id"]],
-  ["DELETE", ["workflowscheme", "$id"]],
-  ["POST", ["workflowscheme", "$id", "createdraft"]],
-  ["PUT", ["workflowscheme", "$id", "draft"]],
-  ["DELETE", ["workflowscheme", "$id", "draft"]],
-  ["PUT", ["workflowscheme", "$id", "default"]],
-  ["DELETE", ["workflowscheme", "$id", "default"]],
-  ["PUT", ["workflowscheme", "$id", "draft", "default"]],
-  ["DELETE", ["workflowscheme", "$id", "draft", "default"]],
-  ["PUT", ["workflowscheme", "$id", "issuetype", "$id"]],
-  ["DELETE", ["workflowscheme", "$id", "issuetype", "$id"]],
-  ["PUT", ["workflowscheme", "$id", "draft", "issuetype", "$id"]],
-  ["DELETE", ["workflowscheme", "$id", "draft", "issuetype", "$id"]],
-  ["PUT", ["workflowscheme", "$id", "workflow"]],
-  ["DELETE", ["workflowscheme", "$id", "workflow"]],
-  ["PUT", ["workflowscheme", "$id", "draft", "workflow"]],
-  ["DELETE", ["workflowscheme", "$id", "draft", "workflow"]],
-  ["PUT", ["issue", "$segment", "assignee"]],
-  ["POST", ["issue", "$segment", "watchers"]],
-  ["DELETE", ["issue", "$segment", "watchers"]],
-  ["POST", ["screens", "addToDefault", "$segment"]],
-  ["POST", ["screens", "$id", "tabs", "$id", "fields"]],
-  ["DELETE", ["screens", "$id", "tabs", "$id", "fields", "$segment"]],
-  ["POST", ["screens", "$id", "tabs", "$id", "fields", "$segment", "move"]],
-  [
-    "PUT",
-    [
-      "screens",
-      "$id",
-      "tabs",
-      "$id",
-      "fields",
-      "$segment",
-      "updateShowWhenEmptyIndicator",
-      "$boolean",
-    ],
-  ],
-  ["POST", ["screens", "$id", "tabs", "$id", "move", "$position"]],
-];
-function nativeTextSegment(value: string): boolean {
-  const decoded = decodeCanonicalUriSegment(value);
-  return (
-    decoded !== undefined &&
-    decoded.trim().length > 0 &&
-    decoded.length <= 255 &&
-    decoded === decoded.trim() &&
-    decoded !== "." &&
-    decoded !== ".." &&
-    !/[\\/%?#\p{Cc}\p{Surrogate}]/u.test(decoded)
-  );
-}
-function nativeNodeSegment(value: string): boolean {
-  const decoded = decodeCanonicalUriSegment(value);
-  return decoded !== undefined && maintenancePathNode(decoded);
-}
-
-function nativeWriteSegment(expected: string, actual: string): boolean {
-  switch (expected) {
-    case "$node":
-      return nativeNodeSegment(actual);
-    case "$id":
-      return /^[1-9]\d{0,18}$/u.test(actual) && BigInt(actual) <= 9223372036854775807n;
-    case "$segment":
-      return nativeTextSegment(actual);
-    case "$boolean":
-      return actual === "true" || actual === "false";
-    case "$position":
-      return /^(?:0|[1-9]\d{0,9})$/u.test(actual) && Number(actual) <= 2147483647;
-    default:
-      return expected === actual;
-  }
-}
-function ambiguousNativeWrite(method: Request["method"], parts: readonly string[]): boolean {
-  return AMBIGUOUS_NATIVE_WRITES.some(
-    ([candidate, path]) =>
-      candidate === method &&
-      path.length === parts.length &&
-      path.every((part, index) => nativeWriteSegment(part, parts[index] ?? "")),
-  );
+function canonicalPathSegments(pathname: string, basePath: string): readonly string[] | undefined {
+  if (pathname !== basePath && !pathname.startsWith(`${basePath}/`)) return undefined;
+  const parts = pathname.slice(basePath.length).split("/").slice(1);
+  return parts.every(canonicalSegment) ? parts : undefined;
 }
 
 export function ambiguousJiraAuthenticationResponse(
@@ -164,22 +42,14 @@ export function ambiguousJiraAuthenticationResponse(
     return false;
   const base = new URL(metadata.baseUrl);
   const target = new URL(request.url);
-  const prefix = `${base.pathname.replace(/\/$/, "")}/rest/api/2/`;
-  if (target.origin !== base.origin || !target.pathname.startsWith(prefix)) return false;
-  const parts = target.pathname.slice(prefix.length).split("/");
-  if (request.method !== "GET")
-    return (
-      ambiguousTabWrite(request.method, parts) ||
-      ambiguousIssueLinkWrite(request.method, parts) ||
-      ambiguousNativeWrite(request.method, parts)
-    );
-  return AMBIGUOUS_PATHS.some(
-    (path) =>
-      path.length === parts.length &&
-      path.every((part, index) =>
-        part === "id" ? /^[1-9]\d{0,18}$/u.test(parts[index] ?? "") : part === parts[index],
-      ),
-  );
+  if (target.origin !== base.origin) return false;
+  const parts = canonicalPathSegments(target.pathname, base.pathname.replace(/\/$/u, ""));
+  if (parts === undefined || parts.length === 0) return false;
+  const identity =
+    request.method === "GET" &&
+    parts.length === IDENTITY_SEGMENTS.length &&
+    parts.every((part, index) => part === IDENTITY_SEGMENTS[index]);
+  return !identity;
 }
 
 export function currentJiraAuthenticationObservation(

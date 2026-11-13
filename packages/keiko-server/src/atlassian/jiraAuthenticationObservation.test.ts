@@ -10,7 +10,10 @@ import type {
 import { executeAtlassianWriteRequest } from "@oscharko-dev/keiko-connectors";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
-import { ambiguousJiraAuthenticationResponse } from "./jiraAuthenticationObservation.js";
+import {
+  ambiguousJiraAuthenticationResponse,
+  withJiraAuthenticationObservation,
+} from "./jiraAuthenticationObservation.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
@@ -208,13 +211,15 @@ it.each([
   "settings/columns",
   "filter/1/columns",
   "user/columns/unknown",
-  "myself",
-])("keeps ordinary401 invalidation on %s without a probe", async (path) => {
-  const f = fixture(() => response({}, 401));
-  await f.deps.httpBodyPortFactory(f.metadata)(request(path));
-  expect(f.urls).toEqual([request(path).url]);
-  expect(f.invalidated).toEqual([2]);
-});
+])(
+  "keeps ordinary401 invalidation on %s once the identity probe also answers 401",
+  async (path) => {
+    const f = fixture(() => response({}, 401));
+    await f.deps.httpBodyPortFactory(f.metadata)(request(path));
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(f.invalidated).toEqual([2]);
+  },
+);
 it.each([
   "workflowscheme/1/unknown",
   "workflow",
@@ -224,10 +229,10 @@ it.each([
   "index-snapshot/isRunning",
   "user/columns",
   "index-snapshot",
-])("does not classify a %s write as an ambiguous administrator read", async (path) => {
+])("decides a %s write 401 by the identity probe and never replays the write", async (path) => {
   const f = fixture(() => response({}, 401));
   await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "PUT", bodyJson: "{}" });
-  expect(f.urls).toHaveLength(1);
+  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
   expect(f.invalidated).toEqual([2]);
 });
 it("honors authority revocation between the primary response and identity probe", async () => {
@@ -521,11 +526,11 @@ it.each([
   { method: "DELETE", path: "issue/SYN-1/remotelink/1" },
   { method: "DELETE", path: "issue/SYN-1/remotelink" },
 ] as const)(
-  "never borrows issue-link permission evidence for $method $path",
+  "never borrows issue-link permission evidence for $method $path: only the identity probe decides",
   async ({ method, path }) => {
     const f = fixture(() => response({}, 401));
     await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method });
-    expect(f.urls).toEqual([request(path).url]);
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
     expect(f.invalidated).toEqual([2]);
   },
 );
@@ -590,7 +595,7 @@ it.each([
 ] as const)("retains ordinary credential failure for unlisted %s %s", async (method, path) => {
   const f = fixture(() => response({}, 401));
   await f.deps.httpBodyPortFactory(f.metadata)(tabRequest(method, path));
-  expect(f.urls).toHaveLength(1);
+  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
   expect(f.invalidated).toEqual([2]);
 });
 it.each(TAB_REQUESTS)(
@@ -786,7 +791,7 @@ it.each([
   { method: "PUT", path: "issue/SYN-1/watchers" },
   { method: "POST", path: "issue/SYN-1/notify" },
 ] as const)(
-  "never widens documented native auth facts to $method $path",
+  "never widens documented native auth facts to $method $path: only the identity probe decides",
   async ({ method, path }) => {
     const f = fixture(() => response({}, 401));
     await f.deps.httpBodyPortFactory(f.metadata)({
@@ -794,7 +799,7 @@ it.each([
       method,
       ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
     });
-    expect(f.urls).toEqual([request(path).url]);
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
     expect(f.invalidated).toEqual([2]);
   },
 );
@@ -817,4 +822,155 @@ it("refuses an encoded slash before dispatch, authentication probing or credenti
       method: "POST",
     }),
   ).toBe(false);
+});
+
+// #4353: the identity probe is the structural rule for every 401 that is not the identity route
+// itself. These routes stood in no list; a project key never matched the numeric-id wildcard.
+const UNLISTED_READS = [
+  "project/KER/role",
+  "project/KER/role/10002",
+  "synthetic-unlisted/resource",
+  "issue/SYN-1/transitions",
+  "serverInfo",
+] as const;
+it.each(UNLISTED_READS)(
+  "classifies a GET 401 on the unlisted route %s as decided by the identity probe",
+  (path) => {
+    const f = fixture(() => response({}, 401));
+    expect(ambiguousJiraAuthenticationResponse(f.metadata, request(path))).toBe(true);
+  },
+);
+it("never classifies the identity route, another origin or another context path as ambiguous", () => {
+  const f = fixture(() => response({}, 401));
+  expect(ambiguousJiraAuthenticationResponse(f.metadata, request("myself"))).toBe(false);
+  expect(
+    ambiguousJiraAuthenticationResponse(f.metadata, {
+      ...request("project/KER/role"),
+      url: "https://other.example.invalid/context/rest/api/2/project/KER/role",
+    }),
+  ).toBe(false);
+  expect(
+    ambiguousJiraAuthenticationResponse(f.metadata, {
+      ...request("project/KER/role"),
+      url: "https://jira.example.invalid/other/rest/api/2/project/KER/role",
+    }),
+  ).toBe(false);
+});
+it.each(UNLISTED_READS)(
+  "keeps a valid credential after a permission-shaped 401 on the unlisted GET %s",
+  async (path) => {
+    const f = fixture((index) => (index === 0 ? response({}, 401) : response(IDENTITY)));
+    const result = await f.deps.httpBodyPortFactory(f.metadata, "unlisted-401")(request(path));
+    expect(result).toMatchObject({ kind: "response", status: 401, authentication: "confirmed" });
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(f.current()).toEqual(f.metadata);
+    expect(f.invalidated).toEqual([]);
+  },
+);
+it.each(UNLISTED_READS)(
+  "still detects an actually invalid credential after a 401 on the unlisted GET %s",
+  async (path) => {
+    const f = fixture(() => response({}, 401));
+    const result = await f.deps.httpBodyPortFactory(f.metadata, "unlisted-401")(request(path));
+    expect(result).toMatchObject({ status: 401 });
+    expect(result).not.toHaveProperty("authentication");
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(f.current()).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "auth-failed" },
+    });
+    expect(f.invalidated).toEqual([2]);
+  },
+);
+it("answers a 401 on the identity route itself without a second probe and revokes the credential", async () => {
+  const f = fixture(() => response({}, 401));
+  await f.deps.httpBodyPortFactory(f.metadata)(request("myself"));
+  expect(f.urls).toEqual([request("myself").url]);
+  expect(f.invalidated).toEqual([2]);
+});
+it("returns an actionable permission failure through the real project-role read", async () => {
+  // The lab actor reads the project but may not read its roles: the role read answers 401.
+  const f = fixture((index) => {
+    if (index === 0) return response({ id: "10000", key: "KER", name: "Keiko" });
+    return index === 1 ? response({}, 401) : response(IDENTITY);
+  });
+  const provider = createJiraProviderForCatalog(
+    () => ({
+      deployment: "data-center",
+      baseUrl: BASE,
+      http: f.deps.httpBodyPortFactory(f.metadata),
+    }),
+    ["jira.project-roles"],
+  );
+  const tool = provider.tools()[0];
+  if (tool === undefined) throw new TypeError("Missing Jira read");
+  const result = await tool.execute(
+    { projectIdOrKey: "KER" },
+    {
+      invocationId: "project-roles",
+      correlationId: "project-roles",
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    },
+  );
+  expect(result.data).toMatchObject({ outcome: "failed", reason: "permission-denied" });
+  expect(f.urls).toEqual([
+    `${BASE}/rest/api/2/project/KER`,
+    `${BASE}/rest/api/2/project/10000/role`,
+    `${BASE}/rest/api/2/myself`,
+  ]);
+  expect(f.current()).toEqual(f.metadata);
+  expect(f.invalidated).toEqual([]);
+});
+
+it("decides a synthetic unlisted GET 401 by the probe alone: confirmed identity keeps the credential", async () => {
+  const f = fixture(() => response({}, 401));
+  const port = vi.fn(() => Promise.resolve({ kind: "response", status: 401 } as const));
+  const probe = vi.fn(() => Promise.resolve(true));
+  const result = await withJiraAuthenticationObservation(
+    f.metadata,
+    port,
+    () => true,
+    probe,
+  )(request("synthetic-unlisted/resource"));
+  expect(result).toEqual({ kind: "response", status: 401, authentication: "confirmed" });
+  expect(port).toHaveBeenCalledTimes(1);
+  expect(probe).toHaveBeenCalledTimes(1);
+});
+it("returns the bare 401 when the probe does not confirm the identity or the observation is stale", async () => {
+  const f = fixture(() => response({}, 401));
+  const port = (): Promise<{ readonly kind: "response"; readonly status: 401 }> =>
+    Promise.resolve({ kind: "response", status: 401 });
+  const request401 = request("project/KER/role");
+  expect(
+    await withJiraAuthenticationObservation(
+      f.metadata,
+      port,
+      () => true,
+      () => Promise.resolve(false),
+    )(request401),
+  ).toEqual({ kind: "response", status: 401 });
+  const stale = vi.fn(() => Promise.resolve(true));
+  expect(
+    await withJiraAuthenticationObservation(f.metadata, port, () => false, stale)(request401),
+  ).toEqual({ kind: "response", status: 401 });
+  expect(stale).not.toHaveBeenCalled();
+});
+it("never probes a non-401 answer or the identity route", async () => {
+  const f = fixture(() => response({}, 401));
+  const probe = vi.fn(() => Promise.resolve(true));
+  const ok = withJiraAuthenticationObservation(
+    f.metadata,
+    () => Promise.resolve({ kind: "response", status: 403 } as const),
+    () => true,
+    probe,
+  );
+  await ok(request("project/KER/role"));
+  await withJiraAuthenticationObservation(
+    f.metadata,
+    () => Promise.resolve({ kind: "response", status: 401 } as const),
+    () => true,
+    probe,
+  )(request("myself"));
+  expect(probe).not.toHaveBeenCalled();
 });

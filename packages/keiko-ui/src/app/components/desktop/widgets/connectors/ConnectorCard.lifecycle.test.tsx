@@ -149,7 +149,9 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     );
     const card = await screen.findByTestId("acx-connector");
     expect(within(card).getByTestId("acx-pod-state")).toHaveTextContent("Authentication failed");
-    expect(card).toHaveTextContent("Check the account and token, then verify again.");
+    expect(card).toHaveTextContent(
+      "The token was rejected. It may have expired or been revoked. Create a new token in Jira, replace it here, then verify again.",
+    );
     expect(within(card).getByTestId("acx-verify-status")).toBeEmptyDOMElement();
   });
   it.each([

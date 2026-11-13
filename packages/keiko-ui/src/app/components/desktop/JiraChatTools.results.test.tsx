@@ -795,7 +795,9 @@ it("explains a refused Jira read without claiming that it completed", () => {
   );
   expect(screen.getByText("Could not complete", { exact: true })).toBeVisible();
   expect(
-    screen.getByText("Verify the Jira Pod connection and its credentials before trying again."),
+    screen.getByText(
+      "Jira rejected the token. It may have expired or been revoked. Replace it on the Jira Pod, verify the connection and try again.",
+    ),
   ).toBeVisible();
   expect(screen.queryByText("Completed", { exact: true })).toBeNull();
   expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();
