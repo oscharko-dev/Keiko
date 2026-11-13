@@ -565,7 +565,7 @@ export const DE_MESSAGES = {
   "chat.error.jiraPodUnavailable.message":
     "Der an diesen Chat gebundene Jira Pod ist nicht mehr verfügbar. Wähle erneut einen Jira Pod.",
   "chat.error.jiraPodUnavailable.remediation":
-    "Öffne das Menü Datenquellen über der Unterhaltung, wähle einen Jira Pod und sende deine Nachricht erneut.",
+    "Öffne das Menü Konnektoren über der Unterhaltung, schalte einen Jira Pod ein und sende deine Nachricht erneut.",
   "chat.error.jiraPodVerification.title": "Jira Pod muss geprüft werden",
   "chat.error.jiraPodVerification.message":
     "Der Jira Pod muss erneut geprüft werden, bevor dieser Chat ihn nutzen kann. Prüfe ihn im Knowledge Pods Hub.",
@@ -575,7 +575,7 @@ export const DE_MESSAGES = {
   "chat.error.jiraPodConnectionChanged.message":
     "Die Jira-Verbindung hat sich geändert, nachdem dieser Chat seinen Jira Pod gewählt hat. Wähle den Jira Pod erneut.",
   "chat.error.jiraPodConnectionChanged.remediation":
-    "Öffne das Menü Datenquellen über der Unterhaltung, wähle den Jira Pod erneut und sende deine Nachricht dann erneut.",
+    "Öffne das Menü Konnektoren über der Unterhaltung, schalte den Jira Pod erneut ein und sende deine Nachricht dann erneut.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",

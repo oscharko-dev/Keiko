@@ -550,7 +550,7 @@ export const EN_MESSAGES = {
   "chat.error.jiraPodUnavailable.message":
     "The Jira Pod bound to this chat is no longer available. Choose a Jira Pod again.",
   "chat.error.jiraPodUnavailable.remediation":
-    "Open the Data sources menu above the conversation and choose a Jira Pod, then send your message again.",
+    "Open the Connectors menu above the conversation and switch on a Jira Pod, then send your message again.",
   "chat.error.jiraPodVerification.title": "Jira Pod needs verification",
   "chat.error.jiraPodVerification.message":
     "The Jira Pod must be verified again before this chat can use it. Verify it in the Knowledge Pods Hub.",
@@ -560,7 +560,7 @@ export const EN_MESSAGES = {
   "chat.error.jiraPodConnectionChanged.message":
     "The Jira connection changed after this chat chose its Jira Pod. Choose the Jira Pod again.",
   "chat.error.jiraPodConnectionChanged.remediation":
-    "Open the Data sources menu above the conversation and choose the Jira Pod again, then send your message again.",
+    "Open the Connectors menu above the conversation and switch the Jira Pod on again, then send your message again.",
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",
