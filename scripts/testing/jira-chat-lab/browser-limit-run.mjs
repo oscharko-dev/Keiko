@@ -33,6 +33,19 @@ const OWNERS = {
   setUiLanguage: "./browser-a11y.mjs",
 };
 
+/**
+ * `all` runs every work package. `release-1` leaves out the sprint-at-scale package, which the
+ * Agile child owns, and its card check; the other steps and their order are unchanged.
+ */
+export const LIMIT_RUN_STEP_SETS = Object.freeze(["all", "release-1"]);
+
+function stepSetOf(extra) {
+  if (extra.length === 0) return "all";
+  assert.ok(extra.length === 2 && extra[0] === "--steps", "Unexpected limit-run argument");
+  assert.ok(LIMIT_RUN_STEP_SETS.includes(extra[1]), "Unknown limit-run step set");
+  return extra[1];
+}
+
 export function limitRunArguments(argv) {
   const [sessionDir, modelId, embeddingModelId, permittedToken, deniedToken, projectKey, ...extra] =
     argv;
@@ -47,8 +60,8 @@ export function limitRunArguments(argv) {
   );
   assert.notEqual(resolve(permittedToken), resolve(deniedToken));
   assert.match(projectKey ?? "", /^LIM[1-9][0-9]{0,6}$/u);
-  assert.equal(extra.length, 0);
-  return { sessionDir, modelId, embeddingModelId, permittedToken, deniedToken, projectKey };
+  const steps = stepSetOf(extra);
+  return { sessionDir, modelId, embeddingModelId, permittedToken, deniedToken, projectKey, steps };
 }
 
 /** Missing owner exports are an incomplete build, never a successful skipped step. */
@@ -325,10 +338,12 @@ async function stages(ctx, options, blocks, results) {
     blocks.runHierarchyBulk(ctx, { faults: hierarchyFaults }),
   );
   await finishFaultPlan(ctx, results, "hierarchy", hierarchyFaults);
-  await runLimitStep(ctx, results, "ac6-sprint", () =>
-    blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
-  );
-  await cards(ctx, blocks, results, "sprint");
+  if (options.steps !== "release-1") {
+    await runLimitStep(ctx, results, "ac6-sprint", () =>
+      blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
+    );
+    await cards(ctx, blocks, results, "sprint");
+  }
   ctx.faults = faultPlan(blocks, "progress");
   const progress = await runLimitStep(ctx, results, "progress-simulation", () =>
     blocks.simulateProgress(ctx, { seedDeviations: true }),
@@ -353,6 +368,7 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
     const verified = results.every((result) => result.status === "green");
     ctx.intent.record("orchestrator", {
       phase: verified ? "steps-verified" : "steps-unverified",
+      steps: selected.steps,
       results,
     });
     if (!verified) ctx.intent.failed();
@@ -360,7 +376,7 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
       step: "browser-limit-run",
       status: verified ? "green" : "unverified",
       detail: verified
-        ? "All limit-run steps independently verified"
+        ? `All limit-run steps independently verified${selected.steps === "all" ? "" : ` (${selected.steps})`}`
         : "Fault evidence remains incomplete",
       counts: { steps: results.length },
       evidenceFile: ctx.intent.path,
@@ -387,7 +403,8 @@ export function finalizeLimitRun(intent, result) {
 }
 
 function validateLimitOptions(ctx, options, blocks) {
-  const selected = { violationRate: 0.125, sprintSize: 250, ...options };
+  const selected = { violationRate: 0.125, sprintSize: 250, steps: "all", ...options };
+  assert.ok(LIMIT_RUN_STEP_SETS.includes(selected.steps), "Unknown limit-run step set");
   assert.ok(selected.violationRate >= 0.1 && selected.violationRate <= 0.15);
   assert.ok(
     Number.isInteger(selected.sprintSize) &&
@@ -706,7 +723,7 @@ async function main(argv) {
             try {
               outcome = await runBrowserLimitRun(
                 await createLimitRunContext(live, opened, options, intent, signal),
-                {},
+                { steps: options.steps },
                 blocks,
               );
             } finally {
@@ -722,7 +739,12 @@ async function main(argv) {
         releaseLane();
       }
       if (status === "unverified") process.exitCode = 1;
-      console.log(JSON.stringify({ operation: "jira-browser-limit-run", status }));
+      // One closed verdict per step: names and statuses only, never a detail or a path.
+      const steps = (intent.state.orchestrator?.results ?? []).map(({ step, status: verdict }) => ({
+        step,
+        status: verdict,
+      }));
+      console.log(JSON.stringify({ operation: "jira-browser-limit-run", status, steps }));
     },
   );
 }

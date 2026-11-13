@@ -58,6 +58,22 @@ process.on("warning", (warning) => {
 /** Where the lab's live Keiko writes its Activity Log; a lane's state directory holds none. */
 export const chatReadLogDirectory = (session) => join(session.directory, "chat-read-logs");
 
+/**
+ * The lab holds no product state outside its private session (#4369). Besides the explicit
+ * `KEIKO_MEMORY_DIR` and database paths of the deps, the process-wide diagnostics writers resolve
+ * `KEIKO_STATE_DIR`, else `<cwd>/.keiko`: without it a lab run would write into the working
+ * directory of whoever started it. The variable is set for this process and every child it forks,
+ * and restored when the run ends.
+ */
+export function isolateRuntimeState(session, env = process.env) {
+  const previous = env.KEIKO_STATE_DIR;
+  env.KEIKO_STATE_DIR = chatReadLogDirectory(session);
+  return () => {
+    if (previous === undefined) delete env.KEIKO_STATE_DIR;
+    else env.KEIKO_STATE_DIR = previous;
+  };
+}
+
 async function unusedPort() {
   const probe = createServer();
   await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
@@ -503,6 +519,7 @@ function createLiveDeps(root, session, secret, retainState, restoring = false, m
     env: {
       ...modelEnv,
       KEIKO_OS_KEYCHAIN: "off",
+      KEIKO_STATE_DIR: chatReadLogDirectory(session),
       KEIKO_MEMORY_DIR: join(root, "memory"),
       [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
       KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: credentialKey,
@@ -848,11 +865,14 @@ export async function withModelFreeJira({ session, run, stateReady, decorateAtla
 }
 
 async function withLabProduct(options) {
-  const release = await prepareLabRun(options.session);
+  const restoreState = isolateRuntimeState(options.session);
+  let release;
   try {
+    release = await prepareLabRun(options.session);
     return await (options.ownedChild ? withOwnedLiveChat(options) : runLabProduct(options));
   } finally {
-    release();
+    release?.();
+    restoreState();
   }
 }
 

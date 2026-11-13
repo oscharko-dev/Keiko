@@ -290,6 +290,9 @@ describe("owned Chat runs use the canonical parent preflight and lane lease", ()
     expect(ports.buildDeps).toHaveBeenCalledOnce();
     const env = ports.buildDeps.mock.calls[0][0].env;
     expect(env.KEIKO_MEMORY_DIR).toBe(join(root, "memory"));
+    // The state directory is private too, so no diagnostics writer falls back to `<cwd>/.keiko`.
+    expect(env.KEIKO_STATE_DIR).toBe(join(directory, "chat-read-logs"));
+    expect(process.env.KEIKO_STATE_DIR).not.toBe(env.KEIKO_STATE_DIR);
     expect(env.KEIKO_OS_KEYCHAIN).toBe("off");
     expect(ports.probe).toHaveBeenCalledOnce();
   });

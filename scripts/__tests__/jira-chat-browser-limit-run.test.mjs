@@ -572,6 +572,62 @@ it("loads exactly the fixed exports and does not silently replace an absent owne
   await expect(loadLimitRunBlocks(importer)).rejects.toThrow("runProgressReport");
 });
 
+it("runs the Release 1 steps without the sprint package and records one verdict per step", async () => {
+  const f = fixture();
+  const answer = await runBrowserLimitRun(f.ctx, { steps: "release-1" }, f.blocks);
+  expect(answer).toMatchObject({
+    status: "green",
+    detail: "All limit-run steps independently verified (release-1)",
+    // The sprint step and its five card steps are the Agile child's package.
+    counts: { steps: 22 },
+  });
+  const names = f.calls.map(({ name }) => name);
+  expect(names).not.toContain("runSprintBulk");
+  for (const owner of [
+    "runProjectSetup",
+    "installTemplates",
+    "runRuleProbes",
+    "stageLastenheft",
+    "runBulkEpics",
+    "gradeBulkRefusals",
+    "runHierarchyBulk",
+    "simulateProgress",
+    "runProgressReport",
+  ])
+    expect(names.filter((name) => name === owner)).toHaveLength(1);
+  const state = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
+  expect(state.data.orchestrator).toMatchObject({ phase: "steps-verified", steps: "release-1" });
+  const verdicts = state.data.orchestrator.results.map(({ step, status }) => [step, status]);
+  expect(verdicts.every(([, status]) => status === "green")).toBe(true);
+  expect(verdicts.filter(([step]) => /sprint/u.test(step))).toEqual([]);
+  expect(verdicts).toHaveLength(22);
+  expect(
+    f.calls.filter(({ name }) => name === "assertCardsReadable").map(({ locale }) => locale),
+  ).toEqual(["en", "de", "en", "de"]);
+});
+
+it("accepts the step set only as an explicit trailing option", () => {
+  const args = [
+    "/private/session",
+    "fixture-chat",
+    "fixture-embedding",
+    "/private/permit",
+    "/private/deny",
+    "LIM7",
+  ];
+  expect(limitRunArguments(args).steps).toBe("all");
+  expect(limitRunArguments([...args, "--steps", "release-1"]).steps).toBe("release-1");
+  expect(limitRunArguments([...args, "--steps", "all"]).steps).toBe("all");
+  for (const extra of [["--steps"], ["--steps", "sprint"], ["release-1"], ["--steps", "all", "x"]])
+    expect(() => limitRunArguments([...args, ...extra])).toThrow();
+});
+
+it("refuses an unknown step set before any owner runs", async () => {
+  const f = fixture();
+  await expect(runBrowserLimitRun(f.ctx, { steps: "sprint" }, f.blocks)).rejects.toThrow();
+  expect(f.calls).toEqual([]);
+});
+
 it("accepts only the explicit fresh-project runtime CLI inputs", () => {
   const args = [
     "/private/session",
