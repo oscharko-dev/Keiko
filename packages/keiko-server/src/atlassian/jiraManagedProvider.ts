@@ -297,11 +297,13 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
     >
 >;
+const SEARCH_FIELDS_DESCRIPTION =
+  "Optional field ids whose value is added to every result row, per issue. Standard fields a row already shows (status, assignee, priority, labels, issue type, project, created, updated) are not repeated. Request only what the question needs.";
 const SEARCH_DEFINITION: ReadDefinition = {
-  description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. Progress, estimates and template compliance across many issues come from jira.report, not from paging results.`,
+  description: `Search Jira with bounded opaque JQL. A page holds 25 issues by default and at most 100 (maxResults); follow nextStartAt for more. Each result is a compact issue summary; fields adds the values of the field ids you name to each result, per issue. Description and comments come from jira.issue and jira.comments. Progress, estimates and template compliance across many issues come from jira.report, not from paging results.`,
   arguments: {
     jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
-    fields: FIELD_IDS,
+    fields: { ...FIELD_IDS, description: SEARCH_FIELDS_DESCRIPTION },
   },
   required: ["jql"],
   item: object(
@@ -406,7 +408,7 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
   "jira.search-post": {
     ...SEARCH_DEFINITION,
     description:
-      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages. Progress, estimates and template compliance across many issues come from jira.report, not from paging results. Native query validation stays enabled.",
+      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. A page holds 25 issues by default and at most 100; follow nextStartAt for all pages. fields adds the values of the field ids you name to each result, per issue. Progress, estimates and template compliance across many issues come from jira.report, not from paging results. Native query validation stays enabled.",
   },
   "jira.issue": {
     description:
@@ -548,6 +550,7 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
           startAt: PAGE_NUMBER,
           total: PAGE_NUMBER,
           nextStartAt: PAGE_NUMBER,
+          ...(name === "jira.search" || name === "jira.search-post" ? { guidance: text(512) } : {}),
         },
         ["outcome"],
       ),

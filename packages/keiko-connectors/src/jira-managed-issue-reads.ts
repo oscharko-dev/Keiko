@@ -127,6 +127,22 @@ export function jiraCommentProjection(value: unknown): CatalogJsonObject | undef
 export function jiraIssueSummary(value: unknown, baseUrl: string): CatalogJsonObject | undefined {
   return issue(value, false, baseUrl);
 }
+// The result row already carries these standard fields under these members, so a request for one
+// of them is answered by the row itself and is not repeated in `fieldValues`.
+const ROW_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["summary", ["summary"]],
+  ["status", ["status"]],
+  ["issuetype", ["issuetype"]],
+  ["project", ["project"]],
+  ["assignee", ["assignee", "assigneeEmpty"]],
+  ["priority", ["priority"]],
+  ["labels", ["labels"]],
+  ["created", ["created"]],
+  ["updated", ["updated"]],
+]);
+function carriedByRow(row: CatalogJsonObject, id: string): boolean {
+  return ROW_MEMBERS.get(id)?.some((member) => Object.hasOwn(row, member)) === true;
+}
 /** A search result with the fields the caller asked for, typed by the instance's own names/schema. */
 function searchIssue(
   value: unknown,
@@ -135,13 +151,30 @@ function searchIssue(
   baseUrl: string,
 ): CatalogJsonObject | undefined {
   const summary = issue(value, false, baseUrl);
-  if (summary === undefined || selected.length === 0) return summary;
+  if (summary === undefined) return summary;
+  // Only what the row does not already say is added: a repeated status or label list would cost
+  // every row of a page its own copy for nothing. An absent standard field stays visible.
+  const extra = selected.filter((id) => !carriedByRow(summary, id));
+  if (extra.length === 0) return summary;
   const fields = jiraSelectedFieldValues(
     { fields: asRecord(value)?.fields, names: body.names, schema: body.schema },
-    selected,
+    extra,
     SEARCH_FIELD_VALUES_MAX_BYTES,
   );
   return fields === undefined ? undefined : { ...summary, fieldValues: fields };
+}
+/**
+ * One closed sentence for a model that asked for field values across more issues than this page
+ * holds. It is built from the total alone: no query, field value or issue text reaches it.
+ */
+function searchGuidance(total: number): string {
+  return `This search matched ${String(total)} issues and returned the requested field values for each result. Field values and progress across many issues come from jira.report; read a few specific issues with jira.issue, or narrow the JQL.`;
+}
+function withSearchGuidance(result: ManagedMcpToolResult): ManagedMcpToolResult {
+  const { items, total } = result.data;
+  if (!Array.isArray(items) || typeof total !== "number" || total <= items.length) return result;
+  const bodies = items.some((item) => asRecord(item)?.fieldValues !== undefined);
+  return bodies ? { ...result, data: { ...result.data, guidance: searchGuidance(total) } } : result;
 }
 function items(
   value: unknown,
@@ -215,11 +248,13 @@ export function jiraIssueReadResult(
   if (name === "jira.comments" && oversizedCommentBody(body.comments))
     return jiraReadFailure("bounds-exceeded");
   return name === "jira.search"
-    ? page(
-        body,
-        items(body.issues, (value) => searchIssue(value, body, selectedFields, baseUrl)),
-        startAt,
-        maxResults,
+    ? withSearchGuidance(
+        page(
+          body,
+          items(body.issues, (value) => searchIssue(value, body, selectedFields, baseUrl)),
+          startAt,
+          maxResults,
+        ),
       )
     : page(body, items(body.comments, jiraCommentProjection), startAt, maxResults);
 }

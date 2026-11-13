@@ -695,6 +695,76 @@ describe("jira.search with requested fields (#4176)", () => {
       },
     ]);
   });
+  it("does not repeat a requested field the result row already carries, and keeps one it does not", async () => {
+    const f = fixture(
+      search([hit("SYN-1", { customfield_1: "Selected", priority: { id: "3", name: "High" } })]),
+    );
+    const result = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["status", "labels", "assignee", "created", "customfield_1", "reporter"],
+    });
+    const [row] = result.data.items as readonly Record<string, unknown>[];
+    expect(row).toMatchObject({
+      status: { name: "Open" },
+      labels: ["synthetic"],
+      assigneeEmpty: true,
+      created: "2026-10-28",
+    });
+    expect(row?.fieldValues).toMatchObject([
+      { id: "customfield_1", state: "value", text: "Selected" },
+      { id: "reporter" },
+    ]);
+    expect((row?.fieldValues as readonly unknown[]).length).toBe(2);
+  });
+  it("omits fieldValues when every requested field is already on the row, but keeps an absent one visible", async () => {
+    const f = fixture(search([hit("SYN-1", {})]));
+    const carried = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["status", "labels"],
+    });
+    expect(JSON.stringify(carried.data.items)).not.toContain("fieldValues");
+    const absent = await f.run("jira.search", { jql: "project=SYN", fields: ["priority"] });
+    expect(absent.data.items).toMatchObject([
+      { fieldValues: [{ id: "priority", state: "unavailable" }] },
+    ]);
+  });
+  describe("steering a search that asks for bodies across more issues than one page", () => {
+    const many = (total: number, issues: readonly unknown[]): unknown => ({
+      ...(search(issues) as Record<string, unknown>),
+      total,
+    });
+    it("carries one closed guidance sentence built from counts only", async () => {
+      const f = fixture(
+        many(240, [hit("SYN-1", { customfield_1: "Private body text", description: "Secret" })]),
+      );
+      const result = await f.run("jira.search", {
+        jql: 'project = "Private Project Name"',
+        fields: ["description", "customfield_1"],
+      });
+      const guidance = result.data.guidance;
+      expect(typeof guidance).toBe("string");
+      expect(guidance).toContain("240");
+      expect(guidance).toContain("jira.report");
+      expect(guidance).toContain("jira.issue");
+      expect(guidance).not.toMatch(/Private|Secret|SYN-1/u);
+    });
+    it.each([
+      [
+        "every issue fits one page",
+        many(1, [hit("SYN-1", { customfield_1: "x" })]),
+        ["customfield_1"],
+      ],
+      ["no field is requested", many(240, [hit("SYN-1", {})]), undefined],
+      ["only row fields are requested", many(240, [hit("SYN-1", {})]), ["status", "labels"]],
+    ])("adds no guidance when %s", async (_name, body, fields) => {
+      const f = fixture(body);
+      const result = await f.run("jira.search", {
+        jql: "project=SYN",
+        ...(fields === undefined ? {} : { fields }),
+      });
+      expect(result.data).not.toHaveProperty("guidance");
+    });
+  });
   it("keeps the summary-only shape when no fields are requested", async () => {
     const f = fixture(search([hit("SYN-1", {})]));
     const result = await f.run("jira.search", { jql: "project=SYN" });

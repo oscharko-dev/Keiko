@@ -239,6 +239,37 @@ it("points figures across many issues to jira.report without attracting every pr
   expect(JSON.stringify(report?.descriptor.inputSchema)).toContain("requirementsFromPods");
 });
 
+it("describes jira.search by what it really does: page sizes, per-row field values and the report alternative", () => {
+  const provider = createJiraProviderForCatalog(vi.fn(), ["jira.search", "jira.search-post"]);
+  for (const name of ["jira.search", "jira.search-post"]) {
+    const tool = provider.tools().find((entry) => entry.name === name);
+    const text = tool?.descriptor.description ?? "";
+    expect(text).toMatch(/25 .*100/u);
+    expect(text).toMatch(/fields[^.]*per.issue|per.issue[^.]*fields/iu);
+    expect(text).toContain("jira.report");
+    expect(text).not.toMatch(/returns issue summaries; fetch an issue/iu);
+    const properties = (tool?.descriptor.inputSchema as { properties: Record<string, unknown> })
+      .properties;
+    expect((properties.fields as { description?: string }).description).toMatch(/\S/u);
+  }
+});
+
+it("admits the closed guidance member of a search result in the advertised result schema", () => {
+  const descriptor = createJiraProviderForCatalog(vi.fn(), ["jira.search"]).tools()[0]?.descriptor;
+  if (descriptor === undefined) throw new TypeError("Expected the search descriptor");
+  const operationBinding = jiraOperationBindingForTool("jira.search");
+  if (operationBinding === undefined) throw new TypeError("Expected search operation binding");
+  const data = {
+    outcome: "succeeded",
+    operationBinding,
+    items: [],
+    startAt: 0,
+    total: 240,
+    guidance: "Use jira.report.",
+  };
+  expect(describeCatalogSchemaMismatch(descriptor.resultSchema, data)).toBeUndefined();
+});
+
 it("advertises the real paging contract of jira.report: summary first, then sections with startAt", () => {
   const provider = createJiraProviderForCatalog(vi.fn(), ["jira.report"]);
   const text = provider.tools().find((tool) => tool.name === "jira.report")?.descriptor.description;
