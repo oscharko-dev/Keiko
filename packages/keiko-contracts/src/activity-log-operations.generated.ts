@@ -1708,7 +1708,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["project", "jql", "project-jql", "report"],
+        values: ["project", "jql", "project-jql", "epic", "report"],
       },
       continued: {
         type: "boolean",
@@ -1724,6 +1724,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "board-configuration",
           "project-screen",
           "time-tracking",
+          "time-tracking-fallback",
+          "field-fallback",
           "unavailable",
         ],
       },
