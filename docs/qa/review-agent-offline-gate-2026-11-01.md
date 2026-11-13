@@ -306,6 +306,84 @@ seed scoring now reports such a control as `incomplete`. Only two of the three c
 measured, so the one false alarm is a lower bound. The recall verdict does not depend on clean
 controls and is unchanged.
 
+### Seed runs after the first gate result
+
+Each later change to the review pipeline was followed by a seed run with the same pair. The seed
+set runs as often as needed; none of these runs read a holdout pull request. No run of a tree
+under review found every required seed. Two runs of prompt variants on local branches did; the last
+reading bullet names them.
+
+| Date       | Tree                                                                                          | Required found | Required seeds not found                                                    | False alarms on clean controls | Settlements                 |
+| ---------- | --------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------- | ------------------------------ | --------------------------- |
+| 2026-11-08 | `546ef5daf` (diff package in parts, #4320)                                                    | 10 of 13       | 3 incomplete: unchecked-input, secretbox-authentication, workspace-relative | 2                              | 14 complete, 3 model-failed |
+| 2026-11-09 | `840ec9357` (epic branch with #4320, run to capture the invalid tool calls)                   | 11 of 13       | workspace-relative missed; secretbox-authentication incomplete              | 1                              | 16 complete, 1 model-failed |
+| 2026-11-09 | `572cf0d25` (described schema repairs, first commit of #4330)                                 | 12 of 13       | off-by-one missed                                                           | 1                              | 17 complete                 |
+| 2026-11-10 | `712f39913` (one defect definition, #4332) plus five lab-only commits, local head `d5b6de1d8` | 12 of 13       | off-by-one missed                                                           | 0                              | 16 complete, 1 model-failed |
+| 2026-11-12 | `ba4a5993b` (three lines after a change)                                                      | 12 of 13       | workspace-relative missed                                                   | 0                              | 17 complete                 |
+| 2026-11-12 | `0929b4ed0` (local merge of the read allowance `d5eb80bd5` and `39144f91a`)                   | 12 of 13       | secretbox-authentication incomplete                                         | 0                              | 16 complete, 1 model-failed |
+| 2026-11-12 | `0929b4ed0`, second run                                                                       | 11 of 13       | swallowed-error missed; workspace-relative incomplete                       | 0                              | 16 complete, 1 model-failed |
+
+Each tree is the checkout commit the run's evidence records. #4330 merged as the squash
+commit `1ed4787e9`, which also contains its second commit `883a8b355`; the trees from 2026-11-10 on
+include `1ed4787e9`.
+
+Reading of these runs:
+
+- The three incomplete reviews of 2026-11-08 ended on an invalid tool call. The capture run was
+  made to record such calls and had one incomplete review. The one incomplete review of 2026-11-10
+  was the advisory seed; its cause was not determined.
+- The 2026-11-10 run was made while every process start on the lab machine took about 13 seconds.
+  It used a local branch that raised 20 timeouts and wall-time limits and re-pinned the
+  governed-tools plugin digest one of those raises changed. Its prompts, token budgets and review
+  logic were the tree's own, its durations are not comparable, and its configuration digest is not
+  the tree's. It is evidence for the prompt change of #4332, not a gate verdict for a release.
+- The five `missed` outcomes show the same failure pattern: off-by-one on 2026-11-06, 2026-11-09
+  and 2026-11-10, and workspace-relative on 2026-11-09 and 2026-11-12. Each time the Reviewer
+  reported the changed lines and named a consequence that a later check stops: an `undefined` item
+  that the guard on the next line drops, or a path outside the workspace that the containment check
+  still refuses. The Counter-checker refuted each candidate (`guarded-elsewhere` or
+  `evidence-mismatch`) and cited that check, which is correct for the consequence as stated. The
+  consequence that gets past the check was not reported. Why the Reviewer stops at the first
+  consequence is open.
+- With three lines after a change the off-by-one seed's guard is inside the hunk, and the
+  2026-11-12 run found that seed. In the workspace-relative seed the check was already in view, so
+  more context is not what that seed lacks.
+- In the 2026-11-12 run on `ba4a5993b` one review, `secretbox-authentication-failure-swallowed`,
+  used 970,637 of the run's 1,291,313 Reviewer prompt tokens in a single session.
+- The two runs on `0929b4ed0` measure the Reviewer's read allowance of 24 calls. Their review code
+  is the code of the merge commit `3eef798e7`, without the later rule that a session which was
+  refused a read and filed no report is incomplete. One session of the 34 reached the allowance: 24
+  calls were let through and one was refused, then the session filed its report and completed. No
+  review ran out of prompt budget, and the Reviewer used 935,336 and 546,547 prompt tokens per run.
+- The three required seeds these two runs did not find have three different causes, and none is the
+  pattern above. In the first run the Counter-checker's model call failed and left the one candidate
+  undecided. In the second run the Counter-checker refuted a correct report of the swallowed-error
+  seed as `evidence-mismatch`, and the Reviewer's report call for the workspace-relative seed was
+  invalid twice, so the turn failed with `invalid-tool-call` and the session ended without a
+  candidate.
+- The evidence of the two runs on `0929b4ed0` is `evidence.json` with sha256
+  `734b3deae6cd9851c2fec9b2d3fae4956155c62848ef3ab05897622995cdcd2f` (first run) and
+  `cd3275152373104874c8ead3cb6aad0cd7f498e23854d84b0cf78991ec8015a1` (second run).
+- A session that the read allowance stops without an accepted report settles its run
+  `incomplete/budget-exhausted` (R4130-054). That rule costs complete reviews: in the 418 stored
+  reviews of the 4-bit gate runs, 30 of the 84 complete reviews made more than 24 model calls, and
+  9 of those 30 had no accepted report. Model calls include reports, so at most 9 of the 84 would
+  have settled `incomplete` under the rule. Development iteration 7 is read against that number.
+- Two prompt variants were run twice each in the same night. Each is one local commit on top of
+  `0929b4ed0`. The branches are kept on the lab machine and are not pushed, so these four runs are
+  lab evidence that this repository cannot reproduce, and none of them is a gate verdict.
+
+  | Variant                                                                                                          | Local head  | Run | Required found | Required seed not found                                   | False alarm on a clean control | `evidence.json` sha256                                             |
+  | ---------------------------------------------------------------------------------------------------------------- | ----------- | --- | -------------- | --------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------ |
+  | Counter-checker: an overstated consequence is still a defect when the reported lines misbehave for another input | `5e17e26f9` | 1   | 13 of 13       | none                                                      | synthetic-clean-added-test     | `e2af883a76960ac1ddb6d868e57c3ecd23b51b9eec76a41c6e5a5cbe0458c83d` |
+  | same                                                                                                             | `5e17e26f9` | 2   | 12 of 13       | secretbox-authentication incomplete (`deadline-exceeded`) | none                           | `78459bd2c5cf30f1f00440ae660689e2a94ff46e2fb12d732bfa71c49f0da7b3` |
+  | Reviewer: work one input through the head and the base before reporting                                          | `6c8899b3b` | 1   | 13 of 13       | none                                                      | none                           | `d8cc6efb489b55df7c4359fa134b7f18c0f99e7dda8754c77cf5b77942d5b30a` |
+  | same                                                                                                             | `6c8899b3b` | 2   | 12 of 13       | secretbox-binary-envelope-boundary missed                 | synthetic-clean-rename         | `4ab8063b5c8372cc32d3a02d5436e968397976e7afe4724f34e722890f8bf128` |
+
+  A clean control drew a candidate in 1 of 6 reviews on the unchanged tree, in 2 of 6 with the
+  Counter-checker variant and in 5 of 6 with the Reviewer variant. Two runs per variant do not
+  separate either from the unchanged tree, so neither is adopted.
+
 ## Decision
 
 The offline gate fails. The holdout fails on coverage, and the seed gate fails on one missed and two

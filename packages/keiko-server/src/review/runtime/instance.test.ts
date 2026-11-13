@@ -5,9 +5,11 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
+import { REVIEW_RUN_DEFAULT_MAX_READ_CALLS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 import type { GovernedCodingToolPort } from "../../coding-runtime/codingToolGovernedDelegate.js";
+import type { ReviewReadAllowance } from "../../coding-runtime/reviewRuntimeGuard.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../../diagnostics-log.js";
 import { DiffFixtureRepository } from "../diff-package/diffFixtures.test-support.js";
 import type { ReviewRuntimeComposeRefusal, ReviewRuntimeComposition } from "./composition.js";
@@ -96,6 +98,7 @@ function service(
     readonly layers?: ReviewRuntimeLayers | (() => ReviewRuntimeLayers);
     readonly compose?: boolean;
     readonly diagnostics?: ServerDiagnosticSink;
+    readonly maxReadCalls?: number;
   } = {},
 ): ServiceFixture {
   const log = createBufferedServerLogSink();
@@ -107,11 +110,12 @@ function service(
     (
       instanceId: string,
       port: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
+      reads: (runId: string) => ReviewReadAllowance | undefined,
     ): ReviewRuntimeComposition | ReviewRuntimeComposeRefusal => {
       if (options.compose === false) return { startFailure: "loopback-unavailable" };
       const scripted = scripts[Math.min(composed, scripts.length - 1)] ?? { reports: [] };
       composed += 1;
-      return fakeReviewComposition(instanceId, port, scripted, observed);
+      return fakeReviewComposition(instanceId, port, scripted, observed, reads);
     },
   );
   const subject = createReviewRuntimeService({
@@ -121,6 +125,7 @@ function service(
     runner: () => createGitReviewProcessRunner(),
     activityLog: log,
     diagnostics: options.diagnostics,
+    ...(options.maxReadCalls === undefined ? {} : { maxReadCalls: options.maxReadCalls }),
     setTimer: (callback) => {
       timers.push(callback);
       return timers.length;
@@ -244,42 +249,144 @@ describe("createReviewRuntimeService", () => {
     // The quarantined instance ends on its own idle stop, armed when its review ended.
     expect(timers).toHaveLength(2);
     timers[0]?.();
+    // The stop line is the last step of the stop, so it is the condition to wait for.
     await vi.waitFor(() => {
-      expect(subject.instanceCount()).toBe(1);
+      const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
+      expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
     });
+    expect(subject.instanceCount()).toBe(1);
     expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
-    const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
-    expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
   });
 
-  it("refuses a review that would need a second quarantined instance", async () => {
+  // #4130: every part of a review in several parts is its own session, and on macOS each session
+  // leaves its instance holding a recovery-required run. The third part within the idle period
+  // found the quarantine taken and was refused (start failure `quarantine-limit`), so the review settled
+  // `incomplete/model-failed` with its remaining parts unreviewed (development iteration 7, first
+  // review, part 4 of 4). The older quarantined instance is now ended to make room.
+  it("ends the quarantined instance when the serving one has to be set aside too", async () => {
     const { repo, base, head } = headRepository();
     const unproven: ScriptedReviewRun = {
       reports: [],
       terminal: "recovery-required",
       reapUnproven: true,
     };
-    const { subject, compose, observed, log } = service([unproven, unproven, { reports: [] }]);
+    const { subject, compose, observed, log } = service(unproven);
+    const instanceCounts: number[] = [];
 
-    await subject.run(request(repo, base, head));
-    await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
-    const third = await subject.run(
-      request(repo, base, head, { reviewRunId: "review-run-3", correlationId: "corr-review-3" }),
+    for (const part of [1, 2, 3, 4]) {
+      const result = await subject.run(
+        request(repo, base, head, {
+          reviewRunId: `review-run-${String(part)}`,
+          correlationId: `corr-part-${String(part)}`,
+        }),
+      );
+      expect(result, `part ${String(part)}`).toMatchObject({
+        ok: true,
+        outcome: "completed",
+        runtimeCleanup: "unproven",
+      });
+      instanceCounts.push(subject.instanceCount());
+    }
+
+    // One serving and at most one quarantined instance, however many sessions follow each other.
+    expect(instanceCounts).toEqual([1, 2, 2, 2]);
+    expect(compose).toHaveBeenCalledTimes(4);
+    expect(observed.starts).toHaveLength(4);
+    expect(observed).toMatchObject({ shutdowns: 2, closes: 2 });
+    const stopped = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(stopped).toHaveLength(2);
+    expect(stopped.map((event) => [event.correlationId, event.level, event.extra])).toEqual([
+      ["corr-part-3", "info", expect.objectContaining({ trigger: "quarantine-replaced" })],
+      ["corr-part-4", "info", expect.objectContaining({ trigger: "quarantine-replaced" })],
+    ]);
+    expect(stopped.every((event) => event.extra?.runCount === 1)).toBe(true);
+  });
+
+  // R4130-057: a shutdown that threw left its instance out of both maps and open, so nothing
+  // could ever close it, and every second session was refused. An instance taken out of the maps
+  // is now always closed and always gets its stop line.
+  it("closes a quarantined instance whose shutdown fails and keeps serving sessions", async () => {
+    const { repo, base, head } = headRepository();
+    const stuck: ScriptedReviewRun = {
+      reports: [],
+      terminal: "recovery-required",
+      reapUnproven: true,
+      shutdownFails: true,
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (record): void => {
+        records.push(record);
+      },
+    };
+    const { subject, compose, observed, log } = service(stuck, { diagnostics });
+    const instanceCounts: number[] = [];
+
+    for (const part of [1, 2, 3, 4, 5]) {
+      const result = await subject.run(
+        request(repo, base, head, {
+          reviewRunId: `review-run-${String(part)}`,
+          correlationId: `corr-part-${String(part)}`,
+        }),
+      );
+      expect(result, `part ${String(part)}`).toMatchObject({ ok: true, outcome: "completed" });
+      instanceCounts.push(subject.instanceCount());
+    }
+
+    expect(instanceCounts).toEqual([1, 2, 2, 2, 2]);
+    expect(compose).toHaveBeenCalledTimes(5);
+    // Every composition but the serving and the quarantined one is closed: none is left untracked.
+    expect(observed).toMatchObject({ shutdowns: 3, closes: 3 });
+    const stopped = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(stopped.map((event) => event.correlationId)).toEqual([
+      "corr-part-3",
+      "corr-part-4",
+      "corr-part-5",
+    ]);
+    for (const event of stopped) {
+      expect(event).toMatchObject({
+        level: "warn",
+        extra: { trigger: "quarantine-replaced", stopFailed: true, runCount: 1 },
+      });
+    }
+    expect(records.map((record) => [record.operation, record.correlationId])).toEqual([
+      ["review.run.runtime-stop", "corr-part-3"],
+      ["review.run.runtime-stop", "corr-part-4"],
+      ["review.run.runtime-stop", "corr-part-5"],
+    ]);
+  });
+
+  // R4130-057, the idle path: the timer's stop had no handler for a rejected shutdown, and the
+  // instance stayed open and untracked.
+  it("closes an idle instance whose shutdown fails", async () => {
+    const { repo, base, head } = headRepository();
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (record): void => {
+        records.push(record);
+      },
+    };
+    const { subject, observed, log, timers } = service(
+      { reports: [], shutdownFails: true },
+      { diagnostics },
     );
 
-    expect(third).toEqual({ ok: false, reason: "runtime-unavailable", rules: "absent" });
-    expect(compose).toHaveBeenCalledTimes(2);
-    expect(observed.starts).toHaveLength(2);
-    expect(observed).toMatchObject({ shutdowns: 0, closes: 0 });
-    expect(subject.instanceCount()).toBe(2);
-    // R4130-019: the refusal names its cause under the review's correlation.
-    const failed = log.events.filter((event) => event.op === "review.run.runtime-stopped");
-    expect(failed).toHaveLength(1);
-    expect(failed[0]).toMatchObject({
-      correlationId: "corr-review-3",
-      level: "warn",
-      extra: { trigger: "start-failed", startFailure: "quarantine-limit", runCount: 0 },
+    await subject.run(request(repo, base, head));
+    expect(subject.instanceCount()).toBe(1);
+    timers.at(-1)?.();
+
+    await vi.waitFor(() => {
+      expect(log.events.some((event) => event.op === "review.run.runtime-stopped")).toBe(true);
     });
+    expect(subject.instanceCount()).toBe(0);
+    expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
+    const stopped = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0]).toMatchObject({
+      level: "warn",
+      extra: { trigger: "idle", stopFailed: true, runCount: 1 },
+    });
+    expect(records.map((record) => record.operation)).toEqual(["review.run.runtime-stop"]);
   });
 
   it("unbinds the review worktree after the run and reuses the instance for the next review", async () => {
@@ -313,12 +420,13 @@ describe("createReviewRuntimeService", () => {
     await subject.run(request(repo, base, head));
     expect(timers).toHaveLength(1);
     timers[0]?.();
+    // The stop line is the last step of the stop, so it is the condition to wait for.
     await vi.waitFor(() => {
-      expect(subject.instanceCount()).toBe(0);
+      const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
+      expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
     });
+    expect(subject.instanceCount()).toBe(0);
     expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
-    const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
-    expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
   });
 
   // Security review of #4135, finding 5: an idle stop that fell while a later review held the
@@ -523,6 +631,72 @@ describe("createReviewRuntimeService", () => {
         expect(next).not.toMatchObject({ reason: "busy" });
       },
     );
+  });
+
+  // #4130: a Reviewer that kept reading resent its whole conversation with every call and ran out
+  // of prompt budget before it reported. Each session gets its own read allowance.
+  describe("the session's read allowance", () => {
+    it("returns the admitted and the refused read calls of the session", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject } = service({ reports: [VALID_REPORT], reads: 5 }, { maxReadCalls: 3 });
+
+      const result = await subject.run(request(repo, base, head));
+
+      expect(result).toMatchObject({
+        ok: true,
+        outcome: "completed",
+        readCalls: { admitted: 3, refused: 2 },
+      });
+      if (!result.ok) throw new Error("expected a run");
+      expect(result.candidates).toHaveLength(1);
+    });
+
+    it("gives the next session of the instance a fresh allowance", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject, compose } = service({ reports: [], reads: 2 }, { maxReadCalls: 2 });
+
+      const first = await subject.run(request(repo, base, head));
+      const second = await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
+
+      expect(compose).toHaveBeenCalledTimes(1);
+      expect(first).toMatchObject({ ok: true, readCalls: { admitted: 2, refused: 0 } });
+      expect(second).toMatchObject({ ok: true, readCalls: { admitted: 2, refused: 0 } });
+    });
+
+    it("holds no allowance once the session has ended", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject, compose } = service({ reports: [], reads: 1 }, { maxReadCalls: 2 });
+
+      await subject.run(request(repo, base, head));
+
+      const reads = compose.mock.calls[0]?.[2] as
+        ((runId: string) => ReviewReadAllowance | undefined) | undefined;
+      expect(reads).toBeTypeOf("function");
+      expect(reads?.("review-run-1")).toBeUndefined();
+    });
+
+    it("answers the contract's default number of read calls", async () => {
+      const { repo, base, head } = headRepository();
+      const reads = REVIEW_RUN_DEFAULT_MAX_READ_CALLS + 1;
+      const { subject } = service({ reports: [], reads });
+
+      await expect(subject.run(request(repo, base, head))).resolves.toMatchObject({
+        ok: true,
+        readCalls: { admitted: REVIEW_RUN_DEFAULT_MAX_READ_CALLS, refused: 1 },
+      });
+    });
+
+    it("reports no read calls for a launch that started no session", async () => {
+      const { repo, base, head } = headRepository();
+      const { subject } = service(
+        { reports: [] },
+        { layers: { ...reviewLayers(), toolProfile: "native" } },
+      );
+
+      const refused = await subject.run(request(repo, base, head));
+
+      expect(refused).toEqual({ ok: false, reason: "native-profile", rules: "absent" });
+    });
   });
 
   // R4130-019: a composition that failed returned `undefined` without a line, so every review

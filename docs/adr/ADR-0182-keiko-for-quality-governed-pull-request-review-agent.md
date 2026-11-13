@@ -71,6 +71,35 @@ findings about the changed code in that part; a single-part task has no such lin
 holdout motivated the split: 158 of 226 measured reviews left diff files unprocessed because the
 whole package had to fit one task.
 
+Each session also has a read allowance (Issue #4130): the tool facade answers at most
+`REVIEW_RUN_DEFAULT_MAX_READ_CALLS` (24) read, search and discover calls of a session. It refuses
+every further one before any admission, with one fixed instruction to report the confirmed findings
+and end the turn. `keiko_review_report` is never counted or refused by it. The task already carries
+every changed hunk of the part, so the allowance bounds only how much surrounding code a session
+fetches. A session that was refused a read and then ends its turn is judged by what it filed
+(R4130-054). With at least one accepted report it is a completed session, and its part counts as
+reviewed. Without one, Keiko cut its reading short and nothing shows what it examined, so its part
+fails with `budget-exhausted` and the run settles `incomplete` (D6). The allowance can therefore
+turn a clean review into an incomplete one, never an unfinished review into a clean one. A session
+that kept reading until its prompt budget ran out settled `incomplete` before the allowance as
+well. A session that would have read on, found nothing and completed now settles `incomplete` too,
+because the prompt forbids a report that says there is no defect, so a stopped session and a
+session with nothing to report look the same. In the 418 stored reviews, 30 of the 84 complete ones
+made more than 24 model calls, and 9 of those 30 had no accepted report. Model calls include
+reports, so 9 of 84 is an upper bound on the complete reviews this rule would have settled
+`incomplete`. Each `review.run.part` line records the read calls the allowance let
+through to admission and the ones it refused (`readCallCount`, `refusedReadCallCount`). A call
+counts when the allowance lets it through, whether or not a later check then answers it `busy` or
+denies it, because each one costs the Reviewer a model call. The
+reason is the measured behaviour of a local Reviewer: every tool call resends the whole
+conversation, and in the 418 stored reviews of the 4-bit gate runs the 127 that ran out of prompt
+budget had made 39 to 45 model calls (first to third quartile), 73 of them without one report.
+After 26 model calls a review had used 703,000 prompt tokens at the median and 1,143,000 at most,
+which leaves room for its reports within the default prompt budget. The Reviewer prompt names the
+allowance and still plans for about 15 calls. The counter and its predicate live beside the layer-4
+guard (`reviewRuntimeGuard.ts`); the review runtime creates one per session and returns its counts
+with the session's result.
+
 ### D2 — Read-only by construction, independent of the autonomy mode
 
 A review run has a closed tool allowlist: `keiko_workspace_read`, `keiko_workspace_discover`,
@@ -317,7 +346,8 @@ review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too
 `skipped/diff-too-large`, `runtime-unavailable` and a Reviewer run the orchestrator refused
 `skipped/model-unavailable`, a failed read-only self-check `skipped/policy-invalid`, and a failed
 rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted prompt allowance or
-authority budget is `incomplete/budget-exhausted`, with an exhausted envelope duration
+authority budget is `incomplete/budget-exhausted`, and so is a Reviewer session that the read
+allowance (D1) refused a read and that filed no accepted report; with an exhausted envelope duration
 `incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`; its candidates are still
 counter-checked, and findings confirmed before an incomplete settlement are presented. A Reviewer
 runtime run that settled `recovery-required` is such a failed Reviewer, with one exception (#4136):
@@ -338,11 +368,23 @@ such a run would refuse the next start, so the next review of the repository doe
 instance is set aside untouched (no early release, acknowledgement or shutdown; it stays quarantined
 until its own idle stop, and `release` does not end it) and a fresh instance is composed beside it,
 recorded as `placement: beside-quarantined` on `review.run.runtime-started`. One review per
-repository at a time still holds. At most one quarantined instance per repository: a review that
-would need a second one is refused as `runtime-unavailable` and settles `skipped/model-unavailable`.
+repository at a time still holds. At most one quarantined instance per repository. When the serving
+instance has to be set aside while an older one is still quarantined, the older one is ended first:
+it serves no review, so this is its idle stop brought forward, recorded as
+`review.run.runtime-stopped` with trigger `quarantine-replaced` under the correlation of the review
+that needed the place (Issue #4130). The reason is a review in several parts (D1): every part is its
+own session, and on macOS every session leaves its instance holding such a run, so a review needs a
+fresh instance per part. Before this rule a part that needed a second quarantined instance was
+refused. In the first review of development iteration 7 (58 files in four parts) the fourth part
+started 4 minutes after the second had ended, found the second part's instance still quarantined
+and was refused, and the review lost that part. Ending an instance always closes its composition
+and always writes its stop line, also when its shutdown or the close fails (R4130-057): the line
+then carries `stopFailed` at `warn` and the error goes to the diagnostic sink as
+`review.run.runtime-stop`. The place is therefore free afterwards, no session is refused for it, and
+no composition is left open and untracked. The same holds for the idle stop and the shutdown.
 Every instance that cannot be started is logged as `review.run.runtime-stopped` with trigger
 `start-failed` under the review's correlation and a closed `startFailure`: the coding runtime's
-activation reason, `host-unavailable`, or `quarantine-limit` (R4130-019). An out-of-range
+activation reason or `host-unavailable` (R4130-019). An out-of-range
 `KEIKO_REVIEW_RUN_MAX_*` value leaves the review runtime and the review run service uncomposed
 with one `review.runtime.budget` diagnostic; it never fails server start (R4130-018).
 The
@@ -405,7 +447,7 @@ verbatim (exact bytes for a name that is not UTF-8) and never enter the Activity
 is `incomplete/files-unprocessed`; nothing reviewable is `skipped/no-reviewable-changes`, or
 `skipped/diff-too-large` when reviewable files were left unprocessed; an exceeded time or byte bound
 fails the package closed as `skipped/diff-too-large` (`reviewDiffPackageFailureSettlement`). The
-packaging ports PR-Agent v0.49.0: five lines of context before and one after each hunk, extension to
+packaging ports PR-Agent v0.49.0: five lines of context before and three after each hunk, extension to
 the enclosing function or class header within ten lines (detected by Keiko for TypeScript,
 JavaScript, Python, Java, Go, C# and Kotlin, since in-tree attributes are neutralized), files of the
 base commit's dominant languages first and larger changes first, and `clip`, which in Keiko keeps
@@ -418,8 +460,16 @@ every part is open, the single-part rules apply to the last one. Each part is ve
 and a file keeps only the hunks that follow each other without a gap from its first hunk, so a hunk
 a part's verification drops ends that file. Whatever does not fit the last part is `unprocessed`
 (`budget`) and settles the run `incomplete/files-unprocessed` exactly as before; `usedTokens` is the
-sum of the parts' counts. PR-Agent applies its extra lines on top of the provider's three default context lines;
-Keiko applies the five and one exactly, and child 8 measurement may change these defaults.
+sum of the parts' counts. PR-Agent applies its extra lines (five before, one after) on top of the
+provider's three default context lines; Keiko applies its own counts exactly. Child 8 measurement
+changed the lines after a change from one to three (Issue #4130): with one line, a guard two lines
+below a changed condition lay outside the hunk, and the Reviewer reported the value that guard
+stops. The basis is a lab probe, not a gate run: it sampled the Reviewer alone on the off-by-one
+seed, with approximated read tools and no Counter-checker. With one line, 8 of 30 sampled reports
+named only the consequence that gets past the guard (three pooled rounds). With three lines, 20 of
+28 did (two pooled rounds, 16 of the 28 samples from a hand-edited task and 12 from the product's
+builder). The seed gate is the end-to-end measurement of this default, and its runs are recorded in
+`docs/qa/review-agent-offline-gate-2026-11-01.md`.
 
 ### D7 — Finding decisions and the audit trail
 

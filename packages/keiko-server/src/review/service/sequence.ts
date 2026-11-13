@@ -416,6 +416,7 @@ function partLine(
     ...(result.ok && result.runtimeRunId !== undefined
       ? { runtimeRunId: result.runtimeRunId }
       : {}),
+    ...(result.ok && result.readCalls !== undefined ? { readCalls: result.readCalls } : {}),
   };
   if (step.kind === "stop") return { ...base, outcome: "refused", reason: step.settlement.reason };
   const fact = step.fact;

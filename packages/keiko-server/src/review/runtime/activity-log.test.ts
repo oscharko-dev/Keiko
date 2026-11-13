@@ -86,6 +86,41 @@ describe("review runtime Activity Log proofs", () => {
     });
   });
 
+  // #4130: a quarantined instance ended before its idle stop, to make room for the next one.
+  it("proves review.run.runtime-stopped for a replaced quarantined instance", () => {
+    const line = onlyLine((sink) => {
+      logReviewRuntimeStopped(sink, CORRELATION, {
+        instanceId: INSTANCE,
+        trigger: "quarantine-replaced",
+        idleDurationMs: 249_000,
+        runCount: 1,
+      });
+    });
+    expect(expectActivityLogProof("review.run.runtime-stopped.line", line)).toMatchObject({
+      trigger: "quarantine-replaced",
+      idleDurationMs: 249_000,
+      runCount: 1,
+    });
+  });
+
+  // R4130-057: a stop whose shutdown failed still closes the instance and says so at `warn`.
+  it("proves review.run.runtime-stopped for a stop that failed", () => {
+    const capture = captureActivityLog();
+    logReviewRuntimeStopped(capture.sink, CORRELATION, {
+      instanceId: INSTANCE,
+      trigger: "idle",
+      idleDurationMs: 300_000,
+      runCount: 1,
+      stopFailed: true,
+    });
+    const [event] = capture.events;
+    if (event === undefined) throw new TypeError("expected one event");
+    expect(event.level).toBe("warn");
+    expect(
+      expectActivityLogProof("review.run.runtime-stopped.line", formatActivityLogProofLine(event)),
+    ).toMatchObject({ trigger: "idle", stopFailed: true });
+  });
+
   it("proves review.run.runtime-stopped for an instance that could not start (R4130-019)", () => {
     const line = onlyLine((sink) => {
       logReviewRuntimeStopped(sink, CORRELATION, {

@@ -489,9 +489,18 @@ export interface ReviewPullRequestDetailResponse {
  * `max_extra_lines_before_dynamic_context`): every included hunk carries this many unchanged
  * lines before and after its changes, and is extended upward to its enclosing function or class
  * header when that header lies within the dynamic window. Child 8 measurement may change them.
+ *
+ * The lines after a change are 3, not PR-Agent's configured 1 (#4130 seeds, 2026-11-11). PR-Agent
+ * adds its one line to the three the provider's patch already carries, so it shows four. With
+ * exactly one line the off-by-one seed's hunk ended before the guard two lines below the changed
+ * loop bound, and the Reviewer reported the value that guard stops. The basis is a lab probe of
+ * the Reviewer alone, with approximated read tools and no Counter-checker: 8 of 30 sampled reports
+ * named only the consequence that gets past the guard with one line, and 20 of 28 with three (16
+ * of those 28 from a hand-edited task). The seed gate is the end-to-end measurement; its runs are
+ * recorded in docs/qa/review-agent-offline-gate-2026-11-01.md.
  */
 export const REVIEW_DIFF_CONTEXT_LINES_BEFORE = 5;
-export const REVIEW_DIFF_CONTEXT_LINES_AFTER = 1;
+export const REVIEW_DIFF_CONTEXT_LINES_AFTER = 3;
 export const REVIEW_DIFF_DYNAMIC_CONTEXT_MAX_LINES = 10;
 /** PR-Agent's own cap on configured context lines (`MAX_EXTRA_LINES`). */
 export const REVIEW_DIFF_CONTEXT_LINES_MAX = 10;
@@ -743,6 +752,16 @@ export const REVIEW_RULES_FILE_DEFAULT_PATH = ".keiko/review-rules.md";
 /** Reviewer run budgets: defaults, never above the coding envelope maxima (ADR-0182 D1). */
 export const REVIEW_RUN_DEFAULT_PROMPT_TOKENS = 1_500_000;
 export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
+/**
+ * The read, search and discover calls one Reviewer session gets answered (ADR-0182 D1, Issue
+ * #4130). Every call resends the whole conversation, so a session that keeps reading uses up its
+ * prompt allowance before it reports. In the 418 stored reviews of the 4-bit gate runs, the 127
+ * that ran out of prompt budget made 39 to 45 model calls (first to third quartile), and 73 of them
+ * had reported nothing. After 26 model calls a review had used 703,000 prompt tokens at the median
+ * and 1,143,000 at most, which leaves room for the reports. The Reviewer prompt still plans for
+ * about 15 calls.
+ */
+export const REVIEW_RUN_DEFAULT_MAX_READ_CALLS = 24;
 /**
  * The most parts one review's diff package is split into (ADR-0182 D1). Each part fits the
  * runtime's first-prompt bound and gets its own Reviewer session, which the run budgets above

@@ -24,12 +24,22 @@ import type { ServerLogSink } from "../../observability/index.js";
 import { correlationIdOrUnknown } from "../../correlation.js";
 import { reviewEvidenceDigest } from "../activity-log.js";
 
-export type ReviewRuntimeStopTrigger = "idle" | "shutdown" | "start-failed";
+/**
+ * Why a review instance stopped. `quarantine-replaced` (#4130): a quarantined instance was ended
+ * before its idle stop, because the repository's serving instance had to be quarantined in its
+ * place.
+ */
+const REVIEW_RUNTIME_STOP_TRIGGERS = [
+  "idle",
+  "shutdown",
+  "start-failed",
+  "quarantine-replaced",
+] as const;
+export type ReviewRuntimeStopTrigger = (typeof REVIEW_RUNTIME_STOP_TRIGGERS)[number];
 
 /**
  * Why a review instance could not be started (R4130-019): the activation's closed unavailable
- * reason, a runtime host that could not be created, or a repository that already holds its one
- * quarantined instance.
+ * reason, or a runtime host that could not be created.
  */
 const REVIEW_RUNTIME_START_FAILURES = [
   "runtime-disabled",
@@ -42,7 +52,6 @@ const REVIEW_RUNTIME_START_FAILURES = [
   "loopback-unavailable",
   "runtime-unqualified",
   "host-unavailable",
-  "quarantine-limit",
 ] as const;
 export type ReviewRuntimeStartFailure = (typeof REVIEW_RUNTIME_START_FAILURES)[number];
 
@@ -106,7 +115,7 @@ const REVIEW_RUN_RUNTIME_STOPPED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["idle", "shutdown", "start-failed"],
+      values: REVIEW_RUNTIME_STOP_TRIGGERS,
     },
     idleDurationMs: { type: "integer", dataClass: "duration", required: true },
     runCount: { type: "integer", dataClass: "count", required: true },
@@ -117,6 +126,9 @@ const REVIEW_RUN_RUNTIME_STOPPED = defineActivityLogOperation({
       required: false,
       values: REVIEW_RUNTIME_START_FAILURES,
     },
+    // R4130-057: present (`true`) only when the instance's shutdown or the close of its composition
+    // failed. The instance is closed and untracked all the same; the diagnostic names the error.
+    stopFailed: { type: "boolean", dataClass: "closed-enum", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -361,6 +373,8 @@ export interface ReviewRuntimeStoppedLine {
   readonly runCount: number;
   /** Only with `start-failed`: why the instance could not be started. */
   readonly startFailure?: ReviewRuntimeStartFailure | undefined;
+  /** Only `true`: the shutdown or the close of the composition failed (R4130-057). */
+  readonly stopFailed?: true | undefined;
 }
 
 export function logReviewRuntimeStopped(
@@ -372,7 +386,7 @@ export function logReviewRuntimeStopped(
     activityLogEvent(
       REVIEW_RUN_RUNTIME_STOPPED,
       {
-        level: line.trigger === "start-failed" ? "warn" : "info",
+        level: line.trigger === "start-failed" || line.stopFailed === true ? "warn" : "info",
         correlationId: correlationIdOrUnknown(correlationId),
       },
       {
@@ -381,6 +395,7 @@ export function logReviewRuntimeStopped(
         idleDurationMs: Math.max(0, Math.round(line.idleDurationMs)),
         runCount: line.runCount,
         ...(line.startFailure === undefined ? {} : { startFailure: line.startFailure }),
+        ...(line.stopFailed === true ? { stopFailed: true } : {}),
       },
     ),
   );

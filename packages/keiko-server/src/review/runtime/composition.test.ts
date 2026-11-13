@@ -20,6 +20,7 @@ import { createBufferedServerLogSink } from "../../../../../tests/support/buffer
 import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "../../observability/index.js";
 import type { CodingToolResult } from "../../coding-runtime/codingToolIpc.js";
+import { REVIEW_READ_ALLOWANCE_GUIDANCE } from "../../coding-runtime/reviewRuntimeGuard.js";
 import type {
   ProductionRuntimeBackendInput,
   ProductionRuntimeBackendResolver,
@@ -150,6 +151,7 @@ function processResult(status: string): unknown {
 function scriptedRun(
   input: ProductionRuntimeBackendInput,
   results: Map<string, CodingToolResult>,
+  calls: readonly Readonly<Record<string, unknown>>[],
 ): ReturnType<ProductionRuntimeBackendResolver["createRun"]> {
   const capability = input.minted.toolFacadeCapability;
   const runId = input.request.runId;
@@ -187,7 +189,7 @@ function scriptedRun(
     } as never,
     turnPort: {
       submitTurn: async () => {
-        for (const call of SCRIPTED_CALLS) {
+        for (const call of calls) {
           const result = await input.toolFacade.execute({ body: JSON.stringify(call), capability });
           results.set(String(call.actionId), result);
         }
@@ -199,7 +201,13 @@ function scriptedRun(
   };
 }
 
-function harness(): Harness {
+interface HarnessOptions {
+  /** What the scripted model calls; the read-only layer script by default. */
+  readonly calls?: readonly Readonly<Record<string, unknown>>[];
+  readonly maxReadCalls?: number;
+}
+
+function harness(options: HarnessOptions = {}): Harness {
   const reviewRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-review-root-")));
   roots.push(reviewRoot);
   const worktree = join(reviewRoot, "wt-1");
@@ -216,7 +224,7 @@ function harness(): Harness {
   const readText = vi.fn(() => Promise.resolve({ ok: false as const, reason: "denied" as const }));
   const stateDir = join(reviewRoot, "state");
   const service = createReviewRuntimeService({
-    compose: (instanceId, reviewReportPort) => {
+    compose: (instanceId, reviewReportPort, reviewReadAllowance) => {
       const composition = composeReviewRuntime({
         instanceId,
         runtimeStateDir: stateDir,
@@ -226,7 +234,7 @@ function harness(): Harness {
             toolProfile: "review",
             createRun: (input) => {
               backendInputs.push(input);
-              return scriptedRun(input, results);
+              return scriptedRun(input, results, options.calls ?? SCRIPTED_CALLS);
             },
           },
           secureWorkspaceTextRead: { readText },
@@ -240,6 +248,7 @@ function harness(): Harness {
         evidenceStore: createInMemoryEvidenceStore(),
         gatewayEvidenceRecorder: () => ({ record: () => undefined }),
         reviewReportPort,
+        reviewReadAllowance,
         serverPrincipal: () => "operator-review",
         activityLog: log,
       });
@@ -250,6 +259,7 @@ function harness(): Harness {
       productionReviewRuntimeLayers(composition, modelId, stateDir),
     runner: () => createGitReviewProcessRunner(),
     activityLog: log,
+    ...(options.maxReadCalls === undefined ? {} : { maxReadCalls: options.maxReadCalls }),
     setTimer: () => 0,
     clearTimer: () => undefined,
   });
@@ -305,6 +315,43 @@ describe("composeReviewRuntime", () => {
     expect(result.ok && result.candidates.map((candidate) => candidate.report.title)).toEqual([
       "Unchecked first element",
     ]);
+    expect(result.ok && result.readCalls).toEqual({ admitted: 1, refused: 0 });
+  });
+
+  // #4130: in the gate's stored reviews, a Reviewer that ran out of prompt budget had made 39 to
+  // 45 model calls, and more than half of those sessions had reported nothing. The session's reads
+  // beyond its allowance are refused with the instruction to report; the report still goes through.
+  it("refuses a session's reads beyond its allowance and still accepts its report", async () => {
+    const read = (id: string): Readonly<Record<string, unknown>> => ({
+      ...identity(id),
+      action: "read",
+      relativePath: "src/first.ts",
+      startLine: 1,
+      maxLines: 50,
+    });
+    const report = SCRIPTED_CALLS.find((call) => call.action === "review-report");
+    if (report === undefined) throw new Error("the scripted calls carry no report");
+    const h = harness({
+      maxReadCalls: 2,
+      calls: [read("read-1"), read("read-2"), read("read-3"), read("read-4"), report],
+    });
+
+    const result = await runReview(h);
+
+    expect(result).toMatchObject({ ok: true, outcome: "completed" });
+    expect(h.readText).toHaveBeenCalledTimes(2);
+    for (const id of ["read-3", "read-4"]) {
+      expect(h.results.get(id), id).toEqual({
+        status: "denied",
+        evidence: [],
+        guidance: REVIEW_READ_ALLOWANCE_GUIDANCE,
+      });
+    }
+    expect(h.results.get("report-1")).toMatchObject({
+      status: "completed",
+      reviewReport: { status: "accepted", accepted: 1 },
+    });
+    expect(result.ok && result.readCalls).toEqual({ admitted: 2, refused: 2 });
   });
 
   it("mints the review authority: workspace-read only, governed-assist, review purpose", async () => {
@@ -427,6 +474,7 @@ describe("composeReviewRuntime", () => {
       runtimeStateDir: "/state/review-runtime",
       reviewWorktreeRoot: "/state/review-worktrees",
       activate: () => ({ unavailableReason: "loopback-unavailable" }),
+      reviewReadAllowance: () => undefined,
       verificationRunner: { runToReport: vi.fn() },
       readWorkspaceHead: () => undefined,
       resolveManagedModelProfile: () => ({ profileId: "p" }),

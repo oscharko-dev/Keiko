@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { captureActivityLog } from "../../activityLogCapture.test-support.js";
 import type { ReviewDiffPackage } from "../diff-package/types.js";
+import type { ReviewCandidateFinding } from "../runtime/findingIntake.js";
 import type { ReviewRuntimeRunRequest, ReviewRuntimeRunResult } from "../runtime/instance.js";
 import { ReviewRunEventHub } from "./events.js";
 import {
@@ -17,7 +18,7 @@ import {
   type ReviewSequenceDeps,
 } from "./sequence.js";
 
-const COMPLETED: ReviewRuntimeRunResult = {
+const COMPLETED: Extract<ReviewRuntimeRunResult, { readonly ok: true }> = {
   ok: true,
   outcome: "completed",
   rules: "absent",
@@ -31,6 +32,18 @@ const COMPLETED: ReviewRuntimeRunResult = {
   },
 };
 
+/** The phase reads only a candidate's fingerprint. */
+function candidateOf(index: number): ReviewCandidateFinding {
+  return { fingerprint: String(index).padStart(64, "0") } as ReviewCandidateFinding;
+}
+
+/** A completed session's result for one part, with the read calls and report the options name. */
+function sessionResult(options: PhaseOptions, index: number): ReviewRuntimeRunResult {
+  const readCalls = options.readCalls?.[index];
+  const candidates = options.reportingParts?.includes(index) === true ? [candidateOf(index)] : [];
+  return { ...COMPLETED, candidates, ...(readCalls === undefined ? {} : { readCalls }) };
+}
+
 /** A fresh readiness observation lives this long in the fixture. */
 const READINESS_LIFETIME_MS = 300_000;
 /** The rules read and the instance start, before the launch reads the model's authority. */
@@ -41,6 +54,8 @@ interface Phase {
   /** Readiness checks and launches, in the order they happened. */
   readonly order: string[];
   readonly completed: boolean;
+  /** The fields of every `review.run.part` line the phase wrote. */
+  readonly partLines: readonly Readonly<Record<string, unknown>>[];
 }
 
 interface PhaseOptions {
@@ -51,7 +66,15 @@ interface PhaseOptions {
   readonly observationAgeMs?: number;
   /** `false` composes the phase without the readiness port, as a deployment without it does. */
   readonly ensureReady?: boolean;
+  /** The read calls each session's result reports, by part index (#4130). */
+  readonly readCalls?: readonly ReviewRuntimeReadCalls[];
+  /** The part indexes whose session filed one accepted report. */
+  readonly reportingParts?: readonly number[];
 }
+
+type ReviewRuntimeReadCalls = NonNullable<
+  Extract<ReviewRuntimeRunResult, { readonly ok: true }>["readCalls"]
+>;
 
 /**
  * A launch as the review runtime performs it: the rules read and the instance start take time, then
@@ -60,6 +83,7 @@ interface PhaseOptions {
  */
 function runPhase(options: PhaseOptions): Promise<Phase> {
   const order: string[] = [];
+  const capture = captureActivityLog();
   const clock = { now: 1_000_000 };
   let observedAt = clock.now - (options.observationAgeMs ?? 0);
   const now = (): number => clock.now;
@@ -71,7 +95,7 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
       return { ok: false, reason: "runtime-unavailable" };
     }
     clock.now += options.sessionMs ?? 1_000;
-    return COMPLETED;
+    return sessionResult(options, request.diffPart?.index ?? 0);
   };
   const ensureReady = (modelId: string, correlationId: string | undefined): Promise<void> => {
     order.push(`ready:${modelId}:${String(correlationId)}`);
@@ -84,7 +108,7 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
     reviewServices: {},
     reviewRuntime: { run },
     models: options.ensureReady === false ? {} : { ensureReady },
-    activityLog: captureActivityLog().sink,
+    activityLog: capture.sink,
     events: new ReviewRunEventHub(now),
     now,
     counterCheckRunPromptTokens: 1_000,
@@ -113,6 +137,9 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
     state,
     order,
     completed,
+    partLines: capture.events
+      .filter((event) => event.op === "review.run.part")
+      .map((event) => event.extra ?? {}),
   }));
 }
 
@@ -158,5 +185,62 @@ describe("the Reviewer model's readiness at each launch (Issue #4130)", () => {
     const { order, state } = await runPhase({ partCount: 1, ensureReady: false });
     expect(order).toEqual(["launch:0"]);
     expect(state.reviewer).toEqual({ outcome: "completed" });
+  });
+});
+
+describe("the Reviewer session's read calls on the part line (Issue #4130)", () => {
+  it("records each session's admitted and refused read calls on its own part line", async () => {
+    const { partLines, state } = await runPhase({
+      partCount: 2,
+      readCalls: [
+        { admitted: 7, refused: 0 },
+        { admitted: 24, refused: 3 },
+      ],
+      reportingParts: [1],
+    });
+
+    expect(state.reviewer).toEqual({ outcome: "completed" });
+    expect(partLines).toMatchObject([
+      { partNumber: 1, outcome: "completed", readCallCount: 7, refusedReadCallCount: 0 },
+      { partNumber: 2, outcome: "completed", readCallCount: 24, refusedReadCallCount: 3 },
+    ]);
+  });
+
+  // R4130-054: the allowance stopped the session, the session ended its turn as told, and the part
+  // settled as a clean `complete` although nothing was reported.
+  it("fails a part whose session was refused a read and filed no report", async () => {
+    const { partLines, state, completed } = await runPhase({
+      partCount: 3,
+      readCalls: [
+        { admitted: 24, refused: 2 },
+        { admitted: 24, refused: 1 },
+        { admitted: 5, refused: 0 },
+      ],
+      reportingParts: [0],
+    });
+
+    expect(state.reviewer).toEqual({ outcome: "failed", reason: "budget-exhausted" });
+    expect(completed).toBe(true);
+    expect(state.candidates).toHaveLength(1);
+    expect(partLines).toMatchObject([
+      { partNumber: 1, outcome: "completed", candidateCount: 1, refusedReadCallCount: 2 },
+      {
+        partNumber: 2,
+        outcome: "failed",
+        reason: "budget-exhausted",
+        candidateCount: 0,
+        readCallCount: 24,
+        refusedReadCallCount: 1,
+      },
+      { partNumber: 3, outcome: "completed", candidateCount: 0, refusedReadCallCount: 0 },
+    ]);
+  });
+
+  it("writes no read counts for a session whose result carries none", async () => {
+    const { partLines } = await runPhase({ partCount: 1 });
+
+    expect(partLines).toHaveLength(1);
+    expect(partLines[0]).not.toHaveProperty("readCallCount");
+    expect(partLines[0]).not.toHaveProperty("refusedReadCallCount");
   });
 });

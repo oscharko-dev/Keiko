@@ -3,7 +3,9 @@
 // One review instance per repository, started on demand when a review starts and stopped after an
 // idle period (default five minutes). An instance left holding a recovery-required run is set aside
 // quarantined until its own idle stop, and a fresh one serves the repository (at most one
-// quarantined instance per repository, #4136). Each instance is its own composition of the coding runtime
+// quarantined instance per repository, #4136). When the serving instance has to be set aside while
+// an older one is still quarantined, the older one is ended first (#4130): a review in several
+// parts needs a fresh instance per part. Each instance is its own composition of the coding runtime
 // (`composition.ts`) with its own orchestrator and run slot, so it serves one review run at a time
 // and never touches the user's Coding Workbench run, active workspace, run list or history.
 //
@@ -28,13 +30,21 @@ import type {
   ReviewReportRejectionReason,
   ReviewRulesFileOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
-import { REVIEW_RUNTIME_DEFAULT_IDLE_MS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
+  REVIEW_RUNTIME_DEFAULT_IDLE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 
 import type {
   GovernedCodingToolPort,
   GovernedCodingToolResult,
 } from "../../coding-runtime/codingToolGovernedDelegate.js";
+import {
+  createReviewReadAllowance,
+  type ReviewReadAllowance,
+  type ReviewReadCallCounts,
+} from "../../coding-runtime/reviewRuntimeGuard.js";
 import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { reportReviewFailure } from "../diagnostics.js";
@@ -113,6 +123,11 @@ export type ReviewRuntimeRunResult =
       readonly rulesText?: string | undefined;
       readonly candidates: readonly ReviewCandidateFinding[];
       readonly rejections: Readonly<Record<ReviewReportRejectionReason, number>>;
+      /**
+       * The session's read, search and discover calls the read allowance let through to admission
+       * and the ones it refused once it was used up (#4130); absent when no session started.
+       */
+      readonly readCalls?: ReviewReadCallCounts | undefined;
     }
   | {
       readonly ok: false;
@@ -126,6 +141,7 @@ export interface ReviewRuntimeServiceDeps {
   readonly compose: (
     instanceId: string,
     reviewReportPort: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
+    reviewReadAllowance: (runId: string) => ReviewReadAllowance | undefined,
   ) => ReviewRuntimeComposition | ReviewRuntimeComposeRefusal;
   /** What the self-check reads for a composed instance about to run one review. */
   readonly layersFor: (
@@ -139,6 +155,8 @@ export interface ReviewRuntimeServiceDeps {
   /** Where a failed readiness check is reported (#4130); the server's diagnostic sink by default. */
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly idleMs?: number | undefined;
+  /** Read, search and discover calls one session gets answered (#4130); the contract default. */
+  readonly maxReadCalls?: number | undefined;
   readonly now?: (() => number) | undefined;
   readonly setTimer?: ((callback: () => void, ms: number) => unknown) | undefined;
   readonly clearTimer?: ((handle: unknown) => void) | undefined;
@@ -164,7 +182,12 @@ export interface ReviewRuntimeService {
 
 interface LiveInstance {
   readonly composition: ReviewRuntimeComposition;
-  readonly slot: { intake: ReviewFindingIntake | undefined; pending: PendingIntake | undefined };
+  readonly slot: {
+    intake: ReviewFindingIntake | undefined;
+    pending: PendingIntake | undefined;
+    /** The read allowance of the session in flight; one session at a time per instance. */
+    reads: ReviewReadAllowance | undefined;
+  };
   busy: boolean;
   runCount: number;
   idleSince: number;
@@ -250,15 +273,28 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
     this.quarantined.set(key, live);
   }
 
+  /**
+   * Ends the repository's quarantined instance now, because the serving instance needs its place
+   * (#4130). It serves no review, so this is its idle stop brought forward.
+   */
+  public async endQuarantined(key: string, correlationId?: string): Promise<void> {
+    const live = this.quarantined.get(key);
+    if (live !== undefined) await this.stopLive(key, live, "quarantine-replaced", correlationId);
+  }
+
   public start(
     key: string,
     correlationId?: string,
     placement?: ReviewRuntimePlacement,
   ): LiveInstance | undefined {
     const startedAt = this.now();
-    const slot: LiveInstance["slot"] = { intake: undefined, pending: undefined };
+    const slot: LiveInstance["slot"] = { intake: undefined, pending: undefined, reads: undefined };
     const instanceId = randomUUID();
-    const composition = this.deps.compose(instanceId, reviewReportPortFor(slot));
+    const composition = this.deps.compose(
+      instanceId,
+      reviewReportPortFor(slot),
+      (): ReviewReadAllowance | undefined => slot.reads,
+    );
     if ("startFailure" in composition) {
       this.startFailed(instanceId, composition.startFailure, correlationId);
       return undefined;
@@ -283,7 +319,7 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
   }
 
   /** Names why no instance could be started, under the review's correlation (R4130-019). */
-  public startFailed(
+  private startFailed(
     instanceId: string,
     startFailure: ReviewRuntimeStartFailure,
     correlationId: string | undefined,
@@ -320,6 +356,10 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
    * Stops exactly `live`. The repository's serving instance is left alone while a review holds or
    * is about to use it; a quarantined instance serves no review, so a review of the same
    * repository never defers its idle stop.
+   *
+   * An instance this method takes out of the maps is always closed and always gets its stop line
+   * (R4130-057): a shutdown that failed left it open, untracked and unreachable for any later stop.
+   * This method never rejects, so the idle timer's call needs no handler.
    */
   private async stopLive(
     key: string,
@@ -334,14 +374,35 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
       this.instances.delete(key);
     }
     this.clearTimer(live.timer);
-    await live.composition.controlPlane.orchestrator.shutdown(correlationId);
-    live.composition.close();
+    const ended = await this.endComposition(live, correlationId);
     logReviewRuntimeStopped(this.deps.activityLog, correlationId, {
       instanceId: live.composition.instanceId,
       trigger,
       idleDurationMs: this.now() - live.idleSince,
       runCount: live.runCount,
+      ...(ended ? {} : { stopFailed: true }),
     });
+  }
+
+  /**
+   * Shuts the instance's orchestrator down and closes its composition. A failure of either goes to
+   * the diagnostic sink and never keeps the other from running. `false` when one of them failed.
+   */
+  private async endComposition(live: LiveInstance, correlationId?: string): Promise<boolean> {
+    let ended = true;
+    try {
+      await live.composition.controlPlane.orchestrator.shutdown(correlationId);
+    } catch (error) {
+      ended = false;
+      reportReviewFailure("review.run.runtime-stop", correlationId, error, this.deps.diagnostics);
+    }
+    try {
+      live.composition.close();
+    } catch (error) {
+      ended = false;
+      reportReviewFailure("review.run.runtime-stop", correlationId, error, this.deps.diagnostics);
+    }
+    return ended;
   }
 
   private clearTimer(handle: unknown): void {
@@ -358,7 +419,10 @@ export function createReviewRuntimeService(deps: ReviewRuntimeServiceDeps): Revi
 interface ServiceContext {
   readonly deps: ReviewRuntimeServiceDeps;
   readonly instances: Map<string, LiveInstance>;
-  /** At most one quarantined instance per repository, kept until its own idle stop (#4136). */
+  /**
+   * At most one quarantined instance per repository, kept until its own idle stop (#4136) or until
+   * the serving instance needs its place (#4130).
+   */
   readonly quarantined: Map<string, LiveInstance>;
   /** Repositories with a review in preparation or in flight. */
   readonly reserved: Set<string>;
@@ -368,34 +432,32 @@ interface ServiceContext {
     placement?: ReviewRuntimePlacement,
   ): LiveInstance | undefined;
   quarantine(key: string, live: LiveInstance): void;
-  startFailed(
-    instanceId: string,
-    startFailure: ReviewRuntimeStartFailure,
-    correlationId: string | undefined,
-  ): void;
+  endQuarantined(key: string, correlationId?: string): Promise<void>;
   arm(key: string, live: LiveInstance): void;
 }
 
 /**
- * The instance the next review of a repository runs on (#4136). An instance whose orchestrator
- * still holds a run that never reached a terminal state (a Reviewer run left recovery-required,
- * such as every macOS gateway-profile run whose end could not be proven) would refuse the next
- * start, so it is set aside, quarantined exactly as it is until its own idle stop, and a fresh
- * instance is composed beside it. At most one quarantined instance per repository: a second one is
- * refused (`undefined`, settled `skipped/model-unavailable`) instead of growing without bound.
+ * The instance the next Reviewer session of a repository runs on (#4136). An instance whose
+ * orchestrator still holds a run that never reached a terminal state (a Reviewer run left
+ * recovery-required, such as every macOS gateway-profile run whose end could not be proven) would
+ * refuse the next start, so it is set aside, quarantined exactly as it is until its own idle stop,
+ * and a fresh instance is composed beside it.
+ *
+ * At most one quarantined instance per repository. When one is already quarantined, it is ended
+ * first (#4130): every part of a review in several parts is its own session, so on macOS each part
+ * leaves its instance holding such a run, and the third part within the idle period found the
+ * place taken and was refused. Ending an instance always closes it, also when its shutdown failed
+ * (R4130-057), so the place is free afterwards and the instances never grow without bound.
  */
-function acquireInstance(
+async function acquireInstance(
   context: ServiceContext,
   request: ReviewRuntimeRunRequest,
-): LiveInstance | undefined {
+): Promise<LiveInstance | undefined> {
   const key = request.repositoryRoot;
   const live = context.instances.get(key);
   if (live === undefined) return context.start(key, request.correlationId);
   if (!live.composition.controlPlane.orchestrator.hasLiveRun()) return live;
-  if (context.quarantined.has(key)) {
-    context.startFailed(randomUUID(), "quarantine-limit", request.correlationId);
-    return undefined;
-  }
+  await context.endQuarantined(key, request.correlationId);
   context.quarantine(key, live);
   return context.start(key, request.correlationId, "beside-quarantined");
 }
@@ -469,7 +531,7 @@ async function prepareAndRun(
     part: request.diffPart,
   });
   if (!task.ok) return { ok: false, reason: "task-too-large", rules: rules.outcome };
-  const instance = acquireInstance(context, request);
+  const instance = await acquireInstance(context, request);
   if (instance === undefined) {
     return { ok: false, reason: "runtime-unavailable", rules: rules.outcome };
   }
@@ -569,6 +631,9 @@ async function runOnInstance(
     if (request.signal?.aborted === true) return cancelledBeforeLaunch(prepared.rules);
     const refusal = selfCheckRefusal(context, live, request);
     if (refusal !== undefined) return { ok: false, reason: refusal, rules: prepared.rules };
+    live.slot.reads = createReviewReadAllowance(
+      context.deps.maxReadCalls ?? REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
+    );
     live.slot.pending = {
       create: (runId): ReviewFindingIntake =>
         createReviewFindingIntake({
@@ -590,6 +655,7 @@ async function runOnInstance(
     workspace.clear();
     live.slot.pending = undefined;
     live.slot.intake = undefined;
+    live.slot.reads = undefined;
     live.busy = false;
     live.runCount += 1;
     // `runReview` re-arms the idle stop once the repository's reservation is released.
@@ -627,6 +693,7 @@ function collected(
     rules,
     candidates: intake?.candidates() ?? [],
     rejections: intake?.rejections() ?? NO_REJECTIONS,
+    ...(live.slot.reads === undefined ? {} : { readCalls: live.slot.reads.counts() }),
   };
 }
 

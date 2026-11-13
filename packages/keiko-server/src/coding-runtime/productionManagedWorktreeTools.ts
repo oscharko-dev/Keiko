@@ -128,6 +128,7 @@ import type {
   CodingRepositorySearchRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { ReviewReadAllowance } from "./reviewRuntimeGuard.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
@@ -522,6 +523,8 @@ export interface ProductionManagedWorktreeToolInput {
   readonly runtimePurpose?: CodingRuntimePurpose | undefined;
   /** ADR-0182 D4: the run's `keiko_review_report` port; present only on a review run. */
   readonly reviewReport?: GovernedCodingToolPort<"review-report"> | undefined;
+  /** ADR-0182 D1 (#4130): the run's read allowance; present only on a review run. */
+  readonly reviewReadAllowance?: ReviewReadAllowance | undefined;
   /**
    * `"folder"` when the workspace is an ordinary directory without a repository: the Git and
    * delivery tools stay registered and refuse with the closed `repository-required` reason
@@ -774,6 +777,9 @@ export function createProductionManagedWorktreeToolFacade(
     {
       toolProfile: input.toolProfile,
       ...(input.runtimePurpose === undefined ? {} : { runtimePurpose: input.runtimePurpose }),
+      ...(input.reviewReadAllowance === undefined
+        ? {}
+        : { reviewReadAllowance: input.reviewReadAllowance }),
       nativeTextRead: readEdit.nativeTextRead,
       nativeFileIO: readEdit.nativeFileIO,
       invocationRegistry: input.invocationRegistry,

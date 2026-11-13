@@ -15,6 +15,7 @@
 import { randomBytes } from "node:crypto";
 
 import {
+  REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
   REVIEW_RUN_MAX_CANDIDATE_REPORTS,
   REVIEW_RUN_MAX_DIFF_PARTS,
   type ReviewRulesFileOutcome,
@@ -43,6 +44,7 @@ Budget:
 - Every tool call sends the whole conversation again and uses part of a fixed review budget. When the budget runs out, the review ends, and only the findings you have already reported count.
 - Read to confirm or refute a specific suspicion, not to survey the repository. Read a window around the lines you need instead of a whole file, and do not read the same lines twice.
 - Plan for about 15 read or search calls for the whole review. If the change is large, spend them on the added lines most likely to be wrong.
+- The read, search and discover tools answer at most ${String(REVIEW_RUN_DEFAULT_MAX_READ_CALLS)} calls in one review. After that they refuse every call: report what you have confirmed and end your turn.
 
 Determining what to flag:
 - A finding is a defect: a concrete input or event under which the head code returns a wrong result, fails, loses data or allows something it must not, or a change that breaks a demand of the review rules. A change that is correct and meets the review rules has no findings. Never file a report that says there is no defect or that the change is fine. A finding that rests on a review rule names that rule in its condition.

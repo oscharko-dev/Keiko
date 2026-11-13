@@ -173,7 +173,11 @@ import type {
 } from "./codingToolInvocationRegistry.js";
 import type { CanonicalCatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { refuseReviewRunAction } from "./reviewRuntimeGuard.js";
+import {
+  refuseReviewRunAction,
+  REVIEW_READ_ALLOWANCE_GUIDANCE,
+  reviewReadAllowanceRefuses,
+} from "./reviewRuntimeGuard.js";
 import type { ReviewReportAcknowledgement } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 // F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
@@ -201,6 +205,7 @@ export function createCodingToolFacade(
     onToolSettled: options.onToolSettled,
     observeEditOutcome: options.observeEditOutcome,
     runtimePurpose: options.runtimePurpose,
+    reviewReadAllowance: options.reviewReadAllowance,
     runtimePurposeLog: options.runtimePurposeLog ?? {
       sink: processServerLogSink(),
       correlationId: () => undefined,
@@ -222,6 +227,7 @@ interface ExecutionContext {
   readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
   readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
   readonly runtimePurpose: CodingToolFacadeOptions["runtimePurpose"];
+  readonly reviewReadAllowance: CodingToolFacadeOptions["reviewReadAllowance"];
   readonly runtimePurposeLog: NonNullable<CodingToolFacadeOptions["runtimePurposeLog"]>;
   readonly inFlight: { count: number };
 }
@@ -291,6 +297,11 @@ async function executeParsed(
     refuseReviewRunAction(context.runtimePurpose, request, "tool-facade", context.runtimePurposeLog)
   ) {
     return empty("denied");
+  }
+  // ADR-0182 D1 (#4130): a review run's reads beyond its allowance are refused with the instruction
+  // to report and end, before they reach the authority port or use up one of its tool calls.
+  if (reviewReadAllowanceRefuses(context.runtimePurpose, request, context.reviewReadAllowance)) {
+    return { status: "denied", evidence: [], guidance: REVIEW_READ_ALLOWANCE_GUIDANCE };
   }
   if (context.inFlight.count >= context.maxInFlight) return empty("busy");
   context.inFlight.count += 1;

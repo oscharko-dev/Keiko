@@ -34558,6 +34558,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      readCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      refusedReadCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       promptTokens: {
         type: "integer",
         dataClass: "count",
@@ -34913,7 +34923,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["idle", "shutdown", "start-failed"],
+        values: ["idle", "shutdown", "start-failed", "quarantine-replaced"],
       },
       idleDurationMs: {
         type: "integer",
@@ -34940,8 +34950,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "loopback-unavailable",
           "runtime-unqualified",
           "host-unavailable",
-          "quarantine-limit",
         ],
+      },
+      stopFailed: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
       },
     },
     causal: "correlation",

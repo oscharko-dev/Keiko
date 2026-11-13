@@ -284,6 +284,12 @@ export interface ProductionCodingRuntimeResolverInput {
    */
   readonly reviewReportPort?:
     ((runId: string) => ProductionManagedWorktreeToolInput["reviewReport"]) | undefined;
+  /**
+   * ADR-0182 D1 (#4130): the read allowance of one run, supplied only by the review composition.
+   * A coding composition supplies none, so its runs' reads are never counted.
+   */
+  readonly reviewReadAllowance?:
+    ((runId: string) => ProductionManagedWorktreeToolInput["reviewReadAllowance"]) | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
@@ -1686,15 +1692,17 @@ function reviewRunFacadeOptions({
   toolProfile,
 }: ManagedToolFacadeInput): Pick<
   ProductionManagedWorktreeToolInput,
-  "toolProfile" | "runtimePurpose" | "reviewReport"
+  "toolProfile" | "runtimePurpose" | "reviewReport" | "reviewReadAllowance"
 > {
   const reviewReport = input.reviewReportPort?.(minted.authorityRef.runId);
+  const reviewReadAllowance = input.reviewReadAllowance?.(minted.authorityRef.runId);
   // The composition's own profile decides the review purpose; the minted context cannot drop it.
   const runtimePurpose = composedRuntimePurpose(toolProfile, context.runtimePurpose);
   return {
     toolProfile,
     ...(runtimePurpose === undefined ? {} : { runtimePurpose }),
     ...(reviewReport === undefined ? {} : { reviewReport }),
+    ...(reviewReadAllowance === undefined ? {} : { reviewReadAllowance }),
   };
 }
 

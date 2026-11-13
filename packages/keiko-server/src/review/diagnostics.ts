@@ -22,6 +22,7 @@ export type ReviewDiagnosticOperation =
   | "review.worktree.remove"
   | "review.run.execute"
   | "review.run.model-readiness"
+  | "review.run.runtime-stop"
   | "review.run.persist"
   | "review.run.diff"
   | "review.settings.read"

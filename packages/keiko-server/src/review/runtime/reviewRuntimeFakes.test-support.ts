@@ -7,6 +7,7 @@ import type { CodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contrac
 
 import { reviewRuntimeAuthorityGrants } from "../../coding-runtime/runtimeAuthorityService.js";
 import type { GovernedCodingToolPort } from "../../coding-runtime/codingToolGovernedDelegate.js";
+import type { ReviewReadAllowance } from "../../coding-runtime/reviewRuntimeGuard.js";
 import { createGeneratedOpenCodeV2Plugins } from "../../coding-runtime/opencodeRuntimeAdapter.js";
 import { createFixedOpenCodeV2Config } from "../../coding-runtime/opencodeLaunchProfile.js";
 import type { ReviewRuntimeComposition } from "./composition.js";
@@ -19,6 +20,8 @@ const GEOMETRY = { contextWindowTokens: 32_768, maxInputTokens: 28_672, maxOutpu
 export interface ScriptedReviewRun {
   /** What the scripted model reports during the run (each through the run's report port). */
   readonly reports: readonly unknown[];
+  /** Read calls the scripted model makes before it reports; each asks the run's read allowance. */
+  readonly reads?: number | undefined;
   /** The state the run settles in; `succeeded` by default. */
   readonly terminal?: "succeeded" | "failed" | "recovery-required" | undefined;
   /**
@@ -28,6 +31,8 @@ export interface ScriptedReviewRun {
   readonly reapUnproven?: boolean | undefined;
   /** The failed turn's own failure code beside an unproven reap (#4138). */
   readonly turnFailureCode?: string | undefined;
+  /** The instance's orchestrator fails its shutdown. */
+  readonly shutdownFails?: boolean | undefined;
 }
 
 export interface ReviewRuntimeObservations {
@@ -75,7 +80,10 @@ function settledSnapshot(state: string): { readonly state: string; readonly fail
 }
 
 function scriptedOrchestrator(
-  reportPort: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
+  ports: {
+    readonly report: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined;
+    readonly reads: (runId: string) => ReviewReadAllowance | undefined;
+  },
   script: ScriptedReviewRun,
   observed: ReviewRuntimeObservations,
   boundRoot: () => string,
@@ -88,7 +96,10 @@ function scriptedOrchestrator(
       observed.boundRoots.push(boundRoot());
       runs += 1;
       const runId = `runtime-run-${String(runs)}`;
-      await fileReports(reportPort(runId), script.reports);
+      const reportPort = ports.report(runId);
+      // The tool facade asks the allowance once per read call; the stand-in does the same.
+      for (let read = 0; read < (script.reads ?? 0); read += 1) ports.reads(runId)?.admit();
+      await fileReports(reportPort, script.reports);
       state = script.terminal ?? "succeeded";
       return { ok: true, snapshot: { runId, state: "running" } };
     },
@@ -102,7 +113,9 @@ function scriptedOrchestrator(
     stop: (): Promise<unknown> => Promise.resolve({ ok: true }),
     shutdown: (): Promise<unknown> => {
       observed.shutdowns += 1;
-      return Promise.resolve({ ok: true });
+      return script.shutdownFails === true
+        ? Promise.reject(new Error("scripted shutdown failure"))
+        : Promise.resolve({ ok: true });
     },
   };
 }
@@ -124,13 +137,19 @@ export function fakeReviewComposition(
   reportPort: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
   script: ScriptedReviewRun,
   observed: ReviewRuntimeObservations,
+  reads: (runId: string) => ReviewReadAllowance | undefined = () => undefined,
 ): ReviewRuntimeComposition {
   const workspace = createReviewWorkspaceLifecycle();
   const boundRoot = (): string => workspace.getActive()?.binding.activeRoot ?? "unbound";
   return {
     instanceId,
     controlPlane: {
-      orchestrator: scriptedOrchestrator(reportPort, script, observed, boundRoot),
+      orchestrator: scriptedOrchestrator(
+        { report: reportPort, reads },
+        script,
+        observed,
+        boundRoot,
+      ),
       eventHub: SETTLED_EVENT_HUB,
       runtimeCapabilityAuthenticator: {
         authenticate: (capability: string): unknown => ({ ok: capability === `cap-${instanceId}` }),
