@@ -323,6 +323,10 @@
     "en": "tools {tools} · structured {structured} · {costClass}/{latencyClass}",
     "de": "Tools {tools} · strukturiert {structured} · {costClass}/{latencyClass}"
   },
+  "settings.models.toolCallingForcedOnly": {
+    "en": "Calls a tool only when forced. In conversations it may not use tools.",
+    "de": "Ruft ein Tool nur auf, wenn der Aufruf erzwungen wird. In Gesprächen nutzt es Tools möglicherweise nicht."
+  },
   "settings.models.reasoningOnToolTurnsDetected": {
     "en": "Returns its reasoning on tool turns: detected",
     "de": "Liefert sein Reasoning bei Tool-Runden zurück: erkannt"

@@ -26,7 +26,12 @@ import {
   resetServerLogFailureNotices,
   resetServerLogger,
 } from "../../../tests/support/activity-log-test-support.js";
-import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import {
+  buildUiHandlerDeps,
+  currentGateway,
+  recordExplicitModelUse,
+  type UiHandlerDeps,
+} from "./deps.js";
 import {
   adoptReportedContextWindow,
   contextWindowProbesSettledForTests,
@@ -111,10 +116,12 @@ function fixtureOf(
   return { deps, configPath: holder.storagePath };
 }
 
-// A model a person has used: the current configuration holds a positive observation for it.
+// A model a person has used (an explicit Settings verification passed): the configuration holds a
+// positive observation for it and the use is recorded.
 function markUsed(deps: UiHandlerDeps, modelId: string): void {
   const holder = deps.gatewayConfig;
   if (holder === undefined) throw new Error("expected a runtime gateway config");
+  recordExplicitModelUse(deps, modelId, holder.generation());
   holder.recordVerifiedCapability(
     modelId,
     { conversationReady: true },
@@ -749,6 +756,82 @@ describe("context meter reading of a model nobody used", () => {
       expect(reading.body).not.toHaveProperty("contextWindowProbePending");
     }
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("dispatches nothing for a model that only the startup check observed, never used", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        rejection("max_tokens=1000000000 cannot be greater than max_model_len=32768."),
+      ),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    const holder = deps.gatewayConfig;
+    // A positive observation, as startup records it: the model answered a check, nobody used it.
+    holder?.recordVerifiedCapability(
+      MODEL,
+      { conversationReady: true },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-startup-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const reading = await meterRead(deps, project, chatId);
+    await contextWindowProbesSettledForTests(deps);
+    expect(reading.body).toMatchObject({ contextWindowAssumed: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("probes once after the model completed one real call through the gateway", async () => {
+    const probeFetch = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        rejection("max_tokens=1000000000 cannot be greater than max_model_len=32768."),
+      ),
+    );
+    const turnFetch = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: "chatcmpl-1",
+            model: MODEL,
+            choices: [
+              { index: 0, finish_reason: "stop", message: { role: "assistant", content: "Hi" } },
+            ],
+            usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", turnFetch);
+    try {
+      const { deps } = fixture(assumedChatCapability(MODEL), probeFetch);
+      const holder = deps.gatewayConfig;
+      holder?.recordVerifiedCapability(
+        MODEL,
+        { conversationReady: true },
+        new Date().toISOString(),
+        holder.generation(),
+      );
+      const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-served-"));
+      roots.push(project);
+      deps.store.createProject(project, "Meter");
+      const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+      await meterRead(deps, project, chatId);
+      expect(probeFetch).not.toHaveBeenCalled();
+      // One real turn through the generation's gateway, as a Chat send makes it.
+      await currentGateway(deps)?.chat({
+        modelId: MODEL,
+        messages: [{ role: "user", content: "Hi" }],
+      });
+      expect(turnFetch).toHaveBeenCalledTimes(1);
+      await meterRead(deps, project, chatId);
+      await contextWindowProbesSettledForTests(deps);
+      expect(probeFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("dispatches nothing for a model that was observed failing", async () => {

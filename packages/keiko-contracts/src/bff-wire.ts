@@ -2704,6 +2704,14 @@ export const GATEWAY_TOOL_CALLING_OUTCOMES = [
 ] as const;
 export type GatewayToolCallingOutcome = (typeof GATEWAY_TOOL_CALLING_OUTCOMES)[number];
 
+/**
+ * A closed note the tool-calling check attaches to a model that was still admitted (#4351):
+ * `forced-only` is `called-only-forced`, a model that calls a tool only when the call is forced, so in
+ * conversations, which never force one, it may not use tools. The UI words it in the person's language.
+ */
+export const GATEWAY_TOOL_CALLING_WARNINGS = ["forced-only"] as const;
+export type GatewayToolCallingWarning = (typeof GATEWAY_TOOL_CALLING_WARNINGS)[number];
+
 export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
 
 export interface GatewayReadinessProbeResult {
@@ -2716,6 +2724,8 @@ export interface GatewayReadinessProbeResult {
   readonly warning?: string | undefined;
   /** Only on the tool-calling probe: which closed outcome the two-step check reached. */
   readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
+  /** Only on the tool-calling probe: a closed note on a model that passed with a limit. */
+  readonly toolCallingWarning?: GatewayToolCallingWarning | undefined;
   // Present only when transport-level evidence conclusively proves a capability value. A semantic
   // sentinel mismatch remains unsupported in the report but must not rewrite durable capability
   // configuration as false.

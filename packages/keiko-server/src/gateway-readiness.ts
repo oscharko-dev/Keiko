@@ -6,7 +6,6 @@ import {
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
   verifyEmbeddingCapability,
-  DEFAULT_PROVIDER_TIMEOUT_MS,
   selectConfiguredModel,
   toolCallingConfigurationFingerprint,
   type GatewayConfig,
@@ -53,6 +52,7 @@ import {
   currentConversationReadinessObservation,
   currentConversationReady,
   currentGatewayConfig,
+  recordExplicitModelUse,
 } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
 import {
@@ -1685,7 +1685,7 @@ const TOOL_CALLING_EVIDENCE: Readonly<Record<GatewayToolCallingOutcome, string>>
   "called-only-forced":
     "The model called the tool only when the call was forced. Keiko offers tools without forcing one, so the model may not use them in Chat or the Coding Workbench.",
   "forced-refused":
-    "The model did not call the tool on its own, and the provider refused the forced call (a thinking mode often does). This is not a verdict that the model cannot call tools; pick it in Chat or the Workbench and try a real tool task, or turn its thinking mode off.",
+    "The model did not call the tool on its own, and the provider refused the forced call (a thinking mode often does). This is not a verdict that the model cannot call tools, but Keiko cannot confirm it either, and tool turns need a confirmed check: turn the thinking mode off and verify again.",
   "no-call":
     "The model answered without calling the tool, also when the call was forced. It does not call tools through this endpoint; choose a model that supports tool calling.",
   "tools-refused":
@@ -1702,7 +1702,12 @@ function observedToolCallingResult(
   const { status, outcome } = verdict;
   const evidence = TOOL_CALLING_EVIDENCE[outcome];
   if (status === "verified") {
-    return { ...result("tool_calling", "passed", start, evidence), toolCallingOutcome: outcome };
+    // Admitted either way; a model that called a tool only when forced carries the closed note.
+    return {
+      ...result("tool_calling", "passed", start, evidence),
+      toolCallingOutcome: outcome,
+      ...(outcome === "called-only-forced" ? { toolCallingWarning: "forced-only" as const } : {}),
+    };
   }
   if (status === "transient") {
     return {
@@ -2123,8 +2128,9 @@ function probeTimeoutFloorMs(
   if (options?.purpose === "coding-workbench-auto" || options?.purpose === "on-demand") {
     return WORKBENCH_PROBE_TIMEOUT_FLOOR_MS;
   }
-  // No purpose: the explicit check a person started. Only the conversational default is lifted.
-  return provider.timeoutMs === DEFAULT_PROVIDER_TIMEOUT_MS ? EXPLICIT_CHECK_TIMEOUT_FLOOR_MS : 0;
+  // No purpose: the explicit check a person started. Only the conversational default is lifted; a
+  // timeout the configuration names is an operator's choice whatever its value.
+  return provider.timeoutConfigured === true ? 0 : EXPLICIT_CHECK_TIMEOUT_FLOOR_MS;
 }
 
 export function probeProvider(
@@ -2572,6 +2578,9 @@ export async function runGatewayReadiness(
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
+  // A person's own verification of the model, answered: it counts as use (#4351).
+  if (trigger === "settings" && request.options?.purpose === undefined && chat.status === "passed")
+    recordExplicitModelUse(deps, selection.provider.modelId, observedGeneration);
   recordReadinessVerdict(
     deps,
     report,

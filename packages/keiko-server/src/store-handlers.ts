@@ -44,6 +44,7 @@ import {
   currentConversationReadinessObservation,
   currentGatewayConfig,
   currentGroundingLimits,
+  modelUsedByPerson,
 } from "./deps.js";
 import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
@@ -1692,10 +1693,13 @@ async function contextStatusWithMeasuredWindow(
 ): Promise<ChatContextStatusWire> {
   const status = readChatContextStatus(deps, chatId, modelId, correlationId);
   // A read never loads a model (#4351): the probe is a streamed completion, so it runs only for a
-  // model a person has used (a positive current observation). Any other model reports the window it
-  // is planned with and dispatches nothing; the first overflow still teaches the real window.
+  // model a person has used (an actual call completed in this configuration generation, or an
+  // explicit Settings verification passed) and that was not since observed failing. A startup
+  // observation is not use. Any other model reports the window it is planned with and dispatches
+  // nothing; the first overflow still teaches the real window.
   const probe =
-    currentConversationReadinessObservation(deps, modelId) === true
+    modelUsedByPerson(deps, modelId) &&
+    currentConversationReadinessObservation(deps, modelId) !== false
       ? discoverAssumedContextWindow(deps, modelId, correlationId ?? UNKNOWN_CORRELATION_ID)
       : Promise.resolve();
   // A provider-reported window is re-checked in the background; only an assumed one delays.

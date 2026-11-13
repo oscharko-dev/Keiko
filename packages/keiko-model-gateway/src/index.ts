@@ -14,7 +14,6 @@
 export { KEIKO_MODEL_GATEWAY_VERSION } from "./version.js";
 export { ReasoningHistoryUnavailableError } from "./reasoning-history.js";
 // The one projection every tool definition passes on its way to an OpenAI-compatible provider.
-export { openAiCompatiblePromptTools } from "./prompt-token-accounting.js";
 
 export type {
   CircuitBreakerConfig,
@@ -151,7 +150,7 @@ export {
 // The ONE env-only Model Gateway provider-admission formula (config.ts's own comment on it):
 // appended here rather than folded into the export block above so this file stays append-only
 // for this addition (KEIKO-final-audit F13/F24).
-export { DEFAULT_PROVIDER_TIMEOUT_MS, hasConfiguredEnvModelProvider } from "./config.js";
+export { hasConfiguredEnvModelProvider } from "./config.js";
 
 export {
   Gateway,

@@ -71,8 +71,7 @@ import {
 // customer's slow LiteLLM/vLLM proxy instead of relying solely on the gateway's own silence/budget
 // floors (resilience.ts) to compensate for a too-short default.
 /** The provider timeout a configuration gets when it names none: the conversational default. */
-export const DEFAULT_PROVIDER_TIMEOUT_MS = 120_000;
-const DEFAULT_TIMEOUT_MS = DEFAULT_PROVIDER_TIMEOUT_MS;
+const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 // KEIKO-0572: exported so gateway-setup.ts / grounded-retrieval-eval.ts can import the shared
@@ -1903,6 +1902,7 @@ function parseProviderConfig(
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+    ...(raw.timeoutMs === undefined ? {} : { timeoutConfigured: true as const }),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
       raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,

@@ -12,7 +12,7 @@
 // here. Keiko's own validation always uses the original schema; the projection only decides what the
 // provider is shown (see provider-tool-schema.ts and the strictness pins in toolCatalogBridge.test).
 import { describe, expect, it } from "vitest";
-import { openAiCompatiblePromptTools } from "@oscharko-dev/keiko-model-gateway";
+import { openAiCompatiblePromptTools } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,

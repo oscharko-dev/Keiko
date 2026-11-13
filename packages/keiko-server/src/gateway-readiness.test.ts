@@ -6,14 +6,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
-import {
-  createDefaultChatCapability,
-  DEFAULT_PROVIDER_TIMEOUT_MS,
-  type GatewayConfig,
-} from "@oscharko-dev/keiko-model-gateway";
+import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import { modelUsedByPerson, type VerifiedModelCapabilityObservation } from "./deps.js";
+import { chatModelToolReadiness } from "./chat-tool-turn.js";
+import { captureConversationReadinessAdmission } from "./conversation-readiness-admission.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   EMBEDDING_EVIDENCE_PATTERN,
@@ -54,6 +53,8 @@ function gatewayConfig(modelId = "test-chat-model"): GatewayConfig {
         baseUrl: "https://llm-gateway.internal/v1",
         apiKey: "secret-token",
         timeoutMs: 30_000,
+        // The stored configuration names its timeout, as every configuration Setup wrote does.
+        timeoutConfigured: true,
         maxRetries: 0,
         retryBaseDelayMs: 0,
       },
@@ -62,6 +63,8 @@ function gatewayConfig(modelId = "test-chat-model"): GatewayConfig {
         baseUrl: "https://llm-gateway.internal/v1",
         apiKey: "secret-token",
         timeoutMs: 30_000,
+        // The stored configuration names its timeout, as every configuration Setup wrote does.
+        timeoutConfigured: true,
         maxRetries: 0,
         retryBaseDelayMs: 0,
       },
@@ -1300,21 +1303,205 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  function holderDeps(config: GatewayConfig, fetchImpl: typeof fetch): UiHandlerDeps {
+    return {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
+      },
+    };
+  }
+
+  // A model that calls a tool only when the call is forced is admitted, with a closed note.
+  it("admits a model that called a tool only when forced and carries the closed forced-only note", async () => {
+    const fetchImpl = vi.fn((_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        tool_choice?: unknown;
+        tools?: unknown;
+      };
+      if (body.tools === undefined) return Promise.resolve(jsonResponse(chatPayload("OK")));
+      return Promise.resolve(
+        body.tool_choice === undefined
+          ? jsonResponse(chatPayload("I would answer in words."))
+          : jsonResponse({
+              choices: [
+                {
+                  message: {
+                    role: "assistant",
+                    tool_calls: [
+                      {
+                        id: "call_1",
+                        type: "function",
+                        function: { name: "report_readiness", arguments: '{"status":"ok"}' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+      );
+    }) as unknown as typeof fetch;
+    const deps = holderDeps(gatewayConfig("forced-only-test"), fetchImpl);
+    const report = await runGatewayReadiness(
+      { modelId: "forced-only-test", options: { probes: ["tool_calling"] } },
+      deps,
+      "corr-forced-only",
+      "settings",
+    );
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    const probe = report.probes.find((entry) => entry.name === "tool_calling");
+    expect(probe).toMatchObject({
+      status: "passed",
+      toolCallingOutcome: "called-only-forced",
+      toolCallingWarning: "forced-only",
+    });
+    expect(report.verifiedCapabilities.toolCalling).toBe(true);
+    // A model that called its tool on its own carries no note.
+    const plain = vi.fn((_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        tools?: unknown;
+      };
+      return Promise.resolve(
+        body.tools === undefined
+          ? jsonResponse(chatPayload("OK"))
+          : jsonResponse({
+              choices: [
+                {
+                  message: {
+                    role: "assistant",
+                    tool_calls: [
+                      {
+                        id: "call_1",
+                        type: "function",
+                        function: { name: "report_readiness", arguments: '{"status":"ok"}' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+      );
+    }) as unknown as typeof fetch;
+    const plainReport = await runGatewayReadiness(
+      { modelId: "forced-only-test", options: { probes: ["tool_calling"] } },
+      holderDeps(gatewayConfig("forced-only-test"), plain),
+      "corr-plain",
+      "settings",
+    );
+    if ("status" in plainReport) return;
+    const plainProbe = plainReport.probes.find((entry) => entry.name === "tool_calling");
+    expect(plainProbe).toMatchObject({ status: "passed", toolCallingOutcome: "called-unforced" });
+    expect(plainProbe).not.toHaveProperty("toolCallingWarning");
+    deps.store.close();
+  });
+
+  // A model whose forced call is refused is not marked unable to call tools (owner decision 2): the
+  // conversation stays admitted, and tool turns stay UNVERIFIED (never "unsupported"), so the person
+  // is told to verify again and is never told to choose another model.
+  it("keeps a forced-refused model's conversation admitted and its tool turns unverified, never unsupported", async () => {
+    const config = gatewayConfig("forced-refused-test");
+    const recorded = new Map<string, VerifiedModelCapabilityObservation>();
+    const fetchImpl = vi.fn((_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        tool_choice?: unknown;
+        tools?: unknown;
+      };
+      if (body.tools === undefined) return Promise.resolve(jsonResponse(chatPayload("OK")));
+      return Promise.resolve(
+        body.tool_choice === undefined
+          ? jsonResponse(chatPayload("I would answer in words."))
+          : jsonResponse({ error: { message: "tool_choice not allowed" } }, 400),
+      );
+    }) as unknown as typeof fetch;
+    const base = holderDeps(config, fetchImpl);
+    const holder = base.gatewayConfig;
+    if (holder === undefined) throw new TypeError("expected a holder");
+    const deps: UiHandlerDeps = {
+      ...base,
+      gatewayConfig: {
+        ...holder,
+        verifiedCapability: (modelId) => recorded.get(modelId),
+        recordVerifiedCapability: (modelId, fields, checkedAt, generation) => {
+          recorded.set(modelId, { modelId, generation: generation ?? 0, checkedAt, fields });
+        },
+      },
+    };
+    await runGatewayReadiness(
+      { modelId: "forced-refused-test", options: { probes: ["chat", "tool_calling"] } },
+      deps,
+      "corr-selectable",
+      "settings",
+    );
+    // The conversation is admitted: the chat answered and nothing recorded a chat failure.
+    expect(captureConversationReadinessAdmission(deps, "forced-refused-test")).toMatchObject({
+      modelId: "forced-refused-test",
+    });
+    expect(recorded.get("forced-refused-test")?.fields.toolCalling).toBeUndefined();
+    // Tool turns need a verified proof; there is none, and the cause is "unverified", not "unsupported".
+    expect(chatModelToolReadiness(deps, "forced-refused-test")).toBe("unverified");
+    deps.store.close();
+  });
+
+  // An explicit Settings verification that answered is use; any other run is not.
+  it("counts only a passed explicit Settings check as use of the model", async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(jsonResponse(chatPayload("OK"))),
+    ) as unknown as typeof fetch;
+    let generation = 0;
+    const config = gatewayConfig("used-test");
+    const deps: UiHandlerDeps = {
+      ...holderDeps(config, fetchImpl),
+    };
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new TypeError("expected a holder");
+    const live = { ...holder, generation: (): number => generation };
+    const usable: UiHandlerDeps = { ...deps, gatewayConfig: live };
+    await runGatewayReadiness(
+      { modelId: "used-test", options: { probes: ["chat"] } },
+      usable,
+      "corr-a",
+    );
+    expect(modelUsedByPerson(usable, "used-test")).toBe(false);
+    await runGatewayReadiness(
+      { modelId: "used-test", options: { probes: ["chat"] } },
+      usable,
+      "corr-b",
+      "settings",
+    );
+    expect(modelUsedByPerson(usable, "used-test")).toBe(true);
+    // A replaced configuration generation drops the use.
+    generation = 1;
+    expect(modelUsedByPerson(usable, "used-test")).toBe(false);
+    deps.store.close();
+  });
+
   // #4351 (item D): a check a person started in Settings waits for a model that may still be loading.
   it("lifts only the conversational default of an explicit check, never a timeout an operator set", () => {
     const [base] = gatewayConfig().providers;
     if (base === undefined) throw new TypeError("expected a provider");
-    const provider = { ...base, timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS };
-    expect(probeProvider(provider, "chat", undefined).timeoutMs).toBe(
+    // A provider whose configuration never named a timeout carries no marker.
+    const defaulted = { ...base, timeoutMs: 120_000, timeoutConfigured: undefined };
+    expect(probeProvider(defaulted, "chat", undefined).timeoutMs).toBe(
       EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
     );
-    // A deliberately configured timeout, shorter or longer, is kept exactly.
-    expect(probeProvider({ ...provider, timeoutMs: 30_000 }, "chat", undefined).timeoutMs).toBe(
-      30_000,
-    );
-    expect(probeProvider({ ...provider, timeoutMs: 900_000 }, "chat", undefined).timeoutMs).toBe(
-      900_000,
-    );
+    // A timeout the configuration names is kept exactly: shorter, longer, and — the case a value
+    // comparison would get wrong — equal to the conversational default.
+    for (const timeoutMs of [30_000, 120_000, 900_000]) {
+      expect(
+        probeProvider({ ...defaulted, timeoutMs, timeoutConfigured: true }, "chat", undefined)
+          .timeoutMs,
+      ).toBe(timeoutMs);
+    }
   });
 
   it("records the bound an explicit check really ran under on its start line", async () => {
@@ -1325,7 +1512,8 @@ describe("gateway readiness route", () => {
       ...configured,
       providers: configured.providers.map((provider) => ({
         ...provider,
-        timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
+        timeoutMs: 120_000,
+        timeoutConfigured: undefined,
       })),
     };
     const deps: UiHandlerDeps = {

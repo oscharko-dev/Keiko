@@ -535,6 +535,15 @@ function probePassed(report: GatewayReadinessReport, name: string): boolean {
   return report.probes.some((probe) => probe.name === name && probe.status === "passed");
 }
 
+// A model that passed the tool-calling check only when the call was forced (#4351): admitted, with a
+// plain note in the person's language that conversations, which never force a call, may not use tools.
+function toolCallingNote(report: GatewayReadinessReport, t: I18nTranslate): string | undefined {
+  const probe = report.probes.find((candidate) => candidate.name === "tool_calling");
+  return probe?.toolCallingWarning === "forced-only"
+    ? t("settings.models.toolCallingForcedOnly")
+    : undefined;
+}
+
 function firstActionableProbeMessage(report: GatewayReadinessReport): string | undefined {
   const issue = report.probes.find(
     (probe) => probe.status !== "passed" && probe.status !== "skipped",
@@ -829,6 +838,7 @@ function ReadinessSummary({
   const report = state.report;
   const workingToday = probePassed(report, "chat");
   const warning = firstActionableProbeMessage(report);
+  const toolNote = toolCallingNote(report, t);
   return (
     <div className="ml-readiness">
       <div className="ml-rrow">
@@ -876,6 +886,7 @@ function ReadinessSummary({
             ) : null}
           </div>
           {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
+          {toolNote !== undefined ? <div className="ml-rwarn">{toolNote}</div> : null}
           <CapabilityDisagreementActions
             model={model}
             report={report}

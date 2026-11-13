@@ -850,6 +850,56 @@ describe("SettingsPanel gateway readiness checks", () => {
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, catalogRefresh);
   });
 
+  // #4351: a model that called a tool only when forced is admitted and carries a plain note.
+  const forcedOnlyReport: GatewayReadinessReport = {
+    modelId: "test-chat-1",
+    checkedAt: "2026-06-24T09:00:00.000Z",
+    overallStatus: "ready",
+    probes: [
+      { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+      {
+        name: "tool_calling",
+        status: "passed",
+        latencyMs: 11,
+        evidence: "The model called the tool only when the call was forced.",
+        toolCallingOutcome: "called-only-forced",
+        toolCallingWarning: "forced-only",
+      },
+    ],
+    verifiedCapabilities: { toolCalling: true },
+  };
+
+  it("shows the forced-only note beside an admitted model that calls tools only when forced", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(forcedOnlyReport);
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    expect(
+      await screen.findByText(
+        "Calls a tool only when forced. In conversations it may not use tools.",
+      ),
+    ).toBeInTheDocument();
+    // Admitted: working today, with the tools badge.
+    expect(screen.getByText("Working today")).toBeInTheDocument();
+    expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
+  });
+
+  it("words the forced-only note in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem("keiko.locale", "de");
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(forcedOnlyReport);
+    render(
+      <I18nProvider>
+        <SettingsPanel />
+      </I18nProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Bereitschaft prüfen" }));
+    expect(
+      await screen.findByText(/Ruft ein Tool nur auf, wenn der Aufruf erzwungen wird/),
+    ).toBeInTheDocument();
+  });
+
   it("surfaces unsupported probe evidence for partial readiness", async () => {
     primeFetches([chatCapability("test-chat-1")]);
     runGatewayReadinessMock.mockResolvedValue({

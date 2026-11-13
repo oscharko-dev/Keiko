@@ -1014,7 +1014,7 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   an identical payload is ambiguous and refused. Chat's split persisted tool pairs may be restored
   only against the exact saved group, including its original prose and parallel calls; fitting old
   tool observations does not change the response identity. Runtime echoes never populate this state.
-- **Detected, not configured (amended 2026-11-14, #4351).** A deployment with no `reasoningHistory`
+- **Detected, not configured (amended 2026-11-13, #4351).** A deployment with no `reasoningHistory`
   or `reasoningContinuation` setting is not left to fail. When a provider answers a tool-turn
   continuation with an HTTP 400 that the gateway attributes to no other cause (not a context
   overflow, an admission refusal, an exhausted output budget, an empty answer or a rejected tool-call
@@ -1025,13 +1025,18 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   that already ran is never executed again, a write is never replayed), and a stream is retried only
   before its first chunk. Only a successful retry teaches anything: the deployment is then remembered
   as wanting its reasoning back and behaves as `"current-turn"` from the next request on. A second
-  rejection surfaces the original error and learns nothing. To make the retry possible, the reasoning
-  of a tool-calling response is now kept for the CURRENT turn even without a setting (same caps, TTL,
-  redaction and binding to the trusted session, provider configuration and generation, memory only);
-  a request of a new turn drops it, and it is kept beyond the turn only for a configured or learned
+  rejection surfaces the original error and learns nothing. A learned deployment can also be wrong
+  or change: when it rejects a continuation that carried its reasoning with an unattributed HTTP 400,
+  that one retry (the closed reason `reasoning-withhold-repair`, never a second retry for the same
+  call) is sent without the reasoning, and its success unlearns the deployment (state `unlearned`);
+  a failed retry changes nothing and surfaces the original error. To make the retry possible, the
+  reasoning of a tool-calling response is now kept for the CURRENT turn even without a setting (same
+  caps, TTL, redaction and binding to the trusted session, provider configuration and generation,
+  memory only); it is dropped as soon as the turn ENDS (a final answer, a failure or a cancellation)
+  and by a request of a new turn, and it is kept beyond the turn only for a configured or learned
   deployment. The learned fact is one content-free flag per deployment fingerprint, lives with the
   gateway instance (so it is gone with a configuration generation change), is never persisted and is
-  never logged beyond the closed `gateway.reasoning-history` state `learned`. An explicit provider
+  never logged beyond the closed `gateway.reasoning-history` states `learned` and `unlearned`. An explicit provider
   setting always wins. Settings > Models shows the fact as "Returns its reasoning on tool turns:
   detected". This replaces the earlier statement that providers omit prior reasoning unless a setting
   says otherwise; no alias name decides anything.

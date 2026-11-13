@@ -24662,7 +24662,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["restored", "retained", "unavailable", "capacity-exceeded", "learned"],
+        values: [
+          "restored",
+          "retained",
+          "unavailable",
+          "capacity-exceeded",
+          "learned",
+          "unlearned",
+        ],
       },
       messageCount: {
         type: "integer",
@@ -24968,6 +24975,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "output-exhausted-repair",
           "empty-answer-repair",
           "reasoning-restore-repair",
+          "reasoning-withhold-repair",
         ],
       },
       httpStatus: {

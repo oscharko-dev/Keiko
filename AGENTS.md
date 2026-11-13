@@ -1275,15 +1275,21 @@ forced named call. It ends in one of six closed outcomes (`called-unforced`, `ca
 `forced-refused`, `no-call`, `tools-refused`, `inconclusive`), recorded as `toolCallingOutcome` on the
 existing readiness completion lines and told in plain words in the tool-calling evidence of
 Settings > Models. A forced call the provider refuses (a thinking mode answers HTTP 400 to
-`tool_choice`) is never a verdict that the model cannot call tools. A check a person starts in
-Settings waits at least the interactive silence floor for a slow model when the provider timeout is the
-conversational default (a timeout an operator set stays as configured); it is bounded, cancelled when
+`tool_choice`) is never a verdict that the model cannot call tools, and writes no "unsupported"
+record, but it confirms nothing either: the conversation stays admitted and tool turns stay
+`unverified` until a check passes. `called-only-forced` is admitted and carries the closed
+`toolCallingWarning: forced-only`, which Settings > Models words in English and German. A check a
+person starts in Settings waits at least the interactive silence floor for a slow model when the stored
+configuration does not name a provider timeout (a timeout the configuration names, whatever its value,
+stays as configured); it is bounded, cancelled when
 the request closes, shown on the start line as `chatProbeTimeoutMs` and announced as still running; no
 conversation turn is affected. Every tool definition leaves the gateway as a plain object schema (no
 `oneOf`, `anyOf`, `allOf`, `enum`, `const` or `not` at the top level; the alternatives are named in the
 description), and Keiko's own validation keeps using the original schema; a hermetic walk over every
 registered tool definition fails on any other construct. The meter read of a Chat's context window
-sends its probe only for a model a person has used. Operator procedure:
+sends its probe only for a model a person has used: an actual model call completed through the
+current configuration generation, or an explicit Settings check passed (a startup observation is not
+use). Operator procedure:
 [`docs/troubleshooting/model-does-not-call-tools.md`](docs/troubleshooting/model-does-not-call-tools.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
@@ -1443,9 +1449,13 @@ tool-turn continuation is answered once with the current turn's retained reasoni
 retry reason `reasoning-restore-repair`; the model request only, never a re-run tool, never a replayed
 write; a stream only before its first chunk); only a successful retry marks the deployment as wanting
 its reasoning back, held in memory for the gateway instance (gone with a generation change, never
-persisted or logged beyond the closed state `learned`) and shown in Settings > Models; a second
-rejection surfaces the original error; an explicit setting always wins; the current turn's reasoning
-is kept in memory for this purpose only and dropped when the turn ends.
+persisted or logged beyond the closed states `learned` and `unlearned`) and shown in Settings > Models;
+a second rejection surfaces the original error; an explicit setting always wins; the current turn's
+reasoning is kept in memory for this purpose only and dropped when the turn ends (a final answer, a
+failure or a cancellation). A learned deployment that rejects a continuation which carried its
+reasoning is answered once without it (the closed retry reason `reasoning-withhold-repair`, still one
+retry per call); when that succeeds the deployment is unlearned, and a second rejection surfaces the
+original error and changes nothing.
 
 For the authenticated native Coding path, the separate explicit provider policy
 `reasoningContinuation: "required-with-tools"` uses the existing native session as the sole

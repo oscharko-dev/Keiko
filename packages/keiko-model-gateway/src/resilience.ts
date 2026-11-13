@@ -249,6 +249,7 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
         "output-exhausted-repair",
         "empty-answer-repair",
         "reasoning-restore-repair",
+        "reasoning-withhold-repair",
       ],
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
@@ -443,7 +444,10 @@ export type RetryRepairReason =
   | "empty-answer-repair"
   // #4351: a provider rejected the next tool round for want of the previous assistant reasoning; the
   // one retry restores the current turn's reasoning and sends no correction.
-  | "reasoning-restore-repair";
+  | "reasoning-restore-repair"
+  // #4351: a deployment learned to want its reasoning back rejected a continuation that carried it;
+  // the one retry sends the same request without it, and its success unlearns the deployment.
+  | "reasoning-withhold-repair";
 
 /**
  * An attempt that already ran outside the loop and failed (#3873, F17, option iii): the loop
@@ -466,8 +470,11 @@ export interface RetryResume {
 // The reason a further attempt was scheduled, on the scheduled line.
 type RetryScheduledReason = "retryable-error" | RetryRepairReason;
 
-/** The repairs that send a correction to the model (the reasoning restore of #4351 sends none). */
-export type SteeredAnswerRepairReason = Exclude<RetryRepairReason, "reasoning-restore-repair">;
+/** The repairs that send a correction to the model (the reasoning repairs of #4351 send none). */
+export type SteeredAnswerRepairReason = Exclude<
+  RetryRepairReason,
+  "reasoning-restore-repair" | "reasoning-withhold-repair"
+>;
 
 // The gateway's own repair of an answer the model could not use: one that exhausted its output
 // budget (#3873, F17), and one that ended after reasoning without a tool call or any text (F23) —

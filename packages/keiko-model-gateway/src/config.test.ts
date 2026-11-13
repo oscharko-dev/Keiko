@@ -1739,6 +1739,19 @@ describe("parseGatewayConfig", () => {
   // and the top-level GatewayConfig.circuitBreaker continues to apply to every provider without
   // one. The parser reuses parseCircuitBreaker so per-provider validation stays consistent with
   // the top-level surface.
+  describe("operator-named provider timeout (#4351)", () => {
+    it("marks a timeout the configuration names, whatever its value, and only then", () => {
+      const named = parseGatewayConfig(
+        rawWithProvider((provider) => ({ ...provider, timeoutMs: 120_000 })),
+      );
+      expect(named.providers[0]?.timeoutConfigured).toBe(true);
+      const { timeoutMs: _omitted, ...withoutTimeout } = validProvider();
+      const defaulted = parseGatewayConfig(rawWithProvider(() => withoutTimeout));
+      expect(defaulted.providers[0]?.timeoutMs).toBe(120_000);
+      expect(defaulted.providers[0]?.timeoutConfigured).toBeUndefined();
+    });
+  });
+
   describe("per-provider circuitBreaker override (KEIKO-0167)", () => {
     it("round-trips a provider-level override alongside a sibling that omits it", () => {
       const raw = {

@@ -58,15 +58,20 @@ keiko support analyze <report.json> --json
 
 3. In the analysis, look for `toolCallingOutcome` on `gateway.readiness.completed` (or on
    `gateway.readiness.automatic.completed` for the Workbench's own check) and for
-   `gateway.retry.scheduled` lines with `reason: reasoning-restore-repair`.
+   `gateway.retry.scheduled` lines with `reason: reasoning-restore-repair` or
+   `reasoning-withhold-repair`.
 
 **Resolution**
 
 - `called-unforced`: nothing to do.
-- `called-only-forced`: the model may not use tools in Chat or the Workbench. Try a real tool task; if
-  it answers in words, choose a model that calls tools on its own, or turn its thinking mode off.
-- `forced-refused`: not a verdict. Pick the model in Chat or the Workbench and try a real tool task. If
-  the provider has a thinking mode, check whether turning it off changes the result.
+- `called-only-forced`: the model is admitted and tools stay available, and Settings > Models shows a
+  note (`toolCallingWarning: forced-only` in the report) that it calls a tool only when forced, so in
+  conversations it may not use tools. Try a real tool task; if it answers in words, choose a model that
+  calls tools on its own, or turn its thinking mode off.
+- `forced-refused`: not a verdict that the model cannot call tools, and no durable "unsupported"
+  record is written: the conversation stays admitted. Keiko cannot confirm tool calling either, and
+  tool turns (Chat tools, the Coding Workbench) need a confirmed check, so they ask for a new
+  verification. If the provider has a thinking mode, turn it off and verify again.
 - `no-call` or `tools-refused`: the endpoint or model does not support tool calling. Choose a model or
   deployment that does, or enable the provider's tool-call support (for a vLLM model, its auto tool
   choice and tool parser).
@@ -74,7 +79,12 @@ keiko support analyze <report.json> --json
 - A tool turn that failed with HTTP 400 after the first tool: nothing to configure. Keiko answers the
   rejection once with the reasoning restored; the next rounds of that deployment carry it at once. If
   the 400 persists, read the evidence above and the provider's own error; do not add a blank
-  `reasoning_content`.
+  `reasoning_content`. What Keiko keeps for a deployment it knows nothing about is held for the
+  current turn only and dropped when the turn ends (a final answer, a failure or a cancellation).
+- A deployment Keiko learned and which then rejects a continuation that carries its reasoning: the
+  one retry of that call is sent without it (`reason: reasoning-withhold-repair`); when that succeeds,
+  Keiko unlearns the deployment (state `unlearned` on `gateway.reasoning-history`) and the next rounds
+  go without reasoning. A second rejection surfaces the original error and changes nothing.
 - An explicit `reasoningHistory` or `reasoningContinuation` setting is only needed for a deployment that
   must not be detected (for the native Coding path, see
   [DeepSeek thinking with tool continuations](./litellm-production-gateway.md)). Preserve the

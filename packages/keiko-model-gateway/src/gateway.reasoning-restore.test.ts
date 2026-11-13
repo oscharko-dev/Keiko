@@ -278,3 +278,236 @@ describe("a provider that demands its reasoning back, detected from its own reje
     expect(gateway.learnedReasoningOnToolTurns(MODEL)).toBe(true);
   });
 });
+
+// A turn the deployment learned its way through: the next request after it carries the reasoning.
+async function learnedGateway(
+  call: ProviderAdapter["call"],
+  events: ModelGatewayLogEvent[] = [],
+): Promise<Gateway> {
+  const warmup: GatewayCallRequest[] = [];
+  let live = false;
+  const gateway = gatewayFor(
+    configuration(),
+    (input, options) => (live ? call(input, options) : demanding(warmup)(input, options)),
+    events,
+  );
+  const first = await gateway.chat(request(FIRST));
+  await gateway.chat(request(afterTool(first)));
+  expect(gateway.learnedReasoningOnToolTurns(MODEL)).toBe(true);
+  live = true;
+  return gateway;
+}
+
+describe("a learned deployment that stops wanting its reasoning is unlearned (owner decision 3)", () => {
+  const TURN: GatewayCallRequest["messages"] = [{ role: "user", content: "Again." }];
+  const continuation = (calling: NormalizedResponse): GatewayCallRequest["messages"] => [
+    ...TURN,
+    { role: "assistant", content: calling.content, toolCalls: calling.toolCalls },
+    { role: "tool", content: "export const a = 1;", toolCallId: CALL.id },
+  ];
+
+  it("answers a plain 400 on a restored continuation once without it, and unlearns on success", async () => {
+    const seen: GatewayCallRequest[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    // The deployment now rejects any continuation that carries reasoning.
+    const gateway = await learnedGateway((input) => {
+      seen.push(input);
+      if (seen.length === 1) return Promise.resolve(answer(true));
+      return hasReasoning(input)
+        ? Promise.reject(new ProviderError("reasoning_content is not accepted", 400))
+        : Promise.resolve(answer(false));
+    }, events);
+    events.length = 0;
+    const calling = await gateway.chat(request(TURN, "session-b"));
+    const done = await gateway.chat(request(continuation(calling), "session-b"));
+    expect(done.content).toBe("Verified.");
+    // Round 1, the rejected restored round 2, and its one retry without reasoning.
+    expect(seen).toHaveLength(3);
+    expect(seen[1] !== undefined && hasReasoning(seen[1])).toBe(true);
+    expect(seen[2] !== undefined && hasReasoning(seen[2])).toBe(false);
+    expect(gateway.learnedReasoningOnToolTurns(MODEL)).toBe(false);
+    expect(
+      events
+        .filter((event) => event.op === "gateway.retry.scheduled")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["reasoning-withhold-repair"]);
+    expect(
+      events
+        .filter((event) => event.op === "gateway.reasoning-history")
+        .map((event) => event.extra?.state),
+    ).toContain("unlearned");
+    // Unlearned: the next continuation is sent without reasoning at once.
+    seen.length = 0;
+    const again = await gateway.chat(request(TURN, "session-c"));
+    seen.length = 0;
+    await gateway.chat(request(continuation(again), "session-c"));
+    expect(seen).toHaveLength(1);
+    expect(seen[0] !== undefined && hasReasoning(seen[0])).toBe(false);
+  });
+
+  it("stays learned when the retry without reasoning is rejected too, and surfaces the original error", async () => {
+    let calls = 0;
+    const gateway = await learnedGateway(() => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(answer(true));
+      return Promise.reject(
+        new ProviderError(calls === 2 ? "original unrelated rejection" : "second rejection", 400),
+      );
+    });
+    const calling = await gateway.chat(request(TURN, "session-b"));
+    await expect(gateway.chat(request(continuation(calling), "session-b"))).rejects.toThrow(
+      "original unrelated rejection",
+    );
+    // Round 1, the rejected request, one retry: one repair per call.
+    expect(calls).toBe(3);
+    expect(gateway.learnedReasoningOnToolTurns(MODEL)).toBe(true);
+  });
+
+  it("grants no withhold retry when the setting is explicit", async () => {
+    const seen: GatewayCallRequest[] = [];
+    const gateway = gatewayFor(configuration("current-turn"), (input) => {
+      seen.push(input);
+      return seen.length === 1
+        ? Promise.resolve(answer(true))
+        : Promise.reject(new ProviderError("rejected anyway", 400));
+    });
+    const calling = await gateway.chat(request(TURN, "session-b"));
+    await expect(gateway.chat(request(continuation(calling), "session-b"))).rejects.toThrow(
+      "rejected anyway",
+    );
+    expect(seen).toHaveLength(2);
+  });
+});
+
+describe("an unrelated 400 on a tool continuation with retained reasoning", () => {
+  it("costs exactly one extra provider call, surfaces the original error and learns nothing", async () => {
+    const seen: GatewayCallRequest[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    const gateway = gatewayFor(
+      configuration(),
+      (input) => {
+        seen.push(input);
+        return seen.length === 1
+          ? Promise.resolve(answer(true))
+          : Promise.reject(new ProviderError(`unsupported parameter ${String(seen.length)}`, 400));
+      },
+      events,
+    );
+    const first = await gateway.chat(request(FIRST));
+    await expect(gateway.chat(request(afterTool(first)))).rejects.toThrow(
+      "unsupported parameter 2",
+    );
+    expect(seen).toHaveLength(3);
+    expect(gateway.learnedReasoningOnToolTurns(MODEL)).toBe(false);
+    expect(events.filter((event) => event.op === "gateway.retry.scheduled")).toHaveLength(1);
+    expect(
+      events
+        .filter((event) => event.op === "gateway.reasoning-history")
+        .map((event) => event.extra?.state),
+    ).not.toContain("learned");
+  });
+});
+
+describe("what is kept for the current turn alone is dropped when the turn ENDS", () => {
+  // A continuation of the first round, answered by a provider that would demand reasoning back.
+  async function endedBy(
+    end: (gateway: Gateway, first: NormalizedResponse) => Promise<unknown>,
+  ): Promise<{ readonly calls: () => number; readonly replay: () => Promise<unknown> }> {
+    let calls = 0;
+    let rejectAll = false;
+    const gateway = gatewayFor(configuration(), () => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(answer(true));
+      if (rejectAll) return Promise.reject(new ProviderError("reasoning_content missing", 400));
+      return Promise.resolve(answer(false));
+    });
+    const first = await gateway.chat(request(FIRST));
+    await end(gateway, first);
+    rejectAll = true;
+    calls = 1;
+    return {
+      calls: (): number => calls,
+      replay: (): Promise<unknown> => gateway.chat(request(afterTool(first))),
+    };
+  }
+
+  it("on a final answer", async () => {
+    const turn = await endedBy((gateway, first) => gateway.chat(request(afterTool(first))));
+    await expect(turn.replay()).rejects.toThrow("reasoning_content missing");
+    // One request and no restored retry behind it: nothing of the ended turn remains.
+    expect(turn.calls()).toBe(2);
+  });
+
+  it("on a failure", async () => {
+    let calls = 0;
+    const base = configuration();
+    const [provider] = base.providers;
+    if (provider === undefined) throw new TypeError("expected a provider");
+    // No provider retries, so each request below is one provider call.
+    const gateway = gatewayFor({ ...base, providers: [{ ...provider, maxRetries: 0 }] }, () => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(answer(true));
+      return Promise.reject(new ProviderError("reasoning_content missing", 400));
+    });
+    const first = await gateway.chat(request(FIRST));
+    // The first rejection is answered by the restore retry, which fails too: the call has failed.
+    await expect(gateway.chat(request(afterTool(first)))).rejects.toThrow();
+    calls = 1;
+    await expect(gateway.chat(request(afterTool(first)))).rejects.toThrow();
+    // The failure ended the turn: the replay is one request, with no restore retry behind it.
+    expect(calls).toBe(2);
+    expect(gateway.learnedReasoningOnToolTurns(MODEL)).toBe(false);
+  });
+
+  it("on a cancellation", async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    const gateway = gatewayFor(configuration(), (input) => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(answer(true));
+      if (input.cancellationSignal?.aborted === true) return Promise.reject(new Error("aborted"));
+      return Promise.reject(new ProviderError("reasoning_content missing", 400));
+    });
+    const first = await gateway.chat(request(FIRST));
+    controller.abort();
+    await expect(
+      gateway.chat({ ...request(afterTool(first)), cancellationSignal: controller.signal }),
+    ).rejects.toThrow();
+    calls = 1;
+    await expect(gateway.chat(request(afterTool(first)))).rejects.toThrow(
+      "reasoning_content missing",
+    );
+    expect(calls).toBe(2);
+  });
+});
+
+describe("a model counts as served only once an actual call completed (#4351)", () => {
+  it("is false before any call and after a failed one, true after a completed buffered call", async () => {
+    let fail = true;
+    const gateway = gatewayFor(
+      ((): GatewayConfig => {
+        const base = configuration();
+        const [provider] = base.providers;
+        if (provider === undefined) throw new TypeError("expected a provider");
+        return { ...base, providers: [{ ...provider, maxRetries: 0 }] };
+      })(),
+      () =>
+        fail ? Promise.reject(new ProviderError("down", 500)) : Promise.resolve(answer(false)),
+    );
+    expect(gateway.hasServedModel(MODEL)).toBe(false);
+    await expect(gateway.chat(request(FIRST))).rejects.toThrow();
+    expect(gateway.hasServedModel(MODEL)).toBe(false);
+    fail = false;
+    await gateway.chat(request(FIRST));
+    expect(gateway.hasServedModel(MODEL)).toBe(true);
+    expect(gateway.hasServedModel("unknown-model")).toBe(false);
+  });
+
+  it("is true after a completed streamed call", async () => {
+    const gateway = gatewayFor(configuration(), () => Promise.resolve(answer(false)));
+    const types: string[] = [];
+    for await (const chunk of gateway.chatStream(request(FIRST))) types.push(chunk.type);
+    expect(types).toContain("done");
+    expect(gateway.hasServedModel(MODEL)).toBe(true);
+  });
+});

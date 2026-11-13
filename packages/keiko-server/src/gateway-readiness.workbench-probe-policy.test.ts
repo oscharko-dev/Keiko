@@ -40,6 +40,8 @@ function provider(timeoutMs: number): ModelProviderConfig {
     baseUrl: "https://siu.llm.intern/v1",
     apiKey: "k",
     timeoutMs,
+    // The stored configuration names its timeout (an operator's choice), as every Setup-written one does.
+    timeoutConfigured: true,
     maxRetries: 0,
     retryBaseDelayMs: 1,
   };

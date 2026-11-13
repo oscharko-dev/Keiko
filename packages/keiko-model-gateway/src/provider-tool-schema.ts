@@ -119,8 +119,15 @@ function alternativeLabel(alternative: JsonObject): string {
   return [names, without].filter((part) => part.length > 0).join(" ") || "no arguments";
 }
 
+// The sentence stays bounded however many alternatives a schema lists: the first MAX_SENTENCE_SETS are
+// named and the rest are counted. Validation of the call is unaffected, it uses the original schema.
 function alternativesSentence(alternatives: readonly JsonObject[], lead: string): string {
-  return `${lead} ${alternatives.map((alternative) => alternativeLabel(alternative)).join("; or ")}.`;
+  const named = alternatives
+    .slice(0, MAX_SENTENCE_SETS)
+    .map((alternative) => alternativeLabel(alternative));
+  const omitted = alternatives.length - named.length;
+  const listed = omitted > 0 ? [...named, `${String(omitted)} more argument sets`] : named;
+  return `${lead} ${listed.join("; or ")}.`;
 }
 
 /** A `not` over required names: the combination the validator refuses and the schema can no longer say. */

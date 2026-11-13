@@ -360,6 +360,22 @@ describe("providerToolSchema", () => {
     expect(result.description.split("; or ")).toHaveLength(8);
   });
 
+  it("keeps the alternatives sentence bounded, naming the first eight and counting the rest", () => {
+    const alternatives = Array.from({ length: 20 }, (_unused, index) => ({
+      type: "object",
+      properties: { [`field${String(index)}`]: { type: "string" } },
+      required: [`field${String(index)}`],
+    }));
+    const result = providerToolSchema({ type: "object", oneOf: alternatives }, "d");
+    const parts = result.description.split("; or ");
+    expect(parts).toHaveLength(9);
+    expect(parts.at(-1)).toBe("12 more argument sets.");
+    expect(result.description).toContain("field7");
+    expect(result.description).not.toContain("field8");
+    // All twenty properties are still advertised; only the sentence is bounded.
+    expect(Object.keys(result.parameters.properties as object)).toHaveLength(20);
+  });
+
   it("leaves a schema whose allOf cannot be folded as it is", () => {
     const schema = { type: "object", allOf: [{ type: "object" }, "not an object"] };
     expect(providerToolSchema(schema, "d")).toEqual({ parameters: schema, description: "d" });
