@@ -331,27 +331,38 @@ function probeKey(metadata: AtlassianCredentialMetadata): string {
   return `${metadata.authRef}|${String(metadata.generation ?? 1)}|${String(revision)}`;
 }
 
+function responseCause(
+  status: number,
+  failure: AtlassianAuthenticationFailure | undefined,
+): ProbeCause {
+  if (status === 401) return failure === "denied" ? "captcha" : "foreign-401";
+  if (status === 429) return "http-429";
+  if (status >= 500) return "http-5xx";
+  if (status >= 400) return "http-4xx";
+  return status >= 300 ? "redirect" : "invalid-body";
+}
+
 function probeCauseOf(last: AtlassianHttpBodyResult | undefined): ProbeCause {
   if (last === undefined) return "probe-error";
-  if (last.kind === "timeout") return "timeout";
-  if (last.kind === "network-error") return "network";
-  if (last.status === 401)
-    return last.authenticationFailure === "denied" ? "captcha" : "foreign-401";
-  if (last.status === 429) return "http-429";
-  if (last.status >= 500) return "http-5xx";
-  if (last.status >= 300 && last.status < 400) return "redirect";
-  if (last.status >= 400) return "http-4xx";
-  return "invalid-body";
+  if (last.kind === "response") return responseCause(last.status, last.authenticationFailure);
+  return last.kind === "timeout" ? "timeout" : "network";
 }
 
 const PROBE_DETAIL = { decision: "probe", routeClass: "other" } as const;
 
-function identityObservation(
+interface ObservedIdentityPort {
+  readonly port: AtlassianHttpBodyPort;
+  readonly last: () => AtlassianHttpBodyResult | undefined;
+  readonly reset: () => void;
+}
+
+/** The identity read's own port; it remembers its last answer so a 401's origin can be judged. */
+function observedIdentityPort(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
   lifecycle: AtlassianCredentialHttpOptions,
-): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome> {
+): ObservedIdentityPort {
   const current = (): boolean =>
     currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef));
   const port = createGatewayAtlassianHttpBodyPort({
@@ -366,58 +377,79 @@ function identityObservation(
     singleAttempt: true,
   });
   const seen: { last?: AtlassianHttpBodyResult } = {};
-  const lastResult = (): AtlassianHttpBodyResult | undefined => seen.last;
-  const observing: AtlassianHttpBodyPort = async (request) => {
-    const result = await port(request);
-    seen.last = result;
-    return result;
+  return {
+    port: async (request) => {
+      const result = await port(request);
+      seen.last = result;
+      return result;
+    },
+    last: () => seen.last,
+    reset: (): void => {
+      Reflect.deleteProperty(seen, "last");
+    },
   };
-  const key = probeKey(metadata);
-  const run = async (
-    deadlineAt: number,
-    signal: AbortSignal | undefined,
-  ): Promise<JiraIdentityProbeOutcome> => {
-    Reflect.deleteProperty(seen, "last");
-    const status = await verifyJiraDataCenterIdentity(observing, metadata.baseUrl, {
-      deadlineAt,
-      signal,
-    });
-    if (status === "ok") {
-      recordConnectionCheck(
-        owner.options,
-        correlationId,
-        "ok",
-        undefined,
-        "request",
-        undefined,
-        PROBE_DETAIL,
-      );
-      rememberPositiveProbe(owner, key);
-      return "confirmed";
-    }
-    // Only a 401 Jira itself authored shows a rejected token; a proxy's or a captcha's does not.
-    const answered = lastResult();
-    if (
-      status === "auth-failed" &&
-      answered?.kind === "response" &&
-      answered.authenticationFailure === "jira"
-    ) {
-      observedAuthentication(owner, metadata, correlationId, PROBE_DETAIL)(401, "jira");
-      return "rejected";
-    }
+}
+
+async function readIdentity(
+  context: {
+    readonly owner: CredentialTransportOwner;
+    readonly metadata: AtlassianCredentialMetadata;
+    readonly correlationId: string;
+    readonly key: string;
+    readonly identity: ObservedIdentityPort;
+  },
+  deadlineAt: number,
+  signal: AbortSignal | undefined,
+): Promise<JiraIdentityProbeOutcome> {
+  const { owner, metadata, correlationId, key, identity } = context;
+  identity.reset();
+  const status = await verifyJiraDataCenterIdentity(identity.port, metadata.baseUrl, {
+    deadlineAt,
+    signal,
+  });
+  const check = (outcome: "ok" | "probe-inconclusive", detail: ConnectionCheckDetail): void => {
     recordConnectionCheck(
       owner.options,
       correlationId,
-      "probe-inconclusive",
+      outcome,
       undefined,
       "request",
       undefined,
-      {
-        ...PROBE_DETAIL,
-        probeCause: probeCauseOf(answered),
-      },
+      detail,
     );
-    return "inconclusive";
+  };
+  if (status === "ok") {
+    check("ok", PROBE_DETAIL);
+    rememberPositiveProbe(owner, key);
+    return "confirmed";
+  }
+  // Only a 401 Jira itself authored shows a rejected token; a proxy's or a captcha's does not.
+  const answered = identity.last();
+  if (
+    status === "auth-failed" &&
+    answered?.kind === "response" &&
+    answered.authenticationFailure === "jira"
+  ) {
+    observedAuthentication(owner, metadata, correlationId, PROBE_DETAIL)(401, "jira");
+    return "rejected";
+  }
+  check("probe-inconclusive", { ...PROBE_DETAIL, probeCause: probeCauseOf(answered) });
+  return "inconclusive";
+}
+
+function identityObservation(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string,
+  lifecycle: AtlassianCredentialHttpOptions,
+): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome> {
+  const key = probeKey(metadata);
+  const context = {
+    owner,
+    metadata,
+    correlationId,
+    key,
+    identity: observedIdentityPort(owner, metadata, correlationId, lifecycle),
   };
   return async (deadlineAt, signal): Promise<JiraIdentityProbeOutcome> => {
     // Only a positive result is reused, and only for this exact generation and revision.
@@ -431,7 +463,7 @@ function identityObservation(
     // One probe in flight per credential generation and revision: concurrent 401s share it.
     const shared = owner.inflightProbes.get(key);
     if (shared !== undefined) return shareProbe(owner, correlationId, shared);
-    const flight = run(deadlineAt, signal);
+    const flight = readIdentity(context, deadlineAt, signal);
     owner.inflightProbes.set(key, flight);
     try {
       return await flight;

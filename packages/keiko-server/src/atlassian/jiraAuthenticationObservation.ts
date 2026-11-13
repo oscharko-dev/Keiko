@@ -145,23 +145,45 @@ export function withJiraAuthenticationObservation<
     Object.freeze(request);
     const deadline = Date.now() + Math.min(request.timeoutMs, 60_000);
     const result = await port(request);
-    const unconfirmed = { ...result, authentication: "unconfirmed" } as const;
-    if (identityRoute401(metadata, request, result)) {
-      // Only a 401 Jira itself authored rejects the token; the observer already discarded it.
-      const origin = result.kind === "response" ? result.authenticationFailure : undefined;
-      if (origin === "jira") return result;
-      options.onUnsettled?.(origin === "denied" ? "denied-401" : "foreign-401");
-      return unconfirmed;
-    }
+    if (identityRoute401(metadata, request, result)) return identityRouteOutcome(result, options);
     if (!ambiguousFailure(metadata, request, result)) return result;
-    const signal = "signal" in request ? request.signal : undefined;
-    if (!probeable(current, deadline, signal, options)) return unconfirmed;
-    const outcome = await settledProbe(probe, deadline, signal, options);
-    if (outcome === "rejected") return result;
-    if (outcome === "confirmed" && current() && withinOriginalRequest(deadline, signal))
-      return { ...result, authentication: "confirmed" };
-    return unconfirmed;
+    return probeOutcome(result, { current, probe, options, deadline, request });
   };
+}
+
+/** The identity route's own 401: only one Jira authored rejects the token (already discarded). */
+function identityRouteOutcome<TResult extends AtlassianHttpResult>(
+  result: TResult,
+  options: JiraAuthenticationObservationOptions,
+): TResult {
+  const origin = result.kind === "response" ? result.authenticationFailure : undefined;
+  if (origin === "jira") return result;
+  options.onUnsettled?.(origin === "denied" ? "denied-401" : "foreign-401");
+  return { ...result, authentication: "unconfirmed" };
+}
+
+async function probeOutcome<TResult extends AtlassianHttpResult>(
+  result: TResult,
+  context: {
+    readonly current: () => boolean;
+    readonly probe: (
+      deadlineAt: number,
+      signal: AbortSignal | undefined,
+    ) => Promise<JiraIdentityProbeOutcome>;
+    readonly options: JiraAuthenticationObservationOptions;
+    readonly deadline: number;
+    readonly request: Request;
+  },
+): Promise<TResult> {
+  const { current, probe, options, deadline, request } = context;
+  const unconfirmed = { ...result, authentication: "unconfirmed" } as const;
+  const signal = "signal" in request ? request.signal : undefined;
+  if (!probeable(current, deadline, signal, options)) return unconfirmed;
+  const outcome = await settledProbe(probe, deadline, signal, options);
+  if (outcome === "rejected") return result;
+  if (outcome === "confirmed" && current() && withinOriginalRequest(deadline, signal))
+    return { ...result, authentication: "confirmed" };
+  return unconfirmed;
 }
 
 function probeable(

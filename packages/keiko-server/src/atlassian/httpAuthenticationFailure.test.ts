@@ -49,7 +49,20 @@ describe("closed 401 origin fact", () => {
   });
 });
 
-function ports(headers: Record<string, string>, status: number, body = "{}") {
+function ports(
+  headers: Record<string, string>,
+  status: number,
+  body = "{}",
+): {
+  readonly body: ReturnType<typeof createGatewayAtlassianHttpBodyPort>;
+  readonly plain: ReturnType<typeof createGatewayAtlassianHttpPort>;
+  readonly request: {
+    readonly method: "GET";
+    readonly url: string;
+    readonly timeoutMs: number;
+    readonly maxBodyBytes: number;
+  };
+} {
   const options = {
     baseUrl: "https://jira.example",
     authRef: "atlassian-cred:synthetic-reference",

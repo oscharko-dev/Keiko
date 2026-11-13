@@ -31,6 +31,7 @@ import {
   JiraPrivateSessionError,
   jiraPrivateCookie,
   type JiraPrivateCookie,
+  type AtlassianAuthenticationFailure,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
@@ -918,7 +919,6 @@ async function projectBodyResponse(
   signal: AbortSignal,
 ): Promise<AtlassianHttpBodyResult> {
   const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
-  const failure = classifyAuthenticationFailure(response.status, response.headers);
   const observedBody = await credentialSafeBody(
     await readResponseBody(response, request),
     response.status,
@@ -957,8 +957,14 @@ async function projectBodyResponse(
     bodyBytes: body.bodyBytes,
     truncated: body.truncated,
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-    ...(failure === undefined ? {} : { authenticationFailure: failure }),
+    ...authenticationFailureField(response),
   };
+}
+function authenticationFailureField(response: Response): {
+  readonly authenticationFailure?: AtlassianAuthenticationFailure;
+} {
+  const failure = classifyAuthenticationFailure(response.status, response.headers);
+  return failure === undefined ? {} : { authenticationFailure: failure };
 }
 function bodyRequestPort(
   base: URL,

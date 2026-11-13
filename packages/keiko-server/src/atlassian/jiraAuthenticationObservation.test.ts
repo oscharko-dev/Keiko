@@ -1379,8 +1379,8 @@ it("keeps an anonymous identity answer Jira-authored: the probe still discards",
 
 // #4353 audit C: concurrent 401s share one identity read per credential generation and revision.
 it.each([
-  ["a throttled Jira (429)", () => response({}, 429)],
-  ["a healthy Jira", () => response(IDENTITY)],
+  ["a throttled Jira (429)", (): Response => response({}, 429)],
+  ["a healthy Jira", (): Response => response(IDENTITY)],
 ] as const)("shares one identity read among ten parallel 401s on %s", async (_name, probe) => {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
@@ -1392,7 +1392,9 @@ it.each([
     return probe();
   });
   const http = f.deps.httpBodyPortFactory(f.metadata, "parallel-401");
-  const calls = Array.from({ length: 10 }, (_unused, index) => http(request(`resource/${index}`)));
+  const calls = Array.from({ length: 10 }, (_unused, index) =>
+    http(request(`resource/${String(index)}`)),
+  );
   await vi.waitFor(() => {
     expect(f.urls.filter((url) => url.endsWith("/myself")).length).toBeGreaterThan(0);
   });
@@ -1419,7 +1421,9 @@ it("lets every sharer see a rejection of the one shared identity read", async ()
     return response({}, 401);
   });
   const http = f.deps.httpBodyPortFactory(f.metadata, "parallel-rejection");
-  const calls = Array.from({ length: 5 }, (_unused, index) => http(request(`resource/${index}`)));
+  const calls = Array.from({ length: 5 }, (_unused, index) =>
+    http(request(`resource/${String(index)}`)),
+  );
   await vi.waitFor(() => {
     expect(f.urls.filter((url) => url.endsWith("/myself")).length).toBe(1);
   });
