@@ -29139,7 +29139,9 @@
           "gateway.conversation.admission",
           "gateway.readiness.automatic.joined",
           "gateway.readiness.automatic.withheld",
-          "gateway.readiness.busy-retained"
+          "gateway.readiness.busy-retained",
+          "gateway.readiness.scope",
+          "gateway.readiness.selection"
         ],
         "end": ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
         "failure": [],
@@ -29175,6 +29177,14 @@
           "mode": "correlation"
         },
         {
+          "op": "gateway.readiness.scope",
+          "mode": "correlation"
+        },
+        {
+          "op": "gateway.readiness.selection",
+          "mode": "correlation"
+        },
+        {
           "op": "gateway.readiness.started",
           "mode": "correlation"
         }
@@ -29188,6 +29198,8 @@
         "gateway.readiness.automatic.withheld",
         "gateway.readiness.busy-retained",
         "gateway.readiness.completed",
+        "gateway.readiness.scope",
+        "gateway.readiness.selection",
         "gateway.readiness.started"
       ],
       "replayReferences": [],
@@ -29330,6 +29342,12 @@
               "name": "chatProbeTimeoutMs",
               "type": "integer",
               "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "checkReason",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -29508,6 +29526,72 @@
             "causeChain": false
           },
           "proofIds": ["gateway.readiness.completed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.readiness.scope",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "checkedModelCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "listedModelCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "modelKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.readiness.scope.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.readiness.selection",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.readiness.selection.line"],
           "replayReferences": [],
           "missingObligations": []
         },

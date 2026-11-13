@@ -4389,6 +4389,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.model.unavailable": "Model list unavailable",
   "chat.model.noEligible": "No conversation-eligible model",
   "chat.model.change": "Change model",
+  "chat.model.checking": "Checking {model}…",
+  "chat.model.notReady":
+    "{model} is not ready. Pick another model or check it in Settings > Models.",
   "chat.noModelAlert":
     "No conversation model is currently available. Check gateway and model status in Settings.",
   "chat.loadingGateway": "Connecting to your gateway...",
@@ -4414,6 +4417,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.voice.batchFinish": "Finish speaking",
   "chat.voice.batchMode": "Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.",
   "chat.error.send": "Could not send message.",
+  "chat.error.modelCheckCooldown":
+    "The selected model did not answer a moment ago. Wait a little and try again, or pick another model.",
+  "chat.error.modelChecking":
+    "The selected model is still being checked. Wait until it answers, then send again.",
+  "chat.error.modelNotReady":
+    "The selected model did not answer its check, so nothing was sent. Pick another model, or check it in Settings > Models and try again.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
   "chat.grounding.dataLabel": "Data sources",

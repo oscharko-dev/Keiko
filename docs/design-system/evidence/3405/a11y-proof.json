@@ -84,27 +84,27 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
-      "sha256": "d2e628abcfdbcca83278546df8326b3b1e37f3c7ef43a424f97b36661124a68c"
+      "sha256": "44d9de61125ee4a256c1ef39a62e3d8f212ffb1145fa520e668929bf4ca43c6a"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "d01e08ddaf28636da6978e9f677c95986fefce2b67c6925825c48cd7fefdf721"
+      "sha256": "f590af36a79713c6213d5922b9f66c4381c289f9a5ba265bf6cdbcdf1fa80508"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "a8cdb5264738569e7330205f10b8bd6adfe1f284d4aeb4ba45206e06df72579d"
+      "sha256": "5655e75cd489a10a18f94c3b1dfca6f4f89c046842a6fec3d064dc59f8dd1670"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "b479a14d426d775b2e2d42f1f5590868fa6777d79c7904f00b1cf189a50363f3"
+      "sha256": "5721154cd5189d79fb04b29fd048f68a521a796059df9e7cfabe0b0ed9972374"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "4f6418281e9705a8186fc6749a7d52952c9c2a0e1b3a5330155a2414aa6b8e62"
+      "sha256": "b73b92bb13b94631d2515baeadcac0b2aeb8ac1b1ae77ed0f4b5f79c7c836884"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
-      "sha256": "48a5b89217f4e144af6b385199e1803cde0389649d363c9268e30120a02e3b46"
+      "sha256": "3a6fccedd077ddcadc9c45f223a79233139efafe2ef4ade29d70949edf147c0c"
     }
   ],
   "harnessProvenanceSha256": {

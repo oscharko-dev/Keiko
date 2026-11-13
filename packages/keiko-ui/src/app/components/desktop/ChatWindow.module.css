@@ -435,3 +435,17 @@ article.cmpUserMessage[data-role="user"][data-layout="turn"] > .cmpUserMessageBu
 .cmpStop[data-tip]:focus-visible::after {
   opacity: 1;
 }
+
+.cmpModelCheck {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.cmpModelCheckFailed {
+  color: var(--feedback-danger);
+}

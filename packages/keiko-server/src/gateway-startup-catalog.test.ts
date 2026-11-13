@@ -1206,9 +1206,7 @@ it("keeps a connection env-only credential transient on newly discovered aliases
   stubReadyToolChat();
   const { configPath, env } = envCatalogState();
   const deps = configuredEnvCatalog(configPath, env, ["chat-model", "new-chat"]);
-  await vi.waitFor(() => {
-    expect(startupModels(deps).find((model) => model.id === "new-chat")?.toolCalling).toBe(true);
-  });
+  await expectReadyAlias(deps);
   const persisted = persistedCredentialProviders(configPath);
   expect(persisted.find((provider) => provider.modelId === "new-chat")).toMatchObject({
     apiKeySourceModelId: "chat-model",
@@ -1232,7 +1230,20 @@ function configuredAliasKey(deps: UiHandlerDeps): string | undefined {
     ?.providers.find((provider) => provider.modelId === "new-chat")?.apiKey;
 }
 
+// #4351: a discovered alias is listed at startup and proven when a person picks it. The pick is the
+// Workbench's own `check=1` profile read for that model, so these scenarios reach the state they
+// always asserted (an alias proven ready) through the path that now owns it.
 async function expectReadyAlias(deps: UiHandlerDeps): Promise<void> {
+  await vi.waitFor(() => {
+    expect(startupModels(deps).find((model) => model.id === "new-chat")).toBeDefined();
+  });
+  await handleCodingSidecarGatewayProfile(
+    {
+      correlationId: "corr-pick-new-chat",
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile?modelId=new-chat&check=1"),
+    } as RouteContext,
+    deps,
+  );
   await vi.waitFor(() => {
     expect(startupModels(deps).find((model) => model.id === "new-chat")?.toolCalling).toBe(true);
   });

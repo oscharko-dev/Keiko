@@ -117,6 +117,30 @@ run; its fallback-font captures were discarded and the 14 committed captures are
 updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
 evidence.
 
+Checking only the models in use (#4351) adds the Chat picker's "checking" and "not ready" notice, its
+two English and German optional-catalog strings and the selection request in `api.ts`, so the
+unchanged freshness gate rejected those digests. The notice style lives in the existing
+`ChatWindow.module.css`, so `globals.css` and the #1300 evidence stay untouched. On 2026-11-13 (UTC)
+the complete original nine-case producer ran in the Linux gates container (`--init`, Node 24.18.0):
+**9 passed (1.6m)**, including the real BFF stop and restart. Only the declared source digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were discarded
+and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or numerical
+ceiling changed. This remains updater fixture evidence.
+
+The follow-up of the same change adds the first-use check on Send and Start, the `check=use` read of a
+mounted Workbench window, one error message in both optional catalogs and the profile read mode in
+`api.ts`-adjacent provider code, so the freshness gate rejected the catalog and `api.ts` digests
+again; the producer was rerun on the final sources the same way (Linux gates container, `--init`,
+Node 24.18.0, 9 passed) and only the three records were kept.
+
+Integrating the browser session notice (#4370) and the models-in-use check (#4351) on the Release 1
+integration branch moved the catalog and `api.ts` digests once more; both changes edit the same
+sources. On 2026-11-13 (UTC) the complete original nine-case producer ran on the combined sources in
+the Linux gates container (`--init`, Node 24.18.0): **9 passed (1.9m)**, and
+`npm run check:update-ui-evidence` passes. Only the three records were kept; its fallback-font
+captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
+assertion or numerical ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -504,3 +528,13 @@ with `KEIKO_WRITE_TRACKED_EVIDENCE=1` in the Linux arm64 gates container (Node 2
 the source digests and `generatedAt` in the three records were taken from this run; its fallback-font
 captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
 assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+The final correction round of the same change (stale check re-validation on Send, Start ownership,
+the closed `cooldown` outcome and its message, wildcard-route and asserted-model wording) changed the
+catalog and `api.ts` digests once more; the producer was rerun the same way on 2026-11-13 (Linux gates
+container, `--init`, Node 24.18.0, 9 passed in 1.6m) and only the three records were kept.
+
+The last round of the same change (the Start bound to its model, its plain "model changed" message
+in both Workbench catalogs, and the clearer not-verified wording of the Gateway Setup notice in both
+core catalogs) moved the catalog digests once more; the producer was rerun on 2026-11-13 the same way
+(Linux gates container, `--init`, Node 24.18.0, 9 passed in 1.7m) and only the three records were kept.
