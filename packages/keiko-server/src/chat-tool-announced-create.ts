@@ -22,15 +22,44 @@ const CREATION = [
   /\b(?:legte|erstellte) ich\b/iu,
 ] as const;
 const ISSUE_OBJECTS = [
-  /\b(?:epics?|stor(?:y|ies)|tasks?|bugs?|sub-?tasks?|issues?|tickets?)\b/iu,
-  /\b(?:vorg[aä]nge?n?|aufgaben?|fehler(?:meldung(?:en)?)?|teilaufgaben?)\b/iu,
+  /\b(?:epics?|tasks?|bugs?|issues?|tickets?)\b/iu,
+  /\b(?:stor(?:y|ies)|sub-?tasks?)\b/iu,
+  /\b(?:vorg[aä]nge?n?|aufgaben?|teilaufgaben?)\b/iu,
+  /\bfehlermeldung(?:en)?\b/iu,
 ] as const;
 /** Words and phrases that make a sentence a refusal, a question, a plan or a condition. */
 const NEGATING_WORDS: ReadonlySet<string> = new Set([
-  ...["not", "never", "no", "cannot", "can't", "couldn't", "wasn't", "weren't", "won't"],
-  ...["would", "will", "should", "shall", "if", "unable", "from"],
-  ...["nicht", "kein", "keine", "konnte", "könnte", "werde", "würde", "wuerde", "soll"],
-  ...["sollte", "falls", "wenn", "noch", "aus", "anhand"],
+  "not",
+  "never",
+  "no",
+  "cannot",
+  "can't",
+  "couldn't",
+  "wasn't",
+  "weren't",
+  "won't",
+  "would",
+  "will",
+  "should",
+  "shall",
+  "if",
+  "unable",
+  "from",
+  "nicht",
+  "kein",
+  "keine",
+  "konnte",
+  "könnte",
+  "werde",
+  "würde",
+  "wuerde",
+  "soll",
+  "sollte",
+  "falls",
+  "wenn",
+  "noch",
+  "aus",
+  "anhand",
 ]);
 const NEGATING_PHRASES = ["could not", "based on", "out of"] as const;
 const TEXT_CALLS = [
@@ -74,7 +103,7 @@ export function announcedCreateCount(
 
 /** How many tool calls the answer wrote as text; nothing executed them. */
 export function toolCallsWrittenAsText(answer: string): number {
-  const found = TEXT_CALLS.reduce((sum, pattern) => sum + (answer.match(pattern)?.length ?? 0), 0);
+  const found = TEXT_CALLS.reduce((sum, pattern) => sum + [...answer.matchAll(pattern)].length, 0);
   return Math.min(COUNT_MAX, found);
 }
 
