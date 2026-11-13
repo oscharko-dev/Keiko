@@ -3,6 +3,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const reads = new Map();
 const deletions = [];
 const failing = new Set();
+// Paths whose removal reports success without taking effect.
+const stuck = new Set();
+// The filters the api actor can read by identity. Jira answers 400 for any other identity.
+let filters = [];
+const FIXTURE_NAMES = { 9: "Gemeinsam" };
+const FIXTURE_FILTER_IDS = new Set(["9", "10"]);
+const api = { name: "keiko-api" };
+// What Jira answers for one filter identity: a removal takes effect unless it is stuck, and an
+// identity the api actor cannot read answers 400.
+function filterAnswer(method, path, id) {
+  const row = filters.find((entry) => String(entry.id) === id);
+  if (method === "DELETE") {
+    if (!stuck.has(path)) filters = filters.filter((entry) => entry !== row);
+    return { status: 204, value: undefined };
+  }
+  if (row !== undefined) return { status: 200, value: row };
+  return FIXTURE_FILTER_IDS.has(id)
+    ? { status: 200, value: { id, name: FIXTURE_NAMES[id] ?? "Auswahl Favorit" } }
+    : { status: 400, value: {} };
+}
+
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
   actorDetails: (actor) => ({ name: `keiko-${actor}` }),
   basicAuth: (_session, actor) => `auth:${actor}`,
@@ -15,7 +36,10 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
   }),
   labRequest: vi.fn(async (_session, method, path) => {
     if (method === "DELETE") deletions.push(path);
-    const status = failing.has(path) ? 500 : method === "GET" ? 200 : 204;
+    const filter = /^\/rest\/api\/2\/filter\/(\d+)$/u.exec(path);
+    const refused = method === "DELETE" && failing.has(path);
+    if (filter !== null && !refused) return filterAnswer(method, path, filter[1]);
+    const status = refused ? 500 : method === "GET" ? 200 : 204;
     return { status, value: { name: path } };
   }),
 }));
@@ -41,13 +65,18 @@ const entry = { id: "worklog", verify: async () => ({ effects: 0, cleanup: [] })
 const turnFor = { fixture, marker: "Auswahl t-1", tag: "t-1" };
 
 describe("recoverScope", () => {
-  let filters;
   beforeEach(() => {
     reads.clear();
     deletions.length = 0;
     failing.clear();
-    filters = [{ id: 10, name: "Auswahl Favorit" }];
-    reads.set("/rest/api/2/filter/my", () => filters);
+    stuck.clear();
+    filters = [{ id: 10, name: "Auswahl Favorit", owner: api }];
+    reads.set("/rest/api/2/filter/favourite", []);
+    reads.set("/rest/api/2/jql/autocompletedata/suggestions", () => ({
+      results: [...filters.map((entry) => entry.name), ...Object.values(FIXTURE_NAMES)]
+        .filter((name, index, all) => all.indexOf(name) === index)
+        .map((name) => ({ value: JSON.stringify(name) })),
+    }));
     reads.set("/rest/api/2/project/KEIKO/", []);
     reads.set("/rest/api/2/search", { total: 2, issues: [{ key: "K-1" }, { key: "K-2" }] });
     for (const key of ["K-1", "K-2"]) {
@@ -64,19 +93,15 @@ describe("recoverScope", () => {
 
   it("removes an extra object of the run beyond the case's own effect", async () => {
     const before = await scopeSnapshot({}, fixture, fixture.selection);
-    filters = [...filters, { id: 11, name: "Extra" }];
+    filters = [...filters, { id: 11, name: "Extra", owner: api }];
     deletions.length = 0;
-    // The removal of the extra filter takes effect in the native collection.
-    reads.set("/rest/api/2/filter/my", () => {
-      return deletions.includes("/rest/api/2/filter/11") ? [filters[0]] : filters;
-    });
     await recoverScope({}, run, entry, turnFor, before);
     expect(deletions).toContain("/rest/api/2/filter/11");
   });
 
   it("throws, so the run stops with its marker, when the scope stays unclean", async () => {
     const before = await scopeSnapshot({}, fixture, fixture.selection);
-    filters = [...filters, { id: 11, name: "Extra" }];
+    filters = [...filters, { id: 11, name: "Extra", owner: api }];
     failing.add("/rest/api/2/filter/11");
     await expect(recoverScope({}, run, entry, turnFor, before)).rejects.toThrow(
       /Native cleanup failed|not clean/u,
@@ -84,10 +109,10 @@ describe("recoverScope", () => {
   });
 
   it("throws when a baseline object changed, although nothing is left to remove", async () => {
-    filters = [...filters, { id: 11, name: "Existing" }];
+    filters = [...filters, { id: 11, name: "Existing", owner: api }];
     const before = await scopeSnapshot({}, fixture, fixture.selection);
     // The failed settlement renamed an existing filter: no removal can undo it.
-    filters = [filters[0], { id: 11, name: "Renamed by the turn" }];
+    filters = [filters[0], { id: 11, name: "Renamed by the turn", owner: api }];
     await expect(recoverScope({}, run, entry, turnFor, before)).rejects.toThrow(
       "not clean after recovery",
     );
@@ -106,7 +131,8 @@ describe("recoverScope", () => {
 
   it("throws when the scope still holds an extra object after a removal that reported success", async () => {
     const before = await scopeSnapshot({}, fixture, fixture.selection);
-    filters = [...filters, { id: 11, name: "Extra" }];
+    filters = [...filters, { id: 11, name: "Extra", owner: api }];
+    stuck.add("/rest/api/2/filter/11");
     await expect(recoverScope({}, run, entry, turnFor, before)).rejects.toThrow(
       "not clean after recovery",
     );
