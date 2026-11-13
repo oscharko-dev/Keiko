@@ -884,6 +884,13 @@ function providerDeploymentIdentity(
   return identity === undefined ? {} : { deploymentIdentitySha256: identity };
 }
 
+// The request timeout of a stored provider. Setup applies its 30 s default for a person who named
+// none and says so (`timeoutDefaulted`), so the explicit check can tell a value Setup chose from one
+// a person chose (#4351); the configuration reads it back as an absent `timeoutConfigured`.
+function providerRequestTimeout(named: number | undefined): Record<string, unknown> {
+  return named === undefined ? { timeoutMs: 30_000, timeoutDefaulted: true } : { timeoutMs: named };
+}
+
 function providerRaw(
   modelId: string,
   baseUrl: string,
@@ -916,7 +923,7 @@ function providerRaw(
         : { supportsImageInput: options.imageInputModelIds.includes(modelId) }),
       ...(supportsResponseFormat ? { structuredOutput: true, supportsResponseFormat: true } : {}),
     },
-    timeoutMs: options.timeoutMs ?? 30_000,
+    ...providerRequestTimeout(options.timeoutMs),
     maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
   };
@@ -1046,7 +1053,7 @@ function voiceProviderRaw(
     // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): re-serialize the
     // per-provider circuit-breaker override so a voice/setup save preserves it.
     ...(options.circuitBreaker === undefined ? {} : { circuitBreaker: options.circuitBreaker }),
-    timeoutMs: options.timeoutMs ?? 30_000,
+    ...providerRequestTimeout(options.timeoutMs),
     maxRetries: options.maxRetries ?? 1,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
   };
@@ -1353,6 +1360,16 @@ function storedReasoningHistory(
   };
 }
 
+function storedRequestTimeout(
+  provider: ModelProviderConfig,
+  submitted: number | undefined,
+): Record<string, unknown> {
+  const timeoutMs = submitted ?? provider.timeoutMs;
+  return submitted === undefined && provider.timeoutConfigured !== true
+    ? { timeoutMs, timeoutDefaulted: true }
+    : { timeoutMs };
+}
+
 function rawProviderFromCurrent(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
@@ -1376,7 +1393,8 @@ function rawProviderFromCurrent(
     ...(provider.realtimeAuthMode === undefined
       ? {}
       : { realtimeAuthMode: provider.realtimeAuthMode }),
-    timeoutMs: timeoutMs ?? provider.timeoutMs,
+    // A rewrite keeps who named the timeout: a person's value stays theirs, Setup's default stays its.
+    ...storedRequestTimeout(provider, timeoutMs),
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
     // Persist the credential-tier persona → voice-id mapping so personas survive a save; the

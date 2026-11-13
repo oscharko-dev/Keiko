@@ -1032,9 +1032,11 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   a failed retry changes nothing and surfaces the original error. To make the retry possible, the
   reasoning of a tool-calling response is now kept for the CURRENT turn even without a setting (same
   caps, TTL, redaction and binding to the trusted session, provider configuration and generation,
-  memory only); it is dropped as soon as the turn ENDS (a final answer, a failure or a cancellation)
-  and by a request of a new turn, and it is kept beyond the turn only for a configured or learned
-  deployment. The learned fact is one content-free flag per deployment fingerprint, lives with the
+  memory only); it is dropped as soon as the turn ENDS (a final answer, a failure or a cancellation
+  of a gateway call) and by a request of a new turn, and it is kept beyond the turn only for a
+  configured or learned deployment. A turn that ends outside the gateway (a Chat round cap, a tool
+  error with no further model call) makes no more requests, so its entries wait for the session's
+  next turn or, at the latest, the 30-minute idle TTL and the entry and byte caps. The learned fact is one content-free flag per deployment fingerprint, lives with the
   gateway instance (so it is gone with a configuration generation change), is never persisted and is
   never logged beyond the closed `gateway.reasoning-history` states `learned` and `unlearned`. An explicit provider
   setting always wins. Settings > Models shows the fact as "Returns its reasoning on tool turns:

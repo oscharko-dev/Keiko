@@ -323,9 +323,29 @@
     "en": "tools {tools} · structured {structured} · {costClass}/{latencyClass}",
     "de": "Tools {tools} · strukturiert {structured} · {costClass}/{latencyClass}"
   },
-  "settings.models.toolCallingForcedOnly": {
-    "en": "Calls a tool only when forced. In conversations it may not use tools.",
-    "de": "Ruft ein Tool nur auf, wenn der Aufruf erzwungen wird. In Gesprächen nutzt es Tools möglicherweise nicht."
+  "settings.models.toolOutcome.called-unforced": {
+    "en": "Tools work: the model called the test tool on its own.",
+    "de": "Tools funktionieren: Das Modell hat das Testwerkzeug von selbst aufgerufen."
+  },
+  "settings.models.toolOutcome.called-only-forced": {
+    "en": "Calls a tool only when forced. In conversations it may not use tools. Choose a model that calls tools on its own, or turn its thinking mode off, then check again.",
+    "de": "Ruft ein Tool nur auf, wenn der Aufruf erzwungen wird. In Gesprächen nutzt es Tools möglicherweise nicht. Wähle ein Modell, das Tools von selbst aufruft, oder schalte den Denkmodus aus und prüfe dann erneut."
+  },
+  "settings.models.toolOutcome.forced-refused": {
+    "en": "The model did not call the tool on its own, and the provider refused the forced call (a thinking mode often does). That does not prove the model cannot call tools, but it is not confirmed either, so tool tasks are not available for it. Turn its thinking mode off and check again.",
+    "de": "Das Modell hat das Tool nicht von selbst aufgerufen, und der Anbieter hat den erzwungenen Aufruf abgelehnt (ein Denkmodus tut das oft). Das beweist nicht, dass das Modell keine Tools aufrufen kann, ist aber auch nicht bestätigt; deshalb sind Tool-Aufgaben für dieses Modell nicht verfügbar. Schalte den Denkmodus aus und prüfe erneut."
+  },
+  "settings.models.toolOutcome.no-call": {
+    "en": "The model answered in words, also when the call was forced. It does not call tools through this endpoint. Choose a model that supports tool calling, or ask your administrator to enable tool-call support for it.",
+    "de": "Das Modell hat in Worten geantwortet, auch als der Aufruf erzwungen wurde. Es ruft über diesen Endpunkt keine Tools auf. Wähle ein Modell mit Tool-Unterstützung oder bitte deine Administration, die Tool-Unterstützung dafür zu aktivieren."
+  },
+  "settings.models.toolOutcome.tools-refused": {
+    "en": "The endpoint refused the request that offers a tool. Ask your administrator to enable tool calling for this model, or choose another model.",
+    "de": "Der Endpunkt hat die Anfrage mit einem Tool abgelehnt. Bitte deine Administration, Tool-Aufrufe für dieses Modell zu aktivieren, oder wähle ein anderes Modell."
+  },
+  "settings.models.toolOutcome.inconclusive": {
+    "en": "Tool calling could not be checked: the gateway timed out, was busy or answered with an error. Check again in a few minutes.",
+    "de": "Tool-Aufrufe konnten nicht geprüft werden: Das Gateway hat nicht rechtzeitig geantwortet, war ausgelastet oder hat mit einem Fehler geantwortet. Prüfe in ein paar Minuten erneut."
   },
   "settings.models.reasoningOnToolTurnsDetected": {
     "en": "Returns its reasoning on tool turns: detected",

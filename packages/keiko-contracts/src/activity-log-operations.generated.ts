@@ -23344,7 +23344,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["reported", "not-reported", "failed", "skipped-spend-budget"],
+        values: ["reported", "not-reported", "failed", "skipped-spend-budget", "skipped-unused"],
       },
       httpStatus: {
         type: "integer",

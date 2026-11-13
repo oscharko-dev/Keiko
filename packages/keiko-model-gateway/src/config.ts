@@ -1902,7 +1902,7 @@ function parseProviderConfig(
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
-    ...(raw.timeoutMs === undefined ? {} : { timeoutConfigured: true as const }),
+    ...timeoutNamedMarker(raw),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
       raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
@@ -1911,6 +1911,17 @@ function parseProviderConfig(
     ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
     ...(circuitBreaker === undefined ? {} : { circuitBreaker }),
   };
+}
+
+// A timeout a person named, as opposed to the default (the resolver's or Setup's, which says so with
+// `timeoutDefaulted`): the explicit check lifts only a default (#4351).
+function timeoutNamedMarker(raw: {
+  readonly timeoutMs?: unknown;
+  readonly timeoutDefaulted?: unknown;
+}): Pick<ModelProviderConfig, "timeoutConfigured"> {
+  return raw.timeoutMs === undefined || raw.timeoutDefaulted === true
+    ? {}
+    : { timeoutConfigured: true };
 }
 
 function reasoningContinuationConfig(

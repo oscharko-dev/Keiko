@@ -1750,6 +1750,14 @@ describe("parseGatewayConfig", () => {
       expect(defaulted.providers[0]?.timeoutMs).toBe(120_000);
       expect(defaulted.providers[0]?.timeoutConfigured).toBeUndefined();
     });
+
+    it("does not count a timeout Setup defaulted as one a person named", () => {
+      const setupDefault = parseGatewayConfig(
+        rawWithProvider((provider) => ({ ...provider, timeoutMs: 30_000, timeoutDefaulted: true })),
+      );
+      expect(setupDefault.providers[0]?.timeoutMs).toBe(30_000);
+      expect(setupDefault.providers[0]?.timeoutConfigured).toBeUndefined();
+    });
   });
 
   describe("per-provider circuitBreaker override (KEIKO-0167)", () => {

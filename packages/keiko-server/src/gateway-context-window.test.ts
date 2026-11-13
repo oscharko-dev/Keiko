@@ -777,10 +777,23 @@ describe("context meter reading of a model nobody used", () => {
     roots.push(project);
     deps.store.createProject(project, "Meter");
     const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const sink = capture();
     const reading = await meterRead(deps, project, chatId);
     await contextWindowProbesSettledForTests(deps);
     expect(reading.body).toMatchObject({ contextWindowAssumed: true });
     expect(fetchImpl).not.toHaveBeenCalled();
+    // The customer log shows why the window stayed assumed: one closed line, joined to the read.
+    const withheld = (): readonly unknown[] =>
+      sink.events.filter(
+        (event) =>
+          event.op === "gateway.context-window.probe" &&
+          (event.extra as { state?: string } | undefined)?.state === "skipped-unused",
+      );
+    expect(withheld()).toHaveLength(1);
+    expect(withheld()[0]).toMatchObject({ parentCorrelationId: "corr-meter-unused" });
+    // Once per deployment and generation: a second read adds nothing.
+    await meterRead(deps, project, chatId);
+    expect(withheld()).toHaveLength(1);
   });
 
   it("probes once after the model completed one real call through the gateway", async () => {

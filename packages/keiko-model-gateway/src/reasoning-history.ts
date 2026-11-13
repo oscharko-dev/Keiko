@@ -221,7 +221,11 @@ function completedForRetention(request: GatewayCallRequest, response: Normalized
 
 // No setting and nothing learned (#4351): a tool-calling response that carried reasoning is kept for
 // this turn only, so that a provider which rejects the next round for want of it can be answered
-// once. Nothing else is kept for such a deployment.
+// once. Nothing else is kept for such a deployment. The gateway ends the turn on a final answer, a
+// failed or a cancelled call (`endTurn`). A turn that ends outside the gateway (a Chat round cap, a
+// tool error with no further model call) makes no further request, so its entries go when the
+// session's next turn begins (`dropEndedTurns`) or, at the latest, after REASONING_HISTORY_TTL_MS
+// (30 minutes) or by the entry and byte caps; they are never persisted.
 function keptForCurrentTurn(request: GatewayCallRequest, response: NormalizedResponse): boolean {
   return (
     request.toolCatalog !== undefined &&
@@ -367,11 +371,6 @@ export class GatewayReasoningHistory {
       if (entry.turnOnly?.scope === current.scope && entry.turnOnly.turn === current.turn)
         this.remove(key);
     }
-  }
-
-  /** How many completed responses are held (tests and capacity evidence). */
-  retainedCount(): number {
-    return this.root().entries.size;
   }
 
   /** A call to this deployment completed through this gateway generation. */

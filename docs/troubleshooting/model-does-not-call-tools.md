@@ -42,7 +42,11 @@ the detection.
 A function whose parameters carry `oneOf`, `anyOf`, `allOf`, `enum`, `const` or `not` at the top level
 is refused by OpenAI-family providers with HTTP 400. Keiko projects every tool definition to a plain
 object schema on its way to the provider and names the alternatives in the tool description; its own
-validation of the call still uses the original schema.
+validation of the call still uses the original schema. Only the top level is projected: the captured
+provider rejection and the provider's own rule name the top level, alternatives nested below the root
+(`items`, property schemas) pass unchanged, and a provider that names a nested construct is the cue to
+project that level too. Managed MCP tools and the tools the OpenCode runtime brings are projected at
+the root by the same gateway choke point and are not covered by the repository's walk.
 
 **Diagnostic Steps**
 
@@ -63,19 +67,24 @@ keiko support analyze <report.json> --json
 
 **Resolution**
 
-- `called-unforced`: nothing to do.
-- `called-only-forced`: the model is admitted and tools stay available, and Settings > Models shows a
-  note (`toolCallingWarning: forced-only` in the report) that it calls a tool only when forced, so in
-  conversations it may not use tools. Try a real tool task; if it answers in words, choose a model that
-  calls tools on its own, or turn its thinking mode off.
-- `forced-refused`: not a verdict that the model cannot call tools, and no durable "unsupported"
-  record is written: the conversation stays admitted. Keiko cannot confirm tool calling either, and
-  tool turns (Chat tools, the Coding Workbench) need a confirmed check, so they ask for a new
-  verification. If the provider has a thinking mode, turn it off and verify again.
-- `no-call` or `tools-refused`: the endpoint or model does not support tool calling. Choose a model or
-  deployment that does, or enable the provider's tool-call support (for a vLLM model, its auto tool
-  choice and tool parser).
-- `inconclusive`: verify again once the gateway is idle; a busy or cold gateway gives no verdict.
+Settings > Models words each closed outcome in one sentence in the person's language
+(`settings.models.toolOutcome.<outcome>` in
+`packages/keiko-ui/src/app/components/desktop/widgets/panels/settings-i18n.messages.json`); what to do
+next, per outcome:
+
+- `called-unforced` (`settings.models.toolOutcome.called-unforced`): nothing to do.
+- `called-only-forced` (`...called-only-forced`): the model is admitted and tools stay available, with
+  the closed `toolCallingWarning: forced-only` in the report. In conversations it may not use tools:
+  choose a model that calls tools on its own, or turn its thinking mode off, then check again.
+- `forced-refused` (`...forced-refused`): not a verdict that the model cannot call tools, and no durable
+  "unsupported" record is written: the conversation stays admitted. Keiko cannot confirm tool calling
+  either, and tool turns (Chat tools, the Coding Workbench) need a confirmed check, so tool tasks are
+  not available for it. Turn the thinking mode off and check again.
+- `no-call` (`...no-call`) or `tools-refused` (`...tools-refused`): the endpoint or model does not
+  support tool calling. Choose another model, or have the administrator enable the provider's tool-call
+  support (for a vLLM model, its auto tool choice and tool parser).
+- `inconclusive` (`...inconclusive`): check again once the gateway is idle; a busy or cold gateway
+  gives no verdict.
 - A tool turn that failed with HTTP 400 after the first tool: nothing to configure. Keiko answers the
   rejection once with the reasoning restored; the next rounds of that deployment carry it at once. If
   the 400 persists, read the evidence above and the provider's own error; do not add a blank

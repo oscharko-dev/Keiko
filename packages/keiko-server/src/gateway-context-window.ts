@@ -89,7 +89,7 @@ const CONTEXT_WINDOW_PROBE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["reported", "not-reported", "failed", "skipped-spend-budget"],
+      values: ["reported", "not-reported", "failed", "skipped-spend-budget", "skipped-unused"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     contextWindow: { type: "integer", dataClass: "count", required: false },
@@ -163,7 +163,9 @@ function logAdoption(
 
 function logProbe(
   modelId: string,
-  outcome: GatewayContextWindowDiscovery | { readonly status: "failed" | "skipped-spend-budget" },
+  outcome:
+    | GatewayContextWindowDiscovery
+    | { readonly status: "failed" | "skipped-spend-budget" | "skipped-unused" },
   probe: ProbeCorrelation,
 ): void {
   getServerLogger().info(
@@ -290,6 +292,8 @@ interface ProbeState {
    */
   readonly inFlight: Map<string, Promise<void>>;
   readonly failed: Map<string, FailedProbes>;
+  /** Identities whose probe a meter read withheld because nobody used the model (logged once each). */
+  readonly withheld: Set<string>;
   readonly controller: AbortController;
   queue: Promise<void>;
   disposed: boolean;
@@ -306,6 +310,7 @@ function probeState(deps: UiHandlerDeps): ProbeState | undefined {
       probed: new Set(),
       inFlight: new Map(),
       failed: new Map(),
+      withheld: new Set(),
       controller: new AbortController(),
       queue: Promise.resolve(),
       disposed: false,
@@ -313,6 +318,28 @@ function probeState(deps: UiHandlerDeps): ProbeState | undefined {
     probeStates.set(holder, state);
   }
   return state;
+}
+
+/**
+ * A meter read withheld the probe because nobody used the model (#4351): the window stays assumed,
+ * and this line is how a customer log shows why. Once per deployment and configuration generation,
+ * never per read.
+ */
+export function noteWithheldContextWindowProbe(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): void {
+  const config = currentGatewayConfig(deps);
+  const state = probeState(deps);
+  if (config === undefined || state === undefined || state.disposed) return;
+  const key = windowAssumed(config, modelId) ? probeKey(deps, config, modelId) : undefined;
+  if (key === undefined || state.withheld.has(key)) return;
+  state.withheld.add(key);
+  const probe = { correlationId: newCorrelationId(), parentCorrelationId: correlationId };
+  recordSafely(CONTEXT_WINDOW_PROBE.op, probe.correlationId, () => {
+    logProbe(modelId, { status: "skipped-unused" }, probe);
+  });
 }
 
 /** Resolves once every queued context-window probe of this holder has finished. Test seam. */

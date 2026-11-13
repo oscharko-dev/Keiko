@@ -309,29 +309,39 @@ describe("what an unconfigured deployment keeps for one turn (#4351)", () => {
     return rest;
   })();
 
-  it("holds the turn's reasoning until the turn ends, then holds no entry of it", () => {
+  const OTHER: GatewayCallRequest = {
+    ...INITIAL,
+    messages: [{ role: "user", content: "Another question." }],
+  };
+  const otherFollowup = (): GatewayCallRequest => ({
+    ...OTHER,
+    messages: [
+      ...OTHER.messages,
+      { role: "assistant", content: ANSWER.content, toolCalls: ANSWER.toolCalls },
+      { role: "tool", content: "result", toolCallId: CALL.id },
+    ],
+  });
+
+  it("holds the turn's reasoning until the turn ends, then nothing of it can be restored", () => {
     const { history } = fixture();
     history.remember(INITIAL, UNCONFIGURED, ANSWER);
-    expect(history.retainedCount()).toBe(1);
     expect(history.canRestoreCurrentTurn(followup(), UNCONFIGURED)).toBe(true);
     history.endTurn(followup(), UNCONFIGURED);
-    expect(history.retainedCount()).toBe(0);
     expect(history.canRestoreCurrentTurn(followup(), UNCONFIGURED)).toBe(false);
   });
 
   it("ends only its own turn and only turn-bound entries", () => {
     const { history } = fixture();
     history.remember(INITIAL, UNCONFIGURED, ANSWER);
-    const other: GatewayCallRequest = {
-      ...INITIAL,
-      messages: [{ role: "user", content: "Another question." }],
-    };
-    history.remember(other, UNCONFIGURED, ANSWER);
+    history.remember(OTHER, UNCONFIGURED, ANSWER);
     history.endTurn(followup(), UNCONFIGURED);
-    expect(history.retainedCount()).toBe(1);
+    expect(history.canRestoreCurrentTurn(followup(), UNCONFIGURED)).toBe(false);
+    expect(history.canRestoreCurrentTurn(otherFollowup(), UNCONFIGURED)).toBe(true);
     // A configured deployment's longer-lived state is not turn-bound and survives a turn's end.
     history.remember(INITIAL, PROVIDER, ANSWER);
     history.endTurn(INITIAL, PROVIDER);
-    expect(history.retainedCount()).toBe(2);
+    expect(history.prepare(followup(), PROVIDER).messages[1]?.reasoningContent).toBe(
+      ANSWER.reasoning,
+    );
   });
 });

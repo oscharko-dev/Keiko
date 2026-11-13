@@ -1,16 +1,29 @@
 // A provider refuses a function whose parameters are not a plain object schema at the top level:
-// "schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the
-// top level" (HTTP 400 on the Azure lane for jira.set-issue-property, root allOf). That used to be
-// found only by a live run. This walk projects every tool definition Keiko can advertise the way
-// the gateway projects it for the wire and fails on any construct outside the documented
-// provider-neutral subset:
+// "Invalid schema for function 'jira_set_issue_property': schema must have type 'object' and not have
+// 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level." (HTTP 400 on the Azure lane; the
+// captured body names the TOP LEVEL). That used to be found only by a live run. This walk projects
+// every tool definition Keiko can advertise the way the gateway projects it for the wire and fails
+// on any construct outside the documented provider-neutral subset:
 //
 //   - the root is `type: "object"`;
 //   - the root carries none of oneOf, anyOf, allOf, enum, const, not.
 //
-// Nested constructs (`items`, property schemas) are accepted by the providers and are not judged
-// here. Keiko's own validation always uses the original schema; the projection only decides what the
-// provider is shown (see provider-tool-schema.ts and the strictness pins in toolCatalogBridge.test).
+// NESTED constructs (alternatives and negations below the root) are deliberately NOT judged, and that
+// is a stated position, not an oversight. Evidence: the captured 400 and the provider's own rule name
+// the TOP LEVEL only ("... at the top level"), Keiko sends no `strict: true` function schema, and many
+// registered tools carry nested alternatives on the wire today (inventory test below). What is NOT proven: a captured run showing every provider accepts them. The Azure
+// functional pass carries a full Jira catalog turn (jira.set-issue-property plus every operation that
+// has nested alternatives) and is the evidence; if any provider names a nested construct, the
+// projection must fold that level and this walk must judge it.
+//
+// The projection (provider-tool-schema.ts) folds ROOT constructs only. It emits a nested `anyOf` in
+// exactly one case, the merge of differing property definitions across root alternatives.
+//
+// Not covered here, because their schemas are not known until runtime: managed MCP external tools
+// and the tools the OpenCode runtime brings itself. Both still pass the gateway's single wire choke
+// point (`openAiCompatiblePromptTools`), so their ROOT constructs are projected; their nested
+// constructs go through unchanged. Keiko's own validation always uses the original schema; the
+// projection only decides what the provider is shown (strictness pins in toolCatalogBridge.test).
 import { describe, expect, it } from "vitest";
 import { openAiCompatiblePromptTools } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
@@ -103,6 +116,27 @@ function codingTools(): readonly Advertised[] {
   ];
 }
 
+const NESTED_ALTERNATIVE_KEYWORDS: ReadonlySet<string> = new Set([
+  "oneOf",
+  "anyOf",
+  "allOf",
+  "not",
+]);
+
+/** Every path below the root that carries an alternative or negation keyword. */
+function nestedAlternatives(node: unknown, path: string): readonly string[] {
+  if (Array.isArray(node))
+    return node.flatMap((entry, index) => nestedAlternatives(entry, `${path}[${String(index)}]`));
+  if (typeof node !== "object" || node === null) return [];
+  return Object.entries(node).flatMap(([key, value]) => {
+    const here = path === "" ? key : `${path}.${key}`;
+    // At the root, `properties` and the other structural keys are walked; the root keywords are
+    // judged by `rootViolations`, never double-counted here.
+    const own = path !== "" && NESTED_ALTERNATIVE_KEYWORDS.has(key) ? [here] : [];
+    return [...own, ...nestedAlternatives(value, here)];
+  });
+}
+
 /** The rule itself: what a provider refuses at the top level of a function's parameters. */
 function rootViolations(parameters: Record<string, unknown>): readonly string[] {
   return [
@@ -155,5 +189,26 @@ describe("every advertised tool definition is provider-neutral on the wire", () 
     expect(rootViolations({ type: "object", not: { required: ["a"] } })).toEqual(["not"]);
     expect(rootViolations({ type: ["object", "null"] })).toEqual(["type"]);
     expect(rootViolations({ type: "object", properties: {} })).toEqual([]);
+  });
+
+  it("inventories the nested alternatives the registered tools carry, so the live pass exercises them", () => {
+    const operations = jiraOperations();
+    const wire = openAiCompatiblePromptTools(operations.map((entry) => entry.definition));
+    const carrying = wire.filter(
+      (tool) =>
+        nestedAlternatives((tool.function as { parameters: unknown }).parameters, "").length > 0,
+    );
+    // Vacuity guard for the position in the header: nested alternatives exist on the wire, are not
+    // judged, and the walk can see them.
+    expect(carrying.length).toBeGreaterThan(0);
+    const nested = {
+      type: "object",
+      properties: {
+        items: { type: "array", items: { oneOf: [{ type: "string" }] } },
+        kind: { type: "string", enum: ["a"] },
+      },
+    };
+    expect(nestedAlternatives(nested, "")).toEqual(["properties.items.items.oneOf"]);
+    expect(rootViolations(nested)).toEqual([]);
   });
 });

@@ -10,7 +10,7 @@ import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/k
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { modelUsedByPerson, type VerifiedModelCapabilityObservation } from "./deps.js";
+import { buildUiHandlerDeps, modelUsedByPerson } from "./deps.js";
 import { chatModelToolReadiness } from "./chat-tool-turn.js";
 import { captureConversationReadinessAdmission } from "./conversation-readiness-admission.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -1407,49 +1407,75 @@ describe("gateway readiness route", () => {
 
   // A model whose forced call is refused is not marked unable to call tools (owner decision 2): the
   // conversation stays admitted, and tool turns stay UNVERIFIED (never "unsupported"), so the person
-  // is told to verify again and is never told to choose another model.
-  it("keeps a forced-refused model's conversation admitted and its tool turns unverified, never unsupported", async () => {
-    const config = gatewayConfig("forced-refused-test");
-    const recorded = new Map<string, VerifiedModelCapabilityObservation>();
-    const fetchImpl = vi.fn((_url: unknown, init?: RequestInit) => {
-      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
-        tool_choice?: unknown;
-        tools?: unknown;
-      };
-      if (body.tools === undefined) return Promise.resolve(jsonResponse(chatPayload("OK")));
-      return Promise.resolve(
-        body.tool_choice === undefined
-          ? jsonResponse(chatPayload("I would answer in words."))
-          : jsonResponse({ error: { message: "tool_choice not allowed" } }, 400),
-      );
-    }) as unknown as typeof fetch;
-    const base = holderDeps(config, fetchImpl);
-    const holder = base.gatewayConfig;
-    if (holder === undefined) throw new TypeError("expected a holder");
-    const deps: UiHandlerDeps = {
-      ...base,
-      gatewayConfig: {
-        ...holder,
-        verifiedCapability: (modelId) => recorded.get(modelId),
-        recordVerifiedCapability: (modelId, fields, checkedAt, generation) => {
-          recorded.set(modelId, { modelId, generation: generation ?? 0, checkedAt, fields });
-        },
-      },
-    };
-    await runGatewayReadiness(
-      { modelId: "forced-refused-test", options: { probes: ["chat", "tool_calling"] } },
-      deps,
-      "corr-selectable",
-      "settings",
-    );
-    // The conversation is admitted: the chat answered and nothing recorded a chat failure.
-    expect(captureConversationReadinessAdmission(deps, "forced-refused-test")).toMatchObject({
-      modelId: "forced-refused-test",
+  // is told to verify again and is never told to choose another model. The state is read from the
+  // configuration the real probe result populated, with a model that really cannot call tools as the
+  // positive control: that one IS recorded as unsupported, so the assertion can tell the two apart.
+  describe("what a tool-calling check leaves in the current configuration", () => {
+    const roots: string[] = [];
+    afterEach(() => {
+      for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
     });
-    expect(recorded.get("forced-refused-test")?.fields.toolCalling).toBeUndefined();
-    // Tool turns need a verified proof; there is none, and the cause is "unverified", not "unsupported".
-    expect(chatModelToolReadiness(deps, "forced-refused-test")).toBe("unverified");
-    deps.store.close();
+
+    function realHolderDeps(modelId: string, fetchImpl: typeof fetch): UiHandlerDeps {
+      const root = mkdtempSync(join(tmpdir(), "keiko-forced-refused-"));
+      roots.push(root);
+      const deps: UiHandlerDeps = {
+        ...buildUiHandlerDeps({
+          configPath: undefined,
+          evidenceDir: join(root, "evidence"),
+          uiDbPath: join(root, "ui.db"),
+          env: {},
+        }),
+        gatewayReadinessFetch: fetchImpl,
+      };
+      const holder = deps.gatewayConfig;
+      if (holder === undefined) throw new TypeError("expected a runtime gateway config");
+      holder.set(gatewayConfig(modelId), true);
+      return deps;
+    }
+
+    // A chat that answers, and a tool request answered per `forced`.
+    function gatewayFetch(forced: "refuses" | "answers-in-words"): typeof fetch {
+      return vi.fn((_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+          string,
+          unknown
+        >;
+        if (!("tools" in body)) return Promise.resolve(jsonResponse(chatPayload("OK")));
+        if (!("tool_choice" in body) || forced === "answers-in-words")
+          return Promise.resolve(jsonResponse(chatPayload("I would answer in words.")));
+        return Promise.resolve(
+          jsonResponse({ error: { message: "tool_choice not allowed" } }, 400),
+        );
+      });
+    }
+
+    async function check(deps: UiHandlerDeps, modelId: string): Promise<void> {
+      await runGatewayReadiness(
+        { modelId, options: { probes: ["chat", "tool_calling"] } },
+        deps,
+        "corr-tool-check",
+        "settings",
+      );
+    }
+
+    it("keeps a forced-refused model's conversation admitted and its tool turns unverified", async () => {
+      const deps = realHolderDeps("refused-model", gatewayFetch("refuses"));
+      await check(deps, "refused-model");
+      expect(captureConversationReadinessAdmission(deps, "refused-model")).toMatchObject({
+        modelId: "refused-model",
+      });
+      expect(chatModelToolReadiness(deps, "refused-model")).toBe("unverified");
+      deps.store.close();
+    });
+
+    it("records a model that never calls a tool as unsupported, which the forced-refused case is not", async () => {
+      const deps = realHolderDeps("silent-model", gatewayFetch("answers-in-words"));
+      await check(deps, "silent-model");
+      // Positive control: a recorded verdict does change what the state reads.
+      expect(chatModelToolReadiness(deps, "silent-model")).toBe("unsupported");
+      deps.store.close();
+    });
   });
 
   // An explicit Settings verification that answered is use; any other run is not.

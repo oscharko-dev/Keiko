@@ -10,6 +10,7 @@ import { logChatContextManagement } from "./chat-context-log.js";
 import {
   contextWindowProbeInFlight,
   discoverAssumedContextWindow,
+  noteWithheldContextWindowProbe,
 } from "./gateway-context-window.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
@@ -1685,6 +1686,26 @@ export function handleChatContextStatus(
 // without generating; a slow gateway only delays the reading, never fails it.
 const CONTEXT_WINDOW_PROBE_WAIT_MS = 3_000;
 
+// A read never loads a model (#4351): the probe is a streamed completion, so it runs only for a model
+// a person has used (an actual call completed in this configuration generation, or an explicit
+// Settings verification passed) and that was not since observed failing. A startup observation is not
+// use. Any other model reports the window it is planned with and dispatches nothing, which the
+// activity log records once per deployment and generation; the first overflow still teaches the
+// real window.
+function measuredWindowProbe(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): Promise<void> {
+  if (
+    modelUsedByPerson(deps, modelId) &&
+    currentConversationReadinessObservation(deps, modelId) !== false
+  )
+    return discoverAssumedContextWindow(deps, modelId, correlationId);
+  noteWithheldContextWindowProbe(deps, modelId, correlationId);
+  return Promise.resolve();
+}
+
 async function contextStatusWithMeasuredWindow(
   deps: UiHandlerDeps,
   chatId: string,
@@ -1692,16 +1713,7 @@ async function contextStatusWithMeasuredWindow(
   correlationId: string | undefined,
 ): Promise<ChatContextStatusWire> {
   const status = readChatContextStatus(deps, chatId, modelId, correlationId);
-  // A read never loads a model (#4351): the probe is a streamed completion, so it runs only for a
-  // model a person has used (an actual call completed in this configuration generation, or an
-  // explicit Settings verification passed) and that was not since observed failing. A startup
-  // observation is not use. Any other model reports the window it is planned with and dispatches
-  // nothing; the first overflow still teaches the real window.
-  const probe =
-    modelUsedByPerson(deps, modelId) &&
-    currentConversationReadinessObservation(deps, modelId) !== false
-      ? discoverAssumedContextWindow(deps, modelId, correlationId ?? UNKNOWN_CORRELATION_ID)
-      : Promise.resolve();
+  const probe = measuredWindowProbe(deps, modelId, correlationId ?? UNKNOWN_CORRELATION_ID);
   // A provider-reported window is re-checked in the background; only an assumed one delays.
   if (status.contextWindowAssumed === true) {
     let timer: NodeJS.Timeout | undefined;

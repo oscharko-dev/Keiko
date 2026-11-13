@@ -11,6 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, loadLocaleMessages, translate } from "@/lib/i18n";
 import type { GatewayReadinessReport, ModelCapability, SafeGatewayConfig } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
+import settingsMessages from "./settings-i18n.messages.json";
+import {
+  GATEWAY_TOOL_CALLING_OUTCOMES,
+  type GatewayToolCallingOutcome,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import { axe } from "jest-axe";
 
 it("attributes embedding verification to the configured retrieval model in the copied report", () => {
   const report: GatewayReadinessReport = {
@@ -850,54 +856,77 @@ describe("SettingsPanel gateway readiness checks", () => {
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, catalogRefresh);
   });
 
-  // #4351: a model that called a tool only when forced is admitted and carries a plain note.
-  const forcedOnlyReport: GatewayReadinessReport = {
-    modelId: "test-chat-1",
-    checkedAt: "2026-06-24T09:00:00.000Z",
-    overallStatus: "ready",
-    probes: [
-      { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
-      {
-        name: "tool_calling",
-        status: "passed",
-        latencyMs: 11,
-        evidence: "The model called the tool only when the call was forced.",
-        toolCallingOutcome: "called-only-forced",
-        toolCallingWarning: "forced-only",
-      },
-    ],
-    verifiedCapabilities: { toolCalling: true },
-  };
+  // #4351: the tool-calling check ends in one closed outcome; each gets one plain sentence in the
+  // person's language that says what it was and what to do. The sentences come from the catalog by
+  // the closed value, so a new outcome without one fails here.
+  function outcomeReport(outcome: GatewayToolCallingOutcome): GatewayReadinessReport {
+    const status =
+      outcome === "called-unforced" || outcome === "called-only-forced"
+        ? "passed"
+        : outcome === "no-call" || outcome === "tools-refused"
+          ? "unsupported"
+          : "failed";
+    return {
+      modelId: "test-chat-1",
+      checkedAt: "2026-06-24T09:00:00.000Z",
+      overallStatus: status === "passed" ? "ready" : "partial",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+        {
+          name: "tool_calling",
+          status,
+          latencyMs: 11,
+          evidence: `server evidence for ${outcome}`,
+          toolCallingOutcome: outcome,
+          ...(outcome === "called-only-forced"
+            ? { toolCallingWarning: "forced-only" as const }
+            : {}),
+        },
+      ],
+      verifiedCapabilities: status === "passed" ? { toolCalling: true } : {},
+    };
+  }
 
-  it("shows the forced-only note beside an admitted model that calls tools only when forced", async () => {
-    primeFetches([chatCapability("test-chat-1")]);
-    runGatewayReadinessMock.mockResolvedValue(forcedOnlyReport);
-    render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
-    expect(
-      await screen.findByText(
-        "Calls a tool only when forced. In conversations it may not use tools.",
-      ),
-    ).toBeInTheDocument();
-    // Admitted: working today, with the tools badge.
-    expect(screen.getByText("Working today")).toBeInTheDocument();
-    expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
-  });
+  const outcomeKey = (outcome: GatewayToolCallingOutcome): keyof typeof settingsMessages =>
+    `settings.models.toolOutcome.${outcome}`;
 
-  it("words the forced-only note in German", async () => {
+  it.each(GATEWAY_TOOL_CALLING_OUTCOMES)(
+    "words the %s outcome in English, in place of the server's evidence",
+    async (outcome) => {
+      primeFetches([chatCapability("test-chat-1")]);
+      runGatewayReadinessMock.mockResolvedValue(outcomeReport(outcome));
+      render(<SettingsPanel />);
+      fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+      const sentence = await screen.findByText(settingsMessages[outcomeKey(outcome)].en);
+      expect(sentence).toBeInTheDocument();
+      expect(screen.queryByText(`server evidence for ${outcome}`)).toBeNull();
+      // The sentence itself passes the accessibility rules (the row around it is not under test).
+      expect(await axe(sentence)).toHaveNoViolations();
+    },
+  );
+
+  it.each(GATEWAY_TOOL_CALLING_OUTCOMES)("words the %s outcome in German", async (outcome) => {
     await loadLocaleMessages("de");
     window.localStorage.setItem("keiko.locale", "de");
     primeFetches([chatCapability("test-chat-1")]);
-    runGatewayReadinessMock.mockResolvedValue(forcedOnlyReport);
+    runGatewayReadinessMock.mockResolvedValue(outcomeReport(outcome));
     render(
       <I18nProvider>
         <SettingsPanel />
       </I18nProvider>,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Bereitschaft prüfen" }));
-    expect(
-      await screen.findByText(/Ruft ein Tool nur auf, wenn der Aufruf erzwungen wird/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(settingsMessages[outcomeKey(outcome)].de)).toBeInTheDocument();
+  });
+
+  it("keeps a model that called a tool only when forced admitted, with the tools badge", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(outcomeReport("called-only-forced"));
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    await screen.findByText(settingsMessages["settings.models.toolOutcome.called-only-forced"].en);
+    expect(screen.getByText("Working today")).toBeInTheDocument();
+    expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
   });
 
   it("surfaces unsupported probe evidence for partial readiness", async () => {

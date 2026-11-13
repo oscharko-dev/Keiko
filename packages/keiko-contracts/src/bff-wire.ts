@@ -2709,8 +2709,7 @@ export type GatewayToolCallingOutcome = (typeof GATEWAY_TOOL_CALLING_OUTCOMES)[n
  * `forced-only` is `called-only-forced`, a model that calls a tool only when the call is forced, so in
  * conversations, which never force one, it may not use tools. The UI words it in the person's language.
  */
-export const GATEWAY_TOOL_CALLING_WARNINGS = ["forced-only"] as const;
-export type GatewayToolCallingWarning = (typeof GATEWAY_TOOL_CALLING_WARNINGS)[number];
+export type GatewayToolCallingWarning = "forced-only";
 
 export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
 

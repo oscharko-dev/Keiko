@@ -535,18 +535,28 @@ function probePassed(report: GatewayReadinessReport, name: string): boolean {
   return report.probes.some((probe) => probe.name === name && probe.status === "passed");
 }
 
-// A model that passed the tool-calling check only when the call was forced (#4351): admitted, with a
-// plain note in the person's language that conversations, which never force a call, may not use tools.
+// The tool-calling check ends in one closed outcome (#4351); each has one plain sentence in the
+// person's language that says what it was and what to do next. The key is derived from the closed
+// value, so an outcome without a sentence does not compile and fails the catalog test.
+function toolCallingOutcomeOf(
+  report: GatewayReadinessReport,
+): GatewayReadinessProbeResult["toolCallingOutcome"] {
+  return report.probes.find((probe) => probe.name === "tool_calling")?.toolCallingOutcome;
+}
+
 function toolCallingNote(report: GatewayReadinessReport, t: I18nTranslate): string | undefined {
-  const probe = report.probes.find((candidate) => candidate.name === "tool_calling");
-  return probe?.toolCallingWarning === "forced-only"
-    ? t("settings.models.toolCallingForcedOnly")
-    : undefined;
+  const outcome = toolCallingOutcomeOf(report);
+  return outcome === undefined ? undefined : t(`settings.models.toolOutcome.${outcome}`);
 }
 
 function firstActionableProbeMessage(report: GatewayReadinessReport): string | undefined {
+  // The tool-calling probe with a closed outcome is worded by `toolCallingNote`, in the person's
+  // language, not by the server's English evidence.
   const issue = report.probes.find(
-    (probe) => probe.status !== "passed" && probe.status !== "skipped",
+    (probe) =>
+      probe.status !== "passed" &&
+      probe.status !== "skipped" &&
+      !(probe.name === "tool_calling" && probe.toolCallingOutcome !== undefined),
   );
   return issue?.warning ?? issue?.evidence;
 }
@@ -808,10 +818,13 @@ function ReadinessNotes({ report }: { readonly report: GatewayReadinessReport })
   const t = useTranslate();
   const warning = firstActionableProbeMessage(report);
   const toolNote = toolCallingNote(report, t);
+  const outcome = toolCallingOutcomeOf(report);
   return (
     <>
       {warning === undefined ? null : <div className="ml-rwarn">{warning}</div>}
-      {toolNote === undefined ? null : <div className="ml-rwarn">{toolNote}</div>}
+      {toolNote === undefined ? null : (
+        <div className={outcome === "called-unforced" ? "ml-url mono" : "ml-rwarn"}>{toolNote}</div>
+      )}
     </>
   );
 }

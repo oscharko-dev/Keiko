@@ -76,7 +76,12 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
-import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
+import {
+  EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
+  probeProvider,
+  runGatewayReadiness,
+  stopConfiguredConversationReadiness,
+} from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
 import {
@@ -2680,6 +2685,64 @@ describe("handleGatewaySetup", () => {
     const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
     expect(saved).toContain('"timeoutMs": 120000');
     deps.store.close();
+  });
+
+  // #4351: the explicit check lifts the conversational default, never a timeout a person named. A
+  // timeout Setup chose for the person is not theirs, whichever way the configuration is rewritten.
+  describe("who named the request timeout (explicit-check lift)", () => {
+    async function setupDeps(label: string): Promise<UiHandlerDeps> {
+      return buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir(`keiko-gw-ev-${label}-`),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(await tempDir(`keiko-gw-ui-${label}-`), "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (_config, modelIds) =>
+          Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+      });
+    }
+
+    function checkTimeoutMs(deps: UiHandlerDeps): number | undefined {
+      const provider = currentGatewayConfig(deps)?.providers[0];
+      return provider === undefined
+        ? undefined
+        : probeProvider(provider, "chat", undefined).timeoutMs;
+    }
+
+    it("lifts a model added without a timeout, through the real Setup write and a later rewrite", async () => {
+      const deps = await setupDeps("timeout-defaulted");
+      const first = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(first.status).toBe(200);
+      expect(currentGatewayConfig(deps)?.providers[0]?.timeoutMs).toBe(30_000);
+      expect(checkTimeoutMs(deps)).toBe(EXPLICIT_CHECK_TIMEOUT_FLOOR_MS);
+      // A later Setup save that names no timeout rewrites the stored provider and keeps that.
+      const updated = await handleGatewaySetup(ctx({ preserveExisting: true }), deps);
+      expect(updated.status).toBe(200);
+      expect(checkTimeoutMs(deps)).toBe(EXPLICIT_CHECK_TIMEOUT_FLOOR_MS);
+      deps.store.close();
+    });
+
+    it("keeps a timeout a person named, at the default's value too, through a later rewrite", async () => {
+      const deps = await setupDeps("timeout-named");
+      const first = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          timeoutMs: 30_000,
+        }),
+        deps,
+      );
+      expect(first.status).toBe(200);
+      expect(checkTimeoutMs(deps)).toBe(30_000);
+      const updated = await handleGatewaySetup(ctx({ preserveExisting: true }), deps);
+      expect(updated.status).toBe(200);
+      expect(checkTimeoutMs(deps)).toBe(30_000);
+      deps.store.close();
+    });
   });
 
   it("updates only the gateway request timeout without re-running setup smoke tests", async () => {
