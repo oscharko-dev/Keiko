@@ -22,7 +22,12 @@ async function status(credentialCustody: unknown): Promise<string> {
   const code = await runLifecycleCli(
     "status",
     [],
-    { out: (text) => void (out += text), err: () => undefined },
+    {
+      out: (text) => {
+        out += text;
+      },
+      err: () => undefined,
+    },
     {},
     {
       cwd: root,

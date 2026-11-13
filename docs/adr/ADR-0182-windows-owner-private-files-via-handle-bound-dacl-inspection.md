@@ -114,21 +114,33 @@ D1's inspection report the directory and that file, and reads the key from the s
   for a token whose backup privilege is enabled, and no Keiko process enables it. The directory is
   bound to the identity at its path after the inspection; a reparse point is refused.
 
-Outcomes, each one body-free `security.vault.custody` line:
+**Order.** A new key file inherits its permissions from its directory. The directory is therefore
+made private and verified before the key is created, so a new key is never readable by another
+principal, not even for a moment. An existing key file is judged together with its directory.
 
-| Outcome      | Meaning                                                                                                                                                              |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `attested`   | Both objects are private as found.                                                                                                                                   |
-| `protected`  | One was not. Keiko gave it D4's protected owner-only DACL (inheritable on the directory) and it then attested.                                                        |
-| `refused`    | An object is not private and could not be made private, was replaced, or is not a regular file or directory. The key is not read; the vault fails closed.             |
-| `unattested` | The inspection itself could not run (PowerShell blocked or unavailable). Nothing is known and nothing is claimed; the vault keeps working as it did before (`warn`). |
+An inherit-only ACE for a principal outside the trusted three counts as foreign under this policy,
+and that includes the well-known CREATOR OWNER entry (`S-1-3-0`) that many default directory ACLs
+carry: such a directory is repaired (`protected`) on first use. That is intended, since the entry
+decides who reaches files later created below the directory.
+
+Outcomes, each one body-free `security.vault.custody` line. The process keeps the worst outcome of
+the vaults it has opened; `/api/health` carries it as the closed `credentialCustody` value and
+`keiko status` prints one sentence for it:
+
+| Outcome      | Meaning                                                                                                                                                                             |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attested`   | Both objects are private as found.                                                                                                                                                  |
+| `protected`  | The directory was not private. Keiko gave it D4's protected owner-only DACL, inheritable. The key file itself was private, so the key was not readable.                              |
+| `exposed`    | A key file was reachable by another principal. Keiko protected it, but the key may have been read: the person is told to replace stored secrets such as a Jira token.                |
+| `refused`    | An object is not private and could not be made private, was replaced, or is not a regular file or directory. The key is not read; the vault fails closed.                            |
+| `unattested` | The inspection itself could not run (PowerShell blocked or unavailable). Nothing is known and nothing is claimed; the vault keeps working as it did before (`warn`).                 |
 
 `unattested` deliberately does not fail closed, unlike D3. D3 refuses optional operator inputs;
 refusing here would take every stored credential away from a host that worked before this
 amendment, only because it blocks PowerShell P/Invoke. Such a host keeps the earlier
-platform-inherited custody, visibly, and the claim is made only where the attestation ran. A
-repair that cannot be verified afterwards is refused: the object was seen reachable by another
-principal.
+platform-inherited custody, visibly: `unattested` is a state of its own in the summary and is never
+read as `attested`, and a later attested vault does not hide it. A repair that cannot be verified
+afterwards is refused: the object was seen reachable by another principal.
 
 A Windows credential-store tier (DPAPI or the Credential Manager) is not part of this decision.
 

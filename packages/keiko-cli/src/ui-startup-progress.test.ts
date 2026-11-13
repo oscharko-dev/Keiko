@@ -1,3 +1,5 @@
+// #4358: the Windows UI process records its startup progress for the launcher that waits on it.
+// The suite is hermetic: the clock and the module-load hook are injected, nothing waits on time.
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +9,7 @@ import {
   beginUiStartupProgress,
   readUiStartupSign,
   UI_STARTUP_MAX_HORIZON_MS,
+  UI_STARTUP_PROGRESS_INTERVAL_MS,
   uiStartupProgressPath,
   type UiStartupProgress,
 } from "./ui-startup-progress.js";
@@ -16,9 +19,17 @@ const OTHER_LAUNCH_ID = "cd".repeat(16);
 
 let stateDir: string;
 let active: UiStartupProgress | undefined;
+let clock: number;
+let onLoad: (() => void) | undefined;
+let loadHookRemoved: boolean;
+let failures: string[];
 
 beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "keiko-startup-progress-"));
+  clock = 0;
+  onLoad = undefined;
+  loadHookRemoved = false;
+  failures = [];
 });
 
 afterEach(() => {
@@ -27,45 +38,60 @@ afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true });
 });
 
-function begin(launchId = LAUNCH_ID): UiStartupProgress {
-  active = beginUiStartupProgress(stateDir, launchId);
+function begin(launchId = LAUNCH_ID, dir = stateDir): UiStartupProgress {
+  active = beginUiStartupProgress(dir, launchId, {
+    recordFailure: (failure) => failures.push(failure),
+    now: () => clock,
+    registerLoadHook: (listener) => {
+      onLoad = listener;
+      return (): void => {
+        loadHookRemoved = true;
+      };
+    },
+  });
   return active;
 }
 
-/** Keeps the main thread busy, as code loading does, until `done` holds or `limitMs` passed. */
-function workUntil(done: () => boolean, limitMs: number): boolean {
-  const startedAt = performance.now();
-  let spin = 0;
-  while (performance.now() - startedAt < limitMs) {
-    for (let index = 0; index < 2_000_000; index += 1) spin = (spin + index) % 9973;
-    if (done()) return true;
-  }
-  return done();
+function token(): string | undefined {
+  return readUiStartupSign(stateDir, LAUNCH_ID)?.token;
 }
 
-describe("UI startup sign of life", () => {
-  it("records a first sign at once, as one fixed-width line without a path or account", () => {
+describe("UI startup progress", () => {
+  it("records a first step at once, as one fixed-width line without a path or account", () => {
     begin();
     const text = readFileSync(uiStartupProgressPath(stateDir), "utf8");
-    expect(text).toMatch(/^[0-9a-f]{32} \d{16} 0000000\n$/u);
-    expect(readUiStartupSign(stateDir, LAUNCH_ID)).toMatchObject({ horizonMs: 0 });
+    expect(text).toBe(`${LAUNCH_ID} ${"1".padStart(16, "0")} 0000000\n`);
+    expect(readUiStartupSign(stateDir, LAUNCH_ID)).toEqual({
+      token: "1".padStart(16, "0"),
+      horizonMs: 0,
+    });
     expect(KEIKO_STATE_FILES).toContain("ui.starting");
   });
 
-  // The main thread is busy for the whole wait and never returns to the event loop: only the worker
-  // thread can have written the new record.
-  it("keeps recording while the main thread is busy and cannot run a timer", () => {
-    begin();
-    const first = readUiStartupSign(stateDir, LAUNCH_ID)?.token;
-    const changed = workUntil(
-      () => readUiStartupSign(stateDir, LAUNCH_ID)?.token !== first,
-      20_000,
-    );
-    expect(changed).toBe(true);
-    expect(readUiStartupSign(stateDir, LAUNCH_ID)?.horizonMs).toBe(0);
+  it("advances only when the main thread reports a completed step", () => {
+    const progress = begin();
+    const first = token();
+    // Time alone is not progress: nothing writes while no step completes.
+    clock += 60_000;
+    expect(token()).toBe(first);
+    progress.advance();
+    expect(token()).not.toBe(first);
   });
 
-  it("announces the bound of a blocking step and clamps it", () => {
+  it("counts every loaded module as progress, at most once per interval", () => {
+    begin();
+    const first = token();
+    onLoad?.();
+    expect(token()).toBe(first);
+    clock += UI_STARTUP_PROGRESS_INTERVAL_MS;
+    onLoad?.();
+    const second = token();
+    expect(second).not.toBe(first);
+    for (let module = 0; module < 500; module += 1) onLoad?.();
+    expect(token()).toBe(second);
+  });
+
+  it("announces the bound of a blocking step at once and clamps it", () => {
     const progress = begin();
     progress.announce(70_000);
     expect(readUiStartupSign(stateDir, LAUNCH_ID)?.horizonMs).toBe(70_000);
@@ -75,11 +101,13 @@ describe("UI startup sign of life", () => {
     expect(readUiStartupSign(stateDir, LAUNCH_ID)?.horizonMs).toBe(0);
   });
 
-  it("removes the record when the start is over, and stays removed", () => {
+  it("removes the record and the load hook when the start is over, and stays stopped", () => {
     const progress = begin();
     progress.stop();
     progress.stop();
     progress.announce(1_000);
+    progress.advance();
+    expect(loadHookRemoved).toBe(true);
     expect(existsSync(uiStartupProgressPath(stateDir))).toBe(false);
     expect(readUiStartupSign(stateDir, LAUNCH_ID)).toBeUndefined();
   });
@@ -106,30 +134,28 @@ describe("UI startup sign of life", () => {
     ["trailing bytes", `${LAUNCH_ID} ${"1".repeat(16)} 0000000\nX`],
     ["a non-numeric bound", `${LAUNCH_ID} ${"1".repeat(16)} 00000x0\n`],
     ["free text", "still starting, please wait\n"],
-  ])("reads %s as no sign of life", (_label, content) => {
+  ])("reads %s as no progress, and not as a failure", (_label, content) => {
     if (content !== undefined) writeFileSync(uiStartupProgressPath(stateDir), content);
-    const failures: string[] = [];
-    expect(readUiStartupSign(stateDir, LAUNCH_ID, (f) => failures.push(f))).toBeUndefined();
-    // A missing or malformed record is no sign of life; only a record that cannot be opened as a
-    // regular file is a failure.
-    expect(failures).toEqual([]);
+    const seen: string[] = [];
+    expect(readUiStartupSign(stateDir, LAUNCH_ID, (failure) => seen.push(failure))).toBeUndefined();
+    expect(seen).toEqual([]);
   });
 
   it("reports nothing and changes nothing for a launch id that is not one", () => {
-    const progress = beginUiStartupProgress(stateDir, "not-a-launch-id");
+    const progress = begin("not-a-launch-id");
     progress.announce(1_000);
+    progress.advance();
     progress.stop();
+    expect(onLoad).toBeUndefined();
     expect(existsSync(uiStartupProgressPath(stateDir))).toBe(false);
   });
 
   it("never fails the start when the record cannot be created, and hands the failure on", () => {
-    const failures: string[] = [];
-    const progress = beginUiStartupProgress(join(stateDir, "missing", "state"), LAUNCH_ID, (f) =>
-      failures.push(f),
-    );
+    const progress = begin(LAUNCH_ID, join(stateDir, "missing", "state"));
     expect(failures).toEqual(["record-unavailable"]);
     expect(() => {
       progress.announce(1_000);
+      progress.advance();
       progress.stop();
     }).not.toThrow();
   });
@@ -140,9 +166,11 @@ describe("UI startup sign of life", () => {
       const target = join(stateDir, "victim.txt");
       writeFileSync(target, "untouched");
       symlinkSync(target, uiStartupProgressPath(stateDir));
-      const failures: string[] = [];
-      expect(readUiStartupSign(stateDir, LAUNCH_ID, (f) => failures.push(f))).toBeUndefined();
-      expect(failures).toEqual(["unreadable"]);
+      const seen: string[] = [];
+      expect(
+        readUiStartupSign(stateDir, LAUNCH_ID, (failure) => seen.push(failure)),
+      ).toBeUndefined();
+      expect(seen).toEqual(["unreadable"]);
       begin();
       expect(readFileSync(target, "utf8")).toBe("untouched");
       expect(readUiStartupSign(stateDir, LAUNCH_ID)).toBeDefined();

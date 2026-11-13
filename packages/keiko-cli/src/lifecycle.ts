@@ -774,6 +774,7 @@ function spawnUiProcess(
   pairingSecret: string,
   launchId: string,
 ): ChildProcess {
+  mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   return deps.spawnFn(process.execPath, uiProcessArguments(options, cwd, env, launchId), {
     argv0: KEIKO_PROCESS_TITLE,
     cwd,
@@ -837,23 +838,27 @@ type StartupSignReader = (
 
 interface StartWait {
   readonly outcome: StartOutcome;
-  /** How often the UI process's sign of life restarted the window (#4358). */
-  readonly lifeSigns: number;
-  /** How often a record was there but could not be read as one (a link, not a regular file). */
-  readonly unreadableSigns: number;
+  /**
+   * Windows only (#4358): how often the UI process's progress restarted the window, and how often
+   * a record was there but could not be read as one (a link, not a regular file).
+   */
+  readonly signs?: { readonly lifeSigns: number; readonly unreadableSigns: number };
 }
 
-// A UI process that keeps showing life is not waited on forever: a start that is still not healthy
-// after this long is ended like one that showed no life at all. An explicit, longer
-// `--start-timeout` raises it.
+// A UI process that keeps making progress is not waited on forever: a start that is still not
+// healthy after this long is ended like one that made none. Fifteen minutes is four times the
+// slowest start measured (239 s, x64 Node under emulation on Windows on ARM); a first start on
+// native x64 hardware is unmeasured. An explicit, longer `--start-timeout` raises it.
 const START_CEILING_MS = 15 * 60_000;
 const STILL_STARTING_NOTICE =
   "Keiko is still starting. Right after an installation or update this can take a few minutes.\n";
 
 /**
- * The window is a SILENCE window (#4358): it restarts whenever the UI process records that it is
- * still working (ui-startup-progress.ts), and stretches to the bound the process announced for a
- * step that blocks it. A process that goes quiet is ended one window after its last record.
+ * On Windows the window bounds a start that makes no progress (#4358): it restarts whenever the UI
+ * process records a completed startup step (ui-startup-progress.ts), and stretches to the bound
+ * the process announced for a step that blocks it. A process that stops making progress is ended
+ * one window after its last record. On every other platform there is no reader: the deadline is
+ * the fixed one it always was, and nothing is read or counted.
  */
 class StartWindow {
   private lastToken: string | undefined;
@@ -864,18 +869,20 @@ class StartWindow {
   public constructor(
     private readonly windowMs: number,
     private deadline: number,
-    private readonly read: (recordFailure: () => void) => UiStartupSign | undefined,
+    private readonly read: ((recordFailure: () => void) => UiStartupSign | undefined) | undefined,
     private readonly onExtended: () => void,
   ) {
     this.ceiling = performance.now() + Math.max(START_CEILING_MS, windowMs);
   }
 
   public result(outcome: StartOutcome): StartWait {
-    return { outcome, lifeSigns: this.signs, unreadableSigns: this.unreadable };
+    if (this.read === undefined) return { outcome };
+    return { outcome, signs: { lifeSigns: this.signs, unreadableSigns: this.unreadable } };
   }
 
-  /** The current deadline, after taking a new sign of life into account. */
+  /** The current deadline, after taking a new progress record into account. */
   public current(): number {
+    if (this.read === undefined) return this.deadline;
     const sign = this.read(() => {
       this.unreadable += 1;
     });
@@ -892,23 +899,39 @@ class StartWindow {
   }
 }
 
-async function waitForHealth(
+function startWindow(
   options: LifecycleOptions,
-  pid: number,
   launchId: string,
-  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive" | "readStartupSign">,
+  deps: Pick<LifecycleRuntimeDeps, "readStartupSign" | "platform">,
   io: CliIo,
-  deadline = performance.now() + options.startTimeoutMs,
-): Promise<StartWait> {
+  deadline: number,
+): StartWindow {
   const read = deps.readStartupSign ?? readUiStartupSign;
-  const window = new StartWindow(
+  return new StartWindow(
     options.startTimeoutMs,
     deadline,
-    (recordFailure) => read(options.stateDir, launchId, recordFailure),
+    deps.platform === "win32"
+      ? (recordFailure): UiStartupSign | undefined =>
+          read(options.stateDir, launchId, recordFailure)
+      : undefined,
     () => {
       io.out(STILL_STARTING_NOTICE);
     },
   );
+}
+
+async function waitForHealth(
+  options: LifecycleOptions,
+  pid: number,
+  launchId: string,
+  deps: Pick<
+    LifecycleRuntimeDeps,
+    "healthProbe" | "sleep" | "isProcessAlive" | "readStartupSign" | "platform"
+  >,
+  io: CliIo,
+  deadline = performance.now() + options.startTimeoutMs,
+): Promise<StartWait> {
+  const window = startWindow(options, launchId, deps, io, deadline);
   // Monotonic clock so a wall-clock adjustment during startup does not skip the health
   // window (forward jump) or hold it open indefinitely (backward jump).
   while (performance.now() < window.current()) {
@@ -1194,7 +1217,9 @@ async function cmdStart(
   return startDirectUi({ options, io, env, deps, cwd, pairingSecret, launchId });
 }
 
-// The state directory defaults to `.keiko` in the working directory. A launch from a directory the
+// Windows only; other platforms keep their start path unchanged (the directory is created where
+// the UI process is spawned). The state directory defaults to `.keiko` in the working directory. A
+// launch from a directory the
 // person cannot write to (a scheduled task or a shortcut without "Start in" runs in
 // `C:\Windows\System32`) used to end as "failed to spawn the UI process", which names the wrong
 // thing and offers no way out (#4358). The message names the cause and both remedies; the cause is
@@ -1219,7 +1244,8 @@ function ensureStartStateDir(
 
 async function startDirectUi(context: OwnedUiStartContext): Promise<number> {
   const { options, io, env, deps, cwd, pairingSecret, launchId } = context;
-  if (!ensureStartStateDir(options, io, deps.securityLogSink)) return 1;
+  if (deps.platform === "win32" && !ensureStartStateDir(options, io, deps.securityLogSink))
+    return 1;
   let child: ChildProcess;
   try {
     child = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);
@@ -1260,7 +1286,7 @@ async function startDirectUi(context: OwnedUiStartContext): Promise<number> {
     "start",
     startOutcome,
     startOutcome === "healthy",
-    started,
+    started.signs,
   );
   if (startOutcome === "healthy") {
     return reportHealthyStart(
@@ -1395,7 +1421,7 @@ async function startOwnedUi(
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
   const started = await waitForHealth(options, launch.pid, launchId, deps, io, deadline);
   const outcome = started.outcome;
-  emitLifecycleHealth(deps.securityLogSink, "start", outcome, outcome === "healthy", started);
+  emitLifecycleHealth(deps.securityLogSink, "start", outcome, outcome === "healthy", started.signs);
   if (outcome === "healthy") return commitOwnedUi(context, launch, deadline);
   await launch.abort();
   return reportUnhealthyStart(options, io, deps, launch.pid, launchId, outcome);

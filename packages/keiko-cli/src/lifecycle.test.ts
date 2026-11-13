@@ -912,13 +912,19 @@ describe("runLifecycleCli", () => {
       /\\system32\\windowspowershell\\v1\.0\\powershell\.exe$/u,
     );
     expect(win.args).not.toContain(url);
-    const program = Buffer.from(win.args.at(-1) ?? "", "base64")
-      .toString("utf16le")
-      .split("\n");
-    // #4358: the opener announces its first statement and bounds `Start-Process` from there; the
-    // caller waits for the host start allowance plus that limit, not for 5 s in total.
-    expect(program.at(-1)).toBe(`Start-Process '${url}'`);
-    expect(program[1]).toBe("$keikoWatchdog = [Threading.CancellationTokenSource]::new(5000)");
+    // #4358: the opener announces its first statement and bounds `Start-Process` to 5 s from there;
+    // the caller waits for the 60 s host start allowance plus that limit. The whole program is
+    // pinned: nothing but these four statements may reach PowerShell.
+    expect(Buffer.from(win.args.at(-1) ?? "", "base64").toString("utf16le")).toBe(
+      [
+        "[Console]::Out.Write('KEIKO_PROGRAM_STARTED' + [char]10); [Console]::Out.Flush()",
+        "$keikoWatchdog = [Threading.CancellationTokenSource]::new(5000)",
+        "$null = $keikoWatchdog.Token.Register([Action][Delegate]::CreateDelegate([Action], [Diagnostics.Process]::GetCurrentProcess(), 'Kill'))",
+        `Start-Process '${url}'`,
+      ].join("\n"),
+    );
+    expect(win.args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+    expect(win.args).toHaveLength(4);
     expect(win.timeoutMs).toBe(65_000);
     expect(resolveExternalOpener(url, "darwin")).toEqual({ command: "open", args: [url] });
     expect(resolveExternalOpener(url, "linux")).toEqual({ command: "xdg-open", args: [url] });

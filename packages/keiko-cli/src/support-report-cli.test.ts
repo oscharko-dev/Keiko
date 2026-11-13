@@ -403,6 +403,56 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+// #4358: the Windows vault custody outcome is a registered, closed line. A support report carries
+// it as context of a vault key-resolution failure in the same process (the refused case); the
+// standing place to read the custody state is `keiko status` and `/api/health`.
+describe("support report around a refused vault key file", () => {
+  function seedRefusedVaultKey(): void {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    const segment = writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, {
+        op: "security.vault.custody",
+        level: "error",
+        errorKind: "unsafe-target",
+        fields: { outcome: "refused", target: "keyfile", reason: "foreign-access" },
+      }),
+      fixtureLine(process, now + 1, {
+        op: "security.vault.key-resolution-failed",
+        level: "error",
+        correlationId: CORRELATION,
+        errorKind: "unsafe-target",
+        fields: { failureKind: "unsafe-target" },
+      }),
+    ]);
+    utimesSync(segment, now / 1000, now / 1000);
+  }
+
+  it("exports the custody line with its closed fields, validates offline and shows it in the JSON analysis", async () => {
+    seedRefusedVaultKey();
+    await exportReport();
+    // Offline validation of the exported report: a report that does not validate throws here.
+    expect(() => analyzeSupportReport(readSupportReportFile(path))).not.toThrow();
+    const report = readFileSync(path, "utf8");
+    expect(report).toContain("security.vault.custody");
+    const analysis = await analyze(["--json"]);
+    expect(analysis.code, analysis.errors.join("")).toBe(0);
+    const projected = analysis.output.join("");
+    expect(projected).toContain("security.vault.custody");
+    expect(projected).toContain("security.vault.key-resolution-failed");
+    for (const closed of ['"refused"', '"keyfile"', '"foreign-access"']) {
+      expect(projected).toContain(closed);
+    }
+    // Nothing but closed values: no path, account or security identifier.
+    for (const text of [report, projected]) {
+      expect(text).not.toMatch(/S-1-5-\d/u);
+      expect(text).not.toMatch(/[A-Za-z]:\\\\Users/u);
+      expect(text).not.toContain(root);
+    }
+  });
+});
+
 describe("support report CLI and private publication", () => {
   it("reuses the incident seed and leaves unnecessary lifecycle validators unloaded", async () => {
     seedGatewayFailure();

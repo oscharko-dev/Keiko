@@ -1834,7 +1834,9 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   const launch = await launchActivityLog(options, isRealLaunch);
   const { loadedServer, activityLog, closeActivityLog } = launch;
   const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
+  advanceStartupProgress();
   runStartupReadinessCheck(options, loadedServer);
+  advanceStartupProgress();
   const startupRecovery = handlerDeps.updateStartupRecovery;
   const readiness = { open: startupRecovery === undefined };
   const recoveryContext = {
@@ -1847,6 +1849,7 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     io,
   };
   const recoveryCurrent = await reconcileBeforeListen(recoveryContext);
+  advanceStartupProgress();
   const server = await factory({
     staticRoot,
     csp,
@@ -1857,7 +1860,9 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     ...(activityLog === undefined ? {} : { activityLog }),
   });
   applyServerTimeouts(server);
+  advanceStartupProgress();
   await listen(server, parsed.port);
+  advanceStartupProgress();
   launch.loadedServer?.prewarmJavaParserWorker();
   const exit = armExitEvidence(server, io, launch, stateDir);
   await reconcileAfterListen({ ...recoveryContext, current: recoveryCurrent, server });
@@ -1955,6 +1960,7 @@ async function launchUiFromDeps(
   // and the injected-server test path alike — this is a second, memoized, already-cached call, not
   // a new load.
   const logLevel = (await loadServerModule()).resolveServerLogThreshold(effectiveEnv);
+  advanceStartupProgress();
   const runtimeEnv = withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv, cwd);
   const handlerDeps = await buildHandlerDepsOrReport(
     parsed,
@@ -1966,9 +1972,11 @@ async function launchUiFromDeps(
     deps.buildHandlerDeps,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
+  advanceStartupProgress();
   try {
     const launchProjectResult = await registerLaunchProjectOrReport(cwd, handlerDeps, io);
     if (launchProjectResult !== null) return launchProjectResult;
+    advanceStartupProgress();
     await startUiServer({
       staticRoot,
       csp: csp.csp,
@@ -2006,6 +2014,7 @@ export async function runUiCli(
   }
   prepareUiInstallLayoutEvidence(cwd, effectiveEnv, deps);
   await beginStartupProgress(cwd, effectiveEnv, parsed, deps);
+  advanceStartupProgress();
   const staticRoot = deps.staticRoot ?? defaultStaticRoot(cwd);
   if (!ensureStaticRoot(staticRoot, io)) {
     endStartupProgress();
@@ -2037,9 +2046,10 @@ export async function runUiCli(
   }
 }
 
-// #4358: while this process loads its code and initialises, it tells the launcher that waits on it
-// that it is working (ui-startup-progress.ts), and how long a bounded Windows program may keep it
-// silent. Only a launched UI reports: the launcher supplied the launch id it waits on.
+// #4358, Windows only: while this process loads its code and initialises, it records its startup
+// progress for the launcher that waits on it (ui-startup-progress.ts): every module it loads, every
+// phase below, and the bound of a Windows program that blocks it. Only a launched UI reports: the
+// launcher supplied the launch id it waits on. Other platforms record nothing.
 let startupProgress: UiStartupProgress | undefined;
 let startupSignState: "reported" | "record-unavailable" | "write-failed" | undefined;
 
@@ -2050,16 +2060,24 @@ async function beginStartupProgress(
   deps: UiCliDeps,
 ): Promise<void> {
   const launchId = parsed.launchId ?? env[KEIKO_UI_LAUNCH_ID_ENV];
+  if (process.platform !== "win32") return;
   if (deps.createServer !== undefined || launchId === undefined) return;
   startupSignState = "reported";
-  const progress = beginUiStartupProgress(resolveRuntimeStateDir(cwd, env), launchId, (failure) => {
-    if (failure !== "unreadable") startupSignState = failure;
+  const progress = beginUiStartupProgress(resolveRuntimeStateDir(cwd, env), launchId, {
+    recordFailure: (failure) => {
+      if (failure !== "unreadable") startupSignState = failure;
+    },
   });
   startupProgress = progress;
   const { setWindowsProgramObserver } = await loadSecurity();
   setWindowsProgramObserver((boundMs) => {
     progress.announce(boundMs);
   });
+}
+
+/** A startup phase of the UI command completed: real progress on the main thread. */
+function advanceStartupProgress(): void {
+  startupProgress?.advance();
 }
 
 function endStartupProgress(): void {

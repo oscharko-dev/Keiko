@@ -1,7 +1,8 @@
 // #4358: `keiko start` gave the UI process 20 seconds and ended it otherwise. On Windows the first
 // start after an installation needs minutes of code loading under the virus scanner, so a healthy,
-// busy process was ended every time. The window now bounds SILENCE: it restarts with every sign of
-// life the UI process records, and a process that goes quiet is still ended one window later.
+// busy process was ended every time. On Windows the window now bounds a start that makes no
+// progress: it restarts with every startup step the UI process records, and a process that stops
+// making progress is still ended one window later. Every other platform keeps the fixed window.
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +41,8 @@ interface Start {
   readonly endedAtSeconds: number;
   readonly killed: boolean;
   readonly events: SecurityLogEvent[];
+  /** How often the launcher read the UI process's progress record. */
+  readonly reads: number;
 }
 
 interface Scenario {
@@ -50,6 +53,10 @@ interface Scenario {
   readonly startTimeoutSeconds?: number;
   /** Every read finds a record it cannot read as one (a link at the record's name). */
   readonly unreadable?: boolean;
+  /** The launcher's platform; Windows unless stated. */
+  readonly platform?: NodeJS.Platform;
+  /** The launch id the health check answers with; the tracked one unless stated. */
+  readonly healthLaunchId?: string;
 }
 
 /**
@@ -71,6 +78,7 @@ async function start(scenario: Scenario): Promise<Start> {
     },
   };
   let killed = false;
+  let reads = 0;
   const events: SecurityLogEvent[] = [];
   const child = { pid: PID, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
   const healthy = (): boolean =>
@@ -84,7 +92,8 @@ async function start(scenario: Scenario): Promise<Start> {
             Response.json({
               status: "ok",
               version: KEIKO_PRODUCT_VERSION,
-              launchId: readPidRecord(join(root, ".keiko", "ui.pid"))?.launchId,
+              launchId:
+                scenario.healthLaunchId ?? readPidRecord(join(root, ".keiko", "ui.pid"))?.launchId,
             }),
           )
         : Promise.reject(new Error("connection refused")),
@@ -94,14 +103,19 @@ async function start(scenario: Scenario): Promise<Start> {
     },
     isPortAvailable: () => Promise.resolve(true),
     openExternal: vi.fn(() => Promise.resolve()),
-    // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
-    platform: () => "linux",
+    platform: () => scenario.platform ?? "win32",
+    // The Windows stop path would run a real taskkill; the fixture ends the process instead.
+    killWindowsTree: () => {
+      killed = true;
+      return "succeeded";
+    },
     verifyLaunchIdentity: () => true,
     sleep: (ms) => {
       now += ms;
       return Promise.resolve();
     },
     readStartupSign: (_stateDir, _launchId, recordFailure) => {
+      reads += 1;
       if (scenario.unreadable === true) recordFailure?.("unreadable");
       return scenario.sign(now / 1_000);
     },
@@ -122,7 +136,7 @@ async function start(scenario: Scenario): Promise<Start> {
     {},
     deps,
   );
-  return { code, out, err, endedAtSeconds: now / 1_000, killed, events };
+  return { code, out, err, endedAtSeconds: now / 1_000, killed, events, reads };
 }
 
 /** A UI process that records work every second until `untilSeconds`, then nothing more. */
@@ -232,6 +246,48 @@ describe("keiko start waits on a UI process that shows life", () => {
   });
 });
 
+// The record can only make the launcher wait: health is confirmed against the tracked launch
+// identity, so a record written by anyone, however often, never turns a start into "healthy".
+describe("a forged progress record", () => {
+  it("never yields a healthy start when the health check answers for another launch", async () => {
+    const result = await start({
+      sign: workingUntil(Infinity),
+      healthyFromSeconds: 5,
+      healthLaunchId: "ef".repeat(16),
+    });
+    expect(result.code).toBe(1);
+    expect(result.out).not.toContain("Keiko UI running");
+    expect(healthEvent(result.events)?.extra).toMatchObject({ outcome: "health-timeout" });
+  });
+
+  it("never yields a healthy start when nothing answers the health check", async () => {
+    const result = await start({ sign: workingUntil(Infinity) });
+    expect(result.code).toBe(1);
+    expect(result.killed).toBe(true);
+  });
+});
+
+// The waiting behaviour is Windows-only: every other platform keeps its fixed window, reads no
+// record and writes the health line it always wrote.
+describe.each(["linux", "darwin"] as const)("keiko start on %s", (platform) => {
+  it("keeps the fixed 20 s window even when a progress record exists, and never reads it", async () => {
+    const result = await start({ sign: workingUntil(Infinity), healthyFromSeconds: 60, platform });
+    expect(result.code).toBe(1);
+    expect(result.reads).toBe(0);
+    expect(result.endedAtSeconds).toBeGreaterThanOrEqual(20);
+    expect(result.endedAtSeconds).toBeLessThan(23);
+    expect(result.out).not.toContain("still starting");
+    const extra = healthEvent(result.events)?.extra ?? {};
+    expect(Object.keys(extra).sort()).toEqual([
+      "completeness",
+      "launchBound",
+      "loss",
+      "outcome",
+      "phase",
+    ]);
+  });
+});
+
 describe("keiko start from a directory it cannot write to", () => {
   // Mode bits do not make a directory read-only on Windows, and root ignores them.
   const unwritableDirectoryAvailable = process.platform !== "win32" && process.getuid?.() !== 0;
@@ -262,7 +318,7 @@ describe("keiko start from a directory it cannot write to", () => {
             spawnFn,
             isPortAvailable: () => Promise.resolve(true),
             isProcessAlive: () => false,
-            platform: () => "linux",
+            platform: () => "win32",
             securityLogSink: { write: (event): void => void events.push(event) },
           },
         );

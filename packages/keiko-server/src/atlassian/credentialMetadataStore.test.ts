@@ -70,6 +70,8 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
+// Issue #4358 names the two file-mode assertions of this suite, which were skipped on win32, and
+// asks for their Windows equivalent; the store itself is unchanged.
 // POSIX proves privacy with the file mode. Windows has no mode bits worth trusting, so the same
 // claim is proven there from the file's own security descriptor, bound to an open descriptor, under
 // the confidentiality policy: nobody but the user, SYSTEM and Administrators holds any access
