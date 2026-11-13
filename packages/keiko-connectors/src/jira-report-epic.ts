@@ -32,7 +32,9 @@ export interface JiraReportEpicScope {
 }
 export type JiraReportEpicResolution =
   | { readonly kind: "resolved"; readonly scope: JiraReportEpicScope }
-  | { readonly kind: "failed"; readonly reason: JiraReportFailure };
+  | { readonly kind: "failed"; readonly reason: JiraReportFailure }
+  /** The member list moved while it was read; the report ends as `scope-changed`. */
+  | { readonly kind: "moved" };
 
 function quoted(key: string): string {
   return JSON.stringify(key);
@@ -64,15 +66,38 @@ function epicLinkOf(catalog: readonly JiraReportFieldCatalogEntry[]): EpicLink {
 interface Collected {
   epicSeen: boolean;
   readonly parents: Set<string>;
+  /** Every key the pages enumerated, and the total the pages stated. */
+  readonly seen: Set<string>;
+  enumerated: number;
+  total: number | undefined;
 }
-function observe(hits: readonly unknown[], epicKey: string, into: Collected): void {
+/** The member read ended because the list moved or was cut, not because it was complete. */
+type MemberEnd = JiraReportFailure | "moved" | undefined;
+/** Returns true when a key repeated: a list that shifts between pages shows a key twice. */
+function observe(hits: readonly unknown[], epicKey: string, into: Collected): boolean {
+  let repeated = false;
   for (const hit of hits) {
     const record = asRecord(hit);
     const key = record?.key;
     if (!isSafeAtlassianIdentifier(key)) continue;
+    if (into.seen.has(key)) repeated = true;
+    into.seen.add(key);
     if (key === epicKey) into.epicSeen = true;
     else if (asRecord(asRecord(record?.fields)?.issuetype)?.subtask !== true) into.parents.add(key);
   }
+  return repeated;
+}
+interface MemberPage {
+  readonly hits: readonly unknown[];
+  readonly total: number;
+}
+/** A page with Jira's own coordinates: it starts where asked and holds no more than the total leaves. */
+function memberPage(body: Record<string, unknown>, startAt: number): MemberPage | undefined {
+  const hits = asArray(body.issues);
+  const { total } = body;
+  if (hits === undefined || typeof total !== "number") return undefined;
+  if (!Number.isSafeInteger(total) || total < 0) return undefined;
+  return body.startAt === startAt && startAt + hits.length <= total ? { hits, total } : undefined;
 }
 async function readMembers(
   http: JiraReportHttp,
@@ -80,7 +105,7 @@ async function readMembers(
   jql: string,
   startAt: number,
   into: Collected,
-): Promise<JiraReportFailure | undefined> {
+): Promise<MemberEnd> {
   const outcome = await http.getRecord(
     `search?${new URLSearchParams({
       jql: `${jql} ORDER BY key ASC`,
@@ -90,16 +115,18 @@ async function readMembers(
     }).toString()}`,
   );
   if (!outcome.ok) return outcome.reason;
-  const hits = asArray(outcome.body.issues);
-  const { total } = outcome.body;
-  if (hits === undefined || typeof total !== "number" || !Number.isSafeInteger(total) || total < 0)
-    return "malformed-payload";
-  if (total > JIRA_REPORT_EPIC_MEMBERS_MAX) return "bounds-exceeded";
-  observe(hits, epicKey, into);
-  const next = startAt + hits.length;
-  return hits.length === 0 || next >= total
-    ? undefined
-    : readMembers(http, epicKey, jql, next, into);
+  const page = memberPage(outcome.body, startAt);
+  if (page === undefined) return "malformed-payload";
+  if (page.total > JIRA_REPORT_EPIC_MEMBERS_MAX) return "bounds-exceeded";
+  if (into.total !== undefined && into.total !== page.total) return "moved";
+  into.total = page.total;
+  if (observe(page.hits, epicKey, into)) return "moved";
+  into.enumerated += page.hits.length;
+  if (startAt + page.hits.length >= page.total) return undefined;
+  // An empty page before the stated total is a cut list, never a complete one.
+  return page.hits.length === 0
+    ? "malformed-payload"
+    : readMembers(http, epicKey, jql, startAt + page.hits.length, into);
 }
 
 /** Member chunks whose `parent in (...)` clause stays within the per-query character bound. */
@@ -137,9 +164,18 @@ export async function resolveJiraReportEpicScope(
   const link = epicLinkOf(catalog);
   if (link.kind === "unresolved") return { kind: "failed", reason: "malformed-payload" };
   const clause = memberClause(epicKey, link.kind === "clause" ? link.clause : undefined);
-  const into: Collected = { epicSeen: false, parents: new Set() };
-  const reason = await readMembers(http, epicKey, clause, 0, into);
-  if (reason !== undefined) return { kind: "failed", reason };
+  const into: Collected = {
+    epicSeen: false,
+    parents: new Set(),
+    seen: new Set(),
+    enumerated: 0,
+    total: undefined,
+  };
+  const end = await readMembers(http, epicKey, clause, 0, into);
+  if (end === "moved") return { kind: "moved" };
+  if (end !== undefined) return { kind: "failed", reason: end };
+  // What the pages enumerated must be exactly what Jira said the list holds.
+  if (into.enumerated !== into.total) return { kind: "moved" };
   if (!into.epicSeen) return { kind: "failed", reason: "not-found" };
   const parents = [...into.parents].sort(compareCodePoints);
   return {

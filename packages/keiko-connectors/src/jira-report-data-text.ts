@@ -19,7 +19,12 @@ export function jiraReportDataText(value: string): string {
     .replaceAll(MARKUP, " ")
     .replaceAll(/\s+/gu, " ")
     .trim();
-  return text.length > JIRA_REPORT_DATA_TEXT_CHARS_MAX
-    ? `${text.slice(0, JIRA_REPORT_DATA_TEXT_CHARS_MAX - 1).trimEnd()}…`
+  // Cut by code point: a UTF-16 cut would split a surrogate pair and leave a lone surrogate.
+  const points = Array.from(text);
+  return points.length > JIRA_REPORT_DATA_TEXT_CHARS_MAX
+    ? `${points
+        .slice(0, JIRA_REPORT_DATA_TEXT_CHARS_MAX - 1)
+        .join("")
+        .trimEnd()}…`
     : text;
 }

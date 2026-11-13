@@ -157,6 +157,18 @@ function estimateOf(
   const value = fields[plan.estimateFieldId];
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
+/** A type the metadata says has no estimate field, and a hit that indeed holds no value for it. */
+function notCarried(
+  fields: Record<string, unknown>,
+  plan: JiraReportFieldPlan,
+  typeId: string,
+): boolean {
+  return (
+    plan.estimateFieldId !== undefined &&
+    plan.estimateNotApplicableTypes.has(typeId) &&
+    !Object.hasOwn(fields, plan.estimateFieldId)
+  );
+}
 function unusableEstimate(
   fields: Record<string, unknown>,
   fieldId: string | undefined,
@@ -359,7 +371,7 @@ export async function parseJiraReportIssue(
     assigned: assignedOf(fields, plan),
     dueDate: stringOf(fields.duedate, 32),
     estimate,
-    ...(plan.estimateNotApplicableTypes.has(typeId) ? { estimateNotCarried: true as const } : {}),
+    ...(notCarried(fields, plan, typeId) ? { estimateNotCarried: true as const } : {}),
     deviations: dedupeDeviations([
       ...requiredDeviations(fields, typeId, plan),
       ...(checkerUnavailable ? [] : checked),

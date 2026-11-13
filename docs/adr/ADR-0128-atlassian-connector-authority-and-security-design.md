@@ -1717,7 +1717,12 @@ bound of one GET requires; the windows are read one after another, an issue sele
 once, and the total is the sum of the windows' totals less those duplicates. The scope states the
 clause that selects the Epic and its members (`scope.jql`), the member count and the digest of the
 member keys (`epicMemberCount`, `epicMembersDigest`), which is what a reader needs to reconcile
-the sub-task windows. An Epic that is not visible fails as `not-found`, one beyond 10,000 members
+the sub-task windows. The member read is complete or it is not a success: pages must start where
+asked and hold no more than the total leaves, an empty page before the stated total, a total that
+changes between pages, a repeated key and an enumerated count other than the total end the report
+incomplete (`read-failed`, or `scope-changed` for a moved list). Inside one window a repeated key
+still ends the read as `scope-changed` (a drifted offset); only a key an earlier window selected
+counts as a duplicate. A field list cut at its bound is unreadable, never "no Epic Link". An Epic that is not visible fails as `not-found`, one beyond 10,000 members
 as `bounds-exceeded`; neither becomes an empty or silently narrowed scope.
 (4) *Derived requirement handles are reported beside the headline.* A `DRV-` handle is detected
 from a statement without an identifier, so a context sentence that contains an obligation phrase
@@ -1734,7 +1739,9 @@ value, `id;"statement"`, under a header that calls it data and never an instruct
 export, in the CSV (kind `derived-requirement`, name in the `summary` column); the Jira comment
 carries identifiers and counts only.
 (5) *Per-type estimates.* A type whose create screen carries no estimate field reads
-`estimateField: "not-carried"` in `progress.byType` beside the unestimated count, so the answer can
+`estimateField: "not-carried"` in `progress.byType` beside the unestimated count, only when no
+issue of the type holds a value (a value on such an issue still counts in the sums and the type is
+not flagged), so the answer can
 say "not estimable" where an issue type that carries the field has issues nobody estimated yet.
 Known limits: derived ids are salted by the document's identity, so the same text in two formats
 gets two derived ids (explicit ids are identical); a statement cell without a modal verb yields no

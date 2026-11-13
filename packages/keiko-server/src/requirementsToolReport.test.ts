@@ -165,6 +165,33 @@ async function coverage(
   return (result?.data.section as { readonly items: readonly unknown[] }).items;
 }
 
+/** The coverage headline of the summary `jira.report` serves, as the person sees it. */
+async function headline(
+  f: PodFixture,
+  issues: readonly SyntheticIssue[],
+  scope: CatalogJsonObject,
+): Promise<Record<string, unknown>> {
+  const provider = createJiraProviderForCatalog<RequirementsToolContext>(
+    () => ({
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid/context",
+      identity: "credential-1",
+      http: jiraReading(issues),
+    }),
+    ["jira.report"],
+    undefined,
+    {
+      store: createJiraReportStore(),
+      owner: (invocation) => invocation.chatId,
+      requirements: (invocation) => chatReportRequirementIds(f.deps, invocation),
+    },
+  );
+  const result = await provider.tools()[0]?.execute({ projectKey: "SYN", ...scope }, context(f));
+  expect(result?.isError).toBeUndefined();
+  const report = result?.data.report as { coverage: { requirements: Record<string, unknown> } };
+  return report.coverage.requirements;
+}
+
 describe("the requirement list Keiko hands jira.report", () => {
   it("lists the explicit identifiers of every Pod once, in the detected order", async () => {
     const f = await fixture([
@@ -218,14 +245,23 @@ describe("the requirement list Keiko hands jira.report", () => {
     const automatic = await coverage(f, issues, { requirementsFromPods: true });
     const control = await coverage(f, issues, { requirementIds: [explicit, derived] });
 
-    // Every unit and every covered state of the explicit-id control is still there: the derived
-    // unit is no longer in the headline but reported beside it, named, and never dropped (#4356).
-    const states = (items: readonly unknown[]): readonly (readonly [unknown, unknown])[] =>
-      items.map((item) => [(item as { id: unknown }).id, (item as { covered: unknown }).covered]);
-    expect(states(automatic)).toEqual(states(control));
+    // Every item of the explicit-id control is still there, compared whole (coveredBy, itemCount,
+    // byType …): the derived unit differs only by being flagged and named beside the headline.
+    const plain = automatic.map((item) => {
+      const { label: _label, derived: _derived, ...rest } = item as Record<string, unknown>;
+      return rest;
+    });
+    expect(plain).toEqual(control);
     expect(automatic[0]).toMatchObject({ id: explicit, covered: true, coveredBy: ["SYN-1"] });
     expect(automatic[1]).toMatchObject({ id: derived, covered: false, derived: true });
     expect((automatic[1] as { label?: string }).label).toContain("Das Portal muss Belege");
+    // The figure the person sees: the headline counts the explicit identifier only, the derived
+    // unit is counted beside it and not in the denominator.
+    expect(await headline(f, issues, { requirementsFromPods: true })).toMatchObject({
+      declared: 1,
+      covered: 1,
+      derived: { declared: 1, covered: 0 },
+    });
   });
 
   it("covers the derived requirement once an issue carries its production trace", async () => {

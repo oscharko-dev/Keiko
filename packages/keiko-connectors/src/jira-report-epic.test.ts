@@ -130,6 +130,35 @@ function reportIdOf(result: Awaited<ReturnType<typeof executeJiraReportTool>>): 
   return reportId;
 }
 
+/** One Epic with 300 stories and a sub-task each: 601 issues, far above the old clause bound. */
+function bigEpic(): readonly FixtureIssue[] {
+  const story = issues.find((issue) => issue.type === "Story");
+  const task = issues.find((issue) => issue.type === "Sub-task");
+  const epic = issues.find((issue) => issue.type === "Epic");
+  if (story === undefined || task === undefined || epic === undefined)
+    throw new Error("The fixture lacks a type");
+  const stories = Array.from({ length: 300 }, (_, index): FixtureIssue => ({
+    ...story,
+    key: `REP-${String(1000 + index)}`,
+    epic: "REP-1",
+    category: index % 3 === 0 ? "done" : "indeterminate",
+    status: index % 3 === 0 ? "Closed" : "Working",
+  }));
+  const subtasks = stories.map((parent, index): FixtureIssue => ({
+    ...task,
+    key: `REP-${String(5000 + index)}`,
+    parent: parent.key,
+    // The first sub-task is selected by the Epic Link as well as by its parent: it counts once.
+    ...(index === 0 ? { epic: "REP-1" } : {}),
+    category: index % 2 === 0 ? "done" : "new",
+    status: index % 2 === 0 ? "Closed" : "Open",
+  }));
+  return [{ ...epic, key: "REP-1" }, ...stories, ...subtasks];
+}
+function jqlOf(search: string): string {
+  return new URLSearchParams(search.slice(search.indexOf("?") + 1)).get("jql") ?? "";
+}
+
 describe("an Epic-scoped report (#4356)", () => {
   it("counts the sub-tasks of the Epic's members, as an independent readback does", async () => {
     const h = await run({ epicKey: EPIC });
@@ -215,28 +244,7 @@ describe("an Epic-scoped report (#4356)", () => {
   });
 
   it("reads an Epic above the old bound in several queries and counts every issue once", async () => {
-    const story = issues.find((issue) => issue.type === "Story");
-    const task = issues.find((issue) => issue.type === "Sub-task");
-    const epic = issues.find((issue) => issue.type === "Epic");
-    if (story === undefined || task === undefined || epic === undefined)
-      throw new Error("The fixture lacks a type");
-    const stories = Array.from({ length: 300 }, (_, index): FixtureIssue => ({
-      ...story,
-      key: `REP-${String(1000 + index)}`,
-      epic: "REP-1",
-      category: index % 3 === 0 ? "done" : "indeterminate",
-      status: index % 3 === 0 ? "Closed" : "Working",
-    }));
-    const subtasks = stories.map((parent, index): FixtureIssue => ({
-      ...task,
-      key: `REP-${String(5000 + index)}`,
-      parent: parent.key,
-      // The first sub-task is selected by the Epic Link as well as by its parent: it counts once.
-      ...(index === 0 ? { epic: "REP-1" } : {}),
-      category: index % 2 === 0 ? "done" : "new",
-      status: index % 2 === 0 ? "Closed" : "Open",
-    }));
-    const big = [{ ...epic, key: "REP-1" }, ...stories, ...subtasks];
+    const big = bigEpic();
     const h = await run({ epicKey: "REP-1" }, { issues: big });
     expect(h.result.data.status).toBe("complete");
     const report = reportOf(h.result);
@@ -245,14 +253,10 @@ describe("an Epic-scoped report (#4356)", () => {
     expect(record(report.completeness)).toMatchObject({ complete: true, issuesRead: big.length });
     expect(record(report.scope)).toMatchObject({ epicMemberCount: 300 });
     expect(String(record(report.scope).epicMembersDigest)).toMatch(/^[0-9a-f]{64}$/u);
-    const windows = new Set(
-      h.searches
-        .map(
-          (search) => new URLSearchParams(search.slice(search.indexOf("?") + 1)).get("jql") ?? "",
-        )
-        .filter((jql) => jql.includes("parent in (")),
-    );
+    const windows = new Set(h.searches.map(jqlOf).filter((jql) => jql.includes("parent in (")));
     expect(windows.size).toBeGreaterThan(1);
+    // Every query of every window keeps the report's stable ordering.
+    expect(h.searches.map(jqlOf).every((jql) => jql.endsWith(" ORDER BY key ASC"))).toBe(true);
     const fewer = await run(
       { epicKey: "REP-1" },
       { issues: big.slice(0, -40).filter((i) => i.key !== "REP-1000") },
@@ -275,5 +279,57 @@ describe("an Epic-scoped report (#4356)", () => {
   ])("validates the Epic key %j", async (args, accepted) => {
     const h = await run(args);
     expect(h.activity[0]?.phase === "refused").toBe(!accepted);
+  });
+
+  it("is incomplete, never complete, when the member list moves between pages", async () => {
+    const big = bigEpic();
+    // The second member page states a different total: the list moved while it was read.
+    const h = await run(
+      { epicKey: "REP-1" },
+      { issues: big, totalFor: (call, total) => (call === 2 ? total + 1 : total) },
+    );
+    const report = reportOf(h.result);
+    expect(h.result.data.status).toBe("incomplete");
+    expect(record(report.completeness)).toMatchObject({ complete: false, reason: "scope-changed" });
+  });
+
+  it("ends as scope-changed, not complete, when a window repeats a key and skips another", async () => {
+    const big = bigEpic();
+    const base = selectFrom(big);
+    const distorted = new Set<string>();
+    // The second sub-task window answers with offsets that drifted: one key twice, another skipped.
+    const select = (jql: string): readonly FixtureIssue[] => {
+      const rows = base(jql);
+      if (!jql.includes("parent in (")) return rows;
+      distorted.add(jql);
+      const [first, , ...rest] = rows;
+      return [...distorted].indexOf(jql) === 1 && first !== undefined && rest.length > 0
+        ? [first, first, ...rest]
+        : rows;
+    };
+    const h = await run({ epicKey: "REP-1" }, { issues: big, select });
+    expect(distorted.size).toBeGreaterThan(1);
+    expect(h.result.data.status).toBe("incomplete");
+    expect(record(reportOf(h.result).completeness)).toMatchObject({
+      complete: false,
+      reason: "scope-changed",
+    });
+  });
+
+  it("is unavailable, never absent, when the field catalog is capped before the Epic Link", async () => {
+    const capped = fieldEdit((items) => {
+      const link = items.splice(
+        items.findIndex((item) => item.id === "customfield_10014"),
+        1,
+      );
+      for (let index = 0; index < 5001; index += 1)
+        items.push({ id: `customfield_${String(30000 + index)}`, schema: { type: "string" } });
+      items.push(...link);
+    });
+    const h = await run({ epicKey: EPIC }, {}, capped);
+    const again = reportOf(await h.call({ reportId: reportIdOf(h.result) }));
+    expect(h.result.data.status).not.toBe("complete");
+    expect(record(again.completeness)).toMatchObject({ complete: false, reason: "read-failed" });
+    expect(JSON.stringify(again)).not.toContain('"epicLink"');
   });
 });

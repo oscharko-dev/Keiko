@@ -175,10 +175,11 @@ async function resolveEpic(
   session: JiraReportSession,
   http: JiraReportHttp,
   hierarchy: JiraReportHierarchyFields,
-): Promise<JiraReportFailure | undefined> {
+): Promise<JiraReportFailure | "scope-changed" | undefined> {
   const { epicKey, projectKey, jql } = session.request;
   if (epicKey === undefined) return undefined;
   const epic = await resolveJiraReportEpicScope(http, epicKey, hierarchy.catalog);
+  if (epic.kind === "moved") return "scope-changed";
   if (epic.kind === "failed") return epic.reason;
   const caller = jql === undefined ? "" : (jqlClause(jql) ?? "");
   const within = (clause: string): string =>
@@ -210,6 +211,10 @@ async function initialize(
   const problem =
     initializationProblem(session, hierarchy, required) ??
     (await resolveEpic(session, http, hierarchy));
+  if (problem === "scope-changed") {
+    finish(session, deps, "scope-changed");
+    return;
+  }
   if (problem !== undefined) {
     // The next call asks again; a second failure ends the report instead of degrading it silently.
     session.failure = jiraReportFailure(problem, false);
@@ -285,10 +290,11 @@ function retainIssue(
 ): Ingest {
   const { issue } = parsed;
   if (plan.omittedFields.size > 0) return "omitted";
-  // A later window may select an issue an earlier one did; it counts once and keeps its place.
-  const duplicate = session.windowIndex > 0 && session.issues.has(issue.key);
-  if (duplicate) session.duplicates += 1;
-  else if (session.issues.has(issue.key)) return "repeated";
+  // A key repeated inside one window is a shifted offset and ends the read as before; only a key an
+  // earlier window selected is a duplicate, which counts once and keeps its place.
+  if (session.windowKeys.has(issue.key)) return "repeated";
+  session.windowKeys.add(issue.key);
+  if (session.issues.has(issue.key)) session.duplicates += 1;
   else {
     session.issues.set(issue.key, issue);
     session.bytes += jiraReportIssueCost(issue) + jiraReportProposalCost(plan, issue.key);
@@ -387,6 +393,7 @@ function endWindow(session: JiraReportSession, deps: JiraReportReadDeps): void {
   session.jql = next;
   session.startAt = 0;
   session.lastKey = undefined;
+  session.windowKeys = new Set();
 }
 async function onPageRead(
   session: JiraReportSession,

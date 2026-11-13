@@ -53,6 +53,8 @@ export interface JiraReportSession {
    */
   windows: readonly string[];
   windowIndex: number;
+  /** The keys the current window selected, to tell a repeat in it from a key of an earlier window. */
+  windowKeys: Set<string>;
   /** The total the current window stated; a change while it is read means the scope moved. */
   windowTotal: number | undefined;
   /** The totals of the windows already read, and the issues they selected a second time. */
@@ -180,6 +182,7 @@ export function createJiraReportSession(input: {
     jql: reportJql(request.projectKey, request.jql),
     windows: [],
     windowIndex: 0,
+    windowKeys: new Set(),
     windowTotal: undefined,
     settledTotal: 0,
     duplicates: 0,

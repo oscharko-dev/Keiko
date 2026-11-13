@@ -52,6 +52,8 @@ interface Options {
    * lists it, as Jira does for a field the account may not see.
    */
   readonly withheldEstimateTypes?: readonly string[];
+  /** The create screens of these types lack the field, but the hits still carry their values. */
+  readonly screenLacksTypes?: readonly string[];
   /** Every create-metadata request answers with this HTTP status (the metadata read fails). */
   readonly createMetaStatus?: number;
   /** Hits at or after this issue number are the ones that withhold it (default: every hit). */
@@ -103,7 +105,10 @@ function createMetaOf(
   options: Options,
 ): AtlassianHttpBodyResult {
   const typeId = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
-  const carries = !(options.withoutEstimateTypes ?? []).includes(typeId);
+  const carries = ![
+    ...(options.withoutEstimateTypes ?? []),
+    ...(options.screenLacksTypes ?? []),
+  ].includes(typeId);
   const body = JSON.parse(answer.bodyText) as { values: unknown[] };
   const values = [
     ...body.values.filter((value) => record(value).fieldId !== "timetracking"),
@@ -673,5 +678,31 @@ describe("the native time estimate and the metadata states of the applicability 
     expect(shown).toMatchObject({ estimateField: "not-carried" });
     const plain = await run({ issues, screenFields: [SCREEN_FIELD] });
     expect(plain.stored?.progress.byType.some((item) => "estimateField" in item)).toBe(false);
+  });
+
+  it("never hides a value: a type is not-carried only when no issue of it holds one", async () => {
+    const [firstBug] = issues.filter((issue) => issue.type === "Bug");
+    if (firstBug === undefined) throw new Error("The fixture has no Bug");
+    const valued = issues.map((issue) =>
+      issue.key === firstBug.key ? { ...issue, points: 4 } : issue,
+    );
+    // The metadata says Bug carries no field, yet one Bug holds an estimate: it counts, and the type is not flagged.
+    const held = await run({ issues: valued, screenLacksTypes: ["12"] });
+    expect(held.result.data.status).toBe("complete");
+    const bug = held.stored?.progress.byType.find((item) => item.typeName === "Bug");
+    expect(bug).not.toHaveProperty("estimateField");
+    expect(bug?.estimated).toBe(1);
+    // No Bug holds a value and the hits omit the field: the type is flagged.
+    const none = await run({ issues, withoutEstimateTypes: ["12"] });
+    const without = Number(
+      record(record(none.report.progress).project).estimate &&
+        record(record(record(none.report.progress).project).estimate).total,
+    );
+    expect(record(record(held.report.progress).project).estimate).toMatchObject({
+      total: without + 4,
+    });
+    expect(none.stored?.progress.byType.find((item) => item.typeName === "Bug")).toMatchObject({
+      estimateField: "not-carried",
+    });
   });
 });
