@@ -669,6 +669,37 @@ expectations are unchanged: 401 means unauthenticated and 403 means a missing pe
 #4306, #4309), and an administrative 401 of a screen or workflow resource cannot revoke a valid
 credential (#4314 AC6); only the mechanism moved from route lists to the identity read.
 
+One owner wraps every credential-bearing port: the ordinary read/body ports and the PAT port of the
+private-session owner (`createJiraPrivatePorts`, used by Chat and the coding-runtime Jira MCP) all
+pass through the same observed wrapper, and all of them pin the credential generation and
+verification revision by value, so a caller mutating its metadata object cannot move what a port
+observes. The private owner's PAT port today reads only the identity route, which stays definitive;
+the wrapper is there so that a later PAT route cannot become a second, unobserved path. Session
+ports (login, WebSudo, logout) never use it, because a session 401 says nothing about the token.
+
+The identity read has three closed outcomes. `confirmed` keeps the credential and reports the 401
+as a permission denial. `rejected` (the identity read itself answered 401 or the anonymous user) discards
+the credential. Everything else is `inconclusive`: a timeout, a refused deadline, throttling, a
+server error, a redirect, non-JSON data, an inactive identity, a caller cancellation, a stale
+observation (the credential changed meanwhile) and any exception thrown out of the probe port. An
+inconclusive 401 is returned as `authentication: "unconfirmed"`, the request is refused with the
+closed write-failure reason `auth-unverified`, the credential is kept and the Hub still shows its
+verified state. The person reads that Jira could not be verified right now and to try again; it
+never claims an expired token and carries no host or identity. A probe exception is reported once
+through the diagnostic port with its class and frames. A positive identity read is reused for the
+same credential generation and verification revision for a fixed ten seconds
+(`JIRA_IDENTITY_PROBE_WINDOW_MS`), which bounds a tool loop of permission 401s to one identity read
+per window; a rejected or inconclusive result is never cached and a new generation or revision never
+inherits a window. `atlassian.connection.checked` carries the closed `decision`
+(`identity-route`, `probe`, `probe-window`) and `routeClass` (`identity`, `other`) so a discard
+decided by the probe is distinguishable from the identity route's own 401, and the closed outcome
+`probe-inconclusive` records an unsettled probe.
+
+The public Pod view carries the closed state `compatibilityFacts: "missing"` when a verified Pod has
+no retained compatibility facts (a record from before they existed). The Pod card then tells the
+person that verifying the connection again obtains them and that no permission is added; no version
+or capability fact ever reaches the view.
+
 Refusals at the connection are readable and name the remedy (#4353), in English and German. A
 rejected token yields the closed `JIRA_AUTHENTICATION_FAILED` Chat refusal, which says that the
 token may have expired or been revoked, names replacing the token on the Jira Pod in the Knowledge

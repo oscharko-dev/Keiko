@@ -270,7 +270,7 @@ describe("Jira compatibility through stored credential verification", () => {
     expect(JSON.stringify(legacy)).not.toMatch(/versionNumbers|restApi|agileApi/u);
     const unverified = publicAtlassianCredential({
       ...verified,
-      livePod: { ...legacyPod, verificationStatus: "unverified" },
+      livePod: { ...legacyPod, verificationStatus: "unverified" as const },
     });
     expect(JSON.stringify(unverified)).not.toContain("compatibilityFacts");
   });

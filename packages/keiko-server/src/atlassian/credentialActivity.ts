@@ -201,7 +201,7 @@ export function recordConnectionCheck(
           outcome: result,
           ...(verificationState === undefined ? {} : { verificationState }),
           ...(jiraCompatibility === undefined ? {} : { jiraCompatibility }),
-          ...(detail === undefined ? {} : detail),
+          ...detail,
           ...(jiraCompatibility === "verified" ? { restApi: "v2", agileApi: "unverified" } : {}),
           completeness: "complete",
           loss: "none",

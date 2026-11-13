@@ -125,21 +125,31 @@ export function withJiraAuthenticationObservation<
     const result = await port(request);
     if (!ambiguousFailure(metadata, request, result)) return result;
     const unconfirmed = { ...result, authentication: "unconfirmed" } as const;
-    if (!current()) {
-      options.onUnsettled?.("stale");
-      return unconfirmed;
-    }
     const signal = "signal" in request ? request.signal : undefined;
-    if (!withinOriginalRequest(deadline, signal)) {
-      options.onUnsettled?.("cancelled-or-expired");
-      return unconfirmed;
-    }
+    if (!probeable(current, deadline, signal, options)) return unconfirmed;
     const outcome = await settledProbe(probe, deadline, signal, options);
     if (outcome === "rejected") return result;
     if (outcome === "confirmed" && current() && withinOriginalRequest(deadline, signal))
       return { ...result, authentication: "confirmed" };
     return unconfirmed;
   };
+}
+
+function probeable(
+  current: () => boolean,
+  deadline: number,
+  signal: AbortSignal | undefined,
+  options: JiraAuthenticationObservationOptions,
+): boolean {
+  if (!current()) {
+    options.onUnsettled?.("stale");
+    return false;
+  }
+  if (!withinOriginalRequest(deadline, signal)) {
+    options.onUnsettled?.("cancelled-or-expired");
+    return false;
+  }
+  return true;
 }
 
 /** A credential change during the probe throws out of the port; it settles as inconclusive. */

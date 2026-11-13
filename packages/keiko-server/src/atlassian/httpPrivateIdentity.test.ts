@@ -522,10 +522,17 @@ describe("real private Jira session composition", () => {
   });
   it("routes the PAT port of the private owner through the one observed wrapper, never the private session port (#4353)", async () => {
     const observed: string[] = [];
-    const f = fixture("login", undefined, 60_000, true, (port) => (request) => {
-      observed.push(request.url);
-      return port(request);
-    });
+    const f = fixture(
+      "login",
+      undefined,
+      60_000,
+      true,
+      (port) =>
+        (request): ReturnType<typeof port> => {
+          observed.push(request.url);
+          return port(request);
+        },
+    );
     await f.ports.identity.perform("login", {});
     expect(await f.ports.identity.session("logout", "actor-key")).toMatchObject({ ok: true });
     // Only the PAT identity reads pass the wrapper; login, proof and logout use session ports.

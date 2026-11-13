@@ -6,7 +6,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyRequest,
-  AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
 import {
   AtlassianCredentialCustodyError,
@@ -1016,12 +1015,15 @@ function privateSessionScope(
     authority: { runId: "synthetic-run", envelopeDigest: "a".repeat(64) },
     principalDigest: "a".repeat(64),
     authRef: f.metadata.authRef,
-    authenticationGeneration: f.metadata.generation ?? 1,
+    authenticationGeneration: f.metadata.generation,
     verificationRevision: f.metadata.livePod.verificationRevision,
     expiresAt: Date.now() + 60_000,
   };
 }
-function privateIdentityPorts(f: Fixture, metadata: JiraMetadata = f.metadata) {
+function privateIdentityPorts(
+  f: Fixture,
+  metadata: JiraMetadata = f.metadata,
+): ReturnType<NonNullable<Fixture["deps"]["jiraPrivatePortFactory"]>> {
   const factory = f.deps.jiraPrivatePortFactory;
   if (factory === undefined) throw new TypeError("Missing private port factory");
   return factory(
@@ -1047,8 +1049,8 @@ it("pins the credential by value for the private port as for the ordinary ports"
   const ports = privateIdentityPorts(f, mutable);
   // The caller advances its own copy; the observed generation and revision stay pinned.
   if (mutable.livePod === undefined) throw new TypeError("Missing Live Pod");
-  mutable.generation = 99;
-  mutable.livePod.verificationRevision = 99;
+  Object.assign(mutable, { generation: 99 });
+  Object.assign(mutable.livePod, { verificationRevision: 99 });
   await ports.identity.session("logout", "synthetic-key");
   expect(f.invalidated).toEqual([2]);
 });
@@ -1110,9 +1112,9 @@ it.each(INCONCLUSIVE)(
     // Never replayed, never revoked, and the end-to-end outcome is the closed one.
     expect(f.invalidated).toEqual([]);
     expect(f.current().livePod?.verificationStatus).toBe("ok");
-    expect(f.current().generation).toBe(kind.name === "stale observation" ? 1 : 1);
+    expect(f.current().generation).toBe(1);
     const outcome = await executeAtlassianWriteRequest(
-      { http: () => Promise.resolve(result as AtlassianHttpBodyResult) },
+      { http: () => Promise.resolve(result) },
       { method: "GET", url: request("project/KER/role").url, expect: "json" },
     );
     expect(outcome).toMatchObject({ ok: false, reason: "auth-unverified", httpStatus: 401 });
@@ -1123,7 +1125,7 @@ it("keeps a probe that actually answers 401 as the one rejected-token outcome", 
   const result = await f.deps.httpBodyPortFactory(f.metadata)(request("project/KER/role"));
   expect(result).not.toHaveProperty("authentication");
   const outcome = await executeAtlassianWriteRequest(
-    { http: () => Promise.resolve(result as AtlassianHttpBodyResult) },
+    { http: () => Promise.resolve(result) },
     { method: "GET", url: request("project/KER/role").url, expect: "json" },
   );
   expect(outcome).toMatchObject({ ok: false, reason: "auth-failed", httpStatus: 401 });
@@ -1168,7 +1170,7 @@ it("reuses a positive identity read for the same generation within the window on
   expect(decisions).toEqual(["probe", "probe-window", "probe-window", "probe"]);
 });
 it("never reuses an inconclusive or rejected identity read", async () => {
-  let now = 1000;
+  const now = 1000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
   const f = fixture((index) => (index % 2 === 0 ? response({}, 401) : response({}, 503)));
   const http = f.deps.httpBodyPortFactory(f.metadata, "no-negative-cache");
