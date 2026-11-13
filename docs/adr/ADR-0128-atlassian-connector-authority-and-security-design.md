@@ -645,21 +645,41 @@ purpose explicitly and omit the observed-request handler; the existing verificat
 the result once. This classification does not depend on a possibly stale metadata snapshot.
 This does not introduce credential polling.
 
-The retained native API also documents 401 for missing WebSudo or view permission on specific
-server-owned GET identities, including workflow-scheme and screen observations. Jira 11.3's
-`ScreensResource` additionally documents administrator-permission 401 responses for exactly
-`POST /screens/{screenId}/tabs` and `PUT`/`DELETE /screens/{screenId}/tabs/{tabId}`
-([native screen resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/ScreensResource.html)).
-Only those enumerated method/path identities await one bounded
-same-target `myself` read before deciding whether the credential failed. The original status and
+Jira Data Center answers 401 for a missing WebSudo, administrator or view permission as well as for
+a failed authentication. The retained native API documents this on workflow-scheme, screen, cluster,
+index-snapshot, user-column and issue-link resources, and the lab observed it on
+`GET /project/{key}/role` (#4353), which no list contained. The model reaches about 450 operations
+through discovery, so a hand-maintained list of ambiguous routes is incomplete by construction and
+has been removed. The structural rule is: a 401 from any request to the instance, read or write,
+except the identity route itself (`GET /rest/api/2/myself`), is decided by one bounded
+same-target `myself` read, and the credential is discarded only when that identity read itself
+answers 401 (or reports the anonymous user). A 401 from the identity route stays definitive, and
+requests outside the saved instance origin and context path are not classified. The original status and
 synchronous response acknowledgement remain unchanged. The identity read retains ordinary saved
 target admission, the original authority guard, signal, remaining deadline and captured credential
-generation/verification revision; it neither retries nor begins connection verification. A current,
+generation/verification revision; it neither retries nor begins connection verification. The cost is
+one bounded probe per 401. A current,
 active identity adds the closed port observation `authentication: "confirmed"`, which classifies
 the original 401 as an operation permission denial without granting authority or changing stored
-compatibility. An explicit authentication failure still invalidates through the existing custody
+compatibility; a write is never retried and never borrows another route's facts. An explicit
+authentication failure still invalidates through the existing custody
 owner. Timeout, malformed data, revoked authority, cancellation or stale observations are not proof
-of credential failure. Upstream JSON cannot supply this port-owned observation.
+of credential failure. Upstream JSON cannot supply this port-owned observation. The earlier
+expectations are unchanged: 401 means unauthenticated and 403 means a missing permission (#4305,
+#4306, #4309), and an administrative 401 of a screen or workflow resource cannot revoke a valid
+credential (#4314 AC6); only the mechanism moved from route lists to the identity read.
+
+Refusals at the connection are readable and name the remedy (#4353), in English and German. A
+rejected token yields the closed `JIRA_AUTHENTICATION_FAILED` Chat refusal, which says that the
+token may have expired or been revoked, names replacing the token on the Jira Pod in the Knowledge
+Pods hub, and states that the Chat and its draft are kept; the Pod dialog and the Chat's Pod
+selection give the same remedy. A release below Data Center 10.3.0 is refused as
+`unsupported-version` before the identity request, and the message names the 10.3.0 floor and
+upgrading or choosing another instance. A certificate failure names the documented
+`KEIKO_CA_BUNDLE_PATH` trust path and never suggests disabling verification. A Pod switch, Pod
+deletion, token replacement, authentication failure, disconnect, mode change and expired authority
+each invalidate pending work and current grants through the existing lifecycle owners; a remote
+effect that already completed is not undone, and no invalidation retries remotely.
 
 Screen-tab create, rename and delete remain high-risk actions in the existing authority and
 approval pipeline. Admission binds the current screen ID/name and the complete tab snapshot;
@@ -674,8 +694,8 @@ checks the complete mutation identity before returning that outcome; a changed i
 write, attachment retirement or dispatch still requires a current turn. A replay returns the
 stored outcome and replay marker, without reconstructing private resource receipts from journal
 fields. The native documented 400 refusals, delete-only 412,
-and positively classified administrator 401 settle as rejected only with the existing
-structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
+and positively classified administrator 401 on the screen-tab writes settle as rejected only with
+the existing structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
 bulk-operation rule is widened.
 
 Application monitoring, in-product diagnostics and JMX exposure changes are high-risk actions

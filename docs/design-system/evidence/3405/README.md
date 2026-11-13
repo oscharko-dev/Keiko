@@ -470,3 +470,13 @@ in the Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.7m)**
 three records were taken from this run; its fallback-font captures were discarded and the 14
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
+
+## Jira connection refusal wording — 2026-11-13 (#4353)
+
+The expired-token, unsupported-release and certificate refusals now name their remedy in both core
+and optional catalogs, so the freshness gate rejected the four catalog digests. The complete
+original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0): **9 passed
+(1.9m)**, including the real BFF stop and restart. Only the four catalog digests and `generatedAt`
+in the three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.
