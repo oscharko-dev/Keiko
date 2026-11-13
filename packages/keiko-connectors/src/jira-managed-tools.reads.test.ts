@@ -748,6 +748,22 @@ describe("jira.search with requested fields (#4176)", () => {
       expect(guidance).toContain("jira.issue");
       expect(guidance).not.toMatch(/Private|Secret|SYN-1/u);
     });
+    it("never claims more than the row returned: a value cut for size is marked unavailable and the sentence says so", async () => {
+      const f = fixture(many(240, [hit("SYN-1", { customfield_1: "x".repeat(20000) })]));
+      const result = await f.run("jira.search", {
+        jql: "project=SYN",
+        fields: ["customfield_1", "customfield_2"],
+      });
+      const [row] = result.data.items as readonly Record<string, unknown>[];
+      expect(row?.fieldValues).toMatchObject([
+        { id: "customfield_1", state: "unavailable" },
+        { id: "customfield_2", state: "unavailable" },
+      ]);
+      const guidance = result.data.guidance as string;
+      expect(guidance).toMatch(/marked unavailable/u);
+      expect(guidance).toMatch(/cut/u);
+      expect(guidance).not.toMatch(/returned the requested field values/u);
+    });
     it.each([
       [
         "every issue fits one page",

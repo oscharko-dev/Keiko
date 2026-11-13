@@ -168,7 +168,7 @@ function searchIssue(
  * holds. It is built from the total alone: no query, field value or issue text reaches it.
  */
 function searchGuidance(total: number): string {
-  return `This search matched ${String(total)} issues and returned the requested field values for each result. Field values and progress across many issues come from jira.report; read a few specific issues with jira.issue, or narrow the JQL.`;
+  return `This search matched ${String(total)} issues. Each result lists the requested fields with a state; a field marked unavailable, empty or unsupported carries no value, and a value too large for its row is cut and marked unavailable. Field values and progress across many issues come from jira.report; read a few specific issues with jira.issue, or narrow the JQL.`;
 }
 function withSearchGuidance(result: ManagedMcpToolResult): ManagedMcpToolResult {
   const { items, total } = result.data;
