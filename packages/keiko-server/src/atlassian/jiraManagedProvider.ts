@@ -298,7 +298,7 @@ type CoreReadToolName = Exclude<
     >
 >;
 const SEARCH_DEFINITION: ReadDefinition = {
-  description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. For counts or checks across many issues use jira.report.`,
+  description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. Progress, estimates and template compliance across many issues come from jira.report, not from paging results.`,
   arguments: {
     jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
     fields: FIELD_IDS,
@@ -406,11 +406,11 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
   "jira.search-post": {
     ...SEARCH_DEFINITION,
     description:
-      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages; use jira.report for project totals and compliance. Native query validation stays enabled.",
+      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages. Progress, estimates and template compliance across many issues come from jira.report, not from paging results. Native query validation stays enabled.",
   },
   "jira.issue": {
     description:
-      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Never loop over a project: use jira.report.",
+      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Totals across many issues come from jira.report, not from reading issues one by one.",
     arguments: { issueKey: text(128), fields: FIELD_IDS },
     required: ["issueKey"],
     paged: false,
