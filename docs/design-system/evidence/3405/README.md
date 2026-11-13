@@ -490,3 +490,12 @@ The complete original nine-case producer ran in the Linux arm64 gates container 
 this run; its fallback-font captures were discarded and the 14 committed captures are unchanged. No
 updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
 evidence.
+
+## Jira connection refusal wording, third pass — 2026-11-13 (#4353)
+
+The sync-failure reason `auth-unverified` and its messages changed both optional catalogs once
+more, so the freshness gate rejected their digests. The complete original nine-case producer ran in
+the Linux arm64 gates container (Node 24.18.0): **9 passed (1.7m)**. Only the catalog digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
+numerical ceiling changed. This remains updater fixture evidence.
