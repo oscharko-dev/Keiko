@@ -931,28 +931,43 @@ async function waitForHealth(
   io: CliIo,
   deadline = performance.now() + options.startTimeoutMs,
 ): Promise<StartWait> {
-  const window = startWindow(options, launchId, deps, io, deadline);
-  // Monotonic clock so a wall-clock adjustment during startup does not skip the health
-  // window (forward jump) or hold it open indefinitely (backward jump).
-  while (performance.now() < window.current()) {
-    if (!deps.isProcessAlive(pid)) return window.result("process-exited");
-    const remaining = Math.ceil(window.current() - performance.now());
-    if (remaining <= 0) break;
-    const health = await deps.healthProbe(
-      healthUrl(options),
-      Math.min(HEALTH_PROBE_TIMEOUT_MS, remaining),
-    );
-    if (
-      health.version === SDK_VERSION &&
-      health.launchId === launchId &&
-      deps.isProcessAlive(pid) &&
-      performance.now() < window.current()
-    ) {
-      return window.result("healthy");
-    }
-    await deps.sleep(Math.min(500, Math.max(0, window.current() - performance.now())));
+  return pollStartHealth(
+    options,
+    pid,
+    launchId,
+    deps,
+    startWindow(options, launchId, deps, io, deadline),
+  );
+}
+
+// One probe, then one wait, then the next probe: strictly sequential and bounded by the start window.
+// A monotonic clock so a wall-clock adjustment during startup does not skip the health window (forward
+// jump) or hold it open indefinitely (backward jump).
+async function pollStartHealth(
+  options: LifecycleOptions,
+  pid: number,
+  launchId: string,
+  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
+  window: StartWindow,
+): Promise<StartWait> {
+  if (performance.now() >= window.current()) return window.result("health-timeout");
+  if (!deps.isProcessAlive(pid)) return window.result("process-exited");
+  const remaining = Math.ceil(window.current() - performance.now());
+  if (remaining <= 0) return window.result("health-timeout");
+  const health = await deps.healthProbe(
+    healthUrl(options),
+    Math.min(HEALTH_PROBE_TIMEOUT_MS, remaining),
+  );
+  if (
+    health.version === SDK_VERSION &&
+    health.launchId === launchId &&
+    deps.isProcessAlive(pid) &&
+    performance.now() < window.current()
+  ) {
+    return window.result("healthy");
   }
-  return window.result("health-timeout");
+  await deps.sleep(Math.min(500, Math.max(0, window.current() - performance.now())));
+  return pollStartHealth(options, pid, launchId, deps, window);
 }
 
 async function ensureStartPortAvailable(

@@ -754,9 +754,8 @@ const REPORT_LABEL_CHARS_MAX = 120;
 function derivedLabel(unit: LocatedRequirementUnit, redact: (value: string) => string): string {
   const { statement, sectionPath } = unit.entry;
   const section = sectionPath.at(-1);
-  const text = redact(`${section === undefined ? "" : `${section}: `}${statement}`)
-    .replaceAll(/\s+/gu, " ")
-    .trim();
+  const sectionPrefix = section === undefined ? "" : `${section}: `;
+  const text = redact(`${sectionPrefix}${statement}`).replaceAll(/\s+/gu, " ").trim();
   return text.length > REPORT_LABEL_CHARS_MAX
     ? `${text.slice(0, REPORT_LABEL_CHARS_MAX - 1)}…`
     : text;

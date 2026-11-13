@@ -205,8 +205,7 @@ function choiceOf(schema: CatalogJsonObject, errors: readonly ErrorObject[]): Ch
     return undefined;
   if (!choiceIsTheFailure(errors[0], error)) return undefined;
   const alternatives = branches.map((branch) => branchRequirements(branch as CatalogJsonValue));
-  if (alternatives.length === 0 || alternatives.some((names) => names === undefined))
-    return undefined;
+  if (alternatives.length === 0 || alternatives.includes(undefined)) return undefined;
   return {
     kind: error.keyword === "oneOf" ? "exactly-one" : "at-least-one",
     alternatives: alternatives as readonly (readonly string[])[],
