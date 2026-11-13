@@ -102,6 +102,8 @@ beforeEach(() => {
   ports.failures = {};
   directory = mkdtempSync(join(tmpdir(), "jira-owned-preflight-"));
   vi.stubEnv("KEIKO_JIRA_LAB_GATEWAY_CONFIG", undefined);
+  // No Jira here; the baseline templates have their own suite (jira-chat-lab-baseline-templates).
+  vi.stubEnv("KEIKO_JIRA_LAB_BASELINE_TEMPLATES", "off");
   vi.stubEnv("KEIKO_JIRA_LAB_CONTEXT_WINDOW", undefined);
   vi.stubGlobal("fetch", ports.fetch);
   vi.spyOn(console, "log").mockImplementation(() => undefined);
