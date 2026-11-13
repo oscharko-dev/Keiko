@@ -183,7 +183,7 @@ describe("derived requirements are reported beside the headline, named, never dr
     if (stored === undefined) throw new Error("Missing report");
     const markdown = exportJiraReport(stored, "markdown").content;
     expect(markdown).toContain("0 of 1 units Keiko derived");
-    expect(markdown).toContain(`${DERIVED} | ${LABEL}`.replace(" | ", " | "));
+    expect(markdown).toContain(`${DERIVED} | ${LABEL}`);
     const csv = exportJiraReport(stored, "csv").content;
     expect(csv).toContain(`derived-requirement,${DERIVED}`);
     expect(csv).toContain(LABEL);

@@ -76,8 +76,11 @@ import { withNestedCallerAdmission } from "./chat-tool-nested-admission.js";
 import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuation-fit.js";
 import {
   omittedReportFindingKeys,
+  rawReportKeyCorrection,
+  rawReportKeys,
   reportCoverageCorrection,
   reportCoverageMismatches,
+  reportEvidenceLines,
   reportFindingCorrection,
   unsupportedIssueKeyCorrection,
   unsupportedIssueKeys,
@@ -116,6 +119,7 @@ import {
 } from "./store/chatToolTranscript.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
+import { requireNoJiraPodRefusal } from "./chat-jira-pod-refusal.js";
 import { CatalogDispatchFault, requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import {
@@ -161,6 +165,10 @@ type AnswerCorrectionLog =
   | {
       readonly correctionKind: "unsupported-issue-key";
       readonly unsupportedKeyCount: number;
+    }
+  | {
+      readonly correctionKind: "raw-report-key";
+      readonly rawReportKeyCount: number;
     };
 
 // Local estimates are not provider counts; the margin keeps the gateway's exact admission and its
@@ -221,6 +229,8 @@ export function mintAndBoundChatTurn<
     nowMs: Date.now(),
     correlationId,
   });
+  // A Jira Pod that cannot serve this Chat says so; every other refusal stays the generic one.
+  requireNoJiraPodRefusal(authority);
   requireDispatch(authority.ok, "denied", "authority-invalid");
   const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
   requireDispatch(remaining > 0, "denied", "authority-expired");
@@ -1357,6 +1367,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
   }
 
+  /** The figures Keiko computed for a Jira report in this turn, one per line; none without one. */
+  public get reportEvidence(): readonly string[] {
+    return reportEvidenceLines(this.settledExchanges);
+  }
+
   /** True once the turn answered from its transcript; callers must deliver, not cancel, it. */
   public get endedEarly(): boolean {
     return this.endedAnswer !== undefined;
@@ -1824,6 +1839,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
+    const rawKeys = rawReportKeys(this.settledExchanges, answer.content);
+    if (rawKeys.length > 0)
+      corrections.push({
+        content: rawReportKeyCorrection(rawKeys),
+        log: { correctionKind: "raw-report-key", rawReportKeyCount: rawKeys.length },
+      });
     const coverage = knowledgeTurnCoverage(this.settledExchanges, {
       incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
     });
@@ -1931,6 +1952,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAfterScopeChange"
   | "endedEarly"
   | "reportsToolAction"
+  | "reportEvidence"
   | "readOnlySynthesisRequest"
   | "settleRetryFailure"
   | "bindEvidenceSources"

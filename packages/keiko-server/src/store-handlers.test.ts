@@ -51,7 +51,7 @@ import type {
   ChatGitChangeScope,
   GroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -72,6 +72,7 @@ import type { RouteContext } from "./routes.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
 import {
   createCapsule,
+  createCapsuleSet,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
   updateCapsuleState,
@@ -2478,9 +2479,26 @@ describe("PATCH /api/chats", () => {
     expect(fetched?.connectedScope).toBeUndefined();
   });
 
-  // Epic #189 — multi-source localKnowledgeScopes (connectors). Shape-only validation at the BFF
-  // (capsule existence is checked in the grounded path); no filesystem roots involved.
+  // Epic #189 — multi-source localKnowledgeScopes (connectors). Shape validation first; a source the
+  // update newly adds must also exist (#4371, see the dedicated suite); no filesystem roots involved.
   it("sets a valid 2-connector localKnowledgeScopes list (list + back-compat single)", async () => {
+    const runtimeDir = join(tmp, "runtime");
+    mkdirSync(runtimeDir, { recursive: true });
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: runtimeDir }),
+    });
+    const alpha = createCapsule(
+      knowledgeStore,
+      testCapsuleInput({ id: "cap-alpha" as KnowledgeCapsuleId }),
+    );
+    createCapsuleSet(knowledgeStore, {
+      id: "set-beta" as CapsuleSetId,
+      displayName: "Beta",
+      tags: [],
+      capsuleIds: [alpha.id],
+    });
+    knowledgeStore.close();
+    await restartWithDeps({ uiDbPath: join(runtimeDir, "keiko-ui.db") });
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
     const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
@@ -2539,12 +2557,10 @@ describe("PATCH /api/chats", () => {
   it("clears all connectors when localKnowledgeScopes is patched with null", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
-    await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
-      method: "PATCH",
-      headers: PATCH_HEADERS,
-      body: JSON.stringify({
-        localKnowledgeScopes: [{ kind: "capsule", capsuleId: "cap-x", connectedAtMs: 1 }],
-      }),
+    store.updateChat(c.id, {
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "cap-x" as KnowledgeCapsuleId, connectedAtMs: 1 },
+      ],
     });
     const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
       method: "PATCH",
@@ -2893,6 +2909,185 @@ describe("chat scope precondition review regressions", () => {
       sink.close?.();
       resetServerLogger();
     }
+  });
+});
+
+// A scope update that names a Knowledge Pod (or Pod Set) which does not exist, or is being deleted,
+// is refused before any state changes, with a closed reason and a readable message (#4371). A bound
+// source that stays in the patch is never re-judged, so a vanished pod cannot lock the rest of the
+// scope: only a source the update newly adds is checked.
+describe("PATCH /api/chats refuses an unavailable Knowledge Pod (#4371)", () => {
+  function chatWithKnowledgeStore(
+    setup: (knowledgeStore: ReturnType<typeof openKnowledgeStore>) => void = () => undefined,
+  ): { readonly chatId: string; readonly handlerDeps: UiHandlerDeps } {
+    const runtimeDir = join(tmp, "runtime");
+    mkdirSync(runtimeDir, { recursive: true });
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: runtimeDir }),
+    });
+    setup(knowledgeStore);
+    knowledgeStore.close();
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "Private title", "m");
+    return {
+      chatId: chat.id,
+      handlerDeps: deps({ uiDbPath: join(runtimeDir, "keiko-ui.db") }),
+    };
+  }
+
+  function patch(
+    chatId: string,
+    body: Record<string, unknown>,
+    handlerDeps: UiHandlerDeps,
+  ): ReturnType<typeof handleUpdateChat> {
+    return handleUpdateChat(
+      directRouteContext(`/api/chats?id=${chatId}`, JSON.stringify(body)).ctx,
+      handlerDeps,
+    );
+  }
+
+  it.each([
+    {
+      name: "a Knowledge Pod that no longer exists",
+      scope: { kind: "capsule", capsuleId: "cap-gone", connectedAtMs: 1 },
+      reason: "knowledge-pod-missing",
+      message: "The selected Knowledge Pod no longer exists.",
+    },
+    {
+      name: "a Knowledge Pod Set that no longer exists",
+      scope: { kind: "capsule-set", capsuleSetId: "set-gone", connectedAtMs: 1 },
+      reason: "knowledge-pod-set-missing",
+      message: "The selected Knowledge Pod Set no longer exists.",
+    },
+  ])("refuses $name and leaves the scope as it was", async ({ scope, reason, message }) => {
+    const { chatId, handlerDeps } = chatWithKnowledgeStore();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const result = await patch(chatId, { localKnowledgeScopes: [scope] }, handlerDeps);
+
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "KNOWLEDGE_POD_UNAVAILABLE", message } },
+      });
+      expect(store.findChatById(chatId)?.localKnowledgeScopes ?? []).toHaveLength(0);
+      const events = sink.events.filter((event) => event.op === "chat.scope.update");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        extra: { outcome: "denied", refusalReason: reason, localKnowledgeSourceCount: 0 },
+      });
+      expect(JSON.stringify(events)).not.toContain("cap-gone");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("refuses a Knowledge Pod that is being deleted", async () => {
+    const { chatId, handlerDeps } = chatWithKnowledgeStore((knowledgeStore) => {
+      const capsule = createCapsule(
+        knowledgeStore,
+        testCapsuleInput({ id: "cap-deleting" as KnowledgeCapsuleId }),
+      );
+      updateCapsuleState(knowledgeStore, capsule.id, "deleting");
+    });
+
+    const result = await patch(
+      chatId,
+      { localKnowledgeScope: { kind: "capsule", capsuleId: "cap-deleting", connectedAtMs: 1 } },
+      handlerDeps,
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "KNOWLEDGE_POD_UNAVAILABLE" } },
+    });
+    expect(store.findChatById(chatId)?.localKnowledgeScope).toBeUndefined();
+  });
+
+  it("accepts an existing Knowledge Pod and an existing Knowledge Pod Set", async () => {
+    const { chatId, handlerDeps } = chatWithKnowledgeStore((knowledgeStore) => {
+      const capsule = createCapsule(
+        knowledgeStore,
+        testCapsuleInput({ id: "cap-here" as KnowledgeCapsuleId }),
+      );
+      createCapsuleSet(knowledgeStore, {
+        id: "set-here" as CapsuleSetId,
+        displayName: "Set",
+        tags: [],
+        capsuleIds: [capsule.id],
+      });
+    });
+
+    const result = await patch(
+      chatId,
+      {
+        localKnowledgeScopes: [
+          { kind: "capsule", capsuleId: "cap-here", connectedAtMs: 1 },
+          { kind: "capsule-set", capsuleSetId: "set-here", connectedAtMs: 2 },
+        ],
+      },
+      handlerDeps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(store.findChatById(chatId)?.localKnowledgeScopes).toHaveLength(2);
+  });
+
+  it("does not re-judge a bound source that stays in the patch, and still adds a live one", async () => {
+    const { chatId, handlerDeps } = chatWithKnowledgeStore((knowledgeStore) => {
+      createCapsule(knowledgeStore, testCapsuleInput({ id: "cap-live" as KnowledgeCapsuleId }));
+    });
+    // Bound before its pod vanished: the store layer takes any shape-valid scope.
+    store.updateChat(chatId, {
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "cap-vanished" as KnowledgeCapsuleId, connectedAtMs: 1 },
+      ],
+    });
+
+    const result = await patch(
+      chatId,
+      {
+        localKnowledgeScopes: [
+          { kind: "capsule", capsuleId: "cap-vanished", connectedAtMs: 1 },
+          { kind: "capsule", capsuleId: "cap-live", connectedAtMs: 2 },
+        ],
+      },
+      handlerDeps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(store.findChatById(chatId)?.localKnowledgeScopes).toHaveLength(2);
+  });
+
+  it("lets the person clear the scope even when its pod vanished", async () => {
+    const { chatId, handlerDeps } = chatWithKnowledgeStore();
+    store.updateChat(chatId, {
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "cap-vanished" as KnowledgeCapsuleId, connectedAtMs: 1 },
+      ],
+    });
+
+    const result = await patch(chatId, { localKnowledgeScopes: null }, handlerDeps);
+
+    expect(result.status).toBe(200);
+    expect(store.findChatById(chatId)?.localKnowledgeScopes ?? []).toHaveLength(0);
+  });
+
+  it("refuses a newly added source when the Knowledge Pod store cannot be read", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "Private title", "m");
+
+    const result = await patch(
+      chat.id,
+      { localKnowledgeScope: { kind: "capsule", capsuleId: "cap-any", connectedAtMs: 1 } },
+      deps({ uiDbPath: undefined }),
+    );
+
+    expect(result).toMatchObject({
+      status: 503,
+      body: { error: { code: "KNOWLEDGE_STORE_UNAVAILABLE" } },
+    });
+    expect(store.findChatById(chat.id)?.localKnowledgeScope).toBeUndefined();
   });
 });
 

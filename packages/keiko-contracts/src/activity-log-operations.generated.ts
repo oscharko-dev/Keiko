@@ -891,6 +891,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -957,6 +958,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "ok",
           "auth-failed",
+          "auth-unverified",
           "forbidden",
           "unreachable",
           "timeout",
@@ -966,7 +968,39 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "tls-failed",
           "sync-unsupported",
           "verification-aborted",
+          "probe-inconclusive",
         ],
+      },
+      decision: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["identity-route", "probe", "probe-window", "probe-shared"],
+      },
+      probeCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "timeout",
+          "network",
+          "http-429",
+          "http-4xx",
+          "http-5xx",
+          "redirect",
+          "invalid-body",
+          "foreign-401",
+          "captcha",
+          "stale",
+          "cancelled-or-expired",
+          "probe-error",
+        ],
+      },
+      routeClass: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["identity", "other"],
       },
       verificationState: {
         type: "string",
@@ -1678,6 +1712,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "invalid-jql",
           "auth",
+          "auth-unverified",
           "permission",
           "effect-denied",
           "cancelled",
@@ -3438,6 +3473,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["applied", "conflict", "cancellation-requested", "denied"],
       },
+      refusalReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "knowledge-pod-missing",
+          "knowledge-pod-set-missing",
+          "knowledge-pod-deleting",
+          "knowledge-store-unavailable",
+        ],
+      },
       expectedScopeDigest: {
         type: "string",
         dataClass: "digest",
@@ -3825,6 +3871,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "effect-denied",
           "cancelled",
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "not-found",
           "rate-limited",
@@ -4142,6 +4189,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "report-coverage",
           "unsupported-issue-key",
           "knowledge-coverage",
+          "raw-report-key",
         ],
       },
       omittedFindingCount: {
@@ -4155,6 +4203,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       unsupportedKeyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      rawReportKeyCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -4783,7 +4836,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "health-timeout",
           "identity-mismatch",
           "spawn-refused",
+          "state-dir-unavailable",
         ],
+      },
+      lifeSigns: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      unreadableSigns: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       launchBound: {
         type: "boolean",
@@ -6212,6 +6276,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "send-failure-skipped-draft",
           "send-failure-skipped-unproven",
           "send-cancel-requested",
+          "send-refused-while-running",
           "equivalent-edit-ignored",
           "stale-draft-echo-ignored",
           "non-text-paste-ignored",
@@ -7098,6 +7163,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["client-jira-result"],
     proofIds: ["client.jira-result.presented.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.knowledge-catalog.refreshed",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-catalog-refresh.knowledgeCatalogRefreshEvent",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["ok", "failed", "superseded"],
+      },
+      duration: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["1s-5s", "5s-10s", "10s-plus"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-knowledge-catalog-refresh"],
+    proofIds: ["client.knowledge-catalog.refreshed.line"],
     releaseImpact: "patch",
   },
   {
@@ -33065,6 +33168,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33175,6 +33279,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33305,6 +33410,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33433,6 +33539,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33585,6 +33692,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33717,6 +33825,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33807,6 +33916,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33923,6 +34033,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34056,6 +34167,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34178,6 +34290,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34303,6 +34416,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34426,6 +34540,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34534,6 +34649,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -38500,6 +38616,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      startupSign: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["reported", "record-unavailable", "write-failed"],
+      },
       processScope: {
         type: "string",
         dataClass: "closed-enum",
@@ -42129,6 +42251,64 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "security.vault.custody",
+    category: "security",
+    owner: "keiko-security",
+    emitter: "windows-vault-custody.emitCustody",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["attested", "protected", "exposed", "unattested", "refused"],
+      },
+      target: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["none", "directory", "keyfile", "both"],
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "none",
+          "inspection-unavailable",
+          "protect-failed",
+          "unavailable",
+          "replaced",
+          "not-regular-file",
+          "not-directory",
+          "malformed-descriptor",
+          "foreign-owner",
+          "null-dacl",
+          "foreign-write",
+          "foreign-access",
+          "unsupported-ace",
+        ],
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["security-vault-key-resolution"],
+    proofIds: ["security.vault.custody.decision"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "security.vault.entries-delete-failed",
     category: "security",
     owner: "keiko-security",
@@ -42650,7 +42830,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["input", "resolve", "verify"],
+        values: ["input", "resolve", "host-start", "verify"],
       },
     },
     causal: "none",
@@ -42848,6 +43028,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["windows-system-root-refused"],
     proofIds: ["security.windows-portable-legacy-launcher.system-root-refused.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "security.windows-program.run",
+    category: "diagnostic",
+    owner: "keiko-security",
+    emitter: "windows-powershell-program.emitProgramRun",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      program: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["local-volume", "owner-private", "process-identity"],
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["completed", "host-start-timeout", "work-timeout", "unavailable"],
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["windows-program-latency"],
+    proofIds: ["security.windows-program.run.outcome"],
     releaseImpact: "patch",
   },
   {

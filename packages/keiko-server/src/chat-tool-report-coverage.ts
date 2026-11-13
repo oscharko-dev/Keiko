@@ -271,3 +271,87 @@ export function reportCoverageCorrection(
     "and give every requirement exactly the issues the report states for it."
   );
 }
+
+/** The latest completed `jira.report` summary of the turn, if any turn exchange holds one. */
+function latestReportSummary(
+  exchanges: readonly ChatToolExchange[],
+): Readonly<Record<string, unknown>> | undefined {
+  for (const exchange of [...exchanges].reverse()) {
+    const { result } = exchange;
+    if (result?.status !== "completed" || result.toolRef?.canonicalId !== REPORT_TOOL) continue;
+    const summary = record(record(result.data)?.report);
+    if (summary !== undefined) return summary;
+  }
+  return undefined;
+}
+
+const SCALAR_EVIDENCE_PATHS: readonly (readonly string[])[] = [
+  ["progress", "project"],
+  ["compliance"],
+  ["completeness"],
+];
+
+function scalarLines(source: Readonly<Record<string, unknown>> | undefined): readonly string[] {
+  return Object.entries(source ?? {}).flatMap(([name, value]) =>
+    typeof value === "number" || typeof value === "boolean" || typeof value === "string"
+      ? [`${name}: ${String(value)}`]
+      : [],
+  );
+}
+
+/**
+ * The figures Keiko computed for a Jira report, one per line: the report's own figure text and the
+ * scalar members of its project progress, compliance and completeness. A claim about a figure the
+ * model took from this result is judged against these lines, beside the citation's own excerpt
+ * (#4355); a figure the report does not state matches no line and stays unsupported.
+ */
+export function reportEvidenceLines(exchanges: readonly ChatToolExchange[]): readonly string[] {
+  const summary = latestReportSummary(exchanges);
+  if (summary === undefined) return [];
+  const figures = typeof summary.figures === "string" ? summary.figures.split("\n") : [];
+  const scalars = SCALAR_EVIDENCE_PATHS.flatMap((path) =>
+    scalarLines(
+      path.reduce<Readonly<Record<string, unknown>> | undefined>(
+        (node, name) => record(node?.[name]),
+        summary,
+      ),
+    ),
+  );
+  return [...figures, ...scalars].map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+const RESULT_KEY = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/u;
+
+function resultKeys(node: unknown, depth: number, into: Set<string>): void {
+  if (depth > 3 || typeof node !== "object" || node === null) return;
+  for (const [name, value] of Object.entries(node)) {
+    if (RESULT_KEY.test(name)) into.add(name);
+    resultKeys(value, depth + 1, into);
+  }
+}
+
+/**
+ * The report's internal result keys the answer prints as `key: value` (for example
+ * `issuesChecked: 33`): a person reads figures in words, not field names (#4355).
+ */
+export function rawReportKeys(
+  exchanges: readonly ChatToolExchange[],
+  answer: string,
+): readonly string[] {
+  const summary = latestReportSummary(exchanges);
+  if (summary === undefined) return [];
+  const keys = new Set<string>();
+  resultKeys(summary, 0, keys);
+  return [...keys].filter((name) =>
+    new RegExp(String.raw`(?<![\p{L}\p{N}_])${name}\s*[:=]`, "u").test(answer),
+  );
+}
+
+/** The one correction a turn gets when its answer prints internal report result keys. */
+export function rawReportKeyCorrection(names: readonly string[]): string {
+  return (
+    `Your answer prints ${String(names.length)} internal result key(s) of the report: ` +
+    `${names.join(", ")}. A person reads figures in words. Answer again and state the same ` +
+    "figures in plain language, without field names."
+  );
+}

@@ -728,7 +728,7 @@ describe("useCodingWorkbenchRuntime", () => {
       const { view, first } = await pendingStart();
       const reads = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length;
       await view.result.current.actions.start("again", { projectMemoryEnabled: false });
-      expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length).toBe(reads);
+      expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls).toHaveLength(reads);
       expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
       // Not silently: the person is told that the model is still being checked.
       await waitFor(() =>
@@ -763,14 +763,14 @@ describe("useCodingWorkbenchRuntime", () => {
       const readsBefore = profile.mock.calls.length;
       act(() => view.result.current.actions.setSelectedModel("model-redacted"));
       // The re-pick itself asks nothing more: the Start already runs the check.
-      expect(profile.mock.calls.length).toBe(readsBefore);
+      expect(profile.mock.calls).toHaveLength(readsBefore);
       // The model answers at the Start's own next poll: the wait survived the re-pick, and the run
       // starts on the model the Start was pressed for.
       profile.mockResolvedValue(verifiedAvailable);
       await first;
       expect(startCodingWorkbenchRuntime).toHaveBeenCalledOnce();
       // Exactly one read followed: the wait's own poll, never one the re-pick caused.
-      expect(profile.mock.calls.length).toBe(readsBefore + 1);
+      expect(profile.mock.calls).toHaveLength(readsBefore + 1);
       view.unmount();
     }, 20_000);
 
