@@ -224,13 +224,27 @@ async function attempt(context, run, entry, round) {
   };
 }
 
-async function runRounds(context, run, cases) {
-  for (let round = 1; round <= run.repeat; round += 1) {
-    for (const entry of cases) {
-      if (run.stop.signal.aborted) throw new TypeError("The run was stopped by a signal");
-      await requireLicense(context.session);
-      run.attempts.push(await attempt({ ...context, stop: run.stop.signal }, run, entry, round));
-    }
+// Every attempt opens its own Chat with its own Atlassian credential, and one product instance
+// retains at most 64 of them (`credential-limit-exceeded`, HTTP 429): the 65th attempt of a single
+// instance stopped the run with 8 of 72 attempts missing (#4352). A lifecycle therefore serves
+// half that bound, like the AC7 driver, and the next one starts on a fresh paired instance.
+export const LIFECYCLE_ATTEMPTS_MAX = 32;
+
+/** The attempts of every round in order, cut into lifecycles that stay under the product bound. */
+export function attemptBatches(cases, repeat, size = LIFECYCLE_ATTEMPTS_MAX) {
+  const schedule = Array.from({ length: repeat }, (_, index) =>
+    cases.map((entry) => ({ entry, round: index + 1 })),
+  ).flat();
+  return Array.from({ length: Math.ceil(schedule.length / size) }, (_, index) =>
+    schedule.slice(index * size, (index + 1) * size),
+  );
+}
+
+async function runAttempts(context, run, batch) {
+  for (const { entry, round } of batch) {
+    if (run.stop.signal.aborted) throw new TypeError("The run was stopped by a signal");
+    await requireLicense(context.session);
+    run.attempts.push(await attempt({ ...context, stop: run.stop.signal }, run, entry, round));
   }
 }
 
@@ -328,13 +342,17 @@ async function measure(session, modelId, run, cases) {
       throw new TypeError(
         `${orphans} issues summarized "Auswahl Vorgang|Ziel" of an earlier run remain; delete them natively first`,
       );
-    await withLiveChat({
-      session,
-      modelId,
-      run: async (context) => {
-        await runRounds(context, run, cases);
-      },
-    });
+    for (const batch of attemptBatches(cases, run.repeat)) {
+      if (run.stop.signal.aborted) break;
+      stage("lifecycle-started", { attempts: batch.length });
+      await withLiveChat({
+        session,
+        modelId,
+        run: async (context) => {
+          await runAttempts(context, run, batch);
+        },
+      });
+    }
     // A signal during the last attempt ends the loop normally, but the run was still stopped.
     complete = !run.stop.signal.aborted;
   } catch (error) {

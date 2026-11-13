@@ -19,7 +19,11 @@ import {
   voteKey,
   voteRows,
 } from "../testing/jira-chat-lab/catalog-selection-objects.mjs";
-import { turnRefusals } from "../testing/jira-chat-lab/catalog-selection.mjs";
+import {
+  attemptBatches,
+  LIFECYCLE_ATTEMPTS_MAX,
+  turnRefusals,
+} from "../testing/jira-chat-lab/catalog-selection.mjs";
 import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
 
 const FIXTURE = {
@@ -400,5 +404,38 @@ describe("selection helpers", () => {
     ]);
     expect(summary).toMatchObject({ valid: 2, selected: 1, invalid: 1 });
     expect(summary.rows.find((row) => row.id === "a")).toMatchObject({ valid: 1, selected: 1 });
+  });
+});
+
+describe("attemptBatches", () => {
+  // One credential per attempt; a product instance retains at most 64 (#4352).
+  const PRODUCT_CREDENTIAL_BOUND = 64;
+
+  it("keeps every lifecycle under the product's credential bound", () => {
+    expect(LIFECYCLE_ATTEMPTS_MAX).toBeLessThanOrEqual(PRODUCT_CREDENTIAL_BOUND / 2);
+    const batches = attemptBatches(SELECTION_CASES, 3);
+    expect(batches.every((batch) => batch.length <= LIFECYCLE_ATTEMPTS_MAX)).toBe(true);
+    // The full run of three rounds exceeds the bound, which is why it needs more than one.
+    expect(SELECTION_CASES.length * 3).toBeGreaterThan(PRODUCT_CREDENTIAL_BOUND);
+    expect(batches.length).toBeGreaterThan(1);
+  });
+
+  it("schedules every case in every round once, in round order", () => {
+    const flat = attemptBatches(SELECTION_CASES, 3).flat();
+    expect(flat).toHaveLength(SELECTION_CASES.length * 3);
+    expect(flat.map((item) => item.round)).toEqual(
+      [1, 2, 3].flatMap((round) => SELECTION_CASES.map(() => round)),
+    );
+    expect(flat.slice(0, SELECTION_CASES.length).map((item) => item.entry.id)).toEqual(
+      SELECTION_CASES.map((entry) => entry.id),
+    );
+  });
+
+  it("handles one case, one round and an exact multiple of the lifecycle size", () => {
+    const one = SELECTION_CASES.slice(0, 1);
+    expect(attemptBatches(one, 1)).toHaveLength(1);
+    expect(attemptBatches(one, 4, 2).map((batch) => batch.length)).toEqual([2, 2]);
+    expect(attemptBatches(one, 5, 2).map((batch) => batch.length)).toEqual([2, 2, 1]);
+    expect(attemptBatches([], 3)).toEqual([]);
   });
 });
