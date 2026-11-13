@@ -12,6 +12,7 @@ import { realpathSync } from "node:fs";
 import { relative, isAbsolute } from "node:path";
 import { JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { readPrivateFile } from "../lab-client.mjs";
+import { cellsOf, decimalCell, integerCell } from "./answer-cells.mjs";
 import { toolExchangeOf } from "./tool-exchanges.mjs";
 import { NO_TURN } from "./journey-support.mjs";
 import { pagedJql } from "./journeys.mjs";
@@ -197,32 +198,6 @@ const canonicalStatus = (value) =>
     ["todo", "to do"],
     ["inprogress", "in progress"],
   ]).get(headerName(value)) ?? value.trim().toLowerCase();
-
-/** Integer counts reject decimals, including .0; locale thousands remain whole counts. */
-function integerCell(value) {
-  const text = value.trim();
-  if (/^(?:0|[1-9]\d*)$/u.test(text))
-    return Number.isSafeInteger(Number(text)) ? Number(text) : undefined;
-  if (!/^[1-9]\d{0,2}([.,])\d{3}(?:\1\d{3})*$/u.test(text)) return undefined;
-  const number = Number(text.replaceAll(/[.,]/gu, ""));
-  return Number.isSafeInteger(number) ? number : undefined;
-}
-
-function decimalCell(value) {
-  const text = value.trim();
-  const integer = integerCell(text);
-  if (integer !== undefined) return integer;
-  const match = /^(\d+|[1-9]\d{0,2}(?:[.,]\d{3})+)([.,])(\d+)$/u.exec(text);
-  if (match === null || match[1].includes(match[2])) return undefined;
-  const number = Number(match[1].replaceAll(/[.,]/gu, "") + "." + match[3]);
-  return Number.isFinite(number) ? number : undefined;
-}
-
-function cellsOf(line) {
-  const text = line.trim().replace(/^\|/u, "").replace(/\|$/u, "");
-  const cells = text.split(/[;\t|]/u).map((cell) => cell.trim().replaceAll(/\*\*|\x60/gu, ""));
-  return cells.length > 1 ? cells : undefined;
-}
 
 function addRow(state, target, key, value) {
   if (value === undefined) {
@@ -472,8 +447,8 @@ export function gradeProgress(answer, truth) {
 }
 
 const unavailableReasons = new Set(JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS);
-const METRIC_ROW = /^(?:SCHÄTZUNG|SCHAETZUNG|ESTIMATE);/iu;
-const SCOPE_ROW = /^(?:SCOPE-LÜCKE|SCOPE-LUECKE|SCOPE GAP);/iu;
+const METRIC_ROW = /^(?:SCHÄTZUNG|SCHAETZUNG|ESTIMATE)$/iu;
+const SCOPE_ROW = /^(?:SCOPE-LÜCKE|SCOPE-LUECKE|SCOPE GAP)$/iu;
 const METRIC_NAME = /^(?:SCHÄTZUNG|SCHAETZUNG|ESTIMATE)$/iu;
 const UNAVAILABLE_CELL = /^(?:NICHT_VERFÜGBAR|NICHT_VERFUEGBAR|UNAVAILABLE)$/iu;
 
@@ -545,8 +520,10 @@ function unavailableAnswer(answer, reason) {
     lines.some((line) => /schätz|schaetz|estimate/iu.test(line) && /\b0(?:[.,]0+)?\b/u.test(line))
   )
     return false;
-  const metrics = lines.filter((line) => METRIC_ROW.test(line)).map((line) => line.split(";"));
-  const gaps = lines.filter((line) => SCOPE_ROW.test(line)).map((line) => line.split(";"));
+  // The same row reader as every other report grader: `;`, TAB and Markdown-pipe rows alike.
+  const rows = lines.map((line) => cellsOf(line)).filter((cells) => cells !== undefined);
+  const metrics = rows.filter((cells) => METRIC_ROW.test(cells[0]));
+  const gaps = rows.filter((cells) => SCOPE_ROW.test(cells[0]));
   return (
     metrics.length === 1 &&
     metrics[0].length === 3 &&
