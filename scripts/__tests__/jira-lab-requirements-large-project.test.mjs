@@ -134,8 +134,8 @@ describe("the large project plan", () => {
       "estimate-source-labelled",
       "configured-unused-stated",
       "other-estimate-field-named",
-      // Strengthened by #4369: the answer shows figures, not the raw result keys (#4355).
-      "answer-without-raw-keys",
+      // Strengthened by #4369: no raw result keys and no unsupported-claim flag (#4355).
+      "answer-clean",
     ]);
   });
 });

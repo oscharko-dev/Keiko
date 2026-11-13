@@ -1,6 +1,8 @@
 // The command-line side of the Composer lane (#4369): which scenarios, types and modes a run takes,
 // which journeys need a product started without the lab's baseline template set, and where the
 // report goes. Pure, so the usage errors and the grouping are testable without a scorecard run.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { COMPOSER_MODES, COMPOSER_WITHOUT_BASELINE } from "./composer.mjs";
 import { COMPOSER_TYPES, typeSlug } from "./composer-templates.mjs";
 
@@ -74,6 +76,26 @@ export function composerTruth(truth, ids) {
     projects: { work: truth.projects.work },
     fieldIds: { epicName: truth.fieldIds.epicName, epicLink: truth.fieldIds.epicLink },
   };
+}
+
+/**
+ * The account a Composer run's oracles read as, from the session's own `language.json` (written by
+ * `seed-language.mjs`): the administrator for an English session, the localized lab actor for a
+ * German one. A Composer run never guesses: a missing record or any other locale is refused, because
+ * the English graders would then misjudge a Jira that shows other names.
+ */
+export function composerReader(session) {
+  const path = join(session.directory, "language.json");
+  if (!existsSync(path))
+    throw new TypeError(
+      "This session has no language.json; run seed-language.mjs <session> en (or de) before a Composer run",
+    );
+  const locale = JSON.parse(readFileSync(path, "utf8")).locale;
+  if (typeof locale === "string" && /^en_[A-Z]{2}$/u.test(locale)) return "admin";
+  if (locale === "de_DE") return "api";
+  throw new TypeError(
+    `The session's locale ${String(locale).slice(0, 12)} is neither en_* nor de_DE; a Composer run accepts only those`,
+  );
 }
 
 /**

@@ -156,31 +156,39 @@ describe("S10 progress of a project", () => {
     ]);
   });
 
-  it("S10 credits the raw-keys obligation only with a stored report result and a clean answer", async () => {
+  it("S10 credits answer-clean only with a stored report result, a readable message and no flag", async () => {
     const stored = { report: { progress: { byStatus: {} }, completeness: { issuesRead: 7 } } };
-    const clean = await JOURNEYS.S10(
+    const run = (answer, storedMessage = { role: "assistant" }) =>
+      JOURNEYS.S10(
+        context({
+          issues: world,
+          act: () => ({ answer, toolExchanges: [reportExchange(stored)] }),
+          extra: { storedAnswer: async () => storedMessage },
+        }),
+        CHAT,
+      );
+    expect((await run(GREEN.join("\n"))).covers).toContain("answer-clean");
+    const dirty = await run(`${GREEN.join("\n")}\nbyStatus: siehe oben`);
+    expect(dirty.status).toBe("red");
+    expect(dirty.detail).toContain("raw result keys");
+    const flagged = await run(GREEN.join("\n"), {
+      role: "assistant",
+      groundedAnswer: {
+        uncertainty: [{ kind: "unsupported-claim", claim: "2 unsupported claims" }],
+      },
+    });
+    expect(flagged.status).toBe("red");
+    expect(flagged.detail).toContain("unsupported-claim");
+    // Without a stored report result or a readable stored message nothing is credited.
+    expect((await grade(GREEN)).covers).not.toContain("answer-clean");
+    const unreadable = await JOURNEYS.S10(
       context({
         issues: world,
         act: () => ({ answer: GREEN.join("\n"), toolExchanges: [reportExchange(stored)] }),
       }),
       CHAT,
     );
-    expect(clean.covers).toContain("answer-without-raw-keys");
-    const dirty = await JOURNEYS.S10(
-      context({
-        issues: world,
-        act: () => ({
-          answer: `${GREEN.join("\n")}\nbyStatus: siehe oben`,
-          toolExchanges: [reportExchange(stored)],
-        }),
-      }),
-      CHAT,
-    );
-    expect(dirty.status).toBe("red");
-    expect(dirty.detail).toContain("raw result keys");
-    // Without a stored report result the obligation is left unverified, not credited.
-    const none = await grade(GREEN);
-    expect(none.covers).not.toContain("answer-without-raw-keys");
+    expect(unreadable.covers).not.toContain("answer-clean");
   });
 
   it("reads a comma decimal and ignores lines that are no data lines", async () => {

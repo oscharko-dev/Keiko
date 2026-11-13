@@ -3,6 +3,7 @@ import { evidenceLines } from "./coverage.mjs";
 
 /** Limits of two oracles that a reader of a report containing them must know. */
 const ORACLE_LIMITS = Object.freeze({
+  C07: "C07's `answer-clean` flag half holds by construction on a Jira-Pod-only Chat, which never runs the entailment stage and sets no groundedAnswer; the lane proves it on the stored message. The mixed-Chat behaviour (computed figures accepted, document claims still flagged) is proven by the product's hermetic tests, not by this lane.",
   S10: "S10 derives its estimate expectation from native data read as the lab administrator (in a German-language session as the product's own actor, so names match what the product sees); the case of an account that cannot read the estimate field is not graded, and reading as the product's own actor hides a visibility or permission defect of the product from the oracle.",
   S11: "S11's unavailable-report case is graded partly on the product's own statement that the report is unavailable.",
 });

@@ -168,30 +168,34 @@ export function gradeComposerRefusal({ type, exchanges, created, template, confo
     : { status: "red", detail: `${detail}; exactly one conformant ${type} was expected` };
 }
 
-const HINT_NOUN = /vorlage|template/iu;
-const HINT_VERB =
-  /anleg\w*|\blege\b|\blegen\b|erstell\w*|definier\w*|hinterleg\w*|einricht\w*|\bcreate\b|\bdefine\b|set up/giu;
-/** The two words before a verb that turn "create" into "could not create". */
-const NEGATION_BEFORE =
-  /(?:\bnicht|\bnot|\bcannot|can't|couldn't|unable to|\bkann nicht|\bkonnte nicht)\s+(?:\w+\s+)?$/iu;
-
 /**
- * Whether one clause tells the person to create a TEMPLATE: a creation verb that is not negated
- * ("ich konnte den Vorgang nicht anlegen" is a refusal, not a hint) within a few words of the
- * template noun.
+ * The template noun as the OBJECT of a creating verb addressed to the person. Two shapes carry it:
+ * the verb first ("lege (zuerst) eine Vorlage an", "create a template") and the German infinitive
+ * last ("eine Vorlage für diesen Typ anlegen"). The noun must follow an article, so "keine Vorlage",
+ * "ohne Vorlage" and "a template exists" are never the object; participles ("hinterlegt",
+ * "definiert", "angelegt") describe a state, they do not ask for anything.
  */
+const ARTICLE = String.raw`(?:eine|die|diese|neue|passende|entsprechende|a|an|the|this|new)`;
+const NOUN = String.raw`(?:vorlage|template)`;
+const FIRST =
+  String.raw`\b(?:lege|legen|erstelle|erstellen|definiere|definieren|richte|create|define|add)\b` +
+  String.raw`(?:\s+(?:\w+)){0,3}\s+${ARTICLE}\s+(?:\w+\s+)?${NOUN}\b`;
+const LAST =
+  String.raw`\b${ARTICLE}\s+(?:\w+\s+)?${NOUN}\b(?:\s+\p{L}+){0,4}\s+` +
+  String.raw`(?:anlegen|erstellen|definieren|einrichten|hinterlegen)\b`;
+const HINT_SHAPES = [new RegExp(FIRST, "iu"), new RegExp(LAST, "iu")];
+/** A negation directly in front of the verb or between verb and noun turns the phrase around. */
+const NEGATED = /\b(?:nicht|nie|kein\w*|ohne|nichts|not|never|don't|cannot|can't)\b/iu;
+
+/** Whether one clause asks the person to create a template. */
 function clauseHints(clause) {
-  const noun = HINT_NOUN.exec(clause);
-  if (noun === null) return false;
-  for (const verb of clause.matchAll(HINT_VERB)) {
-    const near = Math.abs(verb.index - noun.index) <= 60;
-    const negated = NEGATION_BEFORE.test(clause.slice(0, verb.index));
-    if (near && !negated) return true;
-  }
-  return false;
+  return HINT_SHAPES.some((shape) => {
+    const match = shape.exec(clause);
+    return match !== null && !NEGATED.test(match[0]);
+  });
 }
 
-/** The answer tells the person to create a template: a non-negated creation phrase around the noun. */
+/** The answer tells the person to create a template: the noun is the object of a creating verb. */
 export const hasTemplateHint = (answer) =>
   String(answer ?? "")
     .split(/[.!?;\n]+/u)
@@ -267,7 +271,8 @@ const RAW_IDENTIFIERS = Object.freeze([
 /** The parent type the Sub-task template needs, as its own word: "Teilaufgabe" and "Sub-task" are the request's words. */
 const NEEDED_PARENT_TYPE = /(?<![\p{L}-])(?:aufgaben?|tasks?)(?![\p{L}])/iu;
 /** The answer says it is about the parent relation. */
-const PARENT_RELATION = /\beltern|\bparent|übergeordnet|\bunter\b|\bzugeordnet/iu;
+const PARENT_RELATION =
+  /\beltern|\bparent|übergeordnet|\bunter (?:einer|einem|der|dem|einen)\b|\bzugeordnet/iu;
 
 /**
  * A request nobody can repair alone (a Sub-task under a Story): the template refuses it with
@@ -430,61 +435,45 @@ function stepProof(turn, name) {
 const keyIn = (answer, key) => new RegExp(String.raw`\b${key}\b`, "u").test(String(answer ?? ""));
 const keysOf = (issues) => issues.map((issue) => issue.key).join(", ");
 
-/**
- * Obligation e1) — one conversation: an order creates one issue, the conversation is reloaded and
- * answers a question about it in the same chat: exactly one issue exists, the question created
- * nothing and the answer names its key. `created` are the Tasks of the first turn with the title,
- * `asked` is everything the question turn created, `reloadedMessages` what the reload read back.
- */
-export function gradeReloadReconcile({ created, reloadedMessages, asked, answer, askedTurn }) {
-  if (created.length === 0)
-    return { status: "unverified", detail: "the order created no issue; nothing to reconcile" };
-  const proof = stepProof(askedTurn, "the question after the reload");
-  if (proof !== undefined) return proof;
-  if (created.length > 1)
-    return {
-      status: "red",
-      detail: `the order created ${created.length} issues: ${keysOf(created)}`,
-    };
-  if (reloadedMessages < 2)
-    return {
-      status: "red",
-      detail: `the conversation did not survive the reload (${reloadedMessages} messages read back)`,
-    };
-  if (asked.created.length > 0)
-    return {
-      status: "red",
-      detail: `the question after the reload created ${asked.created.length} issues: ${keysOf(asked.created)}`,
-    };
-  return keyIn(answer, created[0].key)
-    ? {
-        status: "green",
-        detail: `one issue (${created[0].key}); the answer after the reload names it`,
-      }
-    : { status: "red", detail: `the answer after the reload does not name ${created[0].key}` };
+/** Whether the answer or any stored result of the turn names `key` (the answer text or a result card). */
+function refersTo(key, answer, exchanges) {
+  if (keyIn(answer, key)) return true;
+  return (Array.isArray(exchanges) ? exchanges : []).some((exchange) =>
+    keyIn(JSON.stringify(exchange?.result?.data ?? {}), key),
+  );
 }
 
 /**
- * Obligation e2) — the same order sent again in the same conversation: the answer refers to the issue
- * created in this conversation. A second issue counts red only because the person did not ask for
- * another one in that turn; it is a model finding, and the trace shows what it searched for first.
+ * Obligations e1 and e2 — the same order sent again in ONE conversation, after a reload
+ * (`repeat-after-reload-no-duplicate`) or straight away (`repeat-in-chat-no-duplicate`): read from
+ * Jira, exactly one issue carries the title and the turn created no issue of ANY summary or type.
+ * The reply must refer to the issue of this conversation, by its key in the answer or in a stored
+ * result card. A second issue is red because the person did not ask for another one (a model
+ * finding; the trace shows what it searched for). The step must have run, else unverified.
  */
-export function gradeRepeatInChat({ created, repeated, answer, repeatedTurn }) {
+export function gradeRepeat({ title, created, after, knownBefore, repeated, answer, turn }) {
   if (created.length !== 1)
     return { status: "unverified", detail: "the first order did not create exactly one issue" };
-  const proof = stepProof(repeatedTurn, "the repeated order");
+  const proof = stepProof(turn, "the repeated order");
   if (proof !== undefined) return proof;
   if (repeated.created.length > 0)
     return {
       status: "red",
       detail: `the repeated order created ${keysOf(repeated.created)} although the person did not ask for another issue (model; see the trace)`,
     };
-  return keyIn(answer, created[0].key)
-    ? { status: "green", detail: `created nothing; the answer refers to ${created[0].key}` }
-    : {
-        status: "red",
-        detail: `created nothing, but the answer does not refer to ${created[0].key}`,
-      };
+  // Only issues this run made count: a leftover with the same title proves and breaks nothing.
+  const same = after.filter(
+    (issue) => issue.fields?.summary === title && !knownBefore.has(issue.key),
+  );
+  if (same.length !== 1)
+    return { status: "red", detail: `${same.length} issues carry the title: ${keysOf(same)}` };
+  const [first] = created;
+  return refersTo(first.key, answer, turn.toolExchanges)
+    ? {
+        status: "green",
+        detail: `created nothing; one issue (${first.key}); the reply refers to it`,
+      }
+    : { status: "red", detail: `created nothing, but the reply does not refer to ${first.key}` };
 }
 
 /** Watcher added or removed, read from the native watcher list. */

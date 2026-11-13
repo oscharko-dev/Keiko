@@ -16,6 +16,7 @@ import { COMPOSER_SCENARIOS } from "../testing/jira-chat-lab/requirements/compos
 import {
   assertComposerLanguageFit,
   composerGroups,
+  composerReader,
   composerSelectionOf,
   composerTruth,
   reportDirectoryName,
@@ -58,6 +59,28 @@ describe("types and modes", () => {
     });
     expect(() => composerSelectionOf({ types: "task,subtask" })).toThrow("--types names subtask");
     expect(() => composerSelectionOf({ modes: "everything" })).toThrow("--modes names everything");
+  });
+});
+
+describe("the account a Composer run reads as, from the session's own language record", () => {
+  const sessionWith = (language) => {
+    const directory = mkdtempSync(join(tmpdir(), "composer-reader-"));
+    if (language !== undefined) writeFileSync(join(directory, "language.json"), language);
+    return { directory };
+  };
+
+  it("is the administrator for any en_* session and the localized actor for de_DE", () => {
+    expect(composerReader(sessionWith(JSON.stringify({ locale: "en_US" })))).toBe("admin");
+    expect(composerReader(sessionWith(JSON.stringify({ locale: "en_GB" })))).toBe("admin");
+    expect(composerReader(sessionWith(JSON.stringify({ locale: "de_DE" })))).toBe("api");
+  });
+
+  it("refuses a session without a record and any other locale instead of guessing English", () => {
+    expect(() => composerReader(sessionWith(undefined))).toThrow("no language.json");
+    for (const locale of ["fr_FR", "de_AT", "de", "", undefined])
+      expect(() => composerReader(sessionWith(JSON.stringify({ locale })))).toThrow(
+        "neither en_* nor de_DE",
+      );
   });
 });
 

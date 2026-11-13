@@ -25,8 +25,7 @@ import {
   gradeEditBreaking,
   gradeEditPreexisting,
   gradeMultiCreate,
-  gradeReloadReconcile,
-  gradeRepeatInChat,
+  gradeRepeat,
   gradeNoTemplate,
   gradeUnrepairable,
   gradeUngovernedChange,
@@ -417,7 +416,7 @@ async function editRules(ctx) {
   );
 }
 
-/** C05 (one conversation): create, reload, ask in the same chat, send the same order again. */
+/** C05 (one conversation): create, reload, the same order again, and once more without a reload. */
 async function reloadAndRepeat(ctx) {
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
@@ -426,38 +425,36 @@ async function reloadAndRepeat(ctx) {
     const title = "Composer Wiederholung";
     const prompt = createPrompt("Task", title, fixture);
     const chat = await ctx.freshChat("autonomous-delivery");
+    const { keys: knownBefore } = await snapshotBefore(ctx, `project = ${PROJECT}`);
     const one = await composerTurn(ctx, fixture, { prompt, chat });
-    const reloadedMessages = await ctx.reloadChat(chat);
-    const two = await composerTurn(ctx, fixture, {
-      prompt: `Ist der Auftrag mit dem Titel ${`„${title}“`} im Jira-Projekt REQ schon erledigt? Nenne mir den Vorgangsschlüssel.`,
-      chat,
-    });
-    const three = await composerTurn(ctx, fixture, { prompt, chat });
     const created = ofType(one.issues, "Task").created.filter(
       (issue) => issue.fields?.summary === title,
     );
+    await ctx.reloadChat(chat);
+    const two = await composerTurn(ctx, fixture, { prompt, chat });
+    const afterTwo = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
+    const three = await composerTurn(ctx, fixture, { prompt, chat });
+    const afterThree = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
+    const graded = (turn, after) => ({
+      title,
+      created,
+      after,
+      knownBefore,
+      repeated: turn.issues,
+      answer: turn.turn.answer,
+      turn: turn.turn,
+    });
     return aggregateParts(
       [
         part(
-          "reload and ask",
-          ["reload-reconciles-without-duplicate"],
-          gradeReloadReconcile({
-            created,
-            reloadedMessages,
-            asked: two.issues,
-            answer: two.turn.answer,
-            askedTurn: two.turn,
-          }),
+          "same order again after a reload",
+          ["repeat-after-reload-no-duplicate"],
+          gradeRepeat(graded(two, afterTwo)),
         ),
         part(
           "same order again in the same chat",
           ["repeat-in-chat-no-duplicate"],
-          gradeRepeatInChat({
-            created,
-            repeated: three.issues,
-            answer: three.turn.answer,
-            repeatedTurn: three.turn,
-          }),
+          gradeRepeat(graded(three, afterThree)),
         ),
       ],
       [one.turn, two.turn, three.turn],

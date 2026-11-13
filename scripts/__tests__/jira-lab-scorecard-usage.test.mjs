@@ -2,11 +2,11 @@
 // nothing and call it valid, an empty selection and a German session with the English graders are
 // refused before any Jira or model is touched.
 import { execFile } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const run = promisify(execFile);
 const SCORECARD = resolve(
@@ -23,12 +23,17 @@ const SESSION = {
   syntheticOnly: true,
 };
 
+const directories = [];
+
 /** A private session record that loads, with the language of the lab session it stands for. */
 function sessionDirectory(locale) {
   const directory = mkdtempSync(join(tmpdir(), "scorecard-usage-"));
+  directories.push(directory);
   writeFileSync(join(directory, "session.json"), JSON.stringify(SESSION), { mode: 0o600 });
   chmodSync(join(directory, "session.json"), 0o600);
-  writeFileSync(join(directory, "language.json"), JSON.stringify({ locale }));
+  // `undefined` is a session that never ran seed-language.mjs: no language record at all.
+  if (locale !== undefined)
+    writeFileSync(join(directory, "language.json"), JSON.stringify({ locale }));
   return directory;
 }
 
@@ -41,6 +46,11 @@ async function refusal(args) {
     return String(error.stderr ?? error.message);
   }
 }
+
+afterEach(() => {
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
 
 describe("scorecard usage errors, by execution", () => {
   it("refuses every invocation that would grade nothing or run the wrong thing", async () => {

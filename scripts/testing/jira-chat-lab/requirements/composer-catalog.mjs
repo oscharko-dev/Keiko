@@ -59,8 +59,9 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     id: "C05",
     requirement: "composer",
     issue: 4354,
-    title: "Reload and a repeated order in one conversation never duplicate a write",
-    obligations: ["reload-reconciles-without-duplicate", "repeat-in-chat-no-duplicate"],
+    title:
+      "The same order sent again in one conversation, after a reload and without, creates no duplicate",
+    obligations: ["repeat-after-reload-no-duplicate", "repeat-in-chat-no-duplicate"],
   },
   {
     id: "C06",

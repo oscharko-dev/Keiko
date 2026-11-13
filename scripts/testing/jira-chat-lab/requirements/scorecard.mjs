@@ -34,6 +34,7 @@ import { COMPOSER_JOURNEY_IDS } from "./composer.mjs";
 import {
   assertComposerLanguageFit,
   composerGroups,
+  composerReader,
   composerSelectionOf,
   composerTruth,
   reportDirectoryName,
@@ -45,7 +46,7 @@ import { ensureLicenseWindow } from "./license-window.mjs";
 import { registerLane } from "./lab-lanes.mjs";
 import { scenarioVerdict } from "./coverage.mjs";
 import { scorecardMarkdown } from "./scorecard-markdown.mjs";
-import { JOURNEY_IDS, oracleReader, runJourneys } from "./journeys.mjs";
+import { JOURNEY_IDS, runJourneys } from "./journeys.mjs";
 import { PROBES } from "./probes.mjs";
 import { TREND_HEADER, countStatuses, trendLine } from "./repeat.mjs";
 import { gradeException } from "./validity.mjs";
@@ -90,7 +91,7 @@ if (composer && !values.model && !values.rehearse)
 const session = loadSession(directory);
 if (composer)
   assertComposerLanguageFit(
-    oracleReader(session),
+    composerReader(session),
     scenarios.map((scenario) => scenario.id),
     composerSelection,
   );

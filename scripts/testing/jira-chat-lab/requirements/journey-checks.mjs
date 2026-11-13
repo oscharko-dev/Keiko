@@ -78,7 +78,7 @@ import {
 import { aggregateParts, countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
 import { draftFindingsPart } from "./draft-findings.mjs";
 import { largeProjectPart } from "./large-project.mjs";
-import { gradeRawKeys } from "./raw-keys.mjs";
+import { gradeAnswerClean } from "./raw-keys.mjs";
 import { templateTestCasesPart } from "./template-test-cases.mjs";
 import {
   epicTemplateConforms,
@@ -359,11 +359,7 @@ async function projectProgress(ctx, chat) {
   };
   const large = await largeProjectPart(ctx);
   const unavailable = await unavailableProgressPart(ctx);
-  const raw = {
-    label: "raw result keys",
-    covers: ["answer-without-raw-keys"],
-    ...gradeRawKeys(turn.answer, turn.toolExchanges),
-  };
+  const raw = await answerCleanPart(ctx, chat, turn);
   return aggregateParts(
     [answer, raw, ...estimateUnverified(plan), large.part, unavailable.part],
     [
@@ -374,6 +370,20 @@ async function projectProgress(ctx, chat) {
       unavailable.turn,
     ],
   );
+}
+
+/** The part `answer-clean` (#4355): no raw result keys in the answer, no flag in the stored message. */
+async function answerCleanPart(ctx, chat, turn) {
+  return {
+    label: "answer clean",
+    covers: ["answer-clean"],
+    ...gradeAnswerClean({
+      answer: turn.answer,
+      exchanges: turn.toolExchanges,
+      stored: await ctx.storedAnswer?.(chat),
+      turn,
+    }),
+  };
 }
 
 /** The estimate part when its native facts were unreadable: unverified, never green, with the reason. */

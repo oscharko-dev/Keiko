@@ -601,6 +601,11 @@ export function journeyContext(live, session, truth) {
       return displayNames({ english: read("admin"), local: read(reader) });
     },
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
+    // The stored assistant message of the Chat (its grounded-answer uncertainty is the flag state).
+    storedAnswer: async (chat) =>
+      (await api(ctx, "stored-answer", messagesPath(ctx, chat), undefined, "GET")).messages
+        .filter((message) => message.role === "assistant")
+        .at(-1),
     // A page reload re-reads the conversation from the product; the count of messages it holds.
     reloadChat: async (chat) =>
       (await api(ctx, "reload", messagesPath(ctx, chat), undefined, "GET")).messages.length,
