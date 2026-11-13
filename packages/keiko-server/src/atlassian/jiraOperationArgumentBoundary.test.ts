@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationContracts } from "./jiraManagedProvider.js";
 
@@ -98,7 +99,7 @@ describe("model arguments cannot supply a request, credentials or authority", ()
   );
 });
 
-function validArguments(tool: string): Record<string, unknown> {
+function validArguments(tool: string): CatalogJsonObject {
   switch (tool) {
     case "jira.projects":
       return {};

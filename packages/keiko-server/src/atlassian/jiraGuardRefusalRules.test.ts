@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraEntityPropertyMutationDeclarationForTool } from "./jiraEntityPropertyMutationDescriptors.js";
 import { jiraLinkMutationDeclarationForTool } from "./jiraLinkMutationDescriptors.js";
@@ -25,7 +26,7 @@ const VALUE = {
 function schemaOf(
   read: typeof jiraEntityPropertyMutationDeclarationForTool,
   tool: string,
-): Record<string, unknown> {
+): CatalogJsonObject {
   const declaration = read(tool);
   if (declaration === undefined) throw new TypeError(`Missing declaration ${tool}`);
   return declaration.descriptor.inputSchema;
@@ -36,9 +37,13 @@ describe("the rule a refused guarded write names", () => {
     jiraEntityPropertyMutationDeclarationForTool,
     "jira.set-issue-property",
   );
-  const base = { issueIdOrKey: "SYN-1", propertyKey: "display", valueNodes: NODES };
+  const base: CatalogJsonObject = {
+    issueIdOrKey: "SYN-1",
+    propertyKey: "display",
+    valueNodes: NODES,
+  };
 
-  it.each([
+  it.each<[string, CatalogJsonObject]>([
     ["neither review form", base],
     ["both review forms", { ...base, expectedValueNodes: NODES, expectAbsent: true }],
   ])("set-issue-property with %s states the exclusive choice", (_name, args) => {
@@ -56,7 +61,11 @@ describe("the rule a refused guarded write names", () => {
 
   it("upsert-remote-link states the same two rules", () => {
     const remote = schemaOf(jiraLinkMutationDeclarationForTool, "jira.upsert-remote-link");
-    const args = { issueIdOrKey: "SYN-1", expectedActorKey: "synthetic-actor", value: VALUE };
+    const args: CatalogJsonObject = {
+      issueIdOrKey: "SYN-1",
+      expectedActorKey: "synthetic-actor",
+      value: VALUE,
+    };
     expect(
       describeCatalogSchemaMismatch(remote, { ...args, expectAbsent: false })?.allowed,
     ).toEqual({
