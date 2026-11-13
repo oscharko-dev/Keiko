@@ -775,8 +775,8 @@ if git -C "$WT" rev-parse --verify --quiet "origin/$REF^{commit}" >/dev/null; th
 SHA="$(git -C "$WT" rev-parse --verify "$REF^{commit}")"
 SHORT="${SHA:0:12}"
 SUBJECT="$(git -C "$WT" log -1 --format=%s "$SHA")"
-if [ -n "$(git -C "$WT" status --porcelain --untracked-files=no)" ]; then
-  echo "refusing to build: $WT has modified tracked files; commit, stash or reset them first" >&2
+if [ -n "$(git -C "$WT" status --porcelain --untracked-files=all -- . ':!.keiko-loop-lock')" ]; then
+  echo "refusing to build: $WT has modified or untracked files; commit, stash or reset them first" >&2
   exit 1
 fi
 git -C "$WT" checkout --quiet --detach "$SHA"
@@ -967,8 +967,8 @@ if git -C "$CO" rev-parse --verify --quiet "origin/$REF^{commit}" >/dev/null; th
 SHA="$(git -C "$CO" rev-parse --verify "$REF^{commit}")"
 SUBJECT="$(git -C "$CO" log -1 --format=%s "$SHA")"
 (cd "$CO" && npm run --silent dev:stop >/dev/null 2>&1 || true)
-if [ -n "$(git -C "$CO" status --porcelain --untracked-files=no)" ]; then
-  echo "refusing to build: $CO has modified tracked files; commit, stash or reset them first" >&2
+if [ -n "$(git -C "$CO" status --porcelain --untracked-files=all -- . ':!.keiko-loop-lock')" ]; then
+  echo "refusing to build: $CO has modified or untracked files; commit, stash or reset them first" >&2
   exit 1
 fi
 git -C "$CO" checkout --quiet --detach "$SHA"
@@ -1004,7 +1004,7 @@ waitssh() { for i in $(seq 1 120); do $SSH hostname >/dev/null 2>&1 && return 0;
 reboot_guest() { $SSH 'shutdown /r /t 5' >/dev/null 2>&1; sleep 90; waitssh || exit 1; sleep 120; }
 reboot_guest
 for pass in $(seq 1 10); do
-  $SSH 'Remove-Item C:\ProgramData\keiko-setup\update-result.txt -ErrorAction SilentlyContinue; schtasks /run /tn KeikoUpdate' >/dev/null 2>&1
+  $SSH 'Remove-Item C:\ProgramData\keiko-setup\update-result.txt -ErrorAction SilentlyContinue; schtasks /run /tn KeikoUpdate' >/dev/null 2>&1 || { echo "ERROR: update pass not started"; exit 2; }
   r=""
   for i in $(seq 1 300); do
     r=$($SSH 'if (Test-Path C:\ProgramData\keiko-setup\update-result.txt) { Get-Content C:\ProgramData\keiko-setup\update-result.txt }' 2>/dev/null | tr -d '\r')
@@ -1017,4 +1017,6 @@ for pass in $(seq 1 10); do
     *reboot=True*) reboot_guest;;
   esac
 done
+echo "UPDATES STILL PENDING AFTER 10 PASSES"
+exit 3
 ```
