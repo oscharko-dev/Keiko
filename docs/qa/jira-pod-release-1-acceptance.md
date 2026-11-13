@@ -13,6 +13,10 @@ fills the trace table in section 4. Nothing here is automated; the walk is the e
 | Walker (Windows)    | _filled at the walk_                                     |
 | Independent auditor | _filled at the walk_                                     |
 
+**Last checked against integration head `e138fc9f6`** (`feat/jira-pod-release-1`, 2026-11-13). The
+walk is written for the Release 1 target, not for that head: steps W07–W13 and W19 are revised
+against the real build and its real labels once the write-path (#4354) package is integrated.
+
 The build must be one that contains the whole Release 1 scope: the template rule for Jira writes
 (#4354), attachments switched off, the connection and credential repairs (#4353), the Windows
 install notice and hand-over (#4358), the two-hour browser session (#4370), the Release 1 lab
@@ -48,10 +52,19 @@ walk on a build that lacks one of them proves nothing about it.
 
 ### 2.2 A Jira Data Center
 
-- Jira Data Center **10.3.0 or later**, reached over HTTPS, with a project for each of the four types
-  and a personal access token of a user who may browse, create and edit issues, comment, add watchers
-  and assign issues in that project. For a private certificate authority set `KEIKO_CA_BUNDLE_PATH`
-  to its PEM file and restart Keiko; never turn certificate verification off.
+- Jira Data Center **10.3.0 or later**, reached over HTTPS, with a project for each of the four types.
+  For a private certificate authority set `KEIKO_CA_BUNDLE_PATH` to its PEM file and restart Keiko;
+  never turn certificate verification off.
+- **A personal access token (PAT)** of the user Keiko acts as. In Jira's own UI (the menu names depend
+  on the Jira version): profile menu → **Profile** → **Personal Access Tokens** → **Create token**; copy
+  the token once, it is not shown again.
+- **Jira permissions of that user: at least what the laboratory's working account has.** In the
+  project: Browse Projects, Create Issues, Edit Issues, Assign Issues, Assignable User, Add Comments,
+  Edit Own Comments, Transition Issues, Link Issues, Manage Watchers and View Voters and Watchers
+  (the keys are `BROWSE_PROJECTS`, `CREATE_ISSUES`, `EDIT_ISSUES`, `ASSIGN_ISSUES`, `ASSIGNABLE_USER`,
+  `ADD_COMMENTS`, `EDIT_OWN_COMMENTS`, `TRANSITION_ISSUES`, `LINK_ISSUES`, `MANAGE_WATCHERS`,
+  `VIEW_VOTERS_AND_WATCHERS`; source: `scripts/testing/jira-chat-lab/seed-permissions.mjs`). A user
+  with fewer permissions makes Jira refuse the write; that refusal is Jira's answer, not a defect.
 - A contributor without such a Jira sets up the repository's laboratory. It holds synthetic data
   only and is described in `scripts/testing/jira-chat-lab/README.md`; read its sections on starting
   an isolated session and on seeding before you begin. From a built checkout, one command per line:
@@ -71,7 +84,9 @@ node scripts/testing/jira-chat-lab/preflight.mjs "$HOME/.local/share/keiko-jira-
   it lasts **three hours**, so do each group of steps inside one such window and repeat a group that
   outlived it. Never change a clock or licence data. Stop a session with `session.mjs stop <directory>`.
 - The lab listens on loopback only (HTTP 18081 and HTTPS 18443 by default) and its certificate names
-  `localhost` and `127.0.0.1` only. Trust its `secrets/tls/ca.pem` through `KEIKO_CA_BUNDLE_PATH`.
+  `localhost` and `127.0.0.1` only. Its CA and server certificate last 365 days, and `session.mjs start`
+  renews them when seven days or less remain. Trust its `secrets/tls/ca.pem` through
+  `KEIKO_CA_BUNDLE_PATH`.
   Its fixture tokens expire one day after creation; an "authentication failed" after that is Jira's
   answer, not a defect. Everything under the session's `secrets/` directory except `ca.pem` is secret:
   type a token into Keiko by hand and never put one into an issue, a log or a screenshot.
@@ -93,6 +108,24 @@ otherwise the steps are identical. **Do** is what you do in the UI; **Expect** i
 **Jira** is the check in Jira's own UI (or its issue search) that the UI did not lie; **Proves** names
 the epic criterion (AC) and the step of #4359 the step carries.
 
+The #4359 walk steps and conditions that the **Proves** lines refer to (the issue's own numbering and
+wording, first words quoted):
+
+| Reference   | First words in #4359                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| step 1      | "Create and connect a Jira Pod, and index. Confirm in Chat which user and which instance…"              |
+| step 2      | "A project lead defines and activates Epic, Task and Bug templates. Violations are refused…"            |
+| step 4      | "A technical lead creates Tasks, Bugs and Sub-tasks with the intended relations (AC4)."                 |
+| step 5      | "Everyday edits from the composer: comment, add a watcher, edit a comment, link two issues…"            |
+| step 6      | "A project lead gets the progress and compliance report. Its totals equal an independent JQL readback…" |
+| step 7      | "Reload and interruption never duplicate a write, for issues created from the composer (AC8)."          |
+| step 8      | "Results are readable in English and German, accessible, and persist across reload (AC9)."              |
+| two hours   | "One browser session of at least two hours with reloads needs no re-pairing."                           |
+| German Jira | "Run the core steps 4 to 6 once against the German-language lab Jira."                                  |
+| Workbench   | "The Jira Pod inside a Coding Workbench run is walked once and its result recorded…"                    |
+
+Step 3 and the attachment part of step 5 moved to Release 2 and are not walked.
+
 Windows differences, once, for all steps: install with `keiko-windows-x64-setup.exe` or
 `keiko-windows-x64.zip`; SmartScreen asks once (**More info → Run anyway**); the first start can take
 minutes and shows no window until the browser opens; the Coding Workbench is not available on Windows,
@@ -103,6 +136,18 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Do:** macOS: unzip `keiko-macos-arm64.zip` (or `keiko-macos-x64.zip`), open `Keiko.app`; if macOS
   refuses, **System Settings → Privacy & Security → Open Anyway**. Windows: run the setup or open
   `Keiko.exe` from the extracted ZIP. Note how long the first start takes.
+  The npm route (a Node.js `>=24.18.0 <25 || >=26.3.0 <27` is required; the desktop packages bring
+  their own) is not the release artifact, but if you use it, run the lines one at a time. Windows
+  PowerShell 5.1 does not accept `&&`:
+
+  ```powershell
+  mkdir keiko
+  cd keiko
+  npm init -y
+  npm install @oscharko-dev/keiko
+  npx keiko start
+  ```
+
 - **Expect:** the browser opens Keiko at `http://127.0.0.1:1983` without a pairing step.
 - **Jira:** not applicable.
 - **Proves:** AC10 (a clean install runs on the platform); #4359 step 1.
@@ -144,7 +189,7 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Expect:** no re-pairing and no **Connect this browser** dialog. (A browser left idle longer than
   30 minutes with no message and no reload is expected to need **Connect browser**; do not count that.)
 - **Jira:** not applicable.
-- **Proves:** AC8; #4359 condition on the two-hour session.
+- **Proves:** AC8; #4359 "two hours".
 
 ### W06 Define and save one template per issue type
 
@@ -219,18 +264,20 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 
 ### W13 Comment, watcher, link, assignee, and the refused attachment
 
-- **Do:** ask Keiko to add a comment, add a watcher, link two issues, and assign an issue to a person
-  by name. Then ask it to attach a file to an issue.
-- **Expect:** the first four are done without any template rule; the card shows **Jira change
+- **Do:** ask Keiko to add a comment, edit that comment, add a watcher, link two issues, and assign an
+  issue to a person found by name. Then ask it to attach a file to an issue.
+- **Expect:** the first five are done without any template rule; the card shows **Jira change
   confirmed** for each. The attachment request is refused: "Attachments are not part of this release,
   so nothing was changed in Jira. Describe the file in a comment instead, or add it in Jira itself."
-- **Jira:** the comment, watcher, link and assignee are there; no attachment was added.
+- **Jira:** the comment (in its edited form), watcher, link and assignee are there; no attachment was added.
 - **Proves:** AC4; #4359 step 5.
 
 ### W14 The progress and compliance report
 
 - **Do:** ask Keiko for a progress and compliance report of a project that holds more issues than one
-  Jira result page, and then of one Epic. Select **Export Markdown** and **Export CSV**.
+  Jira result page, and then of one Epic. Select **Export Markdown** and **Export CSV**. (How many
+  issues one result page holds, and so how large that project must be, is to be confirmed at the first
+  rehearsal of the walk; #4359 asks for a readback over at least two pages.)
 - **Expect:** the card shows **Complete: {read} issues read**, the counts **To do**, **In progress**,
   **Done** and the percentage, and a line "{issues} of {checked} issues deviate ({count}
   deviations)". An unfinished read shows **Incomplete ({reason}): …** and the figures then describe
@@ -248,7 +295,7 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Expect:** both reports have the same figures; labels, field names and notes are in the session's
   language; the German Jira's status names are matched correctly.
 - **Jira:** the German Jira's own status and field names appear unchanged in the report.
-- **Proves:** AC9, AC3; #4359 step 8 and the German-language condition.
+- **Proves:** AC9, AC3; #4359 step 8 and "German Jira".
 
 ### W16 The result card after a reload
 
@@ -278,8 +325,9 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 
 ### W19 A Pod switch with an open draft
 
-- **Do:** with a second verified Jira Pod available, ask Keiko to draft several issues and leave the
-  draft undecided. In **Connectors** switch the second Pod on (one Chat binds one Pod). Then ask Keiko to
+- **Do:** (the two preparations here, a draft left open and a second verified Jira Pod, are to be
+  confirmed at the first rehearsal of the walk) with a second verified Jira Pod available, ask Keiko
+  to draft several issues and leave the draft undecided. In **Connectors** switch the second Pod on (one Chat binds one Pod). Then ask Keiko to
   continue with the draft.
 - **Expect:** the notice **Jira connection changed** with "Choose the Jira Pod again" and the hint to
   open the Data sources menu above the conversation; nothing is sent to Jira; the Chat and its draft
@@ -309,15 +357,20 @@ keiko support analyze <report.json> --json
 - **Expect:** the three operations work as in Chat; a run with no Pod switched on uses no Jira Pod.
   This step is a walk once; it does not block.
 - **Jira:** the comment and status are there.
-- **Proves:** AC4; #4359 "does not block" item. Not available on Windows.
+- **Proves:** AC4; #4359 "Workbench". Not available on Windows.
 
 ### W22 Platform checks (each platform)
 
 - **Do:** note where the credential key is held. macOS: the login keychain (no keyfile beside the
-  stores). Windows: run `keiko status` (`npx keiko status` for an npm install) and read the credential
-  custody line. Confirm that a private certificate authority is trusted only through
+  stores). Windows: with an npm install run `npx keiko status` and read the credential custody line; a
+  portable install documents no `keiko` command on the path, so there read the notices instead (a
+  stored-credentials notice appears only when the key is exposed or could not be checked; see
+  `docs/troubleshooting/windows-portable-first-launch.md` for the bundled `runtime\node\node.exe` and
+  `app\dist\cli\index.js` the launcher itself runs). Confirm that a private certificate authority is trusted only through
   `KEIKO_CA_BUNDLE_PATH`.
-- **Expect:** macOS shows no keychain refusal; Windows reports "Credential custody: attested". A
+- **Expect:** macOS shows no keychain refusal; Windows reports "Credential custody: attested" (npm
+  install) or shows no notice that the key protecting your stored credentials was readable by another
+  account or could not be checked (portable install). A
   connection to a Jira with an untrusted certificate is refused with the message that names
   `KEIKO_CA_BUNDLE_PATH`.
 - **Jira:** not applicable.
@@ -346,6 +399,11 @@ Each one is part of what Release 1 delivers; a verdict does not hide it.
   on 2026-11-02; the change-impact child of Release 2 delivers them" (#4359, narrowings).
 - **The S19 oracle credits a refused create onto its twin.** #4359 names it as the second narrowing:
   "the S19 oracle that credits a refused create onto its twin" (#4359, narrowings).
+- **The Pod card does not show the connected account.** For Release 1 the account is confirmed by
+  asking in Chat (W02).
+- **Several Release 1 outcomes reach the person only through Keiko's answer, not on a card:** the edit
+  of an already-violating issue, and the draft that is refused after a Pod switch. Their card
+  sentences are routed to the owning children; this page changes when the product shows them.
 - **No detection of the same summary across chats.** The same order given in two fresh chats creates
   two issues by design (epic #4351, decision of 2026-11-13).
 - **Attachments are off** until Release 2 (epic #4351, template rule; `jira.attach` and
@@ -385,8 +443,9 @@ Three steps for a person who adds a model to a Keiko that already uses a Jira Po
    and calls no tool fails this step even when the check passed.
 
 If a step fails, export what Keiko recorded and read the outcome without raw logs: at the error
-notice select **Create error report** and **Download report**, or run `keiko support export` and then
-`keiko support analyze <report.json> --json`. Look for `toolCallingOutcome` on
+notice select **Create error report** and **Download report**, or, where the `keiko` command is
+available (an npm install; a portable install documents none on the path), run `keiko support export`
+and then `keiko support analyze <report.json> --json`. Look for `toolCallingOutcome` on
 `gateway.readiness.completed` and for `gateway.retry.scheduled` lines with the reason
 `reasoning-restore-repair`. The report holds counts and closed outcomes only.
 
@@ -464,4 +523,6 @@ tools yes / tools no: settings.models.capabilitySummary, settings.models.yes, se
 Windows SmartScreen "More info → Run anyway", macOS "Open Anyway": README.md (Download), operating-system
   text, not a Keiko catalog label [not a label]
 `create`, `activateOn`, the outcome names of section 6, `toolCallingOutcome`: contract values, not labels [not a label]
+Profile / Personal Access Tokens / Create token: Jira's own UI, version dependent [not a Keiko label]
+Credential custody: attested: output of `keiko status` (packages/keiko-cli/src/lifecycle.ts) [not a label]
 -->
