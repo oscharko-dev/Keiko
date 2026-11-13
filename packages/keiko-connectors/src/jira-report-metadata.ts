@@ -80,7 +80,15 @@ export interface JiraReportRequiredFields {
   /** Numeric estimate candidates actually present on this project's create screens. */
   readonly estimateFields?: readonly JiraReportFieldCatalogEntry[];
   readonly timeTracking?: boolean;
+  /**
+   * The estimate field ids each issue type's create screen carries (`timeoriginalestimate` stands
+   * for Time Tracking), for the types whose screen was read. A type absent here was not read.
+   */
+  readonly estimateByType?: ReadonlyMap<string, readonly string[]>;
 }
+
+/** Jira's own id of the native original time estimate, which the Time Tracking screen field offers. */
+export const JIRA_REPORT_TIME_ESTIMATE_FIELD_ID = "timeoriginalestimate";
 
 function screenEstimateField(value: unknown): readonly JiraReportFieldCatalogEntry[] {
   const field = asRecord(value);
@@ -226,11 +234,21 @@ export async function loadRequiredFields(
   const state = requiredState(byType.size, ids.length);
   const estimateFields = loaded.flatMap((item) => ("fields" in item ? item.estimateFields : []));
   const timeTracking = loaded.some((item) => "fields" in item && item.timeTracking);
+  const estimateByType = new Map<string, readonly string[]>();
+  loaded.forEach((item, index) => {
+    const id = ids[index];
+    if (!("fields" in item) || id === undefined) return;
+    estimateByType.set(id, [
+      ...item.estimateFields.map((field) => field.id),
+      ...(item.timeTracking ? [JIRA_REPORT_TIME_ESTIMATE_FIELD_ID] : []),
+    ]);
+  });
   return {
     state,
     ...(reason === undefined ? {} : { reason }),
     byType,
     estimateFields,
     timeTracking,
+    estimateByType,
   };
 }

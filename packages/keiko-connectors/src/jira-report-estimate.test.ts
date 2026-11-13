@@ -3,7 +3,13 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { JiraReport } from "./jira-report-types.js";
-import { POINTS, fixtureJira, response, syntheticProject } from "./jira-report.fixture.js";
+import {
+  POINTS,
+  fixtureJira,
+  response,
+  syntheticProject,
+  type FixtureIssue,
+} from "./jira-report.fixture.js";
 import {
   CONNECTION,
   CONTEXT,
@@ -33,7 +39,19 @@ interface Options {
   readonly screenFields?: readonly unknown[];
   readonly boardStatus?: number;
   readonly pageSize?: number;
+  /** Replaces the default four-issue project with these issues (points as the fixture carries them). */
+  readonly issues?: readonly FixtureIssue[];
+  /** Issue type ids whose create screen and search hits do not carry the Story Points field. */
+  readonly withoutEstimateTypes?: readonly string[];
+  /**
+   * Search hits of these issue types leave the estimate field out although their create screen
+   * lists it, as Jira does for a field the account may not see.
+   */
+  readonly withheldEstimateTypes?: readonly string[];
+  /** Hits at or after this issue number are the ones that withhold it (default: every hit). */
+  readonly withheldFromIssue?: number;
 }
+const TYPE_ID: Readonly<Record<string, string>> = { Epic: "10", Story: "11", Bug: "12", "Sub-task": "13" };
 function boardPage(url: URL, options: Options): AtlassianHttpBodyResult {
   if (url.searchParams.get("projectKeyOrId") !== "REP") return { ...response({}), status: 404 };
   if (options.boardStatus !== undefined) return { ...response({}), status: options.boardStatus };
@@ -54,20 +72,45 @@ function transport(
     const board = /\/board\/(\d+)\/configuration$/u.exec(url.pathname)?.[1];
     if (board !== undefined) return response(options.configurations?.[board] ?? CONFIG);
     const answer = await base(request);
-    if (
-      url.pathname.includes("/createmeta/REP/issuetypes/") &&
-      answer.kind === "response" &&
-      answer.status === 200
-    ) {
-      const body = JSON.parse(answer.bodyText) as { values: unknown[] };
-      const values = [
-        ...body.values.filter((value) => record(value).fieldId !== "timetracking"),
-        ...(options.screenFields ?? [SCREEN_FIELD]),
-      ];
-      return response({ values, isLast: true, total: values.length });
-    }
+    if (answer.kind !== "response" || answer.status !== 200) return answer;
+    if (url.pathname.includes("/createmeta/REP/issuetypes/")) return createMetaOf(url, answer, options);
+    if (url.pathname.endsWith("/search")) return searchOf(answer, options);
     return answer;
   };
+}
+function createMetaOf(
+  url: URL,
+  answer: Extract<AtlassianHttpBodyResult, { readonly kind: "response" }>,
+  options: Options,
+): AtlassianHttpBodyResult {
+  const typeId = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
+  const carries = !(options.withoutEstimateTypes ?? []).includes(typeId);
+  const body = JSON.parse(answer.bodyText) as { values: unknown[] };
+  const values = [
+    ...body.values.filter((value) => record(value).fieldId !== "timetracking"),
+    ...(carries ? (options.screenFields ?? [SCREEN_FIELD]) : []),
+  ];
+  return response({ values, isLast: true, total: values.length });
+}
+/** Jira omits a field its type does not have, and one the account may not see, from a hit. */
+function searchOf(
+  answer: Extract<AtlassianHttpBodyResult, { readonly kind: "response" }>,
+  options: Options,
+): AtlassianHttpBodyResult {
+  const body = JSON.parse(answer.bodyText) as {
+    issues: { key: string; fields: Record<string, unknown> }[];
+  };
+  for (const issue of body.issues) {
+    const typeId = String(record(issue.fields.issuetype).id);
+    const number = Number(String(issue.key).slice("REP-".length));
+    if ((options.withoutEstimateTypes ?? []).includes(typeId)) delete issue.fields[POINTS];
+    if (
+      (options.withheldEstimateTypes ?? []).includes(typeId) &&
+      number >= (options.withheldFromIssue ?? 0)
+    )
+      delete issue.fields[POINTS];
+  }
+  return response(body);
 }
 interface ReportRun {
   readonly result: ManagedMcpToolResult;
@@ -83,10 +126,12 @@ async function run(
 ): Promise<ReportRun> {
   const points = [3, 5, 8];
   const fixture = fixtureJira({
-    issues: syntheticProject(4).map((issue, index) => ({
-      ...issue,
-      ...(points[index] === undefined ? {} : { points: points[index] }),
-    })),
+    issues:
+      options.issues ??
+      syntheticProject(4).map((issue, index) => ({
+        ...issue,
+        ...(points[index] === undefined ? {} : { points: points[index] }),
+      })),
   });
   const store = createJiraReportStore({ now: () => NOW });
   const activity: JiraReportActivity[] = [];
@@ -380,5 +425,147 @@ describe("estimated and unestimated issues per issue type", () => {
       expect(item.unestimated).toBe(item.total);
       expect(item.estimated).toBe(0);
     }
+  });
+});
+
+describe("an issue type that does not carry the estimate field (#4356)", () => {
+  const BUG = "12";
+  const SUBTASK = "13";
+  const EPIC = "10";
+  const WITHOUT = [EPIC, BUG, SUBTASK] as const;
+  const issues = syntheticProject(250);
+  interface Readback {
+    readonly types: ReadonlyMap<string, { total: number; done: number; unestimated: number }>;
+    readonly statuses: ReadonlyMap<string, number>;
+    readonly estimate: { total: number; done: number; remaining: number; unestimated: number };
+  }
+  /** Computed straight from the fixture's issues, the way an independent JQL readback would. */
+  function readback(source: readonly FixtureIssue[], carrying: ReadonlySet<string>): Readback {
+    const types = new Map<string, { total: number; done: number; unestimated: number }>();
+    const statuses = new Map<string, number>();
+    const estimate = { total: 0, done: 0, remaining: 0, unestimated: 0 };
+    for (const issue of source) {
+      const type = types.get(issue.type) ?? { total: 0, done: 0, unestimated: 0 };
+      type.total += 1;
+      if (issue.category === "done") type.done += 1;
+      const points = carrying.has(TYPE_ID[issue.type] ?? "") ? issue.points : undefined;
+      if (points === undefined) {
+        type.unestimated += 1;
+        estimate.unestimated += 1;
+      } else {
+        estimate.total += points;
+        if (issue.category === "done") estimate.done += points;
+      }
+      types.set(issue.type, type);
+      const status = `${issue.type}|${issue.status}|${issue.category}`;
+      statuses.set(status, (statuses.get(status) ?? 0) + 1);
+    }
+    estimate.remaining = estimate.total - estimate.done;
+    return { types, statuses, estimate };
+  }
+  function figuresOf(h: ReportRun): {
+    readonly types: Map<string, { total: number; done: number; unestimated: number }>;
+    readonly statuses: Map<string, number>;
+  } {
+    if (h.stored === undefined) throw new Error("Missing stored report");
+    const { progress } = h.stored;
+    const types = new Map(
+      progress.byType.map((item) => [
+        item.typeName,
+        { total: item.total, done: item.done, unestimated: Number(item.unestimated) },
+      ]),
+    );
+    const statuses = new Map(
+      progress.byStatus.map((item) => [
+        `${item.typeName}|${item.statusName}|${item.category}`,
+        item.total,
+      ]),
+    );
+    return { types, statuses };
+  }
+
+  it("reads every accessible issue and matches the independent readback over several pages", async () => {
+    const h = await run({ issues, withoutEstimateTypes: WITHOUT });
+    expect(h.result.data.status).toBe("complete");
+    expect(h.report.completeness).toMatchObject({ complete: true, issuesRead: 250 });
+    expect(h.requests.filter((request) => request.includes("/search?")).length).toBeGreaterThan(1);
+    const expected = readback(issues, new Set(["11"]));
+    const actual = figuresOf(h);
+    expect(actual.types).toEqual(expected.types);
+    expect(actual.statuses).toEqual(expected.statuses);
+    expect(record(record(h.report.progress).project).estimate).toEqual(expected.estimate);
+    expect(h.report.scope).toMatchObject({ estimateFieldId: POINTS });
+  });
+
+  it("is complete when only one type lacks the field and still sums the estimate of the others", async () => {
+    const h = await run({ issues, withoutEstimateTypes: [BUG] });
+    expect(h.result.data.status).toBe("complete");
+    const expected = readback(issues, new Set([EPIC, "11", SUBTASK]));
+    expect(record(record(h.report.progress).project).estimate).toEqual(expected.estimate);
+    expect(figuresOf(h).types).toEqual(expected.types);
+  });
+
+  it("stays incomplete when a type that carries the field has it withheld", async () => {
+    const h = await run({ issues, withheldEstimateTypes: ["11"] });
+    expect(h.result.data.status).toBe("incomplete");
+    expect(h.report.completeness).toMatchObject({
+      complete: false,
+      reason: "read-failed",
+      failure: "permission",
+      issuesTotal: 250,
+    });
+    expect(Number(record(h.report.completeness).issuesRead)).toBeLessThan(250);
+    expect(h.activity).toHaveLength(1);
+    expect(h.activity[0]).toMatchObject({
+      phase: "read",
+      status: "incomplete",
+      reason: "read-failed",
+      failure: "permission",
+      issuesTotal: 250,
+    });
+    expect(JSON.stringify(h.activity)).not.toMatch(/REP-|customfield_|Story Points|jira\.example/u);
+  });
+
+  it("keeps only the independently measured prefix when a later page withholds it", async () => {
+    const h = await run({ issues, withheldEstimateTypes: ["11"], withheldFromIssue: 150 });
+    expect(h.result.data.status).toBe("incomplete");
+    // REP-152 is the first story the later page withholds the estimate of.
+    expect(h.report.completeness).toMatchObject({ complete: false, issuesRead: 151 });
+    const prefix = readback(issues.slice(0, 151), new Set(["11", EPIC, BUG, SUBTASK]));
+    expect(record(record(h.report.progress).project).estimate).toEqual(prefix.estimate);
+    expect(JSON.stringify(h.activity)).not.toMatch(/REP-|customfield_|jira\.example/u);
+  });
+
+  it("keeps a measured zero and an explicit null apart from a type without the field", async () => {
+    const story = (key: string, points: number | undefined): FixtureIssue => ({
+      ...syntheticProject(8).find((item) => item.type === "Story")!,
+      key,
+      category: "indeterminate",
+      status: "Working",
+      ...(points === undefined ? {} : { points }),
+    });
+    const bug = { ...syntheticProject(8).find((item) => item.type === "Bug")!, key: "REP-12" };
+    const h = await run({
+      issues: [story("REP-10", 0), story("REP-11", undefined), bug],
+      withoutEstimateTypes: [BUG],
+    });
+    expect(h.result.data.status).toBe("complete");
+    expect(record(record(h.report.progress).project).estimate).toEqual({
+      total: 0,
+      done: 0,
+      remaining: 0,
+      unestimated: 2,
+    });
+    const stories = figuresOf(h).types.get("Story");
+    expect(stories).toMatchObject({ total: 2, unestimated: 1 });
+  });
+
+  it("never exempts a field the screens do not list at all", async () => {
+    const h = await run(
+      { issues, withoutEstimateTypes: WITHOUT, screenFields: [] },
+      { projectKey: "REP", estimateFieldId: POINTS },
+    );
+    expect(h.result.data.status).toBe("incomplete");
+    expect(h.report.completeness).toMatchObject({ complete: false, failure: "permission" });
   });
 });

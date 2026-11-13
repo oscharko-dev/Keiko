@@ -13,6 +13,7 @@ function plan(): JiraReportFieldPlan {
     parentProposals: new Map(),
     omittedFields: new Set(),
     estimateFieldId: "timeoriginalestimate",
+    estimateNotApplicableTypes: new Set(),
     requirementIds: new Set(),
     requiredByType: new Map([
       ["11", Array.from({ length: 300 }, (_, index) => `customfield_${String(20000 + index)}`)],

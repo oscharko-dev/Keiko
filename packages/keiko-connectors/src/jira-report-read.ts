@@ -51,6 +51,20 @@ export function jiraReportFailure(
   return JIRA_REPORT_FAILURE_REASONS.find((value) => value === reason) ?? "unavailable";
 }
 
+/**
+ * The issue types whose read create screen lacks the estimate field although the project offers it
+ * on another type's. Without a type that carries it, the field is unknown to the screens and no
+ * type is exempt: an explicitly named field that no screen lists stays strictly required.
+ */
+function estimateNotApplicableTypes(
+  required: JiraReportRequiredFields,
+  fieldId: string | undefined,
+): ReadonlySet<string> {
+  const screens = [...(required.estimateByType ?? [])];
+  if (fieldId === undefined || !screens.some(([, ids]) => ids.includes(fieldId))) return new Set();
+  return new Set(screens.filter(([, ids]) => !ids.includes(fieldId)).map(([typeId]) => typeId));
+}
+
 function fieldPlan(
   session: JiraReportSession,
   hierarchy: JiraReportHierarchyFields,
@@ -66,6 +80,10 @@ function fieldPlan(
     parentProposals: new Map(),
     omittedFields: new Set(),
     estimateFieldId: session.scope.estimateFieldId,
+    estimateNotApplicableTypes: estimateNotApplicableTypes(
+      required,
+      session.scope.estimateFieldId,
+    ),
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
     checker,
