@@ -109,6 +109,11 @@ function publicJiraPod(generation: number, pod: JiraLivePodMetadata): JiraLivePo
     verificationInProgress: pod.verificationInProgress,
     verificationStatus:
       pod.credentialOperation === undefined ? pod.verificationStatus : "unverified",
+    ...(pod.verificationStatus === "ok" &&
+    pod.credentialOperation === undefined &&
+    pod.compatibility === undefined
+      ? { compatibilityFacts: "missing" as const }
+      : {}),
     capabilities: ["live-read", "live-write"],
   };
 }

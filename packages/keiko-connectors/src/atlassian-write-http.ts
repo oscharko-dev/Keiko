@@ -171,6 +171,14 @@ function classifyTransport(
     : { ok: false, reason: "unavailable" };
 }
 
+function failureReason(
+  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
+): AtlassianConnectorWriteFailureReason {
+  if (result.status === 401 && result.authentication === "confirmed") return "permission-denied";
+  if (result.status === 401 && result.authentication === "unconfirmed") return "auth-unverified";
+  return failureReasonForWriteStatus(result.status);
+}
+
 function classifyFailure(
   result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
 ): AtlassianWriteHttpOutcome {
@@ -180,10 +188,7 @@ function classifyFailure(
       : undefined;
   return {
     ok: false,
-    reason:
-      result.status === 401 && result.authentication === "confirmed"
-        ? "permission-denied"
-        : failureReasonForWriteStatus(result.status),
+    reason: failureReason(result),
     httpStatus: result.status,
     ...(remote === undefined ? {} : { remote }),
   };

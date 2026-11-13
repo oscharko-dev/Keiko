@@ -803,6 +803,40 @@ it("explains a refused Jira read without claiming that it completed", () => {
   expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();
 });
 
+it("explains an unverifiable Jira authentication as retryable, not as an expired token (#4353)", () => {
+  const data = { outcome: "failed", reason: "auth-unverified" };
+  const failed = resultExchange("jira_search", data);
+  if (failed.result === undefined) throw new TypeError("Missing result fixture");
+  render(
+    <JiraChatTools
+      transcript={{
+        schemaVersion: 1,
+        exchanges: [
+          {
+            ...failed,
+            result: {
+              ...failed.result,
+              status: "failed",
+              reason: "provider-reported-error",
+              data,
+              page: null,
+            },
+          },
+        ],
+      }}
+      turnState="completed"
+    />,
+  );
+  expect(screen.getByText("Could not complete", { exact: true })).toBeVisible();
+  expect(
+    screen.getByText(
+      "Jira could not be verified right now, so this request was not sent on. The connection is unchanged. Try again in a moment.",
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText("Completed", { exact: true })).toBeNull();
+  expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();
+});
+
 describe("Jira tool outcome for a business user (#4173)", () => {
   function created(data: CatalogJsonObject): ChatToolExchange {
     const original = exchange("succeeded");

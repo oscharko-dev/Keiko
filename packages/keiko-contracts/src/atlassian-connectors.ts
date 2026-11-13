@@ -403,6 +403,12 @@ export interface JiraLivePodView {
   readonly verificationRevision: number;
   readonly verificationInProgress: boolean;
   readonly verificationStatus: JiraLivePodMetadata["verificationStatus"];
+  /**
+   * Closed state only, never the facts: present as `missing` when the Pod verified before
+   * compatibility facts were retained. An explicit re-verification obtains them; it grants no
+   * permission.
+   */
+  readonly compatibilityFacts?: "missing";
   readonly capabilities: readonly ("live-read" | "live-write")[];
 }
 
@@ -1345,6 +1351,9 @@ export function decideAtlassianConnectorAction(
 // asserts a Jira permission failure, network outage, or absence of an earlier native effect.
 export type AtlassianConnectorWriteFailureReason =
   | "auth-failed"
+  // A 401 whose same-generation identity check could not settle (timeout, throttling, a server
+  // error, cancellation or a changed credential): the request is refused, the credential is kept.
+  | "auth-unverified"
   | "permission-denied"
   | "effect-denied"
   | "cancelled"
@@ -1361,6 +1370,7 @@ export type AtlassianConnectorWriteFailureReason =
 export const ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS: readonly AtlassianConnectorWriteFailureReason[] =
   Object.freeze([
     "auth-failed",
+    "auth-unverified",
     "permission-denied",
     "effect-denied",
     "cancelled",

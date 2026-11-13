@@ -1141,79 +1141,86 @@ describe("end-to-end verify through the gateway transport adapter", () => {
     },
   );
 
-  it("records observed authentication invalidation after acknowledgement and before body consumption", async () => {
-    const events: string[] = [];
-    const sink = createFileServerLogSink(configDir, { level: "debug" });
-    try {
-      const real = buildAtlassianConnectorCredentialDeps({
-        configPath,
-        env: vaultEnv(),
-        egress: () => undefined,
-        activityLog: sink,
-        onLivePodInvalidated: (): void => {
-          events.push("invalidated");
-        },
-        fetchImpl: (): Promise<Response> =>
-          Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>(
-                {
-                  pull: (controller): void => {
-                    events.push("body");
-                    controller.enqueue(new TextEncoder().encode("{}"));
-                    controller.close();
+  it.each([
+    ["identity route", "myself", ["acknowledged", "invalidated", "body"]],
+    ["probe-decided route", "project", ["acknowledged", "body", "body", "invalidated"]],
+  ] as const)(
+    "records observed authentication invalidation after acknowledgement on the %s",
+    async (_name, path, order) => {
+      const events: string[] = [];
+      const sink = createFileServerLogSink(configDir, { level: "debug" });
+      try {
+        const real = buildAtlassianConnectorCredentialDeps({
+          configPath,
+          env: vaultEnv(),
+          egress: () => undefined,
+          activityLog: sink,
+          onLivePodInvalidated: (): void => {
+            events.push("invalidated");
+          },
+          fetchImpl: (): Promise<Response> =>
+            Promise.resolve(
+              new Response(
+                new ReadableStream<Uint8Array>(
+                  {
+                    pull: (controller): void => {
+                      events.push("body");
+                      controller.enqueue(new TextEncoder().encode("{}"));
+                      controller.close();
+                    },
                   },
-                },
-                { highWaterMark: 0 },
+                  { highWaterMark: 0 },
+                ),
+                { status: 401 },
               ),
-              { status: 401 },
             ),
-          ),
-      });
-      const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
-      bindSyntheticTarget(created);
-      const probe = real.custody.beginVerification(created.authRef);
-      if (probe === undefined) throw new Error("Expected verification ticket");
-      real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
-      const metadata = real.custody.getMetadata(created.authRef);
-      if (metadata === undefined) throw new Error("Expected metadata");
-      const http = real.httpBodyPortFactory(metadata, "observed-authentication-proof", {
-        onResponse: (): boolean => {
-          events.push("acknowledged");
-          return true;
-        },
-      });
-      // The identity route is the one definitive 401; any other 401 is decided by the identity
-      // probe after the original response has been consumed (#4353).
-      await http({
-        method: "GET",
-        url: `${metadata.baseUrl}/rest/api/2/myself`,
-        timeoutMs: 1000,
-        maxBodyBytes: 4096,
-      });
-      expect(events).toEqual(["acknowledged", "invalidated", "body"]);
-      const lines = persistedActivityLogLines(
-        readPersistedActivityLog(configDir),
-        "atlassian.connection.checked",
-      );
-      const records = lines.map((line) =>
-        expectActivityLogProof("atlassian.connection.checked.observed-authentication", line),
-      );
-      expect(records).toMatchObject([
-        {
-          action: "request",
-          outcome: "auth-failed",
-          verificationState: "applied",
-          correlationId: "observed-authentication-proof",
-        },
-      ]);
-      expectNoSecretBytes(lines.join("\n"));
-      expect(lines.join("\n")).not.toContain(metadata.authRef);
-      expect(lines.join("\n")).not.toContain(metadata.baseUrl);
-    } finally {
-      sink.close?.();
-    }
-  });
+        });
+        const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+        bindSyntheticTarget(created);
+        const probe = real.custody.beginVerification(created.authRef);
+        if (probe === undefined) throw new Error("Expected verification ticket");
+        real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+        const metadata = real.custody.getMetadata(created.authRef);
+        if (metadata === undefined) throw new Error("Expected metadata");
+        const http = real.httpBodyPortFactory(metadata, "observed-authentication-proof", {
+          onResponse: (): boolean => {
+            events.push("acknowledged");
+            return true;
+          },
+        });
+        // The identity route is the one definitive 401; any other 401 is decided by the identity
+        // probe after the original response was acknowledged and consumed (#4353): acknowledgement
+        // always comes first and the invalidation never precedes it.
+        await http({
+          method: "GET",
+          url: `${metadata.baseUrl}/rest/api/2/${path}`,
+          timeoutMs: 1000,
+          maxBodyBytes: 4096,
+        });
+        expect(events).toEqual(order);
+        const lines = persistedActivityLogLines(
+          readPersistedActivityLog(configDir),
+          "atlassian.connection.checked",
+        );
+        const records = lines.map((line) =>
+          expectActivityLogProof("atlassian.connection.checked.observed-authentication", line),
+        );
+        expect(records).toMatchObject([
+          {
+            action: "request",
+            outcome: "auth-failed",
+            verificationState: "applied",
+            correlationId: "observed-authentication-proof",
+          },
+        ]);
+        expectNoSecretBytes(lines.join("\n"));
+        expect(lines.join("\n")).not.toContain(metadata.authRef);
+        expect(lines.join("\n")).not.toContain(metadata.baseUrl);
+      } finally {
+        sink.close?.();
+      }
+    },
+  );
 
   it("pins response observation before caller metadata or verification can change", async () => {
     const invalidated: number[] = [];

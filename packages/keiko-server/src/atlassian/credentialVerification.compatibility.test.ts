@@ -18,6 +18,7 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import { publicAtlassianCredential } from "./jiraPodAccess.js";
 import { verifyStoredCredential } from "./credentialVerification.js";
 import {
   AtlassianCredentialMetadataStoreError,
@@ -251,6 +252,27 @@ describe("Jira compatibility through stored credential verification", () => {
     assert(current.deployment === "data-center" && current.livePod !== undefined);
     expect(current.livePod.verificationStatus).toBe("auth-failed");
     expect(current.livePod).not.toHaveProperty("compatibility");
+  });
+
+  it("marks a verified Pod without retained facts as missing them, and only that Pod (#4289, #4353)", async () => {
+    const f = fixture();
+    expect(await verifyStoredCredential(f.deps, f.metadata, CORRELATION_ID)).toBe("ok");
+    const verified = currentMetadata(f);
+    assert(verified.deployment === "data-center" && verified.livePod !== undefined);
+    expect(publicAtlassianCredential(verified)).toMatchObject({
+      livePod: { verificationStatus: "ok" },
+    });
+    expect(JSON.stringify(publicAtlassianCredential(verified))).not.toContain("compatibilityFacts");
+    const { compatibility: _facts, ...legacyPod } = verified.livePod;
+    const legacy = publicAtlassianCredential({ ...verified, livePod: legacyPod });
+    expect(legacy).toMatchObject({ livePod: { compatibilityFacts: "missing" } });
+    // Closed state only: no version, REST or Agile fact reaches the public view.
+    expect(JSON.stringify(legacy)).not.toMatch(/versionNumbers|restApi|agileApi/u);
+    const unverified = publicAtlassianCredential({
+      ...verified,
+      livePod: { ...legacyPod, verificationStatus: "unverified" },
+    });
+    expect(JSON.stringify(unverified)).not.toContain("compatibilityFacts");
   });
 
   it("clears successful facts when a recheck throws", async () => {

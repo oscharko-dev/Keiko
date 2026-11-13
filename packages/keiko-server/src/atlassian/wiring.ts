@@ -1,5 +1,9 @@
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { recordConnectionCheck, recordJiraHumanInput } from "./credentialActivity.js";
+import {
+  recordConnectionCheck,
+  recordJiraHumanInput,
+  type ConnectionCheckDetail,
+} from "./credentialActivity.js";
 import { createJiraPrivatePorts, type JiraPrivatePortOptions } from "./httpPrivateIdentity.js";
 import type {
   AtlassianCredentialHttpOptions,
@@ -28,7 +32,9 @@ import {
 import {
   ambiguousJiraAuthenticationResponse,
   currentJiraAuthenticationObservation,
+  JIRA_IDENTITY_PROBE_WINDOW_MS,
   withJiraAuthenticationObservation,
+  type JiraIdentityProbeOutcome,
 } from "./jiraAuthenticationObservation.js";
 // Composition-root wiring for Atlassian connector credential custody (Issue #2241, ADR-0128 D1).
 //
@@ -193,7 +199,14 @@ export function buildAtlassianConnectorCredentialDeps(
   maintainInputs = (): void => {
     custody.humanInputs?.sweepExpired();
   };
-  const owner = { options, listenerPorts, executionResolver, custody, metadataStore };
+  const owner: CredentialTransportOwner = {
+    options,
+    listenerPorts,
+    executionResolver,
+    custody,
+    metadataStore,
+    positiveProbes: new Map(),
+  };
   return {
     custody,
     jiraPrivatePortFactory: privatePortFactory(owner),
@@ -215,12 +228,29 @@ function privatePortFactory(
   owner: CredentialTransportOwner,
 ): NonNullable<AtlassianConnectorCredentialDeps["jiraPrivatePortFactory"]> {
   return (metadata, context, options, lifecycle = {}): ReturnType<typeof createJiraPrivatePorts> =>
-    createJiraPrivatePorts(
-      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle),
-      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle, false),
-      context,
-      boundPrivateOptions(metadata, owner.custody.getMetadata(metadata.authRef), options),
-    );
+    createPrivatePorts(owner, metadata, context, options, lifecycle);
+}
+
+function createPrivatePorts(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  context: Parameters<NonNullable<AtlassianConnectorCredentialDeps["jiraPrivatePortFactory"]>>[1],
+  options: JiraPrivatePortOptions,
+  lifecycle: AtlassianCredentialHttpOptions,
+): ReturnType<typeof createJiraPrivatePorts> {
+  // The same by-value snapshot and the same observed wrapper as the ordinary ports: the PAT port
+  // of the private owner is never a second path that decides a 401 on its own.
+  const pinned = structuredClone(metadata);
+  const bound = boundPrivateOptions(pinned, owner.custody.getMetadata(pinned.authRef), options);
+  return createJiraPrivatePorts(
+    credentialTransportOptions(owner, pinned, context.correlationId, lifecycle),
+    credentialTransportOptions(owner, pinned, context.correlationId, lifecycle, false),
+    context,
+    {
+      ...bound,
+      observePatPort: (port) => observePort(owner, pinned, context.correlationId, lifecycle, port),
+    },
+  );
 }
 
 function generationBoundResolver(
@@ -282,6 +312,14 @@ interface CredentialTransportOwner {
   readonly executionResolver: AtlassianCredentialExecutionResolver;
   readonly custody: AtlassianCredentialCustody;
   readonly metadataStore: AtlassianCredentialMetadataStore;
+  /** Credential generation and revision -> end of the short window a positive identity read holds. */
+  readonly positiveProbes: Map<string, number>;
+}
+
+function probeKey(metadata: AtlassianCredentialMetadata): string {
+  const revision =
+    metadata.deployment === "data-center" ? (metadata.livePod?.verificationRevision ?? 0) : 0;
+  return `${metadata.authRef}|${String(metadata.generation ?? 1)}|${String(revision)}`;
 }
 
 function identityObservation(
@@ -289,7 +327,7 @@ function identityObservation(
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
   lifecycle: AtlassianCredentialHttpOptions,
-): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<boolean> {
+): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome> {
   const current = (): boolean =>
     currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef));
   const port = createGatewayAtlassianHttpBodyPort({
@@ -303,15 +341,43 @@ function identityObservation(
     onResponse: (): boolean => true,
     singleAttempt: true,
   });
-  return async (deadlineAt, signal): Promise<boolean> => {
+  const key = probeKey(metadata);
+  return async (deadlineAt, signal): Promise<JiraIdentityProbeOutcome> => {
+    // Only a positive result is reused, and only for this exact generation and revision.
+    if ((owner.positiveProbes.get(key) ?? 0) > Date.now()) {
+      recordConnectionCheck(owner.options, correlationId, "ok", undefined, "request", undefined, {
+        decision: "probe-window",
+        routeClass: "other",
+      });
+      return "confirmed";
+    }
     const status = await verifyJiraDataCenterIdentity(port, metadata.baseUrl, {
       deadlineAt,
       signal,
     });
-    if (status === "auth-failed") observedAuthentication(owner, metadata, correlationId)(401);
-    else recordConnectionCheck(owner.options, correlationId, status, undefined, "request");
-    return status === "ok";
+    if (status === "auth-failed") {
+      observedAuthentication(owner, metadata, correlationId, {
+        decision: "probe",
+        routeClass: "other",
+      })(401);
+      return "rejected";
+    }
+    recordConnectionCheck(owner.options, correlationId, status, undefined, "request", undefined, {
+      decision: "probe",
+      routeClass: "other",
+    });
+    if (status !== "ok") return "inconclusive";
+    rememberPositiveProbe(owner, key);
+    return "confirmed";
   };
+}
+
+function rememberPositiveProbe(owner: CredentialTransportOwner, key: string): void {
+  const now = Date.now();
+  for (const [stored, until] of owner.positiveProbes) {
+    if (until <= now) owner.positiveProbes.delete(stored);
+  }
+  owner.positiveProbes.set(key, now + JIRA_IDENTITY_PROBE_WINDOW_MS);
 }
 
 function observedPort<
@@ -330,11 +396,42 @@ function observedPort<
   const pinned = structuredClone(metadata);
   const port = create(credentialTransportOptions(owner, pinned, correlationId, lifecycle));
   if (lifecycle.purpose === "verification") return port;
+  return observePort(owner, pinned, correlationId, lifecycle, port);
+}
+
+/** The one owner of the observed-credential wrapper: every credential-bearing port goes through it. */
+function observePort<
+  TRequest extends AtlassianHttpRequest | AtlassianHttpBodyRequest,
+  TResult extends AtlassianHttpResult,
+>(
+  owner: CredentialTransportOwner,
+  pinned: AtlassianCredentialMetadata,
+  correlationId: string | undefined,
+  lifecycle: AtlassianCredentialHttpOptions,
+  port: (request: TRequest) => Promise<TResult>,
+): (request: TRequest) => Promise<TResult> {
+  const id = correlationId ?? UNKNOWN_CORRELATION_ID;
   return withJiraAuthenticationObservation(
     pinned,
     port,
     () => currentJiraAuthenticationObservation(pinned, owner.custody.getMetadata(pinned.authRef)),
-    identityObservation(owner, pinned, correlationId ?? UNKNOWN_CORRELATION_ID, lifecycle),
+    identityObservation(owner, pinned, id, lifecycle),
+    {
+      onUnsettled: (): void => {
+        recordConnectionCheck(
+          owner.options,
+          id,
+          "probe-inconclusive",
+          undefined,
+          "request",
+          undefined,
+          {
+            decision: "probe",
+            routeClass: "other",
+          },
+        );
+      },
+    },
   );
 }
 
@@ -342,6 +439,7 @@ function observedAuthentication(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
+  detail: ConnectionCheckDetail = { decision: "identity-route", routeClass: "identity" },
 ): (status: number) => void {
   if (metadata.deployment !== "data-center" || metadata.livePod === undefined)
     return (): void => undefined;
@@ -361,6 +459,8 @@ function observedAuthentication(
       "auth-failed",
       applied ? "applied" : "stale",
       "request",
+      undefined,
+      detail,
     );
   };
 }

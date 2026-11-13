@@ -26,8 +26,19 @@ export interface AtlassianHttpRequest {
   readonly timeoutMs: number;
 }
 
+/**
+ * Server-owned result of the identity read that decides a 401 (never upstream content):
+ * `confirmed` means the credential is valid, so the 401 was a missing permission; `unconfirmed`
+ * means the check could not settle, so the credential is kept and the 401 stays unexplained.
+ */
+export type AtlassianAuthenticationObservation = "confirmed" | "unconfirmed";
+
 export type AtlassianHttpResult =
-  | { readonly kind: "response"; readonly status: number; readonly authentication?: "confirmed" }
+  | {
+      readonly kind: "response";
+      readonly status: number;
+      readonly authentication?: AtlassianAuthenticationObservation;
+    }
   | { readonly kind: "timeout" }
   | { readonly kind: "network-error"; readonly reason?: "tls" };
 
@@ -112,7 +123,7 @@ export type AtlassianHttpBodyResult =
       readonly kind: "response";
       readonly status: number;
       /** Server-owned identity proof for a documented ambiguous 401; never upstream content. */
-      readonly authentication?: "confirmed";
+      readonly authentication?: AtlassianAuthenticationObservation;
       // Decoded UTF-8 body read up to `maxBodyBytes`; empty for a fixed archive download.
       // Empty for bodyless responses (e.g. 3xx —
       // which the adapter surfaces and never follows).

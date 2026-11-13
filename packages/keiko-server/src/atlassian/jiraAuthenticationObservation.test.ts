@@ -6,12 +6,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyRequest,
+  AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
-import { executeAtlassianWriteRequest } from "@oscharko-dev/keiko-connectors";
+import {
+  AtlassianCredentialCustodyError,
+  executeAtlassianWriteRequest,
+} from "@oscharko-dev/keiko-connectors";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import {
   ambiguousJiraAuthenticationResponse,
+  JIRA_IDENTITY_PROBE_WINDOW_MS,
   withJiraAuthenticationObservation,
 } from "./jiraAuthenticationObservation.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
@@ -241,11 +246,13 @@ it("honors authority revocation between the primary response and identity probe"
     allowed = false;
     return response({}, 401);
   });
-  await expect(
-    f.deps.httpBodyPortFactory(f.metadata, undefined, {
+  // The credential change during the probe no longer throws out of the port: the original 401
+  // settles as unconfirmed, nothing more is sent and the credential is kept (#4353).
+  expect(
+    await f.deps.httpBodyPortFactory(f.metadata, undefined, {
       beforeDispatch: () => allowed,
     })(request()),
-  ).rejects.toMatchObject({ code: "invalid-input" });
+  ).toMatchObject({ status: 401, authentication: "unconfirmed" });
   expect(f.urls).toHaveLength(1);
   expect(f.current()).toEqual(f.metadata);
 });
@@ -416,7 +423,7 @@ it.each(["expired", "cancelled", "revised"] as const)(
       signal: controller.signal,
     });
     expect(result).toMatchObject({ status: 401 });
-    expect(result).not.toHaveProperty("authentication");
+    expect(result).toMatchObject({ authentication: "unconfirmed" });
     expect(f.current().livePod?.verificationStatus).toBe("ok");
   },
 );
@@ -636,7 +643,7 @@ it.each(["expired", "cancelled", "revision", "generation"] as const)(
       signal: controller.signal,
     });
     expect(result).toMatchObject({ status: 401 });
-    expect(result).not.toHaveProperty("authentication");
+    expect(result).toMatchObject({ authentication: "unconfirmed" });
     expect(f.urls).toHaveLength(2);
     expect(f.current().livePod?.verificationStatus).toBe(
       state === "generation" ? "unverified" : "ok",
@@ -649,11 +656,11 @@ it("stops a tab-write auth probe when original authority is revoked and never re
     allowed = false;
     return response({}, 401);
   });
-  await expect(
-    f.deps.httpBodyPortFactory(f.metadata, undefined, {
+  expect(
+    await f.deps.httpBodyPortFactory(f.metadata, undefined, {
       beforeDispatch: () => allowed,
     })(tabRequest("DELETE", "screens/1/tabs/2")),
-  ).rejects.toMatchObject({ code: "invalid-input" });
+  ).toMatchObject({ status: 401, authentication: "unconfirmed" });
   expect(f.urls).toHaveLength(1);
   expect(f.current()).toEqual(f.metadata);
 });
@@ -926,7 +933,7 @@ it("returns an actionable permission failure through the real project-role read"
 it("decides a synthetic unlisted GET 401 by the probe alone: confirmed identity keeps the credential", async () => {
   const f = fixture(() => response({}, 401));
   const port = vi.fn(() => Promise.resolve({ kind: "response", status: 401 } as const));
-  const probe = vi.fn(() => Promise.resolve(true));
+  const probe = vi.fn(() => Promise.resolve("confirmed" as const));
   const result = await withJiraAuthenticationObservation(
     f.metadata,
     port,
@@ -937,28 +944,47 @@ it("decides a synthetic unlisted GET 401 by the probe alone: confirmed identity 
   expect(port).toHaveBeenCalledTimes(1);
   expect(probe).toHaveBeenCalledTimes(1);
 });
-it("returns the bare 401 when the probe does not confirm the identity or the observation is stale", async () => {
+it("settles each probe outcome distinctly: rejected stays bare, everything else is unconfirmed", async () => {
   const f = fixture(() => response({}, 401));
   const port = (): Promise<{ readonly kind: "response"; readonly status: 401 }> =>
     Promise.resolve({ kind: "response", status: 401 });
   const request401 = request("project/KER/role");
+  const settle = (
+    outcome: "confirmed" | "rejected" | "inconclusive",
+    current = true,
+    onUnsettled = vi.fn(),
+  ): Promise<unknown> =>
+    withJiraAuthenticationObservation(
+      f.metadata,
+      port,
+      () => current,
+      () => Promise.resolve(outcome),
+      { onUnsettled },
+    )(request401);
+  expect(await settle("rejected")).toEqual({ kind: "response", status: 401 });
+  expect(await settle("inconclusive")).toEqual({
+    kind: "response",
+    status: 401,
+    authentication: "unconfirmed",
+  });
+  const stale = vi.fn();
+  expect(await settle("confirmed", false, stale)).toMatchObject({ authentication: "unconfirmed" });
+  expect(stale).toHaveBeenCalledWith("stale");
+  const failing = vi.fn();
   expect(
     await withJiraAuthenticationObservation(
       f.metadata,
       port,
       () => true,
-      () => Promise.resolve(false),
+      () => Promise.reject(new TypeError("synthetic probe failure")),
+      { onUnsettled: failing },
     )(request401),
-  ).toEqual({ kind: "response", status: 401 });
-  const stale = vi.fn(() => Promise.resolve(true));
-  expect(
-    await withJiraAuthenticationObservation(f.metadata, port, () => false, stale)(request401),
-  ).toEqual({ kind: "response", status: 401 });
-  expect(stale).not.toHaveBeenCalled();
+  ).toMatchObject({ authentication: "unconfirmed" });
+  expect(failing).toHaveBeenCalledWith("probe-error");
 });
 it("never probes a non-401 answer or the identity route", async () => {
   const f = fixture(() => response({}, 401));
-  const probe = vi.fn(() => Promise.resolve(true));
+  const probe = vi.fn(() => Promise.resolve("confirmed" as const));
   const ok = withJiraAuthenticationObservation(
     f.metadata,
     () => Promise.resolve({ kind: "response", status: 403 } as const),
@@ -974,3 +1000,251 @@ it("never probes a non-401 answer or the identity route", async () => {
   )(request("myself"));
   expect(probe).not.toHaveBeenCalled();
 });
+
+// #4353 review point 1: the PAT port of the private owner serves the same observed credential.
+function privateSessionScope(
+  f: Fixture,
+): Parameters<NonNullable<Fixture["deps"]["jiraPrivatePortFactory"]>>[2]["sessionScope"] {
+  if (f.metadata.livePod === undefined) throw new TypeError("Missing Live Pod");
+  return {
+    context: {
+      kind: "chat",
+      chatId: "synthetic-chat",
+      podId: f.metadata.livePod.podId,
+      bindingGeneration: 1,
+    },
+    authority: { runId: "synthetic-run", envelopeDigest: "a".repeat(64) },
+    principalDigest: "a".repeat(64),
+    authRef: f.metadata.authRef,
+    authenticationGeneration: f.metadata.generation ?? 1,
+    verificationRevision: f.metadata.livePod.verificationRevision,
+    expiresAt: Date.now() + 60_000,
+  };
+}
+function privateIdentityPorts(f: Fixture, metadata: JiraMetadata = f.metadata) {
+  const factory = f.deps.jiraPrivatePortFactory;
+  if (factory === undefined) throw new TypeError("Missing private port factory");
+  return factory(
+    metadata,
+    {
+      invocationId: "private-401",
+      correlationId: "private-401",
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    },
+    { sessionScope: privateSessionScope(f) },
+  );
+}
+it("discards the credential after a 401 on the identity read of the private PAT port", async () => {
+  const f = fixture(() => response({}, 401));
+  await privateIdentityPorts(f).identity.session("logout", "synthetic-key");
+  expect(f.urls).toEqual([`${BASE}/rest/api/2/myself`]);
+  expect(f.invalidated).toEqual([2]);
+});
+it("pins the credential by value for the private port as for the ordinary ports", async () => {
+  const f = fixture(() => response({}, 401));
+  const mutable = structuredClone(f.metadata);
+  const ports = privateIdentityPorts(f, mutable);
+  // The caller advances its own copy; the observed generation and revision stay pinned.
+  if (mutable.livePod === undefined) throw new TypeError("Missing Live Pod");
+  mutable.generation = 99;
+  mutable.livePod.verificationRevision = 99;
+  await ports.identity.session("logout", "synthetic-key");
+  expect(f.invalidated).toEqual([2]);
+});
+
+// #4353 review point 2: a 401 the identity read could not settle is neither an expired token nor
+// a permission denial. The request is refused with its own closed outcome, the credential is kept.
+type Inconclusive =
+  | { readonly name: string; readonly probe: () => Response | Promise<Response> }
+  | { readonly name: string; readonly change: "abort" | "stale" | "expired" | "dispatch-throw" };
+const INCONCLUSIVE: readonly Inconclusive[] = [
+  { name: "403", probe: () => response({}, 403) },
+  { name: "404", probe: () => response({}, 404) },
+  { name: "429", probe: () => response({}, 429, { "retry-after": "3" }) },
+  { name: "503", probe: () => response({}, 503) },
+  {
+    name: "redirect",
+    probe: () => new Response(null, { status: 302, headers: { location: "/x" } }),
+  },
+  { name: "non-JSON", probe: () => new Response("not-json") },
+  { name: "inactive identity", probe: () => response({ ...IDENTITY, active: false }) },
+  { name: "network failure", probe: () => Promise.reject(new TypeError("synthetic network")) },
+  { name: "aborted request", change: "abort" },
+  { name: "stale observation", change: "stale" },
+  { name: "expired deadline", change: "expired" },
+  { name: "dispatch refusal during the probe", change: "dispatch-throw" },
+];
+it.each(INCONCLUSIVE)(
+  "refuses an inconclusive identity read ($name) as auth-unverified and keeps the credential",
+  async (kind) => {
+    const controller = new AbortController();
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let dispatches = 0;
+    const f = fixture((index) => {
+      if (index === 0) {
+        if ("change" in kind) {
+          if (kind.change === "abort") controller.abort();
+          if (kind.change === "expired") now += 2000;
+          if (kind.change === "stale") {
+            const ticket = f.deps.custody.beginVerification(f.metadata.authRef);
+            if (ticket === undefined) throw new TypeError("Missing verification ticket");
+            f.deps.custody.finishVerification(f.metadata.authRef, 1, ticket.revision, "ok");
+          }
+        }
+        return response({}, 401);
+      }
+      return "probe" in kind ? kind.probe() : response(IDENTITY);
+    });
+    const http = f.deps.httpBodyPortFactory(f.metadata, "inconclusive-probe", {
+      beforeDispatch: () => {
+        dispatches += 1;
+        if ("change" in kind && kind.change === "dispatch-throw" && dispatches > 1)
+          throw new AtlassianCredentialCustodyError("credential-changed");
+        return true;
+      },
+    });
+    const result = await http({ ...request("project/KER/role"), signal: controller.signal });
+    expect(result).toMatchObject({ kind: "response", status: 401, authentication: "unconfirmed" });
+    // Never replayed, never revoked, and the end-to-end outcome is the closed one.
+    expect(f.invalidated).toEqual([]);
+    expect(f.current().livePod?.verificationStatus).toBe("ok");
+    expect(f.current().generation).toBe(kind.name === "stale observation" ? 1 : 1);
+    const outcome = await executeAtlassianWriteRequest(
+      { http: () => Promise.resolve(result as AtlassianHttpBodyResult) },
+      { method: "GET", url: request("project/KER/role").url, expect: "json" },
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "auth-unverified", httpStatus: 401 });
+  },
+);
+it("keeps a probe that actually answers 401 as the one rejected-token outcome", async () => {
+  const f = fixture(() => response({}, 401));
+  const result = await f.deps.httpBodyPortFactory(f.metadata)(request("project/KER/role"));
+  expect(result).not.toHaveProperty("authentication");
+  const outcome = await executeAtlassianWriteRequest(
+    { http: () => Promise.resolve(result as AtlassianHttpBodyResult) },
+    { method: "GET", url: request("project/KER/role").url, expect: "json" },
+  );
+  expect(outcome).toMatchObject({ ok: false, reason: "auth-failed", httpStatus: 401 });
+  expect(f.invalidated).toEqual([2]);
+});
+
+// #4353 review point 3: a credential change thrown out of the probe port is a defined outcome.
+it("settles a throw out of the probe as unconfirmed with one closed log line", async () => {
+  const f = fixture(() => response({}, 401));
+  let dispatches = 0;
+  const result = await f.deps.httpBodyPortFactory(f.metadata, "probe-throw", {
+    beforeDispatch: () => {
+      dispatches += 1;
+      if (dispatches > 1) throw new AtlassianCredentialCustodyError("credential-changed");
+      return true;
+    },
+  })(request("project/KER/role"));
+  expect(result).toMatchObject({ status: 401, authentication: "unconfirmed" });
+  expect(f.urls).toHaveLength(1);
+  expect(
+    f.events.filter((event) => event.op === "atlassian.connection.checked").map((e) => e.extra),
+  ).toMatchObject([{ outcome: "probe-inconclusive", decision: "probe", routeClass: "other" }]);
+});
+
+// #4353 review point 4: one positive identity read vouches for a short, fixed window.
+it("reuses a positive identity read for the same generation within the window only", async () => {
+  let now = 1000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const f = fixture((index) => (index === 1 ? response(IDENTITY) : response({}, 401)));
+  const http = f.deps.httpBodyPortFactory(f.metadata, "probe-window");
+  const urls = ["project/KER/role", "issue/SYN-1/transitions", "serverInfo"];
+  for (const path of urls)
+    expect(await http(request(path))).toMatchObject({ authentication: "confirmed" });
+  // Three 401s, one identity read: the other two reuse its window.
+  expect(f.urls.filter((url) => url.endsWith("/myself"))).toHaveLength(1);
+  now += JIRA_IDENTITY_PROBE_WINDOW_MS + 1;
+  await http(request(urls[0] ?? "x"));
+  expect(f.urls.filter((url) => url.endsWith("/myself"))).toHaveLength(2);
+  const decisions = f.events
+    .filter((event) => event.op === "atlassian.connection.checked")
+    .map((event) => event.extra?.decision);
+  expect(decisions).toEqual(["probe", "probe-window", "probe-window", "probe"]);
+});
+it("never reuses an inconclusive or rejected identity read", async () => {
+  let now = 1000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const f = fixture((index) => (index % 2 === 0 ? response({}, 401) : response({}, 503)));
+  const http = f.deps.httpBodyPortFactory(f.metadata, "no-negative-cache");
+  await http(request("project/KER/role"));
+  await http(request("project/KER/role"));
+  expect(f.urls.filter((url) => url.endsWith("/myself"))).toHaveLength(2);
+  expect(f.invalidated).toEqual([]);
+  const rejecting = fixture(() => response({}, 401));
+  const rejectingHttp = rejecting.deps.httpBodyPortFactory(rejecting.metadata);
+  await rejectingHttp(request("project/KER/role"));
+  expect(rejecting.invalidated).toEqual([2]);
+});
+it("does not carry a positive window across a credential generation", async () => {
+  const f = fixture((index) => (index === 1 ? response(IDENTITY) : response({}, 401)));
+  await f.deps.httpBodyPortFactory(f.metadata)(request("project/KER/role"));
+  f.deps.custody.updateLivePod(f.metadata.authRef, {
+    expectedGeneration: 1,
+    apiToken: ["replacement", "synthetic", "credential"].join("-"),
+  });
+  const rotated = f.current();
+  const ticket = f.deps.custody.beginVerification(rotated.authRef);
+  if (ticket === undefined) throw new TypeError("Missing verification ticket");
+  f.deps.custody.finishVerification(rotated.authRef, 2, ticket.revision, "ok");
+  const before = f.urls.length;
+  await f.deps.httpBodyPortFactory(f.current())(request("project/KER/role"));
+  // The rotated credential is probed itself: the first window never vouches for it.
+  expect(f.urls.slice(before).filter((url) => url.endsWith("/myself"))).toHaveLength(1);
+});
+
+// #4353 review point 5: the log line says what decided and which route class triggered it.
+it("records identity-route and probe-decided discards with distinct closed fields", async () => {
+  const route = fixture(() => response({}, 401));
+  await route.deps.httpBodyPortFactory(route.metadata, "identity-route")(request("myself"));
+  expect(
+    route.events.filter((e) => e.op === "atlassian.connection.checked").map((e) => e.extra),
+  ).toMatchObject([{ outcome: "auth-failed", decision: "identity-route", routeClass: "identity" }]);
+  const probed = fixture(() => response({}, 401));
+  await probed.deps.httpBodyPortFactory(
+    probed.metadata,
+    "probe-decided",
+  )(request("project/KER/role"));
+  expect(
+    probed.events.filter((e) => e.op === "atlassian.connection.checked").map((e) => e.extra),
+  ).toMatchObject([{ outcome: "auth-failed", decision: "probe", routeClass: "other" }]);
+});
+
+// #4353 review point 6: rules of the closed issues, pinned by name.
+it.each(["project/KER/role", "workflow", "screens", "screens/1/tabs"])(
+  "#4314 AC6: an administrative 401 on %s keeps a valid credential",
+  async (path) => {
+    const f = fixture((index) => (index === 0 ? response({}, 401) : response(IDENTITY)));
+    await f.deps.httpBodyPortFactory(f.metadata)(request(path));
+    expect(f.invalidated).toEqual([]);
+    expect(f.current()).toEqual(f.metadata);
+  },
+);
+it.each(["cluster/nodes", "cluster/zdu/state", "index-snapshot/isRunning", "index-snapshot"])(
+  "#4316: the GET %s keeps a valid credential after a permission 401",
+  async (path) => {
+    const f = fixture((index) => (index === 0 ? response({}, 401) : response(IDENTITY)));
+    await f.deps.httpBodyPortFactory(f.metadata)(request(path));
+    expect(f.invalidated).toEqual([]);
+  },
+);
+it("#4316: index/summary still discards an invalid credential", async () => {
+  const f = fixture(() => response({}, 401));
+  await f.deps.httpBodyPortFactory(f.metadata)(request("index/summary"));
+  expect(f.invalidated).toEqual([2]);
+});
+it.each(["project/KER/role", "workflow", "cluster/nodes", "index/summary", "myself"])(
+  "#4305, #4306, #4309: a 403 on %s is a missing permission and never touches the credential",
+  async (path) => {
+    const f = fixture(() => response({}, 403));
+    await f.deps.httpBodyPortFactory(f.metadata)(request(path));
+    expect(f.urls).toEqual([request(path).url]);
+    expect(f.invalidated).toEqual([]);
+    expect(f.current()).toEqual(f.metadata);
+  },
+);

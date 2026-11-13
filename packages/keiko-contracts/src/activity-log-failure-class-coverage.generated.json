@@ -3215,6 +3215,12 @@
               "required": false
             },
             {
+              "name": "decision",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "jiraCompatibility",
               "type": "string",
               "dataClass": "closed-enum",
@@ -3228,6 +3234,12 @@
             },
             {
               "name": "restApi",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "routeClass",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false

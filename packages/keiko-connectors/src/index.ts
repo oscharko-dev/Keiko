@@ -84,6 +84,7 @@ export {
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
+  type AtlassianAuthenticationObservation,
 } from "./atlassian-http-port.js";
 export { maintenancePathNode } from "./jira-maintenance-mutation-values.js";
 export {

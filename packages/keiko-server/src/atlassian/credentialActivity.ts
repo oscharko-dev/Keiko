@@ -117,7 +117,22 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
         "tls-failed",
         "sync-unsupported",
         "verification-aborted",
+        "probe-inconclusive",
       ],
+    },
+    // What decided the credential's fate: the identity route's own 401, the same-generation
+    // identity read that follows a 401 from any other route, or its short positive window.
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["identity-route", "probe", "probe-window"],
+    },
+    routeClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["identity", "other"],
     },
     verificationState: {
       type: "string",
@@ -158,13 +173,23 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+export interface ConnectionCheckDetail {
+  readonly decision: "identity-route" | "probe" | "probe-window";
+  readonly routeClass: "identity" | "other";
+}
+
 export function recordConnectionCheck(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
   correlationId: string,
-  result: AtlassianConnectionVerificationStatus | "sync-unsupported" | "verification-aborted",
+  result:
+    | AtlassianConnectionVerificationStatus
+    | "sync-unsupported"
+    | "verification-aborted"
+    | "probe-inconclusive",
   verificationState?: "applied" | "stale",
   source: "verify" | "request" = "verify",
   jiraCompatibility?: "verified" | "unverified",
+  detail?: ConnectionCheckDetail,
 ): void {
   try {
     deps.activityLog?.write(
@@ -176,6 +201,7 @@ export function recordConnectionCheck(
           outcome: result,
           ...(verificationState === undefined ? {} : { verificationState }),
           ...(jiraCompatibility === undefined ? {} : { jiraCompatibility }),
+          ...(detail === undefined ? {} : detail),
           ...(jiraCompatibility === "verified" ? { restApi: "v2", agileApi: "unverified" } : {}),
           completeness: "complete",
           loss: "none",

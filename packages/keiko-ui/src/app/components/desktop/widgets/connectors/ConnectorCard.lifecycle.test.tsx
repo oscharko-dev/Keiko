@@ -132,6 +132,32 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     await userEvent.click(within(card).getByRole("button", { name: "More actions: Lab Jira" }));
     expect(screen.queryByRole("menuitem", { name: "Verify connection" })).toBeNull();
   });
+  it("tells the person where compatibility facts are missing and that re-verifying obtains them (#4353)", async () => {
+    if (LIVE.deployment !== "data-center" || LIVE.livePod === undefined)
+      throw new TypeError("Missing Live Pod fixture");
+    const legacy = {
+      ...LIVE,
+      livePod: { ...LIVE.livePod, compatibilityFacts: "missing" as const },
+    };
+    const { unmount } = render(
+      <ConnectorCard
+        connector={legacy}
+        client={client()}
+        onDeleted={vi.fn()}
+        onUpdated={vi.fn()}
+      />,
+    );
+    const notice = await screen.findByTestId("acx-compatibility-missing");
+    expect(notice).toHaveTextContent(
+      "Verify the connection again to obtain them; no permission is added.",
+    );
+    unmount();
+    render(
+      <ConnectorCard connector={LIVE} client={client()} onDeleted={vi.fn()} onUpdated={vi.fn()} />,
+    );
+    await screen.findByTestId("acx-connector");
+    expect(screen.queryByTestId("acx-compatibility-missing")).toBeNull();
+  });
   it("names a failed verification in the chip with one remediation line", async () => {
     if (LIVE.deployment !== "data-center" || LIVE.livePod === undefined)
       throw new TypeError("Missing Live Pod fixture");

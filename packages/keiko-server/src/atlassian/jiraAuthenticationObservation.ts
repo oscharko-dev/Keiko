@@ -83,7 +83,28 @@ function withinOriginalRequest(deadline: number, signal: AbortSignal | undefined
   return !signal?.aborted && Date.now() < deadline;
 }
 
-/** Original response observation stays synchronous; only the subsequent identity GET is awaited. */
+/** How long a positive identity read vouches for the same credential generation and revision. */
+export const JIRA_IDENTITY_PROBE_WINDOW_MS = 10_000;
+
+/**
+ * Closed outcome of the same-generation identity read that decides a 401: `confirmed` keeps the
+ * credential, `rejected` means the identity read itself answered 401 (the owner has discarded the
+ * credential), `inconclusive` is everything else (timeout, throttling, server error, redirect,
+ * malformed data, cancellation).
+ */
+export type JiraIdentityProbeOutcome = "confirmed" | "rejected" | "inconclusive";
+export type JiraUnsettledProbe = "stale" | "cancelled-or-expired" | "probe-error";
+
+export interface JiraAuthenticationObservationOptions {
+  /** Called once when a probe could not settle for a reason the probe owner cannot record. */
+  readonly onUnsettled?: (reason: JiraUnsettledProbe) => void;
+}
+
+/**
+ * Original response observation stays synchronous; only the subsequent identity GET is awaited.
+ * A 401 the identity read could not settle returns `authentication: "unconfirmed"`: the request
+ * is refused, the credential is kept, and nobody reads an expired token out of an unproven 401.
+ */
 export function withJiraAuthenticationObservation<
   TRequest extends Request,
   TResult extends AtlassianHttpResult,
@@ -91,19 +112,44 @@ export function withJiraAuthenticationObservation<
   metadata: AtlassianCredentialMetadata,
   port: (request: TRequest) => Promise<TResult>,
   current: () => boolean,
-  probe: (deadlineAt: number, signal: AbortSignal | undefined) => Promise<boolean>,
+  probe: (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome>,
+  options: JiraAuthenticationObservationOptions = {},
 ): (request: TRequest) => Promise<TResult> {
   return async (input): Promise<TResult> => {
     const request: TRequest = { ...input };
     Object.freeze(request);
     const deadline = Date.now() + Math.min(request.timeoutMs, 60_000);
     const result = await port(request);
-    if (!ambiguousFailure(metadata, request, result) || !current()) return result;
+    if (!ambiguousFailure(metadata, request, result)) return result;
+    const unconfirmed = { ...result, authentication: "unconfirmed" } as const;
+    if (!current()) {
+      options.onUnsettled?.("stale");
+      return unconfirmed;
+    }
     const signal = "signal" in request ? request.signal : undefined;
-    if (!withinOriginalRequest(deadline, signal)) return result;
-    const confirmed = await probe(deadline, signal);
-    if (confirmed && current() && withinOriginalRequest(deadline, signal))
+    if (!withinOriginalRequest(deadline, signal)) {
+      options.onUnsettled?.("cancelled-or-expired");
+      return unconfirmed;
+    }
+    const outcome = await settledProbe(probe, deadline, signal, options);
+    if (outcome === "rejected") return result;
+    if (outcome === "confirmed" && current() && withinOriginalRequest(deadline, signal))
       return { ...result, authentication: "confirmed" };
-    return result;
+    return unconfirmed;
   };
+}
+
+/** A credential change during the probe throws out of the port; it settles as inconclusive. */
+async function settledProbe(
+  probe: (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome>,
+  deadline: number,
+  signal: AbortSignal | undefined,
+  options: JiraAuthenticationObservationOptions,
+): Promise<JiraIdentityProbeOutcome> {
+  try {
+    return await probe(deadline, signal);
+  } catch {
+    options.onUnsettled?.("probe-error");
+    return "inconclusive";
+  }
 }

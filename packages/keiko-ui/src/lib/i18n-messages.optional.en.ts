@@ -2199,6 +2199,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.state.excluded": "Excluded",
   "chat.jira.outcome.rule.parent-type-mismatch":
     "The parent must have an allowed issue type ({subject}).",
+  "chat.jira.outcome.failure.authUnverified":
+    "Jira could not be verified right now, so this request was not sent on. The connection is unchanged. Try again in a moment.",
   "chat.jira.outcome.failure.auth":
     "Jira rejected the token. It may have expired or been revoked. Replace it on the Jira Pod, verify the connection and try again.",
   "chat.jira.outcome.failure.requirementUntraced":
@@ -5445,6 +5447,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.result.succeededTarget": "Result: {target}",
   "atlassianConnectors.result.failedTitle": "Action failed",
   "atlassianConnectors.result.reason.auth-failed": "Authentication failed.",
+  "atlassianConnectors.result.reason.auth-unverified":
+    "Jira could not be verified right now. The connection is unchanged. Try again in a moment.",
+  "atlassianConnectors.live.compatibilityMissing":
+    "This Jira Pod has no retained compatibility details yet. Verify the connection again to obtain them; no permission is added.",
   "atlassianConnectors.result.reason.permission-denied": "Permission denied.",
   "atlassianConnectors.result.reason.not-found": "The target no longer exists.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian rate-limited the request.",
