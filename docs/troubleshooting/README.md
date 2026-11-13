@@ -184,7 +184,9 @@ working, and every record restarts the window. A first start after an
 installation or update can therefore take minutes (code loading under a virus
 scanner) and still succeed; `keiko start` then prints
 `Keiko is still starting.` once. A start that still shows life after fifteen
-minutes without becoming healthy is ended as well.
+minutes without becoming healthy is ended as well. Fifteen minutes is four
+times the slowest start measured (239 seconds, x64 Node under emulation on
+Windows on ARM); a first start on native x64 hardware has not been measured.
 
 The error is emitted when the child process exited (`process-exited`,
 recorded in the Activity Log as `process.fatal`) or went quiet for a whole
@@ -221,8 +223,10 @@ than a process crash.
   error it classifies (typically a port conflict or a Node.js version
   outside the [supported runtime range](../../package.json)).
 - If the foreground UI starts cleanly and `lifeSigns` is `0`, the UI process
-  could not record its sign of life (the state directory was not writable for
-  it). Raise the window for that host by exporting
+  could not record its sign of life: its `process.started` line then carries
+  `startupSign: record-unavailable` or `write-failed` (the state directory was
+  not writable for it), or the launcher's line counts `unreadableSigns` (a link
+  or a non-regular file at `ui.starting`). Raise the window for that host by exporting
   `KEIKO_START_TIMEOUT_SECS=60` before invoking `keiko start` or
   `npm run keiko:start`, and check the state directory's permissions.
 - `keiko start: cannot create the Keiko state directory in the current working

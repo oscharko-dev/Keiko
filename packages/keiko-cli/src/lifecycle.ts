@@ -17,6 +17,8 @@ import {
 } from "@oscharko-dev/keiko-security";
 import {
   isActivityLogReadinessSnapshot,
+  isCredentialCustodyState,
+  type CredentialCustodyState,
   type ActivityLogReadinessSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 // From the contracts leaf, NOT keiko-server or the keiko-sdk fat barrel: pulling the server
@@ -82,7 +84,11 @@ import {
   liveProcessHasLaunchId,
 } from "./ui-process-identity.js";
 import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
-import { readUiStartupSign, type UiStartupSign } from "./ui-startup-progress.js";
+import {
+  readUiStartupSign,
+  type UiStartupProgressFailureRecorder,
+  type UiStartupSign,
+} from "./ui-startup-progress.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
@@ -195,8 +201,7 @@ export interface LifecycleCliDeps {
   /** Test seam: the process command line the tracked UI's own endpoint is read from. */
   readonly readCommandLine?: ((pid: number) => string | undefined) | undefined;
   /** Test seam: the starting UI process's sign of life (ui-startup-progress.ts). */
-  readonly readStartupSign?:
-    ((stateDir: string, launchId: string) => UiStartupSign | undefined) | undefined;
+  readonly readStartupSign?: StartupSignReader | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -216,8 +221,7 @@ interface LifecycleRuntimeDeps {
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
   readonly readCommandLine?: ((pid: number) => string | undefined) | undefined;
-  readonly readStartupSign?:
-    ((stateDir: string, launchId: string) => UiStartupSign | undefined) | undefined;
+  readonly readStartupSign?: StartupSignReader | undefined;
 }
 
 interface HealthProbeResult {
@@ -226,6 +230,8 @@ interface HealthProbeResult {
   readonly launchId?: string | undefined;
   // The server's diagnostic readiness (#3532), when the health body carried a valid block.
   readonly diagnostics?: ActivityLogReadinessSnapshot | undefined;
+  // How the server keeps its credential vaults on Windows (#4358); a closed value or nothing.
+  readonly credentialCustody?: CredentialCustodyState | undefined;
 }
 
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
@@ -358,6 +364,13 @@ function healthDiagnostics(payload: unknown): ActivityLogReadinessSnapshot | und
   return isActivityLogReadinessSnapshot(diagnostics) ? diagnostics : undefined;
 }
 
+// Untrusted like the rest of the body: only one of the closed states is admitted.
+function healthCredentialCustody(payload: unknown): CredentialCustodyState | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const custody = (payload as { readonly credentialCustody?: unknown }).credentialCustody;
+  return isCredentialCustodyState(custody) ? custody : undefined;
+}
+
 function healthResult(statusCode: number | undefined, body: string): HealthProbeResult {
   if (statusCode === undefined || statusCode < 200 || statusCode >= 300) {
     return { reachable: false, version: undefined };
@@ -372,6 +385,7 @@ function healthResult(statusCode: number | undefined, body: string): HealthProbe
       reachable: true,
       version: healthVersion(payload),
       diagnostics: healthDiagnostics(payload),
+      credentialCustody: healthCredentialCustody(payload),
       ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
     };
   } catch {
@@ -815,10 +829,18 @@ function uiProcessArguments(
 // became healthy, or it stayed alive without answering the health check in time.
 type StartOutcome = "healthy" | "process-exited" | "health-timeout";
 
+type StartupSignReader = (
+  stateDir: string,
+  launchId: string,
+  recordFailure?: UiStartupProgressFailureRecorder,
+) => UiStartupSign | undefined;
+
 interface StartWait {
   readonly outcome: StartOutcome;
   /** How often the UI process's sign of life restarted the window (#4358). */
   readonly lifeSigns: number;
+  /** How often a record was there but could not be read as one (a link, not a regular file). */
+  readonly unreadableSigns: number;
 }
 
 // A UI process that keeps showing life is not waited on forever: a start that is still not healthy
@@ -836,24 +858,27 @@ const STILL_STARTING_NOTICE =
 class StartWindow {
   private lastToken: string | undefined;
   private signs = 0;
+  private unreadable = 0;
   private readonly ceiling: number;
 
   public constructor(
     private readonly windowMs: number,
     private deadline: number,
-    private readonly read: () => UiStartupSign | undefined,
+    private readonly read: (recordFailure: () => void) => UiStartupSign | undefined,
     private readonly onExtended: () => void,
   ) {
     this.ceiling = performance.now() + Math.max(START_CEILING_MS, windowMs);
   }
 
-  public get lifeSigns(): number {
-    return this.signs;
+  public result(outcome: StartOutcome): StartWait {
+    return { outcome, lifeSigns: this.signs, unreadableSigns: this.unreadable };
   }
 
   /** The current deadline, after taking a new sign of life into account. */
   public current(): number {
-    const sign = this.read();
+    const sign = this.read(() => {
+      this.unreadable += 1;
+    });
     if (sign !== undefined && sign.token !== this.lastToken) {
       this.lastToken = sign.token;
       const extended = performance.now() + Math.max(this.windowMs, sign.horizonMs);
@@ -879,7 +904,7 @@ async function waitForHealth(
   const window = new StartWindow(
     options.startTimeoutMs,
     deadline,
-    () => read(options.stateDir, launchId),
+    (recordFailure) => read(options.stateDir, launchId, recordFailure),
     () => {
       io.out(STILL_STARTING_NOTICE);
     },
@@ -887,8 +912,7 @@ async function waitForHealth(
   // Monotonic clock so a wall-clock adjustment during startup does not skip the health
   // window (forward jump) or hold it open indefinitely (backward jump).
   while (performance.now() < window.current()) {
-    if (!deps.isProcessAlive(pid))
-      return { outcome: "process-exited", lifeSigns: window.lifeSigns };
+    if (!deps.isProcessAlive(pid)) return window.result("process-exited");
     const remaining = Math.ceil(window.current() - performance.now());
     if (remaining <= 0) break;
     const health = await deps.healthProbe(
@@ -901,11 +925,11 @@ async function waitForHealth(
       deps.isProcessAlive(pid) &&
       performance.now() < window.current()
     ) {
-      return { outcome: "healthy", lifeSigns: window.lifeSigns };
+      return window.result("healthy");
     }
     await deps.sleep(Math.min(500, Math.max(0, window.current() - performance.now())));
   }
-  return { outcome: "health-timeout", lifeSigns: window.lifeSigns };
+  return window.result("health-timeout");
 }
 
 async function ensureStartPortAvailable(
@@ -1236,7 +1260,7 @@ async function startDirectUi(context: OwnedUiStartContext): Promise<number> {
     "start",
     startOutcome,
     startOutcome === "healthy",
-    started.lifeSigns,
+    started,
   );
   if (startOutcome === "healthy") {
     return reportHealthyStart(
@@ -1371,13 +1395,7 @@ async function startOwnedUi(
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
   const started = await waitForHealth(options, launch.pid, launchId, deps, io, deadline);
   const outcome = started.outcome;
-  emitLifecycleHealth(
-    deps.securityLogSink,
-    "start",
-    outcome,
-    outcome === "healthy",
-    started.lifeSigns,
-  );
+  emitLifecycleHealth(deps.securityLogSink, "start", outcome, outcome === "healthy", started);
   if (outcome === "healthy") return commitOwnedUi(context, launch, deadline);
   await launch.abort();
   return reportUnhealthyStart(options, io, deps, launch.pid, launchId, outcome);
@@ -1470,6 +1488,26 @@ function readinessStatusLine(health: HealthProbeResult): string {
   return `Diagnostic evidence: ${diagnostics.readiness}${reasons}; lost events: ${String(diagnostics.lostEvents)}.\n`;
 }
 
+// `keiko status` states how the credential vaults are kept on Windows (#4358). Each state has its
+// own sentence: "unattested" and "exposed" never read like "attested". Nothing is printed on other
+// platforms or before the server read a vault key.
+const CREDENTIAL_CUSTODY_STATUS: Readonly<Record<CredentialCustodyState, string>> = {
+  attested: "attested (the credential key file and its folder are private to this Windows account)",
+  protected:
+    "protected (the credential folder was open to other Windows accounts; Keiko made it private, the key itself was not readable)",
+  exposed:
+    "exposed (the credential key file was readable by another Windows account before Keiko protected it; replace stored tokens such as the Jira token)",
+  unattested:
+    "unattested (Windows could not be asked whether the credential key file is private to this account; nothing is claimed)",
+};
+
+function credentialCustodyStatusLine(health: HealthProbeResult): string {
+  const custody = health.credentialCustody;
+  return custody === undefined
+    ? ""
+    : `Credential custody: ${CREDENTIAL_CUSTODY_STATUS[custody]}.\n`;
+}
+
 async function cmdStatus(
   options: LifecycleOptions,
   io: CliIo,
@@ -1481,7 +1519,9 @@ async function cmdStatus(
     return 0;
   }
   io.out(`Keiko UI is running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
-  io.out(readinessStatusLine(await deps.healthProbe(healthUrl(options))));
+  const health = await deps.healthProbe(healthUrl(options));
+  io.out(readinessStatusLine(health));
+  io.out(credentialCustodyStatusLine(health));
   return 0;
 }
 

@@ -197,6 +197,8 @@ export {
 } from "./windows-process-identity.js";
 export type { WindowsProcessIdentityOptions } from "./windows-process-identity.js";
 export { WINDOWS_URL_OPENER_TIMEOUT_MS, resolveWindowsUrlOpener } from "./windows-url-opener.js";
+export { currentWindowsVaultCustody } from "./windows-vault-custody.js";
+export type { WindowsVaultCustodyOutcome } from "./windows-vault-custody.js";
 export { setWindowsProgramObserver } from "./windows-powershell-program.js";
 export type { WindowsProgramObserver } from "./windows-powershell-program.js";
 export type { WindowsBrowserApp, WindowsUrlOpener } from "./windows-url-opener.js";

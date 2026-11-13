@@ -48,6 +48,8 @@ interface Scenario {
   /** The second from which the health check answers; never when omitted. */
   readonly healthyFromSeconds?: number;
   readonly startTimeoutSeconds?: number;
+  /** Every read finds a record it cannot read as one (a link at the record's name). */
+  readonly unreadable?: boolean;
 }
 
 /**
@@ -99,7 +101,10 @@ async function start(scenario: Scenario): Promise<Start> {
       now += ms;
       return Promise.resolve();
     },
-    readStartupSign: () => scenario.sign(now / 1_000),
+    readStartupSign: (_stateDir, _launchId, recordFailure) => {
+      if (scenario.unreadable === true) recordFailure?.("unreadable");
+      return scenario.sign(now / 1_000);
+    },
     securityLogSink: { write: (event): void => void events.push(event) },
   };
   const code = await runLifecycleCli(
@@ -174,6 +179,15 @@ describe("keiko start waits on a UI process that shows life", () => {
     expect(result.endedAtSeconds).toBeLessThan(23);
     expect(result.out).not.toContain("still starting");
     expect(healthEvent(result.events)?.extra).toMatchObject({ lifeSigns: 0 });
+  });
+
+  it("counts a record it cannot read, and waits no longer for it", async () => {
+    const result = await start({ sign: () => undefined, unreadable: true });
+    expect(result.code).toBe(1);
+    expect(result.endedAtSeconds).toBeLessThan(23);
+    const extra = healthEvent(result.events)?.extra;
+    expect(extra).toMatchObject({ lifeSigns: 0 });
+    expect(extra?.unreadableSigns).toBeGreaterThan(10);
   });
 
   it("waits out the bound a blocking step announced, then ends a process that stays silent", async () => {

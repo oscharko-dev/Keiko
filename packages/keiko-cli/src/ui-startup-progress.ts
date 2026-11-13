@@ -23,7 +23,14 @@
 // opened once without following a link. It carries the launch id, an opaque change counter and the
 // announced bound: no path, no account, no content. The launcher only ever uses it to wait LONGER
 // on a live process; it can never make a start succeed or shorten a wait.
-import { closeSync, constants as fsConstants, readSync, rmSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  readSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { isKeikoUiLaunchId } from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
@@ -57,6 +64,15 @@ export interface UiStartupProgress {
   /** Ends the reporting and removes the record. Idempotent. */
   readonly stop: () => void;
 }
+
+/**
+ * Why a sign of life could not be recorded or read. The report is optional and can only make the
+ * launcher wait longer, so a failure never fails the start; it is handed to the caller, which owns
+ * the Activity Log line that shows it (`process.started` in the UI process, `cli.lifecycle.health`
+ * in the launcher).
+ */
+export type UiStartupProgressFailure = "record-unavailable" | "write-failed" | "unreadable";
+export type UiStartupProgressFailureRecorder = (failure: UiStartupProgressFailure) => void;
 
 export function uiStartupProgressPath(stateDir: string): string {
   return join(stateDir, UI_STARTUP_PROGRESS_STATE_FILE);
@@ -118,16 +134,24 @@ function startWorker(fd: number, launchId: string): Worker {
   return worker;
 }
 
-function reporting(path: string, fd: number, launchId: string, worker: Worker): UiStartupProgress {
+interface Reporting {
+  readonly path: string;
+  readonly fd: number;
+  readonly launchId: string;
+  readonly worker: Worker;
+  readonly recordFailure: UiStartupProgressFailureRecorder;
+}
+
+function reporting({ path, fd, launchId, worker, recordFailure }: Reporting): UiStartupProgress {
   let open = true;
-  // Reporting is best effort: a record that cannot be written is the same as no record, and the
-  // launcher's `cli.lifecycle.health` line shows it as a start without signs of life.
+  // A record that cannot be written ends the report for this start: the same as no record.
   const write = (horizonMs: number): void => {
     if (!open) return;
     try {
       writeSync(fd, record(launchId, Date.now(), horizonMs), 0, RECORD_BYTES, 0);
     } catch {
       open = false;
+      recordFailure("write-failed");
     }
   };
   write(0);
@@ -147,20 +171,29 @@ function reporting(path: string, fd: number, launchId: string, worker: Worker): 
  * Never throws: when the record or its worker cannot be created the start proceeds without them
  * and the launcher waits one window, as it did before this report existed.
  */
-export function beginUiStartupProgress(stateDir: string, launchId: string): UiStartupProgress {
+export function beginUiStartupProgress(
+  stateDir: string,
+  launchId: string,
+  recordFailure: UiStartupProgressFailureRecorder = (): void => undefined,
+): UiStartupProgress {
   if (!isKeikoUiLaunchId(launchId)) return INERT;
   const path = uiStartupProgressPath(stateDir);
   try {
-    return once(openReporting(path, launchId));
+    return once(openReporting(path, launchId, recordFailure));
   } catch {
+    recordFailure("record-unavailable");
     return INERT;
   }
 }
 
-function openReporting(path: string, launchId: string): UiStartupProgress {
+function openReporting(
+  path: string,
+  launchId: string,
+  recordFailure: UiStartupProgressFailureRecorder,
+): UiStartupProgress {
   const fd = openRecord(path);
   try {
-    return reporting(path, fd, launchId, startWorker(fd, launchId));
+    return reporting({ path, fd, launchId, worker: startWorker(fd, launchId), recordFailure });
   } catch (error) {
     closeSync(fd);
     rmSync(path, { force: true });
@@ -182,9 +215,14 @@ function once(progress: UiStartupProgress): UiStartupProgress {
   };
 }
 
-// No record, a record that cannot be opened without following a link, and a record that is not a
-// regular single-link file all read as "no sign of life": the launcher then waits one window.
-function readRecord(path: string): string | undefined {
+// No record is the ordinary case before the UI process wrote its first one. A record that cannot
+// be opened without following a link, or that is not a regular single-link file, also reads as "no
+// sign of life" (the launcher then waits one window) and is handed to the caller as unreadable.
+function readRecord(
+  path: string,
+  recordFailure: UiStartupProgressFailureRecorder,
+): string | undefined {
+  if (!existsSync(path)) return undefined;
   try {
     const fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
     try {
@@ -196,6 +234,7 @@ function readRecord(path: string): string | undefined {
       closeSync(fd);
     }
   } catch {
+    recordFailure("unreadable");
     return undefined;
   }
 }
@@ -204,8 +243,12 @@ function readRecord(path: string): string | undefined {
  * The UI process's latest sign of life for `launchId`, or `undefined` when there is none: no
  * record, a record of another launch, a link, or anything that is not exactly one record.
  */
-export function readUiStartupSign(stateDir: string, launchId: string): UiStartupSign | undefined {
-  const text = readRecord(uiStartupProgressPath(stateDir));
+export function readUiStartupSign(
+  stateDir: string,
+  launchId: string,
+  recordFailure: UiStartupProgressFailureRecorder = (): void => undefined,
+): UiStartupSign | undefined {
+  const text = readRecord(uiStartupProgressPath(stateDir), recordFailure);
   const match = text === undefined ? null : RECORD_PATTERN.exec(text);
   if (match?.[1] !== launchId) return undefined;
   return {

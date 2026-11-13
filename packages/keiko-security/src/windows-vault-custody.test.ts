@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { SecurityLogEvent } from "./log-port.js";
 import type {
   WindowsOpenedFileIdentity,
@@ -7,6 +7,9 @@ import type {
 } from "./windows-owner-private.js";
 import {
   attestWindowsVaultCustody,
+  currentWindowsVaultCustody,
+  resetWindowsVaultCustodyForTest,
+  secureWindowsVaultDirectory,
   WindowsVaultCustodyError,
   type WindowsVaultCustodyPorts,
 } from "./windows-vault-custody.js";
@@ -168,6 +171,10 @@ function expectBodyFree(h: Harness): void {
   }
 }
 
+beforeEach(() => {
+  resetWindowsVaultCustodyForTest();
+});
+
 describe("attestWindowsVaultCustody", () => {
   it("attests a key file and directory that only the user, SYSTEM and Administrators reach", () => {
     const h = harness([inspection(privateDirectory, privateKeyfile)]);
@@ -180,18 +187,21 @@ describe("attestWindowsVaultCustody", () => {
     expectBodyFree(h);
   });
 
-  it("protects a key file another account can read, then attests it", () => {
+  // The key may have been read while it was reachable: protecting it afterwards is not "all good".
+  it("reports a key file another account could read as exposed, after protecting it", () => {
     const h = harness([
       inspection(privateDirectory, facts(KEYFILE_ID, ARCHIVE_ATTRIBUTE, READABLE_BY_OTHERS)),
       inspection(privateDirectory, privateKeyfile),
     ]);
-    expect(attest(h)).toBe("protected");
+    expect(attest(h)).toBe("exposed");
     expect(h.protectedPaths).toEqual([{ path: KEYFILE, inherit: false }]);
-    expect(custodyLine(h)).toMatchObject({ outcome: "protected", target: "keyfile" });
+    expect(h.events.at(-1)).toMatchObject({ level: "warn", errorKind: "unsafe-target" });
+    expect(custodyLine(h)).toMatchObject({ outcome: "exposed", target: "keyfile" });
+    expect(currentWindowsVaultCustody()).toBe("exposed");
     expectBodyFree(h);
   });
 
-  it("protects a directory with inheritable entries and reports both repaired objects", () => {
+  it("reports exposure when both the directory and the key file were reachable", () => {
     const h = harness([
       inspection(
         facts(DIRECTORY_ID, DIRECTORY_ATTRIBUTE, WRITABLE_BY_OTHERS),
@@ -199,12 +209,23 @@ describe("attestWindowsVaultCustody", () => {
       ),
       inspection(privateDirectory, privateKeyfile),
     ]);
-    expect(attest(h)).toBe("protected");
+    expect(attest(h)).toBe("exposed");
     expect(h.protectedPaths).toEqual([
       { path: DIRECTORY, inherit: true },
       { path: KEYFILE, inherit: false },
     ]);
-    expect(custodyLine(h)).toMatchObject({ outcome: "protected", target: "both" });
+    expect(custodyLine(h)).toMatchObject({ outcome: "exposed", target: "both" });
+  });
+
+  it("reports protected when only the directory was reachable and the key file was private", () => {
+    const h = harness([
+      inspection(facts(DIRECTORY_ID, DIRECTORY_ATTRIBUTE, READABLE_BY_OTHERS), privateKeyfile),
+      inspection(privateDirectory, privateKeyfile),
+    ]);
+    expect(attest(h)).toBe("protected");
+    expect(h.protectedPaths).toEqual([{ path: DIRECTORY, inherit: true }]);
+    expect(custodyLine(h)).toMatchObject({ outcome: "protected", target: "directory" });
+    expect(currentWindowsVaultCustody()).toBe("protected");
   });
 
   it("refuses when protection did not make the object private", () => {
@@ -328,5 +349,89 @@ describe("attestWindowsVaultCustody", () => {
       reason: "inspection-unavailable",
     });
     expectBodyFree(h);
+  });
+});
+
+function secure(h: Harness): ReturnType<typeof secureWindowsVaultDirectory> {
+  return secureWindowsVaultDirectory(
+    { directory: DIRECTORY, sink: { write: (event): void => void h.events.push(event) } },
+    h.ports,
+  );
+}
+
+function directoryOnly(directory: WindowsOwnerPrivateFacts): WindowsOwnerPrivateInspection {
+  return { principal: { userSid: USER, tokenOwnerSid: USER }, files: [directory] };
+}
+
+// A new key file inherits its directory's permissions, so the directory is private first.
+describe("secureWindowsVaultDirectory", () => {
+  it("inspects the directory alone and attests a private one", () => {
+    const h = harness([directoryOnly(privateDirectory)]);
+    expect(secure(h)).toBe("attested");
+    expect(h.inspected).toEqual([[DIRECTORY]]);
+    expect(h.protectedPaths).toEqual([]);
+  });
+
+  it("makes a reachable directory private, with inheritable entries, before any key exists", () => {
+    const h = harness([
+      directoryOnly(facts(DIRECTORY_ID, DIRECTORY_ATTRIBUTE, READABLE_BY_OTHERS)),
+      directoryOnly(privateDirectory),
+    ]);
+    expect(secure(h)).toBe("protected");
+    expect(h.protectedPaths).toEqual([{ path: DIRECTORY, inherit: true }]);
+    expect(custodyLine(h)).toMatchObject({ outcome: "protected", target: "directory" });
+  });
+
+  it("refuses to hold a key in a directory that stays reachable", () => {
+    const reachable = directoryOnly(facts(DIRECTORY_ID, DIRECTORY_ATTRIBUTE, READABLE_BY_OTHERS));
+    const h = harness([reachable, reachable]);
+    expect(() => secure(h)).toThrow(WindowsVaultCustodyError);
+    expect(custodyLine(h)).toMatchObject({ outcome: "refused", target: "directory" });
+  });
+
+  it("claims nothing when the inspection cannot run", () => {
+    const h = harness([new Error("windows-owner-private-unavailable")]);
+    expect(secure(h)).toBe("unattested");
+    expect(currentWindowsVaultCustody()).toBe("unattested");
+  });
+});
+
+// #4358 audit: "unattested" must never be read as "attested", anywhere.
+describe("the process custody summary", () => {
+  const privateOnce = (): Harness => harness([inspection(privateDirectory, privateKeyfile)]);
+
+  it("is undefined until a vault was judged", () => {
+    expect(currentWindowsVaultCustody()).toBeUndefined();
+  });
+
+  it("keeps the worst outcome: a later attested vault never hides an unattested or exposed one", () => {
+    attest(harness([new Error("windows-owner-private-unavailable")]));
+    expect(currentWindowsVaultCustody()).toBe("unattested");
+    attest(privateOnce());
+    expect(currentWindowsVaultCustody()).toBe("unattested");
+    attest(
+      harness([
+        inspection(privateDirectory, facts(KEYFILE_ID, ARCHIVE_ATTRIBUTE, READABLE_BY_OTHERS)),
+        inspection(privateDirectory, privateKeyfile),
+      ]),
+    );
+    expect(currentWindowsVaultCustody()).toBe("exposed");
+    attest(privateOnce());
+    expect(currentWindowsVaultCustody()).toBe("exposed");
+  });
+
+  it("reports attested only when every judged vault attested", () => {
+    attest(privateOnce());
+    attest(privateOnce());
+    expect(currentWindowsVaultCustody()).toBe("attested");
+  });
+
+  it("does not enter a refused vault, which never yields a key", () => {
+    const foreign = inspection(
+      privateDirectory,
+      facts(KEYFILE_ID, ARCHIVE_ATTRIBUTE, FOREIGN_OWNER),
+    );
+    expect(() => attest(harness([foreign, foreign]))).toThrow(WindowsVaultCustodyError);
+    expect(currentWindowsVaultCustody()).toBeUndefined();
   });
 });

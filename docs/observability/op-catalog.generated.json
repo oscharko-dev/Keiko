@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "32b1ccdac8080d011a8102eb15d2515d1db1afded1bf73d801219db7da46fbfd",
+    "catalogDigest": "afd08d08df136a2af08e9f5fd5b0647f233be5686fc7989a0946dd83a4416876",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4958,6 +4958,11 @@
             "dataClass": "count",
             "required": false
           },
+          "unreadableSigns": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "launchBound": {
             "type": "boolean",
             "dataClass": "closed-enum",
@@ -4971,7 +4976,7 @@
         "proofIds": ["cli.lifecycle.health.decision"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:16",
-        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:70"]
+        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:72"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39877,7 +39882,7 @@
         "proofIds": ["process.heartbeat.resources", "process.heartbeat.event-loop"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:92",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1278"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1286"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39986,6 +39991,12 @@
             "dataClass": "count",
             "required": false
           },
+          "startupSign": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["reported", "record-unavailable", "write-failed"]
+          },
           "processScope": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -40006,7 +40017,7 @@
         "proofIds": ["process.started.runtime", "process.started.configuration"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:120",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1403"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1411"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43749,7 +43760,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["attested", "protected", "unattested", "refused"]
+            "values": ["attested", "protected", "exposed", "unattested", "refused"]
           },
           "target": {
             "type": "string",
@@ -43784,8 +43795,8 @@
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.custody.decision"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/windows-vault-custody.ts:59",
-        "emitterSites": ["packages/keiko-security/src/windows-vault-custody.ts:247"]
+        "registrationSite": "packages/keiko-security/src/windows-vault-custody.ts:67",
+        "emitterSites": ["packages/keiko-security/src/windows-vault-custody.ts:265"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43837,8 +43848,8 @@
         },
         "failureClasses": ["security-vault-delete"],
         "proofIds": ["security.vault.entries-delete-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:285",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:984"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:286",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:993"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43870,8 +43881,8 @@
         "failureClasses": ["security-vault-delete"],
         "proofIds": ["security.vault.entries-deleted.count"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:269",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:964"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:270",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:973"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43923,8 +43934,8 @@
         },
         "failureClasses": ["security-vault-write"],
         "proofIds": ["security.vault.entries-merge-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:297",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1011"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:298",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1020"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43956,8 +43967,8 @@
         "failureClasses": ["security-vault-write"],
         "proofIds": ["security.vault.entries-merged.count"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:253",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:949"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:254",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:958"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44009,8 +44020,8 @@
         },
         "failureClasses": ["security-vault-rollback"],
         "proofIds": ["security.vault.entries-rollback-failed.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:321",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1192"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:322",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1201"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44057,8 +44068,8 @@
         },
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.key-resolution-failed.evidence"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:244",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:635"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:245",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:644"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44091,8 +44102,8 @@
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.key-resolved.source"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:221",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:658"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:222",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:667"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44144,8 +44155,8 @@
         },
         "failureClasses": ["security-vault-read"],
         "proofIds": ["security.vault.shard-unreadable.count"],
-        "registrationSite": "packages/keiko-security/src/secret-vault.ts:309",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1107"]
+        "registrationSite": "packages/keiko-security/src/secret-vault.ts:310",
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1116"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -49664,8 +49675,8 @@
         "failureClasses": ["legacy-update-audit-import"],
         "proofIds": ["update.runtime.legacy-import-deferred.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:220",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1697"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:228",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1706"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101043,6 +101054,12 @@
                   "required": false
                 },
                 {
+                  "name": "startupSign",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "stateDirSource",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -106070,6 +106087,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "unreadableSigns",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -106187,6 +106210,12 @@
                 },
                 {
                   "name": "processScopeState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "startupSign",
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": false
@@ -116940,7 +116969,7 @@
     {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui.ts:223",
+      "site": "packages/keiko-cli/src/ui.ts:231",
       "package": "keiko-cli"
     },
     {
@@ -118194,55 +118223,55 @@
     {
       "op": "security.vault.custody",
       "category": "security",
-      "site": "packages/keiko-security/src/windows-vault-custody.ts:62",
+      "site": "packages/keiko-security/src/windows-vault-custody.ts:70",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-delete-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:287",
+      "site": "packages/keiko-security/src/secret-vault.ts:288",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-deleted",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:272",
+      "site": "packages/keiko-security/src/secret-vault.ts:273",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merge-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:299",
+      "site": "packages/keiko-security/src/secret-vault.ts:300",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-merged",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:256",
+      "site": "packages/keiko-security/src/secret-vault.ts:257",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.entries-rollback-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:323",
+      "site": "packages/keiko-security/src/secret-vault.ts:324",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolution-failed",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:246",
+      "site": "packages/keiko-security/src/secret-vault.ts:247",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:224",
+      "site": "packages/keiko-security/src/secret-vault.ts:225",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:311",
+      "site": "packages/keiko-security/src/secret-vault.ts:312",
       "package": "keiko-security"
     },
     {

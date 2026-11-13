@@ -38491,6 +38491,12 @@
               "required": false
             },
             {
+              "name": "startupSign",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "stateDirSource",
               "type": "string",
               "dataClass": "closed-enum",
@@ -43488,6 +43494,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "unreadableSigns",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -43605,6 +43617,12 @@
             },
             {
               "name": "processScopeState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "startupSign",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false

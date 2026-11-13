@@ -4789,6 +4789,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      unreadableSigns: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       launchBound: {
         type: "boolean",
         dataClass: "closed-enum",
@@ -38410,6 +38415,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      startupSign: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["reported", "record-unavailable", "write-failed"],
+      },
       processScope: {
         type: "string",
         dataClass: "closed-enum",
@@ -42058,7 +42069,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["attested", "protected", "unattested", "refused"],
+        values: ["attested", "protected", "exposed", "unattested", "refused"],
       },
       target: {
         type: "string",

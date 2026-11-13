@@ -196,6 +196,14 @@ const PROCESS_STARTED_OPERATION = defineActivityLogOperation({
       maxLength: 64,
     },
     gatewayProviderCount: { type: "integer", dataClass: "count", required: false },
+    // Whether this launched UI process could record its startup sign of life for the launcher that
+    // waits on it (#4358, ui-startup-progress.ts). Absent when no launcher asked for one.
+    startupSign: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["reported", "record-unavailable", "write-failed"],
+    },
     processScope: {
       type: "string",
       dataClass: "closed-enum",
@@ -1416,6 +1424,7 @@ async function reportProcessStarted(
         ...(installMode === undefined ? {} : { installMode }),
         ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
         ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
+        ...(startupSignState === undefined ? {} : { startupSign: startupSignState }),
       },
     ),
   );
@@ -2032,6 +2041,7 @@ export async function runUiCli(
 // that it is working (ui-startup-progress.ts), and how long a bounded Windows program may keep it
 // silent. Only a launched UI reports: the launcher supplied the launch id it waits on.
 let startupProgress: UiStartupProgress | undefined;
+let startupSignState: "reported" | "record-unavailable" | "write-failed" | undefined;
 
 async function beginStartupProgress(
   cwd: string,
@@ -2041,7 +2051,10 @@ async function beginStartupProgress(
 ): Promise<void> {
   const launchId = parsed.launchId ?? env[KEIKO_UI_LAUNCH_ID_ENV];
   if (deps.createServer !== undefined || launchId === undefined) return;
-  const progress = beginUiStartupProgress(resolveRuntimeStateDir(cwd, env), launchId);
+  startupSignState = "reported";
+  const progress = beginUiStartupProgress(resolveRuntimeStateDir(cwd, env), launchId, (failure) => {
+    if (failure !== "unreadable") startupSignState = failure;
+  });
   startupProgress = progress;
   const { setWindowsProgramObserver } = await loadSecurity();
   setWindowsProgramObserver((boundMs) => {

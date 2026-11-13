@@ -108,7 +108,11 @@ describe("UI startup sign of life", () => {
     ["free text", "still starting, please wait\n"],
   ])("reads %s as no sign of life", (_label, content) => {
     if (content !== undefined) writeFileSync(uiStartupProgressPath(stateDir), content);
-    expect(readUiStartupSign(stateDir, LAUNCH_ID)).toBeUndefined();
+    const failures: string[] = [];
+    expect(readUiStartupSign(stateDir, LAUNCH_ID, (f) => failures.push(f))).toBeUndefined();
+    // A missing or malformed record is no sign of life; only a record that cannot be opened as a
+    // regular file is a failure.
+    expect(failures).toEqual([]);
   });
 
   it("reports nothing and changes nothing for a launch id that is not one", () => {
@@ -118,8 +122,12 @@ describe("UI startup sign of life", () => {
     expect(existsSync(uiStartupProgressPath(stateDir))).toBe(false);
   });
 
-  it("never fails the start when the record cannot be created", () => {
-    const progress = beginUiStartupProgress(join(stateDir, "missing", "state"), LAUNCH_ID);
+  it("never fails the start when the record cannot be created, and hands the failure on", () => {
+    const failures: string[] = [];
+    const progress = beginUiStartupProgress(join(stateDir, "missing", "state"), LAUNCH_ID, (f) =>
+      failures.push(f),
+    );
+    expect(failures).toEqual(["record-unavailable"]);
     expect(() => {
       progress.announce(1_000);
       progress.stop();
@@ -132,7 +140,9 @@ describe("UI startup sign of life", () => {
       const target = join(stateDir, "victim.txt");
       writeFileSync(target, "untouched");
       symlinkSync(target, uiStartupProgressPath(stateDir));
-      expect(readUiStartupSign(stateDir, LAUNCH_ID)).toBeUndefined();
+      const failures: string[] = [];
+      expect(readUiStartupSign(stateDir, LAUNCH_ID, (f) => failures.push(f))).toBeUndefined();
+      expect(failures).toEqual(["unreadable"]);
       begin();
       expect(readFileSync(target, "utf8")).toBe("untouched");
       expect(readUiStartupSign(stateDir, LAUNCH_ID)).toBeDefined();

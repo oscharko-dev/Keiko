@@ -13,6 +13,10 @@ import {
   type ResolveLocalVaultKeyOptions,
 } from "./secret-vault.js";
 import type { WindowsOwnerPrivateInspection } from "./windows-owner-private.js";
+import {
+  currentWindowsVaultCustody,
+  resetWindowsVaultCustodyForTest,
+} from "./windows-vault-custody.js";
 
 const USER = "S-1-5-21-1-2-3-1001";
 const KEYFILE = "test-vault.key";
@@ -56,27 +60,38 @@ let events: SecurityLogEvent[];
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "keiko-vault-custody-"));
   events = [];
+  resetWindowsVaultCustodyForTest();
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/** Facts for the real directory and key file, as the Windows inspection would report them. */
-function realFacts(shared: boolean): WindowsOwnerPrivateInspection {
+/**
+ * Facts for the real directory and, when it was asked for, the real key file, as the Windows
+ * inspection would report them. `shared` makes the key file readable by Authenticated Users.
+ */
+function realFacts(
+  shared: boolean,
+  paths: readonly string[] = [dir, join(dir, KEYFILE)],
+): WindowsOwnerPrivateInspection {
   const directory = lstatSync(dir, { bigint: true });
+  const directoryFacts = {
+    kind: "facts" as const,
+    attributes: 0x10,
+    volumeSerial: directory.dev,
+    fileIndex: directory.ino,
+    links: 1,
+    descriptor: descriptor(false),
+  };
+  if (paths.length === 1) {
+    return { principal: { userSid: USER, tokenOwnerSid: USER }, files: [directoryFacts] };
+  }
   const keyfile = lstatSync(join(dir, KEYFILE), { bigint: true });
   return {
     principal: { userSid: USER, tokenOwnerSid: USER },
     files: [
-      {
-        kind: "facts",
-        attributes: 0x10,
-        volumeSerial: directory.dev,
-        fileIndex: directory.ino,
-        links: 1,
-        descriptor: descriptor(false),
-      },
+      directoryFacts,
       {
         kind: "facts",
         attributes: 0x20,
@@ -111,13 +126,13 @@ function custodyOutcomes(): unknown[] {
 }
 
 describe("secret vault key file on Windows", () => {
-  it("attests a new key file and its directory before the key is used", () => {
-    const inspected: (readonly string[])[] = [];
+  it("makes the directory private before it creates a new key, then attests both", () => {
+    const inspected: { readonly paths: readonly string[]; readonly keyExisted: boolean }[] = [];
     const resolved = resolveLocalVaultKey(
       options({
         inspect: (paths) => {
-          inspected.push(paths);
-          return realFacts(false);
+          inspected.push({ paths, keyExisted: existsSync(join(dir, KEYFILE)) });
+          return realFacts(false, paths);
         },
         protect: () => {
           throw new Error("must not protect a private key file");
@@ -126,44 +141,72 @@ describe("secret vault key file on Windows", () => {
     );
     expect(resolved.source).toBe("keyfile");
     expect(resolved.key).toHaveLength(32);
-    expect(inspected).toEqual([[dir, join(dir, KEYFILE)]]);
-    expect(custodyOutcomes()).toEqual(["attested"]);
+    // The directory alone, while no key file exists yet; then the directory and the new key file.
+    expect(inspected).toEqual([
+      { paths: [dir], keyExisted: false },
+      { paths: [dir, join(dir, KEYFILE)], keyExisted: true },
+    ]);
+    expect(custodyOutcomes()).toEqual(["attested", "attested"]);
     const stored = Buffer.from(readFileSync(join(dir, KEYFILE), "utf8").trim(), "base64");
     expect(stored.equals(resolved.key)).toBe(true);
   });
 
-  it("attests an existing key file again on the next resolution and returns the same key", () => {
-    const custody = { inspect: (): WindowsOwnerPrivateInspection => realFacts(false) };
-    const first = resolveLocalVaultKey(options(custody));
-    const second = resolveLocalVaultKey(options(custody));
-    expect(second.key.equals(first.key)).toBe(true);
-    expect(custodyOutcomes()).toEqual(["attested", "attested"]);
+  it("never creates a key in a directory another account can reach", () => {
+    const reachable = (): WindowsOwnerPrivateInspection => {
+      const found = realFacts(false, [dir]);
+      const [directory] = found.files;
+      if (directory?.kind !== "facts") throw new Error("fixture");
+      return { ...found, files: [{ ...directory, descriptor: descriptor(true) }] };
+    };
+    expect(() =>
+      resolveLocalVaultKey(options({ inspect: reachable, protect: (): void => undefined })),
+    ).toThrow("secret vault directory is not private to the current Windows user (foreign-access)");
+    expect(existsSync(join(dir, KEYFILE))).toBe(false);
+    expect(custodyOutcomes()).toEqual(["refused"]);
   });
 
-  it("protects a key file another account can read, then uses it", () => {
+  it("attests an existing key file again on the next resolution and returns the same key", () => {
+    const custody = {
+      inspect: (paths: readonly string[]): WindowsOwnerPrivateInspection => realFacts(false, paths),
+    };
+    const first = resolveLocalVaultKey(options(custody));
+    events.length = 0;
+    const second = resolveLocalVaultKey(options(custody));
+    expect(second.key.equals(first.key)).toBe(true);
+    // An existing key needs one inspection, of the directory and the key file together.
+    expect(custodyOutcomes()).toEqual(["attested"]);
+  });
+
+  it("uses an existing key another account could read, protects it and reports it as exposed", () => {
+    const priv = {
+      inspect: (paths: readonly string[]): WindowsOwnerPrivateInspection => realFacts(false, paths),
+    };
+    const first = resolveLocalVaultKey(options(priv));
+    events.length = 0;
     let protectedPath: string | undefined;
     const resolved = resolveLocalVaultKey(
       options({
-        inspect: () => realFacts(protectedPath === undefined),
+        inspect: (paths) => realFacts(protectedPath === undefined, paths),
         protect: (path) => {
           protectedPath = path;
         },
       }),
     );
     expect(protectedPath).toBe(join(dir, KEYFILE));
-    expect(resolved.key).toHaveLength(32);
-    expect(custodyOutcomes()).toEqual(["protected"]);
+    expect(resolved.key.equals(first.key)).toBe(true);
+    expect(custodyOutcomes()).toEqual(["exposed"]);
+    expect(currentWindowsVaultCustody()).toBe("exposed");
   });
 
   it("refuses the key when the key file stays readable by another account", () => {
     const custody = {
-      inspect: (): WindowsOwnerPrivateInspection => realFacts(true),
+      inspect: (paths: readonly string[]): WindowsOwnerPrivateInspection => realFacts(true, paths),
       protect: (): void => undefined,
     };
     expect(() => resolveLocalVaultKey(options(custody))).toThrow(
       "secret vault key file is not private to the current Windows user (foreign-access)",
     );
-    expect(custodyOutcomes()).toEqual(["refused"]);
+    expect(custodyOutcomes()).toEqual(["attested", "refused"]);
     const failed = events.find((event) => event.op === "security.vault.key-resolution-failed");
     expect(failed).toMatchObject({ level: "error", errorKind: "unsafe-target" });
     expect(events.some((event) => event.op === "security.vault.key-resolved")).toBe(false);
@@ -175,10 +218,11 @@ describe("secret vault key file on Windows", () => {
 
   it("refuses a key file that was replaced between open and inspection", () => {
     const custody = {
-      inspect: (): WindowsOwnerPrivateInspection => {
-        const found = realFacts(false);
+      inspect: (paths: readonly string[]): WindowsOwnerPrivateInspection => {
+        const found = realFacts(false, paths);
         const [directory, keyfile] = found.files;
-        if (directory === undefined || keyfile?.kind !== "facts") throw new Error("fixture");
+        if (keyfile === undefined) return found;
+        if (directory === undefined || keyfile.kind !== "facts") throw new Error("fixture");
         return { ...found, files: [directory, { ...keyfile, fileIndex: keyfile.fileIndex + 1n }] };
       },
     };
@@ -194,11 +238,13 @@ describe("secret vault key file on Windows", () => {
       }),
     );
     expect(resolved.source).toBe("keyfile");
-    expect(custodyOutcomes()).toEqual(["unattested"]);
+    expect(custodyOutcomes()).toEqual(["unattested", "unattested"]);
     expect(events.find((event) => event.op === "security.vault.custody")).toMatchObject({
       level: "warn",
       errorKind: "unavailable",
     });
+    // Never read as attested: the summary a person sees says unattested.
+    expect(currentWindowsVaultCustody()).toBe("unattested");
   });
 
   it("does not attest on other platforms", () => {

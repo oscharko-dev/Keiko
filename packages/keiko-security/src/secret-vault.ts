@@ -75,6 +75,7 @@ import {
 } from "./log-port.js";
 import {
   attestWindowsVaultCustody,
+  secureWindowsVaultDirectory,
   type WindowsVaultCustodyPorts,
 } from "./windows-vault-custody.js";
 
@@ -593,23 +594,31 @@ function keyFromKeyfile(options: ResolveLocalVaultKeyOptions): Buffer {
   assertNoSymlinkedPathSegments(keyfile);
   ensureDirHardened(dirname(keyfile));
   assertNoSymlinkedPathSegments(keyfile);
+  const windows = (options.windowsCustody?.platform ?? process.platform) === "win32";
   let created: Buffer | undefined;
   if (!existsSync(keyfile)) {
+    // A new file inherits its directory's permissions on Windows: the directory is made private
+    // and verified first, so the key is never readable by another principal (#4358).
+    if (windows) {
+      secureWindowsVaultDirectory(
+        { directory: dirname(keyfile), sink: options.sink },
+        options.windowsCustody,
+      );
+    }
     created = randomBytes(KEY_BYTES);
     writeDurableTextFile(keyfile, created.toString("base64"), FILE_MODE);
     chmodIfPresent(keyfile, FILE_MODE);
   }
-  if ((options.windowsCustody?.platform ?? process.platform) === "win32") {
-    return readWindowsAttestedKey(keyfile, options);
-  }
+  if (windows) return readWindowsAttestedKey(keyfile, options);
   return created ?? decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
 }
 
 // Windows has no mode bits: 0o700/0o600 above change nothing there. The key is therefore read
 // from ONE open descriptor whose identity the attestation is bound to, after the key file and its
 // directory were attested (and, when needed, made) private to the current principal (#4358). A
-// refusal throws before the key is read; an inspection that cannot run is recorded and claims
-// nothing (windows-vault-custody.ts).
+// refusal throws before the key is read. The outcome is recorded by the custody owner, on the
+// Activity Log and in the process summary that `/api/health` and `keiko status` show: an
+// inspection that cannot run stays `unattested` there and is never read as attested.
 function readWindowsAttestedKey(keyfile: string, options: ResolveLocalVaultKeyOptions): Buffer {
   const fd = openSync(keyfile, "r");
   try {

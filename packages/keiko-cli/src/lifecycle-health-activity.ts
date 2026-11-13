@@ -42,6 +42,8 @@ const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
     },
     // How often the starting UI process's sign of life restarted the start window (#4358).
     lifeSigns: { type: "integer", dataClass: "count", required: false },
+    // How often a sign-of-life record was present but unreadable (a link, not a regular file).
+    unreadableSigns: { type: "integer", dataClass: "count", required: false },
     launchBound: { type: "boolean", dataClass: "closed-enum", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -59,7 +61,7 @@ export function emitLifecycleHealth(
   phase: "start" | "tracked",
   outcome: LifecycleHealthOutcome,
   launchBound: boolean,
-  lifeSigns?: number,
+  signs?: { readonly lifeSigns: number; readonly unreadableSigns: number },
 ): void {
   let errorKind: ActivityLogErrorKind = "unavailable";
   if (outcome === "health-timeout") errorKind = "timeout";
@@ -79,7 +81,9 @@ export function emitLifecycleHealth(
         launchBound,
         completeness: "complete",
         loss: "none",
-        ...(lifeSigns === undefined ? {} : { lifeSigns }),
+        ...(signs === undefined
+          ? {}
+          : { lifeSigns: signs.lifeSigns, unreadableSigns: signs.unreadableSigns }),
       },
     ),
   );
