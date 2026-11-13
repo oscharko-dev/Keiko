@@ -378,7 +378,7 @@ function observedIdentityPort(
   });
   const seen: { last?: AtlassianHttpBodyResult } = {};
   return {
-    port: async (request) => {
+    port: async (request): Promise<AtlassianHttpBodyResult> => {
       const result = await port(request);
       seen.last = result;
       return result;

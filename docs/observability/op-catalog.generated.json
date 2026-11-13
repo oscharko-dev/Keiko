@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e1b4fed68d26f8de4f2ff72bb787288f272d55cbe32eaf1b7e7f8a64383b194e",
+    "catalogDigest": "920056ad4f0960563f3e5b8e82611b80420ba85d7d78e283d31a436175e65a23",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1284,8 +1284,8 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.http.credential-reflection.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/httpPort.ts:664",
-        "emitterSites": ["packages/keiko-server/src/atlassian/httpPort.ts:705"]
+        "registrationSite": "packages/keiko-server/src/atlassian/httpPort.ts:665",
+        "emitterSites": ["packages/keiko-server/src/atlassian/httpPort.ts:706"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -118513,7 +118513,7 @@
     {
       "op": "atlassian.connection.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/wiring.ts:542",
+      "site": "packages/keiko-server/src/atlassian/wiring.ts:574",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -118579,20 +118579,20 @@
     {
       "op": "atlassian.http.credential-reflection",
       "category": "security",
-      "site": "packages/keiko-server/src/atlassian/httpPort.ts:667",
+      "site": "packages/keiko-server/src/atlassian/httpPort.ts:668",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.http.credential-reflection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/httpPort.ts:716",
+      "site": "packages/keiko-server/src/atlassian/httpPort.ts:717",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.http.credential-reflection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/httpPort.ts:830",
+      "site": "packages/keiko-server/src/atlassian/httpPort.ts:831",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
