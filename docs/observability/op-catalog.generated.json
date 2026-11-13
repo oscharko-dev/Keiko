@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "59fafcc2352e11cd352343edd0877f2a5b8e9bb016d9b9e82cd89245418d051c",
+    "catalogDigest": "58cea85658b4725793bd4060142db74fe11c7ac6c23a8f57a74105e947213167",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38785,9 +38785,9 @@
         "failureClasses": ["portable-native-helper-binding"],
         "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:304",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:305",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:339"
+          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:340"
         ]
       },
       {
@@ -118844,7 +118844,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:200",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:201",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121185,7 +121185,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:294",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:295",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122816,7 +122816,7 @@
     {
       "op": "portable.runtime.native-helper-bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:307",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:308",
       "package": "keiko-server"
     },
     {
