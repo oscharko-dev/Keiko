@@ -1917,7 +1917,7 @@ function parseProviderConfig(
 // true` is a person's value, whatever it is. Without that marker, a value equal to a default Keiko
 // itself ever stored (Setup's 30 s, the resolver's 120 s) is a default, which is every installation
 // written before the marker existed; any other unmarked value was typed by a person.
-const LEGACY_DEFAULT_TIMEOUTS_MS: readonly unknown[] = [30_000, DEFAULT_TIMEOUT_MS];
+const LEGACY_DEFAULT_TIMEOUTS_MS: ReadonlySet<unknown> = new Set([30_000, DEFAULT_TIMEOUT_MS]);
 
 function timeoutNamedMarker(raw: {
   readonly timeoutMs?: unknown;
@@ -1925,7 +1925,7 @@ function timeoutNamedMarker(raw: {
 }): Pick<ModelProviderConfig, "timeoutConfigured"> {
   if (raw.timeoutMs === undefined) return {};
   if (raw.timeoutNamed === true) return { timeoutConfigured: true };
-  return LEGACY_DEFAULT_TIMEOUTS_MS.includes(raw.timeoutMs) ? {} : { timeoutConfigured: true };
+  return LEGACY_DEFAULT_TIMEOUTS_MS.has(raw.timeoutMs) ? {} : { timeoutConfigured: true };
 }
 
 function reasoningContinuationConfig(
