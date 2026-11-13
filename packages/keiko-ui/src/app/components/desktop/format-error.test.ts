@@ -81,6 +81,25 @@ describe("formatUserError", () => {
       resetLoadedMessageCatalogs();
     }
   });
+  it("falls back to the server's text for a refusal code the catalogs do not know", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const error = new ApiError("JIRA_POD_SOMETHING_NEW", "Plain server text.", 409);
+      const notice = toUserErrorNotice(error, "Could not send message.");
+
+      expect(notice.message).toBe("Plain server text.");
+      expect(notice.title).toBe("Request failed");
+      expect(notice.remediation).toBeUndefined();
+      expect(formatUserError(error, "fallback")).toBe(
+        "Plain server text. (JIRA_POD_SOMETHING_NEW)",
+      );
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+
   it.each(["en", "de"] as const)(
     "explains unavailable Chat capabilities without service-specific checks in %s",
     async (locale) => {

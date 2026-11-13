@@ -1276,7 +1276,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       const f = fixture();
       const credentials = f.deps.atlassianConnectorCredentials;
       if (credentials === undefined) throw new Error("Missing credential owner");
-      vi.spyOn(credentials.custody, "list").mockImplementation(() => list(f.deps));
+      const listSpy = vi.spyOn(credentials.custody, "list").mockImplementation(() => list(f.deps));
       const sink = createBufferedServerLogSink();
       setServerLogger(createServerLogger({ sink, level: "debug" }));
       try {
@@ -1293,6 +1293,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
         );
         expect(registered.map((event) => event.extra?.readiness)).toContain(readiness);
       } finally {
+        listSpy.mockRestore();
         resetServerLogger();
       }
     },
@@ -2852,42 +2853,85 @@ it("drains a real buffered HTTP disconnect while the write approval is pending",
   }
 });
 
-type PreparationFailure = "tool-proof" | "authority" | "catalog";
+type PreparationFailure =
+  | "tool-proof"
+  | "authority"
+  | "catalog"
+  | "pod-unavailable"
+  | "pod-verification"
+  | "pod-connection-changed";
 const PREPARATION_RESPONSES: Record<PreparationFailure, readonly [number, string]> = {
   "tool-proof": [400, toolProofRefusal(false)[1]],
   authority: [403, "FORBIDDEN"],
   catalog: [503, "CHAT_TOOL_UNAVAILABLE"],
+  // A Pod that cannot serve the Chat has its own refusals (#4371); every settlement assertion below
+  // holds for them too, over every transport.
+  "pod-unavailable": [409, "JIRA_POD_UNAVAILABLE"],
+  "pod-verification": [409, "JIRA_POD_VERIFICATION_REQUIRED"],
+  "pod-connection-changed": [409, "JIRA_POD_CONNECTION_CHANGED"],
 };
+const POD_FAILURE_METADATA = {
+  "pod-verification": { verificationStatus: "unverified" },
+  "pod-connection-changed": { generation: 2 },
+} as const;
 function preparationFailureDeps(
   f: ReturnType<typeof fixture>,
   failure: PreparationFailure,
   record: NonNullable<UiHandlerDeps["diagnostics"]>["record"],
+  restores: (() => void)[],
 ): UiHandlerDeps {
   const deps: UiHandlerDeps = {
     ...f.deps,
     diagnostics: { record },
-    // A generic authority denial that says nothing about the Pod. A Pod that cannot serve the Chat has
-    // its own refusals (#4371): the turn-level suite above pins their codes.
+    // A generic authority denial that says nothing about the Pod.
     ...(failure === "authority" ? { agentAuthorityRegistry: undefined } : {}),
+    // The Pod's credential is gone altogether.
+    ...(failure === "pod-unavailable" ? { atlassianConnectorCredentials: undefined } : {}),
   };
+  if (failure === "pod-verification" || failure === "pod-connection-changed") {
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing credential owner");
+    const spy = vi
+      .spyOn(credentials.custody, "list")
+      .mockImplementation(() => [metadata(f.deps, POD_FAILURE_METADATA[failure])]);
+    restores.push(() => {
+      spy.mockRestore();
+    });
+  }
   if (failure === "tool-proof") configure(deps, false);
   if (failure === "catalog") {
     if (deps.jiraChatCatalog === undefined) throw new Error("Missing catalog runtime");
-    vi.spyOn(deps.jiraChatCatalog, "get").mockRejectedValueOnce(
-      new CatalogDispatchFault("failed", "handler-unavailable", new Error("Bearer fixture-secret")),
-    );
+    const spy = vi
+      .spyOn(deps.jiraChatCatalog, "get")
+      .mockRejectedValueOnce(
+        new CatalogDispatchFault(
+          "failed",
+          "handler-unavailable",
+          new Error("Bearer fixture-secret"),
+        ),
+      );
+    restores.push(() => {
+      spy.mockRestore();
+    });
   }
   return deps;
 }
 
 describe.each([false, true])("Jira preparation failure settlement (stream=%s)", (stream) => {
   describe.each([false, true])("legacy request=%s", (legacy) => {
-    it.each(["tool-proof", "authority", "catalog"] as const)(
-      "settles %s rejection before any provider output",
-      async (failure) => {
-        const f = fixture();
-        const record = vi.fn();
-        const deps = preparationFailureDeps(f, failure, record);
+    it.each([
+      "tool-proof",
+      "authority",
+      "catalog",
+      "pod-unavailable",
+      "pod-verification",
+      "pod-connection-changed",
+    ] as const)("settles %s rejection before any provider output", async (failure) => {
+      const f = fixture();
+      const record = vi.fn();
+      const restores: (() => void)[] = [];
+      try {
+        const deps = preparationFailureDeps(f, failure, record, restores);
         const before = deps.store.findChatById(f.chatId);
         const body = sendBody(f, "preparation-failed-turn");
         if (legacy) delete body.clientTurnId;
@@ -2907,8 +2951,10 @@ describe.each([false, true])("Jira preparation failure settlement (stream=%s)", 
         else expect(messages[0]?.turnState).toBe("failed");
         expect(record).toHaveBeenCalledTimes(failure === "tool-proof" ? 0 : 1);
         expect(JSON.stringify([result, record.mock.calls])).not.toContain("fixture-secret");
-      },
-    );
+      } finally {
+        for (const restore of restores) restore();
+      }
+    });
   });
 });
 
