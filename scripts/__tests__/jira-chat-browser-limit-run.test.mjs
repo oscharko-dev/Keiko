@@ -579,16 +579,16 @@ it("loads exactly the fixed exports and does not silently replace an absent owne
   await expect(loadLimitRunBlocks(importer)).rejects.toThrow("runProgressReport");
 });
 
-it("runs the Release 1 steps without the sprint package and records one verdict per step", async () => {
+it("runs every step except the sprint package without the sprint package and records one verdict per step", async () => {
   const f = fixture();
-  const answer = await runBrowserLimitRun(f.ctx, { steps: "release-1" }, f.blocks);
+  const answer = await runBrowserLimitRun(f.ctx, { steps: "without-sprint" }, f.blocks);
   // A partial set is never a full green (#4369): the status, the flag and the skipped steps say so.
   expect(answer).toMatchObject({
     status: "partial",
     partial: true,
     skipped: ["ac6-sprint", "ac9-sprint-*"],
     detail:
-      "All release-1 limit-run steps independently verified; ac6-sprint, ac9-sprint-* not run",
+      "All without-sprint limit-run steps independently verified; ac6-sprint, ac9-sprint-* not run",
     // The sprint step and its five card steps are the Agile child's package.
     counts: { steps: 22 },
   });
@@ -609,7 +609,7 @@ it("runs the Release 1 steps without the sprint package and records one verdict 
   const state = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
   expect(state.data.orchestrator).toMatchObject({
     phase: "steps-verified",
-    steps: "release-1",
+    steps: "without-sprint",
     partial: true,
   });
   const verdicts = state.data.orchestrator.results.map(({ step, status }) => [step, status]);
@@ -625,7 +625,7 @@ it("finalizes a partial set as partial, never as green, and refuses a forged gre
   const { finalizeLimitRun, printLimitVerdict } =
     await import("../testing/jira-chat-lab/browser-limit-run.mjs");
   const f = fixture();
-  const outcome = await runBrowserLimitRun(f.ctx, { steps: "release-1" }, f.blocks);
+  const outcome = await runBrowserLimitRun(f.ctx, { steps: "without-sprint" }, f.blocks);
   expect(() => finalizeLimitRun(f.ctx.intent, { ...outcome, status: "green" })).toThrow();
   expect(finalizeLimitRun(f.ctx.intent, outcome)).toBe("partial");
   expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe("completed");
@@ -635,7 +635,7 @@ it("finalizes a partial set as partial, never as green, and refuses a forged gre
   expect(lines[0]).toMatchObject({
     operation: "jira-browser-limit-run",
     status: "partial",
-    steps: "release-1",
+    steps: "without-sprint",
     partial: true,
   });
   expect(lines[0].verdicts).toHaveLength(22);
@@ -660,9 +660,9 @@ it("accepts the step set only as an explicit trailing option", () => {
     "LIM7",
   ];
   expect(limitRunArguments(args).steps).toBe("all");
-  expect(limitRunArguments([...args, "--steps", "release-1"]).steps).toBe("release-1");
+  expect(limitRunArguments([...args, "--steps", "without-sprint"]).steps).toBe("without-sprint");
   expect(limitRunArguments([...args, "--steps", "all"]).steps).toBe("all");
-  for (const extra of [["--steps"], ["--steps", "sprint"], ["release-1"], ["--steps", "all", "x"]])
+  for (const extra of [["--steps"], ["--steps", "sprint"], ["without-sprint"], ["--steps", "all", "x"]])
     expect(() => limitRunArguments([...args, ...extra])).toThrow();
 });
 

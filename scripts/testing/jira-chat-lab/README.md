@@ -1437,10 +1437,10 @@ alone and repeat them: `node catalog-selection.mjs <session> <model> --only <ids
 with a count of issues each. S17 grades the interruption `unverified` when the 1,800 s lab limit ended the
 turn, like the refresh part.
 
-**Limit run, Release 1 steps.** `node browser-limit-run.mjs <session> <model> <embedding> <permitted-token>
-<denied-token> <LIMn> --steps release-1` runs templates and probes, the bulk write with deliberate
+**Limit run without the sprint package.** `node browser-limit-run.mjs <session> <model> <embedding> <permitted-token>
+<denied-token> <LIMn> --steps without-sprint` runs templates and probes, the bulk write with deliberate
 violations and the kill at about 40 %, the hierarchy with relations, the report compared with JQL, and the
 English and German card checks, and leaves out the sprint-at-scale package (Agile child). It prints one
 closed verdict per step. Because a package was left out, its overall verdict is `partial`, never `green`:
-the printed line and the orchestrator record carry `steps: "release-1"`, `partial: true` and the skipped
+the printed line and the orchestrator record carry `steps: "without-sprint"`, `partial: true` and the skipped
 step names, and only a full set can end `green`.

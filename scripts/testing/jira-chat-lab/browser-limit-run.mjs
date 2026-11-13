@@ -34,13 +34,15 @@ const OWNERS = {
 };
 
 /**
- * `all` runs every work package. `release-1` leaves out the sprint-at-scale package, which the
- * Agile child owns, and its card check; the other steps and their order are unchanged.
+ * `all` runs every work package. `without-sprint` runs everything except the sprint-at-scale package,
+ * which the Agile child owns, and the card check that follows it; the remaining steps and their order
+ * are unchanged. It still runs the document steps (templates, the bulk write from a requirements
+ * document, the hierarchy and the report), which are Release 2 groundwork.
  */
-export const LIMIT_RUN_STEP_SETS = Object.freeze(["all", "release-1"]);
+export const LIMIT_RUN_STEP_SETS = Object.freeze(["all", "without-sprint"]);
 /** The steps each partial set leaves out; a run of such a set can end `partial`, never `green`. */
 export const LIMIT_RUN_SKIPPED_STEPS = Object.freeze({
-  "release-1": ["ac6-sprint", "ac9-sprint-*"],
+  "without-sprint": ["ac6-sprint", "ac9-sprint-*"],
 });
 
 function stepSetOf(extra) {
@@ -342,7 +344,7 @@ async function stages(ctx, options, blocks, results) {
     blocks.runHierarchyBulk(ctx, { faults: hierarchyFaults }),
   );
   await finishFaultPlan(ctx, results, "hierarchy", hierarchyFaults);
-  if (options.steps !== "release-1") {
+  if (options.steps !== "without-sprint") {
     await runLimitStep(ctx, results, "ac6-sprint", () =>
       blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
     );

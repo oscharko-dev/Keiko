@@ -22,7 +22,7 @@ import { eachJourneyInLicenseWindow, ensureLicenseWindow } from "./license-windo
 import { LabOutageError, labJiraState } from "./lab-health.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
 import { WORK_PROJECT, clearWorkProject } from "./work-project-reset.mjs";
-import { basicAuth, labRequest } from "../lab-client.mjs";
+import { basicAuth, checked, labRequest } from "../lab-client.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { writeCorpusDocuments } from "./corpus-documents.mjs";
 import { FORMATS } from "./formats.mjs";
@@ -469,6 +469,11 @@ function journeyContext(live, session, truth) {
         '"reason":"authority-invalid"',
       ),
     labSprint: () => labSprintSetup(session, WORK_PROJECT),
+    // The oracles that derive their expectation from Jira itself (the S10 estimate rule).
+    nativeGet: (path) => checked(session, "native-read", "GET", path, basicAuth(session, "admin")),
+    ...(/^[A-Z][A-Z0-9]{1,9}$/u.test(process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT ?? "")
+      ? { estimateProject: process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT }
+      : {}),
   };
   return ctx;
 }

@@ -50,6 +50,16 @@ import { bugWithRelationAndLink, subtasksUnderTask } from "./hierarchy.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
 import { rerunCreatesNoDuplicates } from "./rerun.mjs";
 import {
+  ESTIMATE_RULE_OBLIGATIONS,
+  ESTIMATE_RULE_PROMPT,
+  TIME_FIELD,
+  configuredEstimateField,
+  deriveEstimate,
+  estimateDescriptor,
+  gradeEstimateRule,
+  storyPointsFieldId,
+} from "./estimate-rule.mjs";
+import {
   complianceFieldIds,
   estimateOf,
   gradeProgress,
@@ -237,23 +247,90 @@ const PROGRESS_FIELDS = (fieldIds) =>
     .filter((field) => field !== undefined)
     .join(",");
 
-async function projectProgress(ctx, chat) {
-  const turn = await ctx.turn(chat, progressPrompt(estimateOf(ctx.truth)));
-  const issues = await ctx.search("project = RPT", PROGRESS_FIELDS(ctx.truth.fieldIds));
-  const truth = progressTruth(issues, ctx.truth.fieldIds, ctx.truth.estimate);
-  const grade = gradeProgress(turn.answer, truth);
-  const parts = [
+/**
+ * The facts the product's estimate rule is derived from, read natively: the board's configured
+ * estimation field and the unique Story Points field. A lab context without a native reader keeps
+ * the truth file's estimate (the earlier behaviour).
+ */
+/** The project S10 reads: RPT, or the estimate-case project a run selects (seed-estimate-cases.mjs). */
+const estimateProject = (ctx) => ctx.estimateProject ?? "RPT";
+
+async function nativeEstimateFacts(ctx) {
+  if (ctx.nativeGet === undefined) return undefined;
+  const [fields, configured] = await Promise.all([
+    ctx.nativeGet("/rest/api/2/field"),
+    configuredEstimateField(ctx.nativeGet, estimateProject(ctx)),
+  ]);
+  return configured === undefined
+    ? undefined
+    : { configured, storyPoints: storyPointsFieldId(fields) };
+}
+
+/** What the S10 turn asks and what Jira must hold: the expectation follows the product's rule. */
+async function progressPlan(ctx) {
+  const facts = await nativeEstimateFacts(ctx);
+  const baseFields = PROGRESS_FIELDS(ctx.truth.fieldIds);
+  if (facts === undefined)
+    return { fields: baseFields, estimate: estimateOf(ctx.truth), prompt: undefined };
+  const fields = [
+    ...new Set([...baseFields.split(","), TIME_FIELD, facts.configured, facts.storyPoints]),
+  ]
+    .filter(Boolean)
+    .join(",");
+  const project = estimateProject(ctx);
+  const derived = deriveEstimate({
+    issues: await ctx.search(`project = ${project}`, fields),
+    ...facts,
+  });
+  return { fields, derived, estimate: estimateDescriptor(derived), prompt: ESTIMATE_RULE_PROMPT };
+}
+
+/** The graded parts of the answer: the three figures and, under the rule, its three statements. */
+function progressParts(grade, rule) {
+  const statements =
+    rule === undefined
+      ? []
+      : Object.entries(ESTIMATE_RULE_OBLIGATIONS).map(([key, name]) => [
+          name,
+          { graded: true, ok: rule[key].ok },
+        ]);
+  return [
     ["counts-by-type-status", grade.counts],
     ["per-epic-progress", grade.epics],
     ["estimate-totals", grade.estimate],
+    ...statements,
   ].filter(([, part]) => part.graded);
+}
+
+const ruleDetail = (derived, rule) =>
+  derived === undefined
+    ? ""
+    : `; estimate case ${derived.case} (${rule.source.detail}; ${rule.unused.detail}; ${rule.other.detail})`;
+
+async function projectProgress(ctx, chat) {
+  const plan = await progressPlan(ctx);
+  const base = progressPrompt(plan.estimate, estimateProject(ctx));
+  const turn = await ctx.turn(
+    chat,
+    plan.prompt === undefined ? base : `${base}\n${plan.prompt.join("\n")}`,
+  );
+  const issues = await ctx.search(`project = ${estimateProject(ctx)}`, plan.fields);
+  const truth = progressTruth(
+    issues,
+    ctx.truth.fieldIds,
+    plan.derived === undefined ? ctx.truth.estimate : plan.estimate,
+  );
+  const grade = gradeProgress(turn.answer, truth);
+  const rule =
+    plan.derived === undefined ? undefined : gradeEstimateRule(turn.answer, plan.derived);
+  const parts = progressParts(grade, rule);
   const failed = parts.filter(([, part]) => !part.ok);
   const ungraded = [grade.epics, grade.estimate].filter((part) => !part.graded).length;
   const answer = {
     label: "answer",
     status: failed.length === 0 ? "green" : "red",
     covers: parts.map(([name]) => name),
-    detail: `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}`,
+    detail: `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}${ruleDetail(plan.derived, rule)}`,
   };
   const large = await largeProjectPart(ctx);
   const unavailable = await unavailableProgressPart(ctx);
