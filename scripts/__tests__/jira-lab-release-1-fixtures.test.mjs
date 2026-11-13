@@ -2,7 +2,6 @@
 // fixture inventory and the order that completes a session.
 import { describe, expect, it, vi } from "vitest";
 
-const calls = vi.hoisted(() => []);
 vi.mock("../testing/jira-chat-lab/requirements/seed-projects.mjs", () => ({
   ensureProject: vi.fn(),
   bulkCreate: vi.fn(),
