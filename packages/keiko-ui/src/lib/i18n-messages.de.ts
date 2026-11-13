@@ -548,9 +548,9 @@ export const DE_MESSAGES = {
     "Prüfe die aktuellen Quellen des Chats und sende deine Anfrage anschließend erneut.",
   "chat.error.jiraAuthentication.title": "Jira-Anmeldung fehlgeschlagen",
   "chat.error.jiraAuthentication.message":
-    "Die Jira-Verbindung konnte nicht authentifiziert werden.",
+    "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
   "chat.error.jiraAuthentication.remediation":
-    "Prüfe die Jira-Verbindung erneut im Knowledge Pods Hub. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+    "Öffnen Sie den Knowledge Pods Hub, ersetzen Sie das Token am Jira Pod und verifizieren Sie die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfen Sie vor einer weiteren Änderung den Stand in Jira.",
   "chat.error.knowledgePodUnavailable.title": "Knowledge Pod nicht verfügbar",
   "chat.error.knowledgePodUnavailable.message":
     "Der gewählte Knowledge Pod existiert nicht mehr oder wird gerade gelöscht. Wähle einen anderen Knowledge Pod.",

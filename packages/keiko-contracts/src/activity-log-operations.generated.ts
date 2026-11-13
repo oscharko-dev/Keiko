@@ -891,6 +891,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -957,6 +958,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "ok",
           "auth-failed",
+          "auth-unverified",
           "forbidden",
           "unreachable",
           "timeout",
@@ -966,7 +968,39 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "tls-failed",
           "sync-unsupported",
           "verification-aborted",
+          "probe-inconclusive",
         ],
+      },
+      decision: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["identity-route", "probe", "probe-window", "probe-shared"],
+      },
+      probeCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "timeout",
+          "network",
+          "http-429",
+          "http-4xx",
+          "http-5xx",
+          "redirect",
+          "invalid-body",
+          "foreign-401",
+          "captcha",
+          "stale",
+          "cancelled-or-expired",
+          "probe-error",
+        ],
+      },
+      routeClass: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["identity", "other"],
       },
       verificationState: {
         type: "string",
@@ -1678,6 +1712,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "invalid-jql",
           "auth",
+          "auth-unverified",
           "permission",
           "effect-denied",
           "cancelled",
@@ -3836,6 +3871,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "effect-denied",
           "cancelled",
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "not-found",
           "rate-limited",
@@ -33126,6 +33162,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33236,6 +33273,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33366,6 +33404,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33494,6 +33533,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33646,6 +33686,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33778,6 +33819,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33868,6 +33910,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -33984,6 +34027,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34117,6 +34161,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34239,6 +34284,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34364,6 +34410,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34487,6 +34534,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
@@ -34595,6 +34643,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "auth-failed",
+          "auth-unverified",
           "permission-denied",
           "effect-denied",
           "cancelled",
