@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a378bcd403a76631668fa631c6c4738a99338f8bd6f591a279115db447edb46e",
+    "catalogDigest": "019e9d0ab55da29084afcbf332c894673bf8cc85634e002f55e98487514db193",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1276,7 +1276,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["staged", "submitted", "refused", "progress", "executed", "named"]
+            "values": ["staged", "submitted", "refused", "progress", "executed", "named", "held"]
           },
           "refusal": {
             "type": "string",
@@ -1293,7 +1293,8 @@
               "invalid-fields",
               "draft-changed",
               "draft-invalid",
-              "requirements-untraced"
+              "requirements-untraced",
+              "approval-expired"
             ]
           },
           "newDraft": {
@@ -1428,8 +1429,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-draft.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:20",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:116"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:21",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:121"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -118881,7 +118882,7 @@
     {
       "op": "atlassian.jira-draft",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:23",
+      "site": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:24",
       "package": "keiko-server"
     },
     {
