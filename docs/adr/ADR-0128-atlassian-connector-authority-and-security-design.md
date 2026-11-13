@@ -612,7 +612,7 @@ over a later signal change. The cause is
 not inferred from mutable credential state after cancellation, so a later successful verification
 cannot rewrite the interrupted request’s outcome. HTTP 409 denotes the invalidated bound Jira
 credential, not failed local app-session authentication; EN/DE remediation points to the
-Knowledge Pods hub. Neither the old request nor its effects are retried. Applied scope changes
+Local Knowledge window. Neither the old request nor its effects are retried. Applied scope changes
 and requested cancellation use the registered `chat.scope.update` event. Request correlation passes
 through custody and invalidation, linking the HTTP result, binding effects and cancellation; only
 operations outside a request mint a fresh server correlation. Cleanup failure cannot restore access: incomplete token replacement
@@ -626,7 +626,7 @@ The authenticated credential resource accepts PATCH with `expectedGeneration` an
 uses the same public metadata allowlist and cannot expose the private lifecycle block or token.
 Applied rename/replacement events record only action and generation on the existing Activity Log.
 A logging fault after commit produces a diagnostic without converting success into a retryable
-mutation failure. The Knowledge Pods hub's rename, token replacement, reverify and removal controls
+mutation failure. The Local Knowledge window's rename, token replacement, reverify and removal controls
 use these same authenticated owners. Public metadata is refetched after a lifecycle request settles
 (including an uncertain failure) and on window focus; a browser notification carries no credential,
 readiness or authority. Matching Chat bindings and grants/approvals are invalidated by the same
@@ -2136,7 +2136,7 @@ without answer or tool-result bodies.
   draft commits to its prepared items and private source bindings before returning its preview.
   Execution rechecks the bound revisions and refuses changed or unavailable sources rather than
   substituting a new footer under an old approval. A traced staged draft without that binding must
-  be staged again. Unreferenced writes do not open Knowledge Pods.
+  be staged again. Unreferenced writes do not open the Local Knowledge window.
   A traced draft also preserves the original acceptance criteria before a page is staged, before
   human approval and again before final execution. Each referenced unit requires all its original
   criteria; an explicit criterion reference requires that exact criterion. The canonical description
@@ -2273,7 +2273,7 @@ invocation key requirement for external connector effects.
 
 The authenticated Chat PATCH and serializer own the single Jira binding and saved human mode.
 Responses add the server-resolved ceiling and effective mode without replacing the saved selection.
-The Chat composer's Connectors menu, the Knowledge Pods hub and workspace ports use that same
+The Chat composer's Connectors menu, the Local Knowledge window and workspace ports use that same
 PATCH; a presentation edge appears only after confirmation for the exact requested Chat and Pod.
 The Connectors menu switches the bound Pod (or none) and the Chat's MCP server selection directly;
 switching to another Pod replaces the binding and invalidates the earlier binding's grants and
