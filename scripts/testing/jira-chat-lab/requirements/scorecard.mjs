@@ -26,6 +26,8 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { loadSession } from "../lab-client.mjs";
 import { SCENARIOS } from "./catalog.mjs";
+import { COMPOSER_SCENARIOS } from "./composer-catalog.mjs";
+import { COMPOSER_JOURNEY_IDS } from "./composer.mjs";
 import { ensureLicenseWindow } from "./license-window.mjs";
 import { registerLane } from "./lab-lanes.mjs";
 import { scenarioVerdict } from "./coverage.mjs";
@@ -44,6 +46,7 @@ const { positionals, values } = parseArgs({
     model: { type: "string" },
     "embedding-model": { type: "string" },
     repeat: { type: "string", default: "1" },
+    set: { type: "string", default: "documents" },
   },
 });
 const [directory] = positionals;
@@ -56,7 +59,12 @@ if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 20) {
 }
 const session = loadSession(directory);
 const selected = values.only ? new Set(values.only.split(",")) : undefined;
-const scenarios = SCENARIOS.filter((scenario) => !selected || selected.has(scenario.id));
+// `--set composer` selects the Composer lane (#4369): its own scenarios C01-C07, no Knowledge Pod.
+if (!["documents", "composer"].includes(values.set))
+  throw new TypeError("--set must be documents or composer");
+const composer = values.set === "composer";
+const catalog = composer ? COMPOSER_SCENARIOS : SCENARIOS;
+const scenarios = catalog.filter((scenario) => !selected || selected.has(scenario.id));
 
 async function runChecks(scenario, journeys) {
   const checks = [];
@@ -100,7 +108,8 @@ if (values.model) {
   const truth = JSON.parse(
     readFileSync(join(session.directory, "requirements-truth.json"), "utf8"),
   );
-  const ids = JOURNEY_IDS.filter((id) => scenarios.some((scenario) => scenario.id === id));
+  const known = composer ? COMPOSER_JOURNEY_IDS : JOURNEY_IDS;
+  const ids = known.filter((id) => scenarios.some((scenario) => scenario.id === id));
   journeys = await runJourneys({
     session,
     directory,
@@ -109,13 +118,14 @@ if (values.model) {
     truth,
     ids,
     repeat,
+    set: values.set,
   });
 }
 for (const scenario of scenarios) report.results.push(await runChecks(scenario, journeys));
 report.counts = countStatuses(report.results);
 report.valid = report.counts.invalid === 0;
 
-const output = join(session.directory, "requirements-scorecard");
+const output = join(session.directory, composer ? "composer-scorecard" : "requirements-scorecard");
 mkdirSync(output, { recursive: true, mode: 0o700 });
 const stamp = report.startedAt.replaceAll(":", "-");
 writeFileSync(join(output, `${stamp}.json`), JSON.stringify(report, null, 2), { mode: 0o600 });

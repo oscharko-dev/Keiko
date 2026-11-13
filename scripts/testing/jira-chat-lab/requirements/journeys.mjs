@@ -28,6 +28,7 @@ import { writeCorpusDocuments } from "./corpus-documents.mjs";
 import { FORMATS } from "./formats.mjs";
 import { startDuring } from "./mid-turn.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
+import { COMPOSER_JOURNEYS } from "./composer.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
 import { aggregateRuns } from "./repeat.mjs";
 import {
@@ -445,6 +446,63 @@ async function freshBoundChat(ctx, session, modelId, capsuleId, toolMode) {
   return { ...bound, chat: { ...bound.chat, jiraPodBinding } };
 }
 
+/**
+ * A fresh Chat for the Composer lane: bound to the Jira Pod only (the default of every Chat), in the
+ * given mode. It carries no Knowledge Pod scope and no structure skill (#4369).
+ */
+async function composerChat(ctx, session, modelId, toolMode) {
+  const base = await prepareChat(ctx.origin, ctx.cookie, session, ctx.projectPath, modelId);
+  const bound = await api(
+    ctx,
+    "bind",
+    `/api/chats?id=${encodeURIComponent(base.id)}`,
+    { toolMode, expectedGroundingScopeIdentity: base.groundingScopeIdentity },
+    "PATCH",
+  );
+  const jiraPodBinding = bound.chat.jiraPodBinding ?? base.jiraPodBinding;
+  return { ...bound, chat: { ...bound.chat, jiraPodBinding } };
+}
+
+/** The two journey lanes: how a journey's Chat is bound, and which table its id is looked up in. */
+const DOCUMENT_LANE = Object.freeze({
+  journeys: JOURNEYS,
+  bind: (ctx, session, modelId, capsuleId, mode) =>
+    freshBoundChat(ctx, session, modelId, capsuleId, mode),
+});
+const COMPOSER_LANE = Object.freeze({
+  journeys: COMPOSER_JOURNEYS,
+  bind: (ctx, session, modelId, _capsuleId, mode) => composerChat(ctx, session, modelId, mode),
+});
+
+/** The field the lab's required fixture field needs on a native create, if the session has one. */
+function requiredFixtureField(session) {
+  try {
+    return JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"))
+      .requiredFieldId;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A native admin create (fixtures of the Composer lane); returns the new issue key. */
+async function createNativeIssue(session, fields) {
+  const required = requiredFixtureField(session);
+  const created = await checked(
+    session,
+    "composer-fixture",
+    "POST",
+    "/rest/api/2/issue",
+    basicAuth(session, "admin"),
+    {
+      fields: {
+        ...(required === undefined ? {} : { [required]: "Synthetic required value" }),
+        ...fields,
+      },
+    },
+  );
+  return String(created.key);
+}
+
 export { JOURNEY_IDS };
 
 /** The live plumbing the journey checks are given (see journey-checks.mjs). */
@@ -474,6 +532,7 @@ function journeyContext(live, session, truth) {
     ...(/^[A-Z][A-Z0-9]{1,9}$/u.test(process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT ?? "")
       ? { estimateProject: process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT }
       : {}),
+    nativeCreate: (fields) => createNativeIssue(session, fields),
   };
   return ctx;
 }
@@ -513,7 +572,7 @@ async function restoreSpecification(ctx, check) {
 }
 
 /** One journey in its own fresh bound Chat; a lab error is an invalid check, a failed Keiko route stays red. */
-async function runJourney({ ctx, session, modelId, capsuleId, id }) {
+async function runJourney({ ctx, session, modelId, capsuleId, id, lane = DOCUMENT_LANE }) {
   let check;
   try {
     const mode = JOURNEY_MODES[id] ?? "autonomous-delivery";
@@ -521,8 +580,8 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
       session.directory,
       id,
       async () => {
-        const bound = await freshBoundChat(ctx, session, modelId, capsuleId, mode);
-        return JOURNEYS[id](ctx, bound.chat);
+        const bound = await lane.bind(ctx, session, modelId, capsuleId, mode);
+        return lane.journeys[id](ctx, bound.chat);
       },
       {
         log: (line) => console.log(JSON.stringify(line)),
@@ -585,15 +644,8 @@ export async function modelUnavailable(ctx, session, modelId) {
 }
 
 /** One graded run: readiness first, then the journey re-graded against its gateway evidence. */
-async function gradedRun({
-  ctx,
-  session,
-  modelId,
-  capsuleId,
-  id,
-  readiness,
-  labState = labJiraState,
-}) {
+async function gradedRun({ lane, labState = labJiraState, ...run }) {
+  const { ctx, session, modelId, capsuleId, id, readiness } = run;
   // A journey that starts while the lab's own Jira is down is invalid with that cause, never red.
   const before = await labState(session);
   if (before.state !== "licensed")
@@ -608,7 +660,7 @@ async function gradedRun({
     return redCheck("product-route-failed", `readiness turn failed: ${refused.detail}`);
   }
   const fromMs = Date.now();
-  const check = await runJourney({ ctx, session, modelId, capsuleId, id });
+  const check = await runJourney({ ctx, session, modelId, capsuleId, id, lane });
   const logRoot = chatReadLogDirectory(session);
   const failures = readGatewayFailures(logRoot, { fromMs, toMs: Date.now(), pid: process.pid });
   // A failed journey is re-read against the lab's own Jira: an outage during it is the lab's.
@@ -664,9 +716,13 @@ const journeyOrder = (ids) => [
 async function runLane(live, options, checks) {
   const { session, directory, modelId, truth, ids, repeat = 1 } = options;
   const ctx = journeyContext(live, session, truth);
-  const capsuleId = await prepareDocumentLane(ctx, session, modelId);
+  // The Composer lane has no Knowledge Pod: nothing is prepared and no Pod is bound (#4369).
+  const composer = options.set === "composer";
+  const capsuleId = composer ? undefined : await prepareDocumentLane(ctx, session, modelId);
+  if (composer)
+    ctx.freshChat = async (toolMode) => (await composerChat(ctx, session, modelId, toolMode)).chat;
   const guard = licenseGuard(session, directory);
-  const run = { ctx, session, modelId, capsuleId };
+  const run = { ctx, session, modelId, capsuleId, lane: composer ? COMPOSER_LANE : DOCUMENT_LANE };
   const ports = {
     readiness: options.readiness ?? modelUnavailable,
     labState: options.labState ?? labJiraState,

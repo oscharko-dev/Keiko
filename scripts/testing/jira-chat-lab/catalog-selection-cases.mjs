@@ -419,10 +419,66 @@ const WRITES = [
   },
 ];
 
+// ---------- issue creation, one case per issue type (#4369) ----------
+
+const issueRows = async (s, project, type, summary) => {
+  const jql = encodeURIComponent(
+    `project = ${project} AND issuetype = "${type}" AND summary ~ "\\"${summary}\\""`,
+  );
+  const page = await native(
+    s,
+    `/rest/api/2/search?jql=${jql}&fields=summary,parent&maxResults=10`,
+    "admin",
+  );
+  return page.issues.filter((issue) => issue.fields.summary === summary);
+};
+
+/**
+ * One create case for `type` in `project`. The request names the type and the summary, never the
+ * tool; the effect is the new issue Jira holds, removed again afterwards. A Sub-task is created
+ * under the lane's owned issue, and a parent other than that is a wrong value.
+ */
+function createCase(type, { project, id }) {
+  const summaryOf = (m) => `${m} ${type}`;
+  const under = (f) => (type === "Sub-task" ? ` unter dem Vorgang ${f.selection.issueKey}` : "");
+  return {
+    id,
+    tool: "jira.create",
+    alternatives: ["jira.draft"],
+    catalog: "base",
+    prompt: (f, m) =>
+      `Lege im Jira-Projekt ${project(f)} einen Vorgang vom Typ ${type} mit der Zusammenfassung „${summaryOf(m)}“${under(f)} an.`,
+    verify: async (s, f, m) => {
+      const rows = await issueRows(s, project(f), type, summaryOf(m));
+      const parentOk = (row) =>
+        type !== "Sub-task" || row.fields.parent?.key === f.selection.issueKey;
+      return {
+        effects: countMatching(rows, parentOk),
+        wrongValue: rows.some((row) => !parentOk(row)),
+        // The snapshot of the owned scope keys an issue by its plain path.
+        cleanup: rows.map((row) => `/rest/api/2/issue/${encodeURIComponent(row.key)}`),
+      };
+    },
+  };
+}
+
+/** Task and Sub-task live in the fixture project; Epic, Story and Bug need the Scrum work project. */
+const CREATE_WRITES = [
+  createCase("Task", { id: "create-task", project: (f) => f.project }),
+  createCase("Sub-task", { id: "create-subtask", project: (f) => f.project }),
+  createCase("Epic", { id: "create-epic", project: () => "REQ" }),
+  createCase("Story", { id: "create-story", project: () => "REQ" }),
+  createCase("Bug", { id: "create-bug", project: () => "REQ" }),
+];
+
 export const SELECTION_CASES = Object.freeze([
   ...DISCOVERY_READS.map((entry) => ({ ...entry, effect: "read", catalog: "discovery" })),
   ...BASE_READS.map((entry) => ({ ...entry, effect: "read", catalog: "base" })),
-  ...WRITES.map((entry) => ({ ...entry, effect: "write", catalog: "discovery" })),
+  ...[...WRITES, ...CREATE_WRITES].map((entry) => ({
+    ...entry,
+    effect: "write",
+    catalog: entry.catalog ?? "discovery",
+  })),
 ]);
 
 /** The bounded set of native tokens a correct read result must carry. */

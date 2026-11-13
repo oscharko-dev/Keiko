@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
   readinessError: undefined,
   indexes: 0,
   failIndexAfter: undefined,
+  requests: [],
   refuseLateIndex(name) {
     if (name !== "pod-index") return;
     this.indexes += 1;
@@ -55,6 +56,19 @@ vi.mock("../testing/jira-chat-lab/requirements/journey-checks.mjs", () => ({
     }),
   },
 }));
+vi.mock("../testing/jira-chat-lab/requirements/composer.mjs", () => ({
+  COMPOSER_JOURNEY_IDS: ["C05"],
+  COMPOSER_JOURNEYS: {
+    C05: async (ctx) => ({
+      status: "unverified",
+      covers: [],
+      ...(await ctx.turn(
+        await ctx.freshChat("autonomous-delivery"),
+        "Synthetischer Composer-Turn",
+      )),
+    }),
+  },
+}));
 vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
   const responses = {
     "pod-create": { capsule: { id: "capsule" } },
@@ -71,7 +85,8 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
     chatReadLogDirectory: () => "/unused-synthetic-log-directory",
     prepareChat: async () => ({ id: "chat", groundingScopeIdentity: "scope" }),
     withLiveChat: async ({ run }) => run(fixture.live),
-    jsonRequest: async (_origin, _cookie, name, _path, _body, _method, signal) => {
+    jsonRequest: async (_origin, _cookie, name, _path, body, _method, signal) => {
+      fixture.requests.push({ name, body });
       if (name === "readiness" && fixture.readinessError) throw fixture.readinessError;
       fixture.refuseLateIndex(name);
       if (Object.hasOwn(responses, name)) return responses[name];
@@ -121,6 +136,7 @@ beforeEach(() => {
     readinessError: undefined,
     indexes: 0,
     failIndexAfter: undefined,
+    requests: [],
     live: {
       projectPath: directory,
       origin: "http://127.0.0.1:19999",
@@ -203,6 +219,47 @@ describe("requirements lab turn-limit provenance", () => {
     const turn = await observedTurn({ readiness: undefined });
     expect(turn).toMatchObject({ status: "invalid", reason: "lab-error" });
     expect(fixture.sends).toBe(0);
+  });
+
+  describe("the Composer lane has no Knowledge Pod (#4369)", () => {
+    const names = () => fixture.requests.map((request) => request.name);
+
+    it("prepares no Pod, imports no skill and binds the Chat to nothing but its mode", async () => {
+      fixture.mode = "completed";
+      const result = await runJourneys({
+        session: { directory },
+        directory,
+        modelId: "synthetic-model",
+        embeddingModelId: "synthetic-embedding",
+        truth: {},
+        ids: ["C05"],
+        set: "composer",
+      });
+      expect(fixture.sends).toBe(1);
+      expect(result.C05).toBeDefined();
+      for (const forbidden of [
+        "pod-create",
+        "pod-connect",
+        "pod-index",
+        "skill-import",
+        "skill-select",
+      ])
+        expect(names()).not.toContain(forbidden);
+      const binds = fixture.requests.filter((request) => request.name === "bind");
+      expect(binds.length).toBeGreaterThan(0);
+      for (const { body } of binds) {
+        expect(Object.keys(body).sort()).toEqual(["expectedGroundingScopeIdentity", "toolMode"]);
+        expect(body.toolMode).toBe("autonomous-delivery");
+      }
+    });
+
+    it("leaves the document lane exactly as it was: Pod, skill and a Pod-bound Chat", async () => {
+      fixture.mode = "completed";
+      await observedTurn();
+      expect(names()).toEqual(expect.arrayContaining(["pod-create", "pod-index", "skill-import"]));
+      const bind = fixture.requests.find((request) => request.name === "bind");
+      expect(bind.body.localKnowledgeScopes).toHaveLength(1);
+    });
   });
 
   describe("the lab's own Jira being down (#4369)", () => {

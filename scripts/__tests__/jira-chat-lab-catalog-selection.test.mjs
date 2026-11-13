@@ -679,6 +679,93 @@ describe("the new cases grade red where the product is wrong (#4369)", () => {
   });
 });
 
+describe("issue-create cases, one per type (#4369)", () => {
+  const entry = (id) => SELECTION_CASES.find((candidate) => candidate.id === id);
+  const session = {};
+  const searchPath = (project, type, summary) =>
+    `/rest/api/2/search?jql=${encodeURIComponent(`project = ${project} AND issuetype = "${type}" AND summary ~ "\\"${summary}\\""`)}&fields=summary,parent&maxResults=10`;
+  const found = (key, summary, extra = {}) => ({
+    issues: [{ key, fields: { summary, ...extra } }],
+  });
+  const CASES = [
+    ["create-task", "Task", "KEIKO"],
+    ["create-subtask", "Sub-task", "KEIKO"],
+    ["create-epic", "Epic", "REQ"],
+    ["create-story", "Story", "REQ"],
+    ["create-bug", "Bug", "REQ"],
+  ];
+
+  it("holds one write case per issue type, naming the type and the summary but never the tool", () => {
+    for (const [id, type, project] of CASES) {
+      const create = entry(id);
+      expect(create).toMatchObject({ effect: "write", tool: "jira.create", catalog: "base" });
+      const prompt = create.prompt(FIXTURE, "Auswahl t-1", "tag");
+      expect(prompt).toContain(`Vorgang vom Typ ${type}`);
+      expect(prompt).toContain(`Auswahl t-1 ${type}`);
+      expect(prompt).toContain(project);
+      expect(prompt).not.toMatch(/jira[._]/u);
+    }
+    expect(entry("create-subtask").prompt(FIXTURE, "m", "t")).toContain("KEIKO-1");
+  });
+
+  it.each(CASES)(
+    "%s: one exact new issue is the effect and is removed by its plain path",
+    async (id, type, project) => {
+      const summary = `Auswahl t-1 ${type}`;
+      nativeReads.set(
+        searchPath(project, type, summary),
+        found("KEIKO-7", summary, type === "Sub-task" ? { parent: { key: "KEIKO-1" } } : {}),
+      );
+      const effect = await entry(id).verify(session, FIXTURE, "Auswahl t-1");
+      expect(effect).toMatchObject({ effects: 1, wrongValue: false });
+      expect(effect.cleanup).toEqual(["/rest/api/2/issue/KEIKO-7"]);
+    },
+  );
+
+  it("is no effect for a differing summary, and a wrong parent is a wrong value", async () => {
+    nativeReads.set(
+      searchPath("KEIKO", "Task", "Auswahl t-1 Task"),
+      found("KEIKO-7", "Andere Zusammenfassung"),
+    );
+    expect(await entry("create-task").verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      cleanup: [],
+    });
+    nativeReads.set(
+      searchPath("KEIKO", "Sub-task", "Auswahl t-1 Sub-task"),
+      found("KEIKO-8", "Auswahl t-1 Sub-task", { parent: { key: "KEIKO-99" } }),
+    );
+    expect(await entry("create-subtask").verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      wrongValue: true,
+    });
+  });
+
+  it("grades red where the product is wrong: no write, a stray write, a refused call", () => {
+    const create = entry("create-story");
+    const turn = (exchanges) => ({ exchanges, gateway: healthy });
+    expect(gradeSelection(create, turn([]), { effect: { effects: 0, stray: 0 } }).status).toBe(
+      "no-tool",
+    );
+    expect(
+      gradeSelection(create, turn([call("jira_create")]), { effect: { effects: 1, stray: 2 } })
+        .status,
+    ).toBe("wrong-result");
+    expect(
+      gradeSelection(create, turn([call("jira_create")]), { effect: { effects: 0, stray: 0 } })
+        .status,
+    ).toBe("wrong-result");
+    expect(
+      gradeSelection(create, turn([call("jira_create")]), { effect: { effects: 1, stray: 0 } })
+        .status,
+    ).toBe("selected");
+    expect(
+      gradeSelection(create, turn([call("jira_edit")]), { effect: { effects: 0, stray: 0 } })
+        .status,
+    ).toBe("wrong-tool");
+  });
+});
+
 describe("attemptBatches", () => {
   // One credential per attempt; a product instance retains at most 64 (#4352).
   const PRODUCT_CREDENTIAL_BOUND = 64;
