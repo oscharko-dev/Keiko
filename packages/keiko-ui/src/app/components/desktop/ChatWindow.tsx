@@ -2784,17 +2784,14 @@ function SendLifecycleStatus({
   readonly status: SendStatus;
   /**
    * Sends attempted while the answer runs: say why they were not sent, at that moment (#4371). The
-   * polite region announces a change of text, so every second attempt carries an invisible trailing
-   * no-break space and a repeated refusal is heard again.
+   * reason sits in a child keyed by the attempt, so every attempt inserts a new node into the polite
+   * region and a repeated refusal is announced again.
    */
   readonly sendRefusals?: number;
 }): ReactNode {
   const t = useTranslate();
-  const base = sendLifecycleStatusLabel(status, t);
+  const label = sendLifecycleStatusLabel(status, t);
   const refused = sendRefusals > 0 && isInFlight(status);
-  const label = refused
-    ? `${`${base} ${t("chat.send.runningHint")}`.trim()}${sendRefusals % 2 === 0 ? "\u00a0" : ""}`
-    : base;
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -2807,6 +2804,11 @@ function SendLifecycleStatus({
         <>
           <span className="cmp-loading-dot" aria-hidden="true" />
           {label}
+          {refused ? (
+            <span key={sendRefusals} data-send-refusal>
+              {` ${t("chat.send.runningHint")}`}
+            </span>
+          ) : null}
         </>
       )}
     </div>

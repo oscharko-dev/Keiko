@@ -27,6 +27,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId, responseCorrelationIdOf } from "@/lib/bff-correlation";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { bffRequestErrorKind } from "@/lib/http";
 
 import {
@@ -261,11 +262,17 @@ function reloadKnowledgeCatalog(): Promise<KnowledgeCatalogSnapshot> {
   return loadKnowledgeCatalog(0);
 }
 
-export function clearKnowledgeCatalogCacheForTests(): void {
+// The previous server's pods must not be offered to a person on a new session or a new server
+// process: the cache, the last good snapshot and any pending load are dropped together.
+function discardKnowledgeCatalogCache(): void {
   cacheEpoch += 1;
   cachedSnapshot = undefined;
   lastGoodSnapshot = undefined;
   pendingLoad = undefined;
+}
+
+export function clearKnowledgeCatalogCacheForTests(): void {
+  discardKnowledgeCatalogCache();
 }
 
 export function isReadyCapsule(capsule: CapsuleListEntry): boolean {
@@ -405,15 +412,31 @@ interface CatalogSnapshotState {
   readonly refreshInBackground: (maxAgeMs: number) => void;
 }
 
-// What a mounting hook starts from. A cache too old to reuse still seeds the picker: its pods are
-// offered at once and refreshed in the background, instead of an empty, disabled picker for the
-// whole request (#4371).
-function catalogSeed(): {
-  readonly snapshot: KnowledgeCatalogSnapshot | undefined;
-  readonly stale: boolean;
-} {
-  const fresh = reusableSnapshot(Date.now(), KNOWLEDGE_CATALOG_TTL_MS);
-  return { snapshot: fresh ?? lastGoodSnapshot, stale: fresh === undefined };
+// What a mounting hook starts from, and how it then refreshes. Known pods win: a cache too old to
+// reuse, or a failed one, still seeds the picker with the newest good snapshot, so its pods are
+// offered at once instead of an empty, disabled picker or an error (#4371). A failed cache is shown
+// as the refresh state: the retry runs in the foreground over the pods the person already has.
+type CatalogSeed =
+  | { readonly snapshot: undefined; readonly refresh: "foreground" }
+  | {
+      readonly snapshot: KnowledgeCatalogSnapshot;
+      readonly refresh: "none" | "background" | "foreground";
+    };
+
+function catalogSeed(): CatalogSeed {
+  const cached = reusableSnapshot(Date.now(), KNOWLEDGE_CATALOG_TTL_MS);
+  if (cached !== undefined && cached.loadError === null) {
+    return { snapshot: cached, refresh: "none" };
+  }
+  if (lastGoodSnapshot !== undefined) {
+    return {
+      snapshot: lastGoodSnapshot,
+      refresh: cached === undefined ? "background" : "foreground",
+    };
+  }
+  return cached === undefined
+    ? { snapshot: undefined, refresh: "foreground" }
+    : { snapshot: cached, refresh: "none" };
 }
 
 // A foreground refresh settled: report a slow one, and apply it unless a later one replaced it.
@@ -431,6 +454,28 @@ function settleForegroundRefresh(
   return current;
 }
 
+// A pairing, a restore or a re-inspection of the app session (the page's own signal for a lost or
+// replaced session, and so for a restarted server) drops what the previous server answered. Every
+// window reacts to the same change, but only the first one drops and re-reads.
+let discardedForRedemption = 0;
+function useDiscardOnSessionChange(
+  applyForeground: (load: () => Promise<KnowledgeCatalogSnapshot>) => void,
+  setSnapshot: (snapshot: KnowledgeCatalogSnapshot) => void,
+): void {
+  const redemptions = useCodingAppSessionRedemptions();
+  const seenRef = useRef(redemptions);
+  useEffect(() => {
+    if (seenRef.current === redemptions) return;
+    seenRef.current = redemptions;
+    if (discardedForRedemption !== redemptions) {
+      discardedForRedemption = redemptions;
+      discardKnowledgeCatalogCache();
+    }
+    setSnapshot(EMPTY_KNOWLEDGE_CATALOG);
+    applyForeground(loadKnowledgeCatalog);
+  }, [redemptions, applyForeground, setSnapshot]);
+}
+
 function useCatalogSnapshotState(): CatalogSnapshotState {
   const seed = useRef(catalogSeed()).current;
   const mountedRef = useRef(true);
@@ -438,7 +483,7 @@ function useCatalogSnapshotState(): CatalogSnapshotState {
   const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
     seed.snapshot ?? EMPTY_KNOWLEDGE_CATALOG,
   );
-  const [loading, setLoading] = useState(seed.snapshot === undefined);
+  const [loading, setLoading] = useState(seed.refresh === "foreground");
 
   const applyForeground = useCallback((load: () => Promise<KnowledgeCatalogSnapshot>): void => {
     requestGenerationRef.current += 1;
@@ -461,9 +506,11 @@ function useCatalogSnapshotState(): CatalogSnapshotState {
   }, []);
 
   useEffect(() => {
-    if (seed.snapshot === undefined) applyForeground(loadKnowledgeCatalog);
-    else if (seed.stale) refreshInBackground(KNOWLEDGE_CATALOG_TTL_MS);
+    if (seed.refresh === "foreground") applyForeground(reloadKnowledgeCatalog);
+    else if (seed.refresh === "background") refreshInBackground(KNOWLEDGE_CATALOG_TTL_MS);
   }, [applyForeground, refreshInBackground, seed]);
+
+  useDiscardOnSessionChange(applyForeground, setSnapshot);
 
   useEffect(() => {
     mountedRef.current = true;

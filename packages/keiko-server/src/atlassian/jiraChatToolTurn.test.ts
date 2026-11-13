@@ -1239,6 +1239,20 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
     },
   );
+  it("refuses a turn bound to a Jira Pod that was removed, before any model or Jira call (#4371)", async () => {
+    const f = fixture();
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing credential owner");
+    // The Pod vanished after the Chat was bound to it.
+    vi.spyOn(credentials.custody, "list").mockImplementation(() => []);
+
+    const result = await send(f, "removed-pod-turn");
+
+    expect(result.status, JSON.stringify(result.body)).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "FORBIDDEN" } });
+    expect(f.calls).toHaveLength(0);
+    expect(f.requests()).toBe(0);
+  });
   it("preserves ordinary unbound Chat without tool-calling proof", async () => {
     const f = fixture();
     f.deps.store.updateChat(f.chatId, { jiraPodId: null });

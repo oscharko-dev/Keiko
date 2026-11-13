@@ -455,6 +455,10 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     const { rerender } = renderWindow(base);
     const stop = screen.getByRole("button", { name: "Cancel response" });
     stop.focus();
+    // React puts focus back after a commit that moved it, so the active element alone cannot show
+    // that Stop was asked to let go: the input must never be told to take focus while Stop holds it.
+    const focusCalls = vi.spyOn(HTMLElement.prototype, "focus");
+    const composerInput = screen.getByRole("textbox", { name: "Chat message" });
 
     // contacting -> streaming, then further chunks: new session objects, new messages.
     rerender(view({ ...base, sendStatus: "streaming" }));
@@ -469,13 +473,15 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     rerender(view({ ...base, sendStatus: "streaming", draft: "next" }));
     rerender(view({ ...base, sendStatus: "streaming", draft: "next m" }));
     expect(screen.getByRole("button", { name: "Cancel response" })).toHaveFocus();
+    expect(focusCalls.mock.contexts.filter((target) => target === composerInput)).toHaveLength(0);
+    focusCalls.mockRestore();
     expect(screen.getByRole("textbox", { name: "Chat message" })).not.toHaveFocus();
 
     rerender(view({ ...base, sendStatus: "completed", sending: false }));
     expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
   });
 
-  it("announces a repeated refused send again and records the refusal once per running turn (#4371)", async () => {
+  it("announces a repeated refused send again, by a new node, and records the refusal once per running turn (#4371)", async () => {
     const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
     setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
     try {
@@ -494,14 +500,19 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
       const status = document.querySelector('[data-send-status="streaming"]');
 
       await user.keyboard("{Enter}");
-      const first = status?.textContent;
+      const first = status?.querySelector("[data-send-refusal]");
       await user.keyboard("{Enter}");
-      const second = status?.textContent;
+      const second = status?.querySelector("[data-send-refusal]");
       await user.keyboard("{Enter}{Enter}{Enter}");
 
-      // The polite region announces a change of text, so a repeated refusal must change it.
-      expect(first).not.toBe(second);
-      expect(first?.replaceAll("\u00a0", "")).toBe(second?.replaceAll("\u00a0", ""));
+      // The polite region announces what is inserted: the first node is removed from it and a new
+      // node carrying the same words is added, so a repeated refusal is heard again.
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(second).not.toBe(first);
+      expect(first?.isConnected).toBe(false);
+      expect(second?.textContent).toBe(first?.textContent);
+      expect(status?.querySelectorAll("[data-send-refusal]")).toHaveLength(1);
       expect(
         reports.filter((entry) => entry.meta?.composerActivity === "send-refused-while-running"),
       ).toHaveLength(1);
