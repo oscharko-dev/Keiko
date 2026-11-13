@@ -9,11 +9,8 @@
 // <session>/estimate-mix-truth.json: per type the estimate fields it offers, and its estimated,
 // unestimated (offered but empty) and not-applicable counts, so a report that stops at the first
 // issue of a type without the field, or that counts "not applicable" as unestimated, is graded wrong.
-import { join } from "node:path";
 import { isMainModule } from "../../../lib/is-main-module.mjs";
-import { basicAuth, checked, labRequest, loadSession } from "../lab-client.mjs";
-import { privateJson } from "../private-json.mjs";
-import { withFixtureFieldOptional } from "../seed-fields.mjs";
+import { runFixtureSeed } from "./fixture-seed-cli.mjs";
 import { moveTo, ensureProject, bulkCreate, fieldIds } from "./seed-projects.mjs";
 
 export const ESTIMATE_MIX_PROJECT = "EST";
@@ -299,26 +296,14 @@ async function createPopulation(context, plan, ids) {
   for (const [key, status] of moving) await moveTo(context, key, status);
 }
 
-export async function main(args) {
-  const [directory, ...extra] = args;
-  if (!directory || extra.length > 0)
-    throw new TypeError("Usage: seed-estimate-mix.mjs <session-directory>");
-  const session = loadSession(directory);
-  const auth = basicAuth(session, "admin");
-  const context = { session, auth };
-  const jira = {
-    call: (name, method, path, body, expected) =>
-      checked(session, name, method, path, auth, body, expected),
-    request: (method, path, body) => labRequest(session, method, path, auth, body),
-  };
-  // The qualification field is required in Jira's one default field configuration.
-  const summary = await withFixtureFieldOptional(session, () =>
-    seedEstimateMix(context, jira, (truth) =>
-      privateJson(join(session.directory, "estimate-mix-truth.json"), truth),
-    ),
-  );
-  console.log(JSON.stringify({ operation: "requirements-estimate-mix", ...summary }));
-  return summary;
+export function main(args) {
+  return runFixtureSeed({
+    args,
+    name: "seed-estimate-mix.mjs",
+    receipt: "estimate-mix-truth.json",
+    operation: "requirements-estimate-mix",
+    seed: seedEstimateMix,
+  });
 }
 
 if (isMainModule(import.meta.url)) await main(process.argv.slice(2));

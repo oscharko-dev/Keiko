@@ -7,11 +7,8 @@
 // stands in for it with a text field of the same name, which would test a shape no customer has.
 // The truth, written to <session>/parent-fields-truth.json, is what Jira's own create metadata
 // offers per type, plus one Epic with two Tasks linked through Epic Link.
-import { join } from "node:path";
 import { isMainModule } from "../../../lib/is-main-module.mjs";
-import { basicAuth, checked, labRequest, loadSession } from "../lab-client.mjs";
-import { privateJson } from "../private-json.mjs";
-import { withFixtureFieldOptional } from "../seed-fields.mjs";
+import { runFixtureSeed } from "./fixture-seed-cli.mjs";
 import { bulkCreate, ensureProject, fieldIds } from "./seed-projects.mjs";
 import { ensureOnProjectScreen } from "./seed-estimate-mix.mjs";
 
@@ -101,25 +98,14 @@ export async function seedParentFields(context, jira, save) {
   };
 }
 
-export async function main(args) {
-  const [directory, ...extra] = args;
-  if (!directory || extra.length > 0)
-    throw new TypeError("Usage: seed-parent-fields.mjs <session-directory>");
-  const session = loadSession(directory);
-  const auth = basicAuth(session, "admin");
-  const context = { session, auth };
-  const jira = {
-    call: (name, method, path, body, expected) =>
-      checked(session, name, method, path, auth, body, expected),
-    request: (method, path, body) => labRequest(session, method, path, auth, body),
-  };
-  const summary = await withFixtureFieldOptional(session, () =>
-    seedParentFields(context, jira, (truth) =>
-      privateJson(join(session.directory, "parent-fields-truth.json"), truth),
-    ),
-  );
-  console.log(JSON.stringify({ operation: "requirements-parent-fields", ...summary }));
-  return summary;
+export function main(args) {
+  return runFixtureSeed({
+    args,
+    name: "seed-parent-fields.mjs",
+    receipt: "parent-fields-truth.json",
+    operation: "requirements-parent-fields",
+    seed: seedParentFields,
+  });
 }
 
 if (isMainModule(import.meta.url)) await main(process.argv.slice(2));

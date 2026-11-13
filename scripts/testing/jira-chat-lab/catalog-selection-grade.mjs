@@ -32,6 +32,8 @@ export function describeTrace(exchanges) {
   return {
     calls: calls.length,
     refused: refused.filter(Boolean).length,
+    // Any call that did not complete, so a refusal for another reason stays visible beside it.
+    failed: calls.filter((exchange) => exchange.result?.status !== "completed").length,
     firstRefused: refused[0] === true,
   };
 }
@@ -283,6 +285,7 @@ export function describeSummary(attempts) {
     firstRefusedTurns: traced.filter((attempt) => attempt.describe.firstRefused).length,
     calls: sum((trace) => trace.calls),
     refused: sum((trace) => trace.refused),
+    failed: sum((trace) => trace.failed ?? 0),
     validTurns: traced.length,
   };
 }

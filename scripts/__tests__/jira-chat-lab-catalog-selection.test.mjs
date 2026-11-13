@@ -499,11 +499,13 @@ describe("catalog-level refusals of jira.describe (#4369)", () => {
     expect(describeTrace([refused(), call("jira_describe"), rejected])).toEqual({
       calls: 3,
       refused: 2,
+      failed: 2,
       firstRefused: true,
     });
     expect(describeTrace([call("jira_describe"), refused()])).toEqual({
       calls: 2,
       refused: 1,
+      failed: 1,
       firstRefused: false,
     });
   });
@@ -516,9 +518,10 @@ describe("catalog-level refusals of jira.describe (#4369)", () => {
     expect(describeTrace([refused("jira_priorities"), other, call("jira_discover")])).toEqual({
       calls: 1,
       refused: 0,
+      failed: 1,
       firstRefused: false,
     });
-    expect(describeTrace([])).toEqual({ calls: 0, refused: 0, firstRefused: false });
+    expect(describeTrace([])).toEqual({ calls: 0, refused: 0, failed: 0, firstRefused: false });
   });
 
   it("reports the trace on every graded attempt and summarizes the valid ones", () => {
@@ -527,15 +530,18 @@ describe("catalog-level refusals of jira.describe (#4369)", () => {
       { exchanges: [refused(), call("jira_describe"), call("jira_priorities")], gateway: healthy },
       { tokens: ["High"] },
     );
-    expect(graded.describe).toEqual({ calls: 2, refused: 1, firstRefused: true });
-    const invalid = { status: "invalid", describe: { calls: 1, refused: 1, firstRefused: true } };
+    expect(graded.describe).toEqual({ calls: 2, refused: 1, failed: 1, firstRefused: true });
+    const invalid = {
+      status: "invalid",
+      describe: { calls: 1, refused: 1, failed: 1, firstRefused: true },
+    };
     expect(
       describeSummary([
         { status: "selected", describe: graded.describe },
-        { status: "selected", describe: { calls: 0, refused: 0, firstRefused: false } },
+        { status: "selected", describe: { calls: 0, refused: 0, failed: 0, firstRefused: false } },
         invalid,
       ]),
-    ).toEqual({ turns: 1, firstRefusedTurns: 1, calls: 2, refused: 1, validTurns: 2 });
+    ).toEqual({ turns: 1, firstRefusedTurns: 1, calls: 2, refused: 1, failed: 1, validTurns: 2 });
     expect(summarizeSelection([{ id: "a", catalog: "base", ...graded }]).describe).toMatchObject({
       firstRefusedTurns: 1,
     });
