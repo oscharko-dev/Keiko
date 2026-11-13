@@ -967,6 +967,7 @@ describe("closed enums and guards", () => {
     ]);
     expect(ATLASSIAN_SYNC_FAILURE_REASONS).toEqual([
       "auth-failed",
+      "auth-unverified",
       "permission-denied",
       "rate-limited",
       "timeout",
@@ -1228,6 +1229,7 @@ describe("write-action failure and authority reason vocabulary (Issue #2244)", (
   it("exports the closed write failure reason union with its guard", () => {
     expect(ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS).toEqual([
       "auth-failed",
+      "auth-unverified",
       "permission-denied",
       "effect-denied",
       "cancelled",
