@@ -511,3 +511,35 @@ it.each(["?", "", "synthetic-actor-2"])(
     expect(effects(request)).toHaveLength(0);
   },
 );
+
+// #4354: every remote-link effect stands behind the saved issue templates like any other write; a
+// library that cannot be read refuses it before any write, in execution and in check.
+it.each([
+  ["jira.upsert-remote-link", CREATE],
+  ["jira.update-remote-link", UPDATE],
+  ["jira.delete-remote-link", DELETE],
+  [
+    "jira.delete-remote-link-by-global-id",
+    { ...BASE, globalId: VALUE.globalId, expected: EXPECTED },
+  ],
+] as const)(
+  "%s refuses an unreadable template library before any write",
+  async (operation, args) => {
+    for (const check of [false, true]) {
+      const request = fixture({ existing: operation !== "jira.upsert-remote-link" });
+      const refused = await executeJiraRemoteLinkMutation(
+        operation,
+        args as CatalogJsonObject,
+        request,
+        check,
+        () => ({ templates: [], unreadable: 1 }),
+      );
+      expect(refused).toMatchObject({
+        ok: false,
+        reason: "field-validation",
+        violations: [{ ruleId: "template-unreadable" }],
+      });
+      expect(effects(request)).toHaveLength(0);
+    }
+  },
+);

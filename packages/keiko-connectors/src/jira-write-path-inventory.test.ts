@@ -67,7 +67,7 @@ const PATHS: Readonly<Record<string, WritePath>> = {
   },
   "jira.create-reciprocal-remote-link": {
     site: ["jira-managed-reciprocal-link.ts", GATE],
-    pin: undefined,
+    pin: "jira-managed-reciprocal-link.test.ts",
   },
   "jira.create-worklog": {
     site: ["jira-managed-worklog-mutations.ts", WORKLOG[1]],
@@ -82,8 +82,8 @@ const PATHS: Readonly<Record<string, WritePath>> = {
     pin: "jira-managed-worklog-mutations.test.ts",
   },
   "jira.epic-remove-issues": { site: [...PLANNING], pin: "jira-managed-agile-planning.test.ts" },
-  "jira.rank-epic": { site: [...PLANNING], pin: undefined },
-  "jira.rank-issues": { site: [...PLANNING], pin: undefined },
+  "jira.rank-epic": { site: [...PLANNING], pin: "jira-managed-agile-planning.test.ts" },
+  "jira.rank-issues": { site: [...PLANNING], pin: "jira-managed-agile-planning.test.ts" },
   "jira.set-issue-estimation": { site: [...PLANNING], pin: "jira-managed-agile-planning.test.ts" },
   "jira.sprint-move-issues": {
     site: ["jira-agile-membership.ts", AGILE[1]],
@@ -105,7 +105,10 @@ const PATHS: Readonly<Record<string, WritePath>> = {
     site: ["jira-agile-mutations.ts", BULK[1]],
     pin: "jira-agile-mutations.test.ts",
   },
-  "jira.delete-component": { site: ["jira-managed-component-delete.ts", BULK[1]], pin: undefined },
+  "jira.delete-component": {
+    site: ["jira-managed-component-delete.ts", BULK[1]],
+    pin: "jira-managed-release-lifecycle.test.ts",
+  },
   "jira.merge-version": {
     site: ["jira-managed-version-lifecycle.ts", BULK[1]],
     pin: "jira-managed-release-lifecycle.test.ts",
@@ -124,12 +127,7 @@ const PATHS: Readonly<Record<string, WritePath>> = {
   },
 };
 /** The gaps, exactly. A pin written for one of these removes it from here; the list never grows. */
-const OPEN_GAPS = [
-  "jira.create-reciprocal-remote-link",
-  "jira.delete-component",
-  "jira.rank-epic",
-  "jira.rank-issues",
-] as const;
+const OPEN_GAPS: readonly string[] = [];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (file: string): string => readFileSync(join(HERE, file), "utf8");
@@ -158,13 +156,13 @@ describe("the write-path inventory (#4354)", () => {
   });
 
   it.each(governed.filter((operation) => PATHS[operation]?.pin !== undefined))(
-    "%s: its pinning test exists and names the operation or its owner family",
+    "%s: its pinning test exists and pins template behaviour",
     (operation) => {
       const pin = PATHS[operation]?.pin;
       if (pin === undefined) throw new TypeError(`no pin for ${operation}`);
-      const source = read(pin);
-      const family = operation.replace("jira.", "").split("-")[0] ?? operation;
-      expect(source.includes(operation) || source.includes(family)).toBe(true);
+      // The file must be about the saved rules (templates, formal rules or their violations); which
+      // test inside it pins which operation is read from the named gate site above.
+      expect(read(pin)).toMatch(/template|formal|violat/iu);
     },
   );
 

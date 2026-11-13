@@ -387,6 +387,21 @@ describe("native estimation units and saved formal admission", () => {
       expect(writes(f)).toEqual([]);
     }
   });
+  // #4354: each rank operation has its own refusal pin, not only the one loop above. A rank changes
+  // an issue's rank field, so a required rank rule whose post-state cannot be known refuses it.
+  it.each(CASES.filter(({ name }) => name === "jira.rank-epic" || name === "jira.rank-issues"))(
+    "refuses $name when a saved rule requires the rank field, before any write",
+    async (selected) => {
+      const f = agilePlanningFixture();
+      expect(
+        await executeJiraAgilePlanningMutation(selected.name, selected.args, {
+          ...f.ports,
+          templates: formal("customfield_10019"),
+        }),
+      ).toMatchObject({ ok: false, reason: "field-validation" });
+      expect(writes(f)).toEqual([]);
+    },
+  );
   it("does not use old remaining-estimate evidence to admit an unknown time post-state", async () => {
     const f = agilePlanningFixture();
     f.board.estimation = { type: "field", field: { fieldId: "timeoriginalestimate" } };
