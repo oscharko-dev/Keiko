@@ -61,6 +61,7 @@ const { positionals, values } = parseArgs({
     set: { type: "string", default: "documents" },
     types: { type: "string" },
     modes: { type: "string" },
+    parts: { type: "string" },
     rehearse: { type: "boolean", default: false },
   },
 });

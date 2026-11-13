@@ -474,14 +474,18 @@ async function modesAndApproval(ctx) {
 
 /** C07: S10 and S11 as they are, in a Chat that has only the Jira Pod. */
 async function reportsOnJiraPodOnly(ctx) {
-  const progress = await JOURNEYS.S10(ctx, await ctx.freshChat("autonomous-delivery"));
-  const compliance = await JOURNEYS.S11(ctx, await ctx.freshChat("autonomous-delivery"));
+  const wanted = ctx.composerSelection?.parts;
+  const reports = [
+    ["s10", "S10", "S10 progress report"],
+    ["s11", "S11", "S11 compliance report"],
+  ].filter(([key]) => wanted === undefined || wanted.includes(key));
+  const results = await sequentially(reports, async ([, id, label]) => ({
+    label,
+    ...(await JOURNEYS[id](ctx, await ctx.freshChat("autonomous-delivery"))),
+  }));
   return aggregateParts(
-    [
-      { label: "S10 progress report", ...progress },
-      { label: "S11 compliance report", ...compliance },
-    ],
-    [NO_TURN, NO_TURN],
+    results,
+    results.map(() => NO_TURN),
   );
 }
 

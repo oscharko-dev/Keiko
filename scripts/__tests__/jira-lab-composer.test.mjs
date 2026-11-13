@@ -1507,8 +1507,8 @@ describe("C07 reports run the real S10 and S11 graders", () => {
   const S11_ANSWER =
     "RPT-1: Zusammenfassung ohne [LH-xxx]-Präfix; Abschnitt Abgrenzung fehlt\nRPT-3: kein Epic zugeordnet";
   /** A Jira-Pod-only Chat for the report project: S10 and S11 answer by their own prompt. */
-  const run = ({ s10 = GOOD_S10, s11 = S11_ANSWER, exchanges = [report] } = {}) => {
-    const ctx = lane({});
+  const run = ({ s10 = GOOD_S10, s11 = S11_ANSWER, exchanges = [report], selection } = {}) => {
+    const ctx = lane({ selection });
     ctx.truth = { fieldIds: FIELDS, issues: DEVIATING };
     // Jira's own board: it estimates with the Story Points field, the one the world holds values in.
     ctx.nativeGet = async (path) => {
@@ -1548,6 +1548,15 @@ describe("C07 reports run the real S10 and S11 graders", () => {
     expect(result.detail).toContain("S10 progress report: green");
     expect(result.detail).toContain("S11 compliance report: green");
     expect(ctx.calls.fresh).toHaveLength(2);
+  });
+
+  it("runs S10 alone when the run selects it, and leaves the S11 obligations uncovered", async () => {
+    const { ctx, check } = run({ selection: { parts: ["s10"] } });
+    const result = await check;
+    expect(result.covers).toEqual(expect.arrayContaining(["counts-by-type-status"]));
+    expect(result.covers).not.toContain("deviating-issues");
+    expect(result.detail).not.toContain("S11 compliance report");
+    expect(ctx.calls.fresh).toHaveLength(1);
   });
 
   it("is red when S10's figure is wrong, or S11 leaves a deviation undescribed or the tool report absent", async () => {

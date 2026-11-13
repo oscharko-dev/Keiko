@@ -60,6 +60,23 @@ describe("types and modes", () => {
   });
 });
 
+describe("the reports C07 runs", () => {
+  it("takes S10 alone, S11 alone or both, and refuses another name", () => {
+    expect(composerSelectionOf({ parts: "s10" })).toEqual({ parts: ["s10"] });
+    expect(composerSelectionOf({ parts: "s10,s11" })).toEqual({ parts: ["s10", "s11"] });
+    expect(composerSelectionOf({})).toEqual({});
+    expect(() => composerSelectionOf({ parts: "s12" })).toThrow("--parts names s12");
+  });
+
+  it("is wired into the scorecard options", () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, "../testing/jira-chat-lab/requirements/scorecard.mjs"),
+      "utf8",
+    );
+    expect(source).toContain('parts: { type: "string" }');
+  });
+});
+
 describe("baseline grouping and settings", () => {
   it("runs C03 and C04 in their own group without the baseline, the rest as before", () => {
     expect(composerGroups(["C01", "C02", "C03", "C04", "C05"])).toEqual([

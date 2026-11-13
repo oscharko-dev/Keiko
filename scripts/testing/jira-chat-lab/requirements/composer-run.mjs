@@ -20,23 +20,26 @@ export function selectedScenarios(catalog, only, setName) {
   return catalog.filter((scenario) => wanted.includes(scenario.id));
 }
 
+/** The reports C07 runs: S10 (progress) and S11 (compliance); `--parts s10` runs one of them. */
+export const REPORT_PARTS = Object.freeze(["s10", "s11"]);
+
 /** The types and modes the run selected, validated against the closed vocabularies. */
-export function composerSelectionOf({ types, modes }) {
-  const typeSlugs = new Set(COMPOSER_TYPES.map(typeSlug));
-  const modeKeys = new Set(COMPOSER_MODES.map((entry) => entry.key));
-  const wantedTypes = csv(types);
-  const wantedModes = csv(modes);
-  for (const [label, wanted, known] of [
-    ["--types", wantedTypes, typeSlugs],
-    ["--modes", wantedModes, modeKeys],
-  ])
-    for (const item of wanted ?? [])
+export function composerSelectionOf({ types, modes, parts }) {
+  const selection = {
+    types: csv(types),
+    modes: csv(modes),
+    parts: csv(parts),
+  };
+  const vocabularies = {
+    types: ["--types", new Set(COMPOSER_TYPES.map(typeSlug))],
+    modes: ["--modes", new Set(COMPOSER_MODES.map((entry) => entry.key))],
+    parts: ["--parts", new Set(REPORT_PARTS)],
+  };
+  for (const [key, [label, known]] of Object.entries(vocabularies))
+    for (const item of selection[key] ?? [])
       if (!known.has(item))
         throw new TypeError(`${label} names ${item}; known: ${[...known].join(", ")}`);
-  return {
-    ...(wantedTypes ? { types: wantedTypes } : {}),
-    ...(wantedModes ? { modes: wantedModes } : {}),
-  };
+  return Object.fromEntries(Object.entries(selection).filter(([, wanted]) => wanted !== undefined));
 }
 
 /**
