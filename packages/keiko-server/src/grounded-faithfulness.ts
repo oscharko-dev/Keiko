@@ -1552,6 +1552,16 @@ function evidenceTokens(text: string): ReadonlySet<string> {
   );
 }
 
+/** A shared figure outweighs a shared word. */
+function sharedTokenScore(claim: ReadonlySet<string>, line: string): number {
+  let score = 0;
+  for (const token of evidenceTokens(line)) {
+    if (!claim.has(token)) continue;
+    score += /\d/u.test(token) ? 3 : 1;
+  }
+  return score;
+}
+
 /** The turn's evidence lines that share a figure or a word with the claim, best match first. */
 function supplementalLinesFor(
   claimText: string,
@@ -1560,14 +1570,7 @@ function supplementalLinesFor(
 ): string | undefined {
   const claim = evidenceTokens(claimText);
   const scored = lines
-    .map((line, index) => ({
-      line,
-      index,
-      score: [...evidenceTokens(line)].reduce(
-        (sum, token) => sum + (claim.has(token) ? (/\d/u.test(token) ? 3 : 1) : 0),
-        0,
-      ),
-    }))
+    .map((line, index) => ({ line, index, score: sharedTokenScore(claim, line) }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const picked: string[] = [];
