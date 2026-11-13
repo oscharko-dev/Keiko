@@ -222,8 +222,8 @@ follows the model in use; a model nobody picked receives none unless the walk it
 A restored selection is never checked on page load, restore or opening a Chat: the first Send (Chat)
 or Start (Workbench) on a model without a current observation is the first use that checks it, shows
 that it is being checked and goes ahead when it answers; a refusal shows its reason and keeps the
-draft. A window opening reads the Workbench profile with `check=use`, which asks only for the model
-in use; a pick or Start reads with `check=1`. A check that ended without a verdict may be checked
+draft. A window opening reads the Workbench profile with `check=use`, which dispatches nothing; a
+pick or Start reads with `check=1`. A check that ended without a verdict may be checked
 again by a pick or the next Send, only after the existing not-ready cooldown has passed; a definitive refusal
 stays refused. Gateway Setup keeps the full verification round for explicitly named deployments;
 for a discovered listing, a candidate the walk reaches and the gateway rejects is dropped, a wildcard
@@ -232,8 +232,18 @@ reason), a default that got no verdict from a gateway that answers (a timeout of
 limit, an overloaded status) is kept unverified and the walk stops, a failure to reach the gateway at
 all (refused connection, unknown host, TLS or proxy fault) is no verdict and takes the existing
 base-URL fallback and deferred admission without saving anything, and the listed models no request
-reached are configured and reported as unverified. A window's own adoption of a saved or elected
-model is read with `check=use`; only a person's pick sends `check=1`. `gateway.readiness.scope` records how many models were listed and checked and why,
+reached are configured and reported as unverified. A model kept without a verdict is saved only
+because the answer names it as not verified (the dialog tells the person to choose it in Chat or the
+Coding Workbench, or to verify it in Settings > Models), its tool-calling record is `unverified`, and
+no successful observation is recorded for it. A request for a model with no current positive
+observation that did not come through the UI's first-use check (a Voice canonical target, a direct
+API call) is refused and starts no check: Chat create, send and regeneration answer 400
+`CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable, and the Voice
+queue retries a bounded number of times and then suspends with the transcript kept. A window opening
+or restored selection reads the Workbench profile with `check=use`, which may join a check that
+already runs and report the state but never dispatches one; only a person's pick or Start sends
+`check=1`, and a Start belongs to the model it was pressed for (a model adopted or picked meanwhile
+ends its wait with a plain message and starts no run). `gateway.readiness.scope` records how many models were listed and checked and why,
 only for a check that actually sent a request; `gateway.readiness.selection` records the outcome of
 every pick under its own correlation id; and `gateway.readiness.automatic.started` carries the
 closed `checkReason` (`startup`, `fallback`, `selection`). Nothing renews or recovers a model on a

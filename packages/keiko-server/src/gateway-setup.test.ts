@@ -20,12 +20,18 @@ import { ServerResponse, type IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
-import { currentGatewayConfig, currentContextProfileForModel } from "./deps.js";
+import {
+  currentConversationReadinessObservation,
+  currentGatewayConfig,
+  currentContextProfileForModel,
+} from "./deps.js";
 import { readChatContextStatus } from "./chat-context-status.js";
 import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import { admitCodingRunModel } from "./coding-sidecar-gateway.js";
+import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
   captureConversationReadinessAdmission,
   validateConversationReadinessAdmission,
@@ -2298,6 +2304,58 @@ describe("handleGatewaySetup", () => {
     },
   );
 
+  // A default whose check timed out is saved without a verdict. That is allowed only because (a) the
+  // answer names it as not verified, (b) nothing is recorded as a successful observation and (c) the
+  // product treats a request for it exactly like one for a model nobody checked: refused, not probed.
+  it("saves a default without a verdict as not verified: named in the answer, no observation, refused by admission (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-no-verdict-admission-");
+    const evidenceDir = await tempDir("keiko-gw-ev-no-verdict-admission-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("no verdict"), { code: ERROR_CODES.TIMEOUT })),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    // (a) The answer names every model that was not verified; the dialog says so in plain words.
+    expect(
+      (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds,
+    ).toEqual(["slow-default", "would-answer"]);
+    // (b) Nothing is recorded as a successful observation: the tool-calling record says unverified
+    // and no verified capability or readiness observation exists for the default.
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find((entry) => entry.id === "slow-default")
+        ?.toolCallingVerification?.status,
+    ).toBe("unverified");
+    expect(deps.gatewayConfig?.verifiedCapability("slow-default")).toBeUndefined();
+    expect(currentConversationReadinessObservation(deps, "slow-default")).not.toBe(true);
+    // (c) A conversation request for it is refused like one for a model nobody checked, and the
+    // refusal starts no check: admission only reads observations.
+    const admission = captureConversationReadinessAdmission(deps, "slow-default");
+    expect(admission).toMatchObject({
+      status: 400,
+      body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+    });
+    // The same holds for a coding run: it needs a positive current observation, and starts no check.
+    expect(() =>
+      admitCodingRunModel(
+        currentGatewayConfig(deps),
+        "slow-default",
+        undefined,
+        deps.gatewayConfig,
+      ),
+    ).toThrow(CodingRuntimeLaunchRejectedError);
+    deps.store.close();
+  });
+
   // A failure to reach the gateway at all is no verdict about a model: it never saves an unverified
   // default (that would persist a gateway nothing answered on), and the rest of the listing is not
   // probed either.
@@ -2409,7 +2467,7 @@ describe("handleGatewaySetup", () => {
     const wildcard = diagnostics.find(
       (record) => record.code === "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
     );
-    expect(wildcard).toMatchObject({ droppedWildcardRouteCount: 1 });
+    expect(wildcard).toMatchObject({ droppedChatModelCount: 1 });
     // The wildcard is not "answered and rejected" by the gateway: that wording stays for real rejections.
     expect(
       diagnostics.some(
@@ -2451,7 +2509,7 @@ describe("handleGatewaySetup", () => {
     // ... and the drop is on record even though setup failed before any admission.
     expect(
       diagnostics.find((record) => record.code === "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED"),
-    ).toMatchObject({ droppedWildcardRouteCount: 2 });
+    ).toMatchObject({ droppedChatModelCount: 2 });
     expect(deps.gatewayConfig?.present()).toBe(false);
     deps.store.close();
   });

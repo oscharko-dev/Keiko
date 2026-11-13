@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7cad91f4403e05571fe5aaa29b4ac0b08036a52360b053bc25649c812b95bc90",
+    "catalogDigest": "2c9f1aec8cfb5ce1ebe45e1929fe3f14faa1ad8708445afd0faaf5ec326fa863",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -19017,7 +19017,7 @@
         "proofIds": ["coding-sidecar.gateway.request-validated.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:319",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5888"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5875"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -19158,7 +19158,7 @@
         "proofIds": ["coding-sidecar.gateway.skill-attached.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:368",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5821"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5808"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26081,8 +26081,8 @@
         "failureClasses": ["gateway-setup-metadata"],
         "proofIds": ["gateway.setup.metadata.resolved.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:261",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:348"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:262",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:349"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26115,8 +26115,8 @@
         "failureClasses": ["gateway-setup-target"],
         "proofIds": ["gateway.setup.target.accepted.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:7536",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7563"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:7581",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7608"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26735,8 +26735,8 @@
         "failureClasses": ["gateway-tool-calling-capability"],
         "proofIds": ["gateway.tool-calling.verification.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:175",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9350"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:176",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9403"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27168,8 +27168,8 @@
         "failureClasses": ["gateway-voice-configuration"],
         "proofIds": ["gateway.voice.setup.resolved.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:205",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9372"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:206",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9425"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44988,11 +44988,6 @@
             "dataClass": "count",
             "required": false
           },
-          "droppedWildcardRouteCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": false
-          },
           "skippedChatModelCount": {
             "type": "integer",
             "dataClass": "count",
@@ -45081,7 +45076,7 @@
         "proofIds": ["server.diagnostic.failure.activity-log-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/diagnostics-log.ts:71",
-        "emitterSites": ["packages/keiko-server/src/diagnostics-log.ts:612"]
+        "emitterSites": ["packages/keiko-server/src/diagnostics-log.ts:608"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45143,8 +45138,8 @@
         "failureClasses": ["server-diagnostic"],
         "proofIds": ["server.diagnostic.observation.activity-log-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/diagnostics-log.ts:202",
-        "emitterSites": ["packages/keiko-server/src/diagnostics-log.ts:583"]
+        "registrationSite": "packages/keiko-server/src/diagnostics-log.ts:201",
+        "emitterSites": ["packages/keiko-server/src/diagnostics-log.ts:579"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -108467,12 +108462,6 @@
                   "required": false
                 },
                 {
-                  "name": "droppedWildcardRouteCount",
-                  "type": "integer",
-                  "dataClass": "count",
-                  "required": false
-                },
-                {
                   "name": "frameBytes",
                   "type": "integer",
                   "dataClass": "count",
@@ -118517,63 +118506,63 @@
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6059",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6072",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7200",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7235",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7470",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7505",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7500",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7530",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7512",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7557",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7812",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7857",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7837",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7882",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:8123",
+      "site": "packages/keiko-server/src/gateway-setup.ts:8170",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:8266",
+      "site": "packages/keiko-server/src/gateway-setup.ts:8313",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120794,7 +120783,7 @@
     {
       "op": "gateway.capability",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:9237",
+      "site": "packages/keiko-server/src/gateway-setup.ts:9290",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120813,7 +120802,7 @@
     {
       "op": "gateway.context-window",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:9294",
+      "site": "packages/keiko-server/src/gateway-setup.ts:9347",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120874,7 +120863,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:5246",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:5233",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120916,35 +120905,35 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3273",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3294",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3357",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3378",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3650",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3671",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3782",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3803",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3956",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3977",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121018,13 +121007,13 @@
     {
       "op": "gateway.setup.metadata.resolved",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:264",
+      "site": "packages/keiko-server/src/gateway-setup.ts:265",
       "package": "keiko-server"
     },
     {
       "op": "gateway.setup.target.accepted",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7539",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7584",
       "package": "keiko-server"
     },
     {
@@ -121054,13 +121043,13 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:178",
+      "site": "packages/keiko-server/src/gateway-setup.ts:179",
       "package": "keiko-server"
     },
     {
       "op": "gateway.voice.setup.resolved",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:208",
+      "site": "packages/keiko-server/src/gateway-setup.ts:209",
       "package": "keiko-server"
     },
     {
@@ -122476,7 +122465,7 @@
     {
       "op": "server-log.initialize",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:682",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:678",
       "package": "keiko-server"
     },
     {
@@ -122489,7 +122478,7 @@
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1137",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1132",
       "package": "keiko-server"
     },
     {
@@ -122501,7 +122490,7 @@
     {
       "op": "server.diagnostic.observation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:205",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:204",
       "package": "keiko-server"
     },
     {

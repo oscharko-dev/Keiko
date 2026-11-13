@@ -641,7 +641,7 @@ it("reads the Workbench profile of a restored selection passively, and of an exp
   // A passive read, with or without a model, sends nothing.
   await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b"), deps);
   expect(gateway.requestsFor(CHAT_B)).toBe(before);
-  // The model in use, asked for by an opening window, may be checked; nobody else.
+  // A window opening asks for no check at all, of the model in use or of anyone else.
   await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
   expect(gateway.requestsFor(CHAT_B)).toBe(before);
   expect(gateway.requestsFor(CHAT_C)).toBe(0);
@@ -699,7 +699,7 @@ it("opens the Workbench after a default without a verdict without a single reque
   expect(gateway.requestsFor(CHAT_C)).toBe(0);
 });
 
-it("labels a window opening's proof as startup and a pick's as selection, only once the request is sent", async () => {
+it("dispatches no tool-calling proof for a window opening, and labels a pick's proof as selection", async () => {
   const sink = loggedSink();
   gatewayDouble();
   const deps = composition();
@@ -713,18 +713,44 @@ it("labels a window opening's proof as startup and a pick's as selection, only o
       .filter((line) => line.extra?.modelKind === "tool-calling")
       .map((line) => String(line.extra?.reason));
   expect(toolScopes()).toEqual([]);
-  // The window opens on the model in use, which still lacks its proof: that request is the startup kind.
+  // A window opening on the model in use, which still lacks its proof, sends nothing: no scope line.
   await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
   await codingWorkbenchProbesSettledForTests();
-  expect(toolScopes()).toEqual(["startup"]);
-  // Reading it again sends nothing, so it writes nothing.
-  await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
-  await codingWorkbenchProbesSettledForTests();
-  expect(toolScopes()).toEqual(["startup"]);
-  // A pick of another model is the selection kind.
+  expect(toolScopes()).toEqual([]);
+  // A pick of a model is the selection kind.
   await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=1"), deps);
   await codingWorkbenchProbesSettledForTests();
-  expect(toolScopes()).toEqual(["startup", "selection"]);
+  expect(toolScopes()).toEqual(["selection"]);
+});
+
+it("dispatches nothing when a window opens on a model in use whose check ended without a verdict, and reports its state", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(config({ toolCapable: true }), true, "corr-window-inconclusive");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
+  });
+  await deps.waitForStartupGatewayCatalog?.();
+  await codingWorkbenchProbesSettledForTests();
+  // Past every cooldown: a passive read must not take that for a reason to send a request.
+  const base = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => base + 600_000);
+  const chatRequests = (): number =>
+    [CHAT_A, CHAT_B, CHAT_C].reduce((sum, modelId) => sum + gateway.requestsFor(modelId), 0);
+  const before = chatRequests();
+  const answers = [
+    await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps),
+    await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-a&check=use"), deps),
+    await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps),
+  ];
+  await codingWorkbenchProbesSettledForTests();
+  // Positive control: the three reads answered, with the model's own state, not a verified one.
+  for (const answer of answers) {
+    expect(answer.status).toBe(200);
+    expect(answer.body).not.toMatchObject({ status: "available", verification: "verified" });
+  }
+  expect(chatRequests()).toBe(before);
 });
 
 it("names a recheck the cooldown withheld with its own closed outcome", async () => {

@@ -3112,12 +3112,26 @@ function performNextWorkbenchProbe(resolve: () => void, reject: (error: unknown)
     .catch(reject);
 }
 
+/**
+ * A passive read of the Workbench profile joins the tool-calling proof of this model when one is
+ * running and starts nothing: a window opening or a restored selection never initiates provider
+ * work (#4351). The answer it then reports is the model's current state.
+ */
+export function joinRunningWorkbenchProof(
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+): Promise<void> {
+  const config = deps.gatewayConfig?.current();
+  if (config === undefined || modelId === undefined) return Promise.resolve();
+  const known = workbenchProbes.get(deploymentProbeKey(config, modelId));
+  return known !== undefined && !known.settled ? known.promise : Promise.resolve();
+}
+
 export async function ensureCodingWorkbenchContextWindows(
   deps: UiHandlerDeps,
   electedModelId: string | undefined,
   correlationId?: string,
   retryUnanswered = false,
-  scopeReason: ConversationCheckReason = "selection",
 ): Promise<void> {
   const config = deps.gatewayConfig?.current();
   if (config === undefined) return;
@@ -3128,10 +3142,17 @@ export async function ensureCodingWorkbenchContextWindows(
   const target = workbenchProbeTargets(config).find((candidate) => candidate.modelId === subject);
   if (target === undefined) return;
   const id = correlationId ?? newCorrelationId();
-  await enqueueWorkbenchProbe(deps, config, { ...target, scopeReason }, id, "profile-read", {
-    prioritized: true,
-    retryUnanswered,
-  });
+  await enqueueWorkbenchProbe(
+    deps,
+    config,
+    { ...target, scopeReason: "selection" },
+    id,
+    "profile-read",
+    {
+      prioritized: true,
+      retryUnanswered,
+    },
+  );
 }
 
 // Fresh-install gap (customer field incident, 0.3.10): a configured gateway carries NO
@@ -4079,19 +4100,6 @@ function conversationWalkCandidates(
     listConfiguredCapabilities(config).filter(
       (capability) => capability.kind === "chat" && capability.id !== requestedModelId,
     ),
-  );
-}
-
-export async function ensureAnyConversationReadyChatModel(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-  correlationId?: string,
-): Promise<void> {
-  await awaitConversationReadyCandidate(
-    deps,
-    requestedModelId,
-    ensureOnDemandConversationReadiness,
-    correlationId,
   );
 }
 

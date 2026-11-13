@@ -114,6 +114,7 @@ import type {
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
@@ -7529,10 +7530,10 @@ function reportWildcardRoutesDropped(
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.discovery",
     errorClass: "GatewayDiscoveryWildcardRoutes",
-    message:
-      "Setup dropped discovered wildcard route patterns by their shape; no request was sent for them.",
+    message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
     code: "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
-    droppedWildcardRouteCount: count,
+    // Discovered chat candidates dropped by their shape, never sent a request.
+    droppedChatModelCount: count,
   });
 }
 

@@ -595,12 +595,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/voice/speak", handler: handleVoiceSpeak },
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
-  // #4351: a person's explicit pick of a chat model starts the one check of that model.
-  {
-    method: "POST",
-    pattern: "/api/gateway/readiness/selection",
-    handler: handleGatewaySelectionCheck,
-  },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   {
     method: "PATCH",
@@ -1797,6 +1791,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
   ...JIRA_REPORT_ROUTE_GROUP,
   ...JIRA_DRAFT_ROUTE_GROUP,
+  // #4351: a person's explicit pick of a chat model starts the one check of that model.
+  {
+    method: "POST",
+    pattern: "/api/gateway/readiness/selection",
+    handler: handleGatewaySelectionCheck,
+  },
 ];
 
 interface PreparedRoute {

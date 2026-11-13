@@ -814,7 +814,13 @@ describe("explicit model selection starts exactly one check (#4351)", () => {
       act(() => {
         view.result.current.setSelectedModel(modelId);
       });
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      // Positive control: the pick took effect (it was persisted); only then is "no check" claimed.
+      await waitFor(() => {
+        expect(api.updateChat).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ selectedModel: modelId }),
+        );
+      });
       expect(start).not.toHaveBeenCalled();
     },
   );
@@ -872,12 +878,19 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     vi.restoreAllMocks();
   });
 
-  function sendSpies(): { readonly sent: () => number } {
+  function sendSpies(): {
+    readonly sent: () => number;
+    readonly inputs: () => readonly unknown[];
+  } {
     const stream = vi
       .spyOn(api, "sendDesktopChatStream")
       .mockReturnValue(new Promise(() => undefined));
     const buffered = vi.spyOn(api, "sendDesktopChat").mockReturnValue(new Promise(() => undefined));
-    return { sent: (): number => stream.mock.calls.length + buffered.mock.calls.length };
+    return {
+      sent: (): number => stream.mock.calls.length + buffered.mock.calls.length,
+      inputs: (): readonly unknown[] =>
+        [...stream.mock.calls, ...buffered.mock.calls].map((call) => call[0]),
+    };
   }
 
   it("checks nothing when a restored chat is opened, and sends after the check answers", async () => {
@@ -1098,70 +1111,173 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     );
   }
 
+  const UNCHECKED = "model-unchecked";
+
+  function documentCapableCatalog(): void {
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [
+        chatModel("model-a"),
+        { ...chatModel(UNCHECKED), conversationReady: undefined, supportsDocumentInput: true },
+      ],
+    });
+  }
+
+  interface ComposerRig {
+    readonly user: ReturnType<typeof userEvent.setup>;
+    readonly sessionRef: SessionRef;
+    readonly box: () => HTMLElement;
+    readonly send: (how: "button" | "Enter") => Promise<void>;
+    readonly stage: (name: string) => Promise<void>;
+  }
+
+  async function composerRig(): Promise<ComposerRig> {
+    documentCapableCatalog();
+    const user = userEvent.setup();
+    const sessionRef: SessionRef = { current: undefined };
+    render(<RealComposer sessionRef={sessionRef} />);
+    const box = (): HTMLElement => screen.getByRole("textbox", { name: "Chat message" });
+    await screen.findByRole("textbox", { name: "Chat message" });
+    return {
+      user,
+      sessionRef,
+      box,
+      send: async (how): Promise<void> => {
+        if (how === "button")
+          await user.click(screen.getByRole("button", { name: "Send message" }));
+        else await user.keyboard("{Enter}");
+      },
+      stage: async (name): Promise<void> => {
+        await act(async () => {
+          const added = await sessionRef.current?.addPendingAttachment(
+            new File(["report"], name, { type: "text/plain" }),
+          );
+          expect(added?.ok).toBe(true);
+        });
+      },
+    };
+  }
+
+  // Waits for the check's answer to land in the session (an observable event), then drains the
+  // continuation that follows it: a bounded number of microtask turns, not a sleep.
+  async function answerCheckReady(
+    check: { readonly resolve: (value: { state: "ready" }) => void },
+    sessionRef: SessionRef,
+  ): Promise<void> {
+    await act(async () => {
+      check.resolve({ state: "ready" });
+    });
+    await waitFor(() => {
+      expect(
+        sessionRef.current?.models.find((model) => model.id === UNCHECKED)?.conversationReady,
+      ).toBe(true);
+    });
+    await act(async () => {
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    });
+  }
+
   it.each(["button", "Enter"] as const)(
     "erases nothing and sends nothing when the person typed during the check (%s)",
     async (how) => {
       const check = deferredCheck();
       const start = vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
       const spies = sendSpies();
-      const user = userEvent.setup();
-      render(<RealComposer />);
-      const box = await screen.findByRole("textbox", { name: "Chat message" });
-      await user.type(box, "hello");
-      if (how === "button") await user.click(screen.getByRole("button", { name: "Send message" }));
-      else await user.keyboard("{Enter}");
+      const rig = await composerRig();
+      await rig.user.type(rig.box(), "hello");
+      await rig.send(how);
       await waitFor(() => {
         expect(start).toHaveBeenCalledTimes(1);
       });
-      await user.type(box, " and more");
-      await act(async () => {
-        check.resolve({ state: "ready" });
-        await new Promise<void>((resolve) => setTimeout(resolve, 30));
-      });
+      await rig.user.type(rig.box(), " and more");
+      await answerCheckReady(check, rig.sessionRef);
       // The text typed during the wait is neither erased nor lost, and the old text is not sent.
       expect(spies.sent()).toBe(0);
-      const typed = screen.getByRole("textbox", { name: "Chat message" });
-      expect(typed).toHaveTextContent("hello");
-      expect(typed).toHaveTextContent("and more");
+      expect(rig.box()).toHaveTextContent("hello");
+      expect(rig.box()).toHaveTextContent("and more");
     },
   );
 
   it("does not send an attachment the person removed during the check", async () => {
-    vi.spyOn(api, "fetchModels").mockResolvedValue({
-      models: [
-        chatModel("model-a"),
-        {
-          ...chatModel("model-unchecked"),
-          conversationReady: undefined,
-          supportsDocumentInput: true,
-        },
-      ],
-    });
     const check = deferredCheck();
     const start = vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
     const spies = sendSpies();
-    const user = userEvent.setup();
-    const sessionRef: SessionRef = { current: undefined };
-    render(<RealComposer sessionRef={sessionRef} />);
-    const box = await screen.findByRole("textbox", { name: "Chat message" });
-    await user.type(box, "hello");
-    await act(async () => {
-      const added = await sessionRef.current?.addPendingAttachment(
-        new File(["report"], "report.txt", { type: "text/plain" }),
-      );
-      expect(added?.ok).toBe(true);
-    });
-    await user.click(screen.getByRole("button", { name: "Send message" }));
+    const rig = await composerRig();
+    await rig.user.type(rig.box(), "hello");
+    await rig.stage("report.txt");
+    await rig.send("button");
     await waitFor(() => {
       expect(start).toHaveBeenCalledTimes(1);
     });
-    await user.click(await screen.findByRole("button", { name: "Remove attachment report.txt" }));
-    await act(async () => {
-      check.resolve({ state: "ready" });
-      await new Promise<void>((resolve) => setTimeout(resolve, 30));
-    });
+    await rig.user.click(
+      await screen.findByRole("button", { name: "Remove attachment report.txt" }),
+    );
+    await answerCheckReady(check, rig.sessionRef);
     expect(spies.sent()).toBe(0);
-    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent("hello");
+    expect(rig.box()).toHaveTextContent("hello");
+  });
+
+  it("sends nothing and clears nothing when an attachment was added during the check", async () => {
+    const check = deferredCheck();
+    const start = vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const spies = sendSpies();
+    const rig = await composerRig();
+    await rig.user.type(rig.box(), "hello");
+    await rig.send("button");
+    await waitFor(() => {
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+    await rig.stage("late.txt");
+    await answerCheckReady(check, rig.sessionRef);
+    expect(spies.sent()).toBe(0);
+    expect(rig.box()).toHaveTextContent("hello");
+    expect(screen.getByRole("button", { name: "Remove attachment late.txt" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["fails", "failed"],
+    ["is refused", "refused"],
+  ] as const)(
+    "keeps the draft and the staged attachment when the check %s, and sends nothing",
+    async (_name, kind) => {
+      const start = vi.spyOn(api, "startChatModelSelectionCheck");
+      if (kind === "failed")
+        start.mockRejectedValue(new api.ApiError("INTERNAL", "gateway check failed", 500));
+      else start.mockResolvedValue({ state: "not-ready" });
+      const spies = sendSpies();
+      const rig = await composerRig();
+      await rig.user.type(rig.box(), "hello");
+      await rig.stage("report.txt");
+      await rig.send("button");
+      // Positive control: the reason reached the session; only then is "nothing sent" claimed.
+      await waitFor(() => {
+        expect(rig.sessionRef.current?.error).toMatch(
+          kind === "failed" ? /gateway check failed/ : /^MODEL_NOT_READY$/,
+        );
+      });
+      expect(spies.sent()).toBe(0);
+      expect(rig.box()).toHaveTextContent("hello");
+      expect(
+        screen.getByRole("button", { name: "Remove attachment report.txt" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("sends exactly once to the picked model when the check succeeds, and clears the draft", async () => {
+    const start = vi
+      .spyOn(api, "startChatModelSelectionCheck")
+      .mockResolvedValue({ state: "ready" });
+    const spies = sendSpies();
+    const rig = await composerRig();
+    await rig.user.type(rig.box(), "hello");
+    await rig.send("button");
+    await waitFor(() => {
+      expect(spies.sent()).toBe(1);
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(spies.inputs()[0]).toMatchObject({ modelId: UNCHECKED });
+    await waitFor(() => {
+      expect(rig.box()).not.toHaveTextContent("hello");
+    });
   });
 
   function persistChatSelection(initial: string): void {

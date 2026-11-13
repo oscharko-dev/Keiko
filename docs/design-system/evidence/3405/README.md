@@ -491,3 +491,8 @@ The final correction round of the same change (stale check re-validation on Send
 the closed `cooldown` outcome and its message, wildcard-route and asserted-model wording) changed the
 catalog and `api.ts` digests once more; the producer was rerun the same way on 2026-11-13 (Linux gates
 container, `--init`, Node 24.18.0, 9 passed in 1.6m) and only the three records were kept.
+
+The last round of the same change (the Start bound to its model, its plain "model changed" message
+in both Workbench catalogs, and the clearer not-verified wording of the Gateway Setup notice in both
+core catalogs) moved the catalog digests once more; the producer was rerun on 2026-11-13 the same way
+(Linux gates container, `--init`, Node 24.18.0, 9 passed in 1.7m) and only the three records were kept.

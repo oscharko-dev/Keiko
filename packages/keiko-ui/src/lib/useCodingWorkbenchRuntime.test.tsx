@@ -741,20 +741,32 @@ describe("useCodingWorkbenchRuntime", () => {
       await first;
     });
 
-    it("keeps waiting when the same model is picked again, and asks nothing more", async () => {
+    const verifiedAvailable = {
+      status: "available",
+      profileId: "gateway-redacted",
+      modelAlias: "model-redacted",
+      localEndpointPath: "/api/coding-sidecar/gateway",
+      supportsStreaming: true,
+      supportsToolCalling: true,
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 64,
+        maxRequestBytes: 64_000,
+      },
+      verification: "verified",
+    } as never;
+
+    it("keeps waiting when the same model is picked again, and starts that model when it answers", async () => {
       const { view, first } = await pendingStart();
-      let settled = false;
-      void first.then(() => {
-        settled = true;
-      });
-      const reads = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length;
       act(() => view.result.current.actions.setSelectedModel("model-redacted"));
-      await new Promise<void>((resolve) => setTimeout(resolve, 60));
-      expect(settled).toBe(false);
-      expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length).toBe(reads);
-      view.unmount();
+      // The model answers at the Start's own next poll: the wait survived the re-pick, and the run
+      // starts on the model the Start was pressed for.
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue(verifiedAvailable);
       await first;
-    });
+      expect(startCodingWorkbenchRuntime).toHaveBeenCalledOnce();
+      view.unmount();
+    }, 20_000);
 
     it("ends the wait when the runtime preference changes", async () => {
       const { view, first } = await pendingStart();
@@ -764,18 +776,23 @@ describe("useCodingWorkbenchRuntime", () => {
       view.unmount();
     });
 
-    it("keeps waiting when the window adopts another model: adoption is no pick", async () => {
+    it("starts no run on a model the window adopted during the wait, even when that model answers", async () => {
       const { view, first } = await pendingStart();
-      let settled = false;
-      void first.then(() => {
-        settled = true;
-      });
+      // The adopted model would start at once: it reads as available. It was never checked.
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue(verifiedAvailable);
       act(() => view.result.current.actions.adoptModel("adopted-model"));
-      await new Promise<void>((resolve) => setTimeout(resolve, 60));
-      expect(settled).toBe(false);
-      expect(view.result.current.state.selectedModelId).toBe("adopted-model");
-      view.unmount();
       await first;
+      expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(view.result.current.state.selectedModelId).toBe("adopted-model");
+      });
+      // The person is told plainly why nothing started.
+      await waitFor(() => {
+        expect(view.result.current.state.mutation.error).toMatchObject({
+          code: "CODING_RUNTIME_MODEL_CHANGED_DURING_CHECK",
+        });
+      });
+      view.unmount();
     });
 
     it("starts nothing when the window closes during the wait", async () => {

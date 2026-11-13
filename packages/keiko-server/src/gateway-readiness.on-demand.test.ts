@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
-  CHAT_MODEL_WALK_BUDGET_MS,
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
-  ensureAnyConversationReadyChatModel,
   ensureOnDemandConversationReadiness,
   initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
@@ -230,71 +228,6 @@ function probeableDeps(
   return { deps, fetchCalls: () => calls, readyRecords: () => recorded };
 }
 
-// The walk is BOUNDED (the unbounded-sum lesson of the 0.3.11 embedding ladder): an interactive
-// create must never wait out one provider timeout per configured model. A probe that outlives
-// the budget keeps running in the shared in-flight map, but the REQUEST stops waiting.
-describe("ensureAnyConversationReadyChatModel budget", () => {
-  it("stops waiting at the aggregate walk budget while slow probes keep running", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
-    // Unique per test run: the hanging m2 probe stays in the module-level in-flight map for
-    // the process lifetime, and a fixed generation would let a later test adopt it.
-    const generation = (nextGeneration += 1);
-    const probed: string[] = [];
-    const providers = ["m1", "m2", "m3"].map((modelId) => ({
-      modelId,
-      baseUrl: "https://siu.llm.intern/v1",
-      apiKey: "k",
-      // Deliberately far beyond the walk budget: only the budget can end the wait.
-      timeoutMs: 600_000,
-      maxRetries: 0,
-      retryBaseDelayMs: 1,
-    }));
-    const deps = {
-      env: {},
-      gatewayConfig: {
-        ...holderWith(undefined, generation),
-        current: () => ({ providers }),
-        recordVerifiedCapability: (): void => {
-          // Static holder: observations never persist, so every walk candidate stays probeable.
-        },
-      },
-      redactor: (value: unknown): unknown => value,
-      gatewayReadinessFetch: (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-        const raw = typeof init?.body === "string" ? init.body : "{}";
-        const model = (JSON.parse(raw) as { model?: string }).model ?? "?";
-        probed.push(model);
-        if (model === "m1") {
-          // The requested default answers EMPTY — an honest probe failure, so the walk starts.
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
-              { status: 200, headers: { "content-type": "application/json" } },
-            ),
-          );
-        }
-        // Every sibling hangs far past the budget.
-        return new Promise<Response>(() => {
-          // never resolves
-        });
-      },
-    } as unknown as UiHandlerDeps;
-
-    let settled = false;
-    const walk = ensureAnyConversationReadyChatModel(deps, "m1").then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS - 1);
-    expect(settled).toBe(false);
-    expect(probed).toEqual(["m1", "m2"]);
-    await vi.advanceTimersByTimeAsync(1);
-    await walk;
-    expect(settled).toBe(true);
-    // The requested model and the FIRST walk candidate were probed; the budget expired while
-    // that candidate hung, so the walk never reached the third model.
-    expect(probed).toEqual(["m1", "m2"]);
-  });
-});
-
 describe("on-demand readiness correlation", () => {
   it.each(["ready", "failed"] as const)(
     "links every concurrent waiter to the single shared %s probe",
@@ -345,35 +278,6 @@ describe("on-demand readiness correlation", () => {
       ).toMatchObject({ correlationId: "create-request", extra: { overallStatus: status } });
     },
   );
-
-  it("keeps the request identity through a default-model walk", async () => {
-    const { deps } = probeableDeps("invalid");
-    const events: ServerLogEvent[] = [];
-    await ensureAnyConversationReadyChatModel(
-      {
-        ...deps,
-        activityLog: {
-          write: (event): void => {
-            events.push(event);
-          },
-        },
-      },
-      "chat-model",
-      "create-chat-0001",
-    );
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          op: "gateway.readiness.automatic.started",
-          correlationId: "create-chat-0001",
-        }),
-        expect.objectContaining({
-          op: "gateway.readiness.automatic.completed",
-          correlationId: "create-chat-0001",
-        }),
-      ]),
-    );
-  });
 
   it("records a failed probe outcome against the admitting request", async () => {
     const { deps } = probeableDeps("invalid");

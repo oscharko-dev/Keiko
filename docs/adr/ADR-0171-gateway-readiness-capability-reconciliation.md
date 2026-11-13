@@ -91,7 +91,7 @@ refused credential and at a check without a verdict, and the tool-calling proof 
 the model in use, never a model nobody picked. A restored selection is not checked on page load,
 restore or opening a Chat; the first Send or Start on a model without a current observation is the
 first use that checks it and goes ahead when it answers, and a window opening reads the Workbench
-profile with `check=use` (the model in use only) while a pick or Start reads with `check=1`. A check
+profile with `check=use` (it dispatches nothing) while a pick or Start reads with `check=1`. A check
 without a verdict may be repeated by a pick or the next Send after the not-ready cooldown has passed; an
 explicit Settings verification that answers definitively ends the walk's pause. Gateway Setup keeps
 the full round for explicitly named deployments; for a discovered listing a candidate the walk
@@ -100,8 +100,16 @@ with its own reason), a default without a verdict from a gateway that answers (a
 completion, a rate limit, an overloaded status) is kept unverified and ends the walk, a failure to
 reach the gateway at all (refused connection, unknown host, TLS or proxy fault) is no verdict and
 takes the existing base-URL fallback and deferred admission without saving anything, and listed models
-no request reached are configured and reported unverified. A window's own adoption of a saved or
-elected model reads with `check=use`; only a person's pick sends `check=1`. A connection is the provider entry
+no request reached are configured and reported unverified. A model kept without a verdict is saved
+only because the answer names it as not verified (with what to do), its tool-calling record is
+`unverified` and no successful observation is recorded for it. A request for a model with no current
+positive observation that did not come through the UI's first-use check (a Voice canonical target, a
+direct API call) is refused and starts no check: Chat create, send and regeneration answer 400
+`CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable, and the Voice
+queue retries a bounded number of times and then suspends with the transcript kept. A window's
+opening or restored selection reads with `check=use`, which may join a check that runs and report
+the state but never dispatches one; only a person's pick or Start sends `check=1`, and a Start
+belongs to the model it was pressed for. A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
 interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.

@@ -43237,11 +43237,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
-      droppedWildcardRouteCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
       skippedChatModelCount: {
         type: "integer",
         dataClass: "count",

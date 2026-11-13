@@ -60,7 +60,8 @@ export interface CodingWorkbenchRuntimeActions extends RuntimeMutationActions {
   readonly setSelectedModel: (modelId: string | null) => void;
   /**
    * The window's own choice of a model (the operator's saved one, or the elected default): it is
-   * read with `check=use` like any other passive read and never aborts a Start that is waiting.
+   * read with `check=use` like any other passive read, and it ends the wait of a Start that was
+   * pressed for another model.
    */
   readonly adoptModel: (modelId: string | null) => void;
   readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
@@ -93,6 +94,15 @@ const MODEL_STILL_CHECKING: CodingWorkbenchClientError = {
   message: "The selected model is still being checked.",
   retryable: true,
   modelRefusalReason: "model-verification-pending",
+};
+
+// The abort reason of a wait that a change of model ended, and the plain answer the person gets: a
+// Start belongs to the model it was pressed for and never starts a run on another one (#4351).
+const MODEL_CHANGED_REASON = "model-changed";
+const MODEL_CHANGED_DURING_CHECK: CodingWorkbenchClientError = {
+  code: "CODING_RUNTIME_MODEL_CHANGED_DURING_CHECK",
+  message: "The model changed while it was being checked. No run was started.",
+  retryable: true,
 };
 
 function sourceNeedsModelCheck(state: CodingWorkbenchRuntimeState): boolean {
@@ -151,12 +161,20 @@ async function waitForModelCheck(
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
   refreshSource: RuntimeResources["refreshSource"],
   signal: AbortSignal,
+  modelId: string | null,
 ): Promise<boolean> {
   const before = stateRef.current.source;
   await refreshSource(false, undefined, true);
   await settledSource(stateRef, before);
   const deadline = Date.now() + START_MODEL_CHECK_MAX_WAIT_MS;
-  while (!signal.aborted && sourceCheckPending(stateRef.current) && Date.now() < deadline) {
+  // The wait is the model's: a model adopted or picked meanwhile, by any path, ends it.
+  const stillTheModel = (): boolean => stateRef.current.selectedModelId === modelId;
+  while (
+    !signal.aborted &&
+    stillTheModel() &&
+    sourceCheckPending(stateRef.current) &&
+    Date.now() < deadline
+  ) {
     await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ abortableDelay(
       START_MODEL_CHECK_POLL_MS,
       signal,
@@ -169,7 +187,7 @@ async function waitForModelCheck(
       pendingBefore,
     );
   }
-  return !signal.aborted && stateRef.current.source.value?.available === true;
+  return !signal.aborted && stillTheModel() && stateRef.current.source.value?.available === true;
 }
 
 async function startAfterModelCheck(
@@ -196,16 +214,25 @@ async function startAfterModelCheck(
   }
   const controller = new AbortController();
   intent.startWait = controller;
+  const pressedFor = stateRef.current.selectedModelId;
   let ready = false;
   try {
-    ready = await waitForModelCheck(stateRef, refreshSource, controller.signal);
+    ready = await waitForModelCheck(stateRef, refreshSource, controller.signal, pressedFor);
   } finally {
     if (intent.startWait === controller) intent.startWait = null;
     // The "still being checked" answer to a second Start belongs to this wait only.
     if (stateRef.current.mutation.error?.modelRefusalReason === "model-verification-pending")
       input.dispatch({ kind: "mutation-complete" });
   }
-  // The window closed or the model changed during the wait: nothing starts.
+  // The window closed or the model changed during the wait: nothing starts, and a changed model
+  // says so. A run starts only on the model this Start was pressed for.
+  const modelChanged =
+    controller.signal.reason === MODEL_CHANGED_REASON ||
+    stateRef.current.selectedModelId !== pressedFor;
+  if (modelChanged) {
+    input.dispatch({ kind: "mutation-failed", error: MODEL_CHANGED_DURING_CHECK });
+    return;
+  }
   if (ready && !controller.signal.aborted) await start(taskIntent, options);
 }
 
@@ -259,13 +286,16 @@ function createCodingWorkbenchRuntimeActions({
         return;
       }
       // Another model ends the wait of a Start that was checking the old one.
-      intent.current.startWait?.abort();
+      intent.current.startWait?.abort(MODEL_CHANGED_REASON);
       // The next source read for this model is the person's pick; every other read is passive.
       intent.current.pickedModelId = modelId;
       dispatch({ kind: "select-model", modelId });
     },
     adoptModel: (modelId): void => {
       if (stateRef.current.selectedModelId === modelId) return;
+      // An adopted model is no pick (it reads with `check=use`), but a Start that waits on the old
+      // model does not carry over to it: no run ever starts on a model nobody checked.
+      intent.current.startWait?.abort(MODEL_CHANGED_REASON);
       dispatch({ kind: "select-model", modelId });
     },
     setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
