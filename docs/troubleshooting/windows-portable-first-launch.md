@@ -24,6 +24,14 @@ installed version, either nothing else happens at all, or one of four native dia
 A related report: the setup companion stays alive as a background process after the CLI phase is
 aborted.
 
+Not a failure: on the first installation, a double-click shows one information box titled `Keiko`
+("Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is
+ready."). The launcher has no window of its own, and the setup copies and attests the whole
+installation while the virus scanner reads every new file, so minutes can pass before the browser
+opens. The box appears once, when that first installation begins; it does not appear for a start of
+the installed copy or for an upgrade, and it never updates. A setup that fails afterwards shows one
+of the dialogs above. The Activity Log records the request as `portable.setup-notice.requested`.
+
 **Root Cause**
 
 `Keiko.exe` is a thin native launcher built as a `/SUBSYSTEM:WINDOWS` binary that spawns the
