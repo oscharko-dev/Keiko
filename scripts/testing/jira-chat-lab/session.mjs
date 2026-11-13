@@ -4,7 +4,12 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { initializeLabTls } from "./tls-front.mjs";
+import {
+  initializeLabTls,
+  labComposeFiles,
+  readLabPrivateAddress,
+  writeLabPrivateAddress,
+} from "./tls-front.mjs";
 import { DEFAULT_LAB_CONNECTION, loadSession, normalizeLabSession } from "./lab-client.mjs";
 import { requireExclusiveLab } from "./lab-services.mjs";
 
@@ -39,7 +44,13 @@ if (action === "init") {
   normalizeLabSession(manifest, directory);
   mkdirSync(directory, { mode: 0o700 });
   mkdirSync(join(directory, "secrets"), { mode: 0o700 });
-  initializeLabTls(join(directory, "secrets", "tls"));
+  // Optional (#4369): one private-class address the HTTPS front also serves. Without it the lab
+  // stays loopback-only; the address is recorded privately and every later start reads it back.
+  const privateAddress = writeLabPrivateAddress(
+    join(directory, "secrets", "tls"),
+    process.env.KEIKO_JIRA_LAB_PRIVATE_ADDRESS,
+  );
+  initializeLabTls(join(directory, "secrets", "tls"), { privateAddress });
   for (const name of ["database-password", "admin-password", "api-user-password"])
     writeFileSync(join(directory, "secrets", name), randomBytes(24).toString("base64url"), {
       mode: 0o600,
@@ -54,9 +65,12 @@ if (action === "init") {
   const session = loadSession(directory);
   const command = action === "start" ? ["up", "-d"] : [action === "status" ? "ps" : "stop"];
   let tlsRenewed = false;
+  const tlsDirectory = join(directory, "secrets", "tls");
+  const privateAddress = readLabPrivateAddress(tlsDirectory);
   if (action === "start") {
     await requireExclusiveLab(session);
-    initializeLabTls(join(directory, "secrets", "tls"), {
+    initializeLabTls(tlsDirectory, {
+      privateAddress,
       onRenew: () => {
         tlsRenewed = true;
       },
@@ -71,8 +85,11 @@ if (action === "init") {
         "compose",
         "-p",
         session.project,
-        "-f",
-        join(dirname(fileURLToPath(import.meta.url)), "compose.yaml"),
+        ...labComposeFiles(
+          join(dirname(fileURLToPath(import.meta.url)), "compose.yaml"),
+          join(dirname(fileURLToPath(import.meta.url)), "compose.private.yaml"),
+          tlsDirectory,
+        ).flatMap((file) => ["-f", file]),
         ...selected,
       ],
       {
@@ -82,6 +99,7 @@ if (action === "init") {
           KEIKO_JIRA_LAB_STATE_DIR: directory,
           KEIKO_JIRA_LAB_HTTP_PORT: String(session.httpPort),
           KEIKO_JIRA_LAB_HTTPS_PORT: String(session.httpsPort),
+          ...(privateAddress === undefined ? {} : { KEIKO_JIRA_LAB_PRIVATE_ADDRESS: privateAddress }),
           KEIKO_JIRA_LAB_JIRA_VERSION: session.jiraVersion,
           KEIKO_JIRA_LAB_JIRA_SHA256: session.jiraImageDigest,
         },
