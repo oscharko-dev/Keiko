@@ -181,6 +181,19 @@ function branchRequirements(branch: CatalogJsonValue | undefined): readonly stri
     ? required
     : undefined;
 }
+/** Keywords inside a branch that say the choice itself, not a value, is what failed. */
+const CHOICE_SHAPE_KEYWORDS = new Set(["required", "additionalProperties", "not"]);
+/**
+ * Whether the first error is the choice failing: the `oneOf`/`anyOf` error itself, or a missing,
+ * undeclared or excluded property inside one of its branches. An invalid VALUE inside a branch
+ * (a type, constant, length) is the failure there, and the first error already names its path.
+ */
+function choiceIsTheFailure(first: ErrorObject | undefined, choice: ErrorObject): boolean {
+  if (first === undefined || first === choice) return true;
+  return (
+    first.schemaPath.startsWith(`${choice.schemaPath}/`) && CHOICE_SHAPE_KEYWORDS.has(first.keyword)
+  );
+}
 /** The top-level alternatives of a failed `oneOf`/`anyOf`, only when every branch names its properties. */
 function choiceOf(schema: CatalogJsonObject, errors: readonly ErrorObject[]): Choice | undefined {
   const error = errors.find(
@@ -190,6 +203,7 @@ function choiceOf(schema: CatalogJsonObject, errors: readonly ErrorObject[]): Ch
   const branches = error === undefined ? undefined : schemaAt(schema, error.schemaPath);
   if (error === undefined || !Array.isArray(branches) || branches.length > MAX_CHOICE_BRANCHES)
     return undefined;
+  if (!choiceIsTheFailure(errors[0], error)) return undefined;
   const alternatives = branches.map((branch) => branchRequirements(branch as CatalogJsonValue));
   if (alternatives.length === 0 || alternatives.some((names) => names === undefined))
     return undefined;

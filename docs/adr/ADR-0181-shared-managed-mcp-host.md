@@ -44,8 +44,10 @@ complete acceptance remains tracked separately from this architectural decision.
 `jira.describe` and the existing Knowledge tools. Discovery pages the closed registry of
 implemented operations; it does not advertise the unimplemented API inventory as executable.
 Describe accepts an exact registry identity or the tool name that discovery returned beside it for
-the same provider (never a URL or an HTTP request shape; an operation named twice is refused
-whole) and prepares the selected typed tools for the next model round. A describe replaces the previous additional selection; its result names
+the same provider, and, where discovery lists the underscored Chat alias (`jira_priorities`), the
+dotted registry form (`jira.priorities`) of the same operation (never a URL, an HTTP request shape
+or an unlisted name; an operation named twice is refused whole) and prepares the selected typed
+tools for the next model round. A describe replaces the previous additional selection; its result names
 every previously selected operation it drops (`deselected`), so a model never loses a tool
 without being told. Each published selection, in Chat and Coding, records
 `jira.catalog.selection` on the Activity Log with selected, retained and dropped counts only.

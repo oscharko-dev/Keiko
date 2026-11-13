@@ -196,6 +196,34 @@ describe("external JSON Schema catalog dialect", () => {
       expect(enumerated?.allowed).toEqual({ path: "expectAbsent", values: [true] });
       expect(JSON.stringify(refused)).not.toContain("private");
     });
+    it("states the exclusive choice only when the choice itself is the failure", () => {
+      // A branch is satisfied by its required property, but a value inside it is invalid: the
+      // model must fix that value, and "supply exactly one of" would send it to the wrong place.
+      const draft = compileExternalCatalogSchema({
+        type: "object",
+        oneOf: [
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["items"],
+            properties: { items: { type: "array", items: { type: "string" } } },
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["draftId"],
+            properties: { draftId: { type: "string" } },
+          },
+        ],
+      });
+      const invalidValue = describeCatalogSchemaMismatch(draft, { items: [1] });
+      expect(invalidValue?.invalidPaths).toEqual(["items[]"]);
+      expect(invalidValue?.choice).toBeUndefined();
+      expect(describeCatalogSchemaMismatch(draft, {})?.choice?.kind).toBe("exactly-one");
+      expect(describeCatalogSchemaMismatch(draft, { items: [], draftId: "d" })?.choice?.kind).toBe(
+        "exactly-one",
+      );
+    });
     it("names the declared properties when the value carries one the closed schema does not, never the extra key", () => {
       const mismatch = describeCatalogSchemaMismatch(remoteLink, {
         issueIdOrKey: "a",

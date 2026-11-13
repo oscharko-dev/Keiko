@@ -210,8 +210,13 @@ it("points figures across many issues to jira.report without attracting every pr
   const describe = (name: string): string =>
     provider.tools().find((tool) => tool.name === name)?.descriptor.description ?? "";
   // The pointer stays, narrowed to what the report computes: a model must not page or loop for totals.
-  for (const name of ["jira.search", "jira.search-post", "jira.issue"])
-    expect(describe(name), name).toMatch(/jira\.report/u);
+  // The old incident: models paged search results or read issues one by one to total a project.
+  // These descriptors must keep sending such totals to the report; the behavioural proof is the
+  // S10 case of the Jira lab on the integrated head (the project-statuses case stays separate).
+  for (const name of ["jira.search", "jira.search-post", "jira.issue"]) {
+    expect(describe(name), name).toMatch(/across many issues come from jira\.report/u);
+    expect(describe(name), name).toMatch(/not from (paging results|reading issues one by one)/u);
+  }
   expect(describe("jira.search")).toMatch(/progress, estimates and template compliance/iu);
   const report = provider.tools().find((tool) => tool.name === "jira.report");
   // Both attempts of the selection lane asked for project statuses and were answered by the report.

@@ -406,7 +406,7 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
   "jira.search-post": {
     ...SEARCH_DEFINITION,
     description:
-      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages. Progress, estimates and template compliance across many issues come from jira.report. Native query validation stays enabled.",
+      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages. Progress, estimates and template compliance across many issues come from jira.report, not from paging results. Native query validation stays enabled.",
   },
   "jira.issue": {
     description:
