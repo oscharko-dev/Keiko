@@ -502,6 +502,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private toolDefinitions: readonly ToolDefinition[];
   /** The correction the next round carries after the gateway's own correction was rejected too. */
   private correction: GatewayMessage | undefined;
+  /** A correction about a claimed action is answered without any tool: it can never write. */
+  private correctionWithoutTools = false;
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
   private correctedSinceProgress = false;
   /** The first admission of a correction round follows an attempt the turn could not use. */
@@ -1434,6 +1436,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         offered,
       },
     };
+    if (this.correctionWithoutTools) return { ...round, toolCatalog: undefined };
     return this.fittedRoundOutput(round, offered);
   }
   private fittedRoundOutput(
@@ -1815,6 +1818,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.uncorrectedExchangeCount = this.transcriptExchangeCount();
     this.continuation.push({ role: "assistant", content: answer.content });
     this.correction = { role: "system", content: correction.content };
+    this.correctionWithoutTools = correction.logs.some(
+      (log) =>
+        log.correctionKind === "announced-create" || log.correctionKind === "tool-call-as-text",
+    );
     for (const log of correction.logs)
       recordChatToolTurnCorrected(processServerLogSink(), {
         correlationId: this.options.correlationId,
@@ -1849,7 +1856,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
-    corrections.push(...claimedActionCorrections(this.settledExchanges, answer.content));
+    corrections.push(...claimedActionCorrections(this.settledExchanges, answer.content, context));
     const coverage = knowledgeTurnCoverage(this.settledExchanges, {
       incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
     });
@@ -1911,6 +1918,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 
   private clearCorrection(): void {
     this.correction = undefined;
+    this.correctionWithoutTools = false;
     this.correctionAdmissionPending = false;
   }
 }
@@ -1922,8 +1930,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 function claimedActionCorrections(
   exchanges: readonly ChatToolExchange[],
   answer: string,
+  context: readonly string[],
 ): { readonly content: string; readonly log: AnswerCorrectionLog }[] {
-  const announced = announcedCreateCount(exchanges, answer);
+  const announced = announcedCreateCount(exchanges, answer, context);
   const writtenCalls = toolCallsWrittenAsText(answer);
   const rawKeys = rawReportKeys(exchanges, answer);
   return [

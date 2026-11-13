@@ -1,32 +1,39 @@
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { chatToolDraftReceipts, chatToolIssueKey } from "./chat-tool-receipts.js";
 
 /**
  * Two ways a Jira answer can claim an action that did not happen (#4355 AC4), both decided without
- * a model: an answer that announces an issue was created while the turn holds no create call, and
- * an answer that writes a tool call as text, which nothing executed. The patterns are closed and
- * deliberately narrow: a sentence has to name both a creation and an issue-like object, and a
- * negated, future or conditional sentence announces nothing.
+ * a model: an answer that announces an issue was created although this turn holds no created
+ * receipt, and an answer that writes a tool call as text, which nothing executed. The detector is
+ * narrow on purpose: a missed claim is variance the lab classifies, a wrongly corrected truthful
+ * answer costs a round and a confusing instruction. Documented non-goals, never detected: a claim
+ * in a language other than English or German, a creation named without an issue-like object ("I did
+ * it"), a claim split over two sentences, and an announced edit, comment or transition.
  */
 
-/** The tool aliases whose call creates issues; any exchange the mutation journal classified counts too. */
-const CREATE_TOOLS: ReadonlySet<string> = new Set(["jira_create", "jira_draft"]);
-
-const CREATION = [
-  /\b(?:i|we)(?:'ve| have) (?:created|opened|added|filed)\b/iu,
-  /\b(?:i|we) (?:created|opened|added|filed)\b/iu,
-  /\bbeen created\b/iu,
-  /\b(?:was|were) created\b/iu,
-  /\bsuccessfully created\b/iu,
-  /\bwurden? (?:\p{L}+ )?(?:angelegt|erstellt)\b/iu,
-  /\bhabe\b[^.!?\n]{0,60}\b(?:angelegt|erstellt)\b/iu,
-  /\b(?:legte|erstellte) ich\b/iu,
-] as const;
+const CREATION: readonly {
+  readonly pattern: RegExp;
+  readonly object: "after" | "before" | "inside";
+}[] = [
+  { pattern: /\b(?:i|we)(?:'ve| have) (?:created|opened|added|filed)\b/iu, object: "after" },
+  { pattern: /\b(?:i|we) (?:created|opened|added|filed)\b/iu, object: "after" },
+  { pattern: /\bbeen created\b/iu, object: "before" },
+  { pattern: /\b(?:was|were) created\b/iu, object: "before" },
+  { pattern: /\bsuccessfully created\b/iu, object: "after" },
+  { pattern: /\bwurden? (?:\p{L}+ )?(?:angelegt|erstellt)\b/iu, object: "before" },
+  { pattern: /\bhabe\b[^.!?\n]{0,60}\b(?:angelegt|erstellt)\b/iu, object: "inside" },
+  { pattern: /\b(?:legte|erstellte) ich\b/iu, object: "after" },
+];
 const ISSUE_OBJECTS = [
   /\b(?:epics?|tasks?|bugs?|issues?|tickets?)\b/iu,
   /\b(?:stor(?:y|ies)|sub-?tasks?)\b/iu,
   /\b(?:vorg[aä]nge?n?|aufgaben?|teilaufgaben?)\b/iu,
   /\bfehlermeldung(?:en)?\b/iu,
 ] as const;
+/** Something else was made: a summary, a report, a list, a comment, a file. */
+const NOT_AN_ISSUE =
+  /(?<!\p{L})(?:summary|overview|report|list|comment|note|file|document|draft|plan|table|übersicht|uebersicht|tabelle|bericht|liste|zusammenfassung|kommentar|notiz|datei|dokument|entwurf)(?!\p{L})/iu;
+const WINDOW_CHARS = 60;
 /** Words and phrases that make a sentence a refusal, a question, a plan or a condition. */
 const NEGATING_WORDS: ReadonlySet<string> = new Set([
   "not",
@@ -62,8 +69,18 @@ const NEGATING_WORDS: ReadonlySet<string> = new Set([
   "anhand",
 ]);
 const NEGATING_PHRASES = ["could not", "based on", "out of"] as const;
+/** Third-person or dated history: who created it and when, or a quoted Created field. */
+const HISTORY = [
+  /\bcreated\s+(?:by|on|at|in|from)\b/iu,
+  /\b(?:angelegt|erstellt)\s+(?:von|am|um)\b/iu,
+  /\bcreated\s*:/iu,
+] as const;
+/** A back-reference to something made earlier in the conversation. */
+const BACK_REFERENCE =
+  /\b(?:above|earlier|previously|before|already|oben|zuvor|vorhin|bereits|schon)\b/iu;
+const ISSUE_KEY = /\b[A-Z][A-Z0-9_]{0,63}-\d{1,12}\b/gu;
 const TEXT_CALLS = [
-  /\b(?:jira|knowledge)_[a-z][a-z_]*\s*\(/giu,
+  /\b(?:jira|knowledge)_[a-z][a-z_]*\s*\(\s*[{"'[]/giu,
   /["']name["']\s*:\s*["'](?:jira|knowledge)_[a-z_]+["']/giu,
   /<(?:tool_call|function_call)>/giu,
 ] as const;
@@ -77,28 +94,72 @@ function negated(sentence: string): boolean {
   return (lower.match(/[\p{L}']+/gu) ?? []).some((word) => NEGATING_WORDS.has(word));
 }
 
-function announces(sentence: string): boolean {
+/** The text around a creation where its object stands: before a passive verb, after an active one. */
+function objectWindow(
+  sentence: string,
+  match: RegExpExecArray,
+  side: "after" | "before" | "inside",
+): string {
+  const start = match.index;
+  const end = start + match[0].length;
+  if (side === "inside") return match[0];
+  return side === "after"
+    ? sentence.slice(end, end + WINDOW_CHARS)
+    : sentence.slice(Math.max(0, start - WINDOW_CHARS), start);
+}
+
+function createsAnIssue(sentence: string): boolean {
+  return CREATION.some(({ pattern, object }) => {
+    const match = pattern.exec(sentence);
+    if (match === null) return false;
+    const window = objectWindow(sentence, match, object);
+    return !NOT_AN_ISSUE.test(window) && ISSUE_OBJECTS.some((noun) => noun.test(window));
+  });
+}
+
+function namesKnownKey(sentence: string, known: () => string): boolean {
+  const keys = sentence.match(ISSUE_KEY) ?? [];
+  return keys.length > 0 && keys.some((key) => known().includes(key));
+}
+
+function announces(sentence: string, known: () => string): boolean {
   return (
     !negated(sentence) &&
-    CREATION.some((pattern) => pattern.test(sentence)) &&
-    ISSUE_OBJECTS.some((pattern) => pattern.test(sentence))
+    !HISTORY.some((pattern) => pattern.test(sentence)) &&
+    !BACK_REFERENCE.test(sentence) &&
+    createsAnIssue(sentence) &&
+    !namesKnownKey(sentence, known)
   );
 }
 
-/** Whether the turn holds a create call, whatever its outcome (refused, approved or declined). */
-function holdsCreateCall(exchanges: readonly ChatToolExchange[]): boolean {
-  return exchanges.some(
-    (exchange) => CREATE_TOOLS.has(exchange.call.name) || exchange.mutationOutcome !== undefined,
-  );
+/** Whether this turn holds a created receipt: an effect, not a tool name. */
+function holdsCreatedReceipt(exchanges: readonly ChatToolExchange[]): boolean {
+  return exchanges.some((exchange) => {
+    if (exchange.mutationOutcome !== "succeeded") return false;
+    const created = chatToolDraftReceipts(exchange)?.some((receipt) => receipt.state === "created");
+    return created === true || chatToolIssueKey(exchange.result?.data) !== undefined;
+  });
 }
 
-/** How many sentences announce a created issue although the turn holds no create call. */
+/**
+ * How many sentences announce a created issue although this turn holds no created receipt. A
+ * sentence about an issue key that a tool result or an earlier message already holds, one that
+ * refers back to earlier work, one that gives who or when, and one that makes something else (a
+ * summary) announce nothing.
+ */
 export function announcedCreateCount(
   exchanges: readonly ChatToolExchange[],
   answer: string,
+  context: readonly string[] = [],
 ): number {
-  if (holdsCreateCall(exchanges)) return 0;
-  return Math.min(COUNT_MAX, answer.split(SENTENCE_END).filter(announces).length);
+  if (holdsCreatedReceipt(exchanges)) return 0;
+  let known: string | undefined;
+  const lazyKnown = (): string =>
+    (known ??= `${context.join("\n")}\n${exchanges.map((e) => JSON.stringify(e.result ?? "")).join("\n")}`);
+  return Math.min(
+    COUNT_MAX,
+    answer.split(SENTENCE_END).filter((sentence) => announces(sentence, lazyKnown)).length,
+  );
 }
 
 /** How many tool calls the answer wrote as text; nothing executed them. */
@@ -107,17 +168,19 @@ export function toolCallsWrittenAsText(answer: string): number {
   return Math.min(COUNT_MAX, found);
 }
 
+/** The corrections ask for an honest answer; they never ask for a write. */
 export function announcedCreateCorrection(count: number): string {
   return (
-    `Your answer says ${String(count)} time(s) that Jira issues were created, but this turn called ` +
-    "no create tool, so nothing was created. Call the create tool now, or say plainly that " +
-    "nothing was created."
+    `Your answer says ${String(count)} time(s) that a Jira issue was created, but no Jira issue was ` +
+    "created in this turn. Say plainly what happened and what the person can ask for; do not " +
+    "create or change anything now."
   );
 }
 
 export function toolCallAsTextCorrection(count: number): string {
   return (
-    `Your answer contains ${String(count)} tool call(s) written as text. Text is not executed. ` +
-    "Call the tool through the tool interface, or answer without it."
+    `Your answer contains ${String(count)} tool call(s) written as text. That text did not call a ` +
+    "tool and nothing was executed. Say plainly what happened and what the person can ask for; do " +
+    "not create or change anything now."
   );
 }

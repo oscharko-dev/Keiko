@@ -2313,6 +2313,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.permissionGranted": "Berechtigung erteilt",
   "chat.jira.outcome.permissionDenied": "Berechtigung nicht erteilt",
   "chat.jira.outcome.moreResults": "{count} weitere Ergebnisse anzeigen",
+  "chat.jira.outcome.moreResultsOne": "1 weiteres Ergebnis anzeigen",
   "chat.jira.outcome.openBoard": "Board öffnen",
   "chat.jira.outcome.returned": "Zurückgegebene Ergebnisse: {count}.",
   "chat.jira.outcome.returnedTotal": "{count} von {total} Ergebnissen zurückgegeben.",

@@ -1682,7 +1682,11 @@ describe.each([false, true])(
   "an answer that claims an action no tool performed (stream=%s)",
   (stream) => {
     it.each([
-      ["announced-create", "I created the Epic REQ-1 for you.", "created, but this turn called"],
+      [
+        "announced-create",
+        "I created the Epic REQ-1 for you.",
+        "no Jira issue was created in this turn",
+      ],
       ["tool-call-as-text", 'jira_create({"projectId":"10000"})', "written as text"],
     ] as const)(
       "gets one round for %s, then the model's new answer stands",
@@ -1699,11 +1703,14 @@ describe.each([false, true])(
           await awaitReadGrantedForWrite(f);
           await pending;
 
-          expect(f.calls).toHaveLength(4);
+          // The correction round is answered without any tool, so it can never write.
+          expect(f.calls).toHaveLength(3);
           const correction = (request: GatewayCallRequest | undefined): string =>
             JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
           expect(correction(f.calls[2])).toContain(said);
-          expect(correction(f.calls[3])).not.toContain(said);
+          expect(correction(f.calls[2])).toContain("do not create or change anything now");
+          expect(f.calls[2]?.toolCatalog).toBeUndefined();
+          expect(f.writes()).toBe(0);
           const [user, assistant] = f.deps.store.listMessages(f.chatId);
           expect(user?.turnState).toBe("completed");
           expect(assistant?.content).toBe("No Jira projects are visible.");

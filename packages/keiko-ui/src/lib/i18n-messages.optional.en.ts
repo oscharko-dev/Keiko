@@ -2180,6 +2180,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.permissionGranted": "Permission granted",
   "chat.jira.outcome.permissionDenied": "Permission not granted",
   "chat.jira.outcome.moreResults": "Show {count} more results",
+  "chat.jira.outcome.moreResultsOne": "Show 1 more result",
   "chat.jira.outcome.openBoard": "Open board",
   "chat.jira.outcome.returned": "Returned results: {count}.",
   "chat.jira.outcome.returnedTotal": "{count} of {total} results returned.",

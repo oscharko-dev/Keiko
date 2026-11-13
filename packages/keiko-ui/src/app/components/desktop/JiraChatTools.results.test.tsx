@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
@@ -1013,13 +1013,19 @@ describe("Jira tool outcome for a business user (#4173)", () => {
         turnState="completed"
       />,
     );
-    const lists = screen.getAllByRole("list", { name: "Jira issues", hidden: true });
-    const [open, rest] = lists;
+    const open = screen.getByRole("list", { name: "Jira issues" });
     expect(open).toHaveTextContent("KER-60");
     expect(open).not.toHaveTextContent("KER-61");
+    // A closed disclosure mounts none of its rows; opening it mounts all ten.
+    expect(screen.getAllByRole("list", { name: "Jira issues", hidden: true })).toHaveLength(1);
+    const summary = screen.getByText("Show 10 more results");
+    const details = summary.closest("details");
+    if (details === null) throw new TypeError("Missing disclosure");
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+    const rest = screen.getAllByRole("list", { name: "Jira issues", hidden: true })[1];
     expect(rest).toHaveTextContent("KER-61");
     expect(rest).toHaveTextContent("KER-70");
-    expect(screen.getByText("Show 10 more results")).toBeVisible();
   });
 });
 

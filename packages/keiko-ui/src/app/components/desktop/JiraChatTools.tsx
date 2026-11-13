@@ -1,5 +1,5 @@
 "use client";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { JiraHumanInput } from "./JiraHumanInput";
 import { JiraWriteApproval } from "./JiraWriteApproval";
 import type {
@@ -277,6 +277,35 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
     </>
   );
 }
+/** The rows past the open ones: a closed disclosure mounts none of them, so the card stays finite. */
+function JiraMoreRows({
+  items,
+  label,
+  lazy,
+}: {
+  readonly items: readonly JiraOutcomeItem[];
+  readonly label: WidgetMessageKey | undefined;
+  /** Mount the rows only once the disclosure is open (a draft write can list thousands). */
+  readonly lazy: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className={styles.cmpResultMore}
+      onToggle={(event) => {
+        setOpen(event.currentTarget.open);
+      }}
+    >
+      <summary>
+        {items.length === 1
+          ? t("chat.jira.outcome.moreResultsOne")
+          : t("chat.jira.outcome.moreResults", { count: items.length })}
+      </summary>
+      {open || !lazy ? <JiraResultItems items={items} label={label} /> : null}
+    </details>
+  );
+}
 function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   const { items, resultsLabel: label } = view;
@@ -295,10 +324,11 @@ function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): React
     <>
       {items.length === 0 ? null : <JiraResultItems items={items.slice(0, shown)} label={label} />}
       {items.length <= shown ? null : (
-        <details className={styles.cmpResultMore}>
-          <summary>{t("chat.jira.outcome.moreResults", { count: items.length - shown })}</summary>
-          <JiraResultItems items={items.slice(shown)} label={label} />
-        </details>
+        <JiraMoreRows
+          items={items.slice(shown)}
+          label={label}
+          lazy={view.visibleItems !== undefined}
+        />
       )}
       {view.unlistedItemCount === 0 ? null : (
         <p className={styles.cmpMoreIssues}>

@@ -158,7 +158,7 @@ describe.each(["en", "de"] as const)("saved application settings in %s", (locale
     const application = screen.getByRole("group", { name: labels.application });
     fireEvent.click(
       within(application).getByText(
-        locale === "en" ? "Show 1 more results" : "1 weitere Ergebnisse anzeigen",
+        locale === "en" ? "Show 1 more result" : "1 weiteres Ergebnis anzeigen",
       ),
     );
     for (const value of [

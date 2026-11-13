@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { JIRA_DRAFT_PROBLEMS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describe, expect, it } from "vitest";
@@ -366,6 +366,7 @@ describe("Jira draft results as the production draft tool reports them", () => {
       "chat.jira.outcome.itemOrdinal",
       "chat.jira.outcome.itemUnlisted",
       "chat.jira.outcome.notCreated",
+      "chat.jira.outcome.moreResultsOne",
       "chat.jira.outcome.draftItem",
       "chat.jira.outcome.draftItemUnknown",
       ...JIRA_DRAFT_PROBLEMS.map((problem) => `chat.jira.outcome.draftProblem.${problem}`),
@@ -463,6 +464,37 @@ describe("Jira draft results as the production draft tool reports them", () => {
       }),
     );
     expect(linkedKeys()).toEqual(keysOf(25));
+  });
+
+  const openMore = (): void => {
+    const details = screen.getByText(/^Show \d+ more results?$/u).closest("details");
+    if (details === null) throw new TypeError("Missing disclosure");
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+  };
+  const createdRows = (count: number): Record<string, unknown>[] =>
+    keysOf(count).map((key, index) => ({
+      ref: `r${String(index)}`,
+      state: "created",
+      issueKey: key,
+      browseUrl: `${BROWSE}${key}`,
+    }));
+
+  it("mounts 60 rows while the disclosure is closed and all 200 once it is opened", async () => {
+    await show(
+      draft("jira_draft", { outcome: "succeeded", items: createdRows(200), createdCount: 200 }),
+    );
+    expect(linkedKeys()).toEqual(keysOf(60));
+    openMore();
+    expect(linkedKeys()).toEqual(keysOf(200));
+  });
+
+  it("says Show 1 more result for a single row past the open ones", async () => {
+    await show(
+      draft("jira_draft", { outcome: "succeeded", items: createdRows(61), createdCount: 61 }),
+    );
+    expect(screen.getByText("Show 1 more result")).toBeVisible();
+    expect(linkedKeys()).toEqual(keysOf(60));
   });
 
   it("lists every key of a compact large-draft result with its link", async () => {
