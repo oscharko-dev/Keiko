@@ -302,3 +302,46 @@ it("refuses conflicts when pre-existing refinement caches join", () => {
   for (const owner of [old, next])
     expect(() => owner.history.prepare(followup(), PROVIDER)).toThrow("reasoning history");
 });
+
+describe("what an unconfigured deployment keeps for one turn (#4351)", () => {
+  const UNCONFIGURED: ModelProviderConfig = ((): ModelProviderConfig => {
+    const { reasoningHistory: _setting, ...rest } = PROVIDER;
+    return rest;
+  })();
+
+  const OTHER: GatewayCallRequest = {
+    ...INITIAL,
+    messages: [{ role: "user", content: "Another question." }],
+  };
+  const otherFollowup = (): GatewayCallRequest => ({
+    ...OTHER,
+    messages: [
+      ...OTHER.messages,
+      { role: "assistant", content: ANSWER.content, toolCalls: ANSWER.toolCalls },
+      { role: "tool", content: "result", toolCallId: CALL.id },
+    ],
+  });
+
+  it("holds the turn's reasoning until the turn ends, then nothing of it can be restored", () => {
+    const { history } = fixture();
+    history.remember(INITIAL, UNCONFIGURED, ANSWER);
+    expect(history.canRestoreCurrentTurn(followup(), UNCONFIGURED)).toBe(true);
+    history.endTurn(followup(), UNCONFIGURED);
+    expect(history.canRestoreCurrentTurn(followup(), UNCONFIGURED)).toBe(false);
+  });
+
+  it("ends only its own turn and only turn-bound entries", () => {
+    const { history } = fixture();
+    history.remember(INITIAL, UNCONFIGURED, ANSWER);
+    history.remember(OTHER, UNCONFIGURED, ANSWER);
+    history.endTurn(followup(), UNCONFIGURED);
+    expect(history.canRestoreCurrentTurn(followup(), UNCONFIGURED)).toBe(false);
+    expect(history.canRestoreCurrentTurn(otherFollowup(), UNCONFIGURED)).toBe(true);
+    // A configured deployment's longer-lived state is not turn-bound and survives a turn's end.
+    history.remember(INITIAL, PROVIDER, ANSWER);
+    history.endTurn(INITIAL, PROVIDER);
+    expect(history.prepare(followup(), PROVIDER).messages[1]?.reasoningContent).toBe(
+      ANSWER.reasoning,
+    );
+  });
+});
