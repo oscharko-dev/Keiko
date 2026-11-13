@@ -2274,9 +2274,15 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     );
 
     await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
-    expect(fetchCapsulesMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(fetchCapsulesMock).toHaveBeenCalledWith({
+      includeKnowledgePods: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(fetchCapsuleSetsMock).toHaveBeenCalledTimes(1);
-    expect(fetchCapsuleSetsMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(fetchCapsuleSetsMock).toHaveBeenCalledWith({
+      includeKnowledgePods: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(screen.getAllByRole("combobox", { name: "Grounding mode" })).toHaveLength(2);
   });
 
@@ -2312,7 +2318,10 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await openCombobox(user, "Grounding mode");
 
-    expect(fetchCapsulesMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(fetchCapsulesMock).toHaveBeenCalledWith({
+      includeKnowledgePods: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(screen.getByRole("option", { name: /Knowledge Pod: Knowledge Pod/u })).toBeVisible();
     expect(screen.getByText("Policy denied")).toBeVisible();
     expect(screen.getByText(/blocks grounded answer synthesis/u)).toBeVisible();

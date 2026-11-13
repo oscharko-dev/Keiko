@@ -93,8 +93,16 @@ export const KNOWLEDGE_CATALOG_RECOVERY_DELAYS_MS: readonly number[] = [
   5_000, 10_000, 20_000, 40_000, 60_000, 60_000,
 ];
 
+// A catalog read that outlasts this is aborted and ends as a retryable timeout: the picker never waits
+// on a request nobody answers, and no later load joins one older than the bound (#4371).
+export const KNOWLEDGE_CATALOG_REQUEST_TIMEOUT_MS = 10_000;
+
 let cachedSnapshot: KnowledgeCatalogSnapshot | undefined;
-let pendingLoad: Promise<KnowledgeCatalogSnapshot> | undefined;
+// The newest snapshot that loaded without error, whatever its age: a new chat seeds its picker from
+// it instead of starting empty while the refresh runs.
+let lastGoodSnapshot: KnowledgeCatalogSnapshot | undefined;
+let pendingLoad:
+  { readonly promise: Promise<KnowledgeCatalogSnapshot>; readonly startedAt: number } | undefined;
 // A cleared cache must not be repopulated by a request that started before the clear.
 let cacheEpoch = 0;
 
@@ -151,12 +159,16 @@ function settleCatalogList<Response, Entry>(
   }
 }
 
-async function fetchKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
+async function fetchKnowledgeCatalogSnapshot(
+  signal: AbortSignal,
+): Promise<KnowledgeCatalogSnapshot> {
   const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
-    fetchCapsules({ includeKnowledgePods: true }),
-    fetchCapsuleSets({ includeKnowledgePods: true }),
+    fetchCapsules({ includeKnowledgePods: true, signal }),
+    fetchCapsuleSets({ includeKnowledgePods: true, signal }),
   ]);
   const loadedAt = Date.now();
+  // The timeout already reported this load and ended it: the aborted requests add nothing.
+  if (signal.aborted) return { ...EMPTY_KNOWLEDGE_CATALOG, loadError: signal.reason, loadedAt };
   // Both lists are settled and reported before either failure decides the snapshot, so a capsule
   // failure no longer hides a set-list failure.
   const capsules = settleCatalogList("capsules", capsuleResult, capsulesForKnowledgePodUi);
@@ -183,29 +195,63 @@ function failedCatalogSnapshot(reason: unknown): KnowledgeCatalogSnapshot {
   return { ...EMPTY_KNOWLEDGE_CATALOG, loadError: reason, loadedAt: Date.now() };
 }
 
+function timeoutError(): DOMException {
+  return new DOMException("The Knowledge Pod catalog did not answer in time.", "TimeoutError");
+}
+
+// One bounded request: the fetches carry an abort signal, and the load itself settles at the bound
+// even when a transport ignores that signal, so a pending load can never outlive it.
+function boundedCatalogLoad(): Promise<KnowledgeCatalogSnapshot> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<KnowledgeCatalogSnapshot>((resolve) => {
+    timer = setTimeout(() => {
+      const reason = timeoutError();
+      controller.abort(reason);
+      resolve(failedCatalogSnapshot(reason));
+    }, KNOWLEDGE_CATALOG_REQUEST_TIMEOUT_MS);
+  });
+  return Promise.race([fetchKnowledgeCatalogSnapshot(controller.signal), timedOut])
+    .catch(failedCatalogSnapshot)
+    .finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+}
+
+function cacheSnapshot(snapshot: KnowledgeCatalogSnapshot): void {
+  if (cachedSnapshot === undefined || snapshot.loadedAt >= cachedSnapshot.loadedAt) {
+    cachedSnapshot = snapshot;
+  }
+  if (snapshot.loadError === null) lastGoodSnapshot = snapshot;
+}
+
 /**
  * Loads the shared catalog. A snapshot younger than `maxAgeMs` (and than its own freshness window)
  * is reused; otherwise one request is made and every simultaneous caller joins it, so several chat
- * windows never multiply the request.
+ * windows never multiply the request. A pending load older than the request bound is never joined.
  */
 export function loadKnowledgeCatalog(
   maxAgeMs: number = KNOWLEDGE_CATALOG_TTL_MS,
 ): Promise<KnowledgeCatalogSnapshot> {
   const cached = reusableSnapshot(Date.now(), maxAgeMs);
   if (cached !== undefined) return Promise.resolve(cached);
-  if (pendingLoad !== undefined) return pendingLoad;
+  if (
+    pendingLoad !== undefined &&
+    Date.now() - pendingLoad.startedAt < KNOWLEDGE_CATALOG_REQUEST_TIMEOUT_MS
+  ) {
+    return pendingLoad.promise;
+  }
   const epoch = cacheEpoch;
-  const request = fetchKnowledgeCatalogSnapshot()
-    .catch(failedCatalogSnapshot)
+  const promise: Promise<KnowledgeCatalogSnapshot> = boundedCatalogLoad()
     .then((snapshot) => {
-      if (epoch === cacheEpoch) cachedSnapshot = snapshot;
+      if (epoch === cacheEpoch) cacheSnapshot(snapshot);
       return snapshot;
     })
     .finally(() => {
-      if (epoch === cacheEpoch) pendingLoad = undefined;
+      if (epoch === cacheEpoch && pendingLoad?.promise === promise) pendingLoad = undefined;
     });
-  pendingLoad = request;
-  return request;
+  pendingLoad = { promise, startedAt: Date.now() };
+  return promise;
 }
 
 // A grounding-picker open is a deliberate catalog lifecycle event, distinct from gateway
@@ -218,6 +264,7 @@ function reloadKnowledgeCatalog(): Promise<KnowledgeCatalogSnapshot> {
 export function clearKnowledgeCatalogCacheForTests(): void {
   cacheEpoch += 1;
   cachedSnapshot = undefined;
+  lastGoodSnapshot = undefined;
   pendingLoad = undefined;
 }
 
@@ -327,6 +374,16 @@ function keepLastGoodSnapshot(
   return next;
 }
 
+// A refresh that timed out says nothing about the pods the person already has: the last good
+// snapshot stays on offer and the next open retries. Any other failure is shown as a failure.
+function keepSnapshotOnTimeout(
+  previous: KnowledgeCatalogSnapshot,
+  next: KnowledgeCatalogSnapshot,
+): KnowledgeCatalogSnapshot {
+  const timedOut = next.loadError instanceof DOMException && next.loadError.name === "TimeoutError";
+  return timedOut ? keepLastGoodSnapshot(previous, next) : next;
+}
+
 // Every open refreshes, except the first one within seconds of the mount-time load that already
 // answered it: a deliberate reopen is a catalog lifecycle event and always asks again.
 function usePickerOpenRefresh(loadedAt: number, refresh: () => void): () => void {
@@ -348,16 +405,40 @@ interface CatalogSnapshotState {
   readonly refreshInBackground: (maxAgeMs: number) => void;
 }
 
-function useCatalogSnapshotState(): CatalogSnapshotState {
-  const initialSnapshotRef = useRef<KnowledgeCatalogSnapshot | undefined>(
-    reusableSnapshot(Date.now(), KNOWLEDGE_CATALOG_TTL_MS),
+// What a mounting hook starts from. A cache too old to reuse still seeds the picker: its pods are
+// offered at once and refreshed in the background, instead of an empty, disabled picker for the
+// whole request (#4371).
+function catalogSeed(): {
+  readonly snapshot: KnowledgeCatalogSnapshot | undefined;
+  readonly stale: boolean;
+} {
+  const fresh = reusableSnapshot(Date.now(), KNOWLEDGE_CATALOG_TTL_MS);
+  return { snapshot: fresh ?? lastGoodSnapshot, stale: fresh === undefined };
+}
+
+// A foreground refresh settled: report a slow one, and apply it unless a later one replaced it.
+function settleForegroundRefresh(
+  startedAt: number,
+  next: KnowledgeCatalogSnapshot,
+  current: boolean,
+  apply: (snapshot: (previous: KnowledgeCatalogSnapshot) => KnowledgeCatalogSnapshot) => void,
+): boolean {
+  reportSlowRefresh(
+    startedAt,
+    current ? (next.loadError === null ? "ok" : "failed") : "superseded",
   );
+  if (current) apply((previous) => keepSnapshotOnTimeout(previous, next));
+  return current;
+}
+
+function useCatalogSnapshotState(): CatalogSnapshotState {
+  const seed = useRef(catalogSeed()).current;
   const mountedRef = useRef(true);
   const requestGenerationRef = useRef(0);
   const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
-    initialSnapshotRef.current ?? EMPTY_KNOWLEDGE_CATALOG,
+    seed.snapshot ?? EMPTY_KNOWLEDGE_CATALOG,
   );
-  const [loading, setLoading] = useState(initialSnapshotRef.current === undefined);
+  const [loading, setLoading] = useState(seed.snapshot === undefined);
 
   const applyForeground = useCallback((load: () => Promise<KnowledgeCatalogSnapshot>): void => {
     requestGenerationRef.current += 1;
@@ -365,13 +446,8 @@ function useCatalogSnapshotState(): CatalogSnapshotState {
     setLoading(true);
     const startedAt = Date.now();
     void load().then((next) => {
-      if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) {
-        reportSlowRefresh(startedAt, "superseded");
-        return;
-      }
-      reportSlowRefresh(startedAt, next.loadError === null ? "ok" : "failed");
-      setSnapshot(next);
-      setLoading(false);
+      const current = mountedRef.current && requestGeneration === requestGenerationRef.current;
+      if (settleForegroundRefresh(startedAt, next, current, setSnapshot)) setLoading(false);
     });
   }, []);
 
@@ -385,9 +461,9 @@ function useCatalogSnapshotState(): CatalogSnapshotState {
   }, []);
 
   useEffect(() => {
-    if (initialSnapshotRef.current !== undefined) return;
-    applyForeground(loadKnowledgeCatalog);
-  }, [applyForeground]);
+    if (seed.snapshot === undefined) applyForeground(loadKnowledgeCatalog);
+    else if (seed.stale) refreshInBackground(KNOWLEDGE_CATALOG_TTL_MS);
+  }, [applyForeground, refreshInBackground, seed]);
 
   useEffect(() => {
     mountedRef.current = true;

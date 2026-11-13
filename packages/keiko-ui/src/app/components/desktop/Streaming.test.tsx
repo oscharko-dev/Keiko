@@ -11,6 +11,7 @@
 //      cancelSend's effect on the live request, and the failed-error mapping
 //      that preserves the user prompt but never persists a fake assistant.
 
+import type { ReactElement } from "react";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -435,6 +436,78 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
 
     expect(screen.queryByRole("button", { name: "Cancel response" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
+  });
+
+  it("keeps focus on Stop through every update while the answer runs, and moves it to the input only when the turn ends (#4371)", () => {
+    const base = makeSession({
+      activeChat: makeChat(),
+      models: [chatModelCapability("example-chat-model")],
+      messages: [userMessage("hi")],
+      draft: "",
+      sendStatus: "contacting",
+      sending: true,
+    });
+    const view = (session: ChatSessionApi): ReactElement => (
+      <ChatSessionProvider value={session}>
+        <ChatWindow />
+      </ChatSessionProvider>
+    );
+    const { rerender } = renderWindow(base);
+    const stop = screen.getByRole("button", { name: "Cancel response" });
+    stop.focus();
+
+    // contacting -> streaming, then further chunks: new session objects, new messages.
+    rerender(view({ ...base, sendStatus: "streaming" }));
+    expect(stop).toHaveFocus();
+    rerender(
+      view({ ...base, sendStatus: "streaming", messages: [userMessage("hi"), userMessage("a")] }),
+    );
+    rerender(
+      view({ ...base, sendStatus: "streaming", messages: [userMessage("hi"), userMessage("ab")] }),
+    );
+    // A composer re-render for any other reason (the next draft being typed) does not release it.
+    rerender(view({ ...base, sendStatus: "streaming", draft: "next" }));
+    rerender(view({ ...base, sendStatus: "streaming", draft: "next m" }));
+    expect(screen.getByRole("button", { name: "Cancel response" })).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).not.toHaveFocus();
+
+    rerender(view({ ...base, sendStatus: "completed", sending: false }));
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveFocus();
+  });
+
+  it("announces a repeated refused send again and records the refusal once per running turn (#4371)", async () => {
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    try {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          models: [chatModelCapability("example-chat-model")],
+          messages: [userMessage("hi")],
+          draft: "next prompt",
+          sendStatus: "streaming",
+          sending: true,
+        }),
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("textbox", { name: "Chat message" }));
+      const status = document.querySelector('[data-send-status="streaming"]');
+
+      await user.keyboard("{Enter}");
+      const first = status?.textContent;
+      await user.keyboard("{Enter}");
+      const second = status?.textContent;
+      await user.keyboard("{Enter}{Enter}{Enter}");
+
+      // The polite region announces a change of text, so a repeated refusal must change it.
+      expect(first).not.toBe(second);
+      expect(first?.replaceAll("\u00a0", "")).toBe(second?.replaceAll("\u00a0", ""));
+      expect(
+        reports.filter((entry) => entry.meta?.composerActivity === "send-refused-while-running"),
+      ).toHaveLength(1);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 
   it("leaves focus alone when the answer ends while Stop was not focused (#4371)", () => {

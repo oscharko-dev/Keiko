@@ -2422,20 +2422,26 @@ function cancelComposerSend(event: SyntheticEvent, cancelSend: () => void): void
 // is refused with a visible, politely announced reason, and leaves the draft alone. The refusal lasts
 // until the answer ends; the evidence is closed and body-free.
 function useRunningSendRefusal(sending: boolean): {
-  readonly refused: boolean;
+  readonly refusals: number;
   readonly refuse: () => void;
 } {
-  const [refused, setRefused] = useState(false);
+  const [refusals, setRefusals] = useState(0);
+  const recordedRef = useRef(false);
   useEffect(() => {
-    if (!sending) setRefused(false);
+    if (sending) return;
+    setRefusals(0);
+    recordedRef.current = false;
   }, [sending]);
   const refuse = useCallback((): void => {
-    setRefused(true);
+    setRefusals((count) => count + 1);
+    // One record per running turn: a held Enter repeats the key, not the evidence.
+    if (recordedRef.current) return;
+    recordedRef.current = true;
     reportClientDiagnostic("Keiko composer refused a send while a response runs.", {
       composerActivity: "send-refused-while-running",
     });
   }, []);
-  return { refused: refused && sending, refuse };
+  return { refusals: sending ? refusals : 0, refuse };
 }
 
 // The stop control while an answer runs. It is its own element, never the Send button re-labelled:
@@ -2457,17 +2463,20 @@ function ComposerStopButton({
 }): ReactNode {
   const t = useTranslate();
   const buttonRef = useRef<HTMLButtonElement>(null);
+  // Only the mount takes focus and only the unmount releases it: the callback and the first
+  // decision live in refs, so a re-render while the answer runs never moves focus.
+  const takeFocusRef = useRef(takeFocus);
+  const releaseRef = useRef(onFocusReleased);
   useLayoutEffect(() => {
-    if (takeFocus) buttonRef.current?.focus();
-    // Only the mount decides: a later render must not pull focus back.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    releaseRef.current = onFocusReleased;
+  });
   useLayoutEffect(() => {
     const node = buttonRef.current;
+    if (takeFocusRef.current) node?.focus();
     return (): void => {
-      if (node !== null && document.activeElement === node) onFocusReleased?.();
+      if (node !== null && document.activeElement === node) releaseRef.current?.();
     };
-  }, [onFocusReleased]);
+  }, []);
   return (
     <button
       ref={buttonRef}
@@ -2480,6 +2489,26 @@ function ComposerStopButton({
       <StopIcon size={14} />
     </button>
   );
+}
+
+// Whether the element it is spread on holds focus right now, readable without a re-render.
+function useFocusFlag(): {
+  readonly focused: { current: boolean };
+  readonly handlers: { readonly onFocus: () => void; readonly onBlur: () => void };
+} {
+  const focused = useRef(false);
+  const handlers = useMemo(
+    () => ({
+      onFocus: (): void => {
+        focused.current = true;
+      },
+      onBlur: (): void => {
+        focused.current = false;
+      },
+    }),
+    [],
+  );
+  return { focused, handlers };
 }
 
 // Extracted from ComposerBar (SonarCloud S3776) — the primary action button. While a response runs
@@ -2506,7 +2535,7 @@ function ComposerSendButton({
   readonly onFocusReleased: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
-  const sendFocusedRef = useRef(false);
+  const focusTracking = useFocusFlag();
   const inert = sendBlocked || sending;
   const runningLabel = t("chat.send.running");
   return (
@@ -2514,7 +2543,7 @@ function ComposerSendButton({
       {sending ? (
         <ComposerStopButton
           cancelSend={cancelSend}
-          takeFocus={sendFocusedRef.current}
+          takeFocus={focusTracking.focused.current}
           onFocusReleased={onFocusReleased}
         />
       ) : null}
@@ -2526,8 +2555,7 @@ function ComposerSendButton({
         aria-disabled={inert}
         aria-describedby={sending ? undefined : sendDescribedBy}
         aria-label={sending ? runningLabel : t("chat.send.label")}
-        onFocus={() => (sendFocusedRef.current = true)}
-        onBlur={() => (sendFocusedRef.current = false)}
+        {...focusTracking.handlers}
         onClick={sending ? onRefusedWhileRunning : undefined}
       >
         <ArrowUpIcon size={16} />
@@ -2751,16 +2779,22 @@ function sendLifecycleStatusLabel(status: SendStatus, t: I18nTranslate): string 
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({
   status,
-  sendRefused = false,
+  sendRefusals = 0,
 }: {
   readonly status: SendStatus;
-  /** A send was attempted while the answer runs: say why it was not sent, at that moment (#4371). */
-  readonly sendRefused?: boolean;
+  /**
+   * Sends attempted while the answer runs: say why they were not sent, at that moment (#4371). The
+   * polite region announces a change of text, so every second attempt carries an invisible trailing
+   * no-break space and a repeated refusal is heard again.
+   */
+  readonly sendRefusals?: number;
 }): ReactNode {
   const t = useTranslate();
   const base = sendLifecycleStatusLabel(status, t);
-  const label =
-    sendRefused && isInFlight(status) ? `${base} ${t("chat.send.runningHint")}`.trim() : base;
+  const refused = sendRefusals > 0 && isInFlight(status);
+  const label = refused
+    ? `${`${base} ${t("chat.send.runningHint")}`.trim()}${sendRefusals % 2 === 0 ? "\u00a0" : ""}`
+    : base;
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -2993,20 +3027,20 @@ function composerDictationVisibility(
 function ComposerStatusRow({
   voiceDialogActive,
   sendStatus,
-  sendRefused,
+  sendRefusals,
   voiceDictationVisible,
   dictation,
 }: {
   readonly voiceDialogActive: boolean;
   readonly sendStatus: SendStatus;
-  readonly sendRefused: boolean;
+  readonly sendRefusals: number;
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
 }): ReactNode {
   return (
     <>
       {voiceDialogActive ? null : (
-        <SendLifecycleStatus status={sendStatus} sendRefused={sendRefused} />
+        <SendLifecycleStatus status={sendStatus} sendRefusals={sendRefusals} />
       )}
       {!voiceDialogActive && voiceDictationVisible ? (
         <VoiceDictationComposerStatus error={dictation.error} emptyResult={dictation.emptyResult} />
@@ -3320,7 +3354,7 @@ function ComposerCoreImpl({
   // auto-grow, attachment intake, mention autocomplete, voice-capability gating) up to
   // 60×/s while a reply streams.
   const session = useChatSessionComposer();
-  const { refused: sendRefused, refuse: refuseSend } = useRunningSendRefusal(session.sending);
+  const { refusals: sendRefusals, refuse: refuseSend } = useRunningSendRefusal(session.sending);
   const {
     draft,
     sending,
@@ -3981,7 +4015,7 @@ function ComposerCoreImpl({
               <ComposerStatusRow
                 voiceDialogActive={voiceDialogActive}
                 sendStatus={sendStatus}
-                sendRefused={sendRefused}
+                sendRefusals={sendRefusals}
                 voiceDictationVisible={voiceDictationVisible}
                 dictation={dictation}
               />
