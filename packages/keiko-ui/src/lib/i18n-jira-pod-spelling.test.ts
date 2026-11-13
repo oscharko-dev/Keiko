@@ -24,7 +24,7 @@ describe("Jira Pod terminology (#4353)", () => {
     const hyphenated = files.filter((file) => /Jira-Pods?\b/u.test(readFileSync(file, "utf8")));
     expect(hyphenated.map((file) => file.slice(file.indexOf("src/")))).toEqual([]);
   });
-  it("addresses the reader as Sie in every German message of the connection refusals (#4353)", () => {
+  it("addresses the reader informally, like the neighbouring German messages (#4353)", () => {
     const keys = [
       "chat.jira.outcome.failure.auth",
       "chat.jira.outcome.failure.authUnverified",
@@ -37,12 +37,15 @@ describe("Jira Pod terminology (#4353)", () => {
       "atlassianConnectors.live.compatibilityMissing",
     ] as const;
     for (const key of keys) {
-      const text = OPTIONAL_WIDGET_DE_MESSAGES[key];
-      expect(text, key).not.toMatch(/\b(?:du|dein\w*|dir|dich)\b/iu);
-      expect(text, key).not.toMatch(
-        /\b(?:Versuche|Prüfe|Verifiziere|Ersetze|Erstelle|Öffne|Setze)\b/u,
-      );
+      expect(OPTIONAL_WIDGET_DE_MESSAGES[key], key).not.toMatch(/\b(?:Sie|Ihnen|Ihr\w*)\b/u);
     }
+    // The core catalog's Jira authentication refusal reads the same way.
+    const core = readFileSync(join(__dirname, "i18n-messages.de.ts"), "utf8");
+    const refusal = /"chat\.error\.jiraAuthentication\.[a-z]+":\s*"([^"]*)"/gu;
+    const texts = [...core.matchAll(refusal)].map((match) => match[1] ?? "");
+    expect(texts.length).toBe(3);
+    for (const text of texts) expect(text).not.toMatch(/\b(?:Sie|Ihnen|Ihr\w*)\b/u);
+    expect(texts.join(" ")).toMatch(/\bÖffne\b/u);
   });
   it("gives every closed auth-unverified message in both languages and none of them names a host or identity", () => {
     for (const catalog of [OPTIONAL_WIDGET_EN_MESSAGES, OPTIONAL_WIDGET_DE_MESSAGES]) {
