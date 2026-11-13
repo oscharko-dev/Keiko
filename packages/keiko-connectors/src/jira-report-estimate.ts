@@ -145,3 +145,24 @@ export async function resolveJiraReportEstimate(
   if (boards.failure === "bounds-exceeded") return unavailable("metadata-unavailable");
   return fromBoards(boards, required);
 }
+
+/**
+ * The issue types whose create screen lacks the estimate field although the project offers it on
+ * another type's: a hit of such a type that omits the field is an unestimated issue of a type that
+ * has no estimate, not a field Jira withheld. Nothing is exempt unless the whole metadata read
+ * succeeded (a partial or failed read cannot say which types lack the field), and a field no
+ * screen lists, such as an explicit field the metadata does not know, exempts no type.
+ */
+export function jiraReportEstimateNotApplicableTypes(
+  required: JiraReportRequiredFields,
+  fieldId: string | undefined,
+): ReadonlySet<string> {
+  const screens = [...(required.estimateByType ?? [])];
+  if (
+    fieldId === undefined ||
+    required.state !== "applied" ||
+    !screens.some(([, ids]) => ids.includes(fieldId))
+  )
+    return new Set();
+  return new Set(screens.filter(([, ids]) => !ids.includes(fieldId)).map(([typeId]) => typeId));
+}

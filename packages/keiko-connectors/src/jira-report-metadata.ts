@@ -44,8 +44,15 @@ function catalogOf(items: readonly unknown[]): readonly JiraReportFieldCatalogEn
   if (items.length > CATALOG_MAX) return undefined;
   return items.flatMap((item): readonly JiraReportFieldCatalogEntry[] => {
     const record = asRecord(item);
+    const key = asRecord(record?.schema)?.custom;
     return typeof record?.id === "string" && FIELD_ID.test(record.id)
-      ? [{ id: record.id, name: typeof record.name === "string" ? record.name : record.id }]
+      ? [
+          {
+            id: record.id,
+            name: typeof record.name === "string" ? record.name : record.id,
+            ...(typeof key === "string" ? { schemaKey: key } : {}),
+          },
+        ]
       : [];
   });
 }

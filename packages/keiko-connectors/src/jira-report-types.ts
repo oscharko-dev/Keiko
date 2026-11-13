@@ -35,6 +35,11 @@ export interface JiraReportIssue {
   readonly assigned: boolean;
   readonly dueDate: string | undefined;
   readonly estimate: number | undefined;
+  /**
+   * Present (`true`) when the issue's type has no estimate field at all, so the issue is not
+   * estimable, which is not the same as not yet estimated. Absent otherwise.
+   */
+  readonly estimateNotCarried?: true;
   readonly deviations: readonly JiraReportDeviation[];
   /**
    * Whether at least one issue template applied to this issue and judged it (#4181). `false` when
@@ -138,6 +143,11 @@ export interface JiraReportTypeProgress {
   readonly estimated: number | null;
   /** Issues of this type without one; per-type counts sum to the project's `estimate.unestimated`. */
   readonly unestimated: number | null;
+  /**
+   * `not-carried`: the type has no estimate field, so its issues read as unestimated because they
+   * cannot be estimated, not because nobody did. Absent for a type that carries the field.
+   */
+  readonly estimateField?: "not-carried";
 }
 
 export interface JiraReportStatusCount {
@@ -194,8 +204,13 @@ export interface JiraReportCompleteness {
 
 export interface JiraReportScope {
   readonly projectKey?: string;
-  /** The Epic a report was scoped to; its composed clause is part of `jql`. */
+  /** The Epic a report was scoped to; `jql` states the clause that selects it and its members. */
   readonly epicKey?: string;
+  /** Members of the Epic that can hold sub-tasks, and the digest of their sorted keys. */
+  readonly epicMemberCount?: number;
+  readonly epicMembersDigest?: string;
+  /** Whether the Epic Link field was addressed by id, or the instance has none. */
+  readonly epicLink?: "field" | "absent";
   readonly jql: string;
   readonly estimateFieldId?: string;
   readonly estimateFieldName?: string;

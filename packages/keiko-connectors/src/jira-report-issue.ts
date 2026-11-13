@@ -359,6 +359,7 @@ export async function parseJiraReportIssue(
     assigned: assignedOf(fields, plan),
     dueDate: stringOf(fields.duedate, 32),
     estimate,
+    ...(plan.estimateNotApplicableTypes.has(typeId) ? { estimateNotCarried: true as const } : {}),
     deviations: dedupeDeviations([
       ...requiredDeviations(fields, typeId, plan),
       ...(checkerUnavailable ? [] : checked),

@@ -15,7 +15,10 @@ import {
 import { resolveJiraReportEpicScope } from "./jira-report-epic.js";
 import { reportJql, jqlClause } from "./jira-report-jql.js";
 import { fetchJiraReportPage } from "./jira-report-page.js";
-import { resolveJiraReportEstimate } from "./jira-report-estimate.js";
+import {
+  jiraReportEstimateNotApplicableTypes,
+  resolveJiraReportEstimate,
+} from "./jira-report-estimate.js";
 import {
   discoverHierarchyFields,
   loadRequiredFields,
@@ -53,20 +56,6 @@ export function jiraReportFailure(
   return JIRA_REPORT_FAILURE_REASONS.find((value) => value === reason) ?? "unavailable";
 }
 
-/**
- * The issue types whose read create screen lacks the estimate field although the project offers it
- * on another type's. Without a type that carries it, the field is unknown to the screens and no
- * type is exempt: an explicitly named field that no screen lists stays strictly required.
- */
-function estimateNotApplicableTypes(
-  required: JiraReportRequiredFields,
-  fieldId: string | undefined,
-): ReadonlySet<string> {
-  const screens = [...(required.estimateByType ?? [])];
-  if (fieldId === undefined || !screens.some(([, ids]) => ids.includes(fieldId))) return new Set();
-  return new Set(screens.filter(([, ids]) => !ids.includes(fieldId)).map(([typeId]) => typeId));
-}
-
 function fieldPlan(
   session: JiraReportSession,
   hierarchy: JiraReportHierarchyFields,
@@ -82,7 +71,10 @@ function fieldPlan(
     parentProposals: new Map(),
     omittedFields: new Set(),
     estimateFieldId: session.scope.estimateFieldId,
-    estimateNotApplicableTypes: estimateNotApplicableTypes(required, session.scope.estimateFieldId),
+    estimateNotApplicableTypes: jiraReportEstimateNotApplicableTypes(
+      required,
+      session.scope.estimateFieldId,
+    ),
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
     checker,
@@ -178,19 +170,29 @@ function initializationProblem(
     return required.reason ?? "unavailable";
   return undefined;
 }
-/** Composes the Epic scope into the effective query; its failure is an initialization problem. */
+/** Composes the Epic scope into the query windows; its failure is an initialization problem. */
 async function resolveEpic(
   session: JiraReportSession,
   http: JiraReportHttp,
+  hierarchy: JiraReportHierarchyFields,
 ): Promise<JiraReportFailure | undefined> {
   const { epicKey, projectKey, jql } = session.request;
   if (epicKey === undefined) return undefined;
-  const epic = await resolveJiraReportEpicScope(http, epicKey);
+  const epic = await resolveJiraReportEpicScope(http, epicKey, hierarchy.catalog);
   if (epic.kind === "failed") return epic.reason;
   const caller = jql === undefined ? "" : (jqlClause(jql) ?? "");
-  const clause = caller.length === 0 ? epic.clause : `(${caller}) AND (${epic.clause})`;
-  session.jql = reportJql(projectKey, clause);
-  session.scope = { ...session.scope, jql: clause };
+  const within = (clause: string): string =>
+    reportJql(projectKey, caller.length === 0 ? clause : `(${caller}) AND (${clause})`);
+  const { scope } = epic;
+  session.windows = scope.windows.map(within);
+  session.jql = session.windows[0] ?? session.jql;
+  session.scope = {
+    ...session.scope,
+    jql: caller.length === 0 ? scope.clause : `(${caller}) AND (${scope.clause})`,
+    epicMemberCount: scope.memberCount,
+    epicMembersDigest: scope.membersDigest,
+    epicLink: scope.link,
+  };
   return undefined;
 }
 async function initialize(
@@ -206,7 +208,8 @@ async function initialize(
   session.hierarchy = hierarchy;
   session.required = required;
   const problem =
-    initializationProblem(session, hierarchy, required) ?? (await resolveEpic(session, http));
+    initializationProblem(session, hierarchy, required) ??
+    (await resolveEpic(session, http, hierarchy));
   if (problem !== undefined) {
     // The next call asks again; a second failure ends the report instead of degrading it silently.
     session.failure = jiraReportFailure(problem, false);
@@ -282,9 +285,14 @@ function retainIssue(
 ): Ingest {
   const { issue } = parsed;
   if (plan.omittedFields.size > 0) return "omitted";
-  if (session.issues.has(issue.key)) return "repeated";
-  session.issues.set(issue.key, issue);
-  session.bytes += jiraReportIssueCost(issue) + jiraReportProposalCost(plan, issue.key);
+  // A later window may select an issue an earlier one did; it counts once and keeps its place.
+  const duplicate = session.windowIndex > 0 && session.issues.has(issue.key);
+  if (duplicate) session.duplicates += 1;
+  else if (session.issues.has(issue.key)) return "repeated";
+  else {
+    session.issues.set(issue.key, issue);
+    session.bytes += jiraReportIssueCost(issue) + jiraReportProposalCost(plan, issue.key);
+  }
   session.lastKey = issue.key;
   session.startAt += 1;
   if (parsed.checkerUnavailable) session.checker = "unavailable";
@@ -364,7 +372,21 @@ function newIssuesOf(
   return first?.key === session.lastKey ? page.issues.slice(1) : undefined;
 }
 function scopeMoved(session: JiraReportSession, page: PageRead): boolean {
-  return session.total !== undefined && page.total !== session.total;
+  return session.windowTotal !== undefined && page.total !== session.windowTotal;
+}
+/** The next query of a multi-window scope, or the end of the report after the last one. */
+function endWindow(session: JiraReportSession, deps: JiraReportReadDeps): void {
+  const next = session.windows[session.windowIndex + 1];
+  if (next === undefined) {
+    finish(session, deps);
+    return;
+  }
+  session.settledTotal += session.windowTotal ?? 0;
+  session.windowTotal = undefined;
+  session.windowIndex += 1;
+  session.jql = next;
+  session.startAt = 0;
+  session.lastKey = undefined;
 }
 async function onPageRead(
   session: JiraReportSession,
@@ -388,11 +410,12 @@ async function onPageRead(
   session.pageCount += 1;
   session.transientFailures = 0;
   session.failure = undefined;
-  session.total = page.total;
+  session.windowTotal = page.total;
+  session.total = session.settledTotal + page.total - session.duplicates;
   if (ingested === "slice") return;
   adaptPageSize(session, false);
   if (ingested === "ok") {
-    if (fresh.length === 0 || session.startAt >= page.total) finish(session, deps);
+    if (fresh.length === 0 || session.startAt >= page.total) endWindow(session, deps);
     return;
   }
   const reasons = {

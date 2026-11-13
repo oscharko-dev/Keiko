@@ -44,8 +44,20 @@ export interface JiraReportSession {
   readonly fingerprint: string;
   readonly request: JiraReportRequest;
   scope: JiraReportScope;
-  /** The effective query; an Epic scope replaces it with the composed clause once resolved. */
+  /** The query being read: the first window, or the current one of an Epic scope. */
   jql: string;
+  /**
+   * The queries of a scope that no single query can hold (an Epic's members, then the sub-tasks of
+   * its members in chunks); empty for every other scope. They are read one after another and an
+   * issue counts once however many queries select it.
+   */
+  windows: readonly string[];
+  windowIndex: number;
+  /** The total the current window stated; a change while it is read means the scope moved. */
+  windowTotal: number | undefined;
+  /** The totals of the windows already read, and the issues they selected a second time. */
+  settledTotal: number;
+  duplicates: number;
   readonly startedAt: number;
   phase: "new" | "reading" | "finished";
   busy: boolean;
@@ -166,6 +178,11 @@ export function createJiraReportSession(input: {
     request,
     scope: initialScope(request, input.now),
     jql: reportJql(request.projectKey, request.jql),
+    windows: [],
+    windowIndex: 0,
+    windowTotal: undefined,
+    settledTotal: 0,
+    duplicates: 0,
     startedAt: input.now,
     phase: "new",
     busy: false,

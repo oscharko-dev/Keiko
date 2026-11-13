@@ -213,10 +213,14 @@ function byTypeOf(
   issues: readonly JiraReportIssue[],
   estimatesAvailable: boolean,
 ): readonly JiraReportTypeProgress[] {
-  const types = new Map<string, { total: number; done: number; unestimated: number }>();
+  const types = new Map<
+    string,
+    { total: number; done: number; unestimated: number; notCarried: number }
+  >();
   for (const issue of issues) {
-    const entry = types.get(issue.typeName) ?? { total: 0, done: 0, unestimated: 0 };
+    const entry = types.get(issue.typeName) ?? { total: 0, done: 0, unestimated: 0, notCarried: 0 };
     entry.total += 1;
+    if (issue.estimateNotCarried === true) entry.notCarried += 1;
     if (issue.category === "done") entry.done += 1;
     // The same test as the project's estimate, so the per-type counts sum to its figure.
     if (issue.estimate === undefined) entry.unestimated += 1;
@@ -224,12 +228,15 @@ function byTypeOf(
   }
   return [...types.entries()]
     .sort(([left], [right]) => compareCodePoints(left, right))
-    .map(([typeName, { total, done, unestimated }]) => ({
+    .map(([typeName, { total, done, unestimated, notCarried }]) => ({
       typeName,
       total,
       done,
       estimated: estimatesAvailable ? total - unestimated : null,
       unestimated: estimatesAvailable ? unestimated : null,
+      ...(estimatesAvailable && notCarried === total
+        ? { estimateField: "not-carried" as const }
+        : {}),
     }));
 }
 

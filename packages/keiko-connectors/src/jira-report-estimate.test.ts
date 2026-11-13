@@ -19,7 +19,11 @@ import {
   record,
   reportOf,
 } from "./jira-report.harness.js";
-import { JIRA_STORY_POINTS_SCHEMA_KEY } from "./jira-report-estimate.js";
+import {
+  JIRA_STORY_POINTS_SCHEMA_KEY,
+  jiraReportEstimateNotApplicableTypes,
+} from "./jira-report-estimate.js";
+import type { JiraReportRequiredFields } from "./jira-report-metadata.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool, type JiraReportActivity } from "./jira-report-tool.js";
 import { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
@@ -48,6 +52,8 @@ interface Options {
    * lists it, as Jira does for a field the account may not see.
    */
   readonly withheldEstimateTypes?: readonly string[];
+  /** Every create-metadata request answers with this HTTP status (the metadata read fails). */
+  readonly createMetaStatus?: number;
   /** Hits at or after this issue number are the ones that withhold it (default: every hit). */
   readonly withheldFromIssue?: number;
 }
@@ -76,6 +82,8 @@ function transport(
     if (url.pathname.endsWith("/agile/1.0/board")) return boardPage(url, options);
     const board = /\/board\/(\d+)\/configuration$/u.exec(url.pathname)?.[1];
     if (board !== undefined) return response(options.configurations?.[board] ?? CONFIG);
+    if (options.createMetaStatus !== undefined && url.pathname.includes("/createmeta/"))
+      return { ...response({}), status: options.createMetaStatus };
     const answer = await base(request);
     if (answer.kind !== "response" || answer.status !== 200) return answer;
     if (url.pathname.includes("/createmeta/REP/issuetypes/"))
@@ -109,13 +117,13 @@ function searchOf(
   for (const issue of body.issues) {
     const typeId = String(record(issue.fields.issuetype).id);
     const number = Number(issue.key.slice("REP-".length));
-    if ((options.withoutEstimateTypes ?? []).includes(typeId))
-      Reflect.deleteProperty(issue.fields, POINTS);
-    if (
+    const without = (options.withoutEstimateTypes ?? []).includes(typeId);
+    const withheld =
       (options.withheldEstimateTypes ?? []).includes(typeId) &&
-      number >= (options.withheldFromIssue ?? 0)
-    )
-      Reflect.deleteProperty(issue.fields, POINTS);
+      number >= (options.withheldFromIssue ?? 0);
+    if (without || withheld)
+      for (const field of [POINTS, "timeoriginalestimate"])
+        Reflect.deleteProperty(issue.fields, field);
   }
   return response(body);
 }
@@ -579,5 +587,79 @@ describe("an issue type that does not carry the estimate field (#4356)", () => {
     );
     expect(h.result.data.status).toBe("incomplete");
     expect(h.report.completeness).toMatchObject({ complete: false, failure: "permission" });
+  });
+});
+
+describe("the native time estimate and the metadata states of the applicability rule (#4356)", () => {
+  const TIME = { fieldId: "timetracking", name: "Time Tracking", required: false };
+  const NATIVE = {
+    configurations: { "7": { estimation: { type: "field", field: { fieldId: "timeoriginalestimate" } } } },
+    screenFields: [TIME],
+  } as const;
+  const issues = syntheticProject(60);
+
+  it("exempts a type whose screen has no Time Tracking and sums the seconds of the others", async () => {
+    const h = await run({ issues, ...NATIVE, withoutEstimateTypes: ["12", "13"] });
+    expect(h.result.data.status).toBe("complete");
+    expect(h.report.scope).toMatchObject({
+      estimateFieldId: "timeoriginalestimate",
+      estimateUnit: "seconds",
+    });
+    const carrying = issues.filter((issue) => issue.type === "Epic" || issue.type === "Story");
+    const total = carrying.reduce((sum, issue) => sum + (issue.seconds ?? 0), 0);
+    const done = carrying
+      .filter((issue) => issue.category === "done")
+      .reduce((sum, issue) => sum + (issue.seconds ?? 0), 0);
+    expect(record(record(h.report.progress).project).estimate).toMatchObject({ total, done });
+  });
+
+  it("stays incomplete when a type that has Time Tracking has the field withheld", async () => {
+    const h = await run({ issues, ...NATIVE, withheldEstimateTypes: ["11"] });
+    expect(h.result.data.status).toBe("incomplete");
+    expect(h.report.completeness).toMatchObject({ complete: false, failure: "permission" });
+  });
+
+  it("exempts nothing, and stays strict, when the whole metadata read is denied or fails", async () => {
+    for (const createMetaStatus of [403, 500]) {
+      const first = await run({ issues, ...NATIVE, withoutEstimateTypes: ["12"], createMetaStatus });
+      const second = reportOf(await first.call({ reportId: idOf(first.result) }));
+      expect(first.result.data.status).not.toBe("complete");
+      expect(record(second.completeness)).toMatchObject({ complete: false, reason: "read-failed" });
+    }
+  });
+
+  const screens = new Map([
+    ["11", [POINTS]],
+    ["12", []],
+  ]);
+  const required = (state: JiraReportRequiredFields["state"]): JiraReportRequiredFields => ({
+    state,
+    byType: new Map(),
+    estimateByType: screens,
+  });
+  it.each([
+    ["applied", [POINTS], ["12"]],
+    ["partial", [POINTS], []],
+    ["unavailable", [POINTS], []],
+    ["applied", ["customfield_99999"], []],
+    ["applied", [undefined], []],
+  ] as const)("decides over a %s metadata read for %j: %j", (state, [fieldId], exempt) => {
+    expect([...jiraReportEstimateNotApplicableTypes(required(state), fieldId)]).toEqual(exempt);
+  });
+
+  it("marks a type without the estimate field apart from a type nobody has estimated yet", async () => {
+    const h = await run({ issues, withoutEstimateTypes: ["10", "12", "13"] });
+    const byType = new Map(h.stored?.progress.byType.map((item) => [item.typeName, item]));
+    for (const typeName of ["Epic", "Bug", "Sub-task"])
+      expect(byType.get(typeName)).toMatchObject({ estimateField: "not-carried" });
+    // Stories carry the field; a story without points is unestimated, not "not estimable".
+    expect(byType.get("Story")?.unestimated).toBeGreaterThan(0);
+    expect(byType.get("Story")).not.toHaveProperty("estimateField");
+    const shown = (record(h.report.progress).byType as Record<string, unknown>[]).find(
+      (item) => item.typeName === "Bug",
+    );
+    expect(shown).toMatchObject({ estimateField: "not-carried" });
+    const plain = await run({ issues, screenFields: [SCREEN_FIELD] });
+    expect(plain.stored?.progress.byType.some((item) => "estimateField" in item)).toBe(false);
   });
 });
