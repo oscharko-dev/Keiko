@@ -172,6 +172,32 @@ async function chosenEstimate(
   return fromBoards(boards, required);
 }
 
+/** The name the instance itself returns for a field id, in the instance's language. */
+function instanceName(
+  catalog: readonly JiraReportFieldCatalogEntry[] | undefined,
+  id: string,
+): string | undefined {
+  const name = catalog?.find((field) => field.id === id)?.name.trim();
+  return name === undefined || name.length === 0 || name === id ? undefined : name;
+}
+/**
+ * How the report names an estimate field. A name the instance already gave for it (the board's
+ * display name, a screen's name) stays. Otherwise the instance's own name for that field id from its
+ * field list, in its language, because a person recognises Jira's names and not ours. Only when the
+ * instance gives none: the native time estimate gets our English label with the field id beside it,
+ * so the label never passes for Jira's.
+ */
+function fieldName(
+  catalog: readonly JiraReportFieldCatalogEntry[] | undefined,
+  id: string,
+  known: string,
+): string {
+  if (known !== id && known !== TIME_ESTIMATE.name) return known;
+  const own = instanceName(catalog, id);
+  if (own !== undefined) return own;
+  return id === TIME_ESTIMATE.id ? `${TIME_ESTIMATE.name} (${id})` : known;
+}
+
 /** One report-owned decision: explicit field, project board configuration, then project screens. */
 export async function resolveJiraReportEstimate(
   http: JiraReportHttp,
@@ -181,7 +207,17 @@ export async function resolveJiraReportEstimate(
 ): Promise<Selection> {
   const chosen = await chosenEstimate(http, request, required, catalog);
   const alternate = alternateFor(chosen, required);
-  return alternate === undefined ? chosen : { ...chosen, alternate };
+  const id = chosen.estimateFieldId;
+  const named: Selection =
+    id === undefined
+      ? chosen
+      : { ...chosen, estimateFieldName: fieldName(catalog, id, chosen.estimateFieldName ?? id) };
+  return alternate === undefined
+    ? named
+    : {
+        ...named,
+        alternate: { ...alternate, name: fieldName(catalog, alternate.id, alternate.name) },
+      };
 }
 
 /**
