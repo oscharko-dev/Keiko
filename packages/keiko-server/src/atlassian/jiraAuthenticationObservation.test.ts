@@ -980,7 +980,7 @@ it("settles each probe outcome distinctly: rejected stays bare, everything else 
       { onUnsettled: failing },
     )(request401),
   ).toMatchObject({ authentication: "unconfirmed" });
-  expect(failing).toHaveBeenCalledWith("probe-error");
+  expect(failing).toHaveBeenCalledWith("probe-error", expect.any(TypeError));
 });
 it("never probes a non-401 answer or the identity route", async () => {
   const f = fixture(() => response({}, 401));

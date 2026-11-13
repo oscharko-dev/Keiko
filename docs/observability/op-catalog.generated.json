@@ -118485,6 +118485,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "atlassian.connection.checked",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/wiring.ts:428",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "atlassian.credential.created",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:246",
