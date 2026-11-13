@@ -11,6 +11,7 @@ import {
   writeLabPrivateAddress,
 } from "./tls-front.mjs";
 import { DEFAULT_LAB_CONNECTION, loadSession, normalizeLabSession } from "./lab-client.mjs";
+import { assertLabDirectoryOutsideTemporary } from "./lab-directory.mjs";
 import { requireExclusiveLab } from "./lab-services.mjs";
 
 const [
@@ -30,6 +31,8 @@ if (extra.length !== 0 || (action !== "init" && process.argv.length !== 4))
   throw new TypeError("Existing laboratory sessions are controlled only by their manifest");
 const directory = resolve(requestedDirectory);
 if (action === "init") {
+  // A new session is never created in a temporary directory; existing ones keep working as they are.
+  assertLabDirectoryOutsideTemporary(directory);
   if ((requestedVersion === undefined) !== (requestedDigest === undefined))
     throw new TypeError("Supply both the exact Jira release and image digest");
   const manifest = {

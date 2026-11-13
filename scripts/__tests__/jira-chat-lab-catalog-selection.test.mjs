@@ -6,7 +6,10 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (importOriginal) => ({
   basicAuth: (_session, actor) => `auth:${actor}`,
   checked: vi.fn(async (_session, _name, _method, path) => structuredClone(nativeReads.get(path))),
 }));
-import { SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
+import {
+  SELECTION_CASES,
+  selectionTruth,
+} from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 import {
   callTrace,
   carriesTruth,
@@ -500,12 +503,14 @@ describe("catalog-level refusals of jira.describe (#4369)", () => {
       calls: 3,
       refused: 2,
       failed: 2,
+      gatewayRefused: 0,
       firstRefused: true,
     });
     expect(describeTrace([call("jira_describe"), refused()])).toEqual({
       calls: 2,
       refused: 1,
       failed: 1,
+      gatewayRefused: 0,
       firstRefused: false,
     });
   });
@@ -519,9 +524,16 @@ describe("catalog-level refusals of jira.describe (#4369)", () => {
       calls: 1,
       refused: 0,
       failed: 1,
+      gatewayRefused: 0,
       firstRefused: false,
     });
-    expect(describeTrace([])).toEqual({ calls: 0, refused: 0, failed: 0, firstRefused: false });
+    expect(describeTrace([])).toEqual({
+      calls: 0,
+      refused: 0,
+      failed: 0,
+      gatewayRefused: 0,
+      firstRefused: false,
+    });
   });
 
   it("reports the trace on every graded attempt and summarizes the valid ones", () => {
@@ -530,7 +542,13 @@ describe("catalog-level refusals of jira.describe (#4369)", () => {
       { exchanges: [refused(), call("jira_describe"), call("jira_priorities")], gateway: healthy },
       { tokens: ["High"] },
     );
-    expect(graded.describe).toEqual({ calls: 2, refused: 1, failed: 1, firstRefused: true });
+    expect(graded.describe).toEqual({
+      calls: 2,
+      refused: 1,
+      failed: 1,
+      gatewayRefused: 0,
+      firstRefused: true,
+    });
     const invalid = {
       status: "invalid",
       describe: { calls: 1, refused: 1, failed: 1, firstRefused: true },
@@ -541,10 +559,123 @@ describe("catalog-level refusals of jira.describe (#4369)", () => {
         { status: "selected", describe: { calls: 0, refused: 0, failed: 0, firstRefused: false } },
         invalid,
       ]),
-    ).toEqual({ turns: 1, firstRefusedTurns: 1, calls: 2, refused: 1, failed: 1, validTurns: 2 });
+    ).toEqual({
+      turns: 1,
+      firstRefusedTurns: 1,
+      calls: 2,
+      refused: 1,
+      failed: 1,
+      gatewayRefused: 0,
+      validTurns: 2,
+    });
     expect(summarizeSelection([{ id: "a", catalog: "base", ...graded }]).describe).toMatchObject({
       firstRefusedTurns: 1,
     });
+  });
+});
+
+describe("the gateway's own refusal of jira.describe (#4369)", () => {
+  it("is counted apart from the transcript, which never holds it", () => {
+    const rejected = { "keiko.jira.describe": 2, "keiko.jira.edit": 1 };
+    expect(describeTrace([], { rejected })).toMatchObject({ calls: 0, gatewayRefused: 2 });
+    const graded = gradeSelection(
+      READ,
+      { exchanges: [call("jira_priorities")], gateway: { ...healthy, rejected } },
+      { tokens: ["High"] },
+    );
+    expect(graded.describe.gatewayRefused).toBe(2);
+    expect(
+      describeSummary([{ status: "selected", describe: graded.describe }]).gatewayRefused,
+    ).toBe(2);
+  });
+});
+
+describe("a native truth beyond the bound is refused, never cut (#4369)", () => {
+  const entry = (id) => SELECTION_CASES.find((candidate) => candidate.id === id);
+  const rows = (count) =>
+    Array.from({ length: count }, (_, index) => ({ name: `Status ${index}` }));
+
+  it.each([21, 25])(
+    "refuses %s native statuses instead of grading against twenty",
+    async (count) => {
+      nativeReads.set("/rest/api/2/status", rows(count));
+      await expect(selectionTruth({}, FIXTURE, entry("statuses"))).rejects.toThrow(TypeError);
+    },
+  );
+
+  it("keeps all twenty statuses and a duplicate name counts once", async () => {
+    nativeReads.set("/rest/api/2/status", [...rows(20), { name: "Status 0" }].slice(0, 20));
+    expect(await selectionTruth({}, FIXTURE, entry("statuses"))).toHaveLength(20);
+  });
+
+  it("refuses any generic truth beyond twenty distinct tokens", async () => {
+    nativeReads.set("/rest/api/2/priority", rows(21));
+    await expect(selectionTruth({}, FIXTURE, entry("priorities"))).rejects.toThrow(RangeError);
+  });
+});
+
+describe("the new cases grade red where the product is wrong (#4369)", () => {
+  const entry = (id) => SELECTION_CASES.find((candidate) => candidate.id === id);
+  const grade = (id, exchanges, proof) =>
+    gradeSelection(entry(id), { exchanges, gateway: healthy }, proof);
+
+  it("delete-issue: the target succeeded but the issue is still present", () => {
+    const verdict = grade("delete-issue", [call("jira_delete_issue")], {
+      effect: { effects: 0, stray: 0 },
+    });
+    expect(verdict.status).toBe("wrong-result");
+  });
+
+  it("delete-issue: another issue was deleted too, so the deletion is a stray write", () => {
+    const verdict = grade("delete-issue", [call("jira_delete_issue")], {
+      effect: { effects: 1, stray: 1 },
+    });
+    expect(verdict).toMatchObject({
+      status: "wrong-result",
+      detail: expect.stringContaining("1 writes"),
+    });
+  });
+
+  it("delete-issue: no call and no deletion is no-tool, a deletion without the tool is wrong-tool", () => {
+    expect(grade("delete-issue", [], { effect: { effects: 0, stray: 0 } }).status).toBe("no-tool");
+    expect(
+      grade("delete-issue", [call("jira_edit")], { effect: { effects: 0, stray: 0 } }).status,
+    ).toBe("wrong-tool");
+  });
+
+  it("update-comment: a wrong value is red, the exact text is green", () => {
+    const wrong = { effects: 0, wrongValue: true, stray: 0 };
+    expect(grade("update-comment", [call("jira_update_comment")], { effect: wrong }).status).toBe(
+      "wrong-result",
+    );
+    const exact = { effects: 1, wrongValue: false, stray: 0 };
+    expect(grade("update-comment", [call("jira_update_comment")], { effect: exact }).status).toBe(
+      "selected",
+    );
+  });
+
+  it.each([
+    ["users", "jira_users", ["Synthetic api"], { items: [{ displayName: "Somebody else" }] }],
+    ["fields", "jira_fields", ["customfield_10112"], { items: [{ id: "customfield_10999" }] }],
+    [
+      "get-comment",
+      "jira_get_comment",
+      ["Auswahl Kommentar t"],
+      { body: "Auswahl Kommentar other" },
+    ],
+  ])("%s: a result without the native token is wrong-result", (id, tool, tokens, data) => {
+    const verdict = grade(id, [call(tool, { outcome: "succeeded", ...data })], { tokens });
+    expect(verdict.status).toBe("wrong-result");
+    expect(verdict.missingTokens).toEqual(tokens);
+  });
+
+  it("statuses: one status missing from an otherwise complete answer is wrong-result", () => {
+    const tokens = ["To Do", "In Progress", "Done"];
+    const data = { outcome: "succeeded", items: [{ name: "To Do" }, { name: "Done" }] };
+    const verdict = grade("statuses", [call("jira_statuses", data)], { tokens });
+    expect(verdict).toMatchObject({ status: "wrong-result", missingTokens: ["In Progress"] });
+    const full = { outcome: "succeeded", items: tokens.map((name) => ({ name })) };
+    expect(grade("statuses", [call("jira_statuses", full)], { tokens }).status).toBe("selected");
   });
 });
 

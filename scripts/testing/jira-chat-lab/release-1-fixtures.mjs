@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { basicAuth, checked, labRequest, loadSession } from "./lab-client.mjs";
+import { assertLabDirectoryOutsideTemporary } from "./lab-directory.mjs";
 import { main as seedEstimateMix } from "./requirements/seed-estimate-mix.mjs";
 import { main as seedParentFields } from "./requirements/seed-parent-fields.mjs";
 import { LAB_LOCALES, main as seedLanguage } from "./seed-language.mjs";
@@ -166,6 +167,7 @@ export async function main(args) {
     "Usage: release-1-fixtures.mjs <session-directory> [--seed] [--language de|en] | --inventory";
   const [directory, ...flags] = args;
   if (!directory) throw new TypeError(usage);
+  assertLabDirectoryOutsideTemporary(directory);
   if (flags.length === 1 && flags[0] === "--inventory") {
     const inventory = await fixtureInventory(loadSession(directory));
     console.log(JSON.stringify({ operation: "jira-lab-release-1-fixtures", ...inventory }));

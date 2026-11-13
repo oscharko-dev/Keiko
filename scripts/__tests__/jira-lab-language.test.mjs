@@ -9,9 +9,11 @@ import {
 
 const ENGLISH = ["To Do", "In Progress", "Done"];
 const GERMAN = ["Zu erledigen", "In Arbeit", "Fertig"];
+const TYPES_EN = ["Task", "Bug"];
+const TYPES_DE = ["Aufgabe", "Bug"];
 
 /** A fake Jira: locale per actor; the status names follow the actor's locale, as Jira's do. */
-function fakeJira({ initial = {}, refuse = false, localizes = true } = {}) {
+function fakeJira({ initial = {}, refuse = false, localizes = true, typesLocalized = true } = {}) {
   const locales = new Map(Object.entries(initial));
   const puts = [];
   const localeOf = (actor) => locales.get(actor) ?? "en_US";
@@ -22,6 +24,10 @@ function fakeJira({ initial = {}, refuse = false, localizes = true } = {}) {
       if (path === "/rest/api/2/status") {
         const german = localizes && localeOf(actor) === "de_DE";
         return { status: 200, value: (german ? GERMAN : ENGLISH).map((name) => ({ name })) };
+      }
+      if (path === "/rest/api/2/issuetype") {
+        const german = typesLocalized && localizes && localeOf(actor) === "de_DE";
+        return { status: 200, value: (german ? TYPES_DE : TYPES_EN).map((name) => ({ name })) };
       }
       return { status: 404 };
     },
@@ -41,6 +47,7 @@ describe("ensureLabLocale", () => {
       locale: "de_DE",
       actors: 2,
       localizedStatusNames: 3,
+      localizedIssueTypeNames: 1,
     });
     expect(jira.puts).toEqual([
       ["api", "/rest/api/2/mypreferences?key=jira.user.locale", "de_DE"],
@@ -59,6 +66,7 @@ describe("ensureLabLocale", () => {
     expect(await ensureLabLocale(jira, LAB_LOCALES.en, ["api"])).toMatchObject({
       locale: "en_US",
       localizedStatusNames: 0,
+      localizedIssueTypeNames: 0,
     });
   });
 
@@ -71,6 +79,12 @@ describe("ensureLabLocale", () => {
   it("fails closed when the locale is set but Jira shows no German names", async () => {
     await expect(
       ensureLabLocale(fakeJira({ localizes: false }), LAB_LOCALES.de, ["api"]),
+    ).rejects.toThrow("names of the requested language");
+  });
+
+  it("fails closed when status names are German but issue type names are not", async () => {
+    await expect(
+      ensureLabLocale(fakeJira({ typesLocalized: false }), LAB_LOCALES.de, ["api"]),
     ).rejects.toThrow("names of the requested language");
   });
 

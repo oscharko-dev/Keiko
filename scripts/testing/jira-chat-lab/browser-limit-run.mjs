@@ -38,6 +38,10 @@ const OWNERS = {
  * Agile child owns, and its card check; the other steps and their order are unchanged.
  */
 export const LIMIT_RUN_STEP_SETS = Object.freeze(["all", "release-1"]);
+/** The steps each partial set leaves out; a run of such a set can end `partial`, never `green`. */
+export const LIMIT_RUN_SKIPPED_STEPS = Object.freeze({
+  "release-1": ["ac6-sprint", "ac9-sprint-*"],
+});
 
 function stepSetOf(extra) {
   if (extra.length === 0) return "all";
@@ -366,19 +370,26 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
   try {
     await stages(ctx, selected, blocks, results);
     const verified = results.every((result) => result.status === "green");
+    const skipped = LIMIT_RUN_SKIPPED_STEPS[selected.steps] ?? [];
+    const partial = verified && skipped.length > 0;
     ctx.intent.record("orchestrator", {
       phase: verified ? "steps-verified" : "steps-unverified",
       steps: selected.steps,
+      partial,
+      skipped,
       results,
     });
     if (!verified) ctx.intent.failed();
     return {
       step: "browser-limit-run",
-      status: verified ? "green" : "unverified",
+      status: verified ? (partial ? "partial" : "green") : "unverified",
       detail: verified
-        ? `All limit-run steps independently verified${selected.steps === "all" ? "" : ` (${selected.steps})`}`
+        ? partial
+          ? `All ${selected.steps} limit-run steps independently verified; ${skipped.join(", ")} not run`
+          : "All limit-run steps independently verified"
         : "Fault evidence remains incomplete",
       counts: { steps: results.length },
+      ...(partial ? { partial: true, skipped } : {}),
       evidenceFile: ctx.intent.path,
     };
   } catch (error) {
@@ -390,7 +401,8 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
 /** Finalization runs only after the owned browser/server cleanup has completed. */
 export function finalizeLimitRun(intent, result) {
   assert.ok(
-    result?.step === "browser-limit-run" && new Set(["green", "unverified"]).has(result.status),
+    result?.step === "browser-limit-run" &&
+      new Set(["green", "partial", "unverified"]).has(result.status),
     "A terminal run verdict is required",
   );
   if (result.status === "unverified") {
@@ -398,8 +410,10 @@ export function finalizeLimitRun(intent, result) {
     return "unverified";
   }
   assert.equal(intent.state.orchestrator?.phase, "steps-verified");
+  // A partial set is complete as a set but never a full green: the status stays distinct.
+  assert.equal(result.status === "partial", intent.state.orchestrator?.partial === true);
   intent.complete();
-  return "green";
+  return result.status;
 }
 
 function validateLimitOptions(ctx, options, blocks) {
@@ -695,11 +709,20 @@ export async function createLimitRunContext(live, handles, options, intent, sign
 
 /** One closed verdict per step: names and statuses only, never a detail or a path. */
 export function printLimitVerdict(intent, status) {
+  const orchestrator = intent.state.orchestrator;
   const steps = (intent.state.orchestrator?.results ?? []).map(({ step, status: verdict }) => ({
     step,
     status: verdict,
   }));
-  console.log(JSON.stringify({ operation: "jira-browser-limit-run", status, steps }));
+  console.log(
+    JSON.stringify({
+      operation: "jira-browser-limit-run",
+      status,
+      steps: orchestrator?.steps ?? "all",
+      partial: orchestrator?.partial === true,
+      verdicts: steps,
+    }),
+  );
 }
 
 async function main(argv) {

@@ -34,10 +34,9 @@ const PRIVATE_ADDRESS_FILE = "private-address";
  */
 export function validatePrivateAddress(value) {
   const address = String(value ?? "");
-  const kind = isIP(address);
-  const private4 = kind === 4 && isPrivateIpv4(address.split(".").map(Number));
-  const private6 = kind === 6 && /^f[cd][0-9a-f]{2}:/iu.test(address);
-  if (!private4 && !private6) throw new TypeError("Lab private address must be a private-class IP");
+  // IPv4 only: the compose port mapping of the override has no tested IPv6 form.
+  if (isIP(address) !== 4 || !isPrivateIpv4(address.split(".").map(Number)))
+    throw new TypeError("Lab private address must be a private-class IPv4 address");
   return address;
 }
 
@@ -53,7 +52,7 @@ export function allowedLabHosts(listenPort, privateAddress) {
   const hosts = [`localhost:${listenPort}`, `127.0.0.1:${listenPort}`];
   if (privateAddress === undefined) return new Set(hosts);
   const address = validatePrivateAddress(privateAddress);
-  hosts.push(isIP(address) === 6 ? `[${address}]:${listenPort}` : `${address}:${listenPort}`);
+  hosts.push(`${address}:${listenPort}`);
   return new Set(hosts);
 }
 
@@ -256,7 +255,7 @@ function portNumber(value) {
   return port;
 }
 
-function forward(req, res, backendPort, compose) {
+function forward(req, res, backendPort, compose, upstreamHost) {
   if (!req.url?.startsWith("/") || req.url.startsWith("//")) {
     res.writeHead(400).end();
     return;
@@ -270,7 +269,7 @@ function forward(req, res, backendPort, compose) {
   delete headers["proxy-connection"];
   const upstream = request(
     {
-      hostname: compose ? "jira" : "127.0.0.1",
+      hostname: upstreamHost ?? (compose ? "jira" : "127.0.0.1"),
       port: backendPort,
       method: req.method,
       path: req.url,
@@ -309,11 +308,13 @@ export function startLabTlsFront(
   backendPort = 18080,
   compose = false,
   privateAddress = undefined,
+  { upstreamHost, listenHost } = {},
 ) {
-  portNumber(listenPort);
+  // Port 0 (an ephemeral port the caller owns) is for the hermetic tests only; the CLI refuses it.
+  if (listenPort !== 0) portNumber(listenPort);
   portNumber(backendPort);
-  if (listenPort === backendPort) throw new TypeError("Lab frontend and backend ports must differ");
-  const hosts = allowedLabHosts(listenPort, privateAddress);
+  if (listenPort === backendPort && listenPort !== 0)
+    throw new TypeError("Lab frontend and backend ports must differ");
   const files = compose
     ? { "server.key": join(directory, "server.key"), "server.pem": join(directory, "server.pem") }
     : initializeLabTls(directory, { privateAddress });
@@ -323,17 +324,19 @@ export function startLabTlsFront(
     cert: readFileSync(files["server.pem"]),
     minVersion: "TLSv1.2",
   };
+  // The Host guard follows the port the listener actually holds.
+  const hostsOf = () => allowedLabHosts(server.address().port, privateAddress);
   const handler = (req, res) => {
-    if (!hosts.has(req.headers.host)) {
+    if (!hostsOf().has(req.headers.host)) {
       res.writeHead(421).end();
       return;
     }
-    forward(req, res, backendPort, compose);
+    forward(req, res, backendPort, compose, upstreamHost);
   };
   const server = createServer(options, handler);
   server.requestTimeout = 35_000;
   server.headersTimeout = 10_000;
-  server.listen(listenPort, compose ? "0.0.0.0" : "127.0.0.1");
+  server.listen(listenPort, listenHost ?? (compose ? "0.0.0.0" : "127.0.0.1"));
   if (!compose && privateAddress !== undefined) {
     const extra = createServer(options, handler);
     extra.requestTimeout = server.requestTimeout;

@@ -10,7 +10,16 @@ const TRUTH_TOKENS_MAX = 20;
 const native = (session, path, actor = "api") =>
   checked(session, "catalog-selection-truth", "GET", path, basicAuth(session, actor));
 const names = (rows, key = "name") => rows.map((row) => String(row[key]));
-const bounded = (tokens) => [...new Set(tokens)].slice(0, TRUTH_TOKENS_MAX);
+/**
+ * The distinct native tokens a correct result must carry. A truth beyond the bound is refused, never
+ * cut: an answer graded against the first twenty names would pass while omitting the rest.
+ */
+const bounded = (tokens) => {
+  const distinct = [...new Set(tokens)];
+  if (distinct.length > TRUTH_TOKENS_MAX)
+    throw new RangeError(`The native truth holds ${distinct.length} tokens, beyond the bound`);
+  return distinct;
+};
 const projectPath = (f, suffix = "") =>
   `/rest/api/2/project/${encodeURIComponent(f.project)}${suffix}`;
 const issuePath = (f, suffix = "") =>
@@ -37,7 +46,8 @@ function ownedName(rows, name, read = (row) => row.name) {
 
 /** A list the tools return whole: a longer native list could hide a name from a correct call. */
 function wholeNames(rows) {
-  if (rows.length > TOOL_PAGE_ROWS) throw new TypeError("The native list exceeds one tool page");
+  if (rows.length > Math.min(TOOL_PAGE_ROWS, TRUTH_TOKENS_MAX))
+    throw new TypeError("The native list exceeds one tool page or the truth bound");
   return names(rows);
 }
 

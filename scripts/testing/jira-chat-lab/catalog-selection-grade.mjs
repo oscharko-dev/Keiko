@@ -26,7 +26,7 @@ function refusedForArguments(exchange) {
  * reach the transcript, so they are counted separately; this reads the transcript only.
  * `firstRefused` says the first selection call of the turn failed, the case #4357 targets.
  */
-export function describeTrace(exchanges) {
+export function describeTrace(exchanges, gateway = undefined) {
   const calls = exchanges.filter((exchange) => toolAlias(exchange.call?.name) === "jira_describe");
   const refused = calls.map((exchange) => refusedForArguments(exchange));
   return {
@@ -35,6 +35,8 @@ export function describeTrace(exchanges) {
     // Any call that did not complete, so a refusal for another reason stays visible beside it.
     failed: calls.filter((exchange) => exchange.result?.status !== "completed").length,
     firstRefused: refused[0] === true,
+    // The gateway's own refusal of the call never reaches the transcript; it is counted apart.
+    gatewayRefused: refusedTarget(gateway, "jira.describe"),
   };
 }
 
@@ -169,7 +171,11 @@ export function callTrace(exchanges) {
 export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavailable } = {}) {
   const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable });
   const exchanges = turn.exchanges ?? [];
-  return { ...verdict, calls: callTrace(exchanges), describe: describeTrace(exchanges) };
+  return {
+    ...verdict,
+    calls: callTrace(exchanges),
+    describe: describeTrace(exchanges, turn.gateway),
+  };
 }
 
 function invalidReason(turn, exchanges, truthUnavailable) {
@@ -286,6 +292,7 @@ export function describeSummary(attempts) {
     calls: sum((trace) => trace.calls),
     refused: sum((trace) => trace.refused),
     failed: sum((trace) => trace.failed ?? 0),
+    gatewayRefused: sum((trace) => trace.gatewayRefused ?? 0),
     validTurns: traced.length,
   };
 }

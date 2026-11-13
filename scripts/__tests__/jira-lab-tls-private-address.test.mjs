@@ -4,7 +4,7 @@
 import { X509Certificate } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:https";
-import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,7 +29,7 @@ afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true
 const certificate = (paths) => new X509Certificate(readFileSync(paths["server.pem"]));
 
 describe("private address validation", () => {
-  it.each(["192.168.1.20", "10.0.0.7", "172.16.4.1", "172.31.255.1", "169.254.3.4", "fd12::1"])(
+  it.each(["192.168.1.20", "10.0.0.7", "172.16.4.1", "172.31.255.1", "169.254.3.4"])(
     "accepts the private-class address %s",
     (address) => expect(validatePrivateAddress(address)).toBe(address),
   );
@@ -43,6 +43,7 @@ describe("private address validation", () => {
     "192.169.0.1",
     "::1",
     "2001:db8::1",
+    "fd12::1",
     "localhost",
     "192.168.1.5:443",
     "",
@@ -82,11 +83,11 @@ describe("certificate and Host guard", () => {
     expect(renewals).toBe(1);
   });
 
-  it("accepts exactly the loopback hosts and the private address, bracketing IPv6", () => {
+  it("accepts exactly the loopback hosts and the private address", () => {
     expect(allowedLabHosts(18449, "192.168.1.20")).toEqual(
       new Set(["localhost:18449", "127.0.0.1:18449", "192.168.1.20:18449"]),
     );
-    expect(allowedLabHosts(18449, "fd12::1").has("[fd12::1]:18449")).toBe(true);
+    expect(() => allowedLabHosts(18449, "fd12::1")).toThrow(TypeError);
     expect(() => allowedLabHosts(18449, "8.8.8.8")).toThrow(TypeError);
   });
 });
@@ -129,12 +130,15 @@ describe("recorded address and compose files", () => {
   });
 });
 
-async function freePort() {
-  const probe = createServer();
-  await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
-  const { port } = probe.address();
-  await new Promise((resolve) => probe.close(resolve));
-  return port;
+/** A loopback upstream this test owns; it counts what reached it and answers 200. */
+async function upstream() {
+  const seen = [];
+  const server = createHttpServer((req, res) => {
+    seen.push(req.headers.host);
+    res.writeHead(200).end("ok");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { server, seen, port: server.address().port };
 }
 
 function statusFor(port, ca, host) {
@@ -152,32 +156,42 @@ function statusFor(port, ca, host) {
 }
 
 describe("the front's Host guard on the wire", () => {
+  // Both listeners are on loopback and on ports the OS hands out; the upstream is this test's own.
   async function serve(privateAddress) {
     const root = temp();
     const paths = initializeLabTls(root, { privateAddress });
-    const port = await freePort();
-    // Compose mode serves the certificate files as given; its backend host is unreachable here, so
-    // an accepted Host answers 502 while a refused one answers 421 before any forwarding.
-    const server = startLabTlsFront(root, port, 8080, true, privateAddress);
+    const back = await upstream();
+    const server = startLabTlsFront(root, 0, back.port, true, privateAddress, {
+      upstreamHost: "127.0.0.1",
+      listenHost: "127.0.0.1",
+    });
     await new Promise((resolve) => server.once("listening", resolve));
-    return { server, port, ca: readFileSync(paths["ca.pem"]) };
+    const { port } = server.address();
+    return { server, back, port, ca: readFileSync(paths["ca.pem"]) };
   }
+  const stop = async ({ server, back }) => {
+    server.close();
+    await new Promise((resolve) => back.server.close(resolve));
+  };
 
   it("refuses the private Host without the mode and accepts it with the mode", async () => {
     const plain = await serve(undefined);
     try {
       expect(await statusFor(plain.port, plain.ca, `192.168.1.20:${plain.port}`)).toBe(421);
-      expect(await statusFor(plain.port, plain.ca, `127.0.0.1:${plain.port}`)).toBe(502);
+      expect(plain.back.seen).toEqual([]);
+      expect(await statusFor(plain.port, plain.ca, `127.0.0.1:${plain.port}`)).toBe(200);
     } finally {
-      plain.server.close();
+      await stop(plain);
     }
     const mode = await serve("192.168.1.20");
     try {
-      expect(await statusFor(mode.port, mode.ca, `192.168.1.20:${mode.port}`)).toBe(502);
+      expect(await statusFor(mode.port, mode.ca, `192.168.1.20:${mode.port}`)).toBe(200);
       expect(await statusFor(mode.port, mode.ca, `192.168.1.21:${mode.port}`)).toBe(421);
-      expect(await statusFor(mode.port, mode.ca, `127.0.0.1:${mode.port}`)).toBe(502);
+      expect(await statusFor(mode.port, mode.ca, `127.0.0.1:${mode.port}`)).toBe(200);
+      // Only the two accepted requests reached the upstream, rewritten to its own address.
+      expect(mode.back.seen).toHaveLength(2);
     } finally {
-      mode.server.close();
+      await stop(mode);
     }
   });
 });

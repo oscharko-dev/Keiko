@@ -1411,10 +1411,10 @@ the one order that works and prints the inventory. Seed first (`seed.mjs`, `qual
   and the German locale is applied last: `qualify-fields.mjs` failed on localized names (observed
   2026-11-13). The report counts by status and the JQL by issue type name must work in this session.
 - **HTTPS front on a private address.** `KEIKO_JIRA_LAB_PRIVATE_ADDRESS=<private IP>` at
-  `session.mjs init` records one RFC 1918, link-local or unique-local address. The certificate then names
+  `session.mjs init` records one RFC 1918 or link-local IPv4 address. The certificate then names
   it, the Host guard accepts it and `compose.private.yaml` publishes the TLS port on it beside loopback, so
   a private-class Jira URL can be walked live and a Windows guest reaches the lab without a tunnel.
-  Loopback, wildcard and public addresses are refused; without the variable nothing changes.
+  Loopback, wildcard, IPv6 and public addresses are refused; without the variable nothing changes.
 
 **Renewal and isolation.** Every run starts with `prepareLabRun`: the license window (`ensureLicenseWindow`
 restarts the owned lab), the Personal Access Tokens (`ensureFixtureToken`) and the TLS certificate
@@ -1441,4 +1441,6 @@ turn, like the refresh part.
 <denied-token> <LIMn> --steps release-1` runs templates and probes, the bulk write with deliberate
 violations and the kill at about 40 %, the hierarchy with relations, the report compared with JQL, and the
 English and German card checks, and leaves out the sprint-at-scale package (Agile child). It prints one
-closed verdict per step.
+closed verdict per step. Because a package was left out, its overall verdict is `partial`, never `green`:
+the printed line and the orchestrator record carry `steps: "release-1"`, `partial: true` and the skipped
+step names, and only a full set can end `green`.

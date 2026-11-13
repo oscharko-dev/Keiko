@@ -265,7 +265,7 @@ async function runAttempts(context, run, batch) {
 /** The catalog's refusals of the model's selection call (#4357), measured from the transcript. */
 function describeLine(describe) {
   if (describe === undefined) return "";
-  return `jira.describe: ${describe.turns}/${describe.validTurns} valid turns used it, ${describe.firstRefusedTurns} had their first call refused, ${describe.refused}/${describe.calls} calls refused for their arguments, ${describe.failed} failed in all.`;
+  return `jira.describe: ${describe.turns}/${describe.validTurns} valid turns used it, ${describe.firstRefusedTurns} had their first call refused, ${describe.refused}/${describe.calls} calls refused for their arguments, ${describe.failed} failed in all, ${describe.gatewayRefused} refused by the gateway itself.`;
 }
 
 function markdown(report) {

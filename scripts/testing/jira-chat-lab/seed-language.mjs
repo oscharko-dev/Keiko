@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { actorDetails, basicAuth, labSessionConnection, loadSession } from "./lab-client.mjs";
+import { assertLabDirectoryOutsideTemporary } from "./lab-directory.mjs";
 import { privateJson } from "./private-json.mjs";
 
 export const LAB_LOCALES = Object.freeze({ de: "de_DE", en: "en_US" });
@@ -57,6 +58,13 @@ async function expectOk(port, actor, path) {
   return result.value;
 }
 
+/** How many names an actor sees that the (English) administrator does not. */
+async function localizedCount(port, actor, path) {
+  const seen = names(await expectOk(port, actor, path));
+  const baseline = names(await expectOk(port, "admin", path));
+  return [...seen].filter((name) => !baseline.has(name)).length;
+}
+
 /**
  * Sets the locale of every present actor and proves it natively: each actor reports the locale,
  * and the localized names visible to the api actor differ from the administrator's (German) or
@@ -74,12 +82,13 @@ export async function ensureLabLocale(port, locale, actors) {
     const reported = (await expectOk(port, actor, "/rest/api/2/myself")).locale;
     if (reported !== locale) throw new TypeError("An actor does not report the requested locale");
   }
-  const seen = names(await expectOk(port, actors[0], "/rest/api/2/status"));
-  const baseline = names(await expectOk(port, "admin", "/rest/api/2/status"));
-  const localized = [...seen].filter((name) => !baseline.has(name)).length;
-  if (locale === LAB_LOCALES.de ? localized === 0 : localized !== 0)
-    throw new TypeError("Jira does not present the names of the requested language");
-  return { locale, actors: actors.length, localizedStatusNames: localized };
+  const localizedStatusNames = await localizedCount(port, actors[0], "/rest/api/2/status");
+  const localizedIssueTypeNames = await localizedCount(port, actors[0], "/rest/api/2/issuetype");
+  // Both kinds of name reach JQL and the template matching, so both must differ (or both equal).
+  for (const count of [localizedStatusNames, localizedIssueTypeNames])
+    if (locale === LAB_LOCALES.de ? count === 0 : count !== 0)
+      throw new TypeError("Jira does not present the names of the requested language");
+  return { locale, actors: actors.length, localizedStatusNames, localizedIssueTypeNames };
 }
 
 /** The actors this session holds credentials for. */
@@ -93,6 +102,7 @@ export async function main(args) {
   const [directory, language = "de", ...extra] = args;
   if (!directory || extra.length > 0 || !Object.hasOwn(LAB_LOCALES, language))
     throw new TypeError("Usage: seed-language.mjs <session-directory> [de|en]");
+  assertLabDirectoryOutsideTemporary(directory);
   const session = loadSession(directory);
   const actors = presentActors(session);
   if (!actors.includes("api")) throw new TypeError("The session holds no api actor to localize");
