@@ -12,6 +12,30 @@ export function selectionPath(exchanges) {
     : "direct";
 }
 
+const REFUSAL_REASON = "invalid-arguments";
+
+/** A catalog-level refusal: the dispatcher's own reason, or the tool's own failed result. */
+function refusedForArguments(exchange) {
+  const { result } = exchange;
+  return result?.reason === REFUSAL_REASON || result?.data?.reason === REFUSAL_REASON;
+}
+
+/**
+ * The model's `jira.describe` calls of a turn and how many the catalog refused for their arguments
+ * (an identity the registry does not know, or a repeated one). The gateway's own refusals never
+ * reach the transcript, so they are counted separately; this reads the transcript only.
+ * `firstRefused` says the first selection call of the turn failed, the case #4357 targets.
+ */
+export function describeTrace(exchanges) {
+  const calls = exchanges.filter((exchange) => toolAlias(exchange.call?.name) === "jira_describe");
+  const refused = calls.map((exchange) => refusedForArguments(exchange));
+  return {
+    calls: calls.length,
+    refused: refused.filter(Boolean).length,
+    firstRefused: refused[0] === true,
+  };
+}
+
 /** Native operations the model actually called, without the local catalog lookups. */
 function operationCalls(exchanges) {
   return exchanges.filter((exchange) => !DISCOVERY_ALIASES.has(toolAlias(exchange.call?.name)));
@@ -142,7 +166,8 @@ export function callTrace(exchanges) {
  */
 export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavailable } = {}) {
   const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable });
-  return { ...verdict, calls: callTrace(turn.exchanges ?? []) };
+  const exchanges = turn.exchanges ?? [];
+  return { ...verdict, calls: callTrace(exchanges), describe: describeTrace(exchanges) };
 }
 
 function invalidReason(turn, exchanges, truthUnavailable) {
@@ -230,6 +255,7 @@ export function summarizeSelection(attempts) {
   });
   const total = (key) => rows.reduce((sum, row) => sum + row[key], 0);
   const valid = total("valid");
+  const describe = describeSummary(attempts);
   // Like the scorecard's repeat rule: a run that lost most of its attempts to outages measures
   // nothing, so it is reported as insufficient instead of as a low (or perfect) rate.
   const sufficient = attempts.length > 0 && valid >= Math.ceil(attempts.length / 2);
@@ -240,6 +266,23 @@ export function summarizeSelection(attempts) {
     alternative: total("alternative"),
     wrongArguments: total("wrongArguments"),
     invalid: total("invalid"),
+    describe,
     sufficient,
+  };
+}
+
+/**
+ * How often the catalog refused the model's selection call, over the valid attempts: turns that
+ * called `jira.describe` at all, turns whose first call was refused, and every refused call.
+ */
+export function describeSummary(attempts) {
+  const traced = attempts.filter((attempt) => attempt.status !== "invalid" && attempt.describe);
+  const sum = (pick) => traced.reduce((total, attempt) => total + pick(attempt.describe), 0);
+  return {
+    turns: traced.filter((attempt) => attempt.describe.calls > 0).length,
+    firstRefusedTurns: traced.filter((attempt) => attempt.describe.firstRefused).length,
+    calls: sum((trace) => trace.calls),
+    refused: sum((trace) => trace.refused),
+    validTurns: traced.length,
   };
 }

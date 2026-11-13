@@ -3,8 +3,8 @@
 // jira.discover / jira.describe) and build the arguments from the person's words. Every truth is an
 // independent native Jira read with the lab actor's credentials, never Keiko's own answer; a read
 // that cannot see an owned object, or a list beyond the tools' first page, makes the attempt invalid.
-import { voteKey } from "./catalog-selection-objects.mjs";
-import { actorDetails, basicAuth, checked } from "./lab-client.mjs";
+import { ownedIssue, voteKey } from "./catalog-selection-objects.mjs";
+import { actorDetails, basicAuth, checked, labRequest } from "./lab-client.mjs";
 
 const TRUTH_TOKENS_MAX = 20;
 const native = (session, path, actor = "api") =>
@@ -34,6 +34,15 @@ function ownedName(rows, name, read = (row) => row.name) {
     throw new TypeError("An owned object is not visible to the api actor");
   return [name];
 }
+
+/** A list the tools return whole: a longer native list could hide a name from a correct call. */
+function wholeNames(rows) {
+  if (rows.length > TOOL_PAGE_ROWS) throw new TypeError("The native list exceeds one tool page");
+  return names(rows);
+}
+
+const apiName = () => actorDetails("api").name;
+const commentPath = (f) => issuePath(f, `/comment/${f.selection.commentId}`);
 
 /** Read cases whose operation is reachable only through the catalog search. */
 const DISCOVERY_READS = [
@@ -166,6 +175,46 @@ const DISCOVERY_READS = [
           .values ?? [],
         f.selection.sprintName,
       ),
+  },
+  {
+    id: "statuses",
+    tool: "jira.statuses",
+    alternatives: ["jira.status-page"],
+    prompt: () => "Welche Status gibt es in unserem Jira insgesamt? Nenne alle Namen.",
+    truth: async (s) => wholeNames(await native(s, "/rest/api/2/status")),
+  },
+  {
+    // The lab's own custom field: its name is the same in every Jira language, unlike a built-in.
+    id: "fields",
+    tool: "jira.fields",
+    prompt: () => 'Welche Feld-ID hat das Jira-Feld "Keiko required text"?',
+    truth: async (s) => {
+      const rows = (await native(s, "/rest/api/2/field")).filter(
+        (row) => row.name === "Keiko required text",
+      );
+      if (rows.length !== 1) throw new TypeError("The lab's custom field is not unique");
+      return [String(rows[0].id)];
+    },
+  },
+  {
+    id: "users",
+    tool: "jira.users",
+    alternatives: ["jira.user", "jira.user-directory", "jira.user-picker"],
+    prompt: () => `Suche in Jira nach dem Benutzer "${apiName()}" und nenne seinen Anzeigenamen.`,
+    truth: async (s) => {
+      const rows = await native(s, `/rest/api/2/user/search?username=${apiName()}`);
+      const row = rows.find((candidate) => candidate.name === apiName());
+      if (row === undefined) throw new TypeError("The api actor is not found by the native search");
+      return [String(row.displayName)];
+    },
+  },
+  {
+    id: "get-comment",
+    tool: "jira.get-comment",
+    alternatives: ["jira.comments"],
+    prompt: (f) =>
+      `Wie lautet der Text des Kommentars ${f.selection.commentId} am Vorgang ${f.selection.issueKey}?`,
+    truth: async (s, f) => [String((await native(s, commentPath(f))).body)],
   },
 ];
 
@@ -315,6 +364,52 @@ const WRITES = [
       const present = countMatching(page.watchers, (row) => row.name === name);
       const removal = issuePath(f, `/watchers?username=${encodeURIComponent(name)}`);
       return { effects: present, cleanup: present > 0 ? [removal] : [] };
+    },
+  },
+  {
+    id: "update-comment",
+    tool: "jira.update-comment",
+    prompt: (f, m) =>
+      `Ändere den Kommentar ${f.selection.commentId} am Vorgang ${f.selection.issueKey} so, dass er genau "${m} U" lautet.`,
+    verify: async (s, f, m) => {
+      const body = String((await native(s, commentPath(f))).body);
+      const done = body === `${m} U`;
+      return {
+        effects: done ? 1 : 0,
+        wrongValue: !done && body !== f.selection.commentBody,
+        // The comment is changed in place, which is this case's own effect, not a stray.
+        changed: [commentPath(f)],
+        cleanup: [],
+      };
+    },
+    // Restores the original text, so every round starts from the same comment.
+    restore: async (s, f) => {
+      await checked(
+        s,
+        "catalog-selection-fixture",
+        "PUT",
+        commentPath(f),
+        basicAuth(s, "admin"),
+        { body: f.selection.commentBody },
+      );
+    },
+  },
+  {
+    // The deletion the deployment model denied in the customer test. Each attempt deletes an issue
+    // it owns alone, so the two shared owned issues stay in place for the other cases.
+    id: "delete-issue",
+    tool: "jira.delete-issue",
+    prepare: async (s, f, tag) => {
+      const key = await ownedIssue(s, f, `Auswahl Löschen ${tag}`);
+      f.selection.extraIssueKeys.push(key);
+      return { key };
+    },
+    prompt: (_f, _m, _tag, subject) =>
+      `Lösche den Vorgang ${subject.key} in Jira endgültig. Er wird nicht mehr gebraucht.`,
+    verify: async (s, f, _m, _tag, subject) => {
+      const path = `/rest/api/2/issue/${encodeURIComponent(subject.key)}`;
+      const gone = (await labRequest(s, "GET", path, basicAuth(s, "admin"))).status === 404;
+      return { effects: gone ? 1 : 0, removed: [path], cleanup: [] };
     },
   },
 ];

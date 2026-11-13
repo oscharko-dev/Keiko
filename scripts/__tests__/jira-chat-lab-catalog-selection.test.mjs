@@ -10,6 +10,8 @@ import { SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-case
 import {
   callTrace,
   carriesTruth,
+  describeSummary,
+  describeTrace,
   gradeSelection,
   selectionPath,
   summarizeSelection,
@@ -29,6 +31,9 @@ import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
 const FIXTURE = {
   project: "KEIKO",
   selection: {
+    commentId: "77",
+    commentBody: "Auswahl Kommentar t",
+    extraIssueKeys: [],
     issueKey: "KEIKO-1",
     linkTargetKey: "KEIKO-2",
     componentName: "Auswahl Komponente t",
@@ -52,7 +57,7 @@ const healthy = { unrecovered: 0, circuit: 0 };
 describe("catalog selection cases", () => {
   it("never names the tool, its alias or an argument object in the request", () => {
     for (const entry of SELECTION_CASES) {
-      const prompt = entry.prompt(FIXTURE, "Auswahl m", "tag");
+      const prompt = entry.prompt(FIXTURE, "Auswahl m", "tag", { key: "KEIKO-9" });
       expect(prompt).not.toContain(entry.tool);
       expect(prompt).not.toContain(entry.tool.replaceAll(/[.-]/gu, "_"));
       expect(prompt).not.toMatch(/jira[._]/u);
@@ -404,6 +409,136 @@ describe("selection helpers", () => {
     ]);
     expect(summary).toMatchObject({ valid: 2, selected: 1, invalid: 1 });
     expect(summary.rows.find((row) => row.id === "a")).toMatchObject({ valid: 1, selected: 1 });
+  });
+});
+
+describe("everyday operations beyond the base set (#4369)", () => {
+  const entryOf = (id) => SELECTION_CASES.find((entry) => entry.id === id);
+  const comment = "/rest/api/2/issue/KEIKO-1/comment/77";
+  const session = {};
+
+  it("holds a case for every everyday operation the child names", () => {
+    const tools = new Set(SELECTION_CASES.map((entry) => entry.tool));
+    for (const tool of [
+      "jira.update-comment",
+      "jira.get-comment",
+      "jira.create-issue-link",
+      "jira.link-types",
+      "jira.users",
+      "jira.myself",
+      "jira.fields",
+      "jira.priorities",
+      "jira.statuses",
+      "jira.resolutions",
+      "jira.project-statuses",
+      "jira.delete-issue",
+    ])
+      expect(tools, tool).toContain(tool);
+  });
+
+  it("grades get-comment from the native comment text", async () => {
+    nativeReads.set(comment, { id: "77", body: "Auswahl Kommentar t" });
+    expect(await entryOf("get-comment").truth(session, FIXTURE)).toEqual(["Auswahl Kommentar t"]);
+  });
+
+  it("credits an updated comment only with the requested text and expects its own change", async () => {
+    const entry = entryOf("update-comment");
+    nativeReads.set(comment, { body: "Auswahl t-1 U" });
+    expect(await entry.verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 1,
+      wrongValue: false,
+      changed: [comment],
+    });
+    nativeReads.set(comment, { body: "Something else" });
+    expect(await entry.verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      wrongValue: true,
+    });
+    nativeReads.set(comment, { body: "Auswahl Kommentar t" });
+    expect(await entry.verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      wrongValue: false,
+    });
+  });
+
+  it("does not count the case's own comment change or issue removal as stray writes", () => {
+    const row = (label) => ({ owned: true, label });
+    const before = {
+      issueState: "a",
+      objects: new Map([
+        [comment, row("old")],
+        ["/rest/api/2/issue/KEIKO-9", { owned: false, label: "Auswahl Löschen t", stamp: "s" }],
+      ]),
+    };
+    const after = { issueState: "a", objects: new Map([[comment, row("new")]]) };
+    expect(strayWrites(before, after, [], "Auswahl t").count).toBe(2);
+    expect(
+      strayWrites(before, after, [], "Auswahl t", {
+        changed: [comment],
+        removed: ["/rest/api/2/issue/KEIKO-9"],
+      }).count,
+    ).toBe(0);
+  });
+});
+
+describe("catalog-level refusals of jira.describe (#4369)", () => {
+  const refused = (name = "jira_describe") => ({
+    call: { name },
+    result: {
+      status: "failed",
+      reason: "provider-reported-error",
+      data: { outcome: "failed", reason: "invalid-arguments" },
+    },
+  });
+  const rejected = {
+    call: { name: "jira.describe" },
+    result: { status: "rejected", reason: "invalid-arguments", data: null },
+  };
+
+  it("counts a tool's own failed result and a dispatcher rejection, and the first call", () => {
+    expect(describeTrace([refused(), call("jira_describe"), rejected])).toEqual({
+      calls: 3,
+      refused: 2,
+      firstRefused: true,
+    });
+    expect(describeTrace([call("jira_describe"), refused()])).toEqual({
+      calls: 2,
+      refused: 1,
+      firstRefused: false,
+    });
+  });
+
+  it("counts neither other tools nor another failure of describe", () => {
+    const other = {
+      call: { name: "jira_describe" },
+      result: { status: "failed", data: { outcome: "failed", reason: "selection-too-large" } },
+    };
+    expect(describeTrace([refused("jira_priorities"), other, call("jira_discover")])).toEqual({
+      calls: 1,
+      refused: 0,
+      firstRefused: false,
+    });
+    expect(describeTrace([])).toEqual({ calls: 0, refused: 0, firstRefused: false });
+  });
+
+  it("reports the trace on every graded attempt and summarizes the valid ones", () => {
+    const graded = gradeSelection(
+      READ,
+      { exchanges: [refused(), call("jira_describe"), call("jira_priorities")], gateway: healthy },
+      { tokens: ["High"] },
+    );
+    expect(graded.describe).toEqual({ calls: 2, refused: 1, firstRefused: true });
+    const invalid = { status: "invalid", describe: { calls: 1, refused: 1, firstRefused: true } };
+    expect(
+      describeSummary([
+        { status: "selected", describe: graded.describe },
+        { status: "selected", describe: { calls: 0, refused: 0, firstRefused: false } },
+        invalid,
+      ]),
+    ).toEqual({ turns: 1, firstRefusedTurns: 1, calls: 2, refused: 1, validTurns: 2 });
+    expect(summarizeSelection([{ id: "a", catalog: "base", ...graded }]).describe).toMatchObject({
+      firstRefusedTurns: 1,
+    });
   });
 });
 
