@@ -88,6 +88,8 @@ export const SCENARIOS = Object.freeze([
       "estimate-source-labelled",
       "configured-unused-stated",
       "other-estimate-field-named",
+      // #4355: the answer shows the figures, not the product's raw result keys.
+      "answer-without-raw-keys",
     ],
   },
   {

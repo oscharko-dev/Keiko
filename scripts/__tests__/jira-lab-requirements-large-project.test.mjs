@@ -8,11 +8,13 @@ import { describe, expect, it } from "vitest";
 import {
   LARGE_PROJECT,
   LARGE_SHAPE,
+  displayNames,
   gradeReportFigures,
   largeJiraFigures,
   largePlan,
   largeProjectPart,
   largeTruth,
+  localizeFigures,
   matchesSeededTruth,
 } from "../testing/jira-chat-lab/requirements/large-project.mjs";
 import { JOURNEYS } from "../testing/jira-chat-lab/requirements/journey-checks.mjs";
@@ -132,6 +134,8 @@ describe("the large project plan", () => {
       "estimate-source-labelled",
       "configured-unused-stated",
       "other-estimate-field-named",
+      // Strengthened by #4369: the answer shows figures, not the raw result keys (#4355).
+      "answer-without-raw-keys",
     ]);
   });
 });
@@ -177,14 +181,26 @@ const countOf = (issues) => async (jql) =>
   issues.filter((issue) => jql.split(" AND ").every((clause) => clauseMatches(issue, clause)))
     .length;
 
-function productReport(issues) {
+/** The names a German-language account sees, by the English names the seed and the JQL use. */
+const GERMAN = {
+  types: new Map([["Task", "Aufgabe"]]),
+  statuses: new Map([
+    ["To Do", "Zu erledigen"],
+    ["In Progress", "In Arbeit"],
+    ["Done", "Fertig"],
+  ]),
+};
+const NO_NAMES = { types: new Map(), statuses: new Map() };
+const shown = (names, kind, name) => names[kind].get(name) ?? name;
+
+function productReport(issues, names = NO_NAMES) {
   return buildJiraReport({
     issues: issues.map((issue) => ({
       key: issue.key,
-      typeName: issue.type,
+      typeName: shown(names, "types", issue.type),
       subtask: false,
       summary: issue.summary,
-      statusName: issue.status,
+      statusName: shown(names, "statuses", issue.status),
       category: CATEGORY_KEY[issue.status],
       parentKey: issue.epicKey,
       linkedKeys: [],
@@ -494,15 +510,71 @@ describe("the large-project step", () => {
     expect(turn.durationMs).toBe(1);
   });
 
-  it("is not graded on a German-language session, with the reason, and spends no turn", async () => {
-    const ctx = stepContext(world, { answer: answerLines(world), exchanges });
-    ctx.oracleReader = "api";
-    const { part, turn } = await largeProjectPart(ctx);
-    expect(part.status).toBe("unverified");
-    expect(part.covers).toEqual([]);
-    expect(part.detail).toContain("German-language session");
-    expect(ctx.turns).toHaveLength(0);
-    expect(turn.durationMs).toBe(0);
+  const germanAnswer = (lines) =>
+    lines
+      .split("\n")
+      .map((line) => {
+        if (!line.startsWith("ANZAHL;")) return line;
+        const [token, type, status, count] = line.split(";");
+        return [token, shown(GERMAN, "types", type), shown(GERMAN, "statuses", status), count].join(
+          ";",
+        );
+      })
+      .join("\n");
+  const germanContext = (answer) => {
+    const ctx = stepContext(world, {
+      answer,
+      exchanges: [summaryExchange(productReport(world.issues, GERMAN))],
+    });
+    ctx.displayNames = async () => GERMAN;
+    return ctx;
+  };
+
+  it("grades the report and the answer by the names the reading account sees (German session)", async () => {
+    const { part } = await largeProjectPart(germanContext(germanAnswer(answerLines(world))));
+    expect(part).toMatchObject({ status: "green", covers: ["large-project-report"] });
+  });
+
+  it("is red on a German session when the answer uses names the account does not see", async () => {
+    const { part } = await largeProjectPart(germanContext(answerLines(world)));
+    expect(part.status).toBe("red");
+    expect(part.detail).toContain("answer type/status");
+  });
+
+  it("maps the English names to the reading account's by issue type and status id", async () => {
+    const lists = {
+      english: async (path) =>
+        path.endsWith("issuetype")
+          ? [{ id: "1", name: "Task" }]
+          : [
+              { id: "9", name: "To Do" },
+              { id: "10", name: "Done" },
+            ],
+      local: async (path) =>
+        path.endsWith("issuetype")
+          ? [{ id: "1", name: "Aufgabe" }]
+          : [
+              { id: "9", name: "Zu erledigen" },
+              { id: "10", name: "Fertig" },
+            ],
+    };
+    const names = await displayNames(lists);
+    expect(names.types.get("Task")).toBe("Aufgabe");
+    expect(names.statuses.get("Done")).toBe("Fertig");
+    const jira = {
+      total: 3,
+      category: {},
+      epics: new Map(),
+      byType: new Map([["Task", { total: 3, done: 1 }]]),
+      byStatus: new Map([["Task;Done", 1]]),
+    };
+    const localized = localizeFigures(jira, names);
+    expect([...localized.byType.keys()]).toEqual(["Aufgabe"]);
+    expect([...localized.byStatus.keys()]).toEqual(["Aufgabe;Fertig"]);
+    // A name Jira does not translate stays as it is.
+    expect([
+      ...localizeFigures(jira, { types: new Map(), statuses: new Map() }).byType.keys(),
+    ]).toEqual(["Task"]);
   });
 
   it.each([

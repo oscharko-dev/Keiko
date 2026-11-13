@@ -78,6 +78,7 @@ import {
 import { aggregateParts, countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
 import { draftFindingsPart } from "./draft-findings.mjs";
 import { largeProjectPart } from "./large-project.mjs";
+import { gradeRawKeys } from "./raw-keys.mjs";
 import { templateTestCasesPart } from "./template-test-cases.mjs";
 import {
   epicTemplateConforms,
@@ -358,9 +359,20 @@ async function projectProgress(ctx, chat) {
   };
   const large = await largeProjectPart(ctx);
   const unavailable = await unavailableProgressPart(ctx);
+  const raw = {
+    label: "raw result keys",
+    covers: ["answer-without-raw-keys"],
+    ...gradeRawKeys(turn.answer, turn.toolExchanges),
+  };
   return aggregateParts(
-    [answer, ...estimateUnverified(plan), large.part, unavailable.part],
-    [turn, ...(plan.unavailable === undefined ? [] : [NO_TURN]), large.turn, unavailable.turn],
+    [answer, raw, ...estimateUnverified(plan), large.part, unavailable.part],
+    [
+      turn,
+      NO_TURN,
+      ...(plan.unavailable === undefined ? [] : [NO_TURN]),
+      large.turn,
+      unavailable.turn,
+    ],
   );
 }
 

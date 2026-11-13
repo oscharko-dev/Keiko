@@ -591,6 +591,15 @@ export function journeyContext(live, session, truth) {
     truth,
     // The account the oracles read Jira as (the administrator unless the session is German).
     oracleReader: oracleReader(session),
+    // The type and status names that account sees, for the oracles that compare names.
+    displayNames: async () => {
+      const reader = oracleReader(session);
+      if (reader === "admin") return { types: new Map(), statuses: new Map() };
+      const read = (actor) => (path) =>
+        checked(session, "native-read", "GET", path, basicAuth(session, actor));
+      const { displayNames } = await import("./large-project.mjs");
+      return displayNames({ english: read("admin"), local: read(reader) });
+    },
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
     // A page reload re-reads the conversation from the product; the count of messages it holds.
     reloadChat: async (chat) =>

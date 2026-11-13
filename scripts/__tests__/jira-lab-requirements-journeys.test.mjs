@@ -156,6 +156,33 @@ describe("S10 progress of a project", () => {
     ]);
   });
 
+  it("S10 credits the raw-keys obligation only with a stored report result and a clean answer", async () => {
+    const stored = { report: { progress: { byStatus: {} }, completeness: { issuesRead: 7 } } };
+    const clean = await JOURNEYS.S10(
+      context({
+        issues: world,
+        act: () => ({ answer: GREEN.join("\n"), toolExchanges: [reportExchange(stored)] }),
+      }),
+      CHAT,
+    );
+    expect(clean.covers).toContain("answer-without-raw-keys");
+    const dirty = await JOURNEYS.S10(
+      context({
+        issues: world,
+        act: () => ({
+          answer: `${GREEN.join("\n")}\nbyStatus: siehe oben`,
+          toolExchanges: [reportExchange(stored)],
+        }),
+      }),
+      CHAT,
+    );
+    expect(dirty.status).toBe("red");
+    expect(dirty.detail).toContain("raw result keys");
+    // Without a stored report result the obligation is left unverified, not credited.
+    const none = await grade(GREEN);
+    expect(none.covers).not.toContain("answer-without-raw-keys");
+  });
+
   it("reads a comma decimal and ignores lines that are no data lines", async () => {
     const check = await grade([
       "Hier das Ergebnis:",
