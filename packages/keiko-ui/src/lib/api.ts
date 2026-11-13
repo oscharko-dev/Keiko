@@ -160,6 +160,7 @@ import type {
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
+  isCredentialCustodyState,
   isMemoryReadinessSnapshot,
   isServerInstanceId,
   classifyInvalidActivityLogReadiness,
@@ -426,16 +427,19 @@ export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
   readonly diagnostics?: HealthResponse["diagnostics"];
   readonly diagnosticsInvalid?: true;
   readonly diagnosticsInvalidReason?: HealthDiagnosticsInvalidReason;
+  /** The server sent a credential custody value that is not one of the closed states (#4358). */
+  readonly credentialCustodyInvalid?: true;
 };
 
 export async function fetchHealth(correlationId?: string): Promise<HealthSnapshot> {
   const response = await fetchJson<
-    Omit<HealthResponse, "diagnostics" | "memory"> & {
+    Omit<HealthResponse, "diagnostics" | "memory" | "credentialCustody"> & {
       readonly diagnostics?: unknown;
       readonly memory?: unknown;
+      readonly credentialCustody?: unknown;
     }
   >("/api/health", undefined, undefined, correlationId);
-  const { diagnostics, memory, instanceId, ...health } = response;
+  const { diagnostics, memory, instanceId, credentialCustody, ...health } = response;
   // The server instance identity is kept only in its closed shape; anything else is dropped (#4370).
   let snapshot: HealthSnapshot = isServerInstanceId(instanceId)
     ? { ...health, instanceId }
@@ -450,6 +454,12 @@ export async function fetchHealth(correlationId?: string): Promise<HealthSnapsho
       diagnosticsInvalidReason: classifyInvalidActivityLogReadiness(diagnostics),
     };
   if (isMemoryReadinessSnapshot(memory)) snapshot = { ...snapshot, memory };
+  // Credential custody is kept only as one of its closed states; any other value is dropped and
+  // marked, so the workspace shows nothing for it and reports it once (#4358).
+  if (isCredentialCustodyState(credentialCustody)) snapshot = { ...snapshot, credentialCustody };
+  else if (credentialCustody !== undefined) {
+    snapshot = { ...snapshot, credentialCustodyInvalid: true };
+  }
   recordResponseCorrelationId(snapshot, responseCorrelationIdOf(response) ?? null);
   return snapshot;
 }
@@ -885,6 +895,32 @@ export async function runGatewayReadiness(
       ...(options === undefined ? {} : { options }),
     }),
   });
+}
+
+/**
+ * A person's explicit pick of a chat model (#4351). The server starts the one check of that model
+ * when it has no current observation and answers at once, so the picker can say the model is being
+ * checked; the result arrives through the models read, which joins the running check. It is the only
+ * request a model pick sends: listing and passive reads never start provider work.
+ */
+export interface ChatModelSelectionCheck {
+  readonly state: "checking" | "ready" | "not-ready" | "unchecked";
+  /** Why no check may be running: `already-answered` (a refusal stays refused) or `cooldown`. */
+  readonly outcome?: "started" | "joined" | "already-answered" | "cooldown" | "unknown-model";
+}
+
+export async function startChatModelSelectionCheck(
+  modelId: string,
+  correlationId?: string,
+): Promise<ChatModelSelectionCheck> {
+  const response = await fetchJson<ChatModelSelectionCheck>(
+    "/api/gateway/readiness/selection",
+    { method: "POST", body: JSON.stringify({ modelId }) },
+    undefined,
+    correlationId,
+  );
+  resetModelRequestCache();
+  return response;
 }
 
 export type VerifiedGatewayCapabilityFields = Partial<

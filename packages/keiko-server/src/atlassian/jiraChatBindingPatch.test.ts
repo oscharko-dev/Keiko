@@ -113,4 +113,25 @@ describe("explicit administration patch admission", () => {
       jiraChatUpdateOptions(changed, { jiraAdministrationEnabled: true }, CHAT, "admin-patch"),
     ).toThrow("unavailable or requires verification");
   });
+
+  it.each([
+    [
+      "unsupported-version",
+      "Keiko requires Jira Data Center 10.3.0 or later: upgrade Jira or select another Pod.",
+    ],
+    ["auth-failed", "may have expired or been revoked"],
+  ] as const)("names the remedy for a %s Pod before it is selected", (verificationStatus, text) => {
+    const { deps, credential } = podAccess();
+    const changed: JiraPodAccessDeps = {
+      ...deps,
+      atlassianConnectorCredentials: {
+        custody: {
+          list: () => [{ ...credential, livePod: { ...credential.livePod, verificationStatus } }],
+        },
+      },
+    };
+    expect(() => jiraChatUpdateOptions(changed, { jiraPodId: POD }, CHAT, "pod-patch")).toThrow(
+      text,
+    );
+  });
 });

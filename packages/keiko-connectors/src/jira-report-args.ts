@@ -34,7 +34,16 @@ export type JiraReportArgs =
       /** Keiko, not the model, lists the requirement ids of the Chat's Knowledge Pods. */
       readonly requirementsFromPods: boolean;
     } & JiraReportPage)
-  | ({ readonly kind: "continue"; readonly reportId: string } & JiraReportPage);
+  | ({
+      readonly kind: "continue";
+      readonly reportId: string;
+      /** A scope repeated beside the reportId; it must equal the report's own, else it is refused. */
+      readonly scope: JiraReportContinuationScope;
+    } & JiraReportPage);
+export type JiraReportContinuationScope = Readonly<
+  Partial<Record<"projectKey" | "jql" | "epicKey", string>>
+>;
+const CONTINUATION_SCOPE_KEYS = ["projectKey", "jql", "epicKey"] as const;
 
 const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 const REPORT_ID = new RegExp(JIRA_REPORT_ID_PATTERN, "u");
@@ -49,6 +58,7 @@ export function isJiraReportRequirementId(value: string): boolean {
 const SCOPE_KEYS: ReadonlySet<string> = new Set([
   "projectKey",
   "jql",
+  "epicKey",
   "estimateFieldId",
   "asOf",
   "parentFieldIds",
@@ -57,7 +67,11 @@ const SCOPE_KEYS: ReadonlySet<string> = new Set([
 ]);
 const PAGE_KEYS = ["section", "startAt", "maxResults"] as const;
 const NEW_KEYS: ReadonlySet<string> = new Set([...SCOPE_KEYS, ...PAGE_KEYS]);
-const CONTINUE_KEYS: ReadonlySet<string> = new Set(["reportId", ...PAGE_KEYS]);
+const CONTINUE_KEYS: ReadonlySet<string> = new Set([
+  "reportId",
+  ...PAGE_KEYS,
+  ...CONTINUATION_SCOPE_KEYS,
+]);
 /** Argument names echoed to the model; anything else is named by this placeholder. */
 const ARGUMENT_NAME = /^[A-Za-z]\w{0,31}$/u;
 const UNNAMED_ARGUMENT = "(unnamed)";
@@ -79,6 +93,7 @@ function optionalField(value: unknown): string | undefined | null {
 interface ReportScope {
   readonly projectKey: string | undefined;
   readonly jql: string | undefined;
+  readonly epicKey: string | undefined;
 }
 function optionalProject(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
@@ -95,18 +110,28 @@ function optionalClause(value: unknown): string | undefined | null {
 }
 function scopeOf(args: CatalogJsonObject): ReportScope | undefined {
   const project = optionalProject(args.projectKey);
+  const epic = optionalProject(args.epicKey);
   const clause = optionalClause(args.jql);
-  if (project === null || clause === null) return undefined;
-  // A clause that was only ordering adds no scope; without a project nothing would be left.
+  if (project === null || epic === null || clause === null) return undefined;
+  // A clause that was only ordering adds no scope; without a project or Epic nothing would be left.
   const effective = clause === undefined || clause.length === 0 ? undefined : clause;
-  if (project === undefined && effective === undefined) return undefined;
-  return { projectKey: project, jql: effective };
+  if (project === undefined && effective === undefined && epic === undefined) return undefined;
+  return { projectKey: project, jql: effective, epicKey: epic };
 }
 function optionalDate(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return null;
   const time = Date.parse(`${value}T00:00:00Z`);
   return Number.isFinite(time) && new Date(time).toISOString().startsWith(value) ? value : null;
+}
+/** The scope exactly as the caller wrote it, so a continuation can repeat it and be recognised. */
+function givenScope(args: CatalogJsonObject): JiraReportContinuationScope {
+  return Object.fromEntries(
+    CONTINUATION_SCOPE_KEYS.flatMap((key) => {
+      const value = args[key];
+      return typeof value === "string" ? [[key, value]] : [];
+    }),
+  );
 }
 function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
   if (!Object.keys(args).every((key) => NEW_KEYS.has(key))) return undefined;
@@ -135,6 +160,7 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
     kind: "new",
     request: {
       ...scope,
+      given: givenScope(args),
       estimateFieldId: estimate,
       asOf,
       parentFieldIds: parents,
@@ -170,21 +196,36 @@ function pageOf(args: CatalogJsonObject): JiraReportPage | undefined {
   if (section === undefined || startAt === undefined || maxResults === undefined) return undefined;
   return { section, startAt, maxResults };
 }
+/** The scope arguments of a continuation, as sent, or undefined when one is not a valid string. */
+function continuationScope(args: CatalogJsonObject): JiraReportContinuationScope | undefined {
+  const project = optionalProject(args.projectKey);
+  const epic = optionalProject(args.epicKey);
+  const clause = args.jql === undefined ? undefined : optionalClause(args.jql);
+  if (project === null || epic === null || clause === null) return undefined;
+  return {
+    ...(project === undefined ? {} : { projectKey: project }),
+    ...(epic === undefined ? {} : { epicKey: epic }),
+    ...(typeof args.jql === "string" ? { jql: args.jql } : {}),
+  };
+}
 function continuation(args: CatalogJsonObject): JiraReportArgs | undefined {
   const { reportId } = args;
   const view = pageOf(args);
+  const scope = continuationScope(args);
   if (
     !Object.keys(args).every((key) => CONTINUE_KEYS.has(key)) ||
     typeof reportId !== "string" ||
     !REPORT_ID.test(reportId) ||
-    view === undefined
+    view === undefined ||
+    scope === undefined
   )
     return undefined;
-  return { kind: "continue", reportId, ...view };
+  return { kind: "continue", reportId, scope, ...view };
 }
 
 const ARGUMENT_CHECKS: Readonly<Record<string, (value: unknown) => boolean>> = {
   projectKey: (value) => optionalProject(value) !== null,
+  epicKey: (value) => optionalProject(value) !== null,
   jql: (value) => optionalClause(value) !== null,
   estimateFieldId: (value) => optionalField(value) !== null,
   asOf: (value) => optionalDate(value) !== null,
@@ -217,7 +258,11 @@ export function invalidJiraReportArguments(args: CatalogJsonObject): readonly st
   return args.reportId === undefined && scopeOf(args) === undefined ? ["jql", "projectKey"] : [];
 }
 
-/** A new report names a scope; a continuation names only the report it resumes or pages. */
+/**
+ * A new report names a scope. A continuation names the report it resumes or pages and may repeat
+ * the scope it was computed for: the invariant is that a continuation can never change a report's
+ * scope, which `executeJiraReportTool` enforces by exact equality with the scope as given.
+ */
 export function parseJiraReportArgs(args: CatalogJsonObject): JiraReportArgs | undefined {
   return args.reportId === undefined ? newReport(args) : continuation(args);
 }

@@ -1316,6 +1316,8 @@ describe("the dry run before approval", () => {
         outcome: "rejected",
         reason: "field-validation",
         draftRefusal: "draft-invalid",
+        draftProblem: "item-parent",
+        draftItem: 2,
         guidance:
           "Item 2 has a malformed parent. Nest an item by giving it parent { fieldId, ref } for an " +
           "item of this draft, or { fieldId, issueKey } for an existing issue, with fieldId the " +

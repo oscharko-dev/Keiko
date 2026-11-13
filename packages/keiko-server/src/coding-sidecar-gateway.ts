@@ -102,7 +102,9 @@ import { readJsonObject } from "./files.js";
 import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
   awaitInitializedConversationReadiness,
+  checkSelectedConversationModel,
   ensureCodingWorkbenchContextWindows,
+  joinRunningWorkbenchProof,
   isAnyCodingWorkbenchProbePending,
   isAnyCodingWorkbenchProbeUnanswered,
   isCodingWorkbenchProbePending,
@@ -5148,6 +5150,30 @@ function probeCuresShortfall(reason: CodingWorkbenchSidecarGatewayUnavailableRea
   );
 }
 
+// The proofs a profile read waits for, by what asked: only `check=1` dispatches one.
+function profileChecksFor(
+  checkParam: string | null,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  subject: string | undefined,
+): readonly Promise<unknown>[] {
+  if (checkParam === "1") {
+    return [
+      Promise.all([
+        // A person's pick or Start asks: a probe the gateway never answered runs again. The
+        // model picked is the one proven, even while its own shortfall (a lapsed or missing
+        // tool-call proof) keeps it unavailable; without a pick, the model elected now. No
+        // other listed model receives a request.
+        ensureCodingWorkbenchContextWindows(deps, subject, ctx.correlationId, true),
+        electedConversationReadiness(ctx, deps, subject),
+      ]),
+    ];
+  }
+  // A window opening (`check=use`) waits, bounded, for a proof that already runs; a read that
+  // asks nothing answers at once with the state it has.
+  return checkParam === "use" ? [joinRunningWorkbenchProof(deps, subject)] : [];
+}
+
 export async function handleCodingSidecarGatewayProfile(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -5156,53 +5182,66 @@ export async function handleCodingSidecarGatewayProfile(
   // limits gets its context window proven here, before the projection judges it.
   const modelId = profileModelId(ctx, deps);
   const elected = resolveGatewayProfile(deps, modelId).result;
-  const checkRequested = profileCheckRequested(ctx);
+  const subject = modelId ?? (elected.status === "available" ? elected.modelAlias : undefined);
+  // Only `check=1`, a person's explicit pick or Start, dispatches a check. A window opening, a
+  // restored selection or a passive re-read (`check=use`, or none) may only join a check that
+  // already runs and report the state: Workbench choices and page loads never initiate provider
+  // work (#4351).
+  const checkParam = ctx.url.searchParams.get("check");
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
   // one, and a refuted or non-chat model never does.
-  if (checkRequested && (elected.status === "available" || probeCuresShortfall(elected.reason))) {
+  if (elected.status === "available" || probeCuresShortfall(elected.reason)) {
     // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
     // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
     // answer with the projection (`model-verification-pending` while the probe runs) and let
     // the Workbench read again — never leave the read hanging until the browser gives up.
-    await Promise.race([
-      Promise.all([
-        // Opening the Workbench or choosing a model asks: a probe the gateway never answered runs
-        // again. A passive re-read never retries one (customer 1.3.4).
-        ensureCodingWorkbenchContextWindows(
-          deps,
-          elected.status === "available" ? elected.modelAlias : undefined,
-          ctx.correlationId,
-          checkRequested,
-        ),
-        electedConversationReadiness(ctx, deps, elected, checkRequested),
-      ]),
-      boundedProfileWait(),
-    ]);
+    await settleProfileChecks(ctx, deps, profileChecksFor(checkParam, ctx, deps, subject));
   }
   return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
 }
 
-// A picker selection (`check=1`) may join configuration-owned startup verification. Every other
-// read describes cached readiness immediately; neither path starts a basic-chat health check.
+// A picker selection (`check=1`) starts the one check of the picked model when it has no current
+// observation and joins a check that already runs (#4351). Every other read describes cached
+// readiness immediately and starts no check at all.
 function electedConversationReadiness(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  elected: CodingWorkbenchSidecarGatewayResult,
-  checkRequested: boolean,
+  subjectModelId: string | undefined,
 ): Promise<void> {
   if (
-    !checkRequested ||
-    elected.status !== "available" ||
-    currentConversationReadinessObservation(deps, elected.modelAlias) === true
+    subjectModelId === undefined ||
+    currentConversationReadinessObservation(deps, subjectModelId) === true
   )
     return Promise.resolve();
-  return awaitInitializedConversationReadiness(deps, elected.modelAlias, ctx.correlationId);
+  // The person picked this model: the explicit choice starts one check of it when it has no current
+  // observation, or joins the check that is already running (#4351).
+  return checkSelectedConversationModel(deps, subjectModelId, ctx.correlationId);
 }
 
-function profileCheckRequested(ctx: RouteContext): boolean {
-  return ctx.url.searchParams.get("check") === "1";
+// Bounded wait for the checks a profile read asks for. A check that fails is reported under this
+// read's correlation id and never turns the read into a 500: the projection is still answered.
+async function settleProfileChecks(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  checks: readonly Promise<unknown>[],
+): Promise<void> {
+  try {
+    await Promise.race([Promise.all(checks), boundedProfileWait()]);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        operation: "gateway.readiness",
+        source: "coding-sidecar-gateway.profile-check",
+        error,
+        summary: "A gateway readiness probe could not be completed.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  }
 }
 
 // Under the browser's 15 s read deadline for this profile (keiko-ui `DEFAULT_READ_TIMEOUT_MS`).

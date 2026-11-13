@@ -50,6 +50,8 @@ async function fixture(): Promise<{
   ]);
   fixtures.push(source);
   const draftStore = createJiraDraftStore();
+  // One connection for the fixture: a staged draft resolves under the fingerprint it was stored with.
+  draftStore.bindConnection(() => "connection");
   const openTrace = vi.fn(() => {
     const session = openTraceSession(source.deps, {
       chatId: source.chatId,

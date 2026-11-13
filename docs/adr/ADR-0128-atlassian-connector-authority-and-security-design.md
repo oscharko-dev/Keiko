@@ -645,21 +645,125 @@ purpose explicitly and omit the observed-request handler; the existing verificat
 the result once. This classification does not depend on a possibly stale metadata snapshot.
 This does not introduce credential polling.
 
-The retained native API also documents 401 for missing WebSudo or view permission on specific
-server-owned GET identities, including workflow-scheme and screen observations. Jira 11.3's
-`ScreensResource` additionally documents administrator-permission 401 responses for exactly
-`POST /screens/{screenId}/tabs` and `PUT`/`DELETE /screens/{screenId}/tabs/{tabId}`
-([native screen resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/ScreensResource.html)).
-Only those enumerated method/path identities await one bounded
-same-target `myself` read before deciding whether the credential failed. The original status and
+Jira Data Center answers 401 for a missing WebSudo, administrator or view permission as well as for
+a failed authentication. The retained native API documents this on workflow-scheme, screen, cluster,
+index-snapshot, user-column and issue-link resources, and the lab observed it on
+`GET /project/{key}/role` (#4353), which no list contained. The model reaches about 450 operations
+through discovery, so a hand-maintained list of ambiguous routes is incomplete by construction and
+has been removed. The structural rule is: a 401 from any request to the instance, read or write,
+except the identity route itself (`GET /rest/api/2/myself`), is decided by one bounded
+same-target `myself` read, and the credential is discarded only when that identity read itself
+answers 401 (or reports the anonymous user). A 401 from the identity route stays definitive, and
+requests outside the saved instance origin and context path are not classified. The original status and
 synchronous response acknowledgement remain unchanged. The identity read retains ordinary saved
 target admission, the original authority guard, signal, remaining deadline and captured credential
-generation/verification revision; it neither retries nor begins connection verification. A current,
+generation/verification revision; it neither retries nor begins connection verification. The cost is
+one bounded probe per 401. A current,
 active identity adds the closed port observation `authentication: "confirmed"`, which classifies
 the original 401 as an operation permission denial without granting authority or changing stored
-compatibility. An explicit authentication failure still invalidates through the existing custody
+compatibility; a write is never retried and never borrows another route's facts. An explicit
+authentication failure still invalidates through the existing custody
 owner. Timeout, malformed data, revoked authority, cancellation or stale observations are not proof
-of credential failure. Upstream JSON cannot supply this port-owned observation.
+of credential failure. Upstream JSON cannot supply this port-owned observation. The earlier
+expectations are unchanged: 401 means unauthenticated and 403 means a missing permission (#4305,
+#4306, #4309), and an administrative 401 of a screen or workflow resource cannot revoke a valid
+credential (#4314 AC6); only the mechanism moved from route lists to the identity read.
+
+One owner wraps every credential-bearing port: the ordinary read/body ports and the PAT port of the
+private-session owner (`createJiraPrivatePorts`, used by Chat and the coding-runtime Jira MCP) all
+pass through the same observed wrapper, and all of them pin the credential generation and
+verification revision by value, so a caller mutating its metadata object cannot move what a port
+observes. The private owner's PAT port today reads only the identity route, which stays definitive;
+the wrapper is there so that a later PAT route cannot become a second, unobserved path. Session
+ports (login, WebSudo, logout) never use it, because a session 401 says nothing about the token.
+
+The identity read has three closed outcomes. `confirmed` keeps the credential and reports the 401
+as a permission denial. `rejected` (the identity read itself answered 401 or the anonymous user) discards
+the credential. Everything else is `inconclusive`: a timeout, a refused deadline, throttling, a
+server error, a redirect, non-JSON data, an inactive identity, a caller cancellation, a stale
+observation (the credential changed meanwhile) and any exception thrown out of the probe port. An
+inconclusive 401 is returned as `authentication: "unconfirmed"`, the request is refused with the
+closed write-failure reason `auth-unverified`, the credential is kept and the Hub still shows its
+verified state. The person reads that Jira could not be verified right now and to try again; it
+never claims an expired token and carries no host or identity. A probe exception is reported once
+through the diagnostic port with its class and frames. A positive identity read is reused for the
+same credential generation and verification revision for a fixed ten seconds
+(`JIRA_IDENTITY_PROBE_WINDOW_MS`), which bounds a tool loop of permission 401s to one identity read
+per window; a rejected or inconclusive result is never cached and a new generation or revision never
+inherits a window. `atlassian.connection.checked` carries the closed `decision`
+(`identity-route`, `probe`, `probe-window`) and `routeClass` (`identity`, `other`) so a discard
+decided by the probe is distinguishable from the identity route's own 401, and the closed outcome
+`probe-inconclusive` records an unsettled probe.
+
+Only a 401 that Jira itself authored can show a rejected token. Jira behind a corporate single
+sign-on proxy answers 401 for every request, `myself` included, once the proxy session ends, and a
+captcha or login lock adds `X-Authentication-Denied-Reason`; neither may cost a person their token.
+The transport (`httpAuthenticationFailure.ts`, used by both HTTP ports and the response observer)
+therefore derives a closed fact from the response headers, never exposing a value:
+`authenticationFailure` is `jira`, `denied` or `foreign`. Observed on the laboratory Jira Data
+Center 10.3 with read-only requests (no person's credential involved): a request with an unknown
+bearer token, which is also how Jira sees an expired or a revoked personal access token, and a
+request without credentials both answer 401 with `X-AREQUESTID`, `X-AUSERNAME: anonymous`,
+`WWW-Authenticate: OAuth realm=…`, a JSON content type and the body
+`{"message":"Client must be authenticated to access this resource.","status-code":401,"sub-code":-1}`,
+and no `X-Authentication-Denied-Reason`. The marker is therefore: Jira's request id plus the
+anonymous-user marker and no denial reason is `jira`; a denial reason is `denied`; everything else
+is `foreign`. A personal access token created for a throwaway test and then revoked through Jira's own token
+endpoint, and another one whose expiry was moved into the past by editing the expiry column of its
+own row in the laboratory database (a day-long token cannot age in a test), both answer exactly as
+an unknown token does: 401 with `X-AREQUESTID`, `X-AUSERNAME: anonymous`,
+`WWW-Authenticate: OAuth realm=…`, a JSON body with exactly the keys `message`, `status-code` and
+`sub-code`, and no `X-Authentication-Denied-Reason` and no `X-Seraph-LoginReason`; a valid token
+answers 200 with `X-Seraph-LoginReason: OK` and a named `X-AUSERNAME`. So the marker holds for all
+three kinds of dead token. Not observed: the captcha header on a live Jira (it would have meant
+locking a laboratory account), so `denied` rests on Jira's documented behavior and is pinned as a
+fixture only. Only `jira`
+discards a credential, on the identity route and for the identity read alike. `denied` and
+`foreign` leave the credential and the Pod untouched and return the unconfirmed outcome, so the
+person reads the retry wording, never an expired token. An anonymous 200 that Jira served and the
+transport rewrites into a 401 keeps the three markers, so it stays Jira-authored.
+
+The explicit connection check in Settings follows the same rule. On Data Center a 401 that Jira
+did not author ends the verification as the closed status `auth-unverified` ("could not confirm"):
+the Pod keeps its previous status, generation and compatibility facts, nothing is invalidated, and
+replacing the token stays possible at any time; only a Jira-authored 401 is the definitive
+`auth-failed`. The shared identity read has its own bounded deadline
+(`JIRA_IDENTITY_PROBE_DEADLINE_MS`) and a count of the callers waiting on it: a caller that
+cancels or runs out of time leaves it to the others, and it is torn down only when every caller has
+given up. A waiter's `probe-shared` line carries the cause the shared read ended with and a
+parent correlation to the caller that started it. In the Confluence comment lane an unconfirmed
+401 stops the run like the item path; a confirmed one is a missing permission and degrades to a
+page without comments, exactly like a 403.
+
+The decision reaches every read, not only the write executor. The single status-to-reason owner for
+reads (`failureReasonForResponse`, used by the live search, the sync adapters and the report read)
+maps a 401 with `confirmed` to `permission-denied` and with `unconfirmed` to the closed reason
+`auth-unverified`; a 401 without a decision (Cloud, or the identity request itself) remains
+`auth-failed`. At most one identity read is in flight per credential generation and revision;
+concurrent 401s share its result (`decision: probe-shared`), and a positive result is reused for
+the fixed window. An inconclusive read records its closed `probeCause` (`timeout`, `network`,
+`http-429`, `http-4xx`, `http-5xx`, `redirect`, `invalid-body`, `foreign-401`, `captcha`, `stale`,
+`cancelled-or-expired`, `probe-error`) on the registered operation. On a non-identity route the
+original response is acknowledged first and its body is consumed before the identity read starts, so
+body consumption before the invalidation is inherent to the probe path; the invalidation never
+precedes the acknowledgement on any route class.
+
+The public Pod view carries the closed state `compatibilityFacts: "missing"` when a verified Pod has
+no retained compatibility facts (a record from before they existed). The Pod card then tells the
+person that verifying the connection again obtains them and that no permission is added; no version
+or capability fact ever reaches the view.
+
+Refusals at the connection are readable and name the remedy (#4353), in English and German. A
+rejected token yields the closed `JIRA_AUTHENTICATION_FAILED` Chat refusal, which says that the
+token may have expired or been revoked, names replacing the token on the Jira Pod in the Knowledge
+Pods hub, and states that the Chat and its draft are kept; the Pod dialog and the Chat's Pod
+selection give the same remedy. A release below Data Center 10.3.0 is refused as
+`unsupported-version` before the identity request, and the message names the 10.3.0 floor and
+upgrading or choosing another instance. A certificate failure names the documented
+`KEIKO_CA_BUNDLE_PATH` trust path and never suggests disabling verification. A Pod switch, Pod
+deletion, token replacement, authentication failure, disconnect, mode change and expired authority
+each invalidate pending work and current grants through the existing lifecycle owners; a remote
+effect that already completed is not undone, and no invalidation retries remotely.
 
 Screen-tab create, rename and delete remain high-risk actions in the existing authority and
 approval pipeline. Admission binds the current screen ID/name and the complete tab snapshot;
@@ -674,8 +778,8 @@ checks the complete mutation identity before returning that outcome; a changed i
 write, attachment retirement or dispatch still requires a current turn. A replay returns the
 stored outcome and replay marker, without reconstructing private resource receipts from journal
 fields. The native documented 400 refusals, delete-only 412,
-and positively classified administrator 401 settle as rejected only with the existing
-structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
+and positively classified administrator 401 on the screen-tab writes settle as rejected only with
+the existing structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
 bulk-operation rule is widened.
 
 Application monitoring, in-product diagnostics and JMX exposure changes are high-risk actions
@@ -1752,13 +1856,102 @@ configuration cannot be read, the report selects a unique numeric Story Points f
 project's screens, then screen-backed `timetracking` as `timeoriginalestimate` in seconds.
 A global field name alone does not establish applicability. Without an applicable field, or when
 the board inventory exceeds its bound, the report records a closed unavailability reason and
-`estimate: null`, never invented zero totals or an invented unestimated-issue count. Cancellation
+`estimate: null` and per-type `estimated`/`unestimated` of `null`, never invented zero totals or an
+invented unestimated-issue count (#4356: with a selected field, `unestimated` counts every issue
+without a numeric estimate, an issue of a type that carries no estimate field included; the project
+figure and the per-type counts use that one test and sum). Cancellation
 and denied effect admission still stop the read. A JQL-only scope without a project preserves the
 original-time-estimate default in seconds. The summary and card name the selected field; model
 figures, exports and the report comment disclose unavailable estimates. The existing
 `atlassian.jira-report` line records `estimateSource` (`explicit-field`, `board-configuration`,
-`project-screen`, `time-tracking`, `unavailable`) and an optional closed
+`project-screen`, `time-tracking`, `time-tracking-fallback`, `field-fallback`, `unavailable`) and an optional closed
 `estimateUnavailableReason`, with no field id or display name.
+
+**Complete and truthful reports (#4356, 2026-11-13).** Seven rules keep a figure from
+overstating what Jira allowed Keiko to read.
+(1) *Estimate applicability.* The report requests the selected estimate field for every hit, but
+Jira leaves a field out of a hit for two different reasons: the issue's type does not have it at
+all, or the account may not see it. The first is an unestimated issue; only the second makes the
+read incomplete (`omittedFields`, reason `read-failed`, failure `permission`; an unreadable
+estimate never becomes a complete zero, an explicit `null` stays unestimated and a numeric zero is
+a measured zero). Keiko decides from the create metadata it already reads per issue type
+(`estimateByType`): a hit that lacks the field is exempt only when that type's create screen was
+read and does not list the field while another type's does. A field no screen lists, such as an
+explicit `estimateFieldId` unknown to the metadata, exempts no type, and nothing is exempt unless
+the whole metadata read succeeded: a partial, denied or failed read leaves the read strict. Only the independently measured prefix is kept when a later page
+withholds the field.
+(2) *An incomplete report says so first.* `report.figures` of an incomplete report opens with one
+`INCOMPLETE REPORT: <read> of <total> issues were read (<closed cause>)` line that states every
+figure below covers only the issues read; a complete report is unchanged. The export, comment
+and card already carry the status; an unavailable estimate stays `unavailable`, never zero.
+(3) *Epic scope.* `epicKey` is an additive scope (activity `scopeKind` `epic`), combinable with
+`projectKey` and `jql`, which it never widens. Keiko addresses the Epic Link field by its id,
+resolved from the instance's field list through Jira's own schema key
+(`com.pyxis.greenhopper.jira:gh-epic-link`) as `cf[N]`, never by a display name that an instance
+may localize or rename. The Epic and its members are read through `key = E OR cf[N] = E OR parent
+= E`. A field list that holds no such field (an instance whose Epics are parents) is read by
+`parent` alone and the scope says `epicLink: absent`; an unreadable or ambiguous field list, or a
+clause the instance refuses, is an initialization failure and ends the report incomplete after the
+bounded retry; it is never read by a narrower clause. No single JQL clause names the sub-tasks of
+an Epic's members, so Keiko reads the members that can hold sub-tasks first and then selects their
+sub-tasks with `parent in (<member keys>)`, in as many queries ("windows") as the 2,500 character
+bound of one GET requires; the windows are read one after another, an issue selected twice counts
+once, and the total is the sum of the windows' totals less those duplicates. The scope states the
+clause that selects the Epic and its members (`scope.jql`), the member count and the digest of the
+member keys (`epicMemberCount`, `epicMembersDigest`), which is what a reader needs to reconcile
+the sub-task windows. The member read is complete or it is not a success: pages must start where
+asked and hold no more than the total leaves, an empty page before the stated total, a total that
+changes between pages, a repeated key and an enumerated count other than the total end the report
+incomplete (`read-failed`, or `scope-changed` for a moved list). Inside one window a repeated key
+still ends the read as `scope-changed` (a drifted offset); only a key an earlier window selected
+counts as a duplicate. A field list cut at its bound is unreadable, never "no Epic Link". An Epic that is not visible fails as `not-found`, one beyond 10,000 members
+as `bounds-exceeded`; neither becomes an empty or silently narrowed scope.
+(4) *Derived requirement handles are reported beside the headline.* A `DRV-` handle is detected
+from a statement without an identifier, so a context sentence that contains an obligation phrase
+can become one. With explicit requirement identifiers in the documents the coverage figure counts
+those only; the derived units are reported beside it (`coverage.requirements.derived`, with their
+own covered and uncovered counts and their names), never mixed into the headline and never
+dropped. A document with no explicit identifier has the derived units as its requirements and they
+form the figure as before. The rule is deterministic and needs no language detector. A derived
+handle's name (section and the start of its statement, redacted like other model-visible content)
+is untrusted document text: it is neutralised as data (control, format and line-break characters,
+markup and the report's delimiters removed, at most 120 characters) and rendered as one quoted
+value, `id;"statement"`, under a header that calls it data and never an instruction. It appears in
+`report.figures`, on the requirement section page (`derived: true`, `label`), in the Markdown
+export, in the CSV (kind `derived-requirement`, name in the `summary` column); the Jira comment
+carries identifiers and counts only.
+(5) *Per-type estimates.* A type whose create screen carries no estimate field reads
+`estimateField: "not-carried"` in `progress.byType` beside the unestimated count, only when no
+issue of the type holds a value (a value on such an issue still counts in the sums and the type is
+not flagged), so the answer can
+say "not estimable" where an issue type that carries the field has issues nobody estimated yet.
+(6) *The estimate figure never says zero for one field while another estimate field in use
+holds values, without saying so (2026-11-13).* The same search that reads the configured field
+also reads one alternate estimate field, never a request per issue: native `timeoriginalestimate`
+beside a custom field, and the project's unique numeric Story Points screen field beside time
+tracking. After the last page, on the issues read: when the configured field holds a value on at
+least one issue it stays the figure, and when the alternate also holds values one line names it
+(`scope.estimateAlso`: field, issue count, total, the hours computed once in the figures from the
+seconds); when the configured field holds none and the alternate does, the alternate becomes the
+figure under the closed source `time-tracking-fallback` or `field-fallback`, the configured field
+is named as unused (`scope.estimateConfigured`), and the per-type `not-carried` flags are not
+evaluated for the fallback field, which the sentence says; when neither holds a value the figure is
+as before (zero estimated, every issue unestimated). A field the caller named
+(`estimateFieldId`) is never replaced, only accompanied; a withheld configured field still ends the
+report incomplete; an alternate a hit omits is simply no value. The sentences carry counts and
+neutralised, quoted field names only, appear in `report.figures`, the Markdown export and the
+comment, and the Activity Log records only the closed source value.
+(7) *A continuation may repeat its scope.* A call naming a `reportId` takes `reportId`, `section`,
+`startAt` and `maxResults` and may repeat `projectKey`, `jql` or `epicKey`. The invariant is that a
+continuation can never change a report's scope: a repeat is accepted only when each supplied value
+equals, character for character, the scope the report was started with, and then answers exactly
+like the call without it; a different value, or a scope the report did not have, is refused as
+`invalid-input` naming the argument with a plain-words message. Owner binding, bounds and every
+other refusal are unchanged.
+Known limits: derived ids are salted by the document's identity, so the same text in two formats
+gets two derived ids (explicit ids are identical); a statement cell without a modal verb yields no
+unit for a row without an identifier; an Epic report does not follow sub-tasks of sub-tasks;
+board and sprint scope belong to the Agile surface and no history is invented.
 
 `requirementsFromPods: true` makes Keiko list the requirement identifiers of the Chat's
 Knowledge Pods itself (the read `knowledge.requirements` serves; stable derived `DRV-` handles are

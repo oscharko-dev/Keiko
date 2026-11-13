@@ -2,11 +2,13 @@ import {
   AtlassianCredentialCustodyError,
   atlassianAuthorizationHeaderValue,
   jiraPropertyPathKey,
+  type AtlassianAuthenticationFailure,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpRequest,
   type JiraHumanInputHttpRequest,
 } from "@oscharko-dev/keiko-connectors";
+import { classifyAuthenticationFailure } from "./httpAuthenticationFailure.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { directoryAccessHeaders } from "./httpDirectoryAccess.js";
 import { identityExperimentalHeaders } from "./httpIdentityExperimental.js";
@@ -20,7 +22,11 @@ export interface AtlassianHttpLifecycleOptions {
   /** Server-owned admission after transport preparation; only synchronous true admits. */
   readonly beforeDispatch?: (request: RequestSnapshot) => boolean;
   /** Record the observed status before consuming the body; only synchronous true confirms. */
-  readonly onResponse?: (request: RequestSnapshot, status: number) => boolean;
+  readonly onResponse?: (
+    request: RequestSnapshot,
+    status: number,
+    authenticationFailure?: AtlassianAuthenticationFailure,
+  ) => boolean;
 }
 
 interface RequestLifecycle {
@@ -293,7 +299,13 @@ export function atlassianHttpRequestLifecycle(
       try {
         if (onResponse !== undefined)
           run(() => {
-            requireConfirmation(onResponse(request, response.status));
+            const failure = classifyAuthenticationFailure(response.status, response.headers);
+            // The origin of a 401 is the third argument only when there is one to report.
+            requireConfirmation(
+              failure === undefined
+                ? onResponse(request, response.status)
+                : onResponse(request, response.status, failure),
+            );
           });
       } catch (error) {
         reportObservationFailure(correlationId, error);

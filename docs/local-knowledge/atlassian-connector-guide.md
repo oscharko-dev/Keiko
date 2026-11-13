@@ -70,6 +70,16 @@ verification automatically determines and privately retains its address class. N
 authority still needs the normal runtime trust configuration, such as `egress.caBundlePath`;
 certificate validation stays enabled. See [ADR-0128 D3](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md#d3--governed-egress-single-host-allowlist-shared-transport-fail-closed-redirects).
 
+Jira answers some permission refusals with HTTP 401, which looks like a failed login. Keiko therefore
+checks the token once with the identity request before it treats any 401 as a rejected token (the
+identity request itself is the only definitive 401). A token that really expired or was revoked is
+reported as "Jira authentication failed" with the remedy: replace the token on the Jira Pod in the
+Knowledge Pods hub and verify again; the Chat and its draft stay. A Jira release below 10.3.0 is
+refused with the 10.3.0 floor named. A certificate that Keiko does not trust names the
+`KEIKO_CA_BUNDLE_PATH` setting; see
+[the CA bundle note](../troubleshooting/ca-bundle-fallback.md). Never disable certificate
+verification.
+
 Open **Connectors** in the Chat composer and switch the verified Pod on. The same menu lists every
 centrally configured MCP server; switch off what this Chat should not use. A switched-off server or
 Pod gives the model no tools and no context. Alternatively, drag the Hub's **Add to workspace**

@@ -84,6 +84,8 @@ export {
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
+  type AtlassianAuthenticationObservation,
+  type AtlassianAuthenticationFailure,
 } from "./atlassian-http-port.js";
 export { maintenancePathNode } from "./jira-maintenance-mutation-values.js";
 export {
@@ -311,6 +313,7 @@ export {
   jiraDraftDependencies,
   jiraDraftIdentity,
   checkJiraDraft,
+  isJiraDraftItem,
   parseJiraDraft,
   type JiraDraft,
   type JiraDraftCheck,
@@ -398,6 +401,7 @@ export {
   type JiraDraftReadCounts,
 } from "./jira-draft-read-memo.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
+export { connectionFingerprint } from "./jira-report-tool.js";
 export type {
   JiraReportActivity,
   JiraReportRequirementIds,

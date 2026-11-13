@@ -1718,7 +1718,8 @@ describe("combined Jira review admission parity", () => {
       jiraAction: { canonicalId: "keiko.jira.draft", arguments: () => reference },
     });
     const jira = useDraftRemote(f);
-    const staged = f.deps.jiraDraftStore?.append(f.chatId, undefined, "combined-fingerprint", [
+    const store = f.deps.jiraDraftStore;
+    const staged = store?.append(f.chatId, undefined, store.connectionOf(f.chatId) ?? "unbound", [
       { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
       {
         ref: "child",

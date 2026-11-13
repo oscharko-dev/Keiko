@@ -34,12 +34,14 @@ import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
+import type { JiraDraftProblemCode } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useJiraResultEvidence } from "./jira-result-evidence";
 import {
   jiraToolOutcomeView,
   knowledgeToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
   type JiraOutcomeItem,
+  type JiraOutcomeItemName,
   type JiraOutcomeRule,
   type JiraToolOutcomeView,
 } from "./jira-tool-outcome";
@@ -213,6 +215,22 @@ const RULE_MESSAGES = {
   "template-missing": "chat.jira.outcome.rule.template-missing",
   "template-not-activated": "chat.jira.outcome.rule.template-not-activated",
 } as const satisfies Readonly<Record<JiraOutcomeRule["ruleId"], string>>;
+/** One sentence per closed draft problem; it says what to change, and "{position}" is the item. */
+const DRAFT_PROBLEM_MESSAGES = {
+  "draft-shape": "chat.jira.outcome.draftProblem.draft-shape",
+  "items-missing": "chat.jira.outcome.draftProblem.items-missing",
+  "item-shape": "chat.jira.outcome.draftProblem.item-shape",
+  "item-ref": "chat.jira.outcome.draftProblem.item-ref",
+  "item-ids": "chat.jira.outcome.draftProblem.item-ids",
+  "item-fields": "chat.jira.outcome.draftProblem.item-fields",
+  "item-parent": "chat.jira.outcome.draftProblem.item-parent",
+  "item-links": "chat.jira.outcome.draftProblem.item-links",
+  "item-requirements": "chat.jira.outcome.draftProblem.item-requirements",
+  "ref-duplicate": "chat.jira.outcome.draftProblem.ref-duplicate",
+  "ref-self": "chat.jira.outcome.draftProblem.ref-self",
+  "ref-unknown": "chat.jira.outcome.draftProblem.ref-unknown",
+  "ref-cycle": "chat.jira.outcome.draftProblem.ref-cycle",
+} as const satisfies Record<JiraDraftProblemCode, string>;
 const VALIDATION_MESSAGES = {
   "required-field": "chat.jira.outcome.validation.required-field",
   "unsupported-field": "chat.jira.outcome.validation.unsupported-field",
@@ -285,44 +303,76 @@ function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): React
     </>
   );
 }
+/** The reviewed summary, else the item's place in the draft: never the model's own reference. */
+function JiraItemName({ item }: { readonly item: JiraOutcomeItemName }): ReactNode {
+  const t = useTranslate();
+  let name: string;
+  if (item.unlisted === true) name = t("chat.jira.outcome.itemUnlisted");
+  else if (item.summary === undefined)
+    name = t("chat.jira.outcome.itemOrdinal", { position: item.position });
+  else name = item.ambiguous === true ? `${item.summary} (${String(item.position)})` : item.summary;
+  return <strong>{name} </strong>;
+}
+function JiraProblemList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  const t = useTranslate();
+  return view.problems.length === 0 ? null : (
+    <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.problems")}>
+      {view.problems.map((problem, index) => (
+        <li key={`${String(problem.item?.position ?? 0)}:${problem.field ?? ""}:${String(index)}`}>
+          {problem.item === undefined ? null : <JiraItemName item={problem.item} />}
+          {problem.field === undefined ? null : <strong>{problem.field}: </strong>}
+          <span>{problem.message}</span>
+        </li>
+      ))}
+      {view.hiddenProblemCount === 0 ? null : (
+        <li className={styles.cmpMoreIssues}>
+          {t("chat.jira.outcome.more", { count: view.hiddenProblemCount })}
+        </li>
+      )}
+    </ul>
+  );
+}
+/** What to change in a refused draft, in one sentence per closed problem. */
+function JiraDraftProblemLine({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  const t = useTranslate();
+  const { draftProblem } = view;
+  return draftProblem === undefined ? null : (
+    <p>
+      {t(DRAFT_PROBLEM_MESSAGES[draftProblem.problem], { position: draftProblem.position ?? 0 })}
+    </p>
+  );
+}
+function JiraRuleList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  const t = useTranslate();
+  return view.rules.length === 0 ? null : (
+    <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.rules")}>
+      {view.rules.map((rule) => (
+        <li key={`${rule.ruleId}:${rule.subject}`}>
+          {t(RULE_MESSAGES[rule.ruleId], { subject: rule.subject })}
+        </li>
+      ))}
+    </ul>
+  );
+}
 function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
-  const nothingSent = view.validation !== undefined || view.itemValidations.length > 0;
+  const nothingSent =
+    view.validation !== undefined ||
+    view.itemValidations.length > 0 ||
+    view.draftProblem !== undefined;
   return (
     <>
-      {view.problems.length === 0 ? null : (
-        <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.problems")}>
-          {view.problems.map((problem, index) => (
-            <li key={`${problem.ref ?? ""}:${problem.field ?? ""}:${String(index)}`}>
-              {problem.ref === undefined ? null : <code>{problem.ref} </code>}
-              {problem.field === undefined ? null : <strong>{problem.field}: </strong>}
-              <span>{problem.message}</span>
-            </li>
-          ))}
-          {view.hiddenProblemCount === 0 ? null : (
-            <li className={styles.cmpMoreIssues}>
-              {t("chat.jira.outcome.more", { count: view.hiddenProblemCount })}
-            </li>
-          )}
-        </ul>
-      )}
+      <JiraProblemList view={view} />
+      <JiraDraftProblemLine view={view} />
       {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
-      {view.itemValidations.map((item) => (
-        <p key={item.ref}>
-          <code>{item.ref} </code>
+      {view.itemValidations.map((item, index) => (
+        <p key={`${String(item.item.position)}:${String(index)}`}>
+          <JiraItemName item={item.item} />
           {t(VALIDATION_MESSAGES[item.validation])}
         </p>
       ))}
       {nothingSent ? <p>{t("chat.jira.outcome.nothingSent")}</p> : null}
-      {view.rules.length === 0 ? null : (
-        <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.rules")}>
-          {view.rules.map((rule) => (
-            <li key={`${rule.ruleId}:${rule.subject}`}>
-              {t(RULE_MESSAGES[rule.ruleId], { subject: rule.subject })}
-            </li>
-          ))}
-        </ul>
-      )}
+      <JiraRuleList view={view} />
       {view.failure === undefined ||
       view.validation !== undefined ||
       view.rules.length > 0 ? null : (

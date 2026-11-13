@@ -144,8 +144,23 @@ const CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
-// One count per closed refusal reason, so every refused repair is counted whichever caller sent it.
+// Shared field shapes of the two local-session refusal registrations: one count per closed refusal
+// reason (so every refused repair is counted whichever caller sent it), the window state flag, and
+// the two closed reason sets.
 const DENIAL_REASON_COUNT = { type: "integer", dataClass: "count", required: true } as const;
+const WINDOW_CLOSED_FLAG = { type: "boolean", dataClass: "closed-enum", required: true } as const;
+const WINDOW_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: ["authority-unavailable"],
+} as const;
+const REFUSAL_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: LOCAL_SESSION_DENIAL_REASONS,
+} as const;
 
 const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -155,16 +170,11 @@ const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.localSessionDenied",
   fields: {
-    count: { type: "integer", dataClass: "count", required: true },
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["authority-unavailable"],
-    },
+    count: DENIAL_REASON_COUNT,
+    reason: WINDOW_REASON_FIELD,
     // `false`: the alert raised when the window crossed its threshold. `true`: the window's final
     // summary, written for every window that refused anything. Read the closed one for the totals.
-    windowClosed: { type: "boolean", dataClass: "closed-enum", required: true },
+    windowClosed: WINDOW_CLOSED_FLAG,
     approvalCount: DENIAL_REASON_COUNT,
     inactivityCount: DENIAL_REASON_COUNT,
     invalidClockCount: DENIAL_REASON_COUNT,
@@ -193,15 +203,10 @@ const LOCAL_SESSION_REFUSED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.localSessionRefused",
   fields: {
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: LOCAL_SESSION_DENIAL_REASONS,
-    },
-    count: { type: "integer", dataClass: "count", required: true },
-    presentedProofCount: { type: "integer", dataClass: "count", required: true },
-    distinctProofCount: { type: "integer", dataClass: "count", required: true },
+    reason: REFUSAL_REASON_FIELD,
+    count: DENIAL_REASON_COUNT,
+    presentedProofCount: DENIAL_REASON_COUNT,
+    distinctProofCount: DENIAL_REASON_COUNT,
   },
   causal: "correlation",
   lifecycle: "failure",

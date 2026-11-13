@@ -900,7 +900,16 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
       const review = await reviewed(operation, args);
       const canonical = projectJiraDescriptionInput(fields.description);
       if (canonical === undefined) throw new TypeError("Missing canonical description projection");
-      expect(review.text).toContain(canonical.text);
+      // #4355: what Keiko sends is the canonical wiki text (pinned literally), and the preview shows
+      // that text as a person reads it. Both sides are literals, so a helper that drops or rewrites
+      // content, or a preview that shows the model's own markdown, cannot agree with them.
+      expect(canonical.text).toBe(
+        "h2. Requirement\nExact\nh2. Criteria\n* one\n* two\n* three\n* four\n* five\nh2. Source\nExact source",
+      );
+      expect(review.text).toContain(
+        "Requirement\nExact\nCriteria\n• one\n• two\n• three\n• four\n• five\nSource\nExact source",
+      );
+      expect(review.text).not.toMatch(/h[1-6]\.\s|## |\* one/u);
       expect(JSON.stringify(args)).toBe(before);
       expect(fields.description).toEqual({ format: "markdown", text: description });
     },
@@ -934,6 +943,38 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
     expect(review.text).toContain("Relates → SYN-9");
     expect(review.text).toContain("REQ-1");
     expectNoJson(review);
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+
+  it("shows a created issue's description written in wiki markup as readable text (#4355)", async () => {
+    const review = await reviewed("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10002",
+      fields: {
+        summary: "*URGENT* fix",
+        description: "h2. Ziel\n* erster *wichtiger* Punkt\n{panel:title=Hinweis}\nTeil\n{panel}",
+      },
+    });
+    // A summary is stored with its asterisks, so the preview shows them; only the description is read.
+    expect(review.text).toContain("*URGENT* fix");
+    expect(review.text).toContain("Ziel\n• erster wichtiger Punkt\nHinweis\nTeil");
+    expect(review.text).not.toMatch(/h2\.|\*wichtiger\*|\{panel/u);
+    expectNoJson(review);
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+
+  it("reads only the issue's own description, never a description inside another object (#4355)", async () => {
+    const review = await reviewed("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10002",
+      fields: {
+        summary: "Synthetic story",
+        components: [{ id: "10", name: "Core", description: "*keep* [a|https://x.example/y]" }],
+        description: "* real *wichtig*",
+      },
+    });
+    expect(review.text).toContain("• real wichtig");
+    expect(review.text).toContain("*keep* [a|https://x.example/y]");
     expect(await axe(review.container)).toHaveNoViolations();
   });
 

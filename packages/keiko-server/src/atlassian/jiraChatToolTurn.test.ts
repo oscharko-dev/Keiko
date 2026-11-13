@@ -17,6 +17,7 @@ import { logKnowledgeCoverage, knowledgeTurnCoverage } from "../chat-tool-knowle
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createJiraDraftBatchExecutor, type JiraDraftBatchContext } from "./jiraDraftBatchTool.js";
 import { draftTool } from "./jiraChatCatalogRuntime.js";
@@ -77,6 +78,7 @@ import {
 import { field, multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
 import {
   omittedReportFindingKeys,
+  rawReportKeys,
   reportCoverageMismatches,
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
@@ -116,6 +118,7 @@ vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
   return {
     ...actual,
     omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys),
+    rawReportKeys: vi.fn(actual.rawReportKeys),
     reportCoverageMismatches: vi.fn(actual.reportCoverageMismatches),
     unsupportedIssueKeys: vi.fn(actual.unsupportedIssueKeys),
   };
@@ -229,7 +232,13 @@ function configure(deps: UiHandlerDeps, proof: ToolProof = true, contextWindow?:
     runtime.generation(),
   );
 }
-function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
+function metadata(
+  deps: UiHandlerDeps,
+  overrides: {
+    readonly generation?: number;
+    readonly verificationStatus?: "ok" | "unverified";
+  } = {},
+): AtlassianCredentialMetadata {
   const ownerDigest = jiraChatActorDigest(deps);
   if (ownerDigest === undefined) throw new Error("Missing principal");
   return {
@@ -238,7 +247,7 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     displayName: "Synthetic Jira",
     baseUrl: "https://jira.example.invalid",
     createdAt: 1,
-    generation: 1,
+    generation: overrides.generation ?? 1,
     provider: "jira",
     deployment: "data-center",
     authScheme: "bearer-pat",
@@ -248,7 +257,7 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
       creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
       verificationRevision: 1,
       verificationInProgress: false,
-      verificationStatus: "ok",
+      verificationStatus: overrides.verificationStatus ?? "ok",
     },
   };
 }
@@ -478,6 +487,13 @@ function preselectFixtureCatalog(deps: UiHandlerDeps): void {
       scope,
     ),
   );
+}
+
+/** The fingerprint the Chat's own connection stores a draft under. */
+function connectionOfFixture(f: { readonly chatId: string; readonly deps: UiHandlerDeps }): string {
+  const fingerprint = f.deps.jiraDraftStore?.connectionOf(f.chatId);
+  if (fingerprint === undefined) throw new TypeError("The fixture chat has no connection");
+  return fingerprint;
 }
 
 function fixture(
@@ -1286,6 +1302,73 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
     },
   );
+  // The refusal tells the person what happened and what to do, with a closed code the UI localizes;
+  // nothing about the Pod beyond that closed state is revealed, and nothing is called (#4371).
+  it.each([
+    {
+      name: "a removed Jira Pod",
+      list: (): AtlassianCredentialMetadata[] => [],
+      code: "JIRA_POD_UNAVAILABLE",
+      readiness: "pod-unavailable",
+    },
+    {
+      name: "a Jira Pod that needs verifying again",
+      list: (deps: UiHandlerDeps): AtlassianCredentialMetadata[] => [
+        metadata(deps, { verificationStatus: "unverified" }),
+      ],
+      code: "JIRA_POD_VERIFICATION_REQUIRED",
+      readiness: "verification-required",
+    },
+    {
+      name: "a Jira connection that changed since the Pod was chosen",
+      list: (deps: UiHandlerDeps): AtlassianCredentialMetadata[] => [
+        metadata(deps, { generation: 2 }),
+      ],
+      code: "JIRA_POD_CONNECTION_CHANGED",
+      readiness: "generation-changed",
+    },
+  ])(
+    "refuses a turn bound to $name with its own code, before any model or Jira call",
+    async ({ list, code, readiness }) => {
+      const f = fixture();
+      const credentials = f.deps.atlassianConnectorCredentials;
+      if (credentials === undefined) throw new Error("Missing credential owner");
+      const listSpy = vi.spyOn(credentials.custody, "list").mockImplementation(() => list(f.deps));
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const result = await send(f, "refused-pod-turn");
+
+        expect(result.status, JSON.stringify(result.body)).toBe(409);
+        expect(result.body).toMatchObject({ error: { code } });
+        expect(f.calls).toHaveLength(0);
+        expect(f.requests()).toBe(0);
+        // The refusal line carries the closed readiness, like the other authority call site.
+        const registered = sink.events.filter(
+          (event) =>
+            event.op === "chat.tool-authority.operation" && event.extra?.phase === "register",
+        );
+        expect(registered.map((event) => event.extra?.readiness)).toContain(readiness);
+      } finally {
+        listSpy.mockRestore();
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("keeps the generic refusal when the authority registry is unavailable", async () => {
+    const f = fixture();
+    // Not a Pod state: nothing about the Pod is revealed.
+    Object.assign(f.deps, { agentAuthorityRegistry: undefined });
+
+    const result = await send(f, "registry-unavailable-turn");
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "FORBIDDEN" } });
+    expect(f.calls).toHaveLength(0);
+    expect(f.requests()).toBe(0);
+  });
+
   it("preserves ordinary unbound Chat without tool-calling proof", async () => {
     const f = fixture();
     f.deps.store.updateChat(f.chatId, { jiraPodId: null });
@@ -1594,6 +1677,46 @@ describe.each([false, true])(
       });
       expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
         /LH-0|RPT-/u,
+      );
+    });
+  },
+);
+
+// #4355: a report answer that prints the report's internal result keys ("issuesChecked: 33") gets
+// ONE further round asking for plain language; the model writes the final answer, and neither the
+// keys nor their values reach the Activity Log (the detection is proven in
+// chat-tool-report-coverage.test.ts; this fixture scripts one comment call, not a report result).
+describe.each([false, true])(
+  "an answer that prints the report's internal result keys (stream=%s)",
+  (stream) => {
+    it("gets one round asking for plain language, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      vi.mocked(rawReportKeys).mockReturnValueOnce(["issuesChecked", "issuesJudged"]);
+      const f = fixture();
+      const ctx = sendContext(f, `raw-report-key-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await awaitReadGrantedForWrite(f);
+      await pending;
+
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("prints 2 internal result key(s)");
+      expect(correction(f.calls[2])).toContain("issuesChecked, issuesJudged");
+      expect(correction(f.calls[3])).not.toContain("internal result key(s)");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "raw-report-key",
+        rawReportKeyCount: 2,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
+        /issuesChecked|issuesJudged/u,
       );
     });
   },
@@ -2088,7 +2211,12 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     const items = backlog(size.epics, size.stories);
     let draftId: string | undefined;
     for (let from = 0; from < items.length; from += 50) {
-      const appended = store.append(f.chatId, draftId, "fingerprint", items.slice(from, from + 50));
+      const appended = store.append(
+        f.chatId,
+        draftId,
+        connectionOfFixture(f),
+        items.slice(from, from + 50),
+      );
       if (!appended.ok) throw new Error("Expected the page to stage");
       draftId = appended.draft.id;
     }
@@ -2155,7 +2283,7 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     const { f, reference } = stagedFixture();
     const store = f.deps.jiraDraftStore;
     const draftId = typeof reference.draftId === "string" ? reference.draftId : "";
-    store?.append(f.chatId, draftId, "fingerprint", [
+    store?.append(f.chatId, draftId, connectionOfFixture(f), [
       {
         ref: "late",
         projectId: "10000",
@@ -2827,40 +2955,85 @@ it("drains a real buffered HTTP disconnect while the write approval is pending",
   }
 });
 
-type PreparationFailure = "tool-proof" | "authority" | "catalog";
+type PreparationFailure =
+  | "tool-proof"
+  | "authority"
+  | "catalog"
+  | "pod-unavailable"
+  | "pod-verification"
+  | "pod-connection-changed";
 const PREPARATION_RESPONSES: Record<PreparationFailure, readonly [number, string]> = {
   "tool-proof": [400, toolProofRefusal(false)[1]],
   authority: [403, "FORBIDDEN"],
   catalog: [503, "CHAT_TOOL_UNAVAILABLE"],
+  // A Pod that cannot serve the Chat has its own refusals (#4371); every settlement assertion below
+  // holds for them too, over every transport.
+  "pod-unavailable": [409, "JIRA_POD_UNAVAILABLE"],
+  "pod-verification": [409, "JIRA_POD_VERIFICATION_REQUIRED"],
+  "pod-connection-changed": [409, "JIRA_POD_CONNECTION_CHANGED"],
 };
+const POD_FAILURE_METADATA = {
+  "pod-verification": { verificationStatus: "unverified" },
+  "pod-connection-changed": { generation: 2 },
+} as const;
 function preparationFailureDeps(
   f: ReturnType<typeof fixture>,
   failure: PreparationFailure,
   record: NonNullable<UiHandlerDeps["diagnostics"]>["record"],
+  restores: (() => void)[],
 ): UiHandlerDeps {
   const deps: UiHandlerDeps = {
     ...f.deps,
     diagnostics: { record },
-    ...(failure === "authority" ? { atlassianConnectorCredentials: undefined } : {}),
+    // A generic authority denial that says nothing about the Pod.
+    ...(failure === "authority" ? { agentAuthorityRegistry: undefined } : {}),
+    // The Pod's credential is gone altogether.
+    ...(failure === "pod-unavailable" ? { atlassianConnectorCredentials: undefined } : {}),
   };
+  if (failure === "pod-verification" || failure === "pod-connection-changed") {
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing credential owner");
+    const spy = vi
+      .spyOn(credentials.custody, "list")
+      .mockImplementation(() => [metadata(f.deps, POD_FAILURE_METADATA[failure])]);
+    restores.push(() => {
+      spy.mockRestore();
+    });
+  }
   if (failure === "tool-proof") configure(deps, false);
   if (failure === "catalog") {
     if (deps.jiraChatCatalog === undefined) throw new Error("Missing catalog runtime");
-    vi.spyOn(deps.jiraChatCatalog, "get").mockRejectedValueOnce(
-      new CatalogDispatchFault("failed", "handler-unavailable", new Error("Bearer fixture-secret")),
-    );
+    const spy = vi
+      .spyOn(deps.jiraChatCatalog, "get")
+      .mockRejectedValueOnce(
+        new CatalogDispatchFault(
+          "failed",
+          "handler-unavailable",
+          new Error("Bearer fixture-secret"),
+        ),
+      );
+    restores.push(() => {
+      spy.mockRestore();
+    });
   }
   return deps;
 }
 
 describe.each([false, true])("Jira preparation failure settlement (stream=%s)", (stream) => {
   describe.each([false, true])("legacy request=%s", (legacy) => {
-    it.each(["tool-proof", "authority", "catalog"] as const)(
-      "settles %s rejection before any provider output",
-      async (failure) => {
-        const f = fixture();
-        const record = vi.fn();
-        const deps = preparationFailureDeps(f, failure, record);
+    it.each([
+      "tool-proof",
+      "authority",
+      "catalog",
+      "pod-unavailable",
+      "pod-verification",
+      "pod-connection-changed",
+    ] as const)("settles %s rejection before any provider output", async (failure) => {
+      const f = fixture();
+      const record = vi.fn();
+      const restores: (() => void)[] = [];
+      try {
+        const deps = preparationFailureDeps(f, failure, record, restores);
         const before = deps.store.findChatById(f.chatId);
         const body = sendBody(f, "preparation-failed-turn");
         if (legacy) delete body.clientTurnId;
@@ -2880,8 +3053,10 @@ describe.each([false, true])("Jira preparation failure settlement (stream=%s)", 
         else expect(messages[0]?.turnState).toBe("failed");
         expect(record).toHaveBeenCalledTimes(failure === "tool-proof" ? 0 : 1);
         expect(JSON.stringify([result, record.mock.calls])).not.toContain("fixture-secret");
-      },
-    );
+      } finally {
+        for (const restore of restores) restore();
+      }
+    });
   });
 });
 
@@ -3188,7 +3363,7 @@ describe("four-item Epic and Task template fullchain", () => {
     const staged = f.deps.jiraDraftStore?.append(
       f.chatId,
       undefined,
-      "fullchain-fingerprint",
+      connectionOfFixture(f),
       items,
     );
     if (staged?.ok !== true) throw new TypeError("Missing staged batch");
@@ -4839,4 +5014,267 @@ describe("held approval worker timers", () => {
       }
     },
   );
+});
+
+// #4354 AC4: an approval nobody decided expires after ATLASSIAN_ACTION_APPROVAL_TTL_MS. The model
+// and the person were told it was declined, and a draft sent with its items inline left the Chat
+// with no open draft to resubmit. Every assertion goes through the real turn, route and stores.
+describe("an expired write approval says that it expired and keeps the draft (#4354 AC4)", () => {
+  async function expireInlineDraft(): Promise<{
+    readonly f: ReturnType<typeof fixture>;
+    readonly first: ChatToolWriteApprovalView;
+    readonly next: (arguments_: Record<string, unknown>) => void;
+  }> {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let arguments_: Record<string, unknown> = DRAFT_ARGUMENTS;
+    const f = fixture(true, undefined, true, false, () => arguments_);
+    const pending = send(f, "expiry-first");
+    void pending.catch(() => undefined);
+    await awaitPendingConsent(f);
+    const first = await pendingWriteApproval(f);
+    await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1000);
+    expect((await pending).status).toBe(200);
+    return {
+      f,
+      first,
+      next: (value): void => {
+        arguments_ = value;
+      },
+    };
+  }
+
+  it("shows the card as expired, tells the model so, and writes nothing", async () => {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    cleanups.push(() => {
+      resetServerLogger();
+      return Promise.resolve();
+    });
+    const { f } = await expireInlineDraft();
+    const lines = logs.events
+      .filter((event) => event.op === "atlassian.jira-draft")
+      .map((event) => event.extra);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: "held", newDraft: true, itemCount: 3 }),
+        expect.objectContaining({ phase: "refused", refusal: "approval-expired", itemCount: 3 }),
+      ]),
+    );
+    expect(JSON.stringify(lines)).not.toMatch(/Epic|Story|Loose|epic|SYN-/u);
+    expect(consentState(f)).toBe("expired");
+    const toolResult = f.calls[1]?.messages.find((message) => message.role === "tool")?.content;
+    expect(toolResult).toMatch(/expired/iu);
+    expect(toolResult).not.toMatch(/declin|reject/iu);
+    // Nothing was dispatched: no effect started and the outcome says not-dispatched.
+    expect(firstToolExchange(f).result).toMatchObject({
+      status: "failed",
+      data: { outcome: "not-dispatched" },
+    });
+    expect(firstToolExchange(f).mutationOutcome ?? "not-dispatched").toBe("not-dispatched");
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+  });
+
+  it("keeps the inline draft as the Chat's open draft and names it for the resubmission", async () => {
+    const { f } = await expireInlineDraft();
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    expect(draft?.items.map((item) => item.ref)).toEqual(["epic", "story", "loose"]);
+    const toolResult = f.calls[1]?.messages.find((message) => message.role === "tool")?.content;
+    expect(toolResult).toContain(draft?.id);
+    expect(toolResult).toContain(draft?.digest);
+  });
+
+  it("creates the issues exactly once when the open draft is resubmitted and approved", async () => {
+    const { f, next } = await expireInlineDraft();
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    if (draft === undefined) throw new Error("Missing open draft");
+    next({ draftId: draft.id, draftDigest: draft.digest });
+    // The clock stays where the expiry left it: a second turn is a later turn of the same Chat.
+    const second = send(f, "expiry-second");
+    void second.catch(() => undefined);
+    const secondApproval = (): ChatToolWriteApprovalView | undefined =>
+      f.deps.store.listMessages(f.chatId).filter((message) => message.role === "user")[1]
+        ?.toolTranscript?.exchanges[0]?.approval;
+    await vi.waitFor(() => {
+      expect(secondApproval()?.state).toBe("pending");
+    });
+    const approval = secondApproval();
+    if (approval === undefined) throw new Error("Missing resubmitted approval");
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(f.jira.posts().map((post) => post.fields)).toMatchObject([
+      { summary: "Epic" },
+      { summary: "Story" },
+      { summary: "Loose" },
+    ]);
+  });
+
+  const toolMessage = (f: ReturnType<typeof fixture>): string =>
+    f.calls[1]?.messages.find((message) => message.role === "tool")?.content ?? "";
+
+  it("refuses a held draft on another connection: connection-changed, no card, no Jira request", async () => {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    cleanups.push(() => {
+      resetServerLogger();
+      return Promise.resolve();
+    });
+    const { f, next } = await expireInlineDraft();
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    if (draft === undefined) throw new Error("Missing open draft");
+    // The Pod now points at another Jira whose project and issue-type ids may coincide with ours.
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing credential owner");
+    vi.spyOn(credentials.custody, "list").mockImplementation(() => [
+      { ...metadata(f.deps), baseUrl: "https://other-jira.example.invalid" },
+    ]);
+    const requestsBefore = f.requests();
+    next({ draftId: draft.id, draftDigest: draft.digest });
+    expect((await send(f, "switched-second")).status).toBe(200);
+    const result = f.calls
+      .flatMap((call) => call.messages)
+      .filter((message) => message.role === "tool")
+      .at(-1)?.content;
+    expect(result).toContain("connection-changed");
+    expect(result).toMatch(/Jira connection changed/u);
+    const cards = f.deps.store
+      .listMessages(f.chatId)
+      .flatMap((message) => message.toolTranscript?.exchanges ?? [])
+      .filter((exchange) => exchange.approval?.state === "pending");
+    expect(cards).toHaveLength(0);
+    expect(f.requests()).toBe(requestsBefore);
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+    expect(
+      logs.events
+        .filter((event) => event.op === "atlassian.jira-draft")
+        .map((event) => event.extra),
+    ).toContainEqual(expect.objectContaining({ phase: "refused", refusal: "connection-changed" }));
+  });
+
+  it("refuses a staged draft stored under another connection the same way", async () => {
+    let arguments_: Record<string, unknown> = DRAFT_ARGUMENTS;
+    const f = fixture(true, undefined, true, false, () => arguments_);
+    const staged = f.deps.jiraDraftStore?.append(f.chatId, undefined, "another-connection", [
+      { ref: "a", projectId: "10000", issueTypeId: "10001", fields: { summary: "Old Jira" } },
+    ]);
+    if (staged?.ok !== true) throw new Error("Missing staged draft");
+    arguments_ = { draftId: staged.draft.id, draftDigest: staged.draft.digest };
+    expect((await send(f, "staged-foreign")).status).toBe(200);
+    expect(toolMessage(f)).toContain("connection-changed");
+    const pending = f.deps.store
+      .listMessages(f.chatId)
+      .flatMap((message) => message.toolTranscript?.exchanges ?? [])
+      .filter((exchange) => exchange.approval?.state === "pending");
+    expect(pending).toHaveLength(0);
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+  });
+
+  it("does not report an approval the registry merely lost as expired", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const f = fixture(true, undefined, true, false, () => DRAFT_ARGUMENTS);
+    const pending = send(f, "lost-approval");
+    void pending.catch(() => undefined);
+    await awaitPendingConsent(f);
+    f.deps.atlassianActionApprovalRegistry?.reset();
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(toolMessage(f)).not.toMatch(/expired|draftId/iu);
+    expect(f.writes()).toBe(0);
+  });
+
+  it("neither a decline nor a revoked approval is reported as expired or offers a resubmission", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const declined = fixture(true, undefined, true, false, () => DRAFT_ARGUMENTS);
+    const first = send(declined, "declined");
+    void first.catch(() => undefined);
+    await awaitPendingConsent(declined);
+    expect(await postWriteDecision(declined, await pendingWriteApproval(declined), "reject")).toBe(
+      200,
+    );
+    await first;
+    expect(toolMessage(declined)).not.toMatch(/expired|draftId/iu);
+    const revoked = fixture(true, undefined, true, false, () => DRAFT_ARGUMENTS);
+    const second = send(revoked, "revoked");
+    void second.catch(() => undefined);
+    await awaitPendingConsent(revoked);
+    const approval = await pendingWriteApproval(revoked);
+    revoked.deps.atlassianActionApprovalRegistry?.revokeChatWriteApproval(
+      approval.approvalId,
+      "revoked-proof",
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    await second;
+    expect(toolMessage(revoked)).not.toMatch(/expired|draftId/iu);
+    expect(revoked.writes()).toBe(0);
+  });
+
+  it("refuses a late approval of the expired card and creates the issues exactly once overall", async () => {
+    const { f, first, next } = await expireInlineDraft();
+    expect(await postWriteDecision(f, first, "approve")).not.toBe(200);
+    expect(f.writes()).toBe(0);
+    const draft = f.deps.jiraDraftStore?.latest(f.chatId);
+    if (draft === undefined) throw new Error("Missing open draft");
+    next({ draftId: draft.id, draftDigest: draft.digest });
+    const second = send(f, "late-second");
+    void second.catch(() => undefined);
+    const approval = (): ChatToolWriteApprovalView | undefined =>
+      f.deps.store.listMessages(f.chatId).filter((message) => message.role === "user")[1]
+        ?.toolTranscript?.exchanges[0]?.approval;
+    await vi.waitFor(() => {
+      expect(approval()?.state).toBe("pending");
+    });
+    const fresh = approval();
+    if (fresh === undefined) throw new Error("Missing fresh approval");
+    expect(await postWriteDecision(f, first, "approve")).not.toBe(200);
+    expect(await postWriteDecision(f, fresh, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(await postWriteDecision(f, first, "approve")).not.toBe(200);
+    expect(f.jira.posts()).toHaveLength(3);
+  });
+
+  it("does not hold a draft the preflight refused before anyone was asked", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const invalid = {
+      items: [
+        {
+          ref: "orphan",
+          projectId: "10000",
+          issueTypeId: "10001",
+          fields: { summary: "Orphan" },
+          parent: { fieldId: "parent", ref: "ghost" },
+        },
+      ],
+    };
+    const f = fixture(true, undefined, true, false, () => invalid);
+    const pending = send(f, "refused-draft");
+    void pending.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(2000);
+    await pending;
+    expect(f.deps.jiraDraftStore?.latest(f.chatId)).toBeUndefined();
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(f.writes()).toBe(0);
+  });
+
+  it("logs the expiry of a comment's approval on the authority record, never as a draft", async () => {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    cleanups.push(() => {
+      resetServerLogger();
+      return Promise.resolve();
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const f = fixture(true);
+    const pending = send(f, "comment-expiry");
+    void pending.catch(() => undefined);
+    await awaitPendingConsent(f);
+    await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1000);
+    await pending;
+    expect(logs.events.filter((event) => event.op === "atlassian.jira-draft")).toEqual([]);
+    expect(
+      logs.events.some((event) => JSON.stringify(event.extra ?? {}).includes('"expired"')),
+    ).toBe(true);
+    expect(f.writes()).toBe(0);
+  });
 });

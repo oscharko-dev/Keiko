@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
+import { readWindowsProcessCommandLine } from "@oscharko-dev/keiko-security";
 import { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG } from "./state-paths.js";
 
 export interface LiveLaunchIdentityReaders {
@@ -63,24 +63,6 @@ function runPs(args: readonly string[]): string | undefined {
   return undefined;
 }
 
-function readWindowsCommandLine(pid: number): string | undefined {
-  try {
-    const result = spawnSync(
-      resolveWindowsPowerShellExecutable(),
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `(Get-CimInstance Win32_Process -Filter 'ProcessId=${String(pid)}').CommandLine`,
-      ],
-      { encoding: "utf8", timeout: 3_000, windowsHide: true, shell: false },
-    );
-    return result.status === 0 ? result.stdout : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function defaultReadProcessEnviron(
   pid: number,
   platform: NodeJS.Platform,
@@ -96,7 +78,7 @@ export function defaultReadProcessCommandLine(
 ): string | undefined {
   if (platform === "linux") return readProcFile(pid, "cmdline");
   if (platform === "darwin") return runPs(["-p", String(pid), "-ww", "-o", "args="]);
-  if (platform === "win32") return readWindowsCommandLine(pid);
+  if (platform === "win32") return readWindowsProcessCommandLine(pid);
   return undefined;
 }
 

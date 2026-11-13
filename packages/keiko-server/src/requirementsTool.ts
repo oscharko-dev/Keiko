@@ -749,7 +749,21 @@ const CUT_FOR_REPORT =
   "The Chat's Knowledge Pods hold more requirements than Keiko can list at once. Pass requirementIds yourself.";
 
 /** The identifiers of a collection, explicit and derived, or the plain-words reason Keiko cannot list them. */
-function reportRequirementIds(collection: RequirementCollection): JiraReportRequirementIds {
+const REPORT_LABEL_CHARS_MAX = 120;
+/** A readable name for a derived identifier: its section and the start of the statement. */
+function derivedLabel(unit: LocatedRequirementUnit, redact: (value: string) => string): string {
+  const { statement, sectionPath } = unit.entry;
+  const section = sectionPath.at(-1);
+  const sectionPrefix = section === undefined ? "" : `${section}: `;
+  const text = redact(`${sectionPrefix}${statement}`).replaceAll(/\s+/gu, " ").trim();
+  return text.length > REPORT_LABEL_CHARS_MAX
+    ? `${text.slice(0, REPORT_LABEL_CHARS_MAX - 1)}…`
+    : text;
+}
+function reportRequirementIds(
+  collection: RequirementCollection,
+  redact: (value: string) => string,
+): JiraReportRequirementIds {
   const refusal = collection.refusals[0];
   if (collection.units.length === 0 && refusal !== undefined)
     return {
@@ -761,7 +775,13 @@ function reportRequirementIds(collection: RequirementCollection): JiraReportRequ
   // Derived identifiers are stable handles an issue can name (trace footer, `keiko-req-` label);
   // leaving them out would shrink the denominator and report them covered.
   const ids = [...new Set(collection.units.map((unit) => unit.entry.id))];
-  return ids.length === 0 ? { ok: false, message: NO_IDS_FOR_REPORT } : { ok: true, ids };
+  // A derived handle is no number a person wrote down: its name lets the report say what it is.
+  const labels = Object.fromEntries(
+    collection.units
+      .filter((unit) => unit.entry.idOrigin === "derived")
+      .map((unit): [string, string] => [unit.entry.id, derivedLabel(unit, redact)]),
+  );
+  return ids.length === 0 ? { ok: false, message: NO_IDS_FOR_REPORT } : { ok: true, ids, labels };
 }
 
 /**
@@ -780,6 +800,7 @@ export function chatReportRequirementIds(
     session = openKnowledgeStoreForDeps(deps, { recover: false });
     return reportRequirementIds(
       collectForTurn(session.store, scopes, context.chatId, context.userMessageId),
+      contentRedact(deps),
     );
   } finally {
     session?.close();

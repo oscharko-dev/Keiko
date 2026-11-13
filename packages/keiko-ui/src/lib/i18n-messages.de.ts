@@ -95,6 +95,10 @@ export const DE_MESSAGES = {
     "Memory ist bis zur Reparatur des lokalen Tresors nicht verfügbar. Chat bleibt verfügbar. Behebe die Ursache und starte Keiko neu.",
   "memory.readiness.unreadable":
     "Der gespeicherte Memory-Tresor konnte nicht geöffnet werden. Prüfe den verfügbaren Schlüssel und starte Keiko neu. Chat bleibt verfügbar.",
+  "credentialCustody.exposed":
+    "Der Schlüssel, der deine gespeicherten Zugangsdaten schützt, war für ein anderes Konto auf diesem Computer lesbar. Keiko hat ihn jetzt geschützt, die Zugangsdaten können aber gelesen worden sein. Ersetze sie: Erstelle ein neues Jira-Token und verbinde den Jira Pod neu, und ersetze den Gateway-Schlüssel unter Einstellungen > Modelle.",
+  "credentialCustody.unattested":
+    "Keiko konnte nicht prüfen, ob deine gespeicherten Zugangsdaten vor anderen Konten auf diesem Computer geschützt sind. Sie funktionieren weiter. Bitte deine Administration, Windows PowerShell für dein Konto zuzulassen, und starte Keiko danach neu.",
   "supportReport.create": "Fehlerbericht erstellen",
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.download": "Bericht herunterladen",
@@ -258,7 +262,7 @@ export const DE_MESSAGES = {
   "gatewaySetup.unusable.unverified":
     " Übernommen, aber als Embedding-Modell nicht verifiziert: {models}.",
   "gatewaySetup.unusable.unverifiedChat":
-    " Übernommen, aber als Chat-Modell nicht verifiziert: {models}.",
+    " Übernommen, aber als Chat-Modell nicht verifiziert: {models}. Wähle eines in Chat oder im Coding Workbench, um es zu prüfen, oder verifiziere es unter Einstellungen > Modelle.",
   // Der Undo-Stapel der Shell zeichnet ausschließlich Panel-Umschaltungen auf — kein Verschieben,
   // Skalieren, Maximieren oder Schließen von Fenstern erreicht ihn.
   "shell.command.undo.target": "Rückgängig: {target}",
@@ -544,9 +548,34 @@ export const DE_MESSAGES = {
     "Prüfe die aktuellen Quellen des Chats und sende deine Anfrage anschließend erneut.",
   "chat.error.jiraAuthentication.title": "Jira-Anmeldung fehlgeschlagen",
   "chat.error.jiraAuthentication.message":
-    "Die Jira-Verbindung konnte nicht authentifiziert werden.",
+    "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
   "chat.error.jiraAuthentication.remediation":
-    "Prüfe die Jira-Verbindung erneut im Knowledge Pods Hub. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+    "Öffne den Knowledge Pods Hub, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+  "chat.error.knowledgePodUnavailable.title": "Knowledge Pod nicht verfügbar",
+  "chat.error.knowledgePodUnavailable.message":
+    "Der gewählte Knowledge Pod existiert nicht mehr oder wird gerade gelöscht. Wähle einen anderen Knowledge Pod.",
+  "chat.error.knowledgePodUnavailable.remediation":
+    "Die Liste wurde aktualisiert. Wähle daraus einen Knowledge Pod.",
+  "chat.error.knowledgeStoreUnavailable.title": "Knowledge Pods können nicht geprüft werden",
+  "chat.error.knowledgeStoreUnavailable.message":
+    "Der Knowledge-Pod-Speicher ist nicht verfügbar, die Auswahl konnte daher nicht geprüft werden. Versuche es gleich noch einmal.",
+  "chat.error.knowledgeStoreUnavailable.remediation":
+    "Falls das bestehen bleibt, starte Keiko neu.",
+  "chat.error.jiraPodUnavailable.title": "Jira Pod nicht mehr verfügbar",
+  "chat.error.jiraPodUnavailable.message":
+    "Der an diesen Chat gebundene Jira Pod ist nicht mehr verfügbar. Wähle erneut einen Jira Pod.",
+  "chat.error.jiraPodUnavailable.remediation":
+    "Öffne das Menü Datenquellen über der Unterhaltung, wähle einen Jira Pod und sende deine Nachricht erneut.",
+  "chat.error.jiraPodVerification.title": "Jira Pod muss geprüft werden",
+  "chat.error.jiraPodVerification.message":
+    "Der Jira Pod muss erneut geprüft werden, bevor dieser Chat ihn nutzen kann. Prüfe ihn im Knowledge Pods Hub.",
+  "chat.error.jiraPodVerification.remediation":
+    "Öffne den Knowledge Pods Hub, prüfe die Jira-Verbindung und sende deine Nachricht dann erneut.",
+  "chat.error.jiraPodConnectionChanged.title": "Jira-Verbindung geändert",
+  "chat.error.jiraPodConnectionChanged.message":
+    "Die Jira-Verbindung hat sich geändert, nachdem dieser Chat seinen Jira Pod gewählt hat. Wähle den Jira Pod erneut.",
+  "chat.error.jiraPodConnectionChanged.remediation":
+    "Öffne das Menü Datenquellen über der Unterhaltung, wähle den Jira Pod erneut und sende deine Nachricht dann erneut.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",

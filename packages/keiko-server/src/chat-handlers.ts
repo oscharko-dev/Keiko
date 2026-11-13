@@ -308,6 +308,7 @@ import {
   resolveAppSessionReadAuthority,
 } from "./coding-app-session/appSessionReadAuthority.js";
 import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
+import { JIRA_POD_REFUSALS, JiraPodRefusalFault } from "./chat-jira-pod-refusal.js";
 export {
   MAX_CONTEXT_MESSAGES,
   conversationForGateway,
@@ -581,6 +582,12 @@ export function catalogDispatchErrorResult(
   site: readonly [operation: string, source: string] = ["POST /api/desktop/chat", "chat.send"],
 ): RouteResult {
   if (emitDiagnostic) emitGatewayErrorDiagnostic(deps, error, correlationId, ...site);
+  if (error instanceof JiraPodRefusalFault) {
+    // A state conflict the person can resolve (choose or verify the Jira Pod again), not a
+    // permission question: 409, like the other refused scope states, with a closed code.
+    const { code, message } = JIRA_POD_REFUSALS[error.readiness];
+    return { status: 409, body: errorBody(code, message, correlationId) };
+  }
   const [status, code, message] = CHAT_TOOL_ERROR_RESPONSES[error.status];
   return { status, body: errorBody(code, message, correlationId) };
 }

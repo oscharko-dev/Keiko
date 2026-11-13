@@ -3505,4 +3505,115 @@ describe("runPortableCli", () => {
     );
     expect(leftovers).toEqual([]);
   });
+
+  // A double-click on the downloaded `Keiko.exe` shows nothing for minutes while the managed
+  // installation is set up (#4358: about nine minutes under x64 emulation, then the cold start).
+  // The launcher says so once, through the existing alert path, when it begins a first installation.
+  describe("first-installation notice", () => {
+    const launcherDeps = (
+      home: string,
+      notices: unknown[],
+    ): Parameters<typeof runPortableCli>[3] => ({
+      homedir: () => home,
+      now: () => NOW,
+      spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      lifecycleFn: () => Promise.resolve(0),
+      notifySetupStartedFn: (env): void => {
+        notices.push(env);
+      },
+    });
+
+    it("announces the setup once when a downloaded Windows package starts a first installation", async () => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const source = writePortableFixture(join(root, "bootstrap"), "windows-x64");
+      const env = { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" };
+      const notices: unknown[] = [];
+
+      const code = await runPortableCli(
+        portableLaunchArgs(
+          "windows-x64",
+          source,
+          managedRootForTarget(home, "windows-x64"),
+          join(root, "state"),
+        ),
+        capture().io,
+        env,
+        launcherDeps(home, notices),
+      );
+
+      expect(code).toBe(0);
+      expect(notices).toEqual([env]);
+    });
+
+    it("stays silent for the launch of the installed copy and for an upgrade over it", async () => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const stateDir = join(root, "state");
+      const managedRoot = managedRootForTarget(home, "windows-x64");
+      const env = { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" };
+      const oldSource = writePortableFixture(join(root, "bootstrap"), "windows-x64", "0.2.11");
+      const newSource = writePortableFixture(join(root, "downloaded"), "windows-x64", "0.2.12");
+      await runPortableCli(
+        portableLaunchArgs("windows-x64", oldSource, managedRoot, stateDir),
+        capture().io,
+        env,
+        launcherDeps(home, []),
+      );
+      const notices: unknown[] = [];
+
+      const installed = await runPortableCli(
+        portableLaunchArgs("windows-x64", managedRoot, managedRoot, stateDir),
+        capture().io,
+        env,
+        launcherDeps(home, notices),
+      );
+      const upgrade = await runPortableCli(
+        portableLaunchArgs("windows-x64", newSource, managedRoot, stateDir),
+        capture().io,
+        env,
+        launcherDeps(home, notices),
+      );
+
+      expect([installed, upgrade]).toEqual([0, 0]);
+      expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.12");
+      expect(notices).toEqual([]);
+    });
+
+    it("stays silent for a dry run and on a platform whose launcher shows its own progress", async () => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const windowsSource = writePortableFixture(join(root, "bootstrap"), "windows-x64");
+      const macosSource = writePortableFixture(join(root, "mac"), "macos-arm64");
+      const notices: unknown[] = [];
+
+      await runPortableCli(
+        [
+          ...portableLaunchArgs(
+            "windows-x64",
+            windowsSource,
+            managedRootForTarget(home, "windows-x64"),
+            join(root, "state"),
+          ),
+          "--dry-run",
+        ],
+        capture().io,
+        { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" },
+        launcherDeps(home, notices),
+      );
+      await runPortableCli(
+        portableLaunchArgs(
+          "macos-arm64",
+          macosSource,
+          managedRootForTarget(home, "macos-arm64"),
+          join(root, "mac-state"),
+        ),
+        capture().io,
+        { KEIKO_PORTABLE_UI_LAUNCH: "1" },
+        launcherDeps(home, notices),
+      );
+
+      expect(notices).toEqual([]);
+    });
+  });
 });

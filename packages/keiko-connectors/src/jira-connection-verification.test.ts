@@ -11,7 +11,10 @@ import type {
   AtlassianHttpBodyResult,
 } from "./atlassian-http-port.js";
 
-function response(body: unknown, status = 200): AtlassianHttpBodyResult {
+function response(
+  body: unknown,
+  status = 200,
+): Extract<AtlassianHttpBodyResult, { kind: "response" }> {
   const bodyText = typeof body === "string" ? body : JSON.stringify(body);
   return {
     kind: "response",
@@ -216,11 +219,27 @@ describe("bounded Jira Data Center verification", () => {
   });
 
   it("discards server facts when identity verification fails", async () => {
-    const { port } = fixture([response(version), response({}, 401)]);
+    const { port } = fixture([
+      response(version),
+      { ...response({}, 401), authenticationFailure: "jira" },
+    ]);
     expect(await verifyJiraDataCenterCompatibility(port, "https://jira.example")).toEqual({
       status: "auth-failed",
     });
   });
+
+  it.each(["foreign", "denied"] as const)(
+    "reports an identity 401 of origin %s as unconfirmed, not as a rejected token (#4353)",
+    async (authenticationFailure) => {
+      const { port } = fixture([
+        response(version),
+        { ...response({}, 401), authenticationFailure },
+      ]);
+      expect(await verifyJiraDataCenterCompatibility(port, "https://jira.example")).toEqual({
+        status: "auth-unverified",
+      });
+    },
+  );
 
   it("does not request identity after the shared verification deadline", async () => {
     let now = 0;
@@ -282,7 +301,11 @@ describe("bounded Jira Data Center verification", () => {
   it.each([
     [response("<html>login</html>"), "invalid-response"],
     [response({}, 302), "redirect-refused"],
-    [response({}, 401), "auth-failed"],
+    [{ ...response({}, 401), authenticationFailure: "jira" }, "auth-failed"],
+    // #4353: a 401 that Jira did not author proves nothing about the token.
+    [{ ...response({}, 401), authenticationFailure: "foreign" }, "auth-unverified"],
+    [{ ...response({}, 401), authenticationFailure: "denied" }, "auth-unverified"],
+    [response({}, 401), "auth-unverified"],
     [response({}, 403), "forbidden"],
     [response({ ...version, version: "9.0.0" }), "unsupported-version"],
     [response({ ...version, deploymentType: "Cloud" }), "unsupported-version"],

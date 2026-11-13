@@ -751,6 +751,8 @@ const START_REFUSAL_SUMMARY_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey>
     "CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED",
     "codingWorkbench.alert.startRefusedWorkspaceVolume",
   ],
+  // #4351: a Start belongs to the model it was pressed for.
+  ["CODING_RUNTIME_MODEL_CHANGED_DURING_CHECK", "codingWorkbench.alert.startEndedModelChanged"],
 ]);
 
 // #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that

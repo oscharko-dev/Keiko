@@ -508,22 +508,30 @@ export function parseJiraDraftReference(
 }
 export type JiraDraftResolution =
   | { readonly ok: true; readonly arguments: CatalogJsonObject }
-  | { readonly ok: false; readonly reason: "draft-not-found" | "draft-changed" };
+  | {
+      readonly ok: false;
+      readonly reason: "draft-not-found" | "draft-changed" | "connection-changed";
+    };
 
 /**
  * The staged draft a `jira.draft` call names, as the `{ items }` arguments every consumer parses.
  * `undefined` when the call does not name a staged draft. The digest the call carries must be the
  * digest of the items held now: a draft extended after the digest was read is a different draft.
+ * A draft resolves only under the connection it was stored with: project and issue-type ids repeat
+ * between Jira instances, so after a Pod switch the old draft must never run on the new Jira. No
+ * current connection (`undefined`) resolves nothing.
  */
 export function resolveJiraDraftArguments(
   args: Readonly<Record<string, unknown>>,
   lookup: (draftId: string) => StagedJiraDraft | undefined,
+  currentFingerprint: string | undefined,
 ): JiraDraftResolution | undefined {
   if (!("draftId" in args) && !("draftDigest" in args)) return undefined;
   const reference = parseJiraDraftReference(args);
   const draft = reference === undefined ? undefined : lookup(reference.draftId);
   if (reference === undefined || draft === undefined)
     return { ok: false, reason: "draft-not-found" };
+  if (draft.fingerprint !== currentFingerprint) return { ok: false, reason: "connection-changed" };
   return draft.digest === reference.draftDigest &&
     jiraDraftDigest(draft.items, draft.sourceBindings) === draft.digest
     ? { ok: true, arguments: { items: draft.items } as CatalogJsonObject }

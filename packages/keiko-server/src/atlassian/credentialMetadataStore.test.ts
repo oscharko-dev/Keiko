@@ -2,11 +2,25 @@
 // config dir. The store must fail CLOSED on corrupt or tampered content (never treating an
 // unreadable store as empty) and must persist only the non-secret metadata projection.
 
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
+import {
+  inspectWindowsOwnerPrivateFiles,
+  windowsOwnerPrivateVerdict,
+} from "@oscharko-dev/keiko-security/windows-owner-private";
 import {
   AtlassianCredentialMetadataStoreError,
   atlassianCredentialMetadataPath,
@@ -56,6 +70,33 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
+// Issue #4358 names the two file-mode assertions of this suite, which were skipped on win32, and
+// asks for their Windows equivalent; the store itself is unchanged.
+// POSIX proves privacy with the file mode. Windows has no mode bits worth trusting, so the same
+// claim is proven there from the file's own security descriptor, bound to an open descriptor, under
+// the confidentiality policy: nobody but the user, SYSTEM and Administrators holds any access
+// (#4358, ADR-0182 D5).
+function expectPrivateToOwner(path: string): void {
+  if (process.platform !== "win32") {
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    return;
+  }
+  const fd = openSync(path, "r");
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    const inspection = inspectWindowsOwnerPrivateFiles([path]);
+    const [facts] = inspection.files;
+    expect(facts?.kind).toBe("facts");
+    if (facts === undefined) return;
+    const opened = { dev: stat.dev, ino: stat.ino };
+    expect(windowsOwnerPrivateVerdict(facts, inspection.principal, opened, "none")).toEqual({
+      kind: "owner-private",
+    });
+  } finally {
+    closeSync(fd);
+  }
+}
+
 describe("createAtlassianCredentialMetadataStore", () => {
   it("round-trips insert / get / list / delete", () => {
     const store = createAtlassianCredentialMetadataStore({ configPath });
@@ -82,9 +123,7 @@ describe("createAtlassianCredentialMetadataStore", () => {
     );
     const persisted = JSON.parse(readFileSync(storePath, "utf8")) as { version: number };
     expect(persisted.version).toBe(1);
-    if (process.platform !== "win32") {
-      expect(statSync(storePath).mode & 0o777).toBe(0o600);
-    }
+    expectPrivateToOwner(storePath);
   });
 
   it("fails closed on invalid JSON instead of treating the store as empty", () => {
@@ -150,8 +189,7 @@ describe("private Data Center target admissions", () => {
     expect(restarted.getTargetAdmission(updated)).toEqual(admission);
     expect(restarted.get(updated.authRef)).not.toHaveProperty("targetAdmission");
     expect(restarted.list()).toHaveLength(2);
-    if (process.platform !== "win32")
-      expect(statSync(atlassianCredentialMetadataPath(configPath)).mode & 0o777).toBe(0o600);
+    expectPrivateToOwner(atlassianCredentialMetadataPath(configPath));
   });
 
   it("removes the binding together with its credential and cannot recreate a deleted identity", () => {

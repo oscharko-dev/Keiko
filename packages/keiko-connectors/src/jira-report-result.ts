@@ -18,6 +18,8 @@ import { jiraReportFigures } from "./jira-report-figures.js";
 import type {
   JiraReport,
   JiraReportProgress,
+  JiraReportRequirementCoverage,
+  JiraReportScope,
   JiraReportTypeProgress,
 } from "./jira-report-types.js";
 import type { JiraReportSession } from "./jira-report-session.js";
@@ -101,36 +103,97 @@ function deviationItems(report: JiraReport): readonly CatalogJsonObject[] {
     details: capped(item.details).items,
   }));
 }
+function coveredItem(item: JiraReportRequirementCoverage): CatalogJsonObject {
+  return {
+    id: item.id,
+    covered: true,
+    coveredBy: capped(item.coveredBy).items,
+    coveredByTotal: item.coveredBy.length,
+    coveringTotal: item.coveringTotal,
+    coveringDone: item.coveringDone,
+    itemCount: item.itemCount,
+    done: item.done,
+    byType: typeItems(item.byType),
+  };
+}
+function uncoveredItem(
+  id: string,
+  names: Readonly<Record<string, string>>,
+  derived: boolean,
+): CatalogJsonObject {
+  return {
+    id,
+    covered: false,
+    ...(derived ? { derived: true } : {}),
+    ...(Object.hasOwn(names, id) ? { label: names[id] ?? "" } : {}),
+  };
+}
+/** The headline's covered, then its uncovered ones, then the derived units beside it, likewise. */
 function requirementItems(report: JiraReport): readonly CatalogJsonObject[] {
   const requirements = report.coverage.requirements;
   if (requirements === undefined) return [];
+  const { derived } = requirements;
   return [
-    ...requirements.items.map((item) => ({
-      id: item.id,
-      covered: true,
-      coveredBy: capped(item.coveredBy).items,
-      coveredByTotal: item.coveredBy.length,
-      coveringTotal: item.coveringTotal,
-      coveringDone: item.coveringDone,
-      itemCount: item.itemCount,
-      done: item.done,
-      byType: typeItems(item.byType),
-    })),
-    ...requirements.uncovered.map((id) => ({ id, covered: false })),
+    ...requirements.items.map(coveredItem),
+    ...requirements.uncovered.map((id) => uncoveredItem(id, requirements.uncoveredLabels, false)),
+    ...(derived === undefined
+      ? []
+      : [
+          ...derived.items.map((item) => ({
+            ...coveredItem(item),
+            derived: true,
+            ...(Object.hasOwn(derived.names, item.id)
+              ? { label: derived.names[item.id] ?? "" }
+              : {}),
+          })),
+          ...derived.uncovered.map((id) => uncoveredItem(id, derived.names, true)),
+        ]),
   ];
 }
 function requirementsSummary(report: JiraReport): CatalogJsonValue {
   const requirements = report.coverage.requirements;
   if (requirements === undefined) return null;
+  const { derived } = requirements;
+  const all = requirementItems(report);
+  const headline = requirements.items.length + requirements.uncovered.length;
   return {
     declared: requirements.declared,
     covered: requirements.covered,
     // The section pages the covered requirements first, then the uncovered ones.
     uncovered: listed(requirements.uncovered, "requirements", undefined, requirements.items.length),
-    items: listed(requirementItems(report).slice(0, requirements.items.length), "requirements"),
+    items: listed(all.slice(0, requirements.items.length), "requirements"),
+    ...(derived === undefined
+      ? {}
+      : {
+          derived: {
+            declared: derived.declared,
+            covered: derived.covered,
+            items: listed(
+              all.slice(headline, headline + derived.items.length),
+              "requirements",
+              undefined,
+              headline,
+            ),
+            uncovered: listed(
+              all.slice(headline + derived.items.length),
+              "requirements",
+              undefined,
+              headline + derived.items.length,
+            ),
+          },
+        }),
   };
 }
 
+/** The scope as plain JSON: the nested estimate field references are copied, not shared. */
+function scopeView(scope: JiraReportScope): CatalogJsonObject {
+  const { estimateConfigured, estimateAlso, ...flat } = scope;
+  return {
+    ...flat,
+    ...(estimateConfigured === undefined ? {} : { estimateConfigured: { ...estimateConfigured } }),
+    ...(estimateAlso === undefined ? {} : { estimateAlso: { ...estimateAlso } }),
+  };
+}
 function completenessView(report: JiraReport): CatalogJsonObject {
   const { completeness } = report;
   return {
@@ -164,7 +227,7 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
     digest: report.digest,
     generatedAt: report.generatedAt,
     figures: jiraReportFigures(report),
-    scope: { ...report.scope },
+    scope: scopeView(report.scope),
     completeness: completenessView(report),
     hierarchy: { ...report.hierarchy },
     progress: {

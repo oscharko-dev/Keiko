@@ -3,6 +3,8 @@ import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { processServerLogSinkFor } from "./process-log-sink.js";
 import type {
   UpdateCommandPreview,
   UpdateInstallMode,
@@ -359,7 +361,10 @@ export function detectUpdateInstallMode(
   facts: UpdateRuntimeFacts,
   env: NodeJS.ProcessEnv = {},
   fs: DetectorFs = nodeDetectorFs,
-  securityLogSink?: SecurityLogSink,
+  // The Windows local-volume check of a portable layout reports its refusal here. An absent sink
+  // lost that line and counted it as an unwired port on every start (#4351), so the process sink
+  // is the default and a caller that has a narrower one still passes it.
+  securityLogSink: SecurityLogSink = processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
 ): UpdateInstallMode {
   const portableMode = detectPortableUpdateInstallMode(
     {
