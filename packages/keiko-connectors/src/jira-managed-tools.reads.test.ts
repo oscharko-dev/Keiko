@@ -714,7 +714,7 @@ describe("jira.search with requested fields (#4176)", () => {
       { id: "customfield_1", state: "value", text: "Selected" },
       { id: "reporter" },
     ]);
-    expect((row?.fieldValues as readonly unknown[]).length).toBe(2);
+    expect(row?.fieldValues as readonly unknown[]).toHaveLength(2);
   });
   it("omits fieldValues when every requested field is already on the row, but keeps an absent one visible", async () => {
     const f = fixture(search([hit("SYN-1", {})]));
