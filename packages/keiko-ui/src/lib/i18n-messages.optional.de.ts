@@ -4635,6 +4635,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.voice.batchFinish": "Sprechen beenden",
   "chat.voice.batchMode":
     "Digital Twin: Sprich, um Keiko zu unterbrechen, oder nutze die Taste Unterbrechen.",
+  "chat.error.modelCheckCooldown":
+    "Das gewählte Modell hat vor einem Moment nicht geantwortet. Warte kurz und versuche es erneut, oder wähle ein anderes Modell.",
+  "chat.error.modelChecking":
+    "Das gewählte Modell wird noch geprüft. Warte, bis es antwortet, und sende dann erneut.",
   "chat.error.modelNotReady":
     "Das gewählte Modell hat seine Prüfung nicht bestanden, deshalb wurde nichts gesendet. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle und versuche es erneut.",
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",

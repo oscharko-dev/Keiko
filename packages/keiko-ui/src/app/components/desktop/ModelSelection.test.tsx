@@ -931,6 +931,136 @@ describe("first use of an unchecked model on Send (#4351)", () => {
     expect(view.result.current.error).toMatch(/gateway check failed/);
   });
 
+  function deferredCheck(): {
+    readonly promise: Promise<{ state: "ready" | "not-ready"; outcome?: "cooldown" }>;
+    readonly resolve: (value: { state: "ready" | "not-ready"; outcome?: "cooldown" }) => void;
+  } {
+    let resolve!: (value: { state: "ready" | "not-ready"; outcome?: "cooldown" }) => void;
+    const promise = new Promise<{ state: "ready" | "not-ready"; outcome?: "cooldown" }>((next) => {
+      resolve = next;
+    });
+    return { promise, resolve };
+  }
+
+  it("sends nothing and clears nothing when the person typed during the check", async () => {
+    const check = deferredCheck();
+    vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    let outcome: unknown;
+    const sending = act(async () => {
+      outcome = await view.result.current.sendMessage();
+    });
+    await waitFor(() => {
+      expect(api.startChatModelSelectionCheck).toHaveBeenCalledTimes(1);
+    });
+    act(() => view.result.current.setDraft("hello, and more"));
+    check.resolve({ state: "ready" });
+    await sending;
+    expect(outcome).toEqual({ status: "not-sent" });
+    expect(spies.sent()).toBe(0);
+    expect(view.result.current.draft).toBe("hello, and more");
+  });
+
+  it("sends nothing when the person switched the model during the check", async () => {
+    const check = deferredCheck();
+    vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    let outcome: unknown;
+    const sending = act(async () => {
+      outcome = await view.result.current.sendMessage();
+    });
+    await waitFor(() => {
+      expect(api.startChatModelSelectionCheck).toHaveBeenCalledTimes(1);
+    });
+    act(() => view.result.current.setSelectedModel("model-a"));
+    check.resolve({ state: "ready" });
+    await sending;
+    expect(outcome).toEqual({ status: "not-sent" });
+    expect(spies.sent()).toBe(0);
+    expect(view.result.current.draft).toBe("hello");
+  });
+
+  it("sends nothing to the old chat when the person opened another chat during the check", async () => {
+    const check = deferredCheck();
+    vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    const other = makeHookChat({ id: "hook-chat-2", selectedModel: "model-a", updatedAt: 1 });
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    let outcome: unknown;
+    const sending = act(async () => {
+      outcome = await view.result.current.sendMessage();
+    });
+    await waitFor(() => {
+      expect(api.startChatModelSelectionCheck).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await view.result.current.openChat(other);
+    });
+    check.resolve({ state: "ready" });
+    await sending;
+    expect(outcome).toEqual({ status: "not-sent" });
+    expect(spies.sent()).toBe(0);
+  });
+
+  it("tells a second Send why it waits, and starts one check only", async () => {
+    const check = deferredCheck();
+    const start = vi.spyOn(api, "startChatModelSelectionCheck").mockReturnValue(check.promise);
+    sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    const first = act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await first;
+    await waitFor(() => {
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+    expect(view.result.current.error).toBe("MODEL_CHECKING");
+    expect(start).toHaveBeenCalledTimes(1);
+    check.resolve({ state: "not-ready" });
+  });
+
+  it("shows the cooldown reason, and records a ready answer so the next Send costs no round trip", async () => {
+    const start = vi
+      .spyOn(api, "startChatModelSelectionCheck")
+      .mockResolvedValueOnce({ state: "not-ready", outcome: "cooldown" })
+      .mockResolvedValue({ state: "ready" });
+    const spies = sendSpies();
+    const view = await bootChatHook();
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+    expect(view.result.current.error).toBe("MODEL_CHECK_COOLDOWN");
+    expect(spies.sent()).toBe(0);
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(spies.sent()).toBe(1);
+    });
+    expect(
+      view.result.current.models.find((model) => model.id === "model-unchecked")?.conversationReady,
+    ).toBe(true);
+    // The answer is recorded: sending again asks the server nothing.
+    const calls = start.mock.calls.length;
+    await act(async () => {
+      void view.result.current.sendMessage();
+      await Promise.resolve();
+    });
+    expect(start.mock.calls.length).toBe(calls);
+  });
+
   it("starts no check for a model that already answered", async () => {
     vi.spyOn(api, "fetchChats").mockResolvedValue({
       chats: [makeHookChat({ selectedModel: "model-a" })],

@@ -147,6 +147,7 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
     droppedEmbeddingModelCount: { type: "integer", dataClass: "count", required: false },
     unverifiedChatModelCount: { type: "integer", dataClass: "count", required: false },
     droppedChatModelCount: { type: "integer", dataClass: "count", required: false },
+    droppedWildcardRouteCount: { type: "integer", dataClass: "count", required: false },
     skippedChatModelCount: { type: "integer", dataClass: "count", required: false },
     chatSmokeRoundDeadlineMs: { type: "integer", dataClass: "duration", required: false },
     semanticSkippedCount: { type: "integer", dataClass: "count", required: false },
@@ -351,6 +352,8 @@ export interface ServerDiagnosticRecord {
   // (timeout, transport/proxy/TLS) and stay configured; `dropped` were answered and rejected.
   readonly unverifiedChatModelCount?: number | undefined;
   readonly droppedChatModelCount?: number | undefined;
+  // Discovered wildcard route patterns (`openai/*`) dropped by their shape, never sent a request.
+  readonly droppedWildcardRouteCount?: number | undefined;
   // Of the unverified chat candidates, how many the smoke round's deadline never tried, and that
   // deadline (PR #3602 review): a skipped model is not one that timed out.
   readonly skippedChatModelCount?: number | undefined;
@@ -506,6 +509,7 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
   addBoundedField(fields, "unverifiedChatModelCount", record.unverifiedChatModelCount);
   addBoundedField(fields, "droppedChatModelCount", record.droppedChatModelCount);
+  addBoundedField(fields, "droppedWildcardRouteCount", record.droppedWildcardRouteCount);
   addBoundedField(fields, "skippedChatModelCount", record.skippedChatModelCount);
   addBoundedField(fields, "chatSmokeRoundDeadlineMs", record.chatSmokeRoundDeadlineMs);
   addBoundedField(fields, "semanticSkippedCount", record.semanticSkippedCount);
@@ -860,6 +864,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   // #3591: chat counterpart — a candidate the smoke probe never got an answer from is kept
   // unverified instead of dropped; one the gateway answered and rejected is dropped.
   "Setup kept chat candidates the smoke test never got an answer from and dropped candidates the gateway answered and rejected.",
+  "Setup dropped discovered wildcard route patterns by their shape; no request was sent for them.",
   "gateway-setup-audit-validation-failed",
   "entailment-claim-judging-incomplete",
   "entailment stage failed; degraded to WARN",

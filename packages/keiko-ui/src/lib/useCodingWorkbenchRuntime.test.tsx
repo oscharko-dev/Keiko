@@ -29,6 +29,7 @@ import { GATEWAY_MODEL_CATALOG_UPDATED_EVENT } from "@/app/components/desktop/wi
 import {
   useCodingWorkbenchRuntime,
   type UseCodingWorkbenchRuntimeInput,
+  type UseCodingWorkbenchRuntimeResult,
 } from "./useCodingWorkbenchRuntime";
 
 vi.mock("./coding-workbench-provider-api", async (importOriginal) => {
@@ -647,6 +648,82 @@ describe("useCodingWorkbenchRuntime", () => {
       unavailableReason: "conversation-not-ready",
     });
     view.unmount();
+  });
+
+  describe("a Start that is checking its model (#4351)", () => {
+    const unverified = {
+      status: "available",
+      profileId: "gateway-redacted",
+      modelAlias: "model-redacted",
+      localEndpointPath: "/api/coding-sidecar/gateway",
+      supportsStreaming: true,
+      supportsToolCalling: true,
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 64,
+        maxRequestBytes: 64_000,
+      },
+      verification: "unverified",
+    } as never;
+
+    async function pendingStart(): Promise<{
+      readonly view: ReturnType<typeof renderHook<UseCodingWorkbenchRuntimeResult, unknown>>;
+      readonly first: Promise<void>;
+    }> {
+      installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+      vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(
+        snapshot({ state: "starting", runId: "run-9", pendingPermission: undefined }),
+      );
+      const profile = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile);
+      profile.mockResolvedValue(unverified);
+      const activeWorkspace = workspace();
+      const view = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      act(() => view.result.current.actions.setSelectedModel("model-redacted"));
+      await waitFor(() => expect(view.result.current.state.source.value?.available).toBe(true));
+      // The checked model is still being checked: the source says so and never settles.
+      profile.mockResolvedValue({
+        status: "unavailable",
+        reason: "model-verification-pending",
+      } as never);
+      const first = view.result.current.actions.start("fix it", { projectMemoryEnabled: false });
+      await waitFor(() =>
+        expect(view.result.current.state.source.value?.unavailableReason).toBe(
+          "model-verification-pending",
+        ),
+      );
+      return { view, first };
+    }
+
+    it("makes a second Start during the wait a no-op", async () => {
+      const { view, first } = await pendingStart();
+      const reads = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length;
+      await view.result.current.actions.start("again", { projectMemoryEnabled: false });
+      expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length).toBe(reads);
+      expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+      view.unmount();
+      await first;
+    });
+
+    it("starts nothing when the window closes during the wait", async () => {
+      const { view, first } = await pendingStart();
+      view.unmount();
+      await first;
+      expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing when the model changes during the wait", async () => {
+      const { view, first } = await pendingStart();
+      act(() => view.result.current.actions.setSelectedModel("another-model"));
+      await first;
+      expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+      view.unmount();
+    });
   });
 
   it("keeps Start blocked when a registered workspace is ready but the browser is unpaired", async () => {

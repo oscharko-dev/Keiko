@@ -24398,7 +24398,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["started", "joined", "already-answered", "unknown-model", "bad-request", "failed"],
+        values: [
+          "started",
+          "joined",
+          "already-answered",
+          "cooldown",
+          "unknown-model",
+          "bad-request",
+          "failed",
+        ],
       },
     },
     causal: "correlation",
@@ -43225,6 +43233,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       droppedChatModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      droppedWildcardRouteCount: {
         type: "integer",
         dataClass: "count",
         required: false,

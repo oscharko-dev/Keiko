@@ -92,7 +92,7 @@ the model in use, never a model nobody picked. A restored selection is not check
 restore or opening a Chat; the first Send or Start on a model without a current observation is the
 first use that checks it and goes ahead when it answers, and a window opening reads the Workbench
 profile with `check=use` (the model in use only) while a pick or Start reads with `check=1`. A check
-without a verdict may be repeated by a pick or the next Send within the not-ready cooldown; an
+without a verdict may be repeated by a pick or the next Send after the not-ready cooldown has passed; an
 explicit Settings verification that answers definitively ends the walk's pause. Gateway Setup keeps
 the full round for explicitly named deployments; for a discovered listing a candidate the walk
 rejects is dropped, a wildcard route pattern is dropped by its shape, and listed models no request

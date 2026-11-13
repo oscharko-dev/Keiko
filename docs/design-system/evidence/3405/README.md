@@ -486,3 +486,8 @@ in the Linux arm64 gates container (Node 24.18.0, `--init`): **9 passed (1.7m)**
 three records were taken from this run; its fallback-font captures were discarded and the 14
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
+
+The final correction round of the same change (stale check re-validation on Send, Start ownership,
+the closed `cooldown` outcome and its message, wildcard-route and asserted-model wording) changed the
+catalog and `api.ts` digests once more; the producer was rerun the same way on 2026-11-13 (Linux gates
+container, `--init`, Node 24.18.0, 9 passed in 1.6m) and only the three records were kept.

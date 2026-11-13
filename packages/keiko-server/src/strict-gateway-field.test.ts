@@ -751,8 +751,9 @@ describe("strict LiteLLM field twin", () => {
 
   // The field gateway has six tool-capable models. Persisting one model's conclusion bumps the
   // configuration generation, and a run that started under the previous generation has its
-  // conclusion discarded: probing them all at once stored the first and silently dropped the rest,
-  // leaving every other model in the picker at 4,096 for the whole cooldown.
+  // conclusion discarded: probing them all at once stored the first and silently dropped the rest.
+  // Since #4351 nothing probes them all: an explicit check proves the model in use, a pick proves the
+  // model picked, and every other listed model stays at 4,096 until someone picks it.
   it("proves the context window of the checked model, and of another tool-capable model only when it is picked", async () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };

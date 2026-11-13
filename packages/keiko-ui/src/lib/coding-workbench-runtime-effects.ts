@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
@@ -43,13 +43,47 @@ interface RuntimeEventStreamInput {
   readonly setStreamEpoch: Dispatch<SetStateAction<number>>;
 }
 
+function usePickedModelRefreshEffect({
+  state,
+  refreshSource,
+  intent,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly intent: RefObject<{ pickedModelId: string | null }>;
+  readonly refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>;
+}): void {
+  // A model chosen in the picker is the model the source describes: choosing one reads its profile
+  // and asks the server to check exactly that model when it holds no fresh answer for it. No other
+  // re-read asks for a check, so an open Workbench probes nothing in the background (customer 1.3.4).
+  // Only the person's own pick asks for the explicit check (`check=1`, set by the pick action);
+  // every other read this effect makes (the first read of a mounted window, a changed runtime
+  // preference, a model adopted from a run, a StrictMode double run) is `check=use`, which asks
+  // only for the model the server itself has in use (#4351). Pressing Start on a model that was
+  // never checked is the first use that checks it.
+  useEffect(() => {
+    const picked = intent.current.pickedModelId;
+    intent.current.pickedModelId = null;
+    void refreshSource(
+      false,
+      undefined,
+      picked !== null && picked === state.selectedModelId ? true : "use",
+    );
+  }, [state.runtimePreference, state.selectedModelId, refreshSource, intent]);
+}
+
 export function useCodingWorkbenchRuntimeRefreshEffects({
   state,
   refreshRuntime,
   refreshSource,
   refreshRun,
+  intent,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
+  readonly intent: RefObject<{ pickedModelId: string | null }>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshSource: (
     catalogAlreadyCurrent?: boolean,
@@ -61,18 +95,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshRuntime();
   }, [state.requestedMode, refreshRuntime]);
-  // A model chosen in the picker is the model the source describes: choosing one reads its profile
-  // and asks the server to check exactly that model when it holds no fresh answer for it. No other
-  // re-read asks for a check, so an open Workbench probes nothing in the background (customer 1.3.4).
-  // The first read of a mounted window is not a pick: it carries a restored selection, so it asks
-  // only for the model the server itself has in use (`check=use`, #4351). Pressing Start on a
-  // model that was never checked is the first use that checks it.
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    const restored = !mountedRef.current;
-    mountedRef.current = true;
-    void refreshSource(false, undefined, restored ? "use" : true);
-  }, [state.runtimePreference, state.selectedModelId, refreshSource]);
+  usePickedModelRefreshEffect({ state, refreshSource, intent });
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"
   // after the operator had just verified tool calling, until a reload (workbench end-to-end run,

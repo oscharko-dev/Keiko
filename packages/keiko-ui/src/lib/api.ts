@@ -887,13 +887,17 @@ export async function runGatewayReadiness(
  * checked; the result arrives through the models read, which joins the running check. It is the only
  * request a model pick sends: listing and passive reads never start provider work.
  */
+export interface ChatModelSelectionCheck {
+  readonly state: "checking" | "ready" | "not-ready" | "unchecked";
+  /** Why no check may be running: `already-answered` (a refusal stays refused) or `cooldown`. */
+  readonly outcome?: "started" | "joined" | "already-answered" | "cooldown" | "unknown-model";
+}
+
 export async function startChatModelSelectionCheck(
   modelId: string,
   correlationId?: string,
-): Promise<{ readonly state: "checking" | "ready" | "not-ready" | "unchecked" }> {
-  const response = await fetchJson<{
-    readonly state: "checking" | "ready" | "not-ready" | "unchecked";
-  }>(
+): Promise<ChatModelSelectionCheck> {
+  const response = await fetchJson<ChatModelSelectionCheck>(
     "/api/gateway/readiness/selection",
     { method: "POST", body: JSON.stringify({ modelId }) },
     undefined,

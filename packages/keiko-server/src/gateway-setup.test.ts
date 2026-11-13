@@ -2257,15 +2257,155 @@ describe("handleGatewaySetup", () => {
     }
   });
 
-  it("tests the models a request asserts once, not on every step of the walk (#4351)", async () => {
-    const uiDir = await tempDir("keiko-gw-ui-asserted-once-");
-    const evidenceDir = await tempDir("keiko-gw-ev-asserted-once-");
+  it.each([
+    ["a thrown timeout", { code: ERROR_CODES.TIMEOUT }],
+    ["a thrown rate limit", { code: ERROR_CODES.RATE_LIMIT }],
+    ["a thrown gateway cancellation", { code: ERROR_CODES.CANCELLED }],
+    ["a thrown 503", { httpStatus: 503 }],
+  ])(
+    "keeps a default that ended without a verdict (%s) configured as unverified and probes nothing else (#4351)",
+    async (_name, failure) => {
+      const uiDir = await tempDir("keiko-gw-ui-thrown-no-verdict-");
+      const evidenceDir = await tempDir("keiko-gw-ev-thrown-no-verdict-");
+      const calls: (readonly string[])[] = [];
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (_config, modelIds) => {
+          calls.push([...modelIds]);
+          return Promise.reject(Object.assign(new Error("no verdict"), failure));
+        },
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      // One rule: the default is no rejection, it is kept unverified, and nothing else is probed.
+      expect(calls).toEqual([["slow-default"]]);
+      expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual([
+        "slow-default",
+        "would-answer",
+      ]);
+      expect(
+        (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds,
+      ).toEqual(["slow-default", "would-answer"]);
+      deps.store.close();
+    },
+  );
+
+  it("drops a discovered wildcard route by its shape, with its own diagnostic and no request (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-wildcard-");
+    const evidenceDir = await tempDir("keiko-gw-ev-wildcard-");
+    const calls: (readonly string[])[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.resolve(["good-chat", "openai/*", "other-chat"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        return Promise.resolve([modelIds[0] ?? ""]);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(calls.flat()).not.toContain("openai/*");
+    expect(
+      (result.body as { droppedChatModelIds?: readonly string[] }).droppedChatModelIds,
+    ).toEqual(["openai/*"]);
+    const wildcard = diagnostics.find(
+      (record) => record.code === "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
+    );
+    expect(wildcard).toMatchObject({ droppedWildcardRouteCount: 1 });
+    // The wildcard is not "answered and rejected" by the gateway: that wording stays for real rejections.
+    expect(
+      diagnostics.some(
+        (record) =>
+          record.code === "GATEWAY_DISCOVERY_UNUSABLE_MODELS" &&
+          (record as { droppedChatModelCount?: number }).droppedChatModelCount !== undefined,
+      ),
+    ).toBe(false);
+    deps.store.close();
+  });
+
+  it("never calls the tester with an empty list when only wildcard routes were discovered (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-wildcard-only-");
+    const evidenceDir = await tempDir("keiko-gw-ev-wildcard-only-");
     const calls: (readonly string[])[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["openai/*", "anthropic/*"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        return Promise.resolve([...modelIds]);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(calls).toEqual([]);
+    expect(result.status).toBe(502);
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    deps.store.close();
+  });
+
+  it("does not judge a deployment the person named by its shape (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-wildcard-named-");
+    const evidenceDir = await tempDir("keiko-gw-ev-wildcard-named-");
+    const calls: (readonly string[])[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["named-chat", "named-star-*"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        return Promise.resolve([...modelIds]);
+      },
+    });
+    await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        deploymentNames: ["named-chat", "named-star-*"],
+      }),
+      deps,
+    );
+    // A named deployment keeps the full round, whatever its spelling.
+    expect(calls[0]).toEqual(["named-chat", "named-star-*"]);
+    deps.store.close();
+  });
+
+  it("tests the models a request asserts once, not on every step of the walk (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-asserted-once-");
+    const evidenceDir = await tempDir("keiko-gw-ev-asserted-once-");
+    const calls: (readonly string[])[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
       gatewayModelDiscovery: () => Promise.resolve(["text-chat", "second-chat", "vision-chat"]),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
       gatewaySetupTester: (_config, modelIds) => {
@@ -2287,7 +2427,13 @@ describe("handleGatewaySetup", () => {
     // The asserted model is tested with the first step only; a later step of the same walk never
     // repeats it (a later whole-verification retry on another base URL is a separate attempt).
     expect(calls.slice(0, 2)).toEqual([["text-chat", "vision-chat"], ["second-chat"]]);
-    // The asserted model was never tested, so no capability claim is stored for it.
+    // The gateway rejected that whole first step, so the asserted model is reported as dropped with
+    // the default; the diagnostic counts both, and neither is tested again.
+    expect(
+      diagnostics.find((record) => record.code === "GATEWAY_DISCOVERY_UNUSABLE_MODELS"),
+    ).toMatchObject({ droppedChatModelCount: 2 });
+    // The request claimed image input for a model that was never tested, and Setup never stores a
+    // capability claim for an untested model: it fails closed with 502, by design.
     expect(result.status).toBe(502);
     deps.store.close();
   });

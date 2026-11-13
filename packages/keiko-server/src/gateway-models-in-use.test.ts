@@ -10,6 +10,7 @@ import {
   createDefaultEmbeddingCapability,
   parseGatewayConfig,
   type GatewayConfig,
+  type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
@@ -21,7 +22,15 @@ import {
   initializeConfiguredConversationReadiness,
 } from "./gateway-readiness.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
-import { resolveNewCapsuleEmbeddingIdentity } from "./local-knowledge-handlers.js";
+import {
+  codingWorkbenchProbesSettledForTests,
+  resetCodingWorkbenchContextWindowProbesForTests,
+} from "./gateway-readiness.js";
+import {
+  configuredEmbeddingProviders,
+  resolveNewCapsuleEmbeddingIdentity,
+  selectEmbeddingModelId,
+} from "./local-knowledge-handlers.js";
 import { handleModels } from "./read-handlers.js";
 import type { RouteContext } from "./routes.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -48,6 +57,8 @@ const compositions: UiHandlerDeps[] = [];
 const directories: string[] = [];
 
 afterEach(async () => {
+  // The Workbench's proofs are process-wide: no test inherits another's settled proof.
+  resetCodingWorkbenchContextWindowProbesForTests();
   for (const deps of compositions.splice(0)) await deps.dispose?.();
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
   vi.unstubAllGlobals();
@@ -55,8 +66,26 @@ afterEach(async () => {
   resetServerLogger();
 });
 
+function toolCapableChat(modelId: string, toolCapable: boolean): ModelCapability {
+  const base = createDefaultChatCapability(modelId);
+  return toolCapable
+    ? {
+        ...base,
+        toolCalling: true,
+        workflowEligible: true,
+        contextWindow: 131_072,
+        contextWindowAssumed: false,
+      }
+    : base;
+}
+
 function config(
-  options: { readonly declaredChat?: string; readonly litellm?: boolean } = {},
+  options: {
+    readonly declaredChat?: string;
+    readonly litellm?: boolean;
+    /** Chat models that claim tool calling without a proof: the Workbench has to prove them. */
+    readonly toolCapable?: boolean;
+  } = {},
 ): GatewayConfig {
   return parseGatewayConfig({
     providers: [CHAT_A, CHAT_B, CHAT_C, EMBEDDING_A, EMBEDDING_B].map((modelId) => ({
@@ -69,12 +98,12 @@ function config(
       ...(options.litellm === true ? { tokenCounter: "litellm" } : {}),
     })),
     capabilities: [
-      createDefaultChatCapability(CHAT_A),
+      toolCapableChat(CHAT_A, options.toolCapable === true),
       {
-        ...createDefaultChatCapability(CHAT_B),
+        ...toolCapableChat(CHAT_B, options.toolCapable === true),
         ...(options.declaredChat === CHAT_B ? { chatModeDeclared: true } : {}),
       },
-      createDefaultChatCapability(CHAT_C),
+      toolCapableChat(CHAT_C, options.toolCapable === true),
       createDefaultEmbeddingCapability(EMBEDDING_A),
       createDefaultEmbeddingCapability(EMBEDDING_B),
     ],
@@ -645,4 +674,139 @@ it("proves a never-probed embedding alias when a Knowledge Pod first binds it, a
   await settle(150);
   const refused = await resolveNewCapsuleEmbeddingIdentity(another);
   expect(refused.ok).toBe(false);
+});
+
+it("opens the Workbench after a default without a verdict without a single request to a model nobody picked", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(
+    config({ litellm: true, toolCapable: true }),
+    true,
+    "corr-open-no-verdict",
+  );
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
+  });
+  await deps.waitForStartupGatewayCatalog?.();
+  await settle(300);
+  // A window opening reads with `check=use`, with or without the restored selection.
+  await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=use"), deps);
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-c&check=use"), deps);
+  await settle(200);
+  expect(gateway.requestsFor(CHAT_B)).toBe(0);
+  expect(gateway.requestsFor(CHAT_C)).toBe(0);
+});
+
+it("labels a window opening's proof as startup and a pick's as selection, only once the request is sent", async () => {
+  const sink = loggedSink();
+  gatewayDouble();
+  const deps = composition();
+  deps.gatewayConfig?.set(config({ toolCapable: true }), true, "corr-tool-scope");
+  await vi.waitFor(() => {
+    expect(currentConversationReady(deps, CHAT_A)).toBe(true);
+  });
+  await settle();
+  const toolScopes = (): readonly (string | undefined)[] =>
+    linesOf(sink, "gateway.readiness.scope")
+      .filter((line) => line.extra?.modelKind === "tool-calling")
+      .map((line) => String(line.extra?.reason));
+  expect(toolScopes()).toEqual([]);
+  // The window opens on the model in use, which still lacks its proof: that request is the startup kind.
+  await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
+  await codingWorkbenchProbesSettledForTests();
+  expect(toolScopes()).toEqual(["startup"]);
+  // Reading it again sends nothing, so it writes nothing.
+  await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
+  await codingWorkbenchProbesSettledForTests();
+  expect(toolScopes()).toEqual(["startup"]);
+  // A pick of another model is the selection kind.
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=1"), deps);
+  await codingWorkbenchProbesSettledForTests();
+  expect(toolScopes()).toEqual(["startup", "selection"]);
+});
+
+it("names a recheck the cooldown withheld with its own closed outcome", async () => {
+  const sink = loggedSink();
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(config(), true, "corr-cooldown-outcome");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
+  });
+  await settle(150);
+  await handleGatewaySelectionCheck(
+    { ...selectionRequest({ modelId: CHAT_A }), correlationId: "corr-pick-cooldown" },
+    deps,
+  );
+  const outcome = linesOf(sink, "gateway.readiness.selection").find(
+    (line) => line.correlationId === "corr-pick-cooldown",
+  );
+  expect(outcome?.extra?.outcome).toBe("cooldown");
+});
+
+it("reports a failing startup walk under the configuration request's correlation id", async () => {
+  const sink = loggedSink();
+  const records: { readonly source?: unknown; readonly parentCorrelationId?: unknown }[] = [];
+  gatewayDouble();
+  const deps = composition();
+  const failing = {
+    ...deps,
+    diagnostics: { record: (record: (typeof records)[number]): void => void records.push(record) },
+    activityLog: {
+      write: (event: { readonly op: string }): void => {
+        if (event.op === "gateway.readiness.automatic.completed")
+          throw new TypeError("sink unavailable");
+        sink.write(event as never);
+      },
+    },
+  } as UiHandlerDeps;
+  initializeConfiguredConversationReadiness(
+    ((): UiHandlerDeps => {
+      deps.gatewayConfig?.set(config(), false);
+      return failing;
+    })(),
+    "corr-walk-parent",
+  );
+  await vi.waitFor(() => {
+    expect(records.some((record) => record.source === "gateway-readiness.startup-walk")).toBe(true);
+  });
+  const walk = records.find((record) => record.source === "gateway-readiness.startup-walk");
+  expect(walk?.parentCorrelationId).toBe("corr-walk-parent");
+});
+
+// The consumers that bind or query "the" embedding alias (repository semantic search, the memory
+// embedder, the first pod of a new capsule) all take the first of `configuredEmbeddingProviders`. Startup
+// proves the alias `chooseEmbeddingProvider` selects. If the two ever named different aliases, a consumer
+// would use an alias nobody proved: this pins that they name the same one, also when the aliases differ
+// in cost class and the cheaper one is listed second.
+it("proves at startup exactly the embedding alias every consumer binds first", async () => {
+  const gateway = gatewayDouble();
+  const deps = composition();
+  const cheapSecond = parseGatewayConfig({
+    providers: [EMBEDDING_A, EMBEDDING_B, CHAT_A].map((modelId) => ({
+      modelId,
+      baseUrl: ENDPOINT,
+      apiKey: "throwaway-key",
+      timeoutMs: 1000,
+      maxRetries: 0,
+      retryBaseDelayMs: 1,
+    })),
+    capabilities: [
+      { ...createDefaultEmbeddingCapability(EMBEDDING_A), costClass: "high" },
+      { ...createDefaultEmbeddingCapability(EMBEDDING_B), costClass: "low" },
+      createDefaultChatCapability(CHAT_A),
+    ],
+  });
+  const first = configuredEmbeddingProviders(cheapSecond)[0]?.modelId;
+  expect(selectEmbeddingModelId(cheapSecond)).toBe(first);
+  deps.gatewayConfig?.set(cheapSecond, true, "corr-embedding-consumers");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(first ?? "")).toBeGreaterThan(0);
+  });
+  await settle(100);
+  const other = first === EMBEDDING_A ? EMBEDDING_B : EMBEDDING_A;
+  expect(gateway.requestsFor(other)).toBe(0);
 });

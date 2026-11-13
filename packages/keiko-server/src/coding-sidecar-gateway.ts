@@ -103,7 +103,7 @@ import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-eng
 import {
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
-  conversationModelInUse,
+  conversationModelForStartupProof,
   ensureCodingWorkbenchContextWindows,
   isAnyCodingWorkbenchProbePending,
   isAnyCodingWorkbenchProbeUnanswered,
@@ -5158,8 +5158,9 @@ export async function handleCodingSidecarGatewayProfile(
   // limits gets its context window proven here, before the projection judges it.
   const modelId = profileModelId(ctx, deps);
   const elected = resolveGatewayProfile(deps, modelId).result;
-  const checkRequested = profileCheckRequested(ctx, deps, modelId);
   const subject = modelId ?? (elected.status === "available" ? elected.modelAlias : undefined);
+  const checkMode = profileCheckMode(ctx, deps, subject);
+  const checkRequested = checkMode !== undefined;
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
@@ -5181,6 +5182,7 @@ export async function handleCodingSidecarGatewayProfile(
           subject,
           ctx.correlationId,
           checkRequested,
+          checkMode === "use" ? "startup" : "selection",
         ),
         electedConversationReadiness(ctx, deps, subject, checkRequested),
       ]),
@@ -5209,17 +5211,22 @@ function electedConversationReadiness(
   return checkSelectedConversationModel(deps, subjectModelId, ctx.correlationId);
 }
 
-// `check=1` is a person's explicit pick or Start: it may check any configured model. `check=use` is
-// a window opening or a restored selection (#4351): it asks only for the model in use, which the
-// server elects itself, and a selection that is not that model is read passively.
-function profileCheckRequested(
+// `check=1` is a person's explicit pick or Start: the server may check any configured model.
+// `check=use` is a window opening or a restored selection (#4351): it may ask only for the model
+// startup itself would prove, and only when the read's own subject (a named model, else the model the
+// profile elects) is exactly that model. A model nobody picked, such as the next one after a default
+// that got no verdict, is read passively.
+function profileCheckMode(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  modelId: string | undefined,
-): boolean {
+  subject: string | undefined,
+): "pick" | "use" | undefined {
   const mode = ctx.url.searchParams.get("check");
-  if (mode === "1") return true;
-  return mode === "use" && (modelId === undefined || modelId === conversationModelInUse(deps));
+  if (mode === "1") return "pick";
+  const inUse = conversationModelForStartupProof(deps);
+  // A read that names no model and elects none (its own shortfall keeps it unavailable) asks about
+  // the model startup would prove, which is the only one `check=use` may ever reach.
+  return mode === "use" && inUse !== undefined && (subject ?? inUse) === inUse ? "use" : undefined;
 }
 
 // Bounded wait for the checks a profile read asks for. A check that fails is reported under this

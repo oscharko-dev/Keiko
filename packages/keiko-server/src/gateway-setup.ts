@@ -6894,6 +6894,8 @@ interface ChatAdmission {
   readonly droppedModelIds: readonly string[];
   /** Listed models no request reached (#4351): configured and reported unverified. */
   readonly listedUnverifiedModelIds: readonly string[];
+  /** Wildcard route patterns dropped by their shape, without a request: part of `droppedModelIds`. */
+  readonly wildcardRouteCount: number;
 }
 
 function temporaryChatAdmission(
@@ -6927,6 +6929,7 @@ function temporaryChatAdmission(
     skippedModelIds: [],
     droppedModelIds: [],
     listedUnverifiedModelIds: [],
+    wildcardRouteCount: 0,
   };
 }
 
@@ -6953,15 +6956,22 @@ async function admitChatCandidates(
   candidateModels: SetupCandidateModels,
   candidateConfig: GatewayConfig,
 ): Promise<ChatAdmission> {
-  // A wildcard route pattern (`openai/*`) names no model: it is dropped by its shape, with no request.
-  const wildcardIds = candidateModels.chatModelIds.filter((id) => id.includes("*"));
-  const ids = candidateModels.chatModelIds.filter((id) => !id.includes("*"));
+  // A discovered wildcard route pattern (`openai/*`) names no model: it is dropped by its shape,
+  // with no request. A deployment the person named explicitly is never judged by its shape.
+  const discovered = input.deploymentNames.length === 0;
+  const wildcardIds = discovered
+    ? candidateModels.chatModelIds.filter((id) => id.includes("*"))
+    : [];
+  const ids = candidateModels.chatModelIds.filter((id) => !wildcardIds.includes(id));
   // A model the request itself asserts a capability for is a model the person named: it is tested
   // with the default, so no claim is ever stored for a model that was not tested.
   const asserted = input.imageInputModelIdsProvided
     ? input.imageInputModelIds.filter((id) => ids.includes(id))
     : [];
-  if (input.deploymentNames.length > 0 || ids.length <= 1 || asserted.length >= ids.length) {
+  // Nothing but wildcard patterns was listed: there is no model to test, and the tester is never
+  // called with an empty list. This is the same refusal an all-rejected gateway gives.
+  if (ids.length === 0 && wildcardIds.length > 0) throw allProbesFailedError([]);
+  if (!discovered || ids.length <= 1 || asserted.length >= ids.length) {
     return chatAdmissionFromTest(await input.tester(candidateConfig, ids), [], wildcardIds, ids);
   }
   const ordered = preferredConversationModelOrder(
@@ -6995,9 +7005,13 @@ async function walkChatCandidates(
         );
       return chatAdmissionFromTest(tested, order.slice(index + 1), dropped, gatewayOrder);
     } catch (error) {
-      if (definitiveGatewaySetupFailure(error) || temporaryGatewaySetupFailure(error)) throw error;
-      // No verdict (an overloaded or unreachable gateway) is no rejection: the model stays
-      // configured as unverified and the walk stops, so no other model is loaded on that gateway.
+      // A cancelled request is the caller's decision, not a verdict; a refused credential is the
+      // gateway's answer to every model.
+      input.signal?.throwIfAborted();
+      if (definitiveGatewaySetupFailure(error)) throw error;
+      // One rule for every failure without a verdict, thrown or by status (a timeout, a rate limit,
+      // an overloaded or unreachable gateway): it is no rejection. The model stays configured as
+      // unverified and the walk stops, so no other model is loaded on that gateway.
       if (setupFailureWithoutVerdict(error))
         return withoutVerdictAdmission(
           input,
@@ -7008,7 +7022,9 @@ async function walkChatCandidates(
           gatewayOrder,
         );
       lastError = error;
-      dropped.push(id);
+      // The gateway rejected every model of this step, including the ones the request asserted a
+      // capability for: they are reported as dropped, and the walk never tests them again.
+      dropped.push(id, ...(index === 0 ? asserted : []));
     }
   }
   throw lastError;
@@ -7078,6 +7094,7 @@ function chatAdmissionFromTest(
     skippedModelIds: testResult.skippedModelIds ?? [],
     droppedModelIds: [...(testResult.droppedModelIds ?? []), ...droppedInWalk],
     listedUnverifiedModelIds: listedUnverified,
+    wildcardRouteCount: droppedInWalk.filter((id) => id.includes("*")).length,
   };
 }
 
@@ -7474,7 +7491,20 @@ function reportChatSmokeAdmission(
   chatAdmission: ChatAdmission,
 ): void {
   const unverified = chatAdmission.unverifiedModelIds.length;
-  const dropped = chatAdmission.droppedModelIds.length;
+  // Wildcard patterns were dropped by their shape, not answered and rejected: they have their own line.
+  const dropped = chatAdmission.droppedModelIds.length - chatAdmission.wildcardRouteCount;
+  if (chatAdmission.wildcardRouteCount > 0)
+    emitServerDiagnostic(diagnostics, {
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      timestamp: new Date().toISOString(),
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.discovery",
+      errorClass: "GatewayDiscoveryWildcardRoutes",
+      message:
+        "Setup dropped discovered wildcard route patterns by their shape; no request was sent for them.",
+      code: "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
+      droppedWildcardRouteCount: chatAdmission.wildcardRouteCount,
+    });
   if (unverified === 0 && dropped === 0) return;
   emitServerDiagnostic(diagnostics, {
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,

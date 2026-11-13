@@ -1238,7 +1238,7 @@ or Start (Workbench) on a model without a current observation is the first use t
 that it is being checked and goes ahead when it answers; a refusal shows its reason and keeps the
 draft. A window opening reads the Workbench profile with `check=use`, which asks only for the model
 in use; a pick or Start reads with `check=1`. A check that ended without a verdict may be checked
-again by a pick or the next Send, bounded by the existing not-ready cooldown; a definitive refusal
+again by a pick or the next Send, only after the existing not-ready cooldown has passed; a definitive refusal
 stays refused. Gateway Setup keeps the full verification round for explicitly named deployments;
 for a discovered listing, a candidate the walk reaches and the gateway rejects is dropped, a wildcard
 route pattern is dropped by its shape without a request, a default that got no verdict is kept

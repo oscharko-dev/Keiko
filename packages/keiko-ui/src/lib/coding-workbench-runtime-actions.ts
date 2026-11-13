@@ -69,6 +69,7 @@ interface RuntimeActionInput {
   readonly dispatch: Dispatch<CodingWorkbenchRuntimeStateAction>;
   readonly resources: RuntimeResources;
   readonly mutations: RuntimeMutationActions;
+  readonly intent: RefObject<CodingWorkbenchModelIntent>;
 }
 
 // #4351: pressing Start on a model that was never checked is the first use that checks it. The
@@ -107,32 +108,81 @@ async function settledSource(
   }
 }
 
-async function startAfterModelCheck(
+// Owned by the window: the model check a Start waits on, which ends when the window closes or the
+// model changes, and which a second Start never joins or repeats.
+export interface CodingWorkbenchModelIntent {
+  /** The model a person just picked; the next source read for it is the one explicit check. */
+  pickedModelId: string | null;
+  /** The wait of a Start that is checking its model, if one is running. */
+  startWait: AbortController | null;
+}
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+async function waitForModelCheck(
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
   refreshSource: RuntimeResources["refreshSource"],
-  start: RuntimeMutationActions["start"],
+  signal: AbortSignal,
+): Promise<boolean> {
+  const before = stateRef.current.source;
+  await refreshSource(false, undefined, true);
+  await settledSource(stateRef, before);
+  const deadline = Date.now() + START_MODEL_CHECK_MAX_WAIT_MS;
+  while (!signal.aborted && sourceCheckPending(stateRef.current) && Date.now() < deadline) {
+    await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ abortableDelay(
+      START_MODEL_CHECK_POLL_MS,
+      signal,
+    );
+    if (signal.aborted) break;
+    const pendingBefore = stateRef.current.source;
+    await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ refreshSource();
+    await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ settledSource(
+      stateRef,
+      pendingBefore,
+    );
+  }
+  return !signal.aborted && stateRef.current.source.value?.available === true;
+}
+
+async function startAfterModelCheck(
+  input: {
+    readonly stateRef: RefObject<CodingWorkbenchRuntimeState>;
+    readonly refreshSource: RuntimeResources["refreshSource"];
+    readonly start: RuntimeMutationActions["start"];
+    readonly intent: CodingWorkbenchModelIntent;
+  },
   taskIntent: string,
   options: CodingWorkbenchStartOptions,
 ): Promise<void> {
-  if (sourceNeedsModelCheck(stateRef.current)) {
-    const before = stateRef.current.source;
-    await refreshSource(false, undefined, true);
-    await settledSource(stateRef, before);
-    const deadline = Date.now() + START_MODEL_CHECK_MAX_WAIT_MS;
-    while (sourceCheckPending(stateRef.current) && Date.now() < deadline) {
-      await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ new Promise<void>(
-        (resolve) => setTimeout(resolve, START_MODEL_CHECK_POLL_MS),
-      );
-      const pendingBefore = stateRef.current.source;
-      await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ refreshSource();
-      await /* NOSONAR typescript:S9382 -- one bounded poll at a time, by design (#4351). */ settledSource(
-        stateRef,
-        pendingBefore,
-      );
-    }
-    if (stateRef.current.source.value?.available !== true) return;
+  const { stateRef, refreshSource, start, intent } = input;
+  // A second Start while the first one is checking its model is a no-op.
+  if (intent.startWait !== null) return;
+  if (!sourceNeedsModelCheck(stateRef.current)) {
+    await start(taskIntent, options);
+    return;
   }
-  await start(taskIntent, options);
+  const controller = new AbortController();
+  intent.startWait = controller;
+  let ready = false;
+  try {
+    ready = await waitForModelCheck(stateRef, refreshSource, controller.signal);
+  } finally {
+    if (intent.startWait === controller) intent.startWait = null;
+  }
+  // The window closed or the model changed during the wait: nothing starts.
+  if (ready && !controller.signal.aborted) await start(taskIntent, options);
 }
 
 function createCodingWorkbenchRuntimeActions({
@@ -140,6 +190,7 @@ function createCodingWorkbenchRuntimeActions({
   dispatch,
   resources,
   mutations,
+  intent,
 }: RuntimeActionInput): CodingWorkbenchRuntimeActions {
   const {
     prepareCodexSetup,
@@ -168,13 +219,24 @@ function createCodingWorkbenchRuntimeActions({
   return {
     setRequestedMode: (mode) => dispatch({ kind: "select-mode", mode }),
     setAgent: (agent) => dispatch({ kind: "select-agent", agent }),
-    setRuntimePreference: (preference) => {
+    setRuntimePreference: (preference): void => {
       if (stateRef.current.runtimePreference === preference) return;
       profileSequence.current += 1;
       sourceSequence.current += 1;
       dispatch({ kind: "select-runtime-preference", preference });
     },
-    setSelectedModel: (modelId) => dispatch({ kind: "select-model", modelId }),
+    setSelectedModel: (modelId): void => {
+      // A new model ends the wait of a Start that was checking the old one.
+      intent.current.startWait?.abort();
+      if (modelId !== null && stateRef.current.selectedModelId === modelId) {
+        // The same model picked again: nothing changes, so the explicit check is asked for here.
+        void refreshSource(false, undefined, true);
+        return;
+      }
+      // The next source read for this model is the person's pick; every other read is passive.
+      intent.current.pickedModelId = modelId;
+      dispatch({ kind: "select-model", modelId });
+    },
     setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
     prepareCodexSetup,
     refreshProfile,
@@ -182,7 +244,11 @@ function createCodingWorkbenchRuntimeActions({
     refreshRuntime,
     refreshRun,
     start: (taskIntent, options) =>
-      startAfterModelCheck(stateRef, refreshSource, start, taskIntent, options),
+      startAfterModelCheck(
+        { stateRef, refreshSource, start, intent: intent.current },
+        taskIntent,
+        options,
+      ),
     cancelStart,
     decideApproval,
     stop,
@@ -201,7 +267,7 @@ function createCodingWorkbenchRuntimeActions({
 export function useCodingWorkbenchRuntimeActions(
   input: RuntimeActionInput,
 ): CodingWorkbenchRuntimeActions {
-  const { stateRef, dispatch, resources, mutations } = input;
+  const { stateRef, dispatch, resources, mutations, intent } = input;
   const {
     prepareCodexSetup,
     profileSequence,
@@ -231,6 +297,7 @@ export function useCodingWorkbenchRuntimeActions(
       createCodingWorkbenchRuntimeActions({
         stateRef,
         dispatch,
+        intent,
         resources: {
           prepareCodexSetup,
           profileSequence,
@@ -262,6 +329,7 @@ export function useCodingWorkbenchRuntimeActions(
       decideApproval,
       dispatch,
       inboxAction,
+      intent,
       pause,
       prepareCodexSetup,
       profileSequence,

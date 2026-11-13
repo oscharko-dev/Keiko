@@ -172,6 +172,8 @@ type WorkbenchProbeTrigger = (typeof WORKBENCH_PROBE_TRIGGERS)[number];
 interface WorkbenchRunEvidence {
   readonly basis: WorkbenchProbeBasis;
   readonly trigger: WorkbenchProbeTrigger;
+  /** Why this proof started, for the scope line that is written when its request is sent. */
+  readonly scopeReason: ConversationCheckReason;
 }
 
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
@@ -623,6 +625,7 @@ const SELECTION_CHECK_OUTCOMES = [
   "started",
   "joined",
   "already-answered",
+  "cooldown",
   "unknown-model",
   "bad-request",
   "failed",
@@ -872,6 +875,14 @@ function logReadinessRunStarted(
     logAutomaticReadinessStarted(deps, run.correlationId, modelId, names.length, timeouts, {
       workbench: run.workbench,
     });
+    // The provider is about to be called: only now is a tool-calling proof's scope line written.
+    if (run.workbench !== undefined)
+      logReadinessScope(deps, run.correlationId, {
+        reason: run.workbench.scopeReason,
+        modelKind: "tool-calling",
+        listedModelCount: configuredChatModels(selection.config).length,
+        checkedModelCount: 1,
+      });
     return;
   }
   if (run.trigger === undefined) return;
@@ -2711,12 +2722,6 @@ export function conversationModelForStartupProof(deps: UiHandlerDeps): string | 
   return moved ? undefined : inUse;
 }
 
-/** The id of the chat model the product uses now; absent without a gateway configuration. */
-export function conversationModelInUse(deps: UiHandlerDeps): string | undefined {
-  const config = currentGatewayConfig(deps);
-  return config === undefined ? undefined : inUseConversationModelId(deps, config);
-}
-
 function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
   return workbenchProbeTargets(config).filter(
     (target) =>
@@ -2727,6 +2732,8 @@ function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly Workbench
 
 interface WorkbenchProbeTarget extends WorkbenchProbeNeed {
   readonly modelId: string;
+  /** Startup proof of the model in use, or a person's pick; absent means the trigger decides. */
+  readonly scopeReason?: ConversationCheckReason;
 }
 
 function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
@@ -2825,19 +2832,26 @@ function workbenchProbeOutcome(
   return results.includes(undefined) ? "inconclusive" : "refuted";
 }
 
-function logToolCallingScope(
-  deps: UiHandlerDeps,
-  correlationId: string,
+function workbenchScopeReason(
+  target: WorkbenchProbeTarget,
   trigger: WorkbenchProbeTrigger,
-): void {
-  const current = deps.gatewayConfig?.current();
-  if (current === undefined) return;
-  logReadinessScope(deps, correlationId, {
-    reason: trigger === "startup" ? "startup" : "selection",
-    modelKind: "tool-calling",
-    listedModelCount: configuredChatModels(current).length,
-    checkedModelCount: 1,
-  });
+): ConversationCheckReason {
+  return target.scopeReason ?? (trigger === "startup" ? "startup" : "selection");
+}
+
+// Proven, yet not stored: the configuration changed under the run and the conclusion was discarded
+// as stale. Lift the cooldown so the next read proves it again instead of leaving the model unusable
+// for hours.
+function staleAfterProof(
+  deps: UiHandlerDeps,
+  target: WorkbenchProbeTarget,
+  generation: number | undefined,
+): boolean {
+  const config = deps.gatewayConfig?.current();
+  const stillNeeded =
+    config !== undefined &&
+    workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
+  return stillNeeded && deps.gatewayConfig?.generation() !== generation;
 }
 
 async function runWorkbenchProbe(
@@ -2850,7 +2864,6 @@ async function runWorkbenchProbe(
   try {
     // A proof that runs is a proof that sends: the scope line is written here, never for a queued,
     // joined, settled or withheld one.
-    logToolCallingScope(deps, correlationId, trigger);
     const report = await runGatewayReadiness(
       {
         modelId: target.modelId,
@@ -2859,19 +2872,14 @@ async function runWorkbenchProbe(
       deps,
       correlationId,
       undefined,
-      { basis: target.basis, trigger },
+      {
+        basis: target.basis,
+        trigger,
+        scopeReason: workbenchScopeReason(target, trigger),
+      },
     );
     const outcome = workbenchProbeOutcome(report, target);
-    const config = deps.gatewayConfig?.current();
-    const stillNeeded =
-      config !== undefined &&
-      workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
-    // Proven, yet not stored: the configuration changed under the run and the conclusion was
-    // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
-    // the model unusable for hours.
-    if (outcome === "proven" && stillNeeded && deps.gatewayConfig?.generation() !== generation)
-      return "stale";
-    return outcome;
+    return outcome === "proven" && staleAfterProof(deps, target, generation) ? "stale" : outcome;
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
@@ -3109,17 +3117,18 @@ export async function ensureCodingWorkbenchContextWindows(
   electedModelId: string | undefined,
   correlationId?: string,
   retryUnanswered = false,
+  scopeReason: ConversationCheckReason = "selection",
 ): Promise<void> {
   const config = deps.gatewayConfig?.current();
   if (config === undefined) return;
   // Only the model the Workbench would elect, or a person just picked, is proven (#4351): the other
-  // listed models receive no request until someone picks them. Without a name (the Workbench could
-  // elect none yet) the model in use is the one it would elect next.
-  const subject = electedModelId ?? inUseConversationModelId(deps, config);
+  // listed models receive no request until someone picks them. Without a name the model startup
+  // would prove is the only one a read may ask for.
+  const subject = electedModelId ?? conversationModelForStartupProof(deps);
   const target = workbenchProbeTargets(config).find((candidate) => candidate.modelId === subject);
   if (target === undefined) return;
   const id = correlationId ?? newCorrelationId();
-  await enqueueWorkbenchProbe(deps, config, target, id, "profile-read", {
+  await enqueueWorkbenchProbe(deps, config, { ...target, scopeReason }, id, "profile-read", {
     prioritized: true,
     retryUnanswered,
   });
@@ -3620,8 +3629,9 @@ export function startSelectedConversationCheck(
   const joined = readinessProbesFor(holder).has(key);
   const recheck = conversationQueue(holder).inconclusive.has(modelId);
   const check = startConversationCheck(deps, holder, config, modelId, id, recheck, "selection");
-  if (check === undefined || (!joined && !readinessProbesFor(holder).has(key)))
-    return settled("already-answered");
+  if (check === undefined) return settled("already-answered");
+  // A check was due but the existing not-ready cooldown withheld it: nothing was sent.
+  if (!joined && !readinessProbesFor(holder).has(key)) return settled("cooldown");
   return settled(joined ? "joined" : "started", check);
 }
 
@@ -4142,9 +4152,10 @@ export async function handleGatewaySelectionCheck(
     logSelectionOutcome(deps, correlationId, "bad-request");
     return error("BAD_REQUEST", "A model id is required.");
   }
-  // The returned check settles on its own and reports a failure under this correlation id.
-  startSelectedConversationCheck(deps, modelId, correlationId);
-  return { status: 200, body: { modelId, state: selectionCheckState(deps, modelId) } };
+  // The returned check settles on its own and reports a failure under this correlation id. The
+  // outcome says why nothing may be running: already answered, or withheld by the cooldown.
+  const { outcome } = startSelectedConversationCheck(deps, modelId, correlationId);
+  return { status: 200, body: { modelId, state: selectionCheckState(deps, modelId), outcome } };
 }
 
 function selectionCheckState(

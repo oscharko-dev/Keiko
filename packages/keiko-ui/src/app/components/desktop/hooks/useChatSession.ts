@@ -43,6 +43,8 @@ import {
 import {
   ATTACHMENT_CLEANUP_DEFERRED_ERROR,
   DRAFT_ATTACHMENTS_UNSAVED_ERROR,
+  MODEL_CHECKING_ERROR,
+  MODEL_CHECK_COOLDOWN_ERROR,
   MODEL_NOT_READY_ERROR,
   SKILL_SELECTION_UNAVAILABLE_ERROR,
 } from "@/lib/chat-session-error";
@@ -1900,21 +1902,50 @@ function adoptStartupModelSettlement(
 
 // One shared follow-up consumes already-running startup observations. No timer, focus listener,
 // provider check or retry is introduced, and configuration changes discard this observation.
-type ModelCheckOutcome = "ready" | "refused";
+type ModelCheckOutcome = "ready" | "refused" | "cooldown" | "cancelled" | "failed";
+
+// What the local model list says once the check answered: a ready answer is recorded, so the next
+// Send costs no round trip. A refusal only ends the "being checked" state: marking the model unready
+// here would make Chat send the next message to another model, which is the server's published
+// verdict to give, not this window's guess.
+function applyModelCheckResult(
+  setState: Dispatch<SetStateAction<SessionState>>,
+  modelId: string,
+  ready: boolean,
+): void {
+  setState((previous) => ({
+    ...previous,
+    models: previous.models.map((model) => {
+      if (model.id !== modelId) return model;
+      const { conversationCheckPending: _settled, ...rest } = model;
+      return ready ? { ...rest, conversationReady: true } : rest;
+    }),
+  }));
+}
 
 /**
  * The first use of a model that was never checked (#4351): ask the server for the one check, show
  * that the model is being checked, join the shared settlement read and report whether the model
  * answered. An HTTP failure is thrown to the caller, which shows its reason; nothing is swallowed.
+ * The signal ends the wait (a model switch or a closed chat); the server's check runs on.
  */
 async function checkModelOnFirstUse(
   modelId: string,
   setState: Dispatch<SetStateAction<SessionState>>,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<ModelCheckOutcome> {
   const correlationId = newClientCorrelationId();
-  const { state } = await startChatModelSelectionCheck(modelId, correlationId);
-  if (state === "ready") return "ready";
-  if (state === "not-ready") return "refused";
+  const { state, outcome } = await startChatModelSelectionCheck(modelId, correlationId);
+  if (signal.aborted) return "cancelled";
+  if (state === "ready") {
+    applyModelCheckResult(setState, modelId, true);
+    return "ready";
+  }
+  if (state === "not-ready") {
+    applyModelCheckResult(setState, modelId, false);
+    // A cooldown means the last attempt was too recent to repeat; anything else is a refusal.
+    return outcome === "cooldown" ? "cooldown" : "refused";
+  }
   // The server marks the model while its check runs; the shared settlement read adopts the result.
   setState((previous) => ({
     ...previous,
@@ -1923,19 +1954,16 @@ async function checkModelOnFirstUse(
     ),
     startupReadinessPending: true,
   }));
-  const payload = await fetchModels(correlationId, false, {
-    waitForStartup: true,
-    signal: new AbortController().signal,
-  });
+  const payload = await fetchModels(correlationId, false, { waitForStartup: true, signal });
   publishGatewayModelRefresh({
     kind: "success",
     models: payload.models,
     source: "background",
     correlationId,
   });
-  return payload.models.find((model) => model.id === modelId)?.conversationReady === true
-    ? "ready"
-    : "refused";
+  const ready = payload.models.find((model) => model.id === modelId)?.conversationReady === true;
+  applyModelCheckResult(setState, modelId, ready);
+  return ready ? "ready" : "refused";
 }
 
 async function requestModelSelectionCheck(
@@ -1957,17 +1985,21 @@ async function requestModelSelectionCheck(
 }
 
 // The first Send on a model nobody checked: "ready" goes ahead, anything else leaves the person the
-// reason (the gateway's refusal, or why the check could not run) and the draft untouched.
+// reason (the gateway's refusal, the cooldown after a recent attempt, or why the check could not
+// run) and the draft untouched. An ended wait (switch of model or chat) says nothing.
 async function checkModelBeforeSend(
   modelId: string,
   setState: Dispatch<SetStateAction<SessionState>>,
   setError: (message: string) => void,
-): Promise<ModelCheckOutcome | "failed"> {
+  signal: AbortSignal,
+): Promise<ModelCheckOutcome> {
   try {
-    const outcome = await checkModelOnFirstUse(modelId, setState);
+    const outcome = await checkModelOnFirstUse(modelId, setState, signal);
     if (outcome === "refused") setError(MODEL_NOT_READY_ERROR);
+    if (outcome === "cooldown") setError(MODEL_CHECK_COOLDOWN_ERROR);
     return outcome;
   } catch (error) {
+    if (signal.aborted) return "cancelled";
     reportClientDiagnostic("The first-use check of a chat model could not be completed.", {
       correlationId: correlationIdOf(error),
       errorKind: bffRequestErrorKind(error),
@@ -3434,6 +3466,20 @@ function applyStreamReadConsent(
   };
 }
 
+// Closing the chat, opening another or leaving the window ends the wait of a first-use check.
+function useEndFirstUseCheckOnChatChange(
+  checkRef: { readonly current: AbortController | null },
+  activeChat: { readonly id: string } | null | undefined,
+): void {
+  const identity = activeChat?.id;
+  useEffect(
+    () => (): void => {
+      checkRef.current?.abort();
+    },
+    [identity, checkRef],
+  );
+}
+
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
   // English. `documentContext` is not a component and cannot call a hook, so the session hook
@@ -3506,8 +3552,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     new Map<AbortController, ReturnType<typeof setTimeout>>(),
   );
   const sendMessageRef = useRef<SendMessage | null>(null);
-  // A first-use model check is running: a second Send waits for it instead of starting another.
-  const firstUseCheckRef = useRef(false);
+  // The first-use model check that is running, if any: a second Send is told so instead of starting
+  // another, and a switch of model or chat ends its wait.
+  const firstUseCheckRef = useRef<AbortController | null>(null);
+  // The selection and draft a send was admitted under: if either changes during a model check, the
+  // message is not sent and nothing is cleared.
+  const latestSelectedModelRef = useRef<string | undefined>(undefined);
   const canonicalVoiceQueueRef = canonicalVoicePageOutbox.queueRef;
   const canonicalVoiceQueueOwnerRef = useRef(Symbol("canonical-voice-page-outbox-owner"));
   const canonicalVoiceQueueControllerRef = useRef(new AbortController());
@@ -4123,6 +4173,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
+  useEndFirstUseCheckOnChatChange(firstUseCheckRef, state.activeChat);
+
   useEffect(() => {
     if (state.startupReadinessPending !== true) return;
     return joinStartupModelSettlement();
@@ -4202,6 +4254,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const setSelectedModel = useCallback((id: string) => {
     setError(undefined);
+    // A new model ends the wait of a Send that was checking the old one.
+    firstUseCheckRef.current?.abort();
     // Capture pre-update snapshot so the optimistic write can be rolled back if
     // the PATCH fails — without this the server and UI diverge permanently.
     let snapshot:
@@ -4315,6 +4369,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, []);
 
   const selectedSessionModelId = currentSessionModelId(state);
+  latestSelectedModelRef.current = state.selectedModel;
   const selectionUnavailable = sessionSelectionUnavailable(state);
   useSessionSelectionEvidence(state);
   const refuseHeldSelection = useCallback((): void => {
@@ -5373,6 +5428,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
+      // A Send while the first-use check of the model runs is told why, not silently dropped.
+      if (firstUseCheckRef.current !== null && options?.canonicalVoiceTarget === undefined) {
+        setError(MODEL_CHECKING_ERROR);
+        return { status: "not-sent" };
+      }
       const admission = admitCurrentSource(
         resolveSendMessageAdmission({
           options,
@@ -5382,7 +5442,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           models: state.models,
           selectionUnavailable,
           pendingAttachmentCount: pendingAttachments.length,
-          sendInFlight: isInFlight(sendStatusRef.current) || firstUseCheckRef.current,
+          sendInFlight: isInFlight(sendStatusRef.current),
         }),
       );
       if (admission.kind === "rejected") {
@@ -5394,13 +5454,29 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // shows the model as "being checked", the message goes out when the model answers, and a
       // refusal or a failure shows its reason instead; the draft stays untouched either way.
       if (canonicalTarget === undefined && modelNeedsFirstUseCheck(state.models, modelId)) {
-        firstUseCheckRef.current = true;
+        const controller = new AbortController();
+        firstUseCheckRef.current = controller;
+        const admitted = {
+          chatId: chat.id,
+          selectedModel: state.selectedModel,
+          draftRevision: draftRevisionRef.current,
+        };
+        let outcome: ModelCheckOutcome;
         try {
-          if ((await checkModelBeforeSend(modelId, setState, setError)) !== "ready")
-            return { status: "not-sent" };
+          outcome = await checkModelBeforeSend(modelId, setState, setError, controller.signal);
         } finally {
-          firstUseCheckRef.current = false;
+          if (firstUseCheckRef.current === controller) firstUseCheckRef.current = null;
         }
+        if (outcome !== "ready") return { status: "not-sent" };
+        // The wait can be long. The message goes out only if the chat, the selected model and the
+        // draft are still what they were when it was admitted; otherwise nothing is sent and
+        // nothing is cleared, and the person sends again from where they now are.
+        const unchanged =
+          !controller.signal.aborted &&
+          activeChatIdRef.current === admitted.chatId &&
+          latestSelectedModelRef.current === admitted.selectedModel &&
+          (options?.text !== undefined || draftRevisionRef.current === admitted.draftRevision);
+        if (!unchanged) return { status: "not-sent" };
       }
       if (skillSelectionBlocksSend(markdownSkill, chat.id, canonicalTarget)) {
         setError(SKILL_SELECTION_UNAVAILABLE_ERROR);
