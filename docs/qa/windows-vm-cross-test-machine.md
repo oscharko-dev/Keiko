@@ -461,8 +461,10 @@ measurement; its first host step only reached "waiting for a free slot".
 4. Install the NetKVM driver, move to `virtio-net-pci`, run `slmgr /ato`, record the expiry.
 5. Rerun the provisioning script for OpenSSH, open the firewall rule to all profiles, set
    `RealTimeIsUniversal`, run updates until none remain.
-6. Install the two Node builds, fetch and verify the Keiko release, run the start proofs.
-7. Take the `clean-updated` snapshot and write the expiry date and reminder date into the issue.
+6. Install the two Node builds, then take the `clean-updated` snapshot of the stopped machine, and
+   write the expiry date and reminder date into the issue. The snapshot comes before any Keiko
+   release or browser policy, so it matches the restore note in step 8 of the build procedure.
+7. Fetch and verify the Keiko release and run the start proofs.
 
 ## Appendix: scripts
 
@@ -634,13 +636,19 @@ try {
 }
 ```
 
-Run one pass with a SYSTEM scheduled task and read the result file:
+Run one pass with a SYSTEM scheduled task. `schtasks /run` only starts the task and returns, so
+delete the previous result first and wait for the new one before reading it:
 
-```bat
+```powershell
 schtasks /create /tn KeikoUpdate /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\keiko-setup\keiko-windows-update.ps1" /sc once /st 23:59 /ru SYSTEM /rl HIGHEST /f
+Remove-Item C:\ProgramData\keiko-setup\update-result.txt -ErrorAction SilentlyContinue
 schtasks /run /tn KeikoUpdate
-type C:\ProgramData\keiko-setup\update-result.txt
+while (-not (Test-Path C:\ProgramData\keiko-setup\update-result.txt)) { Start-Sleep -Seconds 10 }
+Get-Content C:\ProgramData\keiko-setup\update-result.txt
 ```
+
+The host helper `keiko-win-update-loop` does this for every pass, reboots when a pass reports
+`reboot=True` and stops when a pass reports `none`.
 
 ### D. `keiko-guest-toolchain.ps1`
 
@@ -767,6 +775,10 @@ if git -C "$WT" rev-parse --verify --quiet "origin/$REF^{commit}" >/dev/null; th
 SHA="$(git -C "$WT" rev-parse --verify "$REF^{commit}")"
 SHORT="${SHA:0:12}"
 SUBJECT="$(git -C "$WT" log -1 --format=%s "$SHA")"
+if [ -n "$(git -C "$WT" status --porcelain --untracked-files=no)" ]; then
+  echo "refusing to build: $WT has modified tracked files; commit, stash or reset them first" >&2
+  exit 1
+fi
 git -C "$WT" checkout --quiet --detach "$SHA"
 log "commit $SHORT  $SUBJECT"
 phase checkout
@@ -876,7 +888,10 @@ Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
   $cli = Join-Path $_.FullName 'node_modules\@oscharko-dev\keiko\dist\cli\index.js'
   if (Test-Path $cli) { & node $cli stop 2>&1 | Out-Null }
 }
-Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:\tools\node-*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+# Whatever the clean stop above left behind: only processes started from an earlier dev install.
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -like '*C:\keiko\dev\*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $pkg = Join-Path $root "$Id\node_modules\@oscharko-dev\keiko"
 if (Test-Path (Join-Path $root $Id)) { Remove-Item -Recurse -Force (Join-Path $root $Id) }
 New-Item -ItemType Directory -Force -Path $pkg | Out-Null
@@ -952,6 +967,10 @@ if git -C "$CO" rev-parse --verify --quiet "origin/$REF^{commit}" >/dev/null; th
 SHA="$(git -C "$CO" rev-parse --verify "$REF^{commit}")"
 SUBJECT="$(git -C "$CO" log -1 --format=%s "$SHA")"
 (cd "$CO" && npm run --silent dev:stop >/dev/null 2>&1 || true)
+if [ -n "$(git -C "$CO" status --porcelain --untracked-files=no)" ]; then
+  echo "refusing to build: $CO has modified tracked files; commit, stash or reset them first" >&2
+  exit 1
+fi
 git -C "$CO" checkout --quiet --detach "$SHA"
 log "commit ${SHA:0:12}  $SUBJECT"
 
@@ -973,4 +992,29 @@ echo "health      $HEALTH"
 echo "url         http://127.0.0.1:$PORT  (state $STATE)"
 echo "elapsed     $(fmt $(($(date +%s) - T0)))"
 echo "stop with   keiko-mac-dev stop"
+```
+
+### L. `keiko-win-update-loop` (host)
+
+```bash
+#!/bin/bash
+# Reboot the guest, then repeat update passes until none are left. Reboots whenever a pass asks.
+SSH="ssh -i <ssh-private-key> -p 2222 -o BatchMode=yes -o ConnectTimeout=10 keiko@127.0.0.1"
+waitssh() { for i in $(seq 1 120); do $SSH hostname >/dev/null 2>&1 && return 0; sleep 10; done; return 1; }
+reboot_guest() { $SSH 'shutdown /r /t 5' >/dev/null 2>&1; sleep 90; waitssh || exit 1; sleep 120; }
+reboot_guest
+for pass in $(seq 1 10); do
+  $SSH 'Remove-Item C:\ProgramData\keiko-setup\update-result.txt -ErrorAction SilentlyContinue; schtasks /run /tn KeikoUpdate' >/dev/null 2>&1
+  r=""
+  for i in $(seq 1 300); do
+    r=$($SSH 'if (Test-Path C:\ProgramData\keiko-setup\update-result.txt) { Get-Content C:\ProgramData\keiko-setup\update-result.txt }' 2>/dev/null)
+    [ -n "$r" ] && break; sleep 10
+  done
+  echo "pass $pass: $r"; $SSH 'Get-Content C:\ProgramData\keiko-setup\update.log -Tail 4' 2>&1 | cut -c1-180
+  case "$r" in
+    none) echo "NO UPDATES LEFT"; exit 0;;
+    error|"") echo "ERROR"; exit 2;;
+    *reboot=True*) reboot_guest;;
+  esac
+done
 ```
