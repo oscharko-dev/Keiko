@@ -843,8 +843,6 @@ describe("the Windows local-volume refusal of the portable install-mode detectio
     );
     expect(mode).toMatchObject({ status: "unsupported", reason: "portable-registration-invalid" });
     expect(activityLogLossCounters()["port-unwired"]).toBe(0);
-    expect(logs.events.map((event) => event.op)).toContain(
-      "security.windows-local-volume.refused",
-    );
+    expect(logs.events.map((event) => event.op)).toContain("security.windows-local-volume.refused");
   });
 });
