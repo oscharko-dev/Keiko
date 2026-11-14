@@ -2674,6 +2674,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
   "chat.skills.jira.proposing": "Reading project…",
+  "chat.skills.jira.proposalCount":
+    "{types} issue types: {proposals} with a proposal, {without} without.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn": "No issues of this type to learn from yet.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "The derived template was not valid, so none is proposed.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira did not answer for this type. Try again.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Not examined: the project has more issue types than one proposal run covers.",
+  "chat.skills.jira.withoutProposalMore": "and {count} more without a proposal.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira did not answer for the required fields of this type; check them before saving.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira did not answer for the sample issues of this type; check the sections before saving.",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
   "chat.skills.jira.error":
@@ -2692,25 +2707,25 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.upload": "Upload Markdown (.md, up to 128 KiB)",
   "chat.skills.retry": "Reload",
   "chat.skills.refusal.template-marker-misplaced":
-    "The template header is not at the very top of the file. Start the file with a line that contains only --- and put the template settings directly below it.",
+    "The template settings are not at the very top of the file. Start the file with a line that contains only --- and put the settings directly below it.",
   "chat.skills.refusal.template-not-a-template":
-    "This file is not a valid Jira template. Put the template settings at the top, between two lines that contain only ---.",
+    "This is not a valid Jira template. Put its settings at the top of the file, between two lines that contain only ---.",
   "chat.skills.refusal.template-front-matter-unterminated":
-    "The template header is not closed. Add a line that contains only --- after the template settings.",
+    "The settings at the top of the file are not closed. Add a line that contains only --- after the last setting.",
   "chat.skills.refusal.template-malformed-line":
-    "A line in the template header is not written as key: value. Fix that line.",
+    "A line in the settings at the top of the file is not written as name: value, for example project: REQ. Fix that line.",
   "chat.skills.refusal.template-unknown-key":
-    "The template header uses a setting Keiko does not know. Remove it or correct its name.",
+    "The settings at the top of the file contain a name Keiko does not know. Remove that line or correct the name.",
   "chat.skills.refusal.template-duplicate-key":
-    "A setting appears twice in the template header. Keep only one of them.",
+    "The same setting appears twice at the top of the file. Keep only one of the two lines.",
   "chat.skills.refusal.template-missing-key":
-    "The template header lacks a required setting, such as the project or the issue type. Add it.",
+    "A required setting is missing at the top of the file, for example project or issueType. Add it.",
   "chat.skills.refusal.template-invalid-value":
-    "A setting in the template header has a value Keiko cannot use. Check how it is written.",
+    "A setting at the top of the file has a value Keiko cannot use, for example a wrong number or a misspelled option. Check how it is written.",
   "chat.skills.refusal.template-limit-exceeded":
-    "The template has more entries or longer text than allowed. Shorten it.",
+    "The template has too many entries. A list may hold at most {listItems} entries ({activations} for activateOn), and the template at most {sections} required sections. Remove some.",
   "chat.skills.refusal.template-unsafe-pattern":
-    "A pattern in the template is too complex to check safely. Use a simpler one.",
+    "A check pattern (the search expression a rule matches a text against) is too complicated or uses something Keiko does not support. Use a shorter, simpler pattern, or plain text without a pattern.",
   "chat.skills.refusal.template-no-rules":
     "The template does not require anything yet. Add at least one rule, such as a required section.",
   "chat.skills.refusal.text-empty": "The file has no text yet. Write something, then save again.",

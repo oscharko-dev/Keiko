@@ -482,6 +482,45 @@ describe("Chat Markdown skill controls", () => {
       expect(await within(dialog).findByRole("alert")).toHaveTextContent("Look at line 7.");
     });
 
+    it("names the limits the parser enforces when the template has too many entries", async () => {
+      const refused = new ApiError("INVALID_REQUEST", "x", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-limit-exceeded" },
+      });
+      const dialog = await refuseSave(refused);
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent(
+        /at most 50 entries \(20 for activateOn\).*at most 50 required/u,
+      );
+      expect(alert.textContent).not.toMatch(/\{\w+\}/u);
+    });
+
+    it("explains in plain words what an unsafe pattern is and what to do", async () => {
+      const refused = new ApiError("INVALID_REQUEST", "x", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-unsafe-pattern" },
+      });
+      const dialog = await refuseSave(refused);
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent("the search expression a rule matches a text against");
+      expect(alert).toHaveTextContent("Use a shorter, simpler pattern, or plain text");
+    });
+
+    // The early return for a refusal once hid a failed selection read; a person needs both.
+    it("keeps the alert of a failed selection read beside the refusal", async () => {
+      vi.mocked(api.fetchMarkdownSkillSelection).mockRejectedValue(new Error("offline"));
+      const refused = new ApiError("INVALID_REQUEST", "x", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-marker-misplaced" },
+      });
+      const dialog = await refuseSave(refused);
+      await waitFor(() => expect(within(dialog).getAllByRole("alert")).toHaveLength(2));
+      const [first, second] = within(dialog).getAllByRole("alert");
+      expect(first).toHaveTextContent("not at the very top of the file");
+      expect(second).toHaveTextContent("Skills could not be updated");
+      expect(within(dialog).getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    });
+
     it("keeps the reload advice for a failure that is not a refusal of the text", async () => {
       const dialog = await refuseSave(new ApiError("CONFLICT", "Skill changed", 409));
       const alert = await within(dialog).findByRole("alert");

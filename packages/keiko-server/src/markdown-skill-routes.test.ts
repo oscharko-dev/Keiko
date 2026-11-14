@@ -315,7 +315,7 @@ describe("private Markdown skill routes (#4023)", () => {
       (reason) => {
         const sink = createBufferedServerLogSink();
         setServerLogger(createServerLogger({ sink, level: "debug" }));
-        logMarkdownSkillOperation("skills-test", "import", "rejected", 400, reason);
+        logMarkdownSkillOperation("skills-test", "import", "rejected", 400, undefined, reason);
         const line = sink.events.find((entry) => entry.op === "skills.library.operation");
         expect(line?.extra).toMatchObject({ refusalReason: reason });
       },

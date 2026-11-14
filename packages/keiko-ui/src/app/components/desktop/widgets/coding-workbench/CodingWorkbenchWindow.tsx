@@ -1928,7 +1928,13 @@ function WorkbenchColumns({
               onDeny={editorBridge.deny}
               onRetry={editorBridge.retry}
             />
-            <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
+            <RecoveryPanel
+              state={state}
+              taskIntent={taskIntent}
+              actions={actions}
+              onNewTask={() => void history.newTask()}
+              newTaskPending={history.pending}
+            />
             <ResearchGrantChip
               grant={research.grant ?? undefined}
               busy={state.mutation.status === "pending"}
@@ -3019,10 +3025,18 @@ function RecoveryPanel({
   state,
   taskIntent,
   actions,
-}: LiveSectionProps & { readonly taskIntent: string }): ReactNode {
+  onNewTask,
+  newTaskPending,
+}: LiveSectionProps & {
+  readonly taskIntent: string;
+  readonly onNewTask: () => void;
+  readonly newTaskPending: boolean;
+}): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const snapshot = state.run.value;
   if (snapshot?.state !== "recovery-required") return null;
+  const acknowledged = snapshot.recoveryAcknowledged === true;
+  const intentEmpty = taskIntent.trim().length === 0;
   const busy = state.mutation.status === "pending";
   return (
     <section className={cx(styles.card, styles.recovery)} aria-labelledby="recovery-title">
@@ -3030,13 +3044,52 @@ function RecoveryPanel({
         {t("codingWorkbench.recovery.title")}
       </PanelTitle>
       <p className={styles.summary}>{t("codingWorkbench.recovery.summary")}</p>
-      {snapshot.recoveryAcknowledged === true ? (
+      <RecoveryButtons
+        actions={actions}
+        acknowledged={acknowledged}
+        busy={busy}
+        retryDisabled={busy || !state.canRetry || intentEmpty}
+        retryIntent={taskIntent}
+      />
+      <button
+        className={styles.button}
+        type="button"
+        disabled={busy || newTaskPending}
+        onClick={onNewTask}
+      >
+        {t("codingWorkbench.recovery.newTask")}
+      </button>
+      {acknowledged && intentEmpty ? (
+        <p className={styles.summary}>{t("codingWorkbench.recovery.retryHint")}</p>
+      ) : null}
+    </section>
+  );
+}
+
+// The ways forward from Recovery required: acknowledge, then retry as a fresh run with the
+// person's own description, or leave with a new task. Nothing here sends the unknown write again.
+function RecoveryButtons({
+  actions,
+  acknowledged,
+  busy,
+  retryDisabled,
+  retryIntent,
+}: Pick<LiveSectionProps, "actions"> & {
+  readonly acknowledged: boolean;
+  readonly busy: boolean;
+  readonly retryDisabled: boolean;
+  readonly retryIntent: string;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <>
+      {acknowledged ? (
         <button
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
-          disabled={busy || !state.canRetry || taskIntent.trim().length === 0}
+          disabled={retryDisabled}
           aria-busy={busy}
-          onClick={() => void actions.retry(taskIntent)}
+          onClick={() => void actions.retry(retryIntent)}
         >
           {t("codingWorkbench.recovery.retry")}
         </button>
@@ -3051,6 +3104,6 @@ function RecoveryPanel({
           {t("codingWorkbench.recovery.acknowledge")}
         </button>
       )}
-    </section>
+    </>
   );
 }

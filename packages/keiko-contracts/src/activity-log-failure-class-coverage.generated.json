@@ -39922,10 +39922,34 @@
               "required": true
             },
             {
+              "name": "beyondLimitCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "httpStatus",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "jiraUnavailableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "nothingToLearnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "partialProposalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "phase",
@@ -39934,9 +39958,27 @@
               "required": true
             },
             {
+              "name": "proposalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "refusalReason",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "templateInvalidCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "typeCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             }
           ],

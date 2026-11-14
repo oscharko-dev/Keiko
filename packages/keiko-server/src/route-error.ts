@@ -1,3 +1,5 @@
+import { isMarkdownSkillRefusalReason } from "@oscharko-dev/keiko-contracts/bff-wire";
+
 export interface ApiError {
   readonly error: {
     readonly code: string;
@@ -15,13 +17,15 @@ export function errorBody(
   correlationId?: string,
   refusal?: { readonly reason: string; readonly line?: number },
 ): ApiError {
+  // The wire carries only a reason from the closed vocabulary; any other value is dropped.
+  const known = refusal !== undefined && isMarkdownSkillRefusalReason(refusal.reason);
   return {
     error: {
       code,
       message,
       ...(correlationId === undefined ? {} : { correlationId }),
-      ...(refusal === undefined ? {} : { reason: refusal.reason }),
-      ...(refusal?.line === undefined ? {} : { line: refusal.line }),
+      ...(known ? { reason: refusal.reason } : {}),
+      ...(known && refusal.line !== undefined ? { line: refusal.line } : {}),
     },
   };
 }

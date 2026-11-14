@@ -52,7 +52,10 @@ describe("the refusal a skill save carries (F31)", () => {
       expect(OPTIONAL_WIDGET_EN_MESSAGES[key].length).toBeGreaterThan(20);
       expect(OPTIONAL_WIDGET_DE_MESSAGES[key].length).toBeGreaterThan(20);
       for (const text of [OPTIONAL_WIDGET_EN_MESSAGES[key], OPTIONAL_WIDGET_DE_MESSAGES[key]]) {
-        expect(text).not.toMatch(/template-|INVALID_REQUEST|front-matter/u);
+        // Words a clerk does not know: the rule id, the wire code and the file format's jargon.
+        expect(text).not.toMatch(
+          /template-|INVALID_REQUEST|front.?matter|Vorlagen-Kopf|Schlüssel/iu,
+        );
       }
     },
   );

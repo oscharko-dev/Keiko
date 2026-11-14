@@ -2830,6 +2830,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalCount":
+    "{types} Vorgangstypen: {proposals} mit Vorschlag, {without} ohne.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn":
+    "Von diesem Typ gibt es noch keine Vorgänge, aus denen sich etwas ableiten lässt.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "Die abgeleitete Vorlage war nicht gültig, deshalb gibt es keinen Vorschlag.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira hat für diesen Typ nicht geantwortet. Versuch es noch einmal.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Nicht geprüft: Das Projekt hat mehr Vorgangstypen, als ein Vorschlagslauf abdeckt.",
+  "chat.skills.jira.withoutProposalMore": "und {count} weitere ohne Vorschlag.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira hat für die Pflichtfelder dieses Typs nicht geantwortet; prüf sie, bevor du speicherst.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira hat für die Beispielvorgänge dieses Typs nicht geantwortet; prüf die Abschnitte, bevor du speicherst.",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
   "chat.skills.jira.error":
@@ -2850,25 +2866,25 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
   "chat.skills.retry": "Neu laden",
   "chat.skills.refusal.template-marker-misplaced":
-    "Der Vorlagen-Kopf steht nicht ganz oben in der Datei. Beginne die Datei mit einer Zeile, die nur --- enthält, und setze die Einstellungen der Vorlage direkt darunter.",
+    "Die Einstellungen der Vorlage stehen nicht ganz oben in der Datei. Beginne die Datei mit einer Zeile, die nur --- enthält, und setze die Einstellungen direkt darunter.",
   "chat.skills.refusal.template-not-a-template":
-    "Das ist keine gültige Jira-Vorlage. Setze die Einstellungen der Vorlage nach oben, zwischen zwei Zeilen, die nur --- enthalten.",
+    "Das ist keine gültige Jira-Vorlage. Setze ihre Einstellungen an den Anfang der Datei, zwischen zwei Zeilen, die nur --- enthalten.",
   "chat.skills.refusal.template-front-matter-unterminated":
-    "Der Vorlagen-Kopf ist nicht abgeschlossen. Füge nach den Einstellungen der Vorlage eine Zeile ein, die nur --- enthält.",
+    "Die Einstellungen am Dateianfang sind nicht abgeschlossen. Füge nach der letzten Einstellung eine Zeile ein, die nur --- enthält.",
   "chat.skills.refusal.template-malformed-line":
-    "Eine Zeile im Vorlagen-Kopf ist nicht als Schlüssel: Wert geschrieben. Korrigiere diese Zeile.",
+    "Eine Zeile bei den Einstellungen am Dateianfang ist nicht als „Name: Wert“ geschrieben, zum Beispiel „project: REQ“. Korrigiere diese Zeile.",
   "chat.skills.refusal.template-unknown-key":
-    "Der Vorlagen-Kopf enthält eine Einstellung, die Keiko nicht kennt. Entferne sie oder korrigiere ihren Namen.",
+    "Bei den Einstellungen am Dateianfang steht ein Name, den Keiko nicht kennt. Entferne die Zeile oder korrigiere den Namen.",
   "chat.skills.refusal.template-duplicate-key":
-    "Eine Einstellung steht zweimal im Vorlagen-Kopf. Behalte nur eine davon.",
+    "Dieselbe Einstellung steht zweimal am Dateianfang. Behalte nur eine der beiden Zeilen.",
   "chat.skills.refusal.template-missing-key":
-    "Im Vorlagen-Kopf fehlt eine Pflichteinstellung, zum Beispiel das Projekt oder der Vorgangstyp. Ergänze sie.",
+    "Am Dateianfang fehlt eine Pflichteinstellung, zum Beispiel project oder issueType. Ergänze sie.",
   "chat.skills.refusal.template-invalid-value":
-    "Eine Einstellung im Vorlagen-Kopf hat einen Wert, den Keiko nicht verwenden kann. Prüfe die Schreibweise.",
+    "Eine Einstellung am Dateianfang hat einen Wert, den Keiko nicht verwenden kann, zum Beispiel eine falsche Zahl oder eine falsch geschriebene Option. Prüfe die Schreibweise.",
   "chat.skills.refusal.template-limit-exceeded":
-    "Die Vorlage hat mehr Einträge oder längere Texte als erlaubt. Kürze sie.",
+    "Die Vorlage hat zu viele Einträge. Eine Liste darf höchstens {listItems} Einträge haben ({activations} bei activateOn), die Vorlage höchstens {sections} Pflichtabschnitte. Entferne einige.",
   "chat.skills.refusal.template-unsafe-pattern":
-    "Ein Muster in der Vorlage ist zu komplex, um es sicher zu prüfen. Nimm ein einfacheres.",
+    "Ein Prüfmuster (der Suchausdruck, gegen den eine Regel einen Text prüft) ist zu kompliziert oder nutzt etwas, das Keiko nicht unterstützt. Nimm ein kürzeres, einfacheres Muster oder schreibe den Text ohne Muster.",
   "chat.skills.refusal.template-no-rules":
     "Die Vorlage verlangt noch nichts. Ergänze mindestens eine Regel, zum Beispiel einen Pflichtabschnitt.",
   "chat.skills.refusal.text-empty":
