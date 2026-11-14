@@ -13,7 +13,10 @@ import { savePrivateJson } from "./private-json.js";
 
 // #4351: the DACL step of a private JSON write on Windows reports its refusal or slow run to the
 // process sink. Without one the line was counted as an unwired port on every such write.
-describe("savePrivateJson on Windows", () => {
+// savePrivateJson has no seam for the DACL step, so the refusal comes from a host that is not
+// Windows: the platform is forced and the system tools cannot be resolved. On a real Windows host
+// the DACL step succeeds and there is no refusal to observe, so the proof is skipped there.
+describe.skipIf(process.platform === "win32")("savePrivateJson on Windows", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetServerLogger();
