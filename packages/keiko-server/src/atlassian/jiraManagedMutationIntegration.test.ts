@@ -331,9 +331,11 @@ function withIssueIdentity(
  * the parent and the description (the two refusals of the parent rule are proven through them).
  */
 function parentOfferedRead(
+  mode: RemoteMode,
   path: string,
   state: MutationRemoteState,
 ): ReturnType<typeof fixtureRead> | undefined {
+  if (mode !== "parent-offered") return undefined;
   if (path.includes("createmeta")) {
     const values = [...FIELDS, field("parent", "issuelink")];
     return response({ values, start: 0, size: 100, last: true, total: values.length });
@@ -347,6 +349,11 @@ function parentOfferedRead(
     fields: {
       ...body.fields,
       parent: field("parent", "issuelink"),
+      customfield_10109: {
+        ...field("customfield_10109", "any"),
+        name: "Epic Link",
+        schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+      },
       description: {
         ...field("description", "string"),
         schema: { type: "string", system: "description" },
@@ -364,10 +371,6 @@ async function fixtureReadResult(
 ): Promise<ReturnType<typeof fixtureRead>> {
   if (mode === "readback-denied" && writes > 0) return response({}, 403);
   const path = new URL(url).pathname;
-  if (mode === "parent-offered") {
-    const offered = parentOfferedRead(path, state);
-    if (offered !== undefined) return offered;
-  }
   // The deleted issue: after the DELETE, a read of any issue is a 404, as Jira answers for a gone one.
   if (mode === "issue-gone-after-write" && writes > 0 && path.includes("/rest/api/2/issue/"))
     return response({ errorMessages: ["Issue Does Not Exist"], errors: {} }, 404);
@@ -377,7 +380,7 @@ async function fixtureReadResult(
       throw new TypeError("Missing independent configured URL observation");
     return observed;
   }
-  const answer = await fixtureOperationRead(url, path, state, lifecycle);
+  const answer = await fixtureOperationRead(url, path, state, lifecycle, mode);
   // Only the gate's read before the write is given an identity; a readback shows what was written.
   return writes === 0 ? withIssueIdentity(url, path, answer) : answer;
 }
@@ -386,8 +389,10 @@ async function fixtureOperationRead(
   path: string,
   state: MutationRemoteState,
   lifecycle: ReturnType<typeof lifecycleRemoteFixture>,
+  mode: RemoteMode,
 ): Promise<ReturnType<typeof fixtureRead>> {
   return (
+    parentOfferedRead(mode, path, state) ??
     verificationProbe(path) ??
     (await lifecycle.read(url)) ??
     nativeRead(path, state) ??
@@ -457,6 +462,8 @@ function remote(
   writes: () => number;
 } {
   const state = mutationRemoteState();
+  // The issue hangs under an Epic, as the lab's Story REQ-448 did.
+  if (mode === "parent-offered") state.fields.customfield_10109 = "SYN-9";
   const lifecycle = lifecycleRemoteFixture(initialOperation);
   const privateNative = privateNativeTransportController(initialOperation);
   state.lifecycle = lifecycle.snapshot();
@@ -1379,12 +1386,12 @@ it("settles a create refused by the template's parent rule as a valid, explained
       "keiko: jira-issue-template",
       "version: 1",
       "project: SYN",
-      "issueType: Task",
+      "issueType: Story",
       "activateOn: [create]",
       'parentField: "parent"',
-      "parentIssueTypes: [Story]",
+      "parentIssueTypes: [Epic]",
       "---",
-      "# Task",
+      "# Story",
     ].join("\n"),
   );
   if (!parsed.ok) throw new TypeError("Expected a parseable template");
@@ -1396,7 +1403,7 @@ it("settles a create refused by the template's parent rule as a valid, explained
   const refused = await f.invoke("jira.create", {
     projectId: "10000",
     issueTypeId: "10001",
-    fields: { summary: "A task under a task", customfield_10000: "Required", parent: "SYN-1" },
+    fields: { summary: "A story under a task", customfield_10000: "Required", parent: "SYN-1" },
   });
 
   // SYN-1 is a Task in this synthetic Jira, the template wants a Story parent: nothing is written.
@@ -1408,7 +1415,7 @@ it("settles a create refused by the template's parent rule as a valid, explained
       data: {
         outcome: "rejected",
         reason: "field-validation",
-        violations: [{ ruleId: "parent-type-mismatch", template: "SYN/Task" }],
+        violations: [{ ruleId: "parent-type-mismatch", template: "SYN/Story" }],
       },
     },
   });
@@ -1419,7 +1426,7 @@ it("settles a create refused by the template's parent rule as a valid, explained
     throw new TypeError("Expected a result object");
   expect(Reflect.get(data, "guidance")).toBe(
     jiraTemplateViolationGuidance([
-      { ruleId: "parent-type-mismatch", subject: "parent", template: "SYN/Task" },
+      { ruleId: "parent-type-mismatch", subject: "parent", template: "SYN/Story" },
     ]),
   );
 });
@@ -1451,7 +1458,7 @@ it.each([
     "the parent rule together with a missing section",
     ["## Acceptance criteria"],
     { parent: "SYN-2", description: "No such section here." },
-    [{ ruleId: "parent-type-mismatch" }, { ruleId: "section-missing" }],
+    [{ ruleId: "section-missing" }, { ruleId: "parent-type-mismatch" }],
   ],
 ] as const)(
   "settles an edit refused by %s as a valid, explained result",
@@ -1481,6 +1488,56 @@ it.each([
     );
   },
 );
+// The live Gemma run "remove the Epic assignment" (REQ-448): clearing the Epic Link a Story template
+// requires is refused by the template's parent rule, and every such edit ended with
+// `result-contract-failed` and data null. The refusal must reach the model as a valid, explained result.
+it("settles the removal of an Epic Link that the template requires as a valid, explained result", async () => {
+  const parsed = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Task",
+      "activateOn: [edit]",
+      'parentField: "customfield_10109"',
+      "---",
+      "# Task",
+    ].join("\n"),
+  );
+  if (!parsed.ok) throw new TypeError("Expected a parseable template");
+  const f = await fixture("parent-offered", undefined, "jira.edit", {}, () => ({
+    templates: [parsed.template],
+    unreadable: 0,
+  }));
+
+  const refused = await f.invoke("jira.edit", {
+    issueKey: "SYN-1",
+    fields: { customfield_10109: null },
+  });
+
+  expect(f.writes()).toBe(0);
+  expect(refused).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "failed",
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations: [{ ruleId: "parent-missing", template: "SYN/Task" }],
+      },
+    },
+  });
+  if (refused.kind !== "settled") throw new TypeError("Expected a settled outcome");
+  const { data } = refused.result;
+  if (typeof data !== "object" || data === null || Array.isArray(data))
+    throw new TypeError("Expected a result object");
+  expect(Reflect.get(data, "guidance")).toBe(
+    jiraTemplateViolationGuidance([
+      { ruleId: "parent-missing", subject: "customfield_10109", template: "SYN/Task" },
+    ]),
+  );
+});
 it.each(["html-error-page", "server-error"] as const)(
   "keeps the turn blocked after %s: the write may have been applied (#2953)",
   async (mode) => {

@@ -652,6 +652,8 @@ const DEFINITIONS: Readonly<
       },
       ["issueKey"],
     ),
+    // The template gate also checks an assignment, so its refusal can carry the violations.
+    bounds: GATED_RESULT_BOUNDS,
   },
   "jira.comment": {
     description: "Add one plain-text comment to an issue.",
