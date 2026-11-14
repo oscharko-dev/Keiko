@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ef2da95258a4ad95b897eb0a2b944c73d9ed060f1bbf7267a03861a72df5a73b",
+    "catalogDigest": "99096035e6708fc3d9e5d3fb912a5ba9a48a66dca5fa9302d5c50c39009c788c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2297,8 +2297,8 @@
         "failureClasses": ["chat-context-management"],
         "proofIds": ["chat.context.failed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-context-log.ts:9",
-        "emitterSites": ["packages/keiko-server/src/chat-context-log.ts:50"]
+        "registrationSite": "packages/keiko-server/src/chat-context-log.ts:10",
+        "emitterSites": ["packages/keiko-server/src/chat-context-log.ts:51"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2490,8 +2490,8 @@
         "failureClasses": ["chat-context-management"],
         "proofIds": ["chat.context.management.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-context-log.ts:64",
-        "emitterSites": ["packages/keiko-server/src/chat-context-log.ts:150"]
+        "registrationSite": "packages/keiko-server/src/chat-context-log.ts:65",
+        "emitterSites": ["packages/keiko-server/src/chat-context-log.ts:151"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -11740,8 +11740,8 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.history-projection.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:57",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1341"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:55",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1339"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13391,8 +13391,8 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.native-question.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:119",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1314"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:117",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1312"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45824,6 +45824,11 @@
             "type": "integer",
             "dataClass": "count",
             "required": false
+          },
+          "partialProposalCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -45832,8 +45837,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:8",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:95"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:9",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:99"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45900,8 +45905,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:110",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:165"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:114",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:169"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -102933,6 +102938,12 @@
                   "required": false
                 },
                 {
+                  "name": "partialProposalCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "phase",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -119871,13 +119882,13 @@
     {
       "op": "chat.context.failed",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-context-log.ts:12",
+      "site": "packages/keiko-server/src/chat-context-log.ts:13",
       "package": "keiko-server"
     },
     {
       "op": "chat.context.management",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-context-log.ts:67",
+      "site": "packages/keiko-server/src/chat-context-log.ts:68",
       "package": "keiko-server"
     },
     {
@@ -120671,7 +120682,7 @@
     {
       "op": "coding-runtime.history-projection",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:60",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:58",
       "package": "keiko-server"
     },
     {
@@ -120818,7 +120829,7 @@
     {
       "op": "coding-runtime.native-question.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:122",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:120",
       "package": "keiko-server"
     },
     {
@@ -123532,13 +123543,13 @@
     {
       "op": "skills.library.operation",
       "category": "setup",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:11",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:12",
       "package": "keiko-server"
     },
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:113",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:117",
       "package": "keiko-server"
     },
     {

@@ -704,3 +704,7 @@ passed, and `npm run check:update-ui-evidence` passes. Only the source digests a
 the three records were taken from this run; its fallback-font captures were discarded and the 14
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
+
+The same producer ran again after the partial template proposal text (#4354, merged from the proposal
+branch) changed the optional catalogs once more; again only the digests and `generatedAt` were taken,
+and `npm run check:update-ui-evidence` passes.

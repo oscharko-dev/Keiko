@@ -349,10 +349,18 @@ async function sampledDescriptions(
   };
 }
 
+/**
+ * Which read Jira did not answer for a proposal that was kept anyway (#4354): the template then
+ * misses what that read would have given, and the person must check it before saving. Both reads
+ * failing leaves nothing to propose, so there are exactly two words.
+ */
+export type JiraTemplateProposalPartial = "required-fields-unavailable" | "samples-unavailable";
+
 export interface JiraTemplateProposal {
   readonly issueType: string;
   readonly markdown: string;
   readonly sampledIssueCount: number;
+  readonly partial?: JiraTemplateProposalPartial;
 }
 
 /** Why a type has no proposal: a closed reason a person can act on (#4354). */
@@ -398,9 +406,40 @@ async function proposalFor(
     requiredFields,
     sections,
   });
+  const partial = partialOf(fields, samples);
   return parseJiraIssueTemplate(markdown).ok
-    ? { proposal: { issueType: type.name, markdown, sampledIssueCount: descriptions.length } }
+    ? {
+        proposal: {
+          issueType: type.name,
+          markdown,
+          sampledIssueCount: descriptions.length,
+          ...(partial === undefined ? {} : { partial }),
+        },
+      }
     : { without: { issueType: label, reason: "template-invalid" } };
+}
+
+function partialOf(
+  fields: Read<readonly string[]>,
+  samples: Read<readonly string[]>,
+): JiraTemplateProposalPartial | undefined {
+  if (fields === "unavailable") return "required-fields-unavailable";
+  return samples === "unavailable" ? "samples-unavailable" : undefined;
+}
+
+/** The most entries without a proposal a response lists by name; the rest is only counted. */
+export const JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX = 20;
+
+/**
+ * Bounds the list of types without a proposal for a response (a project may have very many types):
+ * the first entries by name and the exact number of the others, so a person reads "and N more".
+ */
+export function boundJiraTemplateWithoutProposal(entries: readonly JiraTemplateWithoutProposal[]): {
+  readonly listed: readonly JiraTemplateWithoutProposal[];
+  readonly moreCount: number;
+} {
+  const listed = entries.slice(0, JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX);
+  return { listed, moreCount: entries.length - listed.length };
 }
 
 /**

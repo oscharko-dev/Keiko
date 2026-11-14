@@ -2,6 +2,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { OPTIONAL_COUNT_FIELD } from "./activity-log-field-shapes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { processServerLogSink } from "./process-log-sink.js";
 
@@ -42,12 +43,14 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
     httpStatus: { type: "integer", dataClass: "count", required: true },
     // A Jira template proposal accounts for every issue type of the project (#4354): the number of
     // types and of proposals, and the number without one per closed reason. Counts only.
-    typeCount: { type: "integer", dataClass: "count", required: false },
-    proposalCount: { type: "integer", dataClass: "count", required: false },
-    nothingToLearnCount: { type: "integer", dataClass: "count", required: false },
-    templateInvalidCount: { type: "integer", dataClass: "count", required: false },
-    jiraUnavailableCount: { type: "integer", dataClass: "count", required: false },
-    beyondLimitCount: { type: "integer", dataClass: "count", required: false },
+    typeCount: OPTIONAL_COUNT_FIELD,
+    proposalCount: OPTIONAL_COUNT_FIELD,
+    nothingToLearnCount: OPTIONAL_COUNT_FIELD,
+    templateInvalidCount: OPTIONAL_COUNT_FIELD,
+    jiraUnavailableCount: OPTIONAL_COUNT_FIELD,
+    beyondLimitCount: OPTIONAL_COUNT_FIELD,
+    // Proposals kept although one of their two Jira reads was not answered (#4354).
+    partialProposalCount: OPTIONAL_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -82,6 +85,7 @@ export interface MarkdownSkillProposalAccounting {
   readonly templateInvalidCount: number;
   readonly jiraUnavailableCount: number;
   readonly beyondLimitCount: number;
+  readonly partialProposalCount: number;
 }
 
 export function logMarkdownSkillOperation(
@@ -137,7 +141,7 @@ const MARKDOWN_SKILL_WORKFLOW_OPERATION = defineActivityLogOperation({
     },
     skillRevision: { type: "integer", dataClass: "count", required: true },
     skillDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    skillByteCount: { type: "integer", dataClass: "count", required: false },
+    skillByteCount: OPTIONAL_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

@@ -25,20 +25,21 @@ export type JiraPodAccessDeps = Pick<UiHandlerDeps, "serverPrincipal"> & {
     | undefined;
 };
 
+/** Every Jira Pod the caller owns. */
+export function listOwnedJiraPods(deps: JiraPodAccessDeps): readonly JiraLivePodCredential[] {
+  const actorDigest = jiraChatActorDigest(deps);
+  if (actorDigest === undefined) return [];
+  return (deps.atlassianConnectorCredentials?.custody.list() ?? []).filter(
+    (metadata): metadata is JiraLivePodCredential =>
+      metadata.deployment === "data-center" && metadata.livePod?.ownerDigest === actorDigest,
+  );
+}
+
 export function findOwnedJiraPod(
   deps: JiraPodAccessDeps,
   podId: string,
 ): JiraLivePodCredential | undefined {
-  const actorDigest = jiraChatActorDigest(deps);
-  if (actorDigest === undefined) return undefined;
-  return deps.atlassianConnectorCredentials?.custody
-    .list()
-    .find(
-      (metadata): metadata is JiraLivePodCredential =>
-        metadata.deployment === "data-center" &&
-        metadata.livePod?.podId === podId &&
-        metadata.livePod.ownerDigest === actorDigest,
-    );
+  return listOwnedJiraPods(deps).find((metadata) => metadata.livePod.podId === podId);
 }
 
 export function isReadyJiraPod(credential: JiraLivePodCredential): boolean {

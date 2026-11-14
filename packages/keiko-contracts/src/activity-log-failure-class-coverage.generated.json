@@ -39904,6 +39904,12 @@
               "required": false
             },
             {
+              "name": "partialProposalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "phase",
               "type": "string",
               "dataClass": "closed-enum",

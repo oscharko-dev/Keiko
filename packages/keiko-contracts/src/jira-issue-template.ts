@@ -845,6 +845,21 @@ export function jiraTemplateIssueTypeMatches(
 }
 
 /**
+ * Whether two templates of one project govern the same issue type, by the one rule: two bound templates
+ * by the id they were bound to, any other pair by the typed name. The template list and the gate use
+ * this, so they cannot disagree about which templates share a type (#4354).
+ */
+export function jiraTemplatesShareIssueType(
+  left: Pick<JiraIssueTemplate, "project" | "issueType" | "binding">,
+  right: Pick<JiraIssueTemplate, "project" | "issueType" | "binding">,
+): boolean {
+  if (!sameName(left.project, right.project)) return false;
+  return left.binding !== undefined && right.binding !== undefined
+    ? left.binding.issueTypeId === right.binding.issueTypeId
+    : sameName(left.issueType, right.issueType);
+}
+
+/**
  * The same rule for ONE parent type the template allows, by its position in `parentIssueTypes`: a bound
  * template compares the id it was bound to at that position, any other the typed name or id.
  */

@@ -78,12 +78,15 @@ export interface JiraTemplateGateInput {
     readonly issueTypeId?: string;
     readonly issueKey?: string;
   };
-  readonly transition?: {
-    readonly id: string;
-    readonly name?: string;
-    readonly targetStatusName?: string;
-    readonly targetStatusId?: string;
-  };
+  readonly transition?: JiraTemplateGateTransition;
+}
+/** The transition being performed, and the transitions the issue offers now (ids and names). */
+export interface JiraTemplateGateTransition {
+  readonly id: string;
+  readonly name?: string;
+  readonly targetStatusName?: string;
+  readonly targetStatusId?: string;
+  readonly available?: readonly { readonly id: string; readonly name?: string }[];
 }
 export type JiraTemplateGateResult =
   | {
@@ -820,23 +823,41 @@ async function readProjectStatusNames(
 
 const TRANSITION_ID_TARGET = /^\d{1,10}$/u;
 
-/** The typed targets of a template's `transition:<target>` rules that no status id binds and no typed id names. */
-function unboundTargets(template: JiraIssueTemplate): readonly string[] {
-  return template.activations.flatMap((activation) =>
-    activation.kind === "transition" &&
-    activation.target !== undefined &&
-    jiraTemplateBoundStatusId(template, activation) === undefined &&
-    !TRANSITION_ID_TARGET.test(activation.target)
-      ? [activation.target]
-      : [],
-  );
+const NO_STATUSES: ReadonlySet<string> = new Set();
+
+/**
+ * The typed targets of a template's `transition:<target>` rules that nothing the acting user sees
+ * explains (#4354): not bound to a status id, not the name or id of a transition THIS issue offers
+ * now, and not a status name of the project (`"unread"` when Jira did not list the statuses: a name
+ * cannot then be judged). A numeric target is a transition id only where this issue offers that id;
+ * it is never assumed to be one.
+ */
+function unresolvedTargets(
+  template: JiraIssueTemplate,
+  transition: JiraTemplateGateTransition | undefined,
+  statuses: ReadonlySet<string> | "unread",
+): readonly string[] {
+  const offered = transition?.available ?? [];
+  return template.activations.flatMap((activation) => {
+    if (activation.kind !== "transition" || activation.target === undefined) return [];
+    if (jiraTemplateBoundStatusId(template, activation) !== undefined) return [];
+    const typed = activation.target;
+    const name = typed.trim().toLowerCase();
+    if (offered.some((item) => item.id === typed || item.name?.trim().toLowerCase() === name))
+      return [];
+    if (TRANSITION_ID_TARGET.test(typed)) return [typed];
+    return statuses === "unread" || statuses.has(name) ? [] : [typed];
+  });
 }
 
 /**
- * A transition in a project that has a transition rule whose target is neither bound to a status id
- * nor a status name the acting user sees may be governed by that rule in another profile language:
- * nothing is changed, and the violation names the template. Never a silent pass (#4354). A template
- * bound for this Jira whose status id is gone is dead and blocks nothing.
+ * A transition beside a template that GOVERNS THIS ISSUE (its type matches by the one matcher) and
+ * has a transition rule whose target the acting user's view cannot explain may be governed by that
+ * rule in another profile language: nothing is changed, and the violation names the template. Never a
+ * silent pass (#4354). A template of another issue type is not this rule's business, and one bound
+ * for this Jira whose status id is gone is dead and blocks nothing. When Jira does not list the
+ * project's statuses a name target cannot be judged: the transition goes on and the gate records
+ * `status-list-unavailable` (a Jira that cannot list statuses must not block every transition).
  */
 async function unresolvedTransitionRefusal(
   input: JiraTemplateGateInput,
@@ -844,20 +865,27 @@ async function unresolvedTransitionRefusal(
   identity: Identity,
 ): Promise<JiraTemplateGateResult | undefined> {
   if (input.operation !== "transition") return undefined;
+  const { transition } = input;
   const pending = candidates.filter(
-    (template) => sameProject(template, identity) && unboundTargets(template).length > 0,
+    (template) =>
+      sameTemplateType(template, identity) &&
+      unresolvedTargets(template, transition, NO_STATUSES).length > 0,
   );
   if (pending.length === 0) return undefined;
-  const names = await readProjectStatusNames(input.request, identity.projectKey);
-  if (names === undefined) {
-    noteJiraTemplateGateFact("status-list-unavailable");
-    return undefined;
-  }
-  const unresolved = pending.filter((template) =>
-    unboundTargets(template).some((target) => !names.has(target.trim().toLowerCase())),
+  // The status list is read only when a name target is what is left to explain.
+  const needsNames = pending.some(
+    (template) =>
+      unresolvedTargets(template, transition, "unread").length <
+      unresolvedTargets(template, transition, NO_STATUSES).length,
   );
-  if (unresolved.length === 0) return undefined;
-  return unresolvedRefusal(unresolved);
+  const statuses = needsNames
+    ? await readProjectStatusNames(input.request, identity.projectKey)
+    : NO_STATUSES;
+  if (statuses === undefined) noteJiraTemplateGateFact("status-list-unavailable");
+  const unresolved = pending.filter(
+    (template) => unresolvedTargets(template, transition, statuses ?? "unread").length > 0,
+  );
+  return unresolved.length === 0 ? undefined : unresolvedRefusal(unresolved);
 }
 
 function unresolvedRefusal(templates: readonly JiraIssueTemplate[]): JiraTemplateGateResult {

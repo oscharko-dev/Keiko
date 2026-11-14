@@ -1531,6 +1531,44 @@ describe("localized field names and transition targets", () => {
     }
   });
 
+  // Audit (#4354): the unresolved rule is about THIS issue's templates and what THIS issue offers.
+  it("checks a rule that names a transition of this issue by its name, for an English user too", async () => {
+    const named = template(
+      ["activateOn: [transition:Start]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const f = fixture(SET(named), missing);
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "field-missing" }],
+    });
+    expect(f.writes()).toEqual([]);
+    // The other transition is not the one the rule names: it goes through unchecked.
+    const other = fixture(SET(named), missing);
+    await other.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" });
+    expect(other.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("lets a Story transition through beside an unbound template of another issue type", async () => {
+    const bug = template(TRANSITION, "# T", "Bug");
+    const f = fixture(SET(bug), conforming);
+    await f.run("jira.transition", move);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("refuses a numeric target that is no transition id of this issue instead of assuming it is one", async () => {
+    const numeric = template(
+      ["activateOn: [transition:99]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const f = fixture(SET(numeric), conforming);
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-binding-unresolved", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
   it("records that the status list was missing when it lets such a transition through", async () => {
     const f = fixture(SET(template(TRANSITION, "# T")), { ...conforming, statusList: "absent" });
     expect(await f.run("jira.transition", move)).toMatchObject({

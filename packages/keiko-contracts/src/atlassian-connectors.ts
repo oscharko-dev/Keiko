@@ -2123,6 +2123,7 @@ export {
   jiraTemplateForInstance,
   jiraTemplateGovernsWrites,
   jiraTemplateIssueTypeMatches,
+  jiraTemplatesShareIssueType,
   jiraTemplateParentEntryMatches,
   jiraTemplateParentTypeMatches,
   bindJiraIssueTemplateText,

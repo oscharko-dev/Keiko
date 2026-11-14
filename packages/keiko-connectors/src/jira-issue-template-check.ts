@@ -751,7 +751,7 @@ export function jiraTemplateViolationGuidance(
       " ask the user only for a fact neither provides."
     : "";
   const several = violations.some((violation) => / #\d{1,2}$/u.test(violation.template))
-    ? " #1, #2… in a name: several templates govern this type; name the one a rule comes from; all must be met."
+    ? " #1, #2… in a name: several templates govern this type; a rule both require is named once; all must be met."
     : "";
   return (
     "Nothing was changed: Keiko's template check (not Jira) refused this; it breaks the issue template of the project. " +

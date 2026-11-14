@@ -2841,6 +2841,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Jira hat für diesen Typ nicht geantwortet. Versuch es noch einmal.",
   "chat.skills.jira.withoutProposal.beyond-limit":
     "Nicht geprüft: Das Projekt hat mehr Vorgangstypen, als ein Vorschlagslauf abdeckt.",
+  "chat.skills.jira.withoutProposalMore": "und {count} weitere ohne Vorschlag.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira hat für die Pflichtfelder dieses Typs nicht geantwortet; prüf sie, bevor du speicherst.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira hat für die Beispielvorgänge dieses Typs nicht geantwortet; prüf die Abschnitte, bevor du speicherst.",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
   "chat.skills.jira.error":

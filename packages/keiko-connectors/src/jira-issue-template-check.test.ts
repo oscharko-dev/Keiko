@@ -626,6 +626,11 @@ describe("checkJiraIssueTemplates", () => {
     const second = parsed(["summaryMinLength: 5", "requiredLabels: [x]"], "# T");
     const result = checkJiraIssueTemplates([first, second], subject({ summary: "ab" }), CATALOG);
     expect(result.map((violation) => violation.template)).toEqual(["ABC/Story #1", "ABC/Story #2"]);
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "summary-too-short", subject: "x", template: "ABC/Story #1" },
+      ]),
+    ).toContain("a rule both require is named once");
     const alone = checkJiraIssueTemplates([second], subject({ summary: "ab" }), CATALOG);
     expect(alone.map((violation) => violation.template)).toEqual(["ABC/Story", "ABC/Story"]);
   });

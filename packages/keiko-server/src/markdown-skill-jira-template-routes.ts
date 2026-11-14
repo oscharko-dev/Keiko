@@ -1,5 +1,6 @@
 import {
   createJiraReadRequest,
+  boundJiraTemplateWithoutProposal,
   jiraInstanceIdentity,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
@@ -15,6 +16,7 @@ import {
   jiraIssueTemplateLabel,
   jiraTemplateForInstance,
   jiraTemplateGovernsWrites,
+  jiraTemplatesShareIssueType,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
@@ -22,7 +24,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { findOwnedJiraPod, isReadyJiraPod } from "./atlassian/jiraPodAccess.js";
+import { findOwnedJiraPod, isReadyJiraPod, listOwnedJiraPods } from "./atlassian/jiraPodAccess.js";
 import { readMutation, withSkillAccess } from "./markdown-skill-routes.js";
 import type { MarkdownSkillProposalAccounting } from "./markdown-skill-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -66,19 +68,24 @@ function templateSummary(template: JiraIssueTemplate): {
  * same bound issue type id, or else the same typed name; a template that only governs a status change
  * does not share a type with one that governs writes.
  */
-function sharedTypeCount(template: JiraIssueTemplate, all: readonly JiraIssueTemplate[]): number {
-  const same = (left: string, right: string): boolean =>
-    left.trim().toLowerCase() === right.trim().toLowerCase();
-  return all.filter(
-    (other) =>
-      other !== template &&
-      jiraTemplateGovernsWrites(other) &&
-      jiraTemplateGovernsWrites(template) &&
-      same(other.project, template.project) &&
-      (other.binding !== undefined && template.binding !== undefined
-        ? other.binding.issueTypeId === template.binding.issueTypeId
-        : same(other.issueType, template.issueType)),
-  ).length;
+function sharedTypeCount(
+  template: JiraIssueTemplate,
+  all: readonly JiraIssueTemplate[],
+  instances: readonly (string | undefined)[],
+): number {
+  if (!jiraTemplateGovernsWrites(template)) return 0;
+  // Each template as it governs one of the caller's Jiras (a binding made for another Jira is dropped
+  // there, as in the gate), by the one rule; the most any one Jira shows is the count.
+  const counts = instances.map((instance) => {
+    const view = jiraTemplateForInstance(template, instance);
+    return all.filter(
+      (other) =>
+        other !== template &&
+        jiraTemplateGovernsWrites(other) &&
+        jiraTemplatesShareIssueType(view, jiraTemplateForInstance(other, instance)),
+    ).length;
+  });
+  return Math.max(0, ...counts);
 }
 
 export function handleListJiraTemplates(
@@ -88,6 +95,9 @@ export function handleListJiraTemplates(
   return withSkillAccess(ctx, deps, "jira-template-list", () => {
     const entries = deps.store.markdownSkills.jiraTemplates();
     const parsed = entries.flatMap(({ template }) => (template === undefined ? [] : [template]));
+    const pods = listOwnedJiraPods(deps).filter((pod) => isReadyJiraPod(pod));
+    const instances =
+      pods.length === 0 ? [undefined] : pods.map((pod) => jiraInstanceIdentity(pod.baseUrl));
     return {
       status: 200,
       body: {
@@ -98,7 +108,10 @@ export function handleListJiraTemplates(
           valid: template !== undefined,
           ...(template === undefined
             ? {}
-            : { ...templateSummary(template), sharedWith: sharedTypeCount(template, parsed) }),
+            : {
+                ...templateSummary(template),
+                sharedWith: sharedTypeCount(template, parsed, instances),
+              }),
         })),
       },
     };
@@ -186,7 +199,7 @@ export function handleValidateJiraTemplate(
 
 /** Counts per closed reason of a proposal run: what the closing log line carries, never a type name. */
 function proposalAccounting(result: {
-  readonly proposals: readonly unknown[];
+  readonly proposals: readonly { readonly partial?: string }[];
   readonly withoutProposal: readonly { readonly reason: string }[];
   readonly typeCount: number;
 }): MarkdownSkillProposalAccounting {
@@ -199,6 +212,8 @@ function proposalAccounting(result: {
     templateInvalidCount: count("template-invalid"),
     jiraUnavailableCount: count("jira-unavailable"),
     beyondLimitCount: count("beyond-limit"),
+    partialProposalCount: result.proposals.filter((proposal) => proposal.partial !== undefined)
+      .length,
   };
 }
 
@@ -225,11 +240,13 @@ export function handleProposeJiraTemplates(
         throw jiraReadFailure(result.reason);
       }
       accounted = proposalAccounting(result);
+      const { listed, moreCount } = boundJiraTemplateWithoutProposal(result.withoutProposal);
       return {
         status: 200,
         body: {
           proposals: result.proposals,
-          withoutProposal: result.withoutProposal,
+          withoutProposal: listed,
+          withoutProposalMoreCount: moreCount,
           typeCount: result.typeCount,
         },
       };
