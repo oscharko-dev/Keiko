@@ -151,6 +151,7 @@ export {
   emitSecurityLogEvent,
   bindSecurityLogCorrelation,
   nullSecurityLogSink,
+  unwiredSecurityLogSink,
   securityErrorKind,
 } from "./log-port.js";
 // The bounded Java parser's worker starts and retirements (#4212); the server installs its sink,

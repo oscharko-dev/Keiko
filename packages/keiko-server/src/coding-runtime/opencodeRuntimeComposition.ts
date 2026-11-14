@@ -302,7 +302,8 @@ import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { javaToolOptions } from "./javaToolOptions.js";
-import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink, processServerLogSinkFor } from "../process-log-sink.js";
 import {
   openCodeCatalogAliasFor,
   openCodeCatalogSettlementBudgetMs,
@@ -3704,12 +3705,18 @@ type RunStateAccess = NonNullable<OpenCodeRuntimeCompositionInput["runStateAcces
 const WINDOWS_RUN_STATE_ACCESS: RunStateAccess = Object.freeze({
   protectRoot: (runRoot: string): void => {
     if (process.platform === "win32") {
-      protectWindowsOwnerPrivateFile(runRoot, { inheritToChildren: true });
+      protectWindowsOwnerPrivateFile(runRoot, {
+        inheritToChildren: true,
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
     }
   },
   // Without a copy there is nothing to hand over: the runtime creates its database below the root.
   adoptCopy: (path: string): void => {
-    if (process.platform === "win32" && existsSync(path)) inheritWindowsParentDacl(path);
+    if (process.platform === "win32" && existsSync(path))
+      inheritWindowsParentDacl(path, {
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
   },
 });
 

@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   chmodSync,
   existsSync,
@@ -189,7 +190,12 @@ describe("resolveFigmaVaultKey precedence", () => {
 
       const started = process.hrtime.bigint();
       const resolved = resolveFigmaVaultKey({}, dir, () =>
-        keyFromKeychain({ executable: hangs, timeoutMs: 250, platform: "darwin" }),
+        keyFromKeychain({
+          sink: nullSecurityLogSink(),
+          executable: hangs,
+          timeoutMs: 250,
+          platform: "darwin",
+        }),
       );
 
       // Against the previous unbounded spawn this blocks and fails on the suite timeout. The 20x
@@ -228,7 +234,11 @@ describe("resolveFigmaVaultKey precedence", () => {
   it("uses a stored keychain key in preference to a keyfile", () => {
     const stored = Buffer.alloc(32, 3);
     const resolved = resolveFigmaVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: fakeSecurity(stored.toString("base64")), platform: "darwin" }),
+      keyFromKeychain({
+        sink: nullSecurityLogSink(),
+        executable: fakeSecurity(stored.toString("base64")),
+        platform: "darwin",
+      }),
     );
     expect(resolved.source).toBe("keychain");
     expect(resolved.key.equals(stored)).toBe(true);
@@ -236,7 +246,11 @@ describe("resolveFigmaVaultKey precedence", () => {
 
   it("replaces a stored value that does not decode to 32 bytes", () => {
     const resolved = resolveFigmaVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: fakeSecurity("not-a-32-byte-key"), platform: "darwin" }),
+      keyFromKeychain({
+        sink: nullSecurityLogSink(),
+        executable: fakeSecurity("not-a-32-byte-key"),
+        platform: "darwin",
+      }),
     );
     expect(resolved.source).toBe("keychain");
     expect(resolved.key).toHaveLength(32);
@@ -244,7 +258,11 @@ describe("resolveFigmaVaultKey precedence", () => {
 
   it("generates and stores a key when the keychain has none", () => {
     const resolved = resolveFigmaVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: fakeSecurity(""), platform: "darwin" }),
+      keyFromKeychain({
+        sink: nullSecurityLogSink(),
+        executable: fakeSecurity(""),
+        platform: "darwin",
+      }),
     );
     expect(resolved.source).toBe("keychain");
     expect(resolved.key).toHaveLength(32);
@@ -252,7 +270,11 @@ describe("resolveFigmaVaultKey precedence", () => {
 
   it("falls through to the keyfile when the keychain has none and will not store one", () => {
     const resolved = resolveFigmaVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: fakeSecurity("", 1), platform: "darwin" }),
+      keyFromKeychain({
+        sink: nullSecurityLogSink(),
+        executable: fakeSecurity("", 1),
+        platform: "darwin",
+      }),
     );
     expect(resolved.source).toBe("keyfile");
     expect(resolved.key).toHaveLength(32);

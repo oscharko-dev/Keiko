@@ -135,13 +135,14 @@ export interface MacosKeychainOptions {
   /** The environment the vault was handed, which can withhold the real keychain. */
   readonly env?: Readonly<Record<string, string | undefined>> | undefined;
   /**
-   * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired, a spawn failure that
+   * Activity-log seam (ADR-0019; see `log-port.ts`). A spawn failure that
    * collapses to `{ kind: "unavailable" }` emits one `security.keychain.fallback` event instead of
    * discarding the OS error silently — the gap the 0.3.0 boot-hang incident (see file header)
    * exposed: the tier now returns in time, but still logged nothing about WHY it fell back.
-   * Omitted or `undefined` keeps this tier exactly as silent as before.
+   * Required: a caller names where the line goes (a seam passes the null sink), so a locked,
+   * unavailable or withheld keychain can never be lost as an unwired port.
    */
-  readonly sink?: SecurityLogSink | undefined;
+  readonly sink: SecurityLogSink;
   /**
    * Test seam. Production reads of the real `security` binary use the process memo below; a fake
    * `executable` gets no memo unless a test hands one in.
@@ -315,7 +316,7 @@ export function emitKeychainFallback(
 export function readMacosKeychainSecret(
   service: string,
   account: string,
-  options: MacosKeychainOptions = {},
+  options: MacosKeychainOptions,
 ): MacosKeychainRead {
   const spawn = resolveSpawn(options);
   if (!spawn.darwin) return { kind: "unavailable" };
@@ -370,7 +371,7 @@ export function writeMacosKeychainSecret(
   service: string,
   account: string,
   secret: string,
-  options: MacosKeychainOptions = {},
+  options: MacosKeychainOptions,
 ): boolean {
   const spawn = resolveSpawn(options);
   if (!spawn.darwin || spawn.withheld !== undefined) return false;

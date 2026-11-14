@@ -367,6 +367,7 @@ function verifyLiveLaunchId(input: TerminateUiProcessInput, launchId: string): b
   }
   return liveProcessHasLaunchId(input.pid, launchId, {
     platform: input.platform,
+    securityLogSink: input.securityLogSink,
     ...(input.readProcessEnviron === undefined ? {} : { readEnviron: input.readProcessEnviron }),
     ...(input.readProcessCommandLine === undefined
       ? {}
