@@ -483,6 +483,73 @@ describe("UpdateWindow", () => {
     ).toBeNull();
   });
 
+  // #4358: a Windows installation folder that is not on a local disk, or that Windows could not
+  // check just now, used to read "portable setup required". Each has its own words and a way on.
+  it.each([
+    [
+      "portable-install-volume-not-local",
+      "portable-volume-not-local",
+      "Not on a local disk",
+      "Keiko is not installed on a local disk",
+      "Install Keiko on a local drive of this computer, then check again.",
+    ],
+    [
+      "portable-install-volume-unverified",
+      "portable-volume-unverified",
+      "Installation folder not checked",
+      "Keiko could not check its installation folder",
+      "Try again in a moment. If it keeps happening, restart Keiko.",
+    ],
+  ] as const)(
+    "says why the installation folder stops updates (%s)",
+    async (code, reason, status, title, action) => {
+      const api = apiFor({
+        report: preflight({
+          updateAvailable: false,
+          status: "degraded",
+          availabilityState: "degraded",
+          manualUpdateRequired: true,
+          oneClickEligible: false,
+          portableAsset: {
+            source: "github-release-asset",
+            target: "windows-x64",
+            requiredAssetName: "keiko-windows-x64.zip",
+            status: "install-mode-ineligible",
+          },
+          blockers: [
+            { code, severity: "normal", message: "server text", userActionRequired: true },
+          ],
+        }),
+        status: sessionStatus({
+          installMode: {
+            schemaVersion: "1",
+            status: "unsupported",
+            packageName: "@oscharko-dev/keiko",
+            installKind: "portable-managed",
+            reason,
+            recommendedAction: "manual-download",
+            manualInstructions: "server text",
+            portable: {
+              status: "managed",
+              target: "windows-x64",
+              updateEligible: false,
+              packageVersion: "0.2.9",
+              stable: true,
+              managedRootKind: "home-relative",
+            },
+          },
+        }),
+      });
+
+      render(<UpdateWindow api={api} />);
+
+      expect(await screen.findByRole("heading", { name: status })).toBeInTheDocument();
+      expect(screen.getByText(title)).toBeInTheDocument();
+      expect(screen.getByText(action)).toBeInTheDocument();
+      expect(screen.queryByText("Portable setup required")).not.toBeInTheDocument();
+    },
+  );
+
   it("uses setup-required copy for unmanaged portable bootstrap installs", async () => {
     const api = apiFor({
       report: preflight({

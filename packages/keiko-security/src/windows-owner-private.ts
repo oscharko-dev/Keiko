@@ -101,14 +101,16 @@ export type WindowsOwnerPrivateVerdict =
 export interface WindowsOwnerPrivateOptions {
   readonly runner?: WindowsLocalVolumeRunner | undefined;
   readonly resolvePowerShell?: (() => string) | undefined;
-  readonly securityLogSink?: SecurityLogSink | undefined;
+  /** Required: the refusal and slow-run lines of the DACL tools go here. A seam passes the null sink. */
+  readonly securityLogSink: SecurityLogSink;
 }
 
 export interface WindowsOwnerPrivateProtectOptions {
   readonly runner?: WindowsLocalVolumeRunner | undefined;
   /** Resolves a bare System32 binary name (`whoami.exe`, `icacls.exe`). */
   readonly resolveSystemBinary?: ((name: string) => string) | undefined;
-  readonly securityLogSink?: SecurityLogSink | undefined;
+  /** Required: the refusal and slow-run lines of the DACL tools go here. A seam passes the null sink. */
+  readonly securityLogSink: SecurityLogSink;
   /**
    * For a directory: its entries are inheritable, so every file and directory later created below
    * it is owner-private too, and an inheritable grant later added to the directory still reaches
@@ -273,7 +275,7 @@ function runQuery(
  */
 export function inspectWindowsOwnerPrivateFiles(
   paths: readonly string[],
-  options: WindowsOwnerPrivateOptions = {},
+  options: WindowsOwnerPrivateOptions,
 ): WindowsOwnerPrivateInspection {
   let phase: "input" | "resolve" | "inspect" = "input";
   try {
@@ -339,7 +341,7 @@ function currentUserSid(runner: WindowsLocalVolumeRunner, whoami: string): strin
  */
 export function protectWindowsOwnerPrivateFile(
   path: string,
-  options: WindowsOwnerPrivateProtectOptions = {},
+  options: WindowsOwnerPrivateProtectOptions,
 ): void {
   changeWindowsDacl(path, options, ["whoami.exe", "icacls.exe"], (binary, runner) => {
     const sid = currentUserSid(runner, binary("whoami.exe"));
@@ -368,7 +370,7 @@ export function protectWindowsOwnerPrivateFile(
  */
 export function inheritWindowsParentDacl(
   path: string,
-  options: WindowsOwnerPrivateProtectOptions = {},
+  options: WindowsOwnerPrivateProtectOptions,
 ): void {
   changeWindowsDacl(path, options, ["icacls.exe"], (binary, runner) => {
     runSystemBinary(runner, binary("icacls.exe"), [path, "/reset"]);

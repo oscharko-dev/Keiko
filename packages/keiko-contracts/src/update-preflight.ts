@@ -65,6 +65,8 @@ export const UPDATE_PREFLIGHT_BLOCKER_CODES = [
   "one-click-ineligible",
   "portable-install-mode-ineligible",
   "portable-install-managed-externally",
+  "portable-install-volume-not-local",
+  "portable-install-volume-unverified",
   "portable-release-unavailable",
   "portable-release-malformed",
   "portable-asset-missing",

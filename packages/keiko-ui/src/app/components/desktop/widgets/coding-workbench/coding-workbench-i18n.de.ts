@@ -609,6 +609,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Führe im Terminal aus: keiko gateway-service status",
   "codingWorkbench.gatewayService.unqualified":
     "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
+  "codingWorkbench.installVolume.notLocal":
+    "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
+  "codingWorkbench.installVolume.unverified":
+    "Keiko konnte seinen Installationsordner gerade nicht prüfen, weil Windows zu langsam geantwortet hat. Versuch es gleich noch einmal; wenn es so bleibt, starte Keiko neu.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":

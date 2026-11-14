@@ -1528,6 +1528,20 @@ describe("gateway readiness route", () => {
     }
   });
 
+  // The floor itself, both ways, at a value far below it: an unconfigured timeout is lifted to the
+  // interactive floor; one the configuration names is honoured exactly. The first is what let a
+  // fixture's 100 ms deadline wait 300 s, the second is what keeps a deadline test a deadline test.
+  it("lifts an unconfigured 100 ms to the floor and honours a configured 100 ms", () => {
+    const [base] = gatewayConfig().providers;
+    if (base === undefined) throw new TypeError("expected a provider");
+    const unconfigured = { ...base, timeoutMs: 100, timeoutConfigured: undefined };
+    const configured = { ...base, timeoutMs: 100, timeoutConfigured: true as const };
+    expect(probeProvider(unconfigured, "chat", undefined).timeoutMs).toBe(
+      EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
+    );
+    expect(probeProvider(configured, "chat", undefined).timeoutMs).toBe(100);
+  });
+
   it("records the bound an explicit check really ran under on its start line", async () => {
     const logged: { readonly op: string; readonly extra?: Record<string, unknown> }[] = [];
     const fetchImpl = vi.fn().mockRejectedValue(new Error("upstream gone")) as typeof fetch;

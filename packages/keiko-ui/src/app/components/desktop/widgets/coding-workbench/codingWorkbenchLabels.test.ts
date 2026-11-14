@@ -32,6 +32,7 @@ import {
   visibleAlert,
   visibleAlertFailure,
   gatewayServiceMessageKey,
+  runtimeUnavailableMessageKey,
 } from "./codingWorkbenchLabels";
 import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 
@@ -1230,5 +1231,22 @@ describe("gatewayServiceMessageKey", () => {
     expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
     expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
     expect(gatewayServiceMessageKey(undefined)).toBeUndefined();
+  });
+});
+
+describe("runtimeUnavailableMessageKey", () => {
+  it("names the broker sentences and the two installation-folder sentences, and nothing else", () => {
+    expect(runtimeUnavailableMessageKey("gateway-service-stopped")).toBe(
+      "codingWorkbench.gatewayService.stopped",
+    );
+    expect(runtimeUnavailableMessageKey("install-volume-not-local")).toBe(
+      "codingWorkbench.installVolume.notLocal",
+    );
+    expect(runtimeUnavailableMessageKey("install-volume-unverified")).toBe(
+      "codingWorkbench.installVolume.unverified",
+    );
+    expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
+    expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
+    expect(runtimeUnavailableMessageKey(undefined)).toBeUndefined();
   });
 });
