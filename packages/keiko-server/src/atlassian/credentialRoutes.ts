@@ -436,6 +436,8 @@ export function handleVerifyAtlassianConnectorCredential(
 // state the probe left: verified, a closed failure status, or unverified when a newer change
 // superseded this token before the probe ended (its own check owns the Pod then). The token stays
 // stored whatever the probe finds; any other fault propagates to the opaque, correlated 500.
+// The request's abort is deliberately not passed to the probe: a client that left (a closed tab) must
+// still find the Pod verified or truthfully failed, never half-checked, and the probe is bounded anyway.
 async function verifyReplacedToken(
   deps: AtlassianConnectorCredentialDeps,
   updated: AtlassianCredentialMetadata,

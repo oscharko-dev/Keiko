@@ -39,8 +39,9 @@ import {
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
+import { request as httpRequest, type Server } from "node:http";
+import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AtlassianCredentialCustodyError,
@@ -1912,6 +1913,68 @@ describe("authenticated Live Pod credential updates", () => {
       expect(JSON.stringify(checks)).not.toContain(SYNTHETIC_TOKEN);
       expect(JSON.stringify(checks)).not.toContain(credential.authRef);
     } finally {
+      sink.close?.();
+    }
+  });
+
+  it("a client that disconnects while the probe is in flight does not cancel it: the probe completes, the stored state is its result and one line is written (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    const entered = probeSignal();
+    const release = probeSignal();
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        async (request): Promise<AtlassianHttpBodyResult> => {
+          entered.resolve();
+          await release.promise;
+          return jiraProbeResponse(request);
+        },
+    });
+    try {
+      const serverSockets: Socket[] = [];
+      server.on("connection", (socket) => serverSockets.push(socket));
+      const body = JSON.stringify({
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      // A fresh connection of its own, so the test can wait for the server to see it close.
+      const client = httpRequest({
+        host: UI_HOST,
+        port,
+        path: `/api/atlassian-connectors/credentials/${credential.authRef}`,
+        method: "PATCH",
+        agent: false,
+        headers: { ...csrfHeaders(), "Content-Length": Buffer.byteLength(body) },
+      });
+      const answered = vi.fn();
+      client.on("response", answered);
+      client.on("error", () => undefined);
+      client.end(body);
+      await entered.promise;
+      const serverSocket = serverSockets.at(-1);
+      if (serverSocket === undefined) throw new Error("Expected the request's server connection");
+      const closed = once(serverSocket, "close");
+      client.destroy();
+      await closed;
+      // The server has seen the client leave; the probe is still waiting and nothing settled it.
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        livePod: { verificationInProgress: true },
+      });
+      release.resolve();
+      await expect
+        .poll(() => wiring.custody.getMetadata(credential.authRef))
+        .toMatchObject({ generation: 2, livePod: { verificationStatus: "ok" } });
+      expect(answered).not.toHaveBeenCalled();
+      const checks = readVerificationEvidence(sink).filter(
+        (event) => event.action === "verify-after-replace",
+      );
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({ outcome: "ok", verificationState: "applied" });
+    } finally {
+      release.resolve();
       sink.close?.();
     }
   });
