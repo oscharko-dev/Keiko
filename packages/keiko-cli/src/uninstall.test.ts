@@ -13,8 +13,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
@@ -33,6 +33,7 @@ import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
+import { policyAllowedParent } from "./test-support/policy-allowed-parent.js";
 
 // #2906 round 3 (comment 3865329066): reuses the shared fixture instead of a byte-identical
 // local copy (aliased, not just re-exported, so every existing makeIo() call site keeps
@@ -53,21 +54,8 @@ function makeRoot(): string {
   return root;
 }
 
-function pathInsideRepository(path: string): boolean {
-  let cursor = path;
-  for (;;) {
-    if (existsSync(join(cursor, ".git"))) return true;
-    const parent = dirname(cursor);
-    if (parent === cursor) return false;
-    cursor = parent;
-  }
-}
-
 function makePolicyAllowedRoot(prefix: string): string {
-  const cwdParent = dirname(process.cwd());
-  const parent =
-    cwdParent.startsWith(REAL_TMPDIR) || pathInsideRepository(cwdParent) ? homedir() : cwdParent;
-  const root = mkdtempSync(join(parent, `.keiko-${prefix}-`));
+  const root = mkdtempSync(join(policyAllowedParent(), `.keiko-${prefix}-`));
   tempRoots.push(root);
   return root;
 }

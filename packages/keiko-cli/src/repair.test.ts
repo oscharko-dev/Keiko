@@ -14,8 +14,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activityLogSegmentFileName,
@@ -31,6 +31,7 @@ import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
+import { policyAllowedParent } from "./test-support/policy-allowed-parent.js";
 
 // Seeds the encrypted credential vault index next to a config so apiKeySecretRef references are not
 // flagged as orphaned. The repair check reads only the non-secret reference keys (no decryption), so
@@ -96,21 +97,8 @@ function makeRoot(): string {
   return root;
 }
 
-function pathInsideRepository(path: string): boolean {
-  let cursor = path;
-  for (;;) {
-    if (existsSync(join(cursor, ".git"))) return true;
-    const parent = dirname(cursor);
-    if (parent === cursor) return false;
-    cursor = parent;
-  }
-}
-
 function makePolicyAllowedRoot(prefix: string): string {
-  const cwdParent = dirname(process.cwd());
-  const parent =
-    cwdParent.startsWith(REAL_TMPDIR) || pathInsideRepository(cwdParent) ? homedir() : cwdParent;
-  const root = mkdtempSync(join(parent, `.keiko-${prefix}-`));
+  const root = mkdtempSync(join(policyAllowedParent(), `.keiko-${prefix}-`));
   tempRoots.push(root);
   return root;
 }
