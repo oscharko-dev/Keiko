@@ -200,4 +200,22 @@ describe("one native delegated reciprocal link", () => {
     });
     expect(checkReciprocalInput(ARGS).ok).toBe(true);
   });
+  // #4354: the saved issue templates stand in front of this write like every other write path; a
+  // library that cannot be read refuses it before any request, in check and in execution.
+  it.each([false, true])(
+    "refuses before any write when the saved templates cannot be read, check=%s",
+    async (check) => {
+      const native = reciprocalLinkFixture();
+      const refused = await execute(ARGS, native.request, native.ports, check, () => ({
+        templates: [],
+        unreadable: 1,
+      }));
+      expect(refused).toMatchObject({
+        ok: false,
+        reason: "field-validation",
+        violations: [{ ruleId: "template-unreadable" }],
+      });
+      expect(native.calls.some((call) => call.method !== "GET")).toBe(false);
+    },
+  );
 });

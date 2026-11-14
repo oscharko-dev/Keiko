@@ -1370,6 +1370,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      templateMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateNotActivatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       settledCount: {
         type: "integer",
         dataClass: "count",
@@ -1608,6 +1618,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       templateUnreadableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateNotActivatedCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -3895,6 +3915,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "invalid-field",
           "invalid-operation",
           "bounds-exceeded",
+          "invalid-epic-link",
         ],
       },
       linkRequestedCount: {
@@ -12729,6 +12750,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "cancelled",
           "unavailable",
           "authority-refused",
+          "template-refused",
         ],
       },
       sessionRelation: {
@@ -33158,8 +33180,9 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "invalid-field",
           "invalid-operation",
           "bounds-exceeded",
+          "invalid-epic-link",
         ],
-        maxItems: 5,
+        maxItems: 6,
       },
     },
     causal: "correlation",
@@ -33198,6 +33221,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33309,6 +33333,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33440,6 +33465,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33569,6 +33595,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33722,6 +33749,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33855,6 +33883,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33946,6 +33975,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34063,6 +34093,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34197,6 +34228,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34320,6 +34352,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34446,6 +34479,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34570,6 +34604,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34679,6 +34714,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34871,7 +34907,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["pre-approval", "dispatch"],
+        values: ["pre-approval", "dispatch", "notice"],
       },
       violationCount: {
         type: "integer",
@@ -34896,6 +34932,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "parent-missing",
           "parent-type-mismatch",
           "template-unreadable",
+          "template-missing",
+          "template-not-activated",
         ],
         maxItems: 25,
       },

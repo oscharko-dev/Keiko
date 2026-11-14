@@ -526,15 +526,17 @@ the version no longer matches and Confluence rejects the update. The connector s
 
 ## 11. `invalid-transition`
 
-| Field             | Value                                             |
-| ----------------- | ------------------------------------------------- |
-| Severity          | Medium                                            |
-| Surface           | Local UI, Atlassian connector (write: transition) |
-| Stable identifier | `invalid-transition` write failure reason         |
+| Field             | Value                                        |
+| ----------------- | -------------------------------------------- |
+| Severity          | Medium                                       |
+| Surface           | Chat and Coding Workbench, `jira.transition` |
+| Stable identifier | `invalid-transition` write failure reason    |
 
 **Symptom**
 
-A `transition-issue` write action reports `invalid-transition`. The issue's status was not changed.
+A `jira.transition` call reports `invalid-transition`. The issue's status was not changed and nothing
+was sent to Jira: the transition id is checked against the transitions Jira lists for the issue at
+that moment, so an id that is not listed is refused before any write.
 
 **Root Cause**
 

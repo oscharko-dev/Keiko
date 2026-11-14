@@ -157,6 +157,7 @@ const FACT_FIELDS = {
       "coding-binding",
       "description-projection",
       "field-admission",
+      "release-scope",
     ],
   },
   outcome: {
@@ -486,25 +487,19 @@ export function recordJiraOperationActivity(
   }
 }
 
-/** Provider completion is neither acknowledgement nor proof of native dispatch or availability. */
-export function recordJiraProviderCall(
+/** Records one fact; a sink that cannot take it is counted as loss and diagnosed, never thrown. */
+function recordGuarded(
   correlationId: string,
   tool: JiraManagedReadToolName | JiraMutationOperation,
-  outcome: "completed" | "failed",
+  level: "info" | "warn",
+  observation: Observation,
 ): void {
   try {
     recordJiraOperationActivity(
       processServerLogSink(),
-      {
-        correlationId,
-        level: outcome === "failed" ? "warn" : "info",
-      },
+      { correlationId, level },
       tool,
-      {
-        stage: "provider-call",
-        outcome,
-        reason: outcome === "failed" ? "tool-failed" : "none",
-      },
+      observation,
     );
   } catch (error) {
     recordActivityLogLoss("port-sink-failed");
@@ -519,4 +514,33 @@ export function recordJiraProviderCall(
       }),
     );
   }
+}
+
+/** Provider completion is neither acknowledgement nor proof of native dispatch or availability. */
+export function recordJiraProviderCall(
+  correlationId: string,
+  tool: JiraManagedReadToolName | JiraMutationOperation,
+  outcome: "completed" | "failed",
+): void {
+  recordGuarded(correlationId, tool, outcome === "failed" ? "warn" : "info", {
+    stage: "provider-call",
+    outcome,
+    reason: outcome === "failed" ? "tool-failed" : "none",
+  });
+}
+
+/**
+ * A call of an operation this release does not offer (attachments in Release 1) was refused by the
+ * release switch before any request. One closed line under the call's correlation: the operation
+ * and the refusal, never an argument, a file name or a message.
+ */
+export function recordJiraReleaseScopeRefusal(
+  correlationId: string,
+  tool: JiraManagedReadToolName | JiraMutationOperation,
+): void {
+  recordGuarded(correlationId, tool, "warn", {
+    stage: "release-scope",
+    outcome: "refused",
+    reason: "unavailable",
+  });
 }

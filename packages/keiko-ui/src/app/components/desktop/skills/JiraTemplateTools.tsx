@@ -39,6 +39,7 @@ const FINDING_MESSAGES = {
   "ambiguous-field": "chat.skills.jira.finding.ambiguous-field",
   "unknown-link-type": "chat.skills.jira.finding.unknown-link-type",
   "unknown-transition-target": "chat.skills.jira.finding.unknown-transition-target",
+  "wrong-parent-field": "chat.skills.jira.finding.wrong-parent-field",
 } as const satisfies Record<JiraTemplateFindingCode, string>;
 
 type Work = "idle" | "loading" | "proposing";

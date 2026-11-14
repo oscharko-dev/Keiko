@@ -81,6 +81,20 @@ import {
   nativeSavedConfigurationRead,
   nativeSavedConfigurationWrite,
 } from "../../../../tests/support/jira-managed-saved-configuration-scenarios.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../../tests/support/jira-test-templates.js";
+
+// Release 1 switches the attachment operations off (#4354); this file binds every operation to its
+// actual request, and the attachment mechanics stay in the code for Release 2, so the switch is on
+// here. The switch itself is proven in jira-release-scope.test.ts of the connectors.
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+  >()),
+  jiraOperationInReleaseScope: (): boolean => true,
+}));
 
 const ISSUE_PARAMETERS = { issueIdOrKey: "SYN-1" };
 const PAGING = { startAt: "0", maxResults: "25" };
@@ -4225,12 +4239,17 @@ function savedConfigurationRemote(tool: string): ReturnType<typeof vi.fn<Atlassi
     return write;
   });
 }
-function connection(http: AtlassianHttpBodyPort): JiraManagedConnection {
+/** A creation needs a template of its type (#4354); an edit of another operation does not. */
+const CREATING_TOOLS: ReadonlySet<string> = new Set(["jira.create", "jira.create-issues"]);
+function connection(http: AtlassianHttpBodyPort, tool?: string): JiraManagedConnection {
   const bytes = new TextEncoder().encode("Governed attachment fixture");
   return {
     deployment: "data-center",
     baseUrl: "https://jira.example.invalid/context",
     http,
+    ...(tool !== undefined && CREATING_TOOLS.has(tool)
+      ? { issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES) }
+      : {}),
     emailTemplates: emailTemplateFixtureAdmission(),
     attachmentSource: () =>
       Promise.resolve({
@@ -4275,7 +4294,7 @@ async function observe(scenario: Scenario): Promise<Observation> {
       composition.close();
     }
   }
-  return observeNativeJiraOperation(scenario, connection(remote(scenario.tool)));
+  return observeNativeJiraOperation(scenario, connection(remote(scenario.tool), scenario.tool));
 }
 
 describe("native Jira registry and real connector transport agreement", () => {

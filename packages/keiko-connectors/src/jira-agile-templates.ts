@@ -1,5 +1,8 @@
 import type { JiraFieldMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+  jiraTemplateGovernsWrites,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -136,10 +139,7 @@ async function plannedFields(
 }
 function needsAdmission(set: JiraIssueTemplateSet): boolean {
   return (
-    set.unreadable > 0 ||
-    set.templates.some((template) =>
-      template.activations.some((activation) => activation.kind === "edit"),
-    )
+    set.unreadable > 0 || set.templates.some((template) => jiraTemplateGovernsWrites(template))
   );
 }
 function issueTargets(
