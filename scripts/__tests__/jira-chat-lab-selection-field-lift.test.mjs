@@ -34,8 +34,8 @@ describe("selection cases that write the work project", () => {
 });
 
 describe("the language selection cases", () => {
-  it("are not part of the default 36 and name the type as a German person says it", () => {
-    expect(SELECTION_CASES).toHaveLength(36);
+  it("are not part of the default 40 and name the type as a German person says it", () => {
+    expect(SELECTION_CASES).toHaveLength(40);
     const [entry] = LANGUAGE_SELECTION_CASES;
     expect(SELECTION_CASES.some((other) => other.id === entry.id)).toBe(false);
     expect(entry).toMatchObject({ id: "search-by-type", tool: "jira.search", effect: "read" });

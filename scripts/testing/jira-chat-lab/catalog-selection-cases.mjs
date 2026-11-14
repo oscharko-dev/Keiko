@@ -5,6 +5,7 @@
 // that cannot see an owned object, or a list beyond the tools' first page, makes the attempt invalid.
 import { URL } from "node:url";
 import { ownedIssue, ownedSubtask, voteKey } from "./catalog-selection-objects.mjs";
+import { UNAVAILABLE_CASES } from "./catalog-selection-unavailable.mjs";
 import {
   actorDetails,
   basicAuth,
@@ -507,6 +508,8 @@ export const SELECTION_CASES = Object.freeze([
     effect: "write",
     catalog: entry.catalog ?? "discovery",
   })),
+  // Requests the product cannot fulfil yet: the model must say so plainly without a failed call.
+  ...UNAVAILABLE_CASES,
 ]);
 
 /**

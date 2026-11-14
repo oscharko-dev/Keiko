@@ -2,6 +2,8 @@
 // a laboratory. The model's answer text is never evidence; only the tool transcript and native
 // Jira truth are.
 
+import { gradeUnavailable } from "./catalog-selection-unavailable.mjs";
+
 const DISCOVERY_ALIASES = new Set(["jira_discover", "jira_describe"]);
 const toolAlias = (name) => String(name ?? "").replaceAll(/[.-]/gu, "_");
 
@@ -250,9 +252,9 @@ function refusalEntry(exchange) {
 export function gradeSelection(
   entry,
   turn,
-  { tokens = [], effect, truthUnavailable, restriction } = {},
+  { tokens = [], effect, truthUnavailable, restriction, native } = {},
 ) {
-  const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable, restriction });
+  const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable, restriction, native });
   const exchanges = turn.exchanges ?? [];
   return {
     ...verdict,
@@ -309,11 +311,13 @@ function refusedVerdict(entry, turn, verdict, effect) {
   };
 }
 
-function gradeTurn(entry, turn, { tokens, effect, truthUnavailable, restriction }) {
+function gradeTurn(entry, turn, proof) {
+  const { tokens, effect, truthUnavailable, restriction } = proof;
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
   const invalid = invalidReason(turn, exchanges, truthUnavailable);
   if (invalid !== undefined) return { status: "invalid", path, detail: invalid };
+  if (entry.effect === "unavailable") return { ...gradeUnavailable(entry, turn, proof), path };
   const calls = operationCalls(exchanges);
   const target = targetCall(calls, entry.tool, entry.effect === "write" ? [] : tokens);
   if (target !== undefined)

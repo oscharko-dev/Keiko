@@ -80,8 +80,9 @@ describe("catalog selection cases", () => {
     expect(kinds("discovery", "read")).toBeGreaterThanOrEqual(12);
     expect(kinds("base", "read")).toBeGreaterThanOrEqual(3);
     expect(kinds("discovery", "write")).toBeGreaterThanOrEqual(5);
+    const oracle = { write: "verify", unavailable: "snapshot" };
     for (const entry of SELECTION_CASES)
-      expect(entry.effect === "write" ? entry.verify : entry.truth).toBeTypeOf("function");
+      expect(entry[oracle[entry.effect] ?? "truth"]).toBeTypeOf("function");
   });
 });
 

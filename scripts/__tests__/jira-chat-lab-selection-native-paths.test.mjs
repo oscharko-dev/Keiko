@@ -196,7 +196,9 @@ describe("the selection lane against Jira Data Center's own paths", () => {
     const lane = { ...fixture, selection: created };
     for (const entry of SELECTION_CASES) {
       // The answer's shape is not what this proves; a refused shape throws after its request.
-      await (entry.truth ?? entry.verify)({}, lane, "Auswahl t", "t").catch(() => undefined);
+      await (entry.truth ?? entry.verify ?? entry.snapshot)({}, lane, "Auswahl t", "t").catch(
+        () => undefined,
+      );
     }
     expect(unknownRequests()).toEqual([]);
   });
