@@ -53,6 +53,16 @@ export function estimateCasePlan(key, storyPoints) {
 }
 
 /** Sets the board's estimation statistic; refused when Jira does not report the field afterwards. */
+/**
+ * The body Jira Software's own estimation endpoint takes. Its three properties are `rapidViewId`,
+ * `estimateStatisticId` and `trackingStatisticId` (a live 400 named them 2026-11-14: the earlier
+ * `estimationStatisticId` is not one of them), and a statistic is `field_<field id>`.
+ */
+export function boardEstimationBody(boardId, kind, pointsFieldId) {
+  const statistic = kind === "time" ? "field_timeoriginalestimate" : `field_${pointsFieldId}`;
+  return { rapidViewId: boardId, estimateStatisticId: statistic, trackingStatisticId: statistic };
+}
+
 async function configureBoard(jira, project, kind) {
   const boards = await jira.call(
     "esc-boards",
@@ -69,12 +79,11 @@ async function configureBoard(jira, project, kind) {
     wanted
   )
     return wanted;
-  const statistic = kind === "time" ? "field_timeoriginalestimate" : `field_${points}`;
   await jira.call(
     "esc-configure",
     "PUT",
     "/rest/greenhopper/1.0/rapidviewconfig/estimation",
-    { rapidViewId: board.id, estimationStatisticId: statistic, trackingStatisticId: statistic },
+    boardEstimationBody(board.id, kind, points),
     [200, 204],
   );
   const now = await configuredEstimateField(

@@ -437,6 +437,29 @@ describe("S10 against the native rule, through the journey", () => {
   });
 });
 
+describe("the board's estimation body", () => {
+  it("uses the three properties Jira Software's endpoint knows, with the statistic id of the field", async () => {
+    const { boardEstimationBody } =
+      await import("../testing/jira-chat-lab/requirements/seed-estimate-cases.mjs");
+    expect(boardEstimationBody(6, "time", "customfield_10106")).toEqual({
+      rapidViewId: 6,
+      estimateStatisticId: "field_timeoriginalestimate",
+      trackingStatisticId: "field_timeoriginalestimate",
+    });
+    expect(boardEstimationBody(6, "points", "customfield_10106")).toEqual({
+      rapidViewId: 6,
+      estimateStatisticId: "field_customfield_10106",
+      trackingStatisticId: "field_customfield_10106",
+    });
+    // The live 400 of 2026-11-14 named exactly these three; no other property may be sent.
+    expect(Object.keys(boardEstimationBody(1, "time", "x")).sort()).toEqual([
+      "estimateStatisticId",
+      "rapidViewId",
+      "trackingStatisticId",
+    ]);
+  });
+});
+
 describe("the four estimate-case fixtures", () => {
   it("plans fixtures whose values sit where the case says", async () => {
     const { ESTIMATE_CASE_PROJECTS, estimateCasePlan } =
