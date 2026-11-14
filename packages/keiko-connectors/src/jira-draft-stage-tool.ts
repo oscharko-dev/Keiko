@@ -206,6 +206,8 @@ export interface JiraDraftTemplateRefusal {
   readonly ref: string;
   readonly violations: readonly JiraTemplateViolation[];
 }
+/** The answer of the template dry run when Jira could not be read, so nothing more is read. */
+export const JIRA_DRAFT_TEMPLATE_UNREADABLE = "jira-unreadable" as const;
 /**
  * Every item passes the template check a create passes, now, so the model corrects an item while it
  * is being written instead of after the human has been asked. Items are read one after another
@@ -216,7 +218,7 @@ export async function firstJiraDraftTemplateRefusal(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
   index = 0,
-): Promise<JiraDraftTemplateRefusal | undefined> {
+): Promise<JiraDraftTemplateRefusal | typeof JIRA_DRAFT_TEMPLATE_UNREADABLE | undefined> {
   const item = items[index];
   if (item === undefined) return undefined;
   const result = await checkJiraManagedMutationTemplates(
@@ -225,6 +227,9 @@ export async function firstJiraDraftTemplateRefusal(
     context,
     connection,
   );
+  // Jira could not be read: every later item reads the same metadata and would wait the same.
+  if (!result.ok && result.violations === undefined && result.reason === "unavailable")
+    return JIRA_DRAFT_TEMPLATE_UNREADABLE;
   const violations =
     result.ok || result.violations === undefined ? [] : decidableNow(item, result.violations);
   if (violations.length > 0) return { ref: String(item.ref), violations };
@@ -463,7 +468,8 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   // page after page in one invocation: identical reads are answered from the invocation's memo.
   const reads = withJiraDraftReadMemo(connection, context, run.reads, now);
   const template = await firstJiraDraftTemplateRefusal(items, context, reads);
-  if (template !== undefined) return templateRefusalResult(template, run, args.items.length);
+  if (template !== undefined && template !== JIRA_DRAFT_TEMPLATE_UNREADABLE)
+    return templateRefusalResult(template, run, args.items.length);
   const fields = await pageFieldRefusals(items, context, reads);
   const firstField = fields.refusals[0];
   if (firstField !== undefined) {

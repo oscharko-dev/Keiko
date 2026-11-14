@@ -10,6 +10,7 @@ import { readSavedActor } from "./jira-saved-configuration-values.js";
 import {
   admitIssueLifecycle,
   bindIssueLifecycleIssue,
+  issueIsGone,
   readIssueLifecycleSubtasks,
 } from "./jira-issue-lifecycle-observations.js";
 import {
@@ -84,6 +85,11 @@ async function readback(
 ): Promise<IssueLifecycleAttempt> {
   const actor = await readSavedActor(request, input.actor);
   if (!actor.ok) return { ...actor, receipt };
+  // Jira accepted this very DELETE (the read-back only runs after an observed 2xx) and the issue now
+  // reads as 404: the deletion is confirmed. Any other read-back outcome stays unconfirmed below,
+  // and a 404 after archive, restore or reorder is never absence.
+  if (input.kind === "delete" && (await issueIsGone(request, input.issue)))
+    return { ok: true, receipt };
   const issues = input.kind === "archive-many" ? input.issues : [input.issue];
   for (const issue of issues) {
     const refused = await bindIssueLifecycleIssue(request, issue);
@@ -134,8 +140,9 @@ async function dispatch(
     throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }
-/** All admitted effects remain unconfirmed. Neither a text stream, selected404 nor a visible
- * child sequence is converted into global completion, deletion or hidden-population evidence. */
+/** Archive, restore and reorder stay unconfirmed, and neither a text stream nor a visible child
+ * sequence is converted into global completion or hidden-population evidence. A deletion is
+ * confirmed only by a 404 read-back of the issue after Jira accepted the DELETE itself (#4354). */
 export async function executeJiraIssueLifecycleMutation(
   operation: JiraIssueLifecycleMutation,
   args: CatalogJsonObject,

@@ -16,7 +16,6 @@ import {
   createInMemoryConfluenceFixture,
   createJiraSyncSource,
   createConfluencePage,
-  createJiraIssue,
   executeJiraLiveSearch,
   runAtlassianSyncFetch,
   type AtlassianSyncFetchOutcome,
@@ -88,7 +87,10 @@ function rowsForOperation(
 const MATRIX: readonly MatrixRow[] = [
   ...rowsForOperation("sync", ["confluence", "jira"], READ_REASON),
   ...rowsForOperation("live", ["jira"], READ_REASON),
-  ...rowsForOperation("write", ["jira", "confluence"], WRITE_REASON),
+  // The legacy Jira write executors are retired (#4354); the managed Jira writes classify through
+  // their own executor (jira-managed-mutations tests). The shared D3 write-status mapping stays
+  // pinned here through the Confluence write executor.
+  ...rowsForOperation("write", ["confluence"], WRITE_REASON),
 ];
 
 async function runSyncCell(provider: Provider, condition: DegradationCondition): Promise<string> {
@@ -130,16 +132,8 @@ async function runLiveCell(condition: DegradationCondition): Promise<string> {
   throw new Error("live search did not degrade");
 }
 
-async function runWriteCell(provider: Provider, condition: DegradationCondition): Promise<string> {
+async function runWriteCell(condition: DegradationCondition): Promise<string> {
   const http = conditionBodyPort(condition);
-  if (provider === "jira") {
-    const result = await createJiraIssue(
-      { http, baseUrl: CONNECTOR_BASE_URL, sleep: noopSleep },
-      { projectKey: "PROJ", issueTypeId: "10001", summary: "Degradation probe" },
-    );
-    if (!result.ok) return result.reason;
-    throw new Error("jira write did not degrade");
-  }
   const result = await createConfluencePage(
     { http, baseUrl: CONNECTOR_BASE_URL, sleep: noopSleep },
     { spaceId: "100", title: "Degradation probe", bodyText: "body" },
@@ -151,7 +145,7 @@ async function runWriteCell(provider: Provider, condition: DegradationCondition)
 function runCell(row: MatrixRow): Promise<string> {
   if (row.operation === "sync") return runSyncCell(row.provider, row.condition);
   if (row.operation === "live") return runLiveCell(row.condition);
-  return runWriteCell(row.provider, row.condition);
+  return runWriteCell(row.condition);
 }
 
 describe("connector degradation matrix (Issue #2246 Scope 4, ADR-0128 D3)", () => {
@@ -160,7 +154,7 @@ describe("connector degradation matrix (Issue #2246 Scope 4, ADR-0128 D3)", () =
   });
 
   it("covers every operation × provider × condition cell exactly once", () => {
-    expect(MATRIX).toHaveLength((2 + 1 + 2) * DEGRADATION_CONDITIONS.length);
+    expect(MATRIX).toHaveLength((2 + 1 + 1) * DEGRADATION_CONDITIONS.length);
     const keys = MATRIX.map((row) => `${row.operation}:${row.provider}:${row.condition}`);
     expect(new Set(keys).size).toBe(keys.length);
   });

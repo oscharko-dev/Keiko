@@ -64,6 +64,17 @@ import {
   syntheticJira,
   SYNTHETIC_JIRA_BASE_URL,
 } from "../../../tests/support/jira-synthetic-draft-remote.js";
+import { seedPermissiveJiraTemplates } from "../../../tests/support/jira-test-templates.js";
+
+// Release 1 switches the attachment operations off (#4354); this file exercises their review and
+// upload mechanics, which stay in the code for Release 2, so the switch is on here. That they are
+// not offered is pinned in jiraChatCatalogRuntime.test.ts and codingJiraPodBinding.test.ts.
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+  >()),
+  jiraOperationInReleaseScope: (): boolean => true,
+}));
 
 const MODEL = "synthetic-combined-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -312,6 +323,7 @@ function fixture(options: Options = {}): Fixture {
     env: { KEIKO_STATE_DIR: root },
     modelPortFactory: () => model(calls, options),
   });
+  seedPermissiveJiraTemplates(base.store, ["SYN"], ["Story"]);
   const settings = base.mcpSettings;
   if (settings === undefined) throw new Error("Missing MCP settings owner");
   const server: McpServerDefinition = {
@@ -1519,7 +1531,8 @@ describe("combined Jira review admission parity", () => {
       fileName: "combined-story-template.md",
       contentBase64: Buffer.from(markdown).toString("base64"),
     });
-    expect(f.deps.store.markdownSkills.jiraTemplates()).toHaveLength(1);
+    // The fixture's own permissive template of the type and the one saved here.
+    expect(f.deps.store.markdownSkills.jiraTemplates()).toHaveLength(2);
     const pending = send(f);
     void pending.catch(() => undefined);
     try {

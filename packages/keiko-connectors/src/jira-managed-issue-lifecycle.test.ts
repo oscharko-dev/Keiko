@@ -50,7 +50,10 @@ describe("reviewed native issue lifecycle effects", () => {
     );
     expect(native.snapshot()).toMatchObject({ effects: 1 });
   });
-  it.each(CASES)(
+  // The pin is kept for every kind but a deletion: archive, restore and reorder do not remove the
+  // issue, so a 404 on their read-back is never absence and stays unconfirmed. A deletion is its own
+  // case below (owner decision 2026-11-13, ADR-0128 issue lifecycle paragraph).
+  it.each(CASES.filter((selected) => selected.name !== "jira.delete-issue"))(
     "does not reinterpret $name readback404 as completed absence",
     async (selected) => {
       const native = issueLifecycleFixture(selected);
@@ -92,6 +95,49 @@ describe("reviewed native issue lifecycle effects", () => {
       expect(Object.isFrozen(error.receipt.issueIds)).toBe(true);
     }
     expect(native.snapshot()).toMatchObject({ effects: 1 });
+  });
+});
+
+describe("the outcome of an accepted issue deletion (#4354)", () => {
+  const selected = CASES[1];
+  it("confirms the deletion when Jira accepted the DELETE and the read-back finds the issue gone", async () => {
+    const native = issueLifecycleFixture(selected);
+    native.controls.missingReadback = true;
+    expect(await execute(selected.name, selected.args, native.request, native.ports)).toEqual({
+      ok: true,
+      receipt: selected.receipt,
+    });
+    expect(native.snapshot()).toMatchObject({ effects: 1 });
+    expect(native.calls.filter((call) => call.method === "DELETE")).toHaveLength(1);
+  });
+  it("keeps the deletion unconfirmed when no response to the DELETE was observed", async () => {
+    const native = issueLifecycleFixture(selected);
+    native.controls.lostAck = true;
+    native.controls.missingReadback = true;
+    expect(await execute(selected.name, selected.args, native.request, native.ports)).toMatchObject(
+      { ok: false, reason: "timeout", receipt: selected.receipt },
+    );
+    // The read-back is not even attempted: a 404 alone could also mean "not visible to this account".
+    expect(native.calls.filter((call) => call.method === "GET").length).toBeLessThan(
+      native.calls.length,
+    );
+    expect(native.calls.at(-1)).toMatchObject({ method: "DELETE" });
+  });
+  it("keeps the deletion unconfirmed when the read-back fails for any other reason", async () => {
+    const native = issueLifecycleFixture(selected);
+    native.controls.serverErrorReadback = true;
+    expect(await execute(selected.name, selected.args, native.request, native.ports)).toMatchObject(
+      { ok: false, reason: "unavailable", receipt: selected.receipt },
+    );
+    expect(native.snapshot()).toMatchObject({ effects: 1 });
+  });
+  it("keeps a deletion that Jira refused a failure", async () => {
+    const native = issueLifecycleFixture(selected);
+    native.controls.reject = true;
+    expect(await execute(selected.name, selected.args, native.request, native.ports)).toMatchObject(
+      { ok: false },
+    );
+    expect(native.snapshot()).toMatchObject({ effects: 0 });
   });
 });
 

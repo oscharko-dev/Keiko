@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
+  type JiraMutationAttempt,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   JIRA_EXISTING_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
@@ -1027,5 +1030,66 @@ describe("a create refused because a draft already made the issue", () => {
     }).data;
 
     expect(data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
+  });
+});
+
+// #4354 (AC7.2): the validated copy of a succeeded attempt is what the model's result and the log
+// are built from. It dropped the notices the executor attached, so they never reached either.
+describe("template notices on a validated attempt", () => {
+  const notice = { ruleId: "label-missing", subject: "reviewed", template: "SYN/Task" } as const;
+  const receipt = { issueKey: "SYN-1", issueId: "10001" };
+
+  it("keeps them, so the result tells the model what is still missing", () => {
+    const attempt = validJiraMutationAttempt(
+      { ok: true, receipt, templateNotices: [notice] },
+      "jira.edit",
+    );
+    expect(attempt).toMatchObject({ ok: true, templateNotices: [notice] });
+    expect(jiraAttemptToolResult("succeeded", attempt).data).toMatchObject({
+      outcome: "succeeded",
+      templateNotices: [notice],
+    });
+  });
+
+  it("bounds them like a refusal's violations: closed rule ids only, at most the shared limit", () => {
+    const many = Array.from({ length: JIRA_TEMPLATE_VIOLATIONS_MAX + 10 }, (_, index) => ({
+      ...notice,
+      subject: `label ${String(index)} ${"x".repeat(300)}`,
+    }));
+    const attempt = validJiraMutationAttempt(
+      {
+        ok: true,
+        receipt,
+        templateNotices: [
+          { ruleId: "not-a-rule-id" as never, subject: "dropped", template: "SYN/Task" },
+          ...many,
+        ],
+      },
+      "jira.edit",
+    );
+    if (!attempt.ok) throw new TypeError("Expected a succeeded attempt");
+    const kept = attempt.templateNotices ?? [];
+    expect(kept).toHaveLength(JIRA_TEMPLATE_VIOLATIONS_MAX);
+    expect(kept.every((item) => item.ruleId === "label-missing")).toBe(true);
+    expect(kept.every((item) => item.subject.length <= 120)).toBe(true);
+  });
+
+  it("drops the field when no notice survives the closed rule ids", () => {
+    const attempt = validJiraMutationAttempt(
+      {
+        ok: true,
+        receipt,
+        templateNotices: [
+          { ruleId: "not-a-rule-id" as never, subject: "dropped", template: "SYN/Task" },
+        ],
+      },
+      "jira.edit",
+    );
+    expect(attempt).not.toHaveProperty("templateNotices");
+  });
+
+  it("adds none to an attempt that had none", () => {
+    const attempt = validJiraMutationAttempt({ ok: true, receipt }, "jira.edit");
+    expect(attempt).not.toHaveProperty("templateNotices");
   });
 });

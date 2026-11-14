@@ -99,6 +99,18 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { specification } from "../_requirementSupport.js";
+import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
+import { seedPermissiveJiraTemplates } from "../../../../tests/support/jira-test-templates.js";
+
+// Release 1 switches the attachment operations off (#4354); this file exercises their review and
+// upload mechanics, which stay in the code for Release 2, so the switch is on here. That they are
+// not offered is pinned in jiraChatCatalogRuntime.test.ts and codingJiraPodBinding.test.ts.
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+  >()),
+  jiraOperationInReleaseScope: (): boolean => true,
+}));
 
 // Pass-through spies: the turn's completeness check and its log line run as in production unless a
 // test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
@@ -567,6 +579,8 @@ function fixture(
   });
   configure(deps);
   preselectFixtureCatalog(deps);
+  // A creation needs a template of its type (#4354); the writes below are about the turn, not a rule.
+  seedPermissiveJiraTemplates(deps.store, ["SYN", "KEIKO"], ["Story", "10001"]);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic Jira", MODEL);
   // An unselected Chat resolves the default (Full access); every other fixture pins Ask for approval
@@ -1122,6 +1136,33 @@ function expectSharedGuidanceOncePerRound(calls: readonly GatewayCallRequest[]):
   }
 }
 
+/** An honest answer to the project and issue-type reads a creation's template is chosen by. */
+function identityRead(url: string):
+  | {
+      readonly kind: "response";
+      readonly status: 200;
+      readonly bodyText: string;
+      readonly bodyBytes: number;
+      readonly truncated: false;
+    }
+  | undefined {
+  const path = new URL(url).pathname;
+  const body = path.endsWith("/project/KEIKO")
+    ? { id: "10000", key: "KEIKO" }
+    : path.endsWith("/issuetype/10001")
+      ? { id: "10001", name: "Story" }
+      : undefined;
+  if (body === undefined) return undefined;
+  const bodyText = JSON.stringify(body);
+  return {
+    kind: "response",
+    status: 200,
+    bodyText,
+    bodyBytes: Buffer.byteLength(bodyText),
+    truncated: false,
+  };
+}
+
 describe("normal buffered Chat through the owned Jira catalog", () => {
   it("keeps hostile Jira metadata outside catalog, binding, credential and approval controls", async () => {
     const f = fixture();
@@ -1161,6 +1202,11 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       return async (request): ReturnType<AtlassianHttpBodyPort> => {
         const response = await port(request);
         expect(request.method).toBe("GET");
+        // The identity reads a creation is judged by (#4354) are served honestly; only the
+        // metadata is hostile.
+        const identity = identityRead(request.url);
+        if (identity !== undefined) return { ...response, ...identity };
+        if (!request.url.includes("issue/createmeta/")) return response;
         expect(request.url).toContain("issue/createmeta/KEIKO/issuetypes/10001");
         granted = structuredClone(acceptedReadGrant(f));
         return {
@@ -1229,7 +1275,8 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     const exchange = firstToolExchange(f);
     expect(exchange.approval).toBeUndefined();
     expect(JSON.stringify(exchange.result?.data)).not.toContain("forged-");
-    expect(f.requests()).toBe(1);
+    // The create metadata, and the project and issue-type reads the creation's template is chosen by.
+    expect(f.requests()).toBe(3);
     expect(f.writes()).toBe(0);
   });
   it("grants its first read itself, executes through MCP, persists pairs and reuses the grant next turn", async () => {
@@ -3478,7 +3525,10 @@ describe("four-item Epic and Task template fullchain", () => {
       });
     }
     // The fixture must not accidentally pass because either governing template was unreadable.
-    const saved = f.deps.store.markdownSkills.jiraTemplates();
+    // The fixture's permissive templates of other types are not what this chain is about.
+    const saved = f.deps.store.markdownSkills
+      .jiraTemplates()
+      .filter((entry) => ["Epic", "Task"].includes(entry.template?.issueType ?? ""));
     expect(saved).toHaveLength(2);
     expect(new Set(saved.map((entry) => entry.template?.issueType))).toEqual(
       new Set(["Epic", "Task"]),
@@ -4281,6 +4331,8 @@ describe("four-item Epic and Task template fullchain", () => {
   it("names the sources of every staged page before the digest, then approves and replays that exact draft", async () => {
     citationSources.labels = new Map([[1, "Spec A.pdf · page 2"]]);
     const f = fixture(true, undefined, true, false, true);
+    // A creation needs a template of its type (#4354); this chain is about the citations.
+    seedPermissiveJiraTemplates(f.deps.store, ["SYN"], ["Epic", "Task"]);
     typedJira(f);
     const model = pagedModel(f);
     const pending = sendBatch(f, "cited-paged-first");
@@ -4811,6 +4863,8 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
         http: credentials.httpBodyPortFactory(credential, context.correlationId, {
           beforeDispatch: () => context.beforeEffect(),
         }),
+        // The stage dry-runs each item against the saved templates; without them a create is refused.
+        issueTemplates: jiraIssueTemplateSource(f.deps.store),
       },
       draftTool(f.deps, store),
     );

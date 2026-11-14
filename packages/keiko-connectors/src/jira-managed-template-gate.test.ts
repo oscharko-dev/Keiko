@@ -482,22 +482,71 @@ describe("create", () => {
     expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
   });
 
-  it("changes nothing and reads nothing extra when no template is configured", async () => {
-    for (const templates of [undefined, SET()]) {
-      const f = fixture(templates);
-      await f.run("jira.create", CREATE);
-      expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
-      expect(f.paths().some((line) => line.includes("/project/"))).toBe(false);
-    }
+  // #4354: a creation is sent only when a saved template activated for creating governs the
+  // project and issue type. These cases were the pass-through pins of the earlier rule; the owner
+  // decided on 2026-11-13 that nothing is created without a template, so they are inverted here.
+  it("refuses a creation when no template library is wired, before any write", async () => {
+    const f = fixture(undefined);
+    expect(await f.run("jira.create", CREATE)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "template-missing", subject: "template library", template: "*" }],
+    });
+    expect(f.writes()).toEqual([]);
   });
 
-  it("ignores a template of another project, another issue type or another activation point", async () => {
+  it("refuses a creation when the library holds no template, naming project and issue type", async () => {
+    const f = fixture(SET());
+    expect(await f.run("jira.create", CREATE)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "template-missing", subject: "Story", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("refuses a creation when only templates of another project or issue type exist", async () => {
     const other = { ...template(ALL_POINTS), project: "OTHER" };
     const bug = { ...template(ALL_POINTS), issueType: "Bug" };
-    const editOnly = template(["activateOn: [edit]"]);
-    const f = fixture(SET(other, bug, editOnly));
-    await f.run("jira.create", { ...CREATE, fields: { summary: "x" } });
-    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+    const f = fixture(SET(other, bug));
+    expect(await f.run("jira.create", { ...CREATE, fields: { summary: "x" } })).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-missing", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("tells a template of the type that only governs a status change from a missing one", async () => {
+    const transitionOnly = template(["activateOn: [transition:Ready]"]);
+    const f = fixture(SET(transitionOnly), { issue: {}, fieldCatalog: true });
+    expect(await f.run("jira.create", CREATE)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-not-activated", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("lets a template that names edit govern the creation of its type as well", async () => {
+    const f = fixture(SET(template(["activateOn: [edit]", "summaryMinLength: 40"])), {
+      issue: {},
+      fieldCatalog: true,
+    });
+    expect(await f.run("jira.create", CREATE)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "summary-too-short" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("matches the issue type by name without case and by numeric id", async () => {
+    for (const issueType of ["story", "10001"]) {
+      const f = fixture(
+        SET({ ...template(["activateOn: [create]", "summaryMinLength: 1"]), issueType }),
+        { issue: {}, fieldCatalog: true },
+      );
+      expect(await f.run("jira.create", CREATE)).not.toHaveProperty("violations");
+      expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+    }
   });
 
   it("fails closed when a stored template no longer parses", async () => {
@@ -544,6 +593,32 @@ describe("create", () => {
   });
 });
 
+describe("an edit never changes the project or the issue type of an issue (#4354, L6)", () => {
+  it.each([
+    ["jira.edit", "project", { key: "OTHER" }],
+    ["jira.edit", "issuetype", { id: "10002" }],
+    ["jira.transition", "project", { key: "OTHER" }],
+    ["jira.transition", "issuetype", { id: "10002" }],
+  ] as const)(
+    "refuses %s carrying %s before any request, naming the way",
+    async (op, id, value) => {
+      const f = fixture(SET(template(ALL_POINTS)));
+      const args =
+        op === "jira.edit"
+          ? { issueKey: "SYN-1", fields: { summary: "A longer summary", [id]: value } }
+          : { issueKey: "SYN-1", transitionId: "31", fields: { [id]: value } };
+      const result = await f.run(op, args);
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "field-validation",
+        detail: { fieldId: id, validation: "unsupported-field" },
+      });
+      expect(JSON.stringify(result)).toMatch(/Move.*create the issue again/u);
+      expect(f.http).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("edit", () => {
   const rules = [...ALL_POINTS, "summaryMinLength: 10", "requiredFields: [Story Points]"];
 
@@ -563,21 +638,59 @@ describe("edit", () => {
     expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
   });
 
-  it("refuses an edit that leaves the issue violating, naming the violation", async () => {
+  // #4354, owner decision 2026-11-13: an edit may not make things worse. A rule broken by a field the
+  // edit touches, or newly broken, blocks it; a rule the issue already broke in an untouched field
+  // does not block and is named to the person.
+  it("refuses an edit that breaks a field it touches, and names only that rule", async () => {
     const f = fixture(SET(template(rules)));
     const result = await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } });
     expect(result).toMatchObject({
       ok: false,
       reason: "field-validation",
-      violations: [
-        { ruleId: "summary-too-short" },
-        { ruleId: "field-missing", subject: "Story Points" },
-      ],
+      violations: [{ ruleId: "summary-too-short" }],
     });
+    expect(JSON.stringify(result)).not.toContain("Story Points");
     expect(f.writes()).toEqual([]);
   });
 
-  it("falls back to the instance field list when a name is not on the edit screen", async () => {
+  // The fixture answers a read after the write with the old issue, so the write is not confirmed;
+  // these cases are about whether the gate lets the PUT go out, which is what `writes()` shows.
+  it("lets an edit through when the issue already broke a rule in a field the edit does not touch", async () => {
+    const f = fixture(SET(template(rules)));
+    const result = await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "A longer summary" },
+    });
+    expect(result).not.toHaveProperty("violations");
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+  });
+
+  it("lets an edit through on an issue whose type has no template", async () => {
+    for (const templates of [SET(), SET({ ...template(rules), issueType: "Bug" })]) {
+      const f = fixture(templates);
+      const result = await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } });
+      expect(result).not.toHaveProperty("violations");
+      expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+    }
+  });
+
+  it("governs an edit by any template of the type, whichever plain activation it names", async () => {
+    for (const activation of ["create", "edit"]) {
+      const f = fixture(SET(template([`activateOn: [${activation}]`, "summaryMinLength: 10"])));
+      expect(
+        await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } }),
+      ).toMatchObject({ ok: false, violations: [{ ruleId: "summary-too-short" }] });
+      expect(f.writes()).toEqual([]);
+    }
+  });
+
+  it("does not let a transition-only template govern an edit", async () => {
+    const f = fixture(SET(template(["activateOn: [transition:Ready]", "summaryMinLength: 10"])));
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+  });
+
+  it("lets an edit through when the rule names a field the instance lacks and the edit does not set it", async () => {
     const f = fixture(SET(template(rules)), {
       fieldCatalog: false,
       issue: {
@@ -587,10 +700,8 @@ describe("edit", () => {
         description: FULL_DESCRIPTION,
       },
     });
-    expect(
-      await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "A longer summary" } }),
-    ).toMatchObject({ violations: [{ ruleId: "field-unavailable", subject: "Story Points" }] });
-    expect(f.writes()).toEqual([]);
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "A longer summary" } });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
   });
 
   it("does not govern an issue of another type", async () => {

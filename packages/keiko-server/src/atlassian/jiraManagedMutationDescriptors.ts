@@ -500,6 +500,8 @@ const RESULT_FIELDS = {
   messages: JIRA_FAILURE_MESSAGES_SCHEMA,
   ...LINK_RESULT,
   violations: JIRA_VIOLATIONS_SCHEMA,
+  // Only a success carries notices and only a refusal carries violations, so the one bound holds.
+  templateNotices: JIRA_VIOLATIONS_SCHEMA,
 };
 const RESULT_SCHEMA = object(RESULT_FIELDS, ["outcome"]);
 /** Only a create or an edit can carry requirement references, so only they declare their result. */
