@@ -22,6 +22,7 @@ import type {
   JiraReportComplianceChecker,
   JiraReportStore,
 } from "@oscharko-dev/keiko-connectors";
+import { currentJiraChatConnectionFingerprint } from "./atlassian/jiraChatConnectionIdentity.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -5200,10 +5201,12 @@ function installChatToolCatalogs(
     primary: options.activityLog ?? processServerLogSink(),
     diagnostics: options.diagnostics ?? defaultServerDiagnosticSink,
   };
-  return installKnowledgeChatCatalogRuntime(
-    installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log),
-    log,
+  const installed = installJiraChatCatalogRuntime(deps, log);
+  // A staged draft resolves only on the connection it was stored with (#4354, #4353 AC4).
+  installed.jiraDraftStore?.bindConnection((chatId) =>
+    currentJiraChatConnectionFingerprint(installed, chatId),
   );
+  return installKnowledgeChatCatalogRuntime(installMcpChatCatalogRuntime(installed, log), log);
 }
 
 /**

@@ -68,13 +68,22 @@ describe("local Jira operation discovery", () => {
     const all = vi.spyOn(provider, "jiraOperationContracts").mockImplementation(() => {
       throw new TypeError("Unrelated invalid descriptor");
     });
+    // Ranking by ordinary words reads the generated summary table: no descriptor is built, so
+    // a turn that never calls discover pays nothing, and one that does pays no compile (#4357).
+    const one = vi.spyOn(provider, "jiraOperationForTool").mockImplementation(() => {
+      throw new TypeError("Unrelated invalid descriptor");
+    });
     try {
       const f = fixture();
       expect((await f.discover.execute({ maxResults: 1 }, f.context)).data.items).toHaveLength(1);
+      const ranked = await f.discover.execute({ query: "who am I", maxResults: 3 }, f.context);
+      expect((ranked.data.items as readonly { tool: string }[])[0]?.tool).toBe("jira_myself");
       expect(jiraToolsForIdentities(["GET /rest/api/2/project"])).toEqual(["jira.projects"]);
       expect(all).not.toHaveBeenCalled();
+      expect(one).not.toHaveBeenCalled();
     } finally {
       all.mockRestore();
+      one.mockRestore();
     }
   });
 
@@ -452,6 +461,110 @@ describe("local Jira operation discovery", () => {
     await expect(
       f.describe.execute({ identities: [] }, { ...f.context, beforeEffect: () => false }),
     ).rejects.toMatchObject({ reason: "effect-denied" });
+    expect(f.select).not.toHaveBeenCalled();
+  });
+});
+
+// #4357 discoverability: a person's ordinary words must find the operation, and a hit must read as a
+// plain sentence, not as the authority action. Everything here goes through the real discover and
+// describe tools over the real operation registry.
+const ORDINARY_WORD_QUERIES: readonly (readonly [query: string, tool: string])[] = [
+  ["who am I", "jira.myself"],
+  ["current user", "jira.myself"],
+  ["connected account user name", "jira.myself"],
+  ["project statuses", "jira.project-statuses"],
+  ["statuses of a project", "jira.project-statuses"],
+  ["watch issue", "jira.watch"],
+  ["add me as a watcher", "jira.watch"],
+  ["stop watching", "jira.unwatch"],
+  ["remove watcher", "jira.unwatch"],
+  ["who watches this issue", "jira.watchers"],
+  ["delete issue", "jira.delete-issue"],
+  ["priorities", "jira.priorities"],
+  ["board configuration", "jira.board-configuration"],
+  ["project versions", "jira.versions"],
+  // The everyday operations the lab's deployment model did not reach (3 of 3 wrong tool each).
+  ["list all fields", "jira.fields"],
+  ["all fields", "jira.fields"],
+  ["search users", "jira.users"],
+  ["find a user", "jira.users"],
+];
+const FIRST_PAGE = 5;
+
+describe("finding an operation in ordinary words (#4357)", () => {
+  it.each(ORDINARY_WORD_QUERIES)(
+    "puts the operation for %j on the first page",
+    async (query, tool) => {
+      const f = fixture();
+      const found = await f.discover.execute({ query, maxResults: 100 }, f.context);
+      const items = found.data.items as readonly { identity: string; tool: string }[];
+      const names = items.slice(0, FIRST_PAGE).map((item) => item.tool);
+      expect(names, query).toContain(tool.replace(/[.-]/gu, "_"));
+      // The listed tool name is the one jira.describe accepts for the same operation.
+      const hit = items.find((item) => item.tool === tool.replace(/[.-]/gu, "_"));
+      const selected = await f.describe.execute({ identities: [hit?.tool ?? ""] }, f.context);
+      expect(selected.isError, query).toBeUndefined();
+    },
+  );
+
+  it("describes each hit in one plain sentence instead of the authority action", async () => {
+    const f = fixture();
+    const found = await f.discover.execute(
+      { query: "project statuses", maxResults: 20 },
+      f.context,
+    );
+    const items = found.data.items as readonly { tool: string; description: string }[];
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.description, item.tool).toMatch(/^[A-Z][^\n]{10,139}$/u);
+      expect(item.description, item.tool).not.toMatch(/^jira[._-]/iu);
+    }
+    const statuses = items.find((item) => item.tool === "jira_project_statuses");
+    expect(statuses?.description).toMatch(/project/iu);
+  });
+
+  it.each(["zzqqxx", "weather forecast tomorrow", "quantum entanglement"])(
+    "returns nothing, and invents no match, for the unrelated query %j",
+    async (query) => {
+      const f = fixture();
+      const none = await f.discover.execute({ query, maxResults: 20 }, f.context);
+      expect(none.data).toMatchObject({ outcome: "succeeded", items: [], total: 0 });
+    },
+  );
+
+  it("tells the model when to search and to phrase another language in English operation words", () => {
+    const f = fixture();
+    const description = f.discover.descriptor.description;
+    expect(description).toMatch(
+      /whenever no offered tool does what was asked, before answering that it cannot be done/u,
+    );
+    expect(description).toMatch(/another language in these English words/u);
+    expect(description).not.toMatch(/stable identity/u);
+  });
+
+  it("keeps an unlisted operation out of reach whatever the words say", async () => {
+    const f = fixture();
+    const restricted = createJiraCatalogDiscoveryProvider({
+      tools: new Set(["jira.projects"]),
+      nativeToolNames: true,
+    }).tools();
+    const discover = restricted.find((tool) => tool.name === "jira.discover");
+    const describeTool = restricted.find((tool) => tool.name === "jira.describe");
+    if (discover === undefined || describeTool === undefined) throw new TypeError("Missing tools");
+    const queries = ["who am I", "watch issue", "delete issue", "project statuses"];
+    const results = await Promise.all(
+      queries.map((query) => discover.execute({ query, maxResults: 100 }, f.context)),
+    );
+    results.forEach((found, index) => {
+      const names = (found.data.items as readonly { tool: string }[]).map((item) => item.tool);
+      expect(
+        names.every((name) => name === "jira.projects"),
+        queries[index],
+      ).toBe(true);
+    });
+    await expect(
+      describeTool.execute({ identities: ["jira.myself"] }, f.context),
+    ).resolves.toMatchObject({ isError: true });
     expect(f.select).not.toHaveBeenCalled();
   });
 });

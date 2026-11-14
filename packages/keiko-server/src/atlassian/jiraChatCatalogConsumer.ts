@@ -59,6 +59,8 @@ import {
   requestCatalogWriteApproval,
 } from "./jiraChatCatalogWrite.js";
 import type { ChatWriteApprovalClaim } from "./chatWriteApprovalState.js";
+import { jiraApprovalExpiredResult, type HeldJiraDraft } from "./jiraApprovalExpiry.js";
+import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import {
   JIRA_CATALOG_DISCOVERY_TOOLS,
   type JiraCatalogDiscoveryToolName,
@@ -311,6 +313,15 @@ export interface JiraChatAdmissionOptions {
     /** The requirement trace prepared for exactly this action, which its write receives too. */
     trace: JiraTraceRequest | undefined,
   ) => Promise<CatalogJsonObject | undefined>;
+  /**
+   * Runs after the preflight and before a human is asked: keeps the draft this write sends as the
+   * Chat's open draft (the existing draft store), so an approval that expires leaves something to
+   * resubmit (#4354 AC4). Absent or undefined for a write that is no draft.
+   */
+  readonly holdDraft?: (
+    action: JiraChatCatalogAction,
+    context: JiraChatCatalogContext,
+  ) => HeldJiraDraft | undefined;
   /** The file a `jira.attach` approval shows the human; absent when it cannot be reviewed (#4176). */
   readonly attachmentPreview?: (
     action: JiraChatCatalogAction,
@@ -425,6 +436,28 @@ function reviewableAction(
  * The template and field dry run of a write. A violating write is refused before any effect starts
  * and before any human is asked, whether or not its mode asks for an approval.
  */
+/** A draft the source preparation refused by its closed reason: one body-free line, no text. */
+function recordPreparedDraftRefusal(
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+  refusal: CatalogJsonObject,
+): void {
+  const reason = refusal.draftRefusal;
+  if (action.tool !== "jira.draft" || reason !== "connection-changed") return;
+  recordJiraDraftActivity(undefined, context.correlationId, {
+    phase: "refused",
+    refusal: reason,
+    newDraft: false,
+    pageItemCount: 0,
+    itemCount: 0,
+    pageCount: 0,
+    byteCount: 0,
+    unresolvedRefCount: 0,
+    violationCount: 0,
+    durationMs: 0,
+  });
+}
+
 async function refuseByPreflight(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
@@ -434,9 +467,10 @@ async function refuseByPreflight(
   const preparation = options.sourcePreparation;
   // The dry run admits what the write will: the write receives this prepared trace too (LIM27).
   const trace = preparation?.sourceFor(action.actionId, action.argumentsDigest)?.items[0]?.trace;
-  const refusal =
-    preparation?.refusalFor(action.actionId, action.argumentsDigest) ??
-    (await options.preflightWrite?.(action, context, trace));
+  const prepared = preparation?.refusalFor(action.actionId, action.argumentsDigest);
+  const refusal = prepared ?? (await options.preflightWrite?.(action, context, trace));
+  // The preflight records its own draft refusals; one the source preparation made has no other line.
+  if (prepared !== undefined) recordPreparedDraftRefusal(action, context, prepared);
   if (refusal !== undefined) {
     const binding = jiraOperationBindingForTool(action.tool);
     requireDispatch(binding !== undefined, "failed", "provider-reported-error");
@@ -456,7 +490,41 @@ async function requestWriteStage(
   context: JiraChatCatalogContext,
 ): Promise<void> {
   await refuseByPreflight(options, action, context);
-  await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+  const held = options.holdDraft?.(action, context);
+  const wait = await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+  if (wait === "expired") {
+    // The registry's own line records every expiry; a draft's refusal is also a draft event.
+    if (action.tool === "jira.draft")
+      recordJiraDraftActivity(undefined, context.correlationId, {
+        phase: "refused",
+        refusal: "approval-expired",
+        newDraft: false,
+        pageItemCount: 0,
+        itemCount: held?.itemCount ?? 0,
+        pageCount: 0,
+        byteCount: 0,
+        unresolvedRefCount: 0,
+        violationCount: 0,
+        durationMs: 0,
+      });
+    throw expiredApprovalFault(action, held);
+  }
+}
+
+/** An approval that ran out is reported as that, with the draft to ask again with (#4354 AC4). */
+function expiredApprovalFault(
+  action: JiraChatCatalogAction,
+  held: HeldJiraDraft | undefined,
+): CatalogDispatchFault {
+  const binding = jiraOperationBindingForTool(action.tool);
+  requireDispatch(binding !== undefined, "failed", "provider-reported-error");
+  // The model-visible refusal rides the `failed` class like every other refusal that carries
+  // guidance (a denied result carries no data, the envelope rejects it): effectStarted is false and
+  // the outcome says not-dispatched, so nothing claims an effect or a provider answer.
+  return new CatalogDispatchFault("failed", "provider-reported-error", undefined, {
+    ...jiraApprovalExpiredResult(held),
+    operationBinding: { ...binding },
+  });
 }
 
 async function requestConsent(
