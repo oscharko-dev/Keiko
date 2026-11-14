@@ -547,7 +547,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.deniedBlocker":
-    "Dieser Ordner ist von dem ausgeschlossen, was Keiko lesen darf. Wähle ein Repository außerhalb dieses Orts.",
+    "Keiko darf diesen Ordner nicht lesen. Wähle ein Repository an einem anderen Ort.",
   "codingWorkbench.repository.loadError":
     "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
   "codingWorkbench.repository.retryLoad": "Erneut versuchen",

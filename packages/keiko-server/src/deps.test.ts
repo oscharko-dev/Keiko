@@ -2116,6 +2116,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   it("does not seed a launch directory that the read surface refuses", async () => {
     const refused = join(tmp("launch-refused-"), ".claude", "worktrees", "keiko");
     mkdirSync(refused, { recursive: true });
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-launch-refused-"),
@@ -2124,9 +2126,18 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       initialProjectPath: refused,
     });
 
-    expect(deps.preferredProjectPath).toBeUndefined();
-    expect(deps.store.listProjects()).toEqual([]);
-    await deps.dispose?.();
+    try {
+      expect(deps.preferredProjectPath).toBeUndefined();
+      expect(deps.store.listProjects()).toEqual([]);
+      // The skip is recorded body-free: the closed reason, never the path.
+      const lines = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ extra: { decision: "denied", reason: "denied-locus" } });
+      expect(JSON.stringify(lines[0])).not.toContain("launch-refused-");
+    } finally {
+      await deps.dispose?.();
+      resetServerLogger();
+    }
   });
 
   it("grants package-script trust for an explicitly launcher-selected initial project", async () => {

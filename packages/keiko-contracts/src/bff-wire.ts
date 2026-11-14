@@ -737,6 +737,10 @@ export interface ProjectWithAvailability extends Project {
   // A project row is not sufficient authority for workspace capabilities. Governed consumers
   // admit only explicit `true`; `false` or an absent field fails closed and requires reconnection.
   readonly workspaceAvailable?: boolean;
+  // `false` when the Files and Git routes refuse this folder (a tool's own state area): the project
+  // stays listed and can be chosen, but the shell never offers it as the starting project (#4371).
+  // Absent reads as readable.
+  readonly readable?: boolean;
 }
 
 // ─── Chat status (BFF wire — mirror of UiStore Chat["status"]) ───────────────────

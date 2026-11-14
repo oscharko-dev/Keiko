@@ -157,6 +157,11 @@ export function hasCurrentWorkspaceRootMembership(store: UiStore, rootInput: str
   }
 }
 
+/** Whether the Files and Git routes would read this folder; the project is listed either way. */
+export function projectReadable(project: Project): boolean {
+  return !pathIsDenied(project.path);
+}
+
 export function projectWithWorkspaceAvailability(
   store: UiStore,
   project: Project,
@@ -164,6 +169,7 @@ export function projectWithWorkspaceAvailability(
   return {
     ...project,
     available: isProjectAvailable(project),
+    readable: projectReadable(project),
     workspaceAvailable: hasCurrentWorkspaceRootMembership(store, project.path),
   };
 }
@@ -179,12 +185,18 @@ export function projectsWithWorkspaceAvailability(
     return projects.map((project): ProjectWithAvailability => ({
       ...project,
       available: isProjectAvailable(project),
+      readable: projectReadable(project),
       workspaceAvailable: false,
     }));
   }
   return projects.map((project): ProjectWithAvailability => {
     const workspaceAvailable = hasMembershipInSnapshot(project.path, snapshot);
-    return { ...project, available: isProjectAvailable(project), workspaceAvailable };
+    return {
+      ...project,
+      available: isProjectAvailable(project),
+      readable: projectReadable(project),
+      workspaceAvailable,
+    };
   });
 }
 
@@ -196,10 +208,7 @@ export function userFacingProjects(
   projects: readonly Project[],
   managedTaskWorkspaceRoot: string | undefined,
 ): readonly Project[] {
-  // A project the read surface refuses (every Files and Git read of it is denied) is never offered:
-  // it would start the person on a folder that cannot be opened (#4371).
-  const readable = projects.filter((project) => !pathIsDenied(project.path));
-  if (managedTaskWorkspaceRoot === undefined) return readable;
+  if (managedTaskWorkspaceRoot === undefined) return projects;
   const managedRoot = resolve(managedTaskWorkspaceRoot);
-  return readable.filter((project) => !containsPath(managedRoot, resolve(project.path)));
+  return projects.filter((project) => !containsPath(managedRoot, resolve(project.path)));
 }

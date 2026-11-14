@@ -6036,6 +6036,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "history-run-held",
           "repository-seeded",
           "repository-seed-skipped",
+          "repository-returned",
           "bridge-registration-refused",
           "diff-windowed",
           "notice-held",

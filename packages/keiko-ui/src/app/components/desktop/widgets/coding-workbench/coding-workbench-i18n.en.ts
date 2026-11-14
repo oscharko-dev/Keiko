@@ -521,7 +521,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.deniedBlocker":
-    "This folder is excluded from what Keiko may read. Choose a repository outside that location.",
+    "Keiko may not read this folder. Choose a repository in another location.",
   "codingWorkbench.repository.loadError":
     "Repositories could not be loaded. Refresh the list and try again.",
   "codingWorkbench.repository.retryLoad": "Retry",

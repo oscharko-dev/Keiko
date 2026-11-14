@@ -2381,6 +2381,9 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // active task binding and follows that (`repository-seed-skipped`). Once per window.
   "repository-seeded",
   "repository-seed-skipped",
+  // The Git window handed a repository the person just added or cloned back to the window that
+  // asked for the folder (its return window); no other window changes (#4371). Once per return.
+  "repository-returned",
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
@@ -2600,6 +2603,7 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | { readonly interaction: "history-run-held" }
   | { readonly interaction: "repository-seeded" }
   | { readonly interaction: "repository-seed-skipped" }
+  | { readonly interaction: "repository-returned" }
   | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
@@ -2685,6 +2689,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "history-run-held": {},
   "repository-seeded": {},
   "repository-seed-skipped": {},
+  "repository-returned": {},
   "bridge-registration-refused": {
     refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
   },
