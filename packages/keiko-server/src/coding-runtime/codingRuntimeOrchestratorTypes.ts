@@ -7,6 +7,7 @@ import type {
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchContextUsage,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimeQuestionsResponse,
@@ -130,6 +131,11 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly contextUsage?: ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
+  /**
+   * The version facts of the runtime the server activated, from the same verified metadata the
+   * readiness reports. A run's start line names them, so a support export says which runtime ran.
+   */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
   /**
    * The task workspace's own `AGENTS.md`, attached as bounded untrusted initial context beside the

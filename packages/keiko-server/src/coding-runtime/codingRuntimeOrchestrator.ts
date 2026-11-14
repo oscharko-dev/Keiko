@@ -11,6 +11,7 @@ import type {
   CodingWorkbenchMcpAuthorizationState,
   CodingWorkbenchMcpServer,
   CodingWorkbenchMode,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
@@ -338,6 +339,16 @@ const CODING_RUNTIME_RUN_STARTED_OPERATION = defineActivityLogOperation({
       values: ["build", "plan", "custom"],
     },
     modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Which runtime ran (#4359): the version the verified runtime metadata names and where it came
+    // from. Absent when the server could not name the runtime; never a guess.
+    opencodeVersion: { type: "string", dataClass: "safe-version", required: false, maxLength: 64 },
+    runtimeOrigin: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      // Literal by the registry's rule; a test pins it to CODING_WORKBENCH_RUNTIME_ORIGINS.
+      values: ["portable-release", "npm-runtime-package", "dev-checkout"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -1406,6 +1417,7 @@ function recordRuntimeRunStarted(
   predecessorSelectionReason: PredecessorSelectionReason,
   taskIntent: string,
   identity?: RuntimeRunIdentity,
+  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1426,6 +1438,9 @@ function recordRuntimeRunStarted(
           ? {}
           : { predecessorRunId: snapshot.predecessorRunId }),
         ...runIdentityLogFields(identity),
+        ...(runtimeVersion === undefined
+          ? {}
+          : { opencodeVersion: runtimeVersion.opencode, runtimeOrigin: runtimeVersion.origin }),
       },
     ),
   );
@@ -4207,6 +4222,7 @@ export class CodingRuntimeOrchestrator {
       selection.reason,
       taskIntent,
       this.runIdentity,
+      this.deps.runtimeVersion,
     );
   }
 

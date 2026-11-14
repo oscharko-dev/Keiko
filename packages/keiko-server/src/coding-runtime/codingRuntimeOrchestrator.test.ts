@@ -93,6 +93,7 @@ import type {
   MemoryId,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
+  CodingWorkbenchRuntimeVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -105,6 +106,11 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { CODING_WORKBENCH_RUNTIME_ORIGINS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 type OptionalOrchestratorDeps = Pick<
   Parameters<typeof createCodingRuntimeOrchestrator>[0],
@@ -115,6 +121,7 @@ type OptionalOrchestratorDeps = Pick<
   | "repositoryInstructions"
   | "terminalFacts"
   | "runEffort"
+  | "runtimeVersion"
 >;
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
@@ -179,6 +186,7 @@ function optionalOrchestratorDeps(input: {
     Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
   readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
 }): Partial<OptionalOrchestratorDeps> {
   return {
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -190,6 +198,7 @@ function optionalOrchestratorDeps(input: {
       : {}),
     ...(input.terminalFacts ? { terminalFacts: input.terminalFacts } : {}),
     ...(input.runEffort ? { runEffort: input.runEffort } : {}),
+    ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
   };
 }
 
@@ -289,6 +298,8 @@ function fixture(
   sessionContinuity?: CodingSessionContinuity,
   // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
   workspaceInventory?: readonly WorkspaceInstance[],
+  // #4359: the activated runtime's version facts, named on the run's start line.
+  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -525,6 +536,7 @@ function fixture(
         repositoryInstructions,
         terminalFacts,
         runEffort,
+        runtimeVersion,
       }),
       ...(history === undefined ? {} : { history }),
       ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
@@ -1029,6 +1041,46 @@ describe("CodingRuntimeOrchestrator", () => {
       formatActivityLogProofLine(event),
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
+  });
+  // #4359: a support export must say which runtime ran; the start line names the version the
+  // verified runtime metadata reports and its origin, and nothing when the server cannot name them.
+  it("registers the runtime origins the readiness knows, no more and no fewer", () => {
+    const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
+    const registered = registry.find((entry) => entry.op === "coding-runtime.run.started");
+    expect(registered?.fields.runtimeOrigin?.values).toEqual([...CODING_WORKBENCH_RUNTIME_ORIGINS]);
+  });
+  it("names the activated runtime's version and origin on the start line, never a guess", async () => {
+    const withVersion = captureActivityLog();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      withVersion.activityLog,
+      ...Array.from({ length: 13 }, () => undefined),
+      { opencode: "2.1.4", pinned: "2.2.5", origin: "npm-runtime-package" },
+    );
+    await f.orchestrator.start(start);
+    const event = requireLoggedEvent(
+      withVersion.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.started.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ opencodeVersion: "2.1.4", runtimeOrigin: "npm-runtime-package" });
+
+    const without = captureActivityLog();
+    const g = fixture(undefined, undefined, [], undefined, without.activityLog);
+    await g.orchestrator.start(start);
+    const bare = requireLoggedEvent(
+      without.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(bare.extra).not.toHaveProperty("opencodeVersion");
+    expect(bare.extra).not.toHaveProperty("runtimeOrigin");
   });
   it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
     const captured = captureActivityLog();

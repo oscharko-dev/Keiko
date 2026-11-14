@@ -16159,6 +16159,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      opencodeVersion: {
+        type: "string",
+        dataClass: "safe-version",
+        required: false,
+        maxLength: 64,
+      },
+      runtimeOrigin: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["portable-release", "npm-runtime-package", "dev-checkout"],
+      },
     },
     causal: "correlation",
     lifecycle: "start",
