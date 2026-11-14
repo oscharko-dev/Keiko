@@ -129,15 +129,24 @@ export function VerifyAnnouncement({ state }: { readonly state: LivePodState }):
       data-status={status}
       data-testid="acx-verify-status"
     >
-      {status === undefined ? null : shown ? (
-        <>
-          <span className="acx-notice-label">{t(verifyStatusLabelKey(status))}</span>
-          <span>{guidance}</span>
-        </>
-      ) : (
-        `${t(verifyStatusLabelKey(status))}. ${guidance}`
-      )}
+      {verifyAnnouncementContent(status, guidance, shown, t)}
     </output>
+  );
+}
+
+function verifyAnnouncementContent(
+  status: AtlassianConnectorVerifyStatus | undefined,
+  guidance: string,
+  shown: boolean,
+  t: ReturnType<typeof useTranslate>,
+): ReactNode {
+  if (status === undefined) return null;
+  if (!shown) return `${t(verifyStatusLabelKey(status))}. ${guidance}`;
+  return (
+    <>
+      <span className="acx-notice-label">{t(verifyStatusLabelKey(status))}</span>
+      <span>{guidance}</span>
+    </>
   );
 }
 

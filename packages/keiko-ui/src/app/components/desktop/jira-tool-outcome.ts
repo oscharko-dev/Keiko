@@ -175,7 +175,6 @@ import {
   jiraIssuePickerGroups,
   jiraPinnedCommentDetails,
 } from "./jira-issue-context-presentation";
-import { jiraPresentationNativeText } from "./jira-presentation-values";
 import { jiraReadableText } from "./jira-readable-text";
 
 /** One Jira issue a tool call created, changed or read, as a person recognises it. */
@@ -1594,14 +1593,19 @@ function catalogLookupView(
   | Pick<JiraToolOutcomeView, "items" | "labels" | "returnedCount" | "total" | "unreadableCount">
   | undefined {
   if (!JIRA_CATALOG_TOOLS.has(tool) || data.outcome !== "succeeded") return undefined;
-  const selected = tool === "jira_describe" && data.selectedFor === "next-round";
-  const labels =
-    tool === "jira_discover"
-      ? ["chat.jira.catalog.found" as const]
-      : selected
-        ? ["chat.jira.catalog.selected" as const]
-        : [];
+  const labels = catalogLookupLabels(tool, data);
   return { items: [], labels, returnedCount: undefined, total: undefined, unreadableCount: 0 };
+}
+
+function catalogLookupLabels(
+  tool: string,
+  data: UnknownRecord,
+): readonly ("chat.jira.catalog.found" | "chat.jira.catalog.selected")[] {
+  if (tool === "jira_discover") return ["chat.jira.catalog.found"];
+  if (tool === "jira_describe" && data.selectedFor === "next-round") {
+    return ["chat.jira.catalog.selected"];
+  }
+  return [];
 }
 /** A display projection of the immutable receipt, shared by the live turn and restored history. */
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
