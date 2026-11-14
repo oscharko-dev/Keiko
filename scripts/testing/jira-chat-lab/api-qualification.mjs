@@ -15,6 +15,7 @@ import {
   loadSession,
   requireLicense,
 } from "./lab-client.mjs";
+import { withFixtureFieldOptional } from "./seed-fields.mjs";
 import { privateJson } from "./private-json.mjs";
 import { observeQualificationFixtures } from "./api-qualification-cases.mjs";
 import { dispatchQualification, qualificationWitness } from "./api-qualification-runtime.mjs";
@@ -766,10 +767,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       throw new TypeError(
         "Usage: api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]",
       );
-    const { counts } = await qualifyApi(
-      directory,
-      only === "*" ? undefined : only?.split(","),
-      snapshotId,
+    // The qualification's own creates run in a project that inherits the lab's required field.
+    const { counts } = await withFixtureFieldOptional(loadSession(directory), () =>
+      qualifyApi(directory, only === "*" ? undefined : only?.split(","), snapshotId),
     );
     if (counts.unknown > 0) process.exitCode = 1;
   } catch (error) {

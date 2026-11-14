@@ -13,7 +13,11 @@ import { parseArgs } from "node:util";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { chatReadLogDirectory, jsonRequest, prepareChat, withLiveChat } from "./chat-read.mjs";
 import { privateJson } from "./chat-write.mjs";
-import { SELECTION_CASES, selectionTruth } from "./catalog-selection-cases.mjs";
+import {
+  SELECTION_CASES,
+  selectionNeedsFieldLift,
+  selectionTruth,
+} from "./catalog-selection-cases.mjs";
 import { gradeSelection, summarizeSelection } from "./catalog-selection-grade.mjs";
 import {
   createSelectionObjects,
@@ -26,6 +30,7 @@ import {
 } from "./catalog-selection-objects.mjs";
 import { loadSession, requireLicense } from "./lab-client.mjs";
 import { readGatewayFailures, readToolRejections } from "./requirements/validity.mjs";
+import { withComposerFieldLift } from "./requirements/scorecard-finish.mjs";
 import { withWorkProjectLock } from "./requirements/work-project-lock.mjs";
 
 const TURN_LIMIT_MS = 480_000;
@@ -372,17 +377,22 @@ async function measure(session, modelId, run, cases) {
       throw new TypeError(
         `${orphans} issues summarized "Auswahl Vorgang|Ziel" of an earlier run remain; delete them natively first`,
       );
-    for (const batch of attemptBatches(cases, run.repeat)) {
-      if (run.stop.signal.aborted) break;
-      stage("lifecycle-started", { attempts: batch.length });
-      await withLiveChat({
-        session,
-        modelId,
-        run: async (context) => {
-          await runAttempts(context, run, batch);
-        },
-      });
-    }
+    const runBatches = async () => {
+      for (const batch of attemptBatches(cases, run.repeat)) {
+        if (run.stop.signal.aborted) break;
+        stage("lifecycle-started", { attempts: batch.length });
+        await withLiveChat({
+          session,
+          modelId,
+          run: async (context) => {
+            await runAttempts(context, run, batch);
+          },
+        });
+      }
+    };
+    // The work project inherits the field the lab requires in every project and cannot fill: its
+    // create cases run inside the bracket that lifts the requirement (as the Composer lane does).
+    await withComposerFieldLift(selectionNeedsFieldLift(cases), session, runBatches);
     // A signal during the last attempt ends the loop normally, but the run was still stopped.
     complete = !run.stop.signal.aborted;
   } catch (error) {

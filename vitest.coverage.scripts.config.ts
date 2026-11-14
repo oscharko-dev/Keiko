@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { vitestMaxWorkers } from "./scripts/lib/vitest-workers.mjs";
 
 import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
 
@@ -24,7 +25,8 @@ export default defineConfig({
       fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
     ],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
-    maxWorkers: 2,
+    // The shared bound (2 under CI, 4 locally, KEIKO_VITEST_MAX_WORKERS to choose); GEN-TEST-FLAKE-002.
+    maxWorkers: vitestMaxWorkers(),
     testTimeout: 15_000,
     coverage: {
       provider: "v8",

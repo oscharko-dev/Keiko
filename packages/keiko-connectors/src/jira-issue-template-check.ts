@@ -702,3 +702,44 @@ export function jiraTemplateViolationGuidance(
     " When you explain a refusal to the person, say in plain words what is wrong and what to change; never quote the rule id or a field id as the explanation."
   );
 }
+
+/**
+ * Every guidance `jiraTemplateViolationGuidance` can return, by enumerating what its sentences depend
+ * on: whether a parent rule, a section rule and each rule hint is among the violations, plus the
+ * answers for no governing template, an impact refusal and unreadable evidence. The longest of them
+ * is what every result schema that carries guidance must hold.
+ */
+export function jiraTemplateGuidanceVariants(): readonly string[] {
+  const violation = (ruleId: JiraTemplateViolation["ruleId"]): JiraTemplateViolation => ({
+    ruleId,
+    subject: "x",
+    template: "SYN/Task",
+  });
+  const optional: readonly JiraTemplateViolation["ruleId"][] = [
+    "parent-type-mismatch",
+    "section-missing",
+    ...RULE_HINTS.map(([ruleId]) => ruleId),
+  ];
+  const variants = new Set<string>();
+  for (let mask = 0; mask < 2 ** optional.length; mask += 1) {
+    const chosen = optional.filter((_, index) => (mask >> index) % 2 === 1).map(violation);
+    const guidance = jiraTemplateViolationGuidance([violation("summary-too-short"), ...chosen]);
+    if (guidance !== undefined) variants.add(guidance);
+  }
+  for (const ruleId of [
+    "template-missing",
+    "template-not-activated",
+    "template-unreadable",
+  ] as const) {
+    const guidance = jiraTemplateViolationGuidance([violation(ruleId)]);
+    if (guidance !== undefined) variants.add(guidance);
+  }
+  const impact: JiraTemplateViolation = {
+    ruleId: "template-unreadable",
+    subject: JIRA_TEMPLATE_IMPACT_SUBJECTS.schema,
+    template: "SYN/Task",
+  };
+  const guidance = jiraTemplateViolationGuidance([impact]);
+  if (guidance !== undefined) variants.add(guidance);
+  return [...variants];
+}

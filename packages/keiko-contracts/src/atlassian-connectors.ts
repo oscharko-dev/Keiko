@@ -2089,6 +2089,7 @@ export {
   type JiraMutationReceipt,
   type JiraMutationAttempt,
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_MUTATION_DETAIL_LIMITS,
   sanitizeJiraMutationFailureDetail,
   JIRA_MUTATION_LINKS_MAX,

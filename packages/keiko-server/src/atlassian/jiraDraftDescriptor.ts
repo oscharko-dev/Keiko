@@ -1,6 +1,7 @@
 import {
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
@@ -60,7 +61,7 @@ export function jiraDraftStageDeclaration(): ManagedMcpToolDeclaration {
           newDraft: { type: "boolean" },
           itemCount: { type: "integer", minimum: 0 },
           pageCount: { type: "integer", minimum: 0 },
-          guidance: text(1024),
+          guidance: text(JIRA_RESULT_GUIDANCE_MAX_CHARS),
           unresolvedRefCount: { type: "integer", minimum: 0 },
           unresolvedRefs: { type: "array", maxItems: 32, items: text(32) },
           ref: text(32),

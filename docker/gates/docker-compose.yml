@@ -27,6 +27,11 @@ services:
     shm_size: 2gb
     environment:
       CI: "true"
+      # The vitest worker count (scripts/lib/vitest-workers.mjs). This container sets CI=true, which
+      # alone would pin every local gate job to two workers, so a local gate job defaults to four and
+      # the host's KEIKO_VITEST_MAX_WORKERS (1 to 16) overrides it; =2 reproduces CI's count exactly.
+      # Real CI (GitHub) never uses this file. docs/qa/local-gates.md.
+      KEIKO_VITEST_MAX_WORKERS: "${KEIKO_VITEST_MAX_WORKERS:-4}"
       # Marks evidence produced here as local. Nothing downstream may treat it as authoritative:
       # this container is not the reference architecture for wall-clock measurement.
       KEIKO_LOCAL_GATE_CONTAINER: "1"

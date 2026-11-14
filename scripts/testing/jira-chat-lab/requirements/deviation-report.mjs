@@ -120,7 +120,12 @@ const NEGATOR = phrase(
 const NOT_A_PROBLEM = phrase(
   String.raw`(?:nicht|not|never|nie|kein\p{L}*)\s+(?:\p{L}+\s+)?(?:leer|fehlend|fehlt|missing|empty|ungültig|invalid|falsch|wrong|unset|absent|fehlerhaft|incorrect)|fehl\p{L}*\s+(?:nicht|nirgends)|nichts\s+(?:fehlt|ist\s+falsch)`,
 );
-const NEGATED_FINE = new RegExp(String.raw`${NEGATOR}(?:\s+\p{L}+){0,2}\s+${FINE}`, "giu");
+// German puts the negation after the verb as well: "erfüllt das Muster nicht", "entspricht der Vorgabe
+// nicht" state a deviation; "Summary erfüllt das Muster" alone is a fine-claim and stays a denial.
+const NEGATED_FINE = new RegExp(
+  String.raw`${NEGATOR}(?:\s+\p{L}+){0,2}\s+${FINE}|${FINE}(?:\s+\p{L}+){0,3}\s+${NEGATOR}`,
+  "giu",
+);
 const NOTHING_FOUND_RE = new RegExp(NOTHING_FOUND, "iu");
 const NOT_A_PROBLEM_RE = new RegExp(NOT_A_PROBLEM, "iu");
 const FINE_RE = new RegExp(FINE, "iu");
@@ -137,8 +142,12 @@ function deniesDeviation(clause) {
 // A description of a deviation states a violation: a field that is absent, empty, wrong or unlike the
 // template. Naming the checked fields ("Geprüft wurden Summary, Parent ...") or calling them present
 // states none, so it describes no deviation however many field words it holds.
+// The report's own rule ids ("section-missing", "summary-pattern", "label-missing") are the tool's
+// statement of a violation: an answer that repeats them states one. A hyphen continues a word, so
+// the bare word "missing" inside such an id needs its own alternative.
+const RULE_ID = String.raw`[a-z]+-(?:missing|empty|pattern|mismatch|unavailable|count|too-short|too-long)`;
 const VIOLATION = phrase(
-  String.raw`fehl\p{L}*|missing|lack\p{L}*|absent|ohne|without|kein\p{L}*|nicht|not|no|n't|never|ungültig\p{L}*|invalid|falsch\p{L}*|wrong|incorrect|leer\p{L}*|empty|unset|verletz\p{L}*|violat\p{L}*|weicht\s+ab|abweich\p{L}*|deviat\p{L}*|mangel\p{L}*|m[äa]ngel\p{L}*|fehlerhaft\p{L}*|unvollständig\p{L}*|incomplete|unzulässig\p{L}*|mismatch\p{L}*|differs?|expected|erwartet|statt`,
+  String.raw`${RULE_ID}|fehl\p{L}*|missing|lack\p{L}*|absent|ohne|without|kein\p{L}*|nicht|not|no|n't|never|ungültig\p{L}*|invalid|falsch\p{L}*|wrong|incorrect|leer\p{L}*|empty|unset|verletz\p{L}*|violat\p{L}*|weicht\s+ab|abweich\p{L}*|deviat\p{L}*|mangel\p{L}*|m[äa]ngel\p{L}*|fehlerhaft\p{L}*|unvollständig\p{L}*|incomplete|unzulässig\p{L}*|mismatch\p{L}*|differs?|expected|erwartet|statt`,
 );
 const VIOLATION_RE = new RegExp(VIOLATION, "iu");
 const DEVIATION_SCOPE_RE = new RegExp(phrase(DEVIATION_NOUN), "iu");

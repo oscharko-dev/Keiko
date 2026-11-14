@@ -6,6 +6,7 @@ import {
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_TEMPLATE_RULE_IDS,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   isSafeAtlassianIdentifier,
   sanitizeJiraMutationFailureDetail,
@@ -860,6 +861,16 @@ function toolResultGuidance(
   if (!replayed) return guidance ?? jiraTemplateViolationGuidance(violations ?? []);
   return outcome === "rejected" ? JIRA_ALREADY_REFUSED_GUIDANCE : guidance;
 }
+/**
+ * The guidance the result schema allows. The sentences the producer writes fit (a test pins every
+ * refusal of every governed operation); this is the net under them, so that whatever is written
+ * later still settles as a valid, explained result and never as `result-contract-failed`.
+ */
+export function boundedGuidance(guidance: string | undefined): string | undefined {
+  return guidance === undefined || guidance.length <= JIRA_RESULT_GUIDANCE_MAX_CHARS
+    ? guidance
+    : `${guidance.slice(0, JIRA_RESULT_GUIDANCE_MAX_CHARS - 1)}…`;
+}
 export function jiraMutationToolResult(
   outcome: JiraMutationResultState,
   reason?: AtlassianConnectorWriteFailureReason,
@@ -869,7 +880,9 @@ export function jiraMutationToolResult(
   links?: JiraMutationLinkAccount,
   violations?: readonly JiraTemplateViolation[],
 ): ManagedMcpToolResult {
-  const guidance = toolResultGuidance(outcome, reason, replayed, detail, violations);
+  const guidance = boundedGuidance(
+    toolResultGuidance(outcome, reason, replayed, detail, violations),
+  );
   return {
     data: {
       ...receipt,

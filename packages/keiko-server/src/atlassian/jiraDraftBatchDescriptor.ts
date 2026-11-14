@@ -1,4 +1,5 @@
 import { JIRA_PROJECT_REFERENCE_PATTERN } from "@oscharko-dev/keiko-connectors";
+import { JIRA_RESULT_GUIDANCE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { REQUIREMENT_DOCUMENT_SCOPE_SCHEMA } from "@oscharko-dev/keiko-quality-intelligence";
 import {
@@ -103,7 +104,7 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
           items: text(120),
         },
         createRequested: { type: "boolean" },
-        guidance: text(1024),
+        guidance: text(JIRA_RESULT_GUIDANCE_MAX_CHARS),
         paused: { type: "boolean" },
         remainingCount: COUNT,
         selectionDocuments: { type: "array", maxItems: 20, items: text(512) },

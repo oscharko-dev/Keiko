@@ -1,5 +1,6 @@
 import {
   JIRA_MANAGED_ACTION_TYPES,
+  JIRA_MUTATION_DETAIL_LIMITS,
   type JiraManagedReadToolName,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -33,6 +34,11 @@ interface OperationDefinitionBase {
   readonly authorityAction: (typeof JIRA_MANAGED_ACTION_TYPES)[JiraOperationTool];
   /** Existing handler metadata plus Jira's response remain the permission decision. */
   readonly permissionPolicy: JiraPermissionPolicy;
+  /**
+   * Present only where evidence shows a normal Jira user is refused (#4357). It selects the words of
+   * a permission refusal; it grants nothing, hides nothing and is never inferred from a refusal.
+   */
+  readonly administration?: true;
 }
 export type JiraOperationDefinition = OperationDefinitionBase &
   (
@@ -1061,6 +1067,13 @@ const COMPOSITES: Readonly<
   "jira.draft": { members: ["jira.create", "jira.edit"], local: "local-draft" },
 };
 
+/**
+ * Operations a normal Jira user cannot read, each with its evidence. `jira.custom-fields`: Jira
+ * answers the native GET /rest/api/2/customFields with 403 to a normal actor and 200 to an
+ * administrator (lab, 2026-11-14). Add an operation only with evidence of the same kind.
+ */
+const ADMINISTRATION_ONLY: ReadonlySet<string> = new Set(["jira.custom-fields"]);
+
 function definitionFor(tool: string): JiraOperationDefinition {
   if (Object.hasOwn(NATIVE, tool)) {
     const name = tool as NativeTool;
@@ -1076,6 +1089,7 @@ function definitionFor(tool: string): JiraOperationDefinition {
       effects: effect === "read" ? ["remote-read"] : ["remote-read", "remote-write"],
       authorityAction: JIRA_MANAGED_ACTION_TYPES[name],
       permissionPolicy,
+      ...(ADMINISTRATION_ONLY.has(name) ? { administration: true as const } : {}),
       continuationPolicy:
         name === "jira.create" || name === "jira.edit" ? "approved-issue-links" : "none",
     };
@@ -1138,14 +1152,54 @@ function closedDisjunction(schema: CatalogJsonObject, keyword: "anyOf" | "oneOf"
   );
 }
 
-function boundObjectSchema(schema: CatalogJsonObject, kind: "input" | "result"): CatalogJsonObject {
+/** One guidance sentence is at most 380 bytes; the schema keeps room for the 1280 bound that follows. */
+const JIRA_READ_GUIDANCE_SCHEMA_CHARS = 512;
+/**
+ * What a failed native read carries to the model (#4357): the outcome and closed reason, Jira's own
+ * sanitized messages and the guidance sentence. Each read owns its schema, so the properties it does
+ * not declare are added here once; a property it declares keeps its own definition.
+ */
+const READ_FAILURE_PROPERTIES: CatalogJsonObject = {
+  outcome: { type: "string", enum: ["succeeded", "failed"] },
+  reason: { type: "string", minLength: 1, maxLength: 64 },
+  messages: {
+    type: "array",
+    maxItems: JIRA_MUTATION_DETAIL_LIMITS.messages,
+    items: { type: "string", minLength: 1, maxLength: JIRA_MUTATION_DETAIL_LIMITS.messageChars },
+  },
+  guidance: { type: "string", minLength: 1, maxLength: JIRA_READ_GUIDANCE_SCHEMA_CHARS },
+};
+/**
+ * `full` for a plain object root. A branch of a disjunction already states its own outcome shape;
+ * it receives only the guidance, so a branch can never come to match a shape it did not describe.
+ */
+type ReadFailureScope = "full" | "guidance" | "none";
+export function withReadFailureProperties(
+  properties: CatalogJsonObject,
+  scope: ReadFailureScope,
+): CatalogJsonObject {
+  if (scope === "none") return properties;
+  const added = Object.entries(READ_FAILURE_PROPERTIES).filter(
+    ([name]) => (scope === "full" || name === "guidance") && !Object.hasOwn(properties, name),
+  );
+  return { ...Object.fromEntries(added), ...properties };
+}
+
+function boundObjectSchema(
+  schema: CatalogJsonObject,
+  kind: "input" | "result",
+  read: ReadFailureScope = "none",
+): CatalogJsonObject {
   const { properties, required } = schema;
   if (schema.type === "object") {
     if (kind === "input") return schema;
     if (schemaObject(properties) && schemaRequired(required))
       return {
         ...schema,
-        properties: { ...properties, operationBinding: BINDING_SCHEMA },
+        properties: {
+          ...withReadFailureProperties(properties, read),
+          operationBinding: BINDING_SCHEMA,
+        },
         required: [...required, "operationBinding"],
       };
   }
@@ -1165,18 +1219,18 @@ function boundObjectSchema(schema: CatalogJsonObject, kind: "input" | "result"):
     type: "object",
     [keyword]: alternatives.map((alternative: CatalogJsonValue) => {
       if (!schemaObject(alternative)) throw new ToolCatalogError("invalid-schema");
-      return boundObjectSchema(alternative, kind);
+      return boundObjectSchema(alternative, kind, read === "none" ? "none" : "guidance");
     }),
   };
 }
 
-function resultDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
+function resultDescriptor(descriptor: ToolDescriptor, read: boolean): ToolDescriptor {
   const { descriptorDigest: _digest, ...original } = descriptor;
   return createToolDescriptor({
     ...original,
     toolRef: createToolRef(descriptor.toolRef.canonicalId, descriptor.toolRef.contractVersion + 1),
     inputSchema: boundObjectSchema(descriptor.inputSchema, "input"),
-    resultSchema: boundObjectSchema(descriptor.resultSchema, "result"),
+    resultSchema: boundObjectSchema(descriptor.resultSchema, "result", read ? "full" : "none"),
     bounds: {
       ...descriptor.bounds,
       maxResultBytes: Math.min(
@@ -1195,7 +1249,10 @@ export function createJiraOperationContract(
   const definition = definitionFor(declaration.name);
   if (declaration.risk !== (definition.effects.includes("remote-write") ? "write" : "read"))
     throw new TypeError("Jira operation effect disagrees with its declaration");
-  const projection = resultDescriptor(declaration.descriptor);
+  const projection = resultDescriptor(
+    declaration.descriptor,
+    definition.kind === "native" && !definition.effects.includes("remote-write"),
+  );
   const members =
     definition.kind === "native"
       ? []

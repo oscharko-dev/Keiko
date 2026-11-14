@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aa40235db210519e5e86e9cc65aa9fb06071d45f5176adee86ffa16645dc9247"
+    "catalogDigest": "8076d24b03bf322480d8b27a1118f1d602d2cc27e7334808ff6b92e7b40a82d9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 702,
-    "proofCount": 725,
-    "resolvedProofCount": 725,
+    "operationCount": 701,
+    "proofCount": 724,
+    "resolvedProofCount": 724,
     "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -827,7 +827,6 @@
         "cli.support.export.failed",
         "cli.uninstall.completed",
         "cli.uninstall.failed",
-        "cli.uninstall.handoff",
         "cli.uninstall.started",
         "evidence.retention",
         "portable.normal-startup-recovery.completed",
@@ -1560,7 +1559,6 @@
     "cli.uninstall.failed.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
-    "cli.uninstall.handoff.persisted": ["packages/keiko-cli/src/uninstall.test.ts"],
     "cli.uninstall.started.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
@@ -2753,7 +2751,8 @@
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.operation.configuration.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.core.line": [
       "packages/keiko-server/src/atlassian/jiraManagedProvider.test.ts",
@@ -2766,6 +2765,7 @@
     ],
     "jira.operation.issues.line": [
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
     "jira.operation.local.line": [
@@ -2778,10 +2778,12 @@
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.operation.planning.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.projects.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.properties.line": [
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
