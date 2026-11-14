@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9cd32fbd139fa741cbe781fc849fb767cc6238bd71b41cda4ff2805a33c682ff"
+    "catalogDigest": "8076d24b03bf322480d8b27a1118f1d602d2cc27e7334808ff6b92e7b40a82d9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2751,7 +2751,8 @@
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.operation.configuration.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.core.line": [
       "packages/keiko-server/src/atlassian/jiraManagedProvider.test.ts",
@@ -2764,6 +2765,7 @@
     ],
     "jira.operation.issues.line": [
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
     "jira.operation.local.line": [
@@ -2776,10 +2778,12 @@
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.operation.planning.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.projects.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.properties.line": [
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
