@@ -1029,3 +1029,27 @@ describe("a create refused because a draft already made the issue", () => {
     expect(data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
   });
 });
+
+// #4354 (AC7.2): the validated copy of a succeeded attempt is what the model's result and the log
+// are built from. It dropped the notices the executor attached, so they never reached either.
+describe("template notices on a validated attempt", () => {
+  const notice = { ruleId: "label-missing", subject: "reviewed", template: "SYN/Task" } as const;
+  const receipt = { issueKey: "SYN-1", issueId: "10001" };
+
+  it("keeps them, so the result tells the model what is still missing", () => {
+    const attempt = validJiraMutationAttempt(
+      { ok: true, receipt, templateNotices: [notice] },
+      "jira.edit",
+    );
+    expect(attempt).toMatchObject({ ok: true, templateNotices: [notice] });
+    expect(jiraAttemptToolResult("succeeded", attempt).data).toMatchObject({
+      outcome: "succeeded",
+      templateNotices: [notice],
+    });
+  });
+
+  it("adds none to an attempt that had none", () => {
+    const attempt = validJiraMutationAttempt({ ok: true, receipt }, "jira.edit");
+    expect(attempt).not.toHaveProperty("templateNotices");
+  });
+});

@@ -697,6 +697,9 @@ export function validJiraMutationAttempt(
     ok: true,
     receipt: snapshotReceipt(receipt),
     ...(links === undefined ? {} : { links }),
+    // The rules an untouched field already broke (#4354): the executor's collector attached them to
+    // the attempt, and this validated copy is what the model's result and the log are built from.
+    ...(value.templateNotices === undefined ? {} : { templateNotices: value.templateNotices }),
     ...descriptionFormattingFacts(value),
   };
 }

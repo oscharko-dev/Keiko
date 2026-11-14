@@ -627,6 +627,18 @@ export function isCurrentJiraOperationBinding(
   return contract !== undefined && matchesJiraOperationBinding(contract, value);
 }
 
+/** One closed line per provider call: the release switch's refusal, or the call's completion. */
+function recordProviderResult(
+  correlationId: string,
+  operation: JiraManagedReadToolName | JiraMutationOperation,
+  failed: boolean,
+): void {
+  // The release switch refused it: the one line names that, not a generic tool failure.
+  if (failed && !jiraOperationInReleaseScope(operation))
+    recordJiraReleaseScopeRefusal(correlationId, operation);
+  else recordJiraProviderCall(correlationId, operation, failed ? "failed" : "completed");
+}
+
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
 export function createJiraProviderForCatalog<Context extends ManagedMcpInvocationContext>(
   connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>,
@@ -665,15 +677,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          if (result.isError === true && !jiraOperationInReleaseScope(operation))
-            // The release switch refused it: the one line names that, not a generic tool failure.
-            recordJiraReleaseScopeRefusal(args[1].correlationId, operation);
-          else
-            recordJiraProviderCall(
-              args[1].correlationId,
-              operation,
-              result.isError === true ? "failed" : "completed",
-            );
+          recordProviderResult(args[1].correlationId, operation, result.isError === true);
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },

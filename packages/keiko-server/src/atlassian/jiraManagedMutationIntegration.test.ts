@@ -30,6 +30,8 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gateway";
 import {
@@ -123,6 +125,7 @@ import {
 const cleanup: (() => void | Promise<void>)[] = [];
 const BASE_URL = "https://203.0.113.10/context";
 afterEach(async () => {
+  resetServerLogger();
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 // The attachment operations are switched off for Release 1 (#4354); their mechanics are proved
@@ -1085,7 +1088,7 @@ function brokenSummaryRule(): ReturnType<typeof integrationTemplates> {
   if (!parsed.ok) throw new TypeError("Expected a parseable template");
   return { templates: [parsed.template], unreadable: 0 };
 }
-const NOTICE = [{ ruleId: "summary-too-short", template: "SYN/Task" }] as const;
+const NOTICE = { ruleId: "summary-too-short", template: "SYN/Task" } as const;
 it.each([
   ["jira.edit", { issueKey: "SYN-1", fields: { labels: ["noted"] } }],
   [
@@ -1095,20 +1098,18 @@ it.each([
 ] as const)(
   "names the rule an untouched field already broke as a notice on %s, in the result and the log",
   async (operation, args) => {
+    // The template line goes through the process logger, not the fixture's journal sink.
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
     const f = await fixture("confirmed", undefined, operation, {}, brokenSummaryRule);
     const outcome = await f.invoke(operation, args);
     expect(f.writes()).toBe(1);
     expect(outcome).toMatchObject({
       kind: "settled",
-      result: {
-        data: {
-          outcome: "succeeded",
-          guidance: expect.stringContaining("already broke these template rules"),
-          templateNotices: [expect.objectContaining(NOTICE[0])],
-        },
-      },
+      result: { data: { outcome: "succeeded", templateNotices: [NOTICE] } },
     });
-    const notices = f.logs.events.filter(
+    expect(JSON.stringify(outcome)).toContain("already broke these template rules");
+    const notices = sink.events.filter(
       (event) => event.op === "jira.template.admission" && event.extra?.stage === "notice",
     );
     expect(notices).toHaveLength(1);
@@ -1116,17 +1117,19 @@ it.each([
       "jira.template.admission",
       formatActivityLogProofLine(notices[0] ?? {}),
     );
-    expect(line).toMatchObject({ stage: "notice", operation: expect.any(String) });
-    expect(f.logs.lines().join()).not.toMatch(/Original|SYN-1|noted/u);
+    expect(line).toMatchObject({ stage: "notice" });
+    expect(sink.lines().join()).not.toMatch(/Original|SYN-1|noted/u);
   },
 );
 it("sends an edit of a conforming issue without any notice", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
   const f = await fixture("confirmed", undefined, "jira.edit");
   const outcome = await f.invoke("jira.edit", { issueKey: "SYN-1", fields: { labels: ["noted"] } });
   expect(outcome).toMatchObject({ kind: "settled", result: { data: { outcome: "succeeded" } } });
   expect(JSON.stringify(outcome)).not.toContain("templateNotices");
   expect(
-    f.logs.events.some(
+    sink.events.some(
       (event) => event.op === "jira.template.admission" && event.extra?.stage === "notice",
     ),
   ).toBe(false);

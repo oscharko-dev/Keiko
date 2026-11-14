@@ -171,6 +171,25 @@ describe("the fields a transition carries (#4354)", () => {
     },
   );
 
+  // AC7.2 at the connector: the field the transition carries conforms; the labels rule was already
+  // broken in a field the transition does not touch. The change goes through and the attempt names
+  // that rule as a notice, from the real executor and its collector, not from a hand-built attempt.
+  it("names a rule an untouched field already broke as a notice on the attempt", async () => {
+    const jira = run(
+      {
+        ...TRANSITION,
+        fields: { summary: "A sufficiently long summary that satisfies the rule of the template" },
+      },
+      [template("summaryMinLength: 40", "requiredLabels: [reviewed]")],
+    );
+    const result = await jira.result;
+    expect(result).toMatchObject({
+      ok: true,
+      templateNotices: [{ ruleId: "label-missing", template: "SYN/Task" }],
+    });
+    expect(jira.writes()).toBe(1);
+  });
+
   it("lets a transition with a carried field through when no template governs it", async () => {
     const jira = run({ ...TRANSITION, fields: { summary: "Too short" } }, []);
     expect(await jira.result).toMatchObject({ ok: true });

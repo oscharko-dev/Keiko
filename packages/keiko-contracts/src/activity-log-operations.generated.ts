@@ -33168,6 +33168,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33279,6 +33280,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33410,6 +33412,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33539,6 +33542,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33692,6 +33696,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33825,6 +33830,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33916,6 +33922,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34033,6 +34040,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34167,6 +34175,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34290,6 +34299,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34416,6 +34426,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34540,6 +34551,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34649,6 +34661,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {

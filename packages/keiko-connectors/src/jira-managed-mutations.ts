@@ -979,6 +979,23 @@ async function readChangingIssue(
     ? jiraAlreadyHeldRefusal(issueKey)
     : prior;
 }
+/** The one write of a field change; a transition's refusal is told apart from an edit's (KEIKO-0814). */
+function sendFieldChange(
+  request: JiraMutationRequest,
+  target: ReturnType<typeof fieldMutationTarget>,
+  body: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[],
+  purpose: FieldTarget["purpose"],
+): Promise<MutationValidation> {
+  return statusMutation(
+    request,
+    target.path,
+    target.method,
+    body,
+    metadata,
+    purpose === "transition",
+  );
+}
 async function fieldMutation(
   request: JiraMutationRequest,
   metadata: JiraMutationMetadata,
@@ -1010,14 +1027,7 @@ async function fieldMutation(
   const formatting = { ...descriptionMetric(policy), ...descriptionMetric(validated) };
   if (!onlyLinkCalls) {
     const body = { fields: validated.fields, update, ...target.body };
-    const sent = await statusMutation(
-      request,
-      target.path,
-      target.method,
-      body,
-      metadata.fields,
-      purpose === "transition",
-    );
+    const sent = await sendFieldChange(request, target, body, metadata.fields, purpose);
     if (!sent.ok) return withDescriptionFormatting(sent, formatting);
   }
   const attempt = await completeJiraLinkedMutation(
