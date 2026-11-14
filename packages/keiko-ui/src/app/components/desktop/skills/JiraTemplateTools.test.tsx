@@ -463,15 +463,29 @@ describe("the automatic check follows the selected Pod", () => {
   });
 });
 
+/** A proposal run as the route answers it: every issue type is a proposal or a closed reason. */
+function runOf(
+  proposals: readonly templates.JiraTemplateProposal[],
+  withoutProposal: readonly templates.JiraTemplateWithoutProposal[] = [],
+): templates.JiraTemplateProposalRun {
+  return {
+    proposals,
+    withoutProposal,
+    typeCount: proposals.length + withoutProposal.length,
+  };
+}
+
 describe("template proposals", () => {
   it("proposes templates from a project and opens one in the editor with a safe file name", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      {
-        issueType: "Sub-task / Bug",
-        markdown: "---\nkeiko: jira-issue-template\n---\n",
-        sampledIssueCount: 3,
-      },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([
+        {
+          issueType: "Sub-task / Bug",
+          markdown: "---\nkeiko: jira-issue-template\n---\n",
+          sampledIssueCount: 3,
+        },
+      ]),
+    );
     const user = userEvent.setup();
     render(<Panel stored={library} />);
     await screen.findByText("Story template");
@@ -491,9 +505,9 @@ describe("template proposals", () => {
   });
 
   it("withdraws a completed proposal across Pod A to B to A and logs its original request once", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      { issueType: "Story", markdown: "PRIVATE_DRAFT", sampledIssueCount: 3 },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([{ issueType: "Story", markdown: "PRIVATE_DRAFT", sampledIssueCount: 3 }]),
+    );
     const user = userEvent.setup();
     render(<Panel stored={library} />);
     await screen.findByText("Story template");
@@ -513,17 +527,17 @@ describe("template proposals", () => {
     expect(discarded).toEqual([["Jira template proposal superseded.", { correlationId }]]);
     expect(JSON.stringify(discarded)).not.toMatch(/PRIVATE|pod-1|pod-2|Story/u);
     expect(onDraft).not.toHaveBeenCalled();
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      { issueType: "Story", markdown: "CURRENT_DRAFT", sampledIssueCount: 4 },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([{ issueType: "Story", markdown: "CURRENT_DRAFT", sampledIssueCount: 4 }]),
+    );
     await user.click(screen.getByRole("button", { name: "Propose from project" }));
     expect(await screen.findByText("Proposed for Story (4 issues sampled)")).toBeInTheDocument();
   });
 
   it("withdraws a completed proposal when a same-count stored library revision changes", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      { issueType: "Story", markdown: "STALE_DRAFT", sampledIssueCount: 3 },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([{ issueType: "Story", markdown: "STALE_DRAFT", sampledIssueCount: 3 }]),
+    );
     const user = userEvent.setup();
     const view = render(<Panel stored={libraryOf([DOCUMENT])} />);
     await screen.findByText(ENTRY.name);
@@ -538,13 +552,15 @@ describe("template proposals", () => {
 
   it("starts each proposal from its own Markdown, never the previous project's", async () => {
     vi.mocked(templates.proposeJiraTemplates).mockImplementation((_pod, projectKey) =>
-      Promise.resolve([
-        {
-          issueType: "Story",
-          markdown: `---\nproject: ${projectKey}\n---\n`,
-          sampledIssueCount: projectKey === "OLD" ? 3 : 5,
-        },
-      ]),
+      Promise.resolve(
+        runOf([
+          {
+            issueType: "Story",
+            markdown: `---\nproject: ${projectKey}\n---\n`,
+            sampledIssueCount: projectKey === "OLD" ? 3 : 5,
+          },
+        ]),
+      ),
     );
     const user = userEvent.setup();
     render(<Panel stored={library} />);
@@ -568,8 +584,62 @@ describe("template proposals", () => {
     expect(onDraft).toHaveBeenCalledTimes(2);
   });
 
+  it("accounts for every issue type: the count, each proposal and one plain line per type without one (#4354)", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf(
+        [
+          { issueType: "Task", markdown: "T", sampledIssueCount: 3 },
+          { issueType: "Epic", markdown: "E", sampledIssueCount: 0 },
+          { issueType: "Story", markdown: "S", sampledIssueCount: 2 },
+        ],
+        [
+          { issueType: "Bug", reason: "nothing-to-learn" },
+          { issueType: "Sub-task", reason: "jira-unavailable" },
+        ],
+      ),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("5 issue types: 3 with a proposal, 2 without.");
+    expect(screen.getByText("Bug: No issues of this type to learn from yet.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Sub-task: Jira did not answer for this type. Try again."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Open in editor" })).toHaveLength(3);
+  });
+
+  it("names the reason of each type without a proposal, also when none has one", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf(
+        [],
+        [
+          { issueType: "Task", reason: "template-invalid" },
+          { issueType: "Epic", reason: "beyond-limit" },
+        ],
+      ),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("2 issue types: 0 with a proposal, 2 without.");
+    expect(
+      screen.getByText("Task: The derived template was not valid, so none is proposed."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Epic: Not examined: the project has more issue types than one proposal run covers.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+  });
+
   it("says when a project yields nothing, and rejects keys that are not a project key", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(runOf([]));
     const user = userEvent.setup();
     render(<Panel stored={library} />);
     await screen.findByText("Story template");

@@ -2672,6 +2672,16 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
   "chat.skills.jira.proposing": "Reading project…",
+  "chat.skills.jira.proposalCount":
+    "{types} issue types: {proposals} with a proposal, {without} without.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn": "No issues of this type to learn from yet.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "The derived template was not valid, so none is proposed.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira did not answer for this type. Try again.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Not examined: the project has more issue types than one proposal run covers.",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
   "chat.skills.jira.error":

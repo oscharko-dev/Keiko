@@ -8,6 +8,8 @@ import {
   type JiraTemplateEntry,
   type JiraTemplateFindingCode,
   type JiraTemplateProposal,
+  type JiraTemplateWithoutProposal,
+  type JiraTemplateWithoutProposalReason,
   type JiraTemplateValidation,
 } from "@/lib/jira-templates-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -49,6 +51,8 @@ interface Proposals {
   readonly correlationId: string;
   readonly generation: number;
   readonly items: readonly JiraTemplateProposal[];
+  readonly withoutProposal: readonly JiraTemplateWithoutProposal[];
+  readonly typeCount: number;
 }
 interface Tools {
   readonly templates: readonly JiraTemplateEntry[];
@@ -143,13 +147,15 @@ function useTemplateProposals(run: Run, scope: RequestScope): Pick<Tools, "propo
     propose: (projectKey) =>
       run("proposing", async (isCurrent, correlationId) => {
         if (scope.podId === undefined) return;
-        const items = await proposeJiraTemplates(scope.podId, projectKey, correlationId);
+        const run = await proposeJiraTemplates(scope.podId, projectKey, correlationId);
         if (!isCurrent()) return;
         setProposals((current) => ({
           scope,
           correlationId,
           generation: (current?.generation ?? 0) + 1,
-          items,
+          items: run.proposals,
+          withoutProposal: run.withoutProposal,
+          typeCount: run.typeCount,
         }));
       }),
   };
@@ -446,6 +452,63 @@ export function JiraTemplateProposal({
   );
 }
 
+const WITHOUT_PROPOSAL_TEXT = {
+  "nothing-to-learn": "chat.skills.jira.withoutProposal.nothing-to-learn",
+  "template-invalid": "chat.skills.jira.withoutProposal.template-invalid",
+  "jira-unavailable": "chat.skills.jira.withoutProposal.jira-unavailable",
+  "beyond-limit": "chat.skills.jira.withoutProposal.beyond-limit",
+} as const satisfies Record<JiraTemplateWithoutProposalReason, string>;
+
+function ProposalLine({
+  proposal,
+  onDraft,
+}: {
+  readonly proposal: JiraTemplateProposal;
+  readonly onDraft: (text: string, fileName: string) => void;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <li>
+      <span>
+        {t("chat.skills.jira.proposalTitle", {
+          issueType: proposal.issueType,
+          count: proposal.sampledIssueCount,
+        })}
+      </span>
+      <button
+        type="button"
+        onClick={() =>
+          onDraft(
+            proposal.markdown,
+            `${proposal.issueType.replace(/[^A-Za-z0-9_-]+/gu, "-")}-template.md`,
+          )
+        }
+      >
+        {t("chat.skills.jira.openProposal")}
+      </button>
+    </li>
+  );
+}
+
+/** One plain line for an issue type that has no proposal: its name and why. */
+function WithoutProposalLine({
+  entry,
+}: {
+  readonly entry: JiraTemplateWithoutProposal;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <li>
+      <span>
+        {t("chat.skills.jira.withoutProposalLine", {
+          issueType: entry.issueType,
+          reason: t(WITHOUT_PROPOSAL_TEXT[entry.reason]),
+        })}
+      </span>
+    </li>
+  );
+}
+
 function ProposalList({
   proposals,
   onDraft,
@@ -455,30 +518,29 @@ function ProposalList({
 }): ReactNode {
   const t = useTranslate();
   if (proposals === undefined) return null;
-  if (proposals.items.length === 0) return <p>{t("chat.skills.jira.proposalNone")}</p>;
+  if (proposals.typeCount === 0) return <p>{t("chat.skills.jira.proposalNone")}</p>;
+  const run = String(proposals.generation);
   return (
-    <ul className={styles.cmpProposals}>
-      {proposals.items.map((proposal) => (
-        <li key={`${String(proposals.generation)}:${proposal.issueType}`}>
-          <span>
-            {t("chat.skills.jira.proposalTitle", {
-              issueType: proposal.issueType,
-              count: proposal.sampledIssueCount,
-            })}
-          </span>
-          <button
-            type="button"
-            onClick={() =>
-              onDraft(
-                proposal.markdown,
-                `${proposal.issueType.replace(/[^A-Za-z0-9_-]+/gu, "-")}-template.md`,
-              )
-            }
-          >
-            {t("chat.skills.jira.openProposal")}
-          </button>
-        </li>
-      ))}
-    </ul>
+    <div>
+      <p>
+        {t("chat.skills.jira.proposalCount", {
+          types: proposals.typeCount,
+          proposals: proposals.items.length,
+          without: proposals.withoutProposal.length,
+        })}
+      </p>
+      <ul className={styles.cmpProposals}>
+        {proposals.items.map((proposal) => (
+          <ProposalLine
+            key={`${run}:${proposal.issueType}`}
+            proposal={proposal}
+            onDraft={onDraft}
+          />
+        ))}
+        {proposals.withoutProposal.map((entry) => (
+          <WithoutProposalLine key={`${run}:without:${entry.issueType}`} entry={entry} />
+        ))}
+      </ul>
+    </div>
   );
 }

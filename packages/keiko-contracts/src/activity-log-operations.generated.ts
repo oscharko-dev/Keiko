@@ -44005,6 +44005,36 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      typeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      proposalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      nothingToLearnCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateInvalidCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      jiraUnavailableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      beyondLimitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

@@ -14,6 +14,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { findOwnedJiraPod, isReadyJiraPod } from "./atlassian/jiraPodAccess.js";
 import { readMutation, withSkillAccess } from "./markdown-skill-routes.js";
+import type { MarkdownSkillProposalAccounting } from "./markdown-skill-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { invalidRequest, notFound, UiStoreError } from "./store/errors.js";
 
@@ -145,23 +146,56 @@ export function handleValidateJiraTemplate(
   });
 }
 
+/** Counts per closed reason of a proposal run: what the closing log line carries, never a type name. */
+function proposalAccounting(result: {
+  readonly proposals: readonly unknown[];
+  readonly withoutProposal: readonly { readonly reason: string }[];
+  readonly typeCount: number;
+}): MarkdownSkillProposalAccounting {
+  const count = (reason: string): number =>
+    result.withoutProposal.filter((entry) => entry.reason === reason).length;
+  return {
+    typeCount: result.typeCount,
+    proposalCount: result.proposals.length,
+    nothingToLearnCount: count("nothing-to-learn"),
+    templateInvalidCount: count("template-invalid"),
+    jiraUnavailableCount: count("jira-unavailable"),
+    beyondLimitCount: count("beyond-limit"),
+  };
+}
+
 export function handleProposeJiraTemplates(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-propose", async () => {
-    const body = await readMutation(ctx, deps, 4096);
-    if (body.kind === "rejected") return body.response;
-    const { projectKey, podId } = body.value;
-    if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey)) {
-      throw invalidRequest("Provide a Jira project key.");
-    }
-    const pod = readyPod(deps, podId);
-    const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
-    if (!result.ok) {
-      if (result.reason === "not-found") throw notFound("Jira project");
-      throw jiraReadFailure(result.reason);
-    }
-    return { status: 200, body: { proposals: result.proposals } };
-  });
+  let accounted: MarkdownSkillProposalAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-propose",
+    async () => {
+      const body = await readMutation(ctx, deps, 4096);
+      if (body.kind === "rejected") return body.response;
+      const { projectKey, podId } = body.value;
+      if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey)) {
+        throw invalidRequest("Provide a Jira project key.");
+      }
+      const pod = readyPod(deps, podId);
+      const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
+      if (!result.ok) {
+        if (result.reason === "not-found") throw notFound("Jira project");
+        throw jiraReadFailure(result.reason);
+      }
+      accounted = proposalAccounting(result);
+      return {
+        status: 200,
+        body: {
+          proposals: result.proposals,
+          withoutProposal: result.withoutProposal,
+          typeCount: result.typeCount,
+        },
+      };
+    },
+    () => accounted,
+  );
 }
