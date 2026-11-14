@@ -7,6 +7,7 @@ import {
   compileToolProjection,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   opencodeRegistrationSet,
+  ToolCatalogError,
 } from "@oscharko-dev/keiko-tool-catalog";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
@@ -15,6 +16,7 @@ import {
 import {
   gatewayCatalogAdvertisement,
   openCodeGatewayCatalogAdvertisement,
+  realiasedGatewayCatalogAdvertisement,
 } from "./__fixtures__/toolCatalog.js";
 import { describe, expect, it, vi } from "vitest";
 import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
@@ -2050,6 +2052,30 @@ describe("a name the round did not offer (#4357)", () => {
         unofferedNameClass: "known-not-offered",
       });
     }
+  });
+
+  it("cannot be asked to choose between two offered aliases of one spelling family: a catalog offers none with a dot or hyphen", () => {
+    // Aliases are [a-z][a-z0-9_]* (identity.ts catalogAlias), so the fold maps a dotted or hyphenated
+    // spelling onto at most one offered alias, and no mixed family (a dotted alias beside an
+    // underscore one) can be offered: composing such a catalog is refused. The ambiguous branch of
+    // resolveToolName stays as a guard, pinned on its own.
+    expect(() =>
+      realiasedGatewayCatalogAdvertisement(NOW, { read_file: "mix.tool", list_files: "mix_tool" }),
+    ).toThrow(ToolCatalogError);
+    // The offered underscore alias binds exactly, with no resolution mark, and its dotted spelling
+    // is the one bound by the fold: the exact alias and the spelling never compete.
+    const log: ModelGatewayLogEvent[] = [];
+    const bridge = bridgeFor(offered(), log);
+    expect(bridge.bind({ id: "c1", name: "read_file", arguments: { path: "a.ts" } }).name).toBe(
+      "read_file",
+    );
+    expect(bridge.bind({ id: "c2", name: "read.file", arguments: { path: "a.ts" } }).name).toBe(
+      "read_file",
+    );
+    const bound = log.filter((event) => event.op === "gateway.tool-catalog.call-bound");
+    expect(bound).toHaveLength(2);
+    expect(bound[0]?.extra).not.toHaveProperty("nameResolution");
+    expect(bound[1]?.extra).toMatchObject({ nameResolution: "folded" });
   });
 
   it("does not mark a refusal that is not about the name", () => {
