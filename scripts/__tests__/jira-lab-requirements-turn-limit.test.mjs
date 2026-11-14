@@ -84,6 +84,8 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
   return {
     chatReadLogDirectory: () => "/unused-synthetic-log-directory",
     prepareChat: async () => ({ id: "chat", groundingScopeIdentity: "scope" }),
+    // A template bind is never reached by these journeys (no template is saved); a call would be a defect.
+    requestStatus: async () => ({ status: 404, value: {} }),
     withLiveChat: async ({ run }) => run(fixture.live),
     jsonRequest: async (_origin, _cookie, name, _path, body, _method, signal) => {
       fixture.requests.push({ name, body });

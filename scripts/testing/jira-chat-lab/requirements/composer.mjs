@@ -34,6 +34,8 @@ import {
   gradeWatcher,
   composerRelation,
   ofType,
+  checkedOrRed,
+  gradeCheckedTransition,
   gradeKeysAfterReread,
   severalPath,
 } from "./composer-graders.mjs";
@@ -43,7 +45,7 @@ import {
   gradeTemplateRecognised,
   gradeUnrepairable,
 } from "./composer-refusals.mjs";
-import { isLocalized, typeLabel } from "./language-names.mjs";
+import { isLocalized, statusLabel, typeLabel } from "./language-names.mjs";
 import { withActorLocale } from "../seed-language.mjs";
 import { JOURNEYS } from "./journey-checks.mjs";
 import {
@@ -775,6 +777,15 @@ const LOCALIZED_VARIANTS = [
   },
 ];
 
+/** The profile line of a result: which language the Pod's account showed when the template was bound and when the turn ran. */
+async function withProfile(ctx, grade, runProfile) {
+  const run = runProfile ?? (await ctx.apiLocale?.()) ?? "unknown";
+  return {
+    ...grade,
+    detail: `${grade.detail}; Pod account profile at bind time: ${ctx.lastBindProfile ?? "not bound by the lab"}, at run time: ${run}`,
+  };
+}
+
 async function localizedTemplates(ctx) {
   if (!isLocalized(ctx.language))
     return result(
@@ -798,7 +809,8 @@ async function localizedTemplates(ctx) {
           exchanges: turn.toolExchanges,
           turn,
         });
-        return { turn, part: part(variant.label, [variant.id], grade) };
+        const noted = await withProfile(ctx, grade, variant.locale);
+        return { turn, part: part(variant.label, [variant.id], noted) };
       }),
     );
   });
@@ -806,6 +818,130 @@ async function localizedTemplates(ctx) {
 }
 
 /** Every Composer journey but C07 reads the native state as the administrator: English names, in any session. */
+/**
+ * C11 (#4354, #4359 AC4): in the German-language Jira a German user's create and status change are CHECKED
+ * by a template an English author wrote (the type "Task", the field "Epic Link" and the transition target
+ * "Done" typed by their English names). The product binds the template by ids as the author's profile sees
+ * them; the user's write is then checked, never "template missing" and never unchecked.
+ */
+async function germanUserEnglishAuthor(ctx) {
+  if (!isLocalized(ctx.language))
+    return result(
+      "unverified",
+      NO_TURN,
+      "this session shows no localized issue type names; run seed-language.mjs <session> de",
+      [],
+    );
+  const fixture = await composerFixture(ctx);
+  const task = composerTemplates(PROJECT, "Epic Link", {
+    activateOn: ["create", "transition:Done"],
+  }).filter((entry) => entry.issueType === "Task");
+  await prepareTemplates(ctx, { types: ["Task"] });
+  ctx.authorLocale = "en_US";
+  try {
+    return await withTemplates(ctx.http, task, async () =>
+      parts([...(await germanCreates(ctx, fixture)), ...(await germanMoves(ctx, fixture))]),
+    );
+  } finally {
+    delete ctx.authorLocale;
+  }
+}
+
+/** The German user's two creates: one that meets the English template and one that violates it. */
+async function germanCreates(ctx, fixture) {
+  const conforms = composerConformity("Task", fixture);
+  const send = async (prompt) => composerTurn(ctx, fixture, { prompt });
+  const ok = await send(createPrompt("Task", "Composer Prüfung ok", fixture));
+  const bad = await send(violationPrompt("Task", "Composer Prüfung Verstoß", fixture));
+  const created = gradeComposerCreate({
+    type: "Task",
+    issues: ok.issues,
+    conforms,
+    related: composerRelation("Task", fixture),
+  });
+  const refused = gradeComposerRefusal({
+    type: "Task",
+    exchanges: bad.turn.toolExchanges,
+    created: bad.issues.created,
+    template: `${PROJECT}/Task`,
+    conforms,
+  });
+  return [
+    {
+      turn: ok.turn,
+      part: part(
+        "German user: a create that meets the English template",
+        ["german-create-checked-pass"],
+        await withProfile(ctx, checkedOrRed(created, ok.turn.toolExchanges)),
+      ),
+    },
+    {
+      turn: bad.turn,
+      part: part(
+        "German user: a create that violates the English template",
+        ["german-create-checked-refuse"],
+        await withProfile(ctx, checkedOrRed(refused, bad.turn.toolExchanges)),
+      ),
+    },
+  ];
+}
+
+/** One status change of a native Task to Done, asked in German, graded natively and by the stored refusal. */
+async function germanMove(ctx, fixture, { summary, sections, mustPass }) {
+  const key = await ctx.nativeCreate({
+    project: { key: PROJECT },
+    issuetype: { name: "Task" },
+    summary,
+    [fixture.epicLink]: fixture.epic,
+    description: SYNTHETIC_BODY(sections),
+  });
+  const read = async () =>
+    (await ctx.search(`key = ${key}`, `${composerFields(fixture.epicLink)},status`))[0];
+  const before = await read();
+  const done = statusLabel(ctx.language, "Done");
+  const { turn } = await composerTurn(ctx, fixture, {
+    prompt: `Setze den Vorgang ${key} im Jira-Projekt REQ auf den Status „${done}“. Melde das Ergebnis.`,
+  });
+  const after = await read();
+  return {
+    turn,
+    grade: gradeCheckedTransition({ before, after, exchanges: turn.toolExchanges, mustPass }),
+  };
+}
+
+/** The German user's two status changes: one that meets the transition rule and one that does not. */
+async function germanMoves(ctx, fixture) {
+  const sections = requiredSections("Task");
+  const passing = await germanMove(ctx, fixture, {
+    summary: "Composer Statuswechsel ok",
+    sections,
+    mustPass: true,
+  });
+  const failing = await germanMove(ctx, fixture, {
+    summary: "Composer Statuswechsel Verstoß",
+    sections: sections.slice(0, -1),
+    mustPass: false,
+  });
+  return [
+    {
+      turn: passing.turn,
+      part: part(
+        "German user: a status change that meets the transition rule",
+        ["german-transition-checked-pass"],
+        await withProfile(ctx, passing.grade),
+      ),
+    },
+    {
+      turn: failing.turn,
+      part: part(
+        "German user: a status change that violates the transition rule",
+        ["german-transition-checked-refuse"],
+        await withProfile(ctx, failing.grade),
+      ),
+    },
+  ];
+}
+
 const asAdministrator = (journey) => async (ctx, chat) => {
   ctx.readAs = "admin";
   try {
@@ -827,6 +963,7 @@ export const COMPOSER_JOURNEYS = Object.freeze({
   C08: asAdministrator(watchAndComment),
   C09: asAdministrator(attachmentRefused),
   C10: asAdministrator(localizedTemplates),
+  C11: asAdministrator(germanUserEnglishAuthor),
 });
 export const COMPOSER_JOURNEY_IDS = Object.freeze(Object.keys(COMPOSER_JOURNEYS));
 /** Journeys that need a product started without the lab's baseline template set (#4369). */

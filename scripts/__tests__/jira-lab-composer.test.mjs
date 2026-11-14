@@ -30,7 +30,9 @@ import {
   gradeRepeatReference,
   keysMissingInAnswer,
   keysMissingInCards,
+  gradeCheckedTransition,
   gradeKeysAfterReread,
+  uncheckedWrite,
   severalPath,
   stepProof,
 } from "../testing/jira-chat-lab/requirements/composer-graders.mjs";
@@ -213,7 +215,7 @@ describe("conformity of each type, as Jira holds it", () => {
 });
 
 describe("the catalog", () => {
-  it("adds C01-C10 beside S01-S20 and leaves those untouched", () => {
+  it("adds C01-C11 beside S01-S20 and leaves those untouched", () => {
     expect(COMPOSER_SCENARIOS.map((entry) => entry.id)).toEqual([
       "C01",
       "C02",
@@ -225,6 +227,7 @@ describe("the catalog", () => {
       "C08",
       "C09",
       "C10",
+      "C11",
     ]);
     expect(COMPOSER_JOURNEY_IDS).toEqual(COMPOSER_SCENARIOS.map((entry) => entry.id));
     const ids = SCENARIOS.map((entry) => entry.id);
@@ -2705,5 +2708,176 @@ describe("C08 watcher and comment, C09 attachment", () => {
 
   it("names the journeys that need a product without the baseline template set", () => {
     expect(COMPOSER_WITHOUT_BASELINE).toEqual(["C03", "C04", "C10"]);
+  });
+});
+
+describe("C11 a German user's write is checked by a template an English author wrote", () => {
+  const TYPES = [
+    { id: "10002", english: "Task", localized: "Aufgabe" },
+    { id: "10003", english: "Sub-task", localized: "Sub-Task" },
+    { id: "10001", english: "Story", localized: "Story" },
+    { id: "10000", english: "Epic", localized: "Epic" },
+    { id: "10004", english: "Bug", localized: "Bug" },
+  ];
+  const GERMAN_DATA = {
+    locale: "de_DE",
+    issueTypes: TYPES,
+    statuses: [{ id: "10001", english: "Done", localized: "Fertig" }],
+  };
+  const transition = (data, status = "failed") => ({
+    call: { id: "t", name: "jira_transition", arguments: {} },
+    result: {
+      toolRef: { canonicalId: canonicalToolId("jira.transition"), contractVersion: 3 },
+      status,
+      data,
+    },
+  });
+  const transitionRefusal = (ruleId = "section-missing") =>
+    transition({
+      outcome: "rejected",
+      reason: "field-validation",
+      violations: [{ ruleId, template: "REQ/Task" }],
+    });
+  const unresolved = (type) =>
+    createExchange(
+      {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations: [
+          { ruleId: "template-binding-unresolved", subject: type, template: "REQ/Task" },
+        ],
+      },
+      "failed",
+    );
+  const moved = (ctx, key) => {
+    const issue = ctx.issues.find((entry) => entry.key === key);
+    issue.fields.status = { name: "Done", statusCategory: { key: "done" } };
+  };
+
+  /**
+   * A product that checks every write by the template: the violating create is refused with rule lines and
+   * repaired, a status change of an issue that misses a section is refused, one that meets it moves to Done.
+   * `broken` replaces one behaviour by the defect under test.
+   */
+  const status = (self, key) => {
+    const issue = self.issues.find((entry) => entry.key === key);
+    return { issue, meets: issue.fields.description.includes("Testhinweise") };
+  };
+  const moveTurn = (self, key, broken) => {
+    const { meets } = status(self, key);
+    if (!meets && broken.uncheckedMove) {
+      moved(self, key);
+      return { answer: "Erledigt." };
+    }
+    if (!meets || broken.refuseMeeting)
+      return { toolExchanges: [transitionRefusal()], answer: "Abgelehnt." };
+    moved(self, key);
+    return {
+      toolExchanges: [transition({ outcome: "succeeded" }, "completed")],
+      answer: "Fertig.",
+    };
+  };
+  const createTurn = (content, add, broken) => {
+    const title = content.includes("Composer Prüfung ok")
+      ? "Composer Prüfung ok"
+      : "Composer Prüfung Verstoß";
+    const refused = broken.unresolvedCreate ? unresolved("Task") : refusal("Task");
+    const created = success(add("Task", {}, title).key);
+    return {
+      toolExchanges:
+        title.endsWith("ok") && !broken.unresolvedCreate ? [created] : [refused, created],
+      answer: "Angelegt.",
+    };
+  };
+  const product = (broken = {}) => {
+    const ctx = lane({
+      selection: { types: ["task"] },
+      act: ({ content, add, ctx: self }) => {
+        const key = /(REQ-\d+) im Jira-Projekt REQ auf den Status/u.exec(content)?.[1];
+        if (key !== undefined) return moveTurn(self, key, broken);
+        return content.includes("Composer Prüfung")
+          ? createTurn(content, add, broken)
+          : { answer: "x" };
+      },
+    });
+    ctx.language = GERMAN_DATA;
+    ctx.session = {};
+    ctx.locales = [];
+    const http = ctx.http;
+    ctx.authorSeen = [];
+    ctx.http = async (name, ...rest) => {
+      if (name === "template-import") ctx.authorSeen.push(ctx.authorLocale);
+      return http(name, ...rest);
+    };
+    return ctx;
+  };
+
+  it("is green for a product that checks all four writes, and the English author's template is saved under the English profile", async () => {
+    const ctx = product();
+    ctx.apiLocale = async () => "de_DE";
+    ctx.lastBindProfile = "en_US";
+    const check = await COMPOSER_JOURNEYS.C11(ctx, undefined);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("Pod account profile at bind time: en_US, at run time: de_DE");
+    expect(check.covers).toEqual([
+      "german-create-checked-pass",
+      "german-create-checked-refuse",
+      "german-transition-checked-pass",
+      "german-transition-checked-refuse",
+    ]);
+    // One template, typed by its English names, saved (and so bound) as the English author, then removed.
+    expect(ctx.authorSeen).toEqual(["en_US"]);
+    expect(ctx.authorLocale).toBeUndefined();
+    expect(ctx.calls.http.filter((name) => name === "template-delete")).toHaveLength(1);
+    const prompts = ctx.calls.turns.map((turn) => turn.content);
+    expect(prompts.some((text) => text.includes("auf den Status „Fertig“"))).toBe(true);
+  });
+
+  it("is RED when the product answers 'binding unresolved' to a German user's write (the template was not checked)", async () => {
+    const check = await COMPOSER_JOURNEYS.C11(product({ unresolvedCreate: true }), undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("the write was not checked by the template");
+    expect(check.detail).toContain("template-binding-unresolved");
+  });
+
+  it("is RED when an issue that violates the transition rule moves to Done, and when one that meets it is refused", async () => {
+    const unchecked = await COMPOSER_JOURNEYS.C11(product({ uncheckedMove: true }), undefined);
+    expect(unchecked.status).toBe("red");
+    expect(unchecked.detail).toContain("moved to Done although it does not meet");
+    const refusing = await COMPOSER_JOURNEYS.C11(product({ refuseMeeting: true }), undefined);
+    expect(refusing.status).toBe("red");
+    expect(refusing.detail).toContain(
+      "the issue meets the template but the transition was refused",
+    );
+  });
+
+  it("is unverified, with no turn, in a session that shows no localized names", async () => {
+    const plain = lane({ act: () => ({ answer: "x" }) });
+    const check = await COMPOSER_JOURNEYS.C11(plain, undefined);
+    expect(check.status).toBe("unverified");
+    expect(plain.calls.turns).toHaveLength(0);
+  });
+
+  it("gradeCheckedTransition tells a refusal, an unchecked move and a missing attempt apart", () => {
+    const issue = (category) => ({ fields: { status: { statusCategory: { key: category } } } });
+    const grade = (after, exchanges, mustPass) =>
+      gradeCheckedTransition({ before: issue("new"), after: issue(after), exchanges, mustPass });
+    expect(grade("done", [], true).status).toBe("green");
+    expect(grade("new", [transitionRefusal("field-missing")], false)).toMatchObject({
+      status: "green",
+      detail: expect.stringContaining("field-missing"),
+    });
+    expect(grade("new", [], false).status).toBe("unverified");
+    expect(grade("new", [transition({ outcome: "failed" })], false).status).toBe("unverified");
+    expect(grade("new", [], true).status).toBe("unverified");
+    expect(
+      grade(
+        "new",
+        [transition({ outcome: "rejected", violations: [{ ruleId: "template-missing" }] })],
+        true,
+      ).status,
+    ).toBe("red");
+    expect(uncheckedWrite([transitionRefusal("template-missing")])?.status).toBe("red");
+    expect(uncheckedWrite([transitionRefusal("section-missing")])).toBeUndefined();
   });
 });

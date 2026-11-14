@@ -374,6 +374,19 @@ export function editRefusals(exchanges) {
 }
 
 /**
+ * Every `jira.transition` the gate refused with template violations (the rule lines of a transition rule),
+ * the same structured rejection an edit carries. A transition that failed for another reason lists none.
+ */
+export function transitionRefusals(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) => {
+    if (!toolExchangeOf(exchange, "jira.transition")) return [];
+    const data = exchange.result.data;
+    const violations = data?.outcome === "rejected" ? violationsIn(data.violations) : [];
+    return violations.length === 0 ? [] : [{ index, violations }];
+  });
+}
+
+/**
  * Every succeeded `jira.edit` with the template notices it carried: the rules an issue already
  * broke in fields the edit did not touch (the product's closed account, never its wording).
  */

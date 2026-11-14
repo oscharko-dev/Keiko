@@ -123,4 +123,17 @@ export const COMPOSER_SCENARIOS = Object.freeze([
       "id-template-english-user-governs",
     ],
   },
+  {
+    id: "C11",
+    requirement: "composer",
+    issue: 4354,
+    title:
+      "In the German-language Jira a German user's create and status change are checked by a template an English author wrote, never as a missing or unbound template",
+    obligations: [
+      "german-create-checked-pass",
+      "german-create-checked-refuse",
+      "german-transition-checked-pass",
+      "german-transition-checked-refuse",
+    ],
+  },
 ]);
