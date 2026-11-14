@@ -120,6 +120,24 @@ function admissionRefusal(
   return modelsTouched ? changedRoleRefusal(ctx, request) : undefined;
 }
 
+/**
+ * The policy a write that names a role model would produce, before any check (R4130-062): the one
+ * its preflight judges. `undefined` for an invalid body and for a write that names no role model,
+ * which preflights nothing.
+ */
+export function reviewSettingsWriteModelPolicy(
+  ctx: ReviewPolicyContext,
+  current: ReviewSettingsDocument,
+  body: unknown,
+): ResolvedReviewPolicy | undefined {
+  const request = validated(body);
+  if ("kind" in request) return undefined;
+  if (request.reviewerModelId === undefined && request.counterCheckerModelId === undefined) {
+    return undefined;
+  }
+  return resolveReviewPolicy(ctx, nextDocument(current, request));
+}
+
 function sameModels(left: ReviewSettingsDocument, right: ReviewSettingsDocument): boolean {
   return (
     left.reviewerModelId === right.reviewerModelId &&

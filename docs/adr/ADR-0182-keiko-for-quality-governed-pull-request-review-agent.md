@@ -571,8 +571,19 @@ the start they stand for: the dry run checks readiness between admission and eli
 start, and the pair qualification start, the settings write and the model-policy view ask through
 `renewLapsedReviewToolProofs` (`review/policy/policy.ts`). That helper asks only for a model the
 operator policy allows and whose proof was verified and has lapsed, so a refused model receives no
-traffic (R4130-003) and a never-proven or refuted model keeps its verdict; the view asks without
-waiting, and a locked policy asks nothing at a settings write. A renewed proof is stored like one
+traffic (R4130-003) and a never-proven or refuted model keeps its verdict. The models asked are
+those whose proofs decide the policy (`reviewPolicyDecidingModelIds`): a role the user or the
+operator chose is decided by that model, and a role left to the recommendation by every configured
+chat model, because a lapsed proof makes a candidate ineligible and the recommendation then names a
+smaller model or none (R4130-061). The view asks for the policy it shows, without waiting. A
+settings write that names a role model asks for the policy it would produce, both roles, because
+its preflight judges both (R4130-062); a locked policy, an invalid body and a write that names no
+role model ask nothing. The settings write and the qualification start wait at most 30 seconds
+(`REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS`) and are then judged on the stored proof, because a renewal
+goes through the probe queue and can outlast the time a client keeps a request open; the renewal
+goes on, an elapsed wait is reported, and the next attempt finds the answer. The dry run waits as
+long as a start's own check does and saves nothing. Concurrent requests share one running renewal
+of a model. A renewed proof is stored like one
 the Workbench renewed and can advance the configuration generation. A conversation turn in flight
 elsewhere then fails its next call with `generation-changed`, and a pair qualification that
 recorded its generation at its start reads as `unmeasured` afterwards. The Workbench's profile read

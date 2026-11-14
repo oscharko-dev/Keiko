@@ -156,6 +156,28 @@ function resolveRole(
   return { modelId: chosen.modelId, source: chosen.source, state };
 }
 
+/**
+ * The models whose stored proofs decide `policy` (R4130-061, R4130-062): a role the user or the
+ * operator chose is decided by that model, and a role left to the recommendation by every
+ * configured chat model, because each is a candidate. A lapsed proof makes a candidate ineligible,
+ * so a recommendation over lapsed proofs names a smaller model or none.
+ */
+export function reviewPolicyDecidingModelIds(
+  ctx: ReviewPolicyContext,
+  policy: ResolvedReviewPolicy,
+): readonly string[] {
+  const roles = [policy.reviewer, policy.counterChecker];
+  const chosen = roles.flatMap((role) => (role.modelId === null ? [] : [role.modelId]));
+  const recommended = roles.some(
+    (role) => role.source === "recommendation" || role.source === "none",
+  );
+  if (!recommended) return chosen;
+  return [
+    ...chosen,
+    ...indexedChatCapabilities(ctx.capabilities).map((entry) => entry.capability.id),
+  ];
+}
+
 /** Resolves both roles for one repository's stored settings (absent: none saved). */
 export function resolveReviewPolicy(
   ctx: ReviewPolicyContext,

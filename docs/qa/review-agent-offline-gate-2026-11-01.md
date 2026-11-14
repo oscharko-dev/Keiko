@@ -195,7 +195,7 @@ Reading of the runs so far:
 - The read allowance of 24 does not keep a session inside its prompt budget. 52 of the 100 sessions
   used all 24 reads, at 444,000 to 1,562,000 prompt tokens (median 885,000), and they filed 158 of
   the 198 candidates of all sessions. The 9 sessions that made 9 to 16 reads used 472,000
-  at the median. 26 sessions made no read call at all and ended within seconds (median about 16,500
+  at the median. 26 sessions made no read call at all and ended within seconds (median about 16,400
   prompt tokens); the log does not show whether their parts held anything to find.
 - The Reviewer used 59.1 million prompt tokens, 1.97 million per review at the mean. The reviews
   took 26.4 hours in all: 10.3 hours of Reviewer sessions and 16.06 hours of counter-checks.

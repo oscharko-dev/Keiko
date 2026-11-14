@@ -30,11 +30,13 @@ import {
   effectiveRulesFilePath,
   recordReviewPolicyRefusal,
   renewLapsedReviewToolProofs,
+  REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS,
   reviewPolicyContext,
 } from "./policy.js";
 import {
   resolveReviewPolicy,
   reviewModelOptions,
+  reviewPolicyDecidingModelIds,
   type ResolvedReviewPolicy,
   type ReviewPolicyContext,
 } from "./resolution.js";
@@ -44,7 +46,7 @@ import {
   ReviewSettingsStorageError,
   type ReviewSettingsStore,
 } from "./settingsStore.js";
-import { updateReviewSettings } from "./settingsUpdate.js";
+import { reviewSettingsWriteModelPolicy, updateReviewSettings } from "./settingsUpdate.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { processServerLogSink } from "../../process-log-sink.js";
 
@@ -197,10 +199,12 @@ export function handleReviewModelPolicy(ctx: RouteContext, deps: UiHandlerDeps):
     const response = policyResponse(deps, policyCtx, repositoryId ?? null, settings);
     logResolved(deps, correlationId, response);
     // R4130-058: the view shows a role whose tool-call proof lapsed as refused. Asking for the
-    // proof here, without waiting, lets the next read show the model as it will run.
+    // proof here, without waiting, lets the next read show the model as it will run. R4130-061: a
+    // role left to the recommendation names no model while every candidate's proof has lapsed, so
+    // the candidates are asked, not only the resolved models.
     void renewLapsedReviewToolProofs(
       deps,
-      [response.reviewer.modelId, response.counterChecker.modelId],
+      reviewPolicyDecidingModelIds(policyCtx, response),
       correlationId,
     );
     return { status: 200, body: deps.redactor(response) };
@@ -254,11 +258,34 @@ export function handleReviewSettingsGet(ctx: RouteContext, deps: UiHandlerDeps):
   }
 }
 
-/** The role models a settings write names, whatever else the body holds. */
-function requestedRoleModels(body: unknown): readonly unknown[] {
-  if (typeof body !== "object" || body === null) return [];
-  const { reviewerModelId, counterCheckerModelId } = body as Record<string, unknown>;
-  return [reviewerModelId, counterCheckerModelId];
+/**
+ * Renews the lapsed tool-call proofs that decide a settings write, before the write is judged
+ * (R4130-058). The write preflights both roles of the policy it would produce, so the models of
+ * that policy are asked, not only those the body names (R4130-062). A locked policy refuses every
+ * model change and an invalid body is refused before any model is judged, so neither asks
+ * anything. The request waits at most `REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS`.
+ */
+async function renewWriteProofs(
+  deps: UiHandlerDeps,
+  target: { readonly store: ReviewSettingsStore; readonly repositoryId: string },
+  body: unknown,
+  correlationId: string,
+): Promise<void> {
+  const policyCtx = reviewPolicyContext(deps);
+  if (policyCtx.operator.lockModelPolicy) return;
+  // The write itself reads and reports the stored document after the wait; this read only names
+  // the models to ask.
+  const stored = target.store.read(target.repositoryId);
+  const current =
+    stored.kind === "stored" ? stored.document : emptyReviewSettings(target.repositoryId);
+  const policy = reviewSettingsWriteModelPolicy(policyCtx, current, body);
+  if (policy === undefined) return;
+  await renewLapsedReviewToolProofs(
+    deps,
+    reviewPolicyDecidingModelIds(policyCtx, policy),
+    correlationId,
+    REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS,
+  );
 }
 
 /** `PUT /api/git-review/settings?repositoryId=…`. */
@@ -271,13 +298,10 @@ export async function handleReviewSettingsPut(
   const correlationId = correlationIdOrUnknown(ctx.correlationId);
   const body = await readJsonRequestBodyOutcome(ctx.req, SETTINGS_BODY_MAX_BYTES, correlationId);
   if (body.kind === "rejected") return { status: body.response.status, body: body.response.body };
-  // R4130-058: a role model whose tool-call proof lapsed is renewed before the write judges it. A
-  // locked policy refuses every model change, so nothing is asked then.
-  if (!reviewPolicyContext(deps).operator.lockModelPolicy) {
-    await renewLapsedReviewToolProofs(deps, requestedRoleModels(body.value), correlationId);
-  }
-  const policyCtx = reviewPolicyContext(deps);
   try {
+    await renewWriteProofs(deps, target, body.value, correlationId);
+    // Read after the wait: the catalog and the stored document may both have changed during it.
+    const policyCtx = reviewPolicyContext(deps);
     const outcome = await updateReviewSettings({
       ctx: policyCtx,
       current: readSettings(target.store, target.repositoryId, correlationId),

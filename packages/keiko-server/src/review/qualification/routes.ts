@@ -21,6 +21,7 @@ import { reviewCancelResult, serveReviewEventStream } from "../eventStream.js";
 import {
   recordReviewPolicyRefusal,
   renewLapsedReviewToolProofs,
+  REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS,
   reviewPolicyContext,
 } from "../policy/policy.js";
 import { admitReviewRoleModels, checkReviewRoleModels } from "../policy/resolution.js";
@@ -119,6 +120,7 @@ async function renewAdmittedPairProofs(
     deps,
     [reviewerModelId, counterCheckerModelId],
     ctx.correlationId,
+    REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS,
   );
 }
 
