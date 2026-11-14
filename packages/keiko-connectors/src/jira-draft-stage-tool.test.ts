@@ -590,7 +590,7 @@ describe("jira.draft-stage (#4178)", () => {
         fieldId: "customfield_10103",
         validation: "required-field",
         messages: [
-          "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+          "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
         ],
       },
     });
@@ -810,7 +810,7 @@ describe("jira.draft-stage (#4178)", () => {
       items: [item("b") as CatalogJsonObject],
     });
     const NOT_FOUND =
-      "No draft with this draftId is held for this Chat, so nothing was staged. Stage the items again with jira.draft-stage and use the draftId it returns; do not invent one.";
+      "No draft with this draftId is held for this Chat, so nothing was staged. Call jira.draft-stage again without a draftId: that starts a new draft; then use the draftId it returns, and do not invent one.";
     expect(unknown.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
     const foreign = await h.stage({ draftId, items: [item("b") as CatalogJsonObject] }, "chat-2");
     expect(foreign.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
@@ -821,6 +821,60 @@ describe("jira.draft-stage (#4178)", () => {
         "Two items of the draft use the same ref. Give every item its own ref and stage the page again; nothing was staged.",
     });
     expect(h.deps.store.peek(draftId, "chat-1")?.items).toHaveLength(1);
+  });
+});
+
+// #4357 AC3: the three refusals that carried only a code now say what to do next, pinned exactly.
+describe("what a refused staging tells the model to do next (#4357 AC3)", () => {
+  it("names the way out of a page that did not pass Keiko's check", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, connection(), {
+      ...h.deps,
+      prepareRequirements: () => ({
+        ok: true,
+        items: [item("different")],
+        sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+      }),
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        reason: "invalid-input",
+        guidance:
+          "An item of this page did not pass Keiko's check of its fields, links or requirement references. Send the page again with every item in the jira.draft item form; nothing was staged.",
+      },
+    });
+  });
+  it("says a draft cannot be staged on a deployment that is not Data Center", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(
+      pageOf("a"),
+      CONTEXT,
+      { ...connection(), deployment: "cloud" } as unknown as Parameters<
+        typeof executeJiraDraftStageTool
+      >[2],
+      h.deps,
+    );
+    expect(result.data).toMatchObject({
+      reason: "unsupported-deployment",
+      guidance:
+        "Drafts work with Jira Data Center only, and this connection is not one. Tell the user a draft cannot be staged here. Nothing was staged.",
+    });
+  });
+  it("tells a model to stage again when the connection changed since the draft was staged", async () => {
+    const h = harness();
+    const first = await h.stage({ items: [item("a") as CatalogJsonObject] });
+    const result = await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), items: [item("b") as CatalogJsonObject] },
+      CONTEXT,
+      { ...connection(), baseUrl: "https://another-jira.example.invalid/context" },
+      h.deps,
+    );
+    expect(result.data).toMatchObject({
+      reason: "connection-changed",
+      guidance:
+        "The Jira connection changed since this draft was staged, so it cannot be extended. Call jira.draft-stage again without a draftId: that starts a new draft on the current connection. Nothing was staged.",
+    });
   });
 });
 

@@ -861,7 +861,11 @@ describe("Jira's own field errors (#4176)", () => {
     const result = jiraAttemptToolResult("rejected", {
       ok: false,
       reason: "field-validation",
-      detail: { fieldErrors: FIELD_ERRORS, messages: ["Issue could not be created."] },
+      detail: {
+        fromJira: true,
+        fieldErrors: FIELD_ERRORS,
+        messages: ["Issue could not be created."],
+      },
     });
 
     expect(result).toEqual({
@@ -982,7 +986,10 @@ describe("a create refused because a draft already made the issue", () => {
       ok: false,
       reason: "conflict",
       receipt: { issueKey: "SYN-1" },
-      detail: { messages: ["The requested change conflicts with the current state."] },
+      detail: {
+        fromJira: true,
+        messages: ["The requested change conflicts with the current state."],
+      },
     });
     expect(conflict.data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
   });
@@ -1028,7 +1035,7 @@ describe("a create refused because a draft already made the issue", () => {
     const data = jiraAttemptToolResult("rejected", {
       ok: false,
       reason: "conflict",
-      detail: { messages: ["Jira reported a conflict."] },
+      detail: { fromJira: true, messages: ["Jira reported a conflict."] },
     }).data;
 
     expect(data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
@@ -1096,38 +1103,67 @@ describe("template notices on a validated attempt", () => {
   });
 });
 
-// #4357 AC3: the instruction a refusal carries matches who refused it and why.
+// #4357 AC3: the instruction a refusal carries matches who refused it and why. Who refused is a closed
+// fact (`detail.fromJira`, set where Jira's error document is parsed), never read from the detail's
+// shape: a Keiko refusal with messages and no `validation` is still Keiko's.
 describe("the guidance of a refusal says who refused it and what to do (#4357 AC3)", () => {
-  it("does not say Jira refused what Keiko refused before sending it", () => {
+  const refuse = (
+    reason: "field-validation" | "conflict" | "invalid-transition" | "permission-denied",
+    detail: Record<string, unknown>,
+  ): unknown =>
+    jiraAttemptToolResult("rejected", { ok: false, reason, detail } as JiraMutationAttempt).data
+      .guidance;
+  it.each([
+    [
+      "a field check of Keiko",
+      "field-validation",
+      { validation: "invalid-field", fieldId: "x", messages: ["m"] },
+    ],
+    [
+      "an invalid transition Keiko found",
+      "invalid-transition",
+      { fieldId: "transitionId", messages: ["m"] },
+    ],
+    [
+      "a closed sprint",
+      "invalid-transition",
+      { messages: ["A closed sprint cannot be changed again."] },
+    ],
+    ["an unbound template identity", "malformed-payload", { messages: ["m"] }],
+    ["an actor key that is not the user's", "conflict", { messages: ["m"] }],
+  ] as const)("does not say Jira refused %s", (_name, reason, detail) => {
+    const guidance = refuse(reason as "conflict", detail);
+    expect(guidance).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
+    expect(guidance).not.toMatch(/Jira refused|fieldErrors/u);
+  });
+  it("keeps the correction instruction for Jira's own error document, and only for it", () => {
+    expect(
+      refuse("field-validation", {
+        fromJira: true,
+        fieldErrors: [{ fieldId: "summary", message: "m" }],
+      }),
+    ).toBe(JIRA_REJECTED_GUIDANCE);
+    expect(
+      refuse("field-validation", { fieldErrors: [{ fieldId: "summary", message: "m" }] }),
+    ).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
+  });
+  it("does not tell a permission refusal to correct fields, from Jira or from a read", () => {
+    for (const fromJira of [true, undefined]) {
+      const guidance = refuse("permission-denied", {
+        ...(fromJira === undefined ? {} : { fromJira }),
+        messages: ["You do not have permission."],
+      });
+      expect(guidance).toBe(JIRA_PERMISSION_GUIDANCE);
+      expect(guidance).not.toMatch(/Correct the fields|Jira refused this change/u);
+      expect(guidance).toContain("Do not retry it.");
+    }
+  });
+  it("never sends the closed fact to the model", () => {
     const data = jiraAttemptToolResult("rejected", {
       ok: false,
       reason: "field-validation",
-      detail: {
-        validation: "invalid-field",
-        fieldId: "propertyKey",
-        messages: ["propertyKey must be the exact property key. Nothing was changed."],
-      },
-    }).data;
-    expect(data.guidance).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
-    expect(data.guidance).not.toMatch(/Jira refused/u);
-    expect(JIRA_LOCAL_REFUSAL_GUIDANCE).toContain("Keiko refused this change before sending it");
-  });
-  it("does not tell a permission refusal to correct fields", () => {
-    const data = jiraAttemptToolResult("rejected", {
-      ok: false,
-      reason: "permission-denied",
-      detail: { messages: ["You do not have permission to edit this issue."] },
-    }).data;
-    expect(data.guidance).toBe(JIRA_PERMISSION_GUIDANCE);
-    expect(data.guidance).not.toMatch(/Correct the fields/u);
-    expect(data.guidance).toContain("Do not retry it.");
-  });
-  it("keeps the correction instruction for Jira's own error document", () => {
-    const data = jiraAttemptToolResult("rejected", {
-      ok: false,
-      reason: "field-validation",
-      detail: { fieldErrors: [{ fieldId: "summary", message: "Summary is required." }] },
-    }).data;
-    expect(data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
+      detail: { fromJira: true, messages: ["m"] },
+    } as JiraMutationAttempt).data;
+    expect(JSON.stringify(data)).not.toContain("fromJira");
   });
 });

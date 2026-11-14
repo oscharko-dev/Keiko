@@ -751,15 +751,16 @@ function linkData(links: JiraMutationLinkAccount | undefined): Record<string, un
 export const JIRA_REJECTED_GUIDANCE =
   "Jira refused this change and nothing was changed. Correct the fields named in fieldErrors (fieldId, fieldName, message) or messages, then send the corrected change once. If Jira refuses it again, tell the user in plain language which field is the problem and what Jira said.";
 /**
- * Keiko's own refusal, made before anything was sent: it carries a closed `validation` and a sentence
- * that names the rule, which Jira's own error document never does (#4357 AC3). Saying "Jira refused"
- * there would be untrue.
+ * A refusal made before the change was sent: by Keiko's own checks, or by what Keiko read first
+ * (#4357 AC3). Its `messages` and `fieldId` say what to do; saying "Jira refused" there would be untrue.
+ * Which of the two instructions a result gets is decided by a closed fact set where Jira's error
+ * document is parsed (`detail.fromJira`), never by the shape of the detail.
  */
 export const JIRA_LOCAL_REFUSAL_GUIDANCE =
-  "Keiko refused this change before sending it to Jira and nothing was changed. Correct the argument named in fieldId or messages, then send the corrected change once. If it is refused again, tell the user in plain language which argument is the problem.";
+  "Keiko refused this change before sending it to Jira, and nothing was changed. Do what the messages say: correct the argument named in fieldId, or read the current state again, then send the corrected change once. If it is refused again, tell the user in plain language what is wrong.";
 /** A permission refusal is not a field to correct: retrying cannot succeed. */
 export const JIRA_PERMISSION_GUIDANCE =
-  "Jira refused this change because this connection may not make it, and nothing was changed. Do not retry it. Tell the user in plain language that the Jira account lacks the permission, and what Jira said.";
+  "Jira's permissions do not allow this connection to make this change or to read what it needs, and nothing was changed. Do not retry it. Tell the user in plain language that the Jira account lacks the permission, and what the messages say.";
 export const JIRA_EXISTING_GUIDANCE =
   "Nothing was written: the Jira resource identified by this result already exists or already holds these values, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
 /** The journal holds no arguments or results, so a replay cannot repeat the earlier reasons. */
@@ -802,7 +803,7 @@ function explainedRefusalGuidance(
   detail: JiraMutationFailureDetail | undefined,
 ): string {
   if (reason === "permission-denied") return JIRA_PERMISSION_GUIDANCE;
-  return detail?.validation === undefined ? JIRA_REJECTED_GUIDANCE : JIRA_LOCAL_REFUSAL_GUIDANCE;
+  return detail?.fromJira === true ? JIRA_REJECTED_GUIDANCE : JIRA_LOCAL_REFUSAL_GUIDANCE;
 }
 function uncertainOutcome(
   outcome: JiraMutationResultState,

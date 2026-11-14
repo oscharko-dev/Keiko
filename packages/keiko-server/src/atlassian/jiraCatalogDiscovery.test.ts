@@ -585,6 +585,22 @@ describe("a search for an operation outside this release (#4357 AC3)", () => {
       expect(JIRA_OUT_OF_RELEASE_GUIDANCE).not.toMatch(/attach|jira[._]/iu);
     },
   );
+  it("is true with results and without: the same sentence either way", async () => {
+    const f = fixture();
+    const withResults = await f.discover.execute({ query: "attach a file to an issue" }, f.context);
+    expect((withResults.data.items as readonly unknown[]).length).toBeGreaterThan(0);
+    expect(withResults.data.guidance).toBe(JIRA_OUT_OF_RELEASE_GUIDANCE);
+    // A provider that offers only search lists nothing for these words, and the notice still holds:
+    // the withheld operations do not depend on the provider's own tool set.
+    const narrow = createJiraCatalogDiscoveryProvider({ tools: new Set(["jira.search"]) });
+    const discover = narrow.tools().find((tool) => tool.name === "jira.discover");
+    if (discover === undefined) throw new TypeError("Missing discover tool");
+    const without = await discover.execute({ query: "attach file" }, f.context);
+    expect(without.data).toMatchObject({ items: [], total: 0 });
+    expect(without.data.guidance).toBe(JIRA_OUT_OF_RELEASE_GUIDANCE);
+    // The sentence does not contradict the release's own attachment refusal, which names it.
+    expect(JIRA_OUT_OF_RELEASE_GUIDANCE).toContain("not part of this release");
+  });
   it("adds no notice to a search that finds an operation or finds nothing at all", async () => {
     const f = fixture();
     const found = await f.discover.execute({ query: "who am I" }, f.context);

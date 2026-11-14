@@ -125,19 +125,23 @@ const CREATE = (epic: string): CatalogJsonObject => ({
 
 describe("the Epic Link sentence stays whole for any key (#4357 AC3)", () => {
   const RULE =
-    " is not an Epic, or this account cannot see it. The Epic Link must be the key of an existing Epic of this project that you can see; create the Epic first. Nothing was changed.";
+    " is not an Epic, or this account cannot see it. The Epic Link must be the key of an existing Epic of this project that you can see; create the Epic first. This write was not made.";
   it("names the key and the rule, within the 200-byte bound of a detail message", () => {
     expect(jiraEpicLinkRefusalMessage("SYN-5")).toBe(`SYN-5${RULE}`);
     expect(
       new TextEncoder().encode(jiraEpicLinkRefusalMessage("SYN-5")).length,
     ).toBeLessThanOrEqual(200);
   });
-  it("shortens a key too long for the room, never the rule or its last sentence", () => {
-    const long = `${"PROJECTKEY".repeat(12)}-1234567890`;
-    const message = jiraEpicLinkRefusalMessage(long);
+  it.each([
+    ["an over-long key", `${"PROJECTKEY".repeat(12)}-1234567890`],
+    ["CJK text", "任務".repeat(25)],
+    ["quotes and a backslash", 'SYN-5"\\"'],
+    ["a split surrogate", `SYN-1${"\ud83d"}`],
+    ["free text", "not a key at all"],
+  ])("names the target without repeating it when it is %s", (_name, target) => {
+    const message = jiraEpicLinkRefusalMessage(target);
+    expect(message).toBe(`The Epic Link target${RULE}`);
     expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
-    expect(message.endsWith(`...${RULE}`)).toBe(true);
-    expect(message.startsWith("PROJECTKEY")).toBe(true);
     expect(sanitizeJiraMutationFailureDetail({ messages: [message] })?.messages).toEqual([message]);
   });
 });

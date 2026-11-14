@@ -28,6 +28,7 @@ import { chatToolTurnPartialAnswer } from "../chat-tool-turn-ending.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_LOCAL_REFUSAL_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
 } from "./jiraMutationResult.js";
@@ -37,6 +38,9 @@ import { podFixture, specification } from "../_requirementSupport.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
+  jiraDraftGuidance,
+  JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE,
+  JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE,
   JIRA_DRAFT_UNTRACED_GUIDANCE,
   JIRA_DRAFT_EXISTING_GUIDANCE,
   JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
@@ -1305,5 +1309,47 @@ describe("the draft connection carries the customer's issue templates (#4177)", 
     const result = await executeJiraChatDraft({ ...execution(jira), connection });
     expect(jira.posts()).toHaveLength(4);
     expect(result.isError).toBeUndefined();
+  });
+});
+
+// #4357 AC3: a draft run says who refused each failed item, from the closed fact its own result
+// carries; Keiko's own checks must never read as "Jira refused", and the reverse.
+describe("what a draft run tells the model about items it could not create (#4357 AC3)", () => {
+  const failed = (
+    ref: string,
+    refusedBy: "jira" | "keiko",
+    issueKey?: string,
+  ): Parameters<typeof jiraDraftGuidance>[0][number] => ({
+    ref,
+    state: "failed",
+    ...(issueKey === undefined ? {} : { issueKey }),
+    detail: { messages: ["m"] },
+    refusedBy,
+  });
+  const created = (ref: string): Parameters<typeof jiraDraftGuidance>[0][number] => ({
+    ref,
+    state: "created",
+    issueKey: `SYN-${ref}`,
+  });
+  it("says Keiko refused an item that only Keiko's checks refused", () => {
+    expect(jiraDraftGuidance([failed("a", "keiko")])).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
+    expect(jiraDraftGuidance([created("1"), failed("a", "keiko")])).toBe(
+      JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE,
+    );
+    expect(JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE).not.toMatch(/Jira refused/u);
+  });
+  it("keeps the words for items only Jira refused", () => {
+    expect(jiraDraftGuidance([failed("a", "jira")])).toBe(JIRA_REJECTED_GUIDANCE);
+    expect(jiraDraftGuidance([created("1"), failed("a", "jira")])).toBe(
+      JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
+    );
+  });
+  it("names both when Keiko refused one item and Jira another, created or not", () => {
+    for (const items of [
+      [failed("a", "keiko"), failed("b", "jira")],
+      [created("1"), failed("a", "keiko"), failed("b", "jira")],
+    ])
+      expect(jiraDraftGuidance(items)).toBe(JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE);
+    expect(JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE).toMatch(/refused by Keiko .* and some by Jira/u);
   });
 });

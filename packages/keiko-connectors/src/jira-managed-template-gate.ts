@@ -12,6 +12,7 @@ import {
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
   evaluateJiraTemplateChange,
+  JIRA_TEMPLATE_IMPACT_SUBJECTS,
   jiraTemplatesNeedingTransitionNames,
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
@@ -136,25 +137,33 @@ function unreadableRefusal(names: readonly string[] | undefined): JiraTemplateGa
  * reason is `field-validation`, which would leave the closed reason alone (#4357 AC3). So the refusal
  * also carries one sentence per cause, which both paths keep.
  */
-const IDENTITY_MESSAGES: Readonly<Record<string, string>> = {
-  "not-found":
-    "The project or issue type of this issue was not found or is not visible to this connection, so the project's template cannot be applied. Nothing was changed.",
-  "permission-denied":
-    "This connection may not read the issue's project or issue type, so the project's template cannot be applied. Nothing was changed.",
+/** What the template check could not read: the write's own subject, so a sentence is true of it. */
+type IdentitySubject = "project-and-type" | "issue" | "field-list";
+const IDENTITY_SUBJECTS: Readonly<Record<IdentitySubject, string>> = {
+  "project-and-type": "the project or issue type",
+  issue: "the issue",
+  "field-list": "the field list of the issue's type",
 };
-const IDENTITY_UNREADABLE =
-  "Jira's answer about the project and issue type could not be read completely, so the project's template cannot be applied. Nothing was changed.";
+function identityMessage(subject: IdentitySubject, reason: string): string {
+  const what = IDENTITY_SUBJECTS[subject];
+  const applied = "so the project's template cannot be applied. This write was not made.";
+  if (reason === "not-found")
+    return `Keiko did not find ${what}, or this connection cannot see it, ${applied}`;
+  if (reason === "permission-denied") return `This connection may not read ${what}, ${applied}`;
+  if (reason === "malformed-payload" || reason === "conflict")
+    return `Jira's answer about ${what} could not be read completely, ${applied}`;
+  return `Keiko could not read ${what} from Jira just now, ${applied}`;
+}
 function identityRefusal(
   failure: Extract<JiraTemplateGateResult, { ok: false }>,
+  subject: IdentitySubject,
 ): JiraTemplateGateResult {
   // Preserve the closed native failure, but also keep the refusal visible to the existing
   // template-only dry run. It must not reinterpret unbound rule selection as a successful check.
   // One violation: the refusal is about the unbound identity, so it names no candidate template.
   return {
     ...failure,
-    detail: failure.detail ?? {
-      messages: [IDENTITY_MESSAGES[failure.reason] ?? IDENTITY_UNREADABLE],
-    },
+    detail: failure.detail ?? { messages: [identityMessage(subject, failure.reason)] },
     violations: [
       {
         ruleId: "template-unreadable",
@@ -445,7 +454,7 @@ function bulkReferenceViolation(rule: BulkReferenceRule): JiraTemplateViolation 
   return {
     ruleId: "template-unreadable",
     template: jiraIssueTemplateLabel(rule.template),
-    subject: `Bulk issue-field impact: ${rule.reference}`.slice(0, 120),
+    subject: `${JIRA_TEMPLATE_IMPACT_SUBJECTS.bulkPrefix}${rule.reference}`.slice(0, 120),
   };
 }
 function bulkReferenceViolations(
@@ -544,7 +553,7 @@ function deletionRuleAffected(template: JiraIssueTemplate, values: readonly unkn
 }
 function schemaImpactResult(
   affected: readonly JiraIssueTemplate[],
-  subject = "Schema changes require complete governed issue migration",
+  subject: string = JIRA_TEMPLATE_IMPACT_SUBJECTS.schema,
 ): JiraTemplateGateResult {
   return affected.length === 0
     ? OK
@@ -762,7 +771,8 @@ export async function gateJiraMutationByTemplates(
     input.operation === "create"
       ? await createIdentity(input.request, input.target)
       : await issueIdentity(input.request, input.target.issueKey);
-  if ("ok" in first) return identityRefusal(first);
+  if ("ok" in first)
+    return identityRefusal(first, input.operation === "create" ? "project-and-type" : "issue");
   return (
     (input.operation === "create" ? createWithoutTemplate(set, candidates, first) : undefined) ??
     checkCandidates(input, candidates, first)
@@ -823,7 +833,7 @@ async function checkCandidates(
   if (matching.length === 0) return OK;
   const catalog = await completeCatalog(input, matching);
   const identity = await completeIdentity(input, first, catalog, matching);
-  if ("ok" in identity) return identityRefusal(identity);
+  if ("ok" in identity) return identityRefusal(identity, "field-list");
   const ordered = requiredLinksFirst(input.links ?? [], matching);
   // Only the link that rides on the request itself exists in the state this write leaves.
   const primary = planJiraIssueLinks(ordered, identity.prior.issuelinks).inline;

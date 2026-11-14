@@ -11,28 +11,25 @@ import { JIRA_CATALOG_DISCOVERY_TOOLS } from "./jiraCatalogDiscovery.js";
 import { jiraOperationContracts } from "./jiraManagedProvider.js";
 
 // #4357 AC3: a refusal, a description or a guidance text that tells a model to call a tool must name
-// a tool that exists. A model that follows `jira.issue_types` for `jira.issue-types` calls nothing
-// and cannot correct itself, so every Jira tool name inside a text literal of the Jira modules is
-// derived from the registered operations, never trusted by spelling.
+// a tool that exists. A model that follows `jira.issue_types` for `jira.issue-types` calls nothing and
+// cannot correct itself. So every `jira.` / `jira_` token inside a prose literal of the Jira modules
+// is decided by one question: is this exact token a registered tool name, the underscore alias of
+// one, or a registered Activity Log operation? Never by the shape of the spelling.
 const PACKAGES = fileURLToPath(new URL("../../../", import.meta.url));
-const SCANNED: readonly { readonly directory: string; readonly only: RegExp }[] = [
+const REPOSITORY = fileURLToPath(new URL("../../../../", import.meta.url));
+const SCANNED_ROOTS: readonly { readonly directory: string; readonly only: RegExp }[] = [
   { directory: join(PACKAGES, "keiko-connectors", "src"), only: /./u },
-  { directory: join(PACKAGES, "keiko-server", "src", "atlassian"), only: /./u },
-  { directory: join(PACKAGES, "keiko-contracts", "src"), only: /^(jira|atlassian).*\.ts$/u },
+  { directory: join(PACKAGES, "keiko-server", "src"), only: /./u },
+  { directory: join(PACKAGES, "keiko-contracts", "src"), only: /^(jira|atlassian)/u },
 ];
-// A tool name is `jira.` and a lowercase word ending in a letter or digit; a trailing sentence dot,
-// a domain such as `jira.example.invalid` and an activity-log operation such as `jira.operation.core`
-// are not names, and a prefix such as `jira.set-` that code completes is not a complete one.
-const TOOL_NAME = /(?<![\w./-])jira\.[a-z](?:[\w-]*\w)?(?![\w-]|\.[a-z])/gu;
+// Every spelling: any case of "jira", a dot or an underscore, then the rest of the token, so a wrong
+// name written with a further dot segment or an upper-case first letter is a candidate too.
+const CANDIDATE = /(?<![\w./-])[Jj][Ii][Rr][Aa][._][A-Za-z][\w.-]*\w/gu;
 
-/**
- * Every Jira tool name inside a prose literal (a string or template literal with a space, as a
- * sentence a model reads has) of one TypeScript source text. A literal that is one bare identifier,
- * such as an error kind `jira.mutation-execution-failed`, is not a sentence.
- */
-function toolNamesInLiterals(source: string): readonly string[] {
+/** Every candidate token inside a prose literal (a string with a space, as a model reads it). */
+function candidatesInLiterals(source: string): readonly string[] {
   const file = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
-  const names: string[] = [];
+  const found: string[] = [];
   const visit = (node: ts.Node): void => {
     if (
       ts.isStringLiteral(node) ||
@@ -41,56 +38,87 @@ function toolNamesInLiterals(source: string): readonly string[] {
       ts.isTemplateMiddle(node) ||
       ts.isTemplateTail(node)
     )
-      names.push(...(/\s/u.test(node.text) ? (node.text.match(TOOL_NAME) ?? []) : []));
+      found.push(...(/\s/u.test(node.text) ? (node.text.match(CANDIDATE) ?? []) : []));
     ts.forEachChild(node, visit);
   };
   visit(file);
-  return names;
+  return found;
+}
+function filesUnder(directory: string, only: RegExp): readonly string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : filesUnder(path, only);
+    const named = only.test(entry.name) && entry.name.endsWith(".ts");
+    return named && !/\.(test|generated)\.ts$/u.test(entry.name) ? [path] : [];
+  });
 }
 function scannedFiles(): readonly string[] {
-  return SCANNED.flatMap(({ directory, only }) =>
-    readdirSync(directory)
-      .filter((name) => only.test(name) && name.endsWith(".ts"))
-      .filter((name) => !/\.(test|generated)\.ts$/u.test(name))
-      .map((name) => join(directory, name)),
-  );
+  return SCANNED_ROOTS.flatMap(({ directory, only }) => filesUnder(directory, only));
 }
-function registeredTools(): ReadonlySet<string> {
-  return new Set<string>([
+// Tokens that look like a tool name and are not one, each exact and each for a stated reason: Jira's own
+// application-property keys (the instance-setting tools read and write them) and a SQL column. An
+// exact token is allowed, never a shape, so a wrong tool name cannot hide behind them.
+const NOT_TOOL_TOKENS: ReadonlySet<string> = new Set([
+  "jira.clone.prefix",
+  "jira.option.timetracking",
+  "jira.option.voting",
+  "jira.option.watching",
+  "jira.user.locale",
+  "jira.user.timezone",
+  "jira_state_json",
+]);
+function registeredNames(): ReadonlySet<string> {
+  const tools = new Set<string>([
     ...jiraOperationContracts().map((contract) => contract.definition.tool),
     ...JIRA_MANAGED_READ_TOOLS,
     ...JIRA_MUTATION_OPERATIONS,
     ...JIRA_CATALOG_DISCOVERY_TOOLS,
   ]);
+  const operations = JSON.parse(
+    readFileSync(join(REPOSITORY, "docs", "observability", "op-catalog.generated.json"), "utf8"),
+  ) as { readonly operations: readonly string[] };
+  return new Set([
+    ...tools,
+    ...[...tools].map((name) => name.replace(/[.-]/gu, "_")),
+    ...operations.operations,
+    ...NOT_TOOL_TOKENS,
+  ]);
 }
 
 describe("every Jira tool named in a text is a registered operation (#4357 AC3)", () => {
-  it("finds a tool name only in a text literal, and not a domain, an operation id or a sentence dot", () => {
+  const registered = new Set(["jira.issue-types", "jira.myself", "jira_myself"]);
+  const unknownIn = (source: string): readonly string[] =>
+    candidatesInLiterals(source).filter((token) => !registered.has(token));
+  it("judges a token by whether it is registered, in any spelling and only inside a prose literal", () => {
     const source = [
       'const a = "Use jira.issue-types, not jira.issue_types.";',
-      "const b = `ask ${x} via jira.myself.`;",
-      'const c = "https://jira.example.invalid/rest and jira.operation.core";',
+      "const b = `ask ${x} via jira.myself and Jira.myself.`;",
+      'const c = "see jira.issue-types.list or jira_myself for it";',
+      'const d = "https://jira.example.invalid/rest and jira.operation.core";',
       'const e = "jira.mutation-execution-failed";',
-      'const f = "Use the jira.set- prefix words or jira.create-";',
       "// jira.comment in a comment is not a text a model reads",
-      "const d = { tool: jira.search };",
     ].join("\n");
-    expect(toolNamesInLiterals(source)).toEqual([
-      "jira.issue-types",
+    expect(unknownIn(source)).toEqual([
       "jira.issue_types",
-      "jira.myself",
+      "Jira.myself",
+      "jira.issue-types.list",
+      "jira.operation.core",
     ]);
   });
-  it("scans the modules that carry refusals, descriptions and guidance", () => {
-    expect(scannedFiles().length).toBeGreaterThan(300);
-    expect(registeredTools().size).toBeGreaterThan(400);
+  it("scans every module that carries refusals, descriptions and guidance, recursively", () => {
+    const files = scannedFiles();
+    expect(files.length).toBeGreaterThan(900);
+    expect(files.some((path) => path.endsWith("chat-tool-receipts.ts"))).toBe(true);
+    expect(files.some((path) => path.endsWith("codingJiraPodBinding.ts"))).toBe(true);
+    expect(files.some((path) => path.includes("jira-test-request"))).toBe(true);
+    expect(registeredNames().size).toBeGreaterThan(900);
   });
   it("names no tool that is not registered, in any text of the Jira modules", () => {
-    const registered = registeredTools();
+    const known = registeredNames();
     const unknown = scannedFiles().flatMap((path) =>
-      toolNamesInLiterals(readFileSync(path, "utf8"))
-        .filter((name) => !registered.has(name))
-        .map((name) => `${path.slice(PACKAGES.length)}: ${name}`),
+      candidatesInLiterals(readFileSync(path, "utf8"))
+        .filter((token) => !known.has(token))
+        .map((token) => `${path.slice(PACKAGES.length)}: ${token}`),
     );
     expect(unknown).toEqual([]);
   });

@@ -298,17 +298,17 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
  */
 const FIELD_VALIDATION_MESSAGES: Readonly<Record<JiraFieldValidationFailure, string>> = {
   "required-field":
-    "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+    "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
   "unsupported-field":
-    "The field named in fieldId cannot be set through Keiko: leave it out. Nothing was changed.",
+    "The field named in fieldId cannot be set through Keiko: leave it out if it is optional. If it is required, tell the user the issue has to be created in Jira. This write was not made.",
   "invalid-operation":
-    "The operation sent for the field named in fieldId is not offered for it: use one the field list shows. Nothing was changed.",
+    "The operation sent for the field named in fieldId is not offered for it: use one the field list shows. This write was not made.",
   "invalid-field":
-    "The value sent for the field named in fieldId does not fit its type: send it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+    "The value sent for the field named in fieldId does not fit its type: send it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
   "bounds-exceeded":
-    "The fields sent are more or larger than one call takes: send fewer or shorter values. Nothing was changed.",
+    "The fields sent are more or larger than one call takes: send fewer or shorter values. This write was not made.",
   "invalid-epic-link":
-    "The Epic Link must be the key of an existing Epic of this project that you can see. Nothing was changed.",
+    "The Epic Link must be the key of an existing Epic of this project that you can see. This write was not made.",
 };
 /** Keiko's own pre-dispatch refusal names the field and the closed reason. */
 function validationFailure(

@@ -294,9 +294,9 @@ export const JIRA_DRAFT_TOO_LARGE_GUIDANCE =
 const REFUSAL_GUIDANCE: Readonly<Partial<Record<JiraDraftRefusal, string>>> = {
   "too-large": JIRA_DRAFT_TOO_LARGE_GUIDANCE,
   "draft-not-found":
-    "No draft with this draftId is held for this Chat, so nothing was staged. Stage the items again with jira.draft-stage and use the draftId it returns; do not invent one.",
+    "No draft with this draftId is held for this Chat, so nothing was staged. Call jira.draft-stage again without a draftId: that starts a new draft; then use the draftId it returns, and do not invent one.",
   "connection-changed":
-    "The Jira connection changed since this draft was staged, so it cannot be extended. Stage the items again with jira.draft-stage. Nothing was staged.",
+    "The Jira connection changed since this draft was staged, so it cannot be extended. Call jira.draft-stage again without a draftId: that starts a new draft on the current connection. Nothing was staged.",
   "duplicate-ref":
     "Two items of the draft use the same ref. Give every item its own ref and stage the page again; nothing was staged.",
   "unsupported-deployment":

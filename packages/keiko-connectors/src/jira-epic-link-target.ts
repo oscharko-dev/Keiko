@@ -66,17 +66,18 @@ function candidateKeys(fields: Readonly<Record<string, unknown>>): boolean {
 
 /**
  * The rule the model must satisfy, after the target it named. The whole message is one detail message
- * and a detail message is cut at its byte bound, so the part that is the rule is fixed and the key
- * that varies is the part that gives way (#4357 AC3): a key too long for the room left is shortened
- * with dots, never the rule or its closing "Nothing was changed.".
+ * and a detail message is cut at its JSON-encoded byte bound, so what varies must never be able to
+ * reach it (#4357 AC3): the target is echoed only when it is an issue key short enough for the room
+ * left, which is plain ASCII that needs no escaping. Any other value of the field (text, quotes,
+ * non-ASCII, an over-long key) is named as "The Epic Link target", never repeated.
  */
 const EPIC_LINK_RULE =
-  " is not an Epic, or this account cannot see it. The Epic Link must be the key of an existing Epic of this project that you can see; create the Epic first. Nothing was changed.";
+  " is not an Epic, or this account cannot see it. The Epic Link must be the key of an existing Epic of this project that you can see; create the Epic first. This write was not made.";
 /** What the model is told when an Epic Link names an issue the instance does not know as an Epic. */
 export function jiraEpicLinkRefusalMessage(target: string): string {
   const room = JIRA_MUTATION_DETAIL_LIMITS.messageBytes - EPIC_LINK_RULE.length;
-  const shown = target.length > room ? `${target.slice(0, room - 3)}...` : target;
-  return `${shown}${EPIC_LINK_RULE}`;
+  const named = ISSUE_KEY.test(target) && target.length <= room ? target : "The Epic Link target";
+  return `${named}${EPIC_LINK_RULE}`;
 }
 /**
  * The refusal for an Epic Link whose target the instance does not know as an Epic, or undefined:

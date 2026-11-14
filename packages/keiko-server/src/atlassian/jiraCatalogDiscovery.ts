@@ -235,7 +235,7 @@ function matching(options: DiscoveryOptions, query: string): readonly Summary[] 
  * other search, over the operations the release scope withholds.
  */
 export const JIRA_OUT_OF_RELEASE_GUIDANCE =
-  "No operation of this release matches this search, but it asks for an operation this release does not include. Do not use another tool in its place: tell the user it is not available here and can be done in Jira itself.";
+  "This search names an operation that is not part of this release, so no tool for it exists here, whatever else the list holds. Do not use another tool in its place: tell the user it is not available in this release and can be done in Jira itself.";
 function topScore(entries: readonly Candidate[], terms: readonly string[]): number {
   return entries.reduce((best, entry) => Math.max(best, scoreOf(entry, terms)), 0);
 }
@@ -247,12 +247,9 @@ function topScore(entries: readonly Candidate[], terms: readonly string[]): numb
 function namesOutOfReleaseOperation(options: DiscoveryOptions, query: string): boolean {
   const terms = significantTerms(query).slice(0, QUERY_TERMS_MAX);
   if (terms.length === 0) return false;
+  // Withheld operations are never in the provider's tool set, so the set cannot narrow them.
   const withheld = jiraOperationDefinitions()
-    .filter(
-      (definition) =>
-        (options.tools === undefined || options.tools.has(definition.tool)) &&
-        !jiraOperationInReleaseScope(definition.tool),
-    )
+    .filter((definition) => !jiraOperationInReleaseScope(definition.tool))
     .map((definition): Candidate => {
       const summary: Summary = {
         identity: definition.identity,

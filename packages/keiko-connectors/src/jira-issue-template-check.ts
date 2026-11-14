@@ -620,13 +620,22 @@ const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
   "section-empty",
 ]);
 /**
- * A bulk or schema change that touches a field a formal rule refers to is not "evidence we could not
- * read": the rule exists, and the issues it would change cannot be checked one by one (#4357 AC3).
+ * The two subjects the gate gives a bulk or schema change that touches a field a formal rule refers
+ * to. They are one shared value, written here and used by the gate, so the guidance below is chosen by
+ * the producer's own constant and not by an independent copy of its prose (#4357 AC3). That is not
+ * "evidence we could not read": the rule exists, and the issues it would change cannot be checked one
+ * by one.
  */
-const IMPACT_SUBJECT =
-  /^(?:Bulk issue-field impact: |Schema changes require complete governed issue migration)/u;
+export const JIRA_TEMPLATE_IMPACT_SUBJECTS = {
+  bulkPrefix: "Bulk issue-field impact: ",
+  schema: "Schema changes require complete governed issue migration",
+} as const;
 function isImpactViolation(violation: JiraTemplateViolation): boolean {
-  return violation.ruleId === "template-unreadable" && IMPACT_SUBJECT.test(violation.subject);
+  return (
+    violation.ruleId === "template-unreadable" &&
+    (violation.subject.startsWith(JIRA_TEMPLATE_IMPACT_SUBJECTS.bulkPrefix) ||
+      violation.subject === JIRA_TEMPLATE_IMPACT_SUBJECTS.schema)
+  );
 }
 const IMPACT_GUIDANCE =
   "Nothing was changed: a formal template rule of this project refers to a field this change would alter on issues that Keiko cannot check one by one. Do not retry it. Change the affected issues one at a time with the edit tool, or tell the person it has to be done in Jira.";

@@ -1387,7 +1387,7 @@ describe("the dry run before approval", () => {
           fieldId: "customfield_10103",
           validation: "required-field",
           messages: [
-            "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+            "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
           ],
         });
         expect(await f.run()).toEqual({
@@ -1522,7 +1522,7 @@ describe("the dry run before approval", () => {
       fieldId: "customfield_10103",
       validation: "required-field",
       messages: [
-        "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+        "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
       ],
       guidance: JIRA_LOCAL_REFUSAL_GUIDANCE,
     });
