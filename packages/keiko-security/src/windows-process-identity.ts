@@ -41,11 +41,12 @@ try {
   if ($null -ne $process -and $null -ne $process.CommandLine) { [Console]::Out.Write($process.CommandLine) }
 } catch { exit 1 }`;
 
-/** Hermetic seams; production callers pass none. */
+/** Hermetic seams, plus the one sink every caller must name. */
 export interface WindowsProcessIdentityOptions {
   readonly runner?: WindowsProgramRunner | undefined;
   readonly resolvePowerShell?: (() => string) | undefined;
-  readonly securityLogSink?: SecurityLogSink | undefined;
+  /** Required: the slow-run and unavailable lines go here. A seam passes the null sink. */
+  readonly securityLogSink: SecurityLogSink;
 }
 
 function queryCommandLine(pid: number, options: WindowsProcessIdentityOptions): string | undefined {
@@ -70,7 +71,7 @@ function queryCommandLine(pid: number, options: WindowsProcessIdentityOptions): 
  */
 export function readWindowsProcessCommandLine(
   pid: number,
-  options: WindowsProcessIdentityOptions = {},
+  options: WindowsProcessIdentityOptions,
 ): string | undefined {
   if (!Number.isSafeInteger(pid) || pid < 1 || pid > MAX_PID) return undefined;
   try {

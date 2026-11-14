@@ -1,4 +1,7 @@
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CHAT_TOOL_BATCH_COUNT_MAX,
+  type ChatToolExchange,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   JIRA_DRAFT_PROBLEMS,
   JIRA_FIELD_VALIDATION_FAILURES,
@@ -177,8 +180,9 @@ import { jiraReadableText } from "./jira-readable-text";
 /** One Jira issue a tool call created, changed or read, as a person recognises it. */
 interface JiraOutcomeIssue {
   readonly key: string;
-  readonly summary?: string;
   readonly href?: string;
+  /** The result says the issue already existed; it was found, not created. */
+  readonly existing?: true;
 }
 /**
  * How a person recognises a draft item: the summary they reviewed, else its place in the draft. The
@@ -218,6 +222,17 @@ interface JiraOutcomeProblem {
   readonly field?: string;
   readonly message: string;
 }
+/**
+ * One card sentence per draft refusal that is not a field problem, by `data.draftRefusal`: the
+ * draft was not found, it changed after review, or the Jira connection changed. A refusal that
+ * `draft-invalid` carries is named by its problem instead. The test walks JIRA_DRAFT_REFUSALS, so a
+ * refusal the contract gains without a sentence here fails there.
+ */
+export const JIRA_DRAFT_REFUSAL_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
+  "draft-not-found": "chat.jira.outcome.draftRefusal.draft-not-found",
+  "draft-changed": "chat.jira.outcome.draftRefusal.draft-changed",
+  "connection-changed": "chat.jira.outcome.draftRefusal.connection-changed",
+};
 /** Why Keiko refused a whole draft before sending it: a closed code and the item it concerns. */
 interface JiraOutcomeDraftProblem {
   readonly problem: JiraDraftProblemCode;
@@ -237,9 +252,13 @@ export interface JiraToolOutcomeView {
   readonly unreadableCount: number;
   readonly stagedCount: number | undefined;
   readonly unresolvedCount: number | undefined;
+  /** Issues of a draft write that were not created (failed, skipped, still pending or excluded). */
+  readonly notCreatedCount?: number;
   readonly problems: readonly JiraOutcomeProblem[];
   /** Absent unless the draft itself was refused; a person reads what to change from it. */
   readonly draftProblem?: JiraOutcomeDraftProblem;
+  /** The sentence for a refusal that is not a field problem (not found, changed, connection). */
+  readonly draftRefusal?: WidgetMessageKey;
   readonly rules: readonly JiraOutcomeRule[];
   readonly validation: JiraFieldValidationFailure | undefined;
   /** Keiko's own field check refused these draft items; each is named by its summary. */
@@ -248,21 +267,26 @@ export interface JiraToolOutcomeView {
   readonly hiddenProblemCount: number;
   readonly failure: WidgetMessageKey | undefined;
   /**
-   * The issue keys of the result as a bounded projection (#4173): a compact large draft lists
-   * its keys as ranges, so the keys are counted here rather than present as items.
-   */
-  readonly issues: readonly JiraOutcomeIssue[];
-  readonly hiddenIssueCount: number;
-  /**
    * `count` lists at most JIRA_OUTCOME_ITEMS_SHOWN issues and counts the rest in "and N more";
    * `disclosure` keeps every item behind a bounded disclosure.
    */
   readonly overflow: "count" | "disclosure";
+  /** How many rows stand open before the rest sit behind a disclosure. */
+  readonly visibleItems?: number;
   /** Issues a compact result counted but did not list; added to the hidden count in `count` mode. */
   readonly unlistedItemCount: number;
 }
 
 export const JIRA_OUTCOME_ITEMS_SHOWN = 5;
+/**
+ * A draft write lists every issue it created, each with its link (#4355): this many rows stand
+ * open in the card and the rest sit behind a disclosure that mounts them only when it is opened.
+ * Every key a compact result carries is expanded from its ranges, up to the largest batch.
+ */
+const JIRA_OUTCOME_WRITE_ITEMS_SHOWN = 60;
+const JIRA_OUTCOME_KEYS_LISTED = CHAT_TOOL_BATCH_COUNT_MAX;
+/** The most keys one unexpanded span adds to the "and N more" count, however large it claims to be. */
+const KEY_SPAN_COUNT_MAX = 1_000_000_000;
 const JIRA_OUTCOME_PROBLEMS_SHOWN = 20;
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/u;
@@ -774,27 +798,9 @@ function webLink(value: unknown): string | undefined {
     return undefined;
   }
 }
-function issueOf(source: UnknownRecord | undefined, keyField: string): JiraOutcomeIssue[] {
-  const key = text(source?.[keyField]);
-  if (key === undefined || !ISSUE_KEY.test(key)) return [];
-  const summary = text(source?.summary);
-  const href = webLink(source?.browseUrl);
-  return [
-    { key, ...(summary === undefined ? {} : { summary }), ...(href === undefined ? {} : { href }) },
-  ];
-}
-/** A read lists `key`; a draft's item rows list `issueKey` (the production draft schema). */
-function listed(value: unknown): JiraOutcomeIssue[] {
-  return Array.isArray(value)
-    ? value.flatMap((entry) => {
-        const item = record(entry);
-        return item?.issueKey === undefined ? issueOf(item, "key") : issueOf(item, "issueKey");
-      })
-    : [];
-}
-
 interface ListedKeys {
   readonly shown: readonly JiraOutcomeIssue[];
+  /** The keys and unreadable parts beyond `shown`: counted, never silently dropped. */
   readonly count: number;
 }
 const RANGE = /^([A-Z][A-Z0-9_]{0,254})-(\d{1,15})\.\.\1-(\d{1,15})$/u;
@@ -812,28 +818,53 @@ function runOf(part: string): KeyRun | undefined {
     ? undefined
     : { project, from, to };
 }
-/** One `KEY-3` or `KEY-3..KEY-9` part: the keys it names, as many as fit, and how many in all. */
-function partKeys(part: string, room: number): ListedKeys {
+/** What a result's key ranges name: the keys as far as they fit, and the keys or parts left over. */
+interface ExpandedKeys {
+  readonly shown: readonly JiraOutcomeIssue[];
+  readonly count: number;
+}
+interface KeyExpansion {
+  readonly shown: Map<string, JiraOutcomeIssue>;
+  readonly room: number;
+  readonly taken: ReadonlySet<string>;
+  readonly existing: boolean;
+  /** Keys past the room and parts that name no key: counted, never dropped silently. */
+  count: number;
+}
+function admitKey(expansion: KeyExpansion, key: string): void {
+  if (expansion.shown.has(key) || expansion.taken.has(key)) return;
+  if (expansion.shown.size >= expansion.room) expansion.count += 1;
+  else expansion.shown.set(key, expansion.existing ? { key, existing: true } : { key });
+}
+/** One `KEY-3` or `KEY-3..KEY-9` part; a part that is neither (descending, mixed prefixes) counts as one. */
+function expandPart(expansion: KeyExpansion, part: string): void {
   const run = runOf(part);
   if (run === undefined) {
-    const single = ISSUE_KEY.test(part);
-    return { shown: single && room > 0 ? [{ key: part }] : [], count: single ? 1 : 0 };
+    if (ISSUE_KEY.test(part)) admitKey(expansion, part);
+    else expansion.count += 1;
+    return;
   }
-  const shown: JiraOutcomeIssue[] = [];
-  for (let n = run.from; n <= run.to && shown.length < room; n += 1)
-    shown.push({ key: `${run.project}-${String(n)}` });
-  return { shown, count: run.to - run.from + 1 };
+  // Expand only while the list has room; the rest of the span is counted arithmetically, so a
+  // hostile range such as KEY-1..KEY-999999999999999 returns at once.
+  let n = run.from;
+  for (; n <= run.to && expansion.shown.size < expansion.room; n += 1)
+    admitKey(expansion, `${run.project}-${String(n)}`);
+  expansion.count += Math.min(Math.max(0, run.to - n + 1), KEY_SPAN_COUNT_MAX);
 }
-/** One entry of a compact draft's key list: several comma-joined keys and ranges. */
-function rangeKeys(entry: string, room: number): ListedKeys {
-  const shown: JiraOutcomeIssue[] = [];
-  let count = 0;
-  for (const part of entry.split(",")) {
-    const parsed = partKeys(part.trim(), room - shown.length);
-    shown.push(...parsed.shown);
-    count += parsed.count;
-  }
-  return { shown, count };
+/**
+ * The compact result's comma-joined parts, expanded into distinct keys (an overlapping range lists a
+ * key once, a key already taken by the created list is not listed again as found).
+ */
+function expandKeyEntries(
+  entries: readonly string[],
+  room: number,
+  taken: ReadonlySet<string>,
+  existing: boolean,
+): ExpandedKeys {
+  const expansion: KeyExpansion = { shown: new Map(), room, taken, existing, count: 0 };
+  for (const entry of entries)
+    for (const part of entry.split(",")) expandPart(expansion, part.trim());
+  return { shown: [...expansion.shown.values()], count: expansion.count };
 }
 /** A listed key opens under the result's own browse prefix; without a web prefix it stays plain. */
 function linked(issue: JiraOutcomeIssue, prefix: unknown): JiraOutcomeIssue {
@@ -844,23 +875,28 @@ function linked(issue: JiraOutcomeIssue, prefix: unknown): JiraOutcomeIssue {
 /** The created and found keys a compact large-draft result lists as ranges, and those it counts. */
 function compactKeys(data: UnknownRecord | undefined): ListedKeys {
   if (data?.compact !== true) return { shown: [], count: 0 };
-  const shown: JiraOutcomeIssue[] = [];
-  let count = typeof data.unlistedKeyCount === "number" ? Math.max(0, data.unlistedKeyCount) : 0;
-  for (const name of ["createdRanges", "existingRanges"]) {
-    const entries = Array.isArray(data[name]) ? (data[name] as unknown[]) : [];
-    for (const entry of entries) {
-      if (typeof entry !== "string") continue;
-      const parsed = rangeKeys(entry, JIRA_OUTCOME_ITEMS_SHOWN - shown.length);
-      shown.push(...parsed.shown);
-      count += parsed.count;
-    }
-  }
-  return { shown: shown.map((issue) => linked(issue, data.browseUrlPrefix)), count };
-}
-function uniqueIssues(issues: readonly JiraOutcomeIssue[]): JiraOutcomeIssue[] {
-  const seen = new Map<string, JiraOutcomeIssue>();
-  for (const issue of issues) if (!seen.has(issue.key)) seen.set(issue.key, issue);
-  return [...seen.values()];
+  const entriesOf = (name: string): string[] => {
+    const listed: unknown = data[name];
+    return Array.isArray(listed)
+      ? listed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  };
+  const created = expandKeyEntries(
+    entriesOf("createdRanges"),
+    JIRA_OUTCOME_KEYS_LISTED,
+    new Set(),
+    false,
+  );
+  const found = expandKeyEntries(
+    entriesOf("existingRanges"),
+    JIRA_OUTCOME_KEYS_LISTED - created.shown.length,
+    new Set(created.shown.map((issue) => issue.key)),
+    true,
+  );
+  return {
+    shown: [...created.shown, ...found.shown].map((issue) => linked(issue, data.browseUrlPrefix)),
+    count: created.count + found.count + (count(data.unlistedKeyCount) ?? 0),
+  };
 }
 function problemsOf(
   data: UnknownRecord | undefined,
@@ -964,6 +1000,47 @@ function itemProblemsOf(
   return items.flatMap((entry, index) =>
     problemsOf(record(entry), itemName(entry, index, reviewed)),
   );
+}
+/** A result that reports draft rows by state, or lists its keys as ranges, is a draft write. */
+function reportsDraftRows(data: UnknownRecord): boolean {
+  const rows: readonly unknown[] = Array.isArray(data.items) ? data.items : [];
+  return data.compact === true || rows.some((row) => typeof record(row)?.state === "string");
+}
+/** Decided by the result's shape, not by a tool name: it names created or found issues. */
+function writesIssueKeys(data: UnknownRecord): boolean {
+  const rows: readonly unknown[] = Array.isArray(data.items) ? data.items : [];
+  return (
+    data.compact === true ||
+    rows.some((row) => ["created", "existing"].includes(String(record(row)?.state)))
+  );
+}
+const NOT_CREATED_COUNTS = [
+  "failedCount",
+  "skippedCount",
+  "pendingCount",
+  "excludedCount",
+] as const;
+const NOT_CREATED_STATES: ReadonlySet<unknown> = new Set([
+  "failed",
+  "skipped",
+  "pending",
+  "excluded",
+]);
+/** What a partial draft left uncreated: its own counts, else its rows; none for another tool. */
+function notCreatedOf(data: UnknownRecord): number | undefined {
+  if (!reportsDraftRows(data)) return undefined;
+  const counts = NOT_CREATED_COUNTS.map((name) => count(data[name]));
+  const rows: readonly unknown[] = Array.isArray(data.items) ? data.items : [];
+  const total = counts.some((value) => value !== undefined)
+    ? counts.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+    : rows.filter((row) => NOT_CREATED_STATES.has(record(row)?.state)).length;
+  return total > 0 ? total : undefined;
+}
+function draftRefusalOf(data: UnknownRecord | undefined): WidgetMessageKey | undefined {
+  const reason = text(data?.draftRefusal);
+  return reason !== undefined && Object.hasOwn(JIRA_DRAFT_REFUSAL_MESSAGES, reason)
+    ? JIRA_DRAFT_REFUSAL_MESSAGES[reason]
+    : undefined;
 }
 function draftProblemOf(data: UnknownRecord | undefined): JiraOutcomeDraftProblem | undefined {
   const problem = JIRA_DRAFT_PROBLEMS.find((value) => value === data?.draftProblem);
@@ -1393,8 +1470,6 @@ export function knowledgeToolOutcomeView(
     validation: undefined,
     itemValidations: [],
     hiddenProblemCount: 0,
-    issues: [],
-    hiddenIssueCount: 0,
     overflow: "disclosure",
     unlistedItemCount: 0,
     failure: undefined,
@@ -1415,40 +1490,21 @@ const SPECIALIZED_TOOLS: ReadonlySet<string> = new Set([
   "jira_issue_picker",
   "jira_issue",
 ]);
-interface IssueProjection {
-  readonly issues: readonly JiraOutcomeIssue[];
-  readonly hiddenIssueCount: number;
-  readonly listed: ListedKeys;
+/** The label a draft row that already existed carries, shared with the compact key list. */
+function foundLabels(): WidgetMessageKey[] {
+  const label = DRAFT_STATES.existing;
+  return label === undefined ? [] : [label];
 }
-/** The issues and the compact key ranges a Jira exchange carries; MCP and knowledge tools carry none. */
-function issueProjection(exchange: ChatToolExchange, data: UnknownRecord): IssueProjection {
-  const issues = uniqueIssues([
-    ...issueOf(data, "issueKey"),
-    ...listed(data.items),
-    ...listed(record(exchange.draftProgress)?.items),
-  ]);
-  const ranged = compactKeys(data);
-  const room = Math.max(0, JIRA_OUTCOME_ITEMS_SHOWN - issues.length);
-  const shown = [...issues, ...ranged.shown.slice(0, room)].slice(0, JIRA_OUTCOME_ITEMS_SHOWN);
-  return {
-    issues: shown,
-    hiddenIssueCount: Math.max(0, issues.length + ranged.count - shown.length),
-    listed: ranged,
-  };
-}
-function issueListItems(
-  items: readonly JiraOutcomeItem[],
-  projection: IssueProjection,
-): JiraOutcomeItem[] {
+function issueListItems(items: readonly JiraOutcomeItem[], listed: ListedKeys): JiraOutcomeItem[] {
   const keyed = new Set(items.flatMap((item) => (item.key === undefined ? [] : [item.key])));
-  const compact = projection.listed.shown.flatMap((issue): JiraOutcomeItem[] =>
+  const compact = listed.shown.flatMap((issue): JiraOutcomeItem[] =>
     keyed.has(issue.key)
       ? []
       : [
           {
             key: issue.key,
             ...(issue.href === undefined ? {} : { href: issue.href }),
-            labels: [],
+            labels: issue.existing === true ? foundLabels() : [],
             facts: [],
           },
         ],
@@ -1458,11 +1514,11 @@ function issueListItems(
 function usesIssueList(
   tool: string,
   items: readonly JiraOutcomeItem[],
-  projection: IssueProjection,
+  listed: ListedKeys,
 ): boolean {
   return (
     !SPECIALIZED_TOOLS.has(tool) &&
-    (projection.listed.shown.length > 0 ||
+    (listed.shown.length > 0 ||
       items.some((item) => item.key !== undefined && ISSUE_KEY.test(item.key)))
   );
 }
@@ -1507,23 +1563,21 @@ function resultItemsView(
   data: UnknownRecord,
 ): Pick<
   JiraToolOutcomeView,
-  "items" | "resultsLabel" | "overflow" | "unlistedItemCount" | "issues" | "hiddenIssueCount"
+  "items" | "resultsLabel" | "overflow" | "visibleItems" | "unlistedItemCount"
 > {
-  const projection = exchange.call.name.startsWith("jira_")
-    ? issueProjection(exchange, data)
-    : { issues: [], hiddenIssueCount: 0, listed: { shown: [], count: 0 } };
+  const listed: ListedKeys = exchange.call.name.startsWith("jira_")
+    ? compactKeys(data)
+    : { shown: [], count: 0 };
   const own = outcomeItems(exchange, data);
-  const issueList = usesIssueList(exchange.call.name, own, projection);
-  const items = issueList ? issueListItems(own, projection) : own;
+  const issueList = usesIssueList(exchange.call.name, own, listed);
+  const items = issueList ? issueListItems(own, listed) : own;
+  const listsEveryKey = writesIssueKeys(data);
   return {
     items,
     ...resultsLabelOf(exchange.call.name, issueList),
-    overflow: issueList ? "count" : "disclosure",
-    unlistedItemCount: issueList
-      ? Math.max(0, projection.listed.count - projection.listed.shown.length)
-      : 0,
-    issues: projection.issues,
-    hiddenIssueCount: projection.hiddenIssueCount,
+    overflow: issueList && !listsEveryKey ? "count" : "disclosure",
+    ...(listsEveryKey ? { visibleItems: JIRA_OUTCOME_WRITE_ITEMS_SHOWN } : {}),
+    unlistedItemCount: issueList ? listed.count : 0,
   };
 }
 /** A display projection of the immutable receipt, shared by the live turn and restored history. */
@@ -1531,7 +1585,6 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const knowledge = knowledgeToolOutcomeView(exchange);
   if (knowledge !== undefined) return knowledge;
   const data = storedOutcomeData(exchange);
-  const draftProblem = draftProblemOf(data);
   return {
     ...resultItemsView(exchange, data),
     ...pageCounts(data, exchange.call.name, reviewedItems(exchange)),
@@ -1548,9 +1601,28 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     itemValidations: privateAccount(exchange.call.name)
       ? []
       : itemValidationsOf(data, reviewedItems(exchange)),
+    ...draftViews(exchange, data),
+  };
+}
+/**
+ * What a refused or partial draft tells the person: the named problem or refusal, which replaces
+ * the generic "review the fields" advice, and the issues that were not created.
+ */
+function draftViews(
+  exchange: ChatToolExchange,
+  data: UnknownRecord,
+): Pick<JiraToolOutcomeView, "draftProblem" | "draftRefusal" | "notCreatedCount" | "failure"> {
+  const draftProblem = draftProblemOf(data);
+  const notCreatedCount = notCreatedOf(data);
+  const draftRefusal = draftProblem === undefined ? draftRefusalOf(data) : undefined;
+  return {
     ...(draftProblem === undefined ? {} : { draftProblem }),
-    // A named draft problem replaces the generic "review the fields" advice.
-    failure: draftProblem === undefined ? failureMessage(exchange, data) : undefined,
+    ...(notCreatedCount === undefined ? {} : { notCreatedCount }),
+    ...(draftRefusal === undefined ? {} : { draftRefusal }),
+    failure:
+      draftProblem === undefined && draftRefusal === undefined
+        ? failureMessage(exchange, data)
+        : undefined,
   };
 }
 function resultsLabelOf(

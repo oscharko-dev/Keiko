@@ -5110,6 +5110,12 @@
               "required": false
             },
             {
+              "name": "claimNotice",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "draftReceiptCount",
               "type": "integer",
               "dataClass": "count",
@@ -5223,6 +5229,12 @@
           "causal": "correlation",
           "analyzerProjection": "timeline",
           "safeContextFields": [
+            {
+              "name": "announcementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
             {
               "name": "correctionKind",
               "type": "string",
@@ -52805,6 +52817,12 @@
             },
             {
               "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "verdict",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true

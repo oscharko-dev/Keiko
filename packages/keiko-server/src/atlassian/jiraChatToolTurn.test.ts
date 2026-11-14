@@ -82,6 +82,7 @@ import {
   reportCoverageMismatches,
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
+import { chatToolDraftReceipts } from "../chat-tool-receipts.js";
 import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
 import { conversationModelNotReadyResult } from "../conversation-readiness-admission.js";
 import type { ToolCallingReadinessReason } from "../conversation-readiness-error.js";
@@ -384,6 +385,47 @@ function describeFixtureOperation(
     ],
   };
 }
+// A test may script the text of the next FINAL answer (#4355); it is used once.
+const scriptedFinalAnswer = vi.hoisted(() => ({
+  next: undefined as string | undefined,
+  /** The final answer after `next`, for a model that repeats its claim in the correction round. */
+  after: undefined as string | undefined,
+  /** A model that answers the tool-less correction round with a tool call. */
+  callInToollessRound: false,
+  /** Runs once, just before the turn's final answer, e.g. to leave a marker an earlier leg stored. */
+  beforeAnswer: undefined as (() => void) | undefined,
+}));
+function finalAnswer(response: NormalizedResponse): NormalizedResponse {
+  const before = scriptedFinalAnswer.beforeAnswer;
+  scriptedFinalAnswer.beforeAnswer = undefined;
+  before?.();
+  const content = scriptedFinalAnswer.next;
+  scriptedFinalAnswer.next = scriptedFinalAnswer.after;
+  scriptedFinalAnswer.after = undefined;
+  return content === undefined ? response : { ...response, content };
+}
+/** The round that carries a claimed-action correction offers no tool; a hostile model calls one anyway. */
+function answerWithoutCatalog(
+  request: GatewayCallRequest,
+  base: NormalizedResponse,
+): NormalizedResponse {
+  return toolCallWithoutCatalog(request, base) ?? finalAnswer(base);
+}
+function toolCallWithoutCatalog(
+  request: GatewayCallRequest,
+  base: NormalizedResponse,
+): NormalizedResponse | undefined {
+  const correcting = request.messages.some((message) =>
+    JSON.stringify(message.content).includes("do not create or change anything now"),
+  );
+  if (!scriptedFinalAnswer.callInToollessRound || !correcting) return undefined;
+  return {
+    ...base,
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [{ id: "unoffered-call", name: "jira_create", arguments: {} }],
+  };
+}
 function syntheticModel(
   calls: GatewayCallRequest[],
   mutation: Mutation,
@@ -413,7 +455,7 @@ function syntheticModel(
       },
     };
     reservation?.settle(base.usage, true, "observed");
-    if (request.toolCatalog?.kind !== "bound") return base;
+    if (request.toolCatalog?.kind !== "bound") return answerWithoutCatalog(request, base);
     expect(reservation).toBeDefined();
     const tool = request.toolCatalog.projection.tools.find(
       (entry) => entry.toolRef.canonicalId === offeredTool(mutation, draft),
@@ -421,7 +463,7 @@ function syntheticModel(
     if (tool === undefined)
       return describeFixtureOperation(request, base, offeredTool(mutation, draft));
     operationRound++;
-    if (endsTurn(repeatTools, operationRound)) return base;
+    if (endsTurn(repeatTools, operationRound)) return finalAnswer(base);
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     if (typeof mutation === "object") mutation.beforeCall?.();
     return {
@@ -1726,6 +1768,221 @@ describe.each([false, true])(
   },
 );
 
+// #4355 AC4: an answer that announces a created issue while the turn holds no create call, or that
+// writes a tool call as text, gets ONE further round; the model writes the final answer, and the
+// log line carries only the closed kind and a count.
+describe.each([false, true])(
+  "an answer that claims an action no tool performed (stream=%s)",
+  (stream) => {
+    it.each([
+      [
+        "announced-create",
+        "I created the Epic REQ-1 for you.",
+        "no Jira issue was created in this turn",
+      ],
+      ["tool-call-as-text", 'jira_create({"projectId":"10000"})', "written as text"],
+    ] as const)(
+      "gets one round for %s, then the model's new answer stands",
+      async (kind, claim, said) => {
+        vi.mocked(recordChatToolTurnCorrected).mockClear();
+        scriptedFinalAnswer.next = claim;
+        try {
+          const f = fixture();
+          const ctx = sendContext(f, `claimed-${kind}-${String(stream)}`);
+          const pending = stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps);
+          void pending.catch(() => undefined);
+          await awaitReadGrantedForWrite(f);
+          await pending;
+
+          // The correction round is answered without any tool, so it can never write.
+          expect(f.calls).toHaveLength(3);
+          const correction = (request: GatewayCallRequest | undefined): string =>
+            JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+          expect(correction(f.calls[2])).toContain(said);
+          expect(correction(f.calls[2])).toContain("do not create or change anything now");
+          expect(f.calls[2]?.toolCatalog).toBeUndefined();
+          expect(f.writes()).toBe(0);
+          const [user, assistant] = f.deps.store.listMessages(f.chatId);
+          expect(user?.turnState).toBe("completed");
+          expect(assistant?.content).toBe("No Jira projects are visible.");
+          // A correction that worked leaves no marker.
+          expect(user?.toolTranscript?.claimNotice).toBeUndefined();
+          expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+          expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+            correctionKind: kind,
+            announcementCount: 1,
+          });
+          expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
+            /REQ-1|projectId/u,
+          );
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+          scriptedFinalAnswer.callInToollessRound = false;
+        }
+      },
+    );
+  },
+);
+
+// #4355 AC4: when the correction round cannot correct the claim (the model calls a tool in the
+// tool-less round, or repeats the claim), the answer is published as the model wrote it and the
+// stored turn carries a closed marker the Chat words; nothing is executed.
+describe.each([false, true])(
+  "a claimed action the correction round could not correct (stream=%s)",
+  (stream) => {
+    it.each([
+      [
+        "calls a tool in the tool-less round",
+        "I created the Epic REQ-1 for you.",
+        { callInToollessRound: true },
+        "no-jira-create",
+      ],
+      [
+        "repeats the claim",
+        "I created the Epic REQ-1 for you.",
+        { after: "I created the Epic REQ-1 again." },
+        "no-jira-create",
+      ],
+      [
+        "repeats a tool call written as text",
+        'jira_create({"projectId":"10000"})',
+        { after: 'jira_create({"projectId":"10000"}) again' },
+        "tool-call-not-executed",
+      ],
+    ] as const)(
+      "stores the closed marker and leaves the answer unchanged when the model %s",
+      async (_name, claim, script, marker) => {
+        scriptedFinalAnswer.next = claim;
+        scriptedFinalAnswer.after = "after" in script ? script.after : undefined;
+        scriptedFinalAnswer.callInToollessRound = "callInToollessRound" in script;
+        try {
+          const f = fixture();
+          const ctx = sendContext(f, `uncorrected-${String(stream)}-${String(_name.length)}`);
+          const pending = stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps);
+          void pending.catch(() => undefined);
+          await awaitReadGrantedForWrite(f);
+          await pending;
+          const [user, assistant] = f.deps.store.listMessages(f.chatId);
+          // The words are the model's own: no sentence of Keiko's is appended, in any language.
+          expect(assistant?.content).toBe("after" in script ? script.after : claim);
+          expect(user?.toolTranscript?.claimNotice).toBe(marker);
+          expect(f.writes()).toBe(0);
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+          scriptedFinalAnswer.callInToollessRound = false;
+        }
+      },
+    );
+  },
+);
+
+// #4355 AC4: the marker describes the turn's FINAL answer. A marker an earlier leg of the same turn
+// stored never outlives a final answer that no longer claims the effect, the claim check reads the
+// text the first detection saw, and a marker that cannot be stored never changes the answer.
+describe.each([false, true])("the claim marker follows the final answer (stream=%s)", (stream) => {
+  async function run(
+    f: ReturnType<typeof fixture>,
+    id: string,
+    body: Record<string, unknown> = sendBody(f, id),
+    deps: UiHandlerDeps = f.deps,
+  ): Promise<void> {
+    const ctx = context(body);
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, deps)
+      : handleSendDesktopChat(ctx, deps);
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await pending;
+  }
+  function reset(): void {
+    scriptedFinalAnswer.next = undefined;
+    scriptedFinalAnswer.after = undefined;
+    scriptedFinalAnswer.callInToollessRound = false;
+    scriptedFinalAnswer.beforeAnswer = undefined;
+  }
+  const storeStale = (f: ReturnType<typeof fixture>) => (): void => {
+    const user = f.deps.store.listMessages(f.chatId).find((message) => message.role === "user");
+    if (user === undefined) throw new Error("Missing user message");
+    f.deps.store.updateChatToolTranscript(
+      user.id,
+      { kind: "claim-notice", notice: "no-jira-create" },
+      "stale-marker",
+    );
+  };
+
+  it.each([
+    ["a clean final answer", undefined],
+    ["a corrected final answer", "I created the Epic REQ-1 for you."],
+  ] as const)("clears a marker an earlier leg stored after %s", async (_name, claim) => {
+    scriptedFinalAnswer.next = claim;
+    try {
+      const f = fixture();
+      scriptedFinalAnswer.beforeAnswer = storeStale(f);
+      await run(f, `stale-${String(stream)}-${String(_name.length)}`);
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(user?.toolTranscript?.claimNotice).toBeUndefined();
+    } finally {
+      reset();
+    }
+  });
+
+  it("reads the claim check against the text the first detection saw", async () => {
+    scriptedFinalAnswer.next = "I created the Epic REQ-1 for you.";
+    scriptedFinalAnswer.after = "The epic REQ-7 was created.";
+    try {
+      const f = fixture();
+      await run(f, `context-${String(stream)}`, {
+        ...sendBody(f, `context-${String(stream)}`),
+        content: "List Jira projects, I already know REQ-7",
+      });
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(assistant?.content).toBe("The epic REQ-7 was created.");
+      // REQ-7 is a key the person gave: naming it is no claimed creation.
+      expect(user?.toolTranscript?.claimNotice).toBeUndefined();
+    } finally {
+      reset();
+    }
+  });
+
+  it("publishes the answer unchanged and reports a diagnostic when the marker cannot be stored", async () => {
+    scriptedFinalAnswer.next = "I created the Epic REQ-1 for you.";
+    scriptedFinalAnswer.after = "I created the Epic REQ-1 again.";
+    try {
+      const f = fixture();
+      const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+      vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+        (id, change, correlationId) => {
+          if (change.kind === "claim-notice") throw new Error("disk full Bearer fixture-secret");
+          update(id, change, correlationId);
+        },
+      );
+      const record = vi.fn();
+      await run(f, `store-fails-${String(stream)}`, sendBody(f, `store-fails-${String(stream)}`), {
+        ...f.deps,
+        diagnostics: { record },
+      });
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("I created the Epic REQ-1 again.");
+      expect(user?.toolTranscript?.claimNotice).toBeUndefined();
+      expect(f.writes()).toBe(0);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ operation: "chat.tool-turn.claim-notice" }),
+      );
+      expect(JSON.stringify(record.mock.calls)).not.toContain("fixture-secret");
+    } finally {
+      reset();
+    }
+  });
+});
+
 // S01 of epic #4173: after three refused creates Qwen answered "successfully created … REQ-42". An
 // answer naming issue keys no tool result shows gets ONE further round naming them; the model
 // writes the final answer, and the keys never reach the Activity Log.
@@ -2326,6 +2583,28 @@ it("creates an epic, its task and two sub-tasks under that task from one approve
   const exchange = firstToolExchange(f);
   expect(exchange.mutationOutcome).toBe("succeeded");
   expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":4');
+});
+
+// #4355 AC1: the answer the model wrote repeats none of the created keys, yet the stored transcript
+// of the real turn holds every one of them as a receipt, so the result card (rendered from this
+// stored state alone, also after a reload) lists all of them with their links.
+it("keeps every created key in the stored transcript although the model's answer repeats none", async () => {
+  draftToSend = NESTED_DRAFT_ARGUMENTS;
+  const f = fixture(true, undefined, true, false, true);
+  const pending = handleSendDesktopChat(sendContext(f, "created-keys-stored"), f.deps);
+  void pending.catch(() => undefined);
+  await awaitReadGrantedForWrite(f);
+  await decidePendingWrite(f, "approve");
+  expect((await pending).status).toBe(200);
+  const [, assistant] = f.deps.store.listMessages(f.chatId);
+  expect(assistant?.content).not.toMatch(/SYN-\d+/u);
+  const receipts = chatToolDraftReceipts(firstToolExchange(f)) ?? [];
+  expect(receipts.filter((receipt) => receipt.state === "created").map((r) => r.issueKey)).toEqual([
+    "SYN-1",
+    "SYN-2",
+    "SYN-3",
+    "SYN-4",
+  ]);
 });
 
 // #4178: a hostile client names refs the reviewed draft does not contain. The decision route

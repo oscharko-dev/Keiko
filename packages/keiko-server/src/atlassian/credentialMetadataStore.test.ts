@@ -2,6 +2,7 @@
 // config dir. The store must fail CLOSED on corrupt or tampered content (never treating an
 // unreadable store as empty) and must persist only the non-secret metadata projection.
 
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   closeSync,
   fstatSync,
@@ -84,7 +85,9 @@ function expectPrivateToOwner(path: string): void {
   const fd = openSync(path, "r");
   try {
     const stat = fstatSync(fd, { bigint: true });
-    const inspection = inspectWindowsOwnerPrivateFiles([path]);
+    const inspection = inspectWindowsOwnerPrivateFiles([path], {
+      securityLogSink: nullSecurityLogSink(),
+    });
     const [facts] = inspection.files;
     expect(facts?.kind).toBe("facts");
     if (facts === undefined) return;

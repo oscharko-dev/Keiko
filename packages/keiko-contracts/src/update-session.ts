@@ -199,6 +199,8 @@ export type UpdateUnsupportedReason =
   | "portable-setup-failed"
   | "portable-it-managed"
   | "portable-registration-invalid"
+  | "portable-volume-not-local"
+  | "portable-volume-unverified"
   | "portable-non-stable";
 
 export const UPDATE_UNSUPPORTED_REASONS: readonly UpdateUnsupportedReason[] = Object.freeze([
@@ -215,6 +217,8 @@ export const UPDATE_UNSUPPORTED_REASONS: readonly UpdateUnsupportedReason[] = Ob
   "portable-setup-failed",
   "portable-it-managed",
   "portable-registration-invalid",
+  "portable-volume-not-local",
+  "portable-volume-unverified",
   "portable-non-stable",
 ] as const satisfies readonly UpdateUnsupportedReason[]);
 
