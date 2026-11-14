@@ -129,7 +129,7 @@ export function portableInstallRootIdentitySha256(path: string): string {
 // registration may still exist and be authoritative. Callers must see those failures
 // so they do not skip managed-update / cleanup behaviour or overwrite retained
 // installation attestation while the actual storage failure stays hidden.
-function readJson(path: string): unknown {
+export function readJson(path: string): unknown {
   const raw = readFileSync(path, "utf8");
   try {
     return JSON.parse(raw) as unknown;

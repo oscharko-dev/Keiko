@@ -30,6 +30,7 @@ import {
 import type { CliIo } from "./runner.js";
 import { emitCliWindowsSystemFailure } from "./security-log.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
+import { portableRuntimeRecordEntries } from "./portable-runtime-record.js";
 
 export type ManagedRootMode = "default" | "custom";
 export type NativeRegistrationKind = "windows-start-menu" | "macos-system-applications";
@@ -728,14 +729,66 @@ function selectedWindowsGenerationRoot(layout: PortableLayout): string | undefin
   return /^\.portable\/generations\/[a-f0-9]{64}$/u.test(relativeRoot) ? relativeRoot : undefined;
 }
 
+// The runtime files the selected payload's own record names, as paths below the install root. A
+// first installation is a flat copy of the payload and an updated one a generation folder; both
+// carry the record their staging wrote, so neither needs a hand-kept list of these files (#4358).
+interface InstalledRuntimeEntries {
+  readonly files: ReadonlySet<string>;
+  readonly prefixes: readonly string[];
+}
+
+function installedRuntimeEntries(layout: PortableLayout): InstalledRuntimeEntries {
+  const base = normalizedRelativePath(layout.installRoot, layout.resourceRoot);
+  const prefix = base === "" ? "" : `${base}/`;
+  const entries = portableRuntimeRecordEntries(layout.resourceRoot);
+  return {
+    files: new Set([...entries.files].map((file) => `${prefix}${file}`)),
+    prefixes: entries.prefixes.map((folder) => `${prefix}${folder}`),
+  };
+}
+
+function recordedRuntimeFile(relPath: string, runtime: InstalledRuntimeEntries): boolean {
+  return (
+    runtime.files.has(relPath) || runtime.prefixes.some((folder) => relPath.startsWith(folder))
+  );
+}
+
+function recordedRuntimeDirectory(relPath: string, runtime: InstalledRuntimeEntries): boolean {
+  const folder = `${relPath}/`;
+  return (
+    [...runtime.files].some((file) => file.startsWith(folder)) ||
+    runtime.prefixes.some((root) => root.startsWith(folder) || folder.startsWith(root))
+  );
+}
+
+interface ManagedScanRules {
+  readonly layout: PortableLayout;
+  readonly windowsGenerationRoots: readonly string[] | undefined;
+  readonly runtime: InstalledRuntimeEntries;
+}
+
+function knownManagedDirectory(relPath: string, rules: ManagedScanRules): boolean {
+  return (
+    allowlistedDirectory(relPath, rules.layout, rules.windowsGenerationRoots) ||
+    recordedRuntimeDirectory(relPath, rules.runtime)
+  );
+}
+
+function knownManagedFile(relPath: string, rules: ManagedScanRules): boolean {
+  return (
+    allowlistedFile(relPath, rules.layout, rules.windowsGenerationRoots) ||
+    recordedRuntimeFile(relPath, rules.runtime)
+  );
+}
+
 function scanManagedTree(
   absPath: string,
-  layout: PortableLayout,
-  windowsGenerationRoots: readonly string[] | undefined,
+  rules: ManagedScanRules,
   files: string[],
   directories: string[],
   issues: string[],
 ): void {
+  const { layout } = rules;
   directories.push(absPath);
   for (const name of readdirSync(absPath)) {
     const entryPath = join(absPath, name);
@@ -746,11 +799,11 @@ function scanManagedTree(
     }
     const relPath = normalizedRelativePath(layout.installRoot, entryPath);
     if (stat.isDirectory()) {
-      if (!allowlistedDirectory(relPath, layout, windowsGenerationRoots)) {
+      if (!knownManagedDirectory(relPath, rules)) {
         issues.push(topLevelUnknown(relPath));
         continue;
       }
-      scanManagedTree(entryPath, layout, windowsGenerationRoots, files, directories, issues);
+      scanManagedTree(entryPath, rules, files, directories, issues);
       continue;
     }
     if (!stat.isFile()) {
@@ -761,7 +814,7 @@ function scanManagedTree(
       issues.push(`portable managed install refused hardlink at ${entryPath}`);
       continue;
     }
-    if (!allowlistedFile(relPath, layout, windowsGenerationRoots)) {
+    if (!knownManagedFile(relPath, rules)) {
       issues.push(topLevelUnknown(relPath));
       continue;
     }
@@ -787,7 +840,8 @@ function inspectPortableManagedInstallWithWindowsGenerationRoots(
       issues: ["portable managed install refused malformed Windows generation layout"],
     };
   }
-  scanManagedTree(layout.installRoot, layout, windowsGenerationRoots, files, directories, issues);
+  const rules = { layout, windowsGenerationRoots, runtime: installedRuntimeEntries(layout) };
+  scanManagedTree(layout.installRoot, rules, files, directories, issues);
   return { files, directories, issues };
 }
 
