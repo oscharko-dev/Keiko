@@ -10,11 +10,14 @@ import type {
   ChatToolBatchProgress,
   ChatToolExchange,
   ChatToolTranscript,
+  ChatToolTurnEnd,
+  ChatToolTurnEndReason,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CHAT_TOOL_BATCH_TOOL_NAME,
   isChatClaimNotice,
   isChatToolBatchProgress,
+  isChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   isChatToolReadGrantView,
@@ -92,6 +95,11 @@ export type ChatToolTranscriptUpdate =
       /** The marker follows the turn's final answer: a value sets it, undefined clears it. */
       readonly kind: "claim-notice";
       readonly notice: ChatClaimNotice | undefined;
+    }
+  | {
+      /** How the turn ended early, as closed facts (#4355): a value sets it, undefined clears it. */
+      readonly kind: "turn-end";
+      readonly end: ChatToolTurnEnd | undefined;
     }
   | {
       readonly kind: "write-approval";
@@ -182,6 +190,7 @@ const UPDATE = defineActivityLogOperation({
         "write-approval",
         "human-input",
         "claim-notice",
+        "turn-end",
       ],
     },
     batchPhase: {
@@ -198,6 +207,22 @@ const UPDATE = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: ["no-jira-create", "tool-call-not-executed"],
+    },
+    turnEndReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "budget-exhausted",
+        "deadline",
+        "authority-invalid",
+        "authentication-failed",
+        "tool-failure",
+        "output-exhausted",
+        "context-overflow",
+        "tool-not-offered",
+        "model-failure",
+      ],
     },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
@@ -466,16 +491,31 @@ function validReadGrants(
   );
 }
 
+/** The two closed facts a turn's final answer states: the claim marker and the early ending. */
+function validMarkers(value: Record<string, unknown>): boolean {
+  return (
+    (value.claimNotice === undefined || isChatClaimNotice(value.claimNotice)) &&
+    (value.turnEnd === undefined || isChatToolTurnEnd(value.turnEnd))
+  );
+}
+
 function validTranscript(
   value: unknown,
   identity: TranscriptIdentity | undefined,
 ): value is StoredTranscript {
   if (
     !object(value) ||
-    !exact(value, ["schemaVersion", "exchanges", "readGrant", "readGrants", "claimNotice"])
+    !exact(value, [
+      "schemaVersion",
+      "exchanges",
+      "readGrant",
+      "readGrants",
+      "claimNotice",
+      "turnEnd",
+    ])
   )
     return false;
-  if (value.claimNotice !== undefined && !isChatClaimNotice(value.claimNotice)) return false;
+  if (!validMarkers(value)) return false;
   if (
     value.schemaVersion !== 1 ||
     !Array.isArray(value.exchanges) ||
@@ -735,6 +775,7 @@ function applyUpdate(
   if (update.kind === "progress") return applyProgress(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind === "claim-notice") return { ...current, claimNotice: update.notice };
+  if (update.kind === "turn-end") return { ...current, turnEnd: update.end };
   if (update.kind !== "read-consent") return applyExchange(current, update);
   return applyReadConsent(current, update, chatId);
 }
@@ -993,6 +1034,14 @@ function redactStarted(
     throw invalidRequest("Invalid pending native tool identity.");
   return { ...update, call: redactCall(update, redact) };
 }
+function redactTurnEnd(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "turn-end" }>,
+): ChatToolTranscriptUpdate {
+  if (update.end !== undefined && !isChatToolTurnEnd(update.end))
+    throw invalidRequest("Invalid turn ending.");
+  // The record is closed facts (a reason, tool names, issue keys, counts): validated, never free text.
+  return { kind: "turn-end", end: update.end };
+}
 function redactClaimNotice(
   update: Extract<ChatToolTranscriptUpdate, { kind: "claim-notice" }>,
 ): ChatToolTranscriptUpdate {
@@ -1019,7 +1068,7 @@ function redactHumanInput(
 function redactStateUpdate(
   update: Exclude<
     ChatToolTranscriptUpdate,
-    { kind: "started" | "captured" | "settled" | "human-input" | "claim-notice" }
+    { kind: "started" | "captured" | "settled" | "human-input" | "claim-notice" | "turn-end" }
   >,
 ): ChatToolTranscriptUpdate {
   if (update.kind === "write-prepared") {
@@ -1053,6 +1102,7 @@ function redactUpdate(
   if (update.kind === "settled") return redactSettlement(update, redact);
   if (update.kind === "human-input") return redactHumanInput(update);
   if (update.kind === "claim-notice") return redactClaimNotice(update);
+  if (update.kind === "turn-end") return redactTurnEnd(update);
   return redactStateUpdate(update);
 }
 
@@ -1125,6 +1175,17 @@ function draftReceiptLogFields(update: ChatToolTranscriptUpdate): { draftReceipt
       : 0,
   };
 }
+/** Only the closed value of a marker reaches the line; absent means cleared. */
+function markerLogFields(update: ChatToolTranscriptUpdate): {
+  readonly claimNotice?: ChatClaimNotice;
+  readonly turnEndReason?: ChatToolTurnEndReason;
+} {
+  if (update.kind === "claim-notice" && update.notice !== undefined)
+    return { claimNotice: update.notice };
+  if (update.kind === "turn-end" && update.end !== undefined)
+    return { turnEndReason: update.end.reason };
+  return {};
+}
 export function updateChatToolTranscript(
   db: DatabaseSync,
   id: string,
@@ -1163,9 +1224,7 @@ export function updateChatToolTranscript(
         messageDigest: sha256Hex(id),
         phase: update.kind,
         exchangeCount: count,
-        ...(update.kind === "claim-notice" && update.notice !== undefined
-          ? { claimNotice: update.notice }
-          : {}),
+        ...markerLogFields(update),
         ...draftReceiptLogFields(update),
         ...progressLogFields(update),
         completeness: "complete",

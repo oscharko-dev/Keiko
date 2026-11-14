@@ -27,6 +27,7 @@ import {
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
   claimNoticeOfAnswer,
+  turnEndOfAnswer,
   speakableAnswerText,
   speechPreparationEvidence,
   speechTextWithNote,
@@ -51,7 +52,10 @@ import {
 } from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
-import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  buildGroundedAnswerContextPackSummary,
+  type ChatToolTurnEnd,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
@@ -6111,6 +6115,141 @@ describe("Keiko's note under an answer that claimed an effect its turn did not b
       await waitFor(() => {
         expect(writeText.mock.calls).toEqual([[`${CLAIM}\n\n${expected}`]]);
       });
+    } finally {
+      if (clipboardDescriptor === undefined) Reflect.deleteProperty(navigator, "clipboard");
+      else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+});
+
+// #4355: a turn that ended early states WHY and WHAT as closed facts with the stored turn; the Chat
+// words the ending from its catalog in the person's language. The stored English answer stays the
+// fallback for exports, history and a turn stored without the facts.
+describe("The answer of a turn that ended early, worded in the person's language", () => {
+  const STORED = "This request was not finished: this turn reached its time limit.";
+  const END: ChatToolTurnEnd = {
+    reason: "deadline",
+    completed: [{ tool: "jira_create", key: "REQ-1" }],
+    unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
+    unsettled: [{ tool: "jira_transition" }],
+    notDone: [{ tool: "jira_draft", item: 3, state: "skipped" }],
+    moreCount: 0,
+    readCount: 3,
+    refusedCount: 1,
+  };
+  function turn(
+    end: ChatToolTurnEnd | undefined,
+    answer: Partial<ChatMessage> = {},
+  ): ChatMessage[] {
+    return [
+      makeMessage({
+        id: "u-end",
+        content: "Create the backlog",
+        toolTranscript: {
+          schemaVersion: 1,
+          exchanges: [],
+          ...(end === undefined ? {} : { turnEnd: end }),
+        },
+      }),
+      makeMessage({ id: "a-end", role: "assistant", content: STORED, timestamp: 2, ...answer }),
+    ];
+  }
+  async function renderIn(locale: "en" | "de", messages: ChatMessage[]): Promise<void> {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat(), messages })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+  }
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it("shows a deadline with an unconfirmed write in German, with every receipt and no English", async () => {
+    await renderIn("de", turn(END));
+    const text = (await screen.findByText(/Diese Anfrage wurde nicht abgeschlossen/u)).closest(
+      ".chat-msg-bubble",
+    )?.textContent;
+    expect(text).toContain("die Zeit für diesen Durchgang ist abgelaufen");
+    expect(text).toContain("In diesem Durchgang erledigt:");
+    expect(text).toContain("jira_create REQ-1");
+    expect(text).toContain(
+      "Gesendet, aber nicht bestätigt — prüfe das in Jira, bevor du es erneut versuchst:",
+    );
+    expect(text).toContain("jira_draft (Eintrag 2, ohne Schlüssel) (unsicher)");
+    expect(text).toContain("Gestartet, aber nicht abgeschlossen");
+    expect(text).toContain("jira_draft (Eintrag 3, ohne Schlüssel) (übersprungen)");
+    expect(text).toContain("Lesezugriffe abgeschlossen: 3. Abgelehnte oder fehlgeschlagene");
+    expect(text).toContain("Schick eine weitere Nachricht");
+    expect(text).not.toContain("This request was not finished");
+    expect(text).not.toContain("Sent but not confirmed");
+  });
+
+  it("shows the authentication failure in German with what to do", async () => {
+    await renderIn("de", turn({ ...END, reason: "authentication-failed" }));
+    expect(
+      await screen.findByText(/Die Anmeldung bei Jira ist fehlgeschlagen/u, { exact: false }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/ersetze das Token und prüfe die Verbindung/u)).toBeInTheDocument();
+  });
+
+  it("words the same facts in English from the catalog, with the same receipts", async () => {
+    await renderIn("en", turn(END));
+    const text = (await screen.findByText(/This request was not finished/u)).closest(
+      ".chat-msg-bubble",
+    )?.textContent;
+    expect(text).toContain("this turn reached its time limit");
+    expect(text).toContain("jira_draft (item 2, no key) (uncertain)");
+    expect(text).toContain("Reads completed: 3. Refused or failed tool calls: 1.");
+  });
+
+  it("renders the stored answer as before when the turn carries no ending", async () => {
+    await renderIn("de", turn(undefined));
+    expect(await screen.findByText(STORED)).toBeInTheDocument();
+    expect(screen.queryByText(/Diese Anfrage wurde nicht abgeschlossen/u)).toBeNull();
+  });
+
+  it("never words a regenerated answer as the ending", async () => {
+    await renderIn(
+      "de",
+      turn(END, {
+        content: "Hier ist die neue Antwort.",
+        responseVersion: 2,
+        responseVersions: [
+          { version: 1, content: STORED, timestamp: 2 },
+          { version: 2, content: "Hier ist die neue Antwort.", timestamp: 3, supersedesVersion: 1 },
+        ],
+      }),
+    );
+    expect(await screen.findByText("Hier ist die neue Antwort.")).toBeInTheDocument();
+    expect(screen.queryByText(/Diese Anfrage wurde nicht abgeschlossen/u)).toBeNull();
+  });
+
+  it("finds the ending of the turn an answer closes, and only for its first answer", () => {
+    const [user, answer] = turn(END);
+    if (user === undefined || answer === undefined) throw new Error("Missing fixture messages");
+    expect(turnEndOfAnswer([user, answer], answer)).toEqual(END);
+    expect(turnEndOfAnswer([user, answer], { ...answer, responseVersion: 2 })).toBeUndefined();
+    expect(turnEndOfAnswer([answer], answer)).toBeUndefined();
+    expect(turnEndOfAnswer([user, answer], undefined)).toBeUndefined();
+  });
+
+  it("carries the worded ending into a copy of the answer", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      await renderIn("de", turn(END));
+      await screen.findByText(/Diese Anfrage wurde nicht abgeschlossen/u);
+      fireEvent.click(screen.getByRole("button", { name: /kopieren/iu }));
+      await waitFor(() => {
+        expect(writeText.mock.calls[0]?.[0]).toContain("Diese Anfrage wurde nicht abgeschlossen");
+      });
+      expect(writeText.mock.calls[0]?.[0]).not.toContain("This request was not finished");
     } finally {
       if (clipboardDescriptor === undefined) Reflect.deleteProperty(navigator, "clipboard");
       else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);

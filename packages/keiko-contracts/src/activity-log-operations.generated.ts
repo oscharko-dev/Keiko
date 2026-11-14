@@ -4033,6 +4033,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "write-approval",
           "human-input",
           "claim-notice",
+          "turn-end",
         ],
       },
       batchPhase: {
@@ -4061,6 +4062,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["no-jira-create", "tool-call-not-executed"],
+      },
+      turnEndReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "budget-exhausted",
+          "deadline",
+          "authority-invalid",
+          "authentication-failed",
+          "tool-failure",
+          "output-exhausted",
+          "context-overflow",
+          "tool-not-offered",
+          "model-failure",
+        ],
       },
       exchangeCount: {
         type: "integer",

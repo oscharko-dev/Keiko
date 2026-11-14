@@ -605,11 +605,141 @@ export function isChatClaimNotice(value: unknown): value is ChatClaimNotice {
   return (CHAT_CLAIM_NOTICES as readonly unknown[]).includes(value);
 }
 
+/**
+ * Why a Chat tool turn ended before the model gave its own answer (#4175, #4355). One closed
+ * vocabulary: the server's ending function writes it to the `chat.tool-turn.ended` log line and to
+ * the transcript from the same value, and the Chat words each member from its message catalog.
+ */
+export const CHAT_TOOL_TURN_END_REASONS = [
+  "budget-exhausted",
+  "deadline",
+  "authority-invalid",
+  "authentication-failed",
+  "tool-failure",
+  "output-exhausted",
+  "context-overflow",
+  "tool-not-offered",
+  "model-failure",
+] as const;
+export type ChatToolTurnEndReason = (typeof CHAT_TOOL_TURN_END_REASONS)[number];
+export function isChatToolTurnEndReason(value: unknown): value is ChatToolTurnEndReason {
+  return (CHAT_TOOL_TURN_END_REASONS as readonly unknown[]).includes(value);
+}
+
+/** The state a backlog-draft item carried when its turn ended. */
+export const CHAT_TURN_END_ITEM_STATES = [
+  "created",
+  "existing",
+  "failed",
+  "uncertain",
+  "skipped",
+  "excluded",
+  "pending",
+] as const;
+export type ChatTurnEndItemState = (typeof CHAT_TURN_END_ITEM_STATES)[number];
+
+/**
+ * One receipt of an ended turn: the tool, the issue key (or key range) Jira acknowledged, and for a
+ * backlog-draft item its position and state. Facts only, no text, so any language can word it.
+ */
+export interface ChatTurnEndReceipt {
+  readonly tool: string;
+  readonly key?: string | undefined;
+  /** 1-based position of a draft item that has no key. */
+  readonly item?: number | undefined;
+  readonly state?: ChatTurnEndItemState | undefined;
+}
+export const CHAT_TURN_END_RECEIPTS_MAX = 1000;
+const CHAT_TURN_END_TEXT_MAX = 600;
+const CHAT_TURN_END_KEYS = [
+  "reason",
+  "completed",
+  "unconfirmed",
+  "unsettled",
+  "notDone",
+  "moreCount",
+  "readCount",
+  "refusedCount",
+] as const;
+const CHAT_TURN_END_RECEIPT_KEYS: ReadonlySet<string> = new Set(["tool", "key", "item", "state"]);
+
+/**
+ * How a turn ended early, as closed facts (#4355): the reason and the receipts its deterministic
+ * answer lists. The stored English answer stays the fallback for exports and older clients.
+ */
+export interface ChatToolTurnEnd {
+  readonly reason: ChatToolTurnEndReason;
+  /** Writes Jira acknowledged. */
+  readonly completed: readonly ChatTurnEndReceipt[];
+  /** Writes sent whose outcome is not confirmed. */
+  readonly unconfirmed: readonly ChatTurnEndReceipt[];
+  /** Calls started but never settled. */
+  readonly unsettled: readonly ChatTurnEndReceipt[];
+  /** Draft items refused, blocked or not started. */
+  readonly notDone: readonly ChatTurnEndReceipt[];
+  /** Receipts beyond the per-list bound, over all four lists. */
+  readonly moreCount: number;
+  readonly readCount: number;
+  readonly refusedCount: number;
+}
+
+function isTurnEndText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= CHAT_TURN_END_TEXT_MAX;
+}
+function isTurnEndCount(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+}
+function isTurnEndReceiptDetail(entry: Record<string, unknown>): boolean {
+  return (
+    (entry.key === undefined || isTurnEndText(entry.key)) &&
+    (entry.item === undefined || (isTurnEndCount(entry.item, 1_000_000) && entry.item > 0)) &&
+    (entry.state === undefined ||
+      (CHAT_TURN_END_ITEM_STATES as readonly unknown[]).includes(entry.state))
+  );
+}
+function isTurnEndReceipt(value: unknown): value is ChatTurnEndReceipt {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    Object.keys(entry).every((key) => CHAT_TURN_END_RECEIPT_KEYS.has(key)) &&
+    isTurnEndText(entry.tool) &&
+    isTurnEndReceiptDetail(entry)
+  );
+}
+function isTurnEndReceiptList(value: unknown): value is readonly ChatTurnEndReceipt[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= CHAT_TURN_END_RECEIPTS_MAX &&
+    value.every(isTurnEndReceipt)
+  );
+}
+const CHAT_TURN_END_LISTS = ["completed", "unconfirmed", "unsettled", "notDone"] as const;
+const CHAT_TURN_END_COUNTS = ["moreCount", "readCount", "refusedCount"] as const;
+function hasTurnEndShape(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === CHAT_TURN_END_KEYS.length &&
+    CHAT_TURN_END_KEYS.every((key) => keys.includes(key))
+  );
+}
+/** A closed, bounded ending record; anything else is not one (exact keys, closed reason). */
+export function isChatToolTurnEnd(value: unknown): value is ChatToolTurnEnd {
+  return (
+    hasTurnEndShape(value) &&
+    isChatToolTurnEndReason(value.reason) &&
+    CHAT_TURN_END_LISTS.every((key) => isTurnEndReceiptList(value[key])) &&
+    CHAT_TURN_END_COUNTS.every((key) => isTurnEndCount(value[key], 1_000_000_000))
+  );
+}
+
 export interface ChatToolTranscript {
   readonly schemaVersion: 1;
   readonly exchanges: readonly ChatToolExchange[];
   /** Absent unless the published answer carries a claim the turn does not bear out. */
   readonly claimNotice?: ChatClaimNotice | undefined;
+  /** Absent unless the turn ended early; the stored answer is then its English rendering. */
+  readonly turnEnd?: ChatToolTurnEnd | undefined;
   /** Latest update retained for older clients and the existing consent event. */
   readonly readGrant?: ChatToolReadGrantView | undefined;
   /** At most one current disclosure per source kind; older transcripts contain only readGrant. */

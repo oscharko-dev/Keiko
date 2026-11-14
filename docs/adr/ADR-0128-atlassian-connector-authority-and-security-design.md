@@ -1603,6 +1603,30 @@ otherwise, so a marker an earlier leg stored never outlives the answer it descri
 answer shows none, because regeneration runs no tool turn. The voice dialogue reads the same note after
 the answer; its speech preparation counts are unchanged.
 
+A turn that ends early is worded in the person's language by the same pattern (2026-11-14, #4355).
+The deterministic ending answer was server-composed English, which a German-speaking clerk read at
+the deadline, an expired token or an unfinished batch. The server never receives the UI language, so
+the stored turn now also carries the closed `turnEnd` record on the user message's transcript,
+through a validated `turn-end` transcript update (the log records only its closed reason as
+`turnEndReason` on `chat.tool-transcript.updated`): the reason, the receipts as facts (tool, issue
+key or key range, a keyless draft item's position and state), at most 1000 per list with the count of
+the rest, and the read and refused counts. One function, `chatToolTurnEnd`, builds it beside the
+English answer from the same tally, and the same ending call writes the `chat.tool-turn.ended` log
+field and the transcript field from one value, so they cannot differ. The reason vocabulary is one
+closed list in `keiko-contracts` (`CHAT_TOOL_TURN_END_REASONS`, nine values) shared by the server,
+the log registry and the Chat; a test walks it and fails a reason without a sentence in both
+languages. The Chat words the lead sentence, the four list titles, the receipt lines, the counts
+line and the footer from the message catalog (English and informal German), with the meaning of the
+receipt titles unchanged: "sent but not confirmed" and "started but not settled" still tell the
+person to check Jira before retrying. The stored English answer remains the content of the assistant
+message, so exports, history, older clients and a turn stored without the record show
+it as before; only a first answer of a turn that carries the record is reworded, and a regenerated
+answer never is. Like the marker, the ending describes the turn's FINAL answer: an early end sets it
+and any other final answer clears an earlier leg's record. Compatibility: a build that validates the
+transcript with exact keys cannot read a row that carries `claimNotice` or `turnEnd`; this is the
+same one-way rule as for the marker, and the field is optional, so a row without it is read
+unchanged by every build.
+
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
 before every Jira write, so a Markdown skill's advice the model may ignore is no longer the only

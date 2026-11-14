@@ -24,6 +24,9 @@ import {
   isExpandableDirectory,
   isGroundedRerankerFailureKind,
   isChatToolBatchProgress,
+  isChatToolTurnEnd,
+  CHAT_TOOL_TURN_END_REASONS,
+  CHAT_TURN_END_RECEIPTS_MAX,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MIME_BYTES,
   MAX_CONNECTED_SOURCES,
@@ -1740,4 +1743,50 @@ it("admits counted batch progress on the draft batch exchange only, and nothing 
     expect(isChatToolBatchProgress(hostile)).toBe(false);
     expect(isDesktopChatStreamEvent(frame("jira_draft_batch", hostile))).toBe(false);
   }
+});
+
+describe("the turn ending record (#4355)", () => {
+  const end = {
+    reason: "deadline",
+    completed: [{ tool: "jira_create", key: "REQ-1" }],
+    unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
+    unsettled: [{ tool: "jira_transition" }],
+    notDone: [],
+    moreCount: 0,
+    readCount: 3,
+    refusedCount: 1,
+  };
+
+  it("accepts every closed reason and nothing else", () => {
+    for (const reason of CHAT_TOOL_TURN_END_REASONS) {
+      expect(isChatToolTurnEnd({ ...end, reason })).toBe(true);
+    }
+    expect(CHAT_TOOL_TURN_END_REASONS).toHaveLength(9);
+    expect(isChatToolTurnEnd({ ...end, reason: "Jira is down" })).toBe(false);
+    expect(isChatToolTurnEnd({ ...end, reason: undefined })).toBe(false);
+  });
+
+  it.each([
+    ["an unknown field", { ...end, extra: true }],
+    ["a missing field", { ...end, notDone: undefined }],
+    ["a receipt with free text", { ...end, completed: [{ tool: "jira_create", note: "x" }] }],
+    ["an empty tool name", { ...end, completed: [{ tool: "" }] }],
+    ["an unknown item state", { ...end, notDone: [{ tool: "jira_draft", state: "done" }] }],
+    ["a zero item position", { ...end, notDone: [{ tool: "jira_draft", item: 0 }] }],
+    ["a negative count", { ...end, readCount: -1 }],
+    ["a fractional count", { ...end, refusedCount: 0.5 }],
+    ["a list that is not an array", { ...end, unsettled: "jira_transition" }],
+    ["an over-long key", { ...end, completed: [{ tool: "t", key: "K".repeat(601) }] }],
+    [
+      "a list beyond the bound",
+      {
+        ...end,
+        completed: Array.from({ length: CHAT_TURN_END_RECEIPTS_MAX + 1 }, () => ({ tool: "t" })),
+      },
+    ],
+    ["an array", [end]],
+    ["null", null],
+  ])("refuses %s", (_name, value) => {
+    expect(isChatToolTurnEnd(value)).toBe(false);
+  });
 });

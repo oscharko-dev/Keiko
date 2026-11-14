@@ -671,3 +671,13 @@ original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0
 Only the source digests and `generatedAt` in the changed records were taken from this run; its
 fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Jira turn endings worded in the person's language — 2026-11-15 (#4355, #4351)
+
+The Chat window and the optional message catalogs gained the wording of a turn that ended early (the
+reason, the receipt lists, the counts line and the footer), so the freshness gate rejected the
+changed digests. The complete original nine-case producer ran in a Linux arm64 gates container
+(Node 24.18.0, fresh `npm ci`): all nine passed. Only the source digests and `generatedAt` in the
+three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.
