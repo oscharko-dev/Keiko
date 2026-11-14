@@ -5,8 +5,15 @@ import { packFiles } from "../../../../scripts/package-surface-pack.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 // Both trees are admitted whole by the inspection's folder rules, so one file of each stands for
-// them; every other entry of the real listing is written as it is.
+// them; every other entry of the real listing is written as it is. `dist/` is in the listing only
+// after the root build (`npm run build`); the gates container's typecheck builds the workspace
+// packages but not the root, so a listing without it gets the surface's own required file instead
+// of silently losing the tree. `treesInListing` says which case a run was in.
 const WHOLE_TREES = ["dist/", "node_modules/"] as const;
+const TREE_FALLBACK_FILE: Readonly<Record<(typeof WHOLE_TREES)[number], string>> = {
+  "dist/": "dist/index.js",
+  "node_modules/": "node_modules/@oscharko-dev/keiko-cli/package.json",
+};
 
 let cachedListing: readonly string[] | undefined;
 
@@ -20,17 +27,26 @@ export function realRootPackListing(): readonly string[] {
   return cachedListing;
 }
 
-/** The real listing with each whole tree reduced to its first file. */
+function treeFile(listing: readonly string[], tree: (typeof WHOLE_TREES)[number]): string {
+  return listing.find((path) => path.startsWith(tree)) ?? TREE_FALLBACK_FILE[tree];
+}
+
+/** The whole trees the real listing itself carries a file of. */
+export function treesInListing(): readonly string[] {
+  const listing = realRootPackListing();
+  return WHOLE_TREES.filter((tree) => listing.some((path) => path.startsWith(tree)));
+}
+
+/** The trees every fixture covers, with one file each, and the packed entries outside them. */
 export function realRootPackSample(): readonly string[] {
   const listing = realRootPackListing();
   const outsideTrees = listing.filter((path) => !WHOLE_TREES.some((tree) => path.startsWith(tree)));
-  const treeSamples = WHOLE_TREES.flatMap(
-    (tree) => listing.find((path) => path.startsWith(tree)) ?? [],
-  );
-  return [...outsideTrees, ...treeSamples];
+  return [...outsideTrees, ...WHOLE_TREES.map((tree) => treeFile(listing, tree))];
 }
 
-function realRootPackageJson(): Record<string, unknown> {
+export { WHOLE_TREES };
+
+export function realRootPackageJson(): Record<string, unknown> {
   return JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as Record<
     string,
     unknown

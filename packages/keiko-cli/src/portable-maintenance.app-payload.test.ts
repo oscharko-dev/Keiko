@@ -12,6 +12,9 @@ import { layoutFor, type PortableLayout, type PortableTarget } from "./portable-
 import {
   realRootPackListing,
   realRootPackSample,
+  realRootPackageJson,
+  treesInListing,
+  WHOLE_TREES,
   writePortableAppPayload,
 } from "./test-support/portable-app-payload.js";
 import { writePortableRuntimePayload } from "./test-support/portable-runtime-payload.js";
@@ -102,10 +105,27 @@ function unknown(layout: PortableLayout, absPath: string): string {
 describe("managed install inspection accepts the real package and nothing else", () => {
   it("is not vacuous: the real listing holds the entries a hand-written fixture left out", () => {
     const outside = realRootPackListing().filter(
-      (path) => !path.startsWith("dist/") && !path.startsWith("node_modules/"),
+      (path) => !WHOLE_TREES.some((tree) => path.startsWith(tree)),
     );
+    // Today the package packs these seven entries outside its two whole trees. A floor, so a
+    // listing that lost most of them fails here instead of passing over an empty fixture.
+    expect(outside.length).toBeGreaterThanOrEqual(7);
     expect(outside).toEqual(expect.arrayContaining(["package.json", "LICENSE", "NOTICE"]));
     expect(realRootPackSample()).toEqual(expect.arrayContaining(outside));
+  });
+
+  it("states which whole trees every fixture covers and that the package packs both", () => {
+    // `dist` is the package's own `files` entry; its content is in the listing only after the root
+    // build, so the fixture writes the surface's required `dist/index.js` when it is not.
+    expect(realRootPackageJson().files).toContain("dist");
+    expect(WHOLE_TREES).toEqual(["dist/", "node_modules/"]);
+    const sample = realRootPackSample();
+    for (const tree of WHOLE_TREES) {
+      expect(sample.filter((path) => path.startsWith(tree))).toHaveLength(1);
+    }
+    for (const tree of treesInListing()) {
+      expect(realRootPackListing().some((path) => path.startsWith(tree))).toBe(true);
+    }
   });
 
   it.each(INSTALLS)(
@@ -145,6 +165,24 @@ describe("managed install inspection accepts the real package and nothing else",
         expect(existsSync(path)).toBe(true);
         expect(portableManagedInstallHealth(layout).issueCount).toBe(1);
         rmSync(path);
+      }
+    },
+  );
+
+  it.each(INSTALLS)(
+    "refuses a folder that only has the name of an always-packed file, and keeps it (%s)",
+    (_name, make) => {
+      const { layout } = make();
+      for (const folder of ["LICENSE.d", "readme.x", "COPYING.txt"]) {
+        const inside = join(layout.resourceRoot, "app", folder, "FOREIGN.txt");
+        touch(inside);
+        const entry = join(layout.resourceRoot, "app", folder);
+        expect(inspectPortableManagedInstall(layout).issues).toEqual([unknown(layout, entry)]);
+        expect(() => {
+          removePortableManagedInstall(layout, noopIo, false);
+        }).toThrow(unknown(layout, entry));
+        expect(existsSync(inside)).toBe(true);
+        rmSync(entry, { recursive: true });
       }
     },
   );

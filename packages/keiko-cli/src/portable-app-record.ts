@@ -53,14 +53,26 @@ function packedPaths(packageJson: Readonly<Record<string, unknown>>): readonly s
   return named.flatMap((value) => plainPackedPath(value) ?? []);
 }
 
-function alwaysPackedNames(appRoot: string): readonly string[] {
-  return readdirSync(appRoot).filter((name) => ALWAYS_PACKED_NAME.test(name));
+function appEntryKind(appRoot: string, name: string): "file" | "folder" | undefined {
+  const stat = lstatSync(join(appRoot, ...name.split("/")), { throwIfNoEntry: false });
+  if (stat === undefined) return undefined;
+  if (stat.isFile()) return "file";
+  return stat.isDirectory() ? "folder" : undefined;
+}
+
+// What npm always packs are files: a folder whose name only matches the pattern (`LICENSE.d`) is
+// not one of them and never becomes a prefix.
+function alwaysPackedFiles(appRoot: string): readonly string[] {
+  return readdirSync(appRoot).filter(
+    (name) => ALWAYS_PACKED_NAME.test(name) && appEntryKind(appRoot, name) === "file",
+  );
 }
 
 /**
  * The entries of `app/` that the payload's own package names, below the resource root. A named
  * entry counts as what it is on disk, the way npm decides it: a file is one file, a folder covers
- * its content, anything else names nothing. Nothing outside what that package packs is admitted.
+ * its content, anything else names nothing. The entries npm always adds are admitted as files only.
+ * Nothing outside what that package packs is admitted.
  */
 export function portableAppEntries(resourceRoot: string): PortableAppEntries {
   const files = new Set<string>([APP_PACKAGE_JSON_PATH]);
@@ -68,12 +80,11 @@ export function portableAppEntries(resourceRoot: string): PortableAppEntries {
   const packageJson = readPayloadJson(resourceRoot, APP_PACKAGE_JSON_PATH);
   if (!isJsonRecord(packageJson)) return { files, prefixes };
   const appRoot = join(resourceRoot, "app");
-  const names = [...packedPaths(packageJson), ...alwaysPackedNames(appRoot)];
-  for (const name of names) {
-    const stat = lstatSync(join(appRoot, ...name.split("/")), { throwIfNoEntry: false });
-    if (stat === undefined) continue;
-    if (stat.isFile()) files.add(`app/${name}`);
-    else if (stat.isDirectory()) prefixes.push(`app/${name}/`);
+  for (const name of alwaysPackedFiles(appRoot)) files.add(`app/${name}`);
+  for (const name of packedPaths(packageJson)) {
+    const kind = appEntryKind(appRoot, name);
+    if (kind === "file") files.add(`app/${name}`);
+    else if (kind === "folder") prefixes.push(`app/${name}/`);
   }
   return { files, prefixes };
 }
