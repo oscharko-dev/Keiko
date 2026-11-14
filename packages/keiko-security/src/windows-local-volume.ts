@@ -130,7 +130,6 @@ function commandFailed(result: BoundedPowerShellResult): boolean {
 }
 
 export type WindowsLocalVolumePhase = "input" | "resolve" | "host-start" | "verify";
-type LocalVolumePhase = WindowsLocalVolumePhase;
 
 /**
  * What a refusal says about the folder. `not-local`: the check ran and denied it, or the input can
@@ -163,12 +162,15 @@ export function windowsLocalVolumeVerdict(error: unknown): WindowsLocalVolumeVer
   return error instanceof WindowsLocalVolumeError ? error.verdict : "unverifiable";
 }
 
-function refusalVerdict(phase: LocalVolumePhase, error: unknown): WindowsLocalVolumeVerdict {
+function refusalVerdict(phase: WindowsLocalVolumePhase, error: unknown): WindowsLocalVolumeVerdict {
   if (phase === "resolve" || phase === "host-start") return "unverifiable";
   return error instanceof WindowsProgramWorkTimeoutError ? "unverifiable" : "not-local";
 }
 
-function localVolumeErrorKind(phase: LocalVolumePhase, error: unknown): ActivityLogErrorKind {
+function localVolumeErrorKind(
+  phase: WindowsLocalVolumePhase,
+  error: unknown,
+): ActivityLogErrorKind {
   if (phase === "input") return "invalid-request";
   if (phase === "resolve") return "unavailable";
   if (phase === "host-start" || error instanceof WindowsProgramWorkTimeoutError) return "timeout";
@@ -189,7 +191,7 @@ function refusalMessage(error: unknown): string {
 
 function reportLocalVolumeRefusal(
   sink: SecurityLogSink | undefined,
-  detected: LocalVolumePhase,
+  detected: WindowsLocalVolumePhase,
   error: unknown,
 ): never {
   // The host never reached the program: nothing about the volume was learned.
@@ -229,7 +231,7 @@ export function assertWindowsLocalVolume(
   options: WindowsLocalVolumeOptions = {},
 ): void {
   if ((options.platform ?? process.platform) !== "win32") return;
-  let phase: LocalVolumePhase = "input";
+  let phase: WindowsLocalVolumePhase = "input";
   try {
     assertUsablePath(path);
     phase = "resolve";
