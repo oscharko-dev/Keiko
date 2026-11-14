@@ -1,5 +1,6 @@
-import { writeFileSync } from "node:fs";
-import { basename, isAbsolute, win32 } from "node:path";
+import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, win32 } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 /**
@@ -40,6 +41,18 @@ export const LAUNCH_FAILURE_NOTE_ENV = "KEIKO_PORTABLE_FAILURE_NOTE";
 
 const NOTE_FILE_NAME = /^keiko-launch-note-\d{1,10}\.txt$/u;
 
+// The launcher names its note inside the user's temporary directory (GetTempPathW) and the CLI
+// resolves the same directory (os.tmpdir): the note path is honored only there, compared by real
+// path so that a short (8.3) spelling of the same folder is accepted and a link elsewhere is not.
+function inTemporaryDirectory(path: string): boolean {
+  const parent = dirname(path);
+  const temporary = tmpdir();
+  if (!existsSync(parent) || !existsSync(temporary)) return false;
+  const left = realpathSync.native(parent);
+  const right = realpathSync.native(temporary);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
 /**
  * Leaves the closed reason token for the native launcher, which shows its own fixed text for it.
  * Only a start the launcher itself began (`KEIKO_PORTABLE_UI_LAUNCH=1`) with a note path of exactly
@@ -59,7 +72,8 @@ export function writeLaunchFailureNote(
   if (
     path.split(/[\\/]/u).includes("..") ||
     !(isAbsolute(path) || win32.isAbsolute(path)) ||
-    !NOTE_FILE_NAME.test(basename(path.replaceAll("\\", "/")))
+    !NOTE_FILE_NAME.test(basename(path.replaceAll("\\", "/"))) ||
+    !inTemporaryDirectory(path)
   ) {
     throw new Error("launch failure note path is not the launcher's own");
   }

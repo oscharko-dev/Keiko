@@ -92,12 +92,36 @@ static int bootstrap_artifact_unusable(const wchar_t *path) {
   return attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+/* Every message box of the launcher goes through show_box (#4358): a start without a console AND
+ * without a visible desktop (a scheduled task, a service, an automation step) has nobody to close a
+ * box, so MessageBoxW would block for ever and the exit code would never be returned. A box is shown
+ * only when the process's window station is visible (WSF_VISIBLE; the interactive WinSta0) and the
+ * session is not shutting down (a logoff ends the child on purpose and must not look like a failed
+ * start). Otherwise nothing is shown and the caller goes on at once: the exit code is returned, and
+ * the activity-log line and the failure note stay. */
+static int desktop_is_interactive(void) {
+  HWINSTA station = GetProcessWindowStation();
+  USEROBJECTFLAGS flags;
+  DWORD needed = 0;
+  if (station == NULL) return 0;
+  ZeroMemory(&flags, sizeof(flags));
+  if (!GetUserObjectInformationW(station, UOI_FLAGS, &flags, (DWORD)sizeof(flags), &needed)) {
+    return 0;
+  }
+  return (flags.dwFlags & WSF_VISIBLE) != 0 && GetSystemMetrics(SM_SHUTTINGDOWN) == 0;
+}
+
+static void show_box(const wchar_t *text, UINT icon) {
+  if (!desktop_is_interactive()) return;
+  (void)MessageBoxW(NULL, text, L"Keiko", MB_OK | icon);
+}
+
 static void report_bootstrap_failure(int has_console, const wchar_t *console_line,
                                      const wchar_t *dialog_text) {
   if (has_console) {
     fwprintf(stderr, L"%ls", console_line);
   } else {
-    MessageBoxW(NULL, dialog_text, L"Keiko", MB_OK | MB_ICONERROR);
+    show_box(dialog_text, MB_ICONERROR);
   }
 }
 
@@ -221,7 +245,7 @@ static DWORD WINAPI feedback_thread(LPVOID context) {
   if (WaitForSingleObject(feedback->done, KEIKO_FEEDBACK_DELAY_MS) != WAIT_TIMEOUT) return 0;
   /* The box is the person's to close; it is shown once and never again. A failure to show it is
    * not a failure to start Keiko. */
-  (void)MessageBoxW(NULL, feedback_text(), L"Keiko", MB_OK | MB_ICONINFORMATION);
+  show_box(feedback_text(), MB_ICONINFORMATION);
   return 0;
 }
 
@@ -229,6 +253,7 @@ static void feedback_start(keiko_feedback *feedback) {
   feedback->done = NULL;
   feedback->thread = NULL;
   feedback->thread_id = 0;
+  if (!desktop_is_interactive()) return; /* nobody to read it: no thread, no wait */
   feedback->done = CreateEventW(NULL, TRUE, FALSE, NULL);
   if (feedback->done == NULL) return; /* no feedback, the start itself goes on */
   feedback->thread = CreateThread(NULL, 0, feedback_thread, feedback, 0, &feedback->thread_id);
@@ -246,7 +271,9 @@ static void feedback_stop(keiko_feedback *feedback) {
     /* A box that is showing is closed. A box whose delay ran out just before this stop is not yet a
      * window and is not found; it shows late and ends with this process, which waits for the thread
      * at most the bounded join below (three seconds) and then returns, so the launcher is never kept
-     * alive by it. */
+     * alive by it. Known and accepted: in that narrow race at the two-second boundary the first-start
+     * box can appear at the moment the start ended, and for a child that failed it can be on screen
+     * together with the failure box; the join bounds it. */
     (void)EnumThreadWindows(feedback->thread_id, close_feedback_window, 0);
     (void)WaitForSingleObject(feedback->thread, KEIKO_FEEDBACK_JOIN_MS);
     (void)CloseHandle(feedback->thread);
@@ -303,9 +330,7 @@ static int claim_launcher_instance(const wchar_t *root, HANDLE *instance) {
   *instance = CreateMutexW(NULL, FALSE, name);
   if (*instance == NULL) return 1;
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
-    if (!bring_feedback_forward()) {
-      (void)MessageBoxW(NULL, already_starting_text(), L"Keiko", MB_OK | MB_ICONINFORMATION);
-    }
+    if (!bring_feedback_forward()) show_box(already_starting_text(), MB_ICONINFORMATION);
     (void)CloseHandle(*instance);
     *instance = NULL;
     return 0;
@@ -354,19 +379,38 @@ typedef struct {
   L"Keiko wird gerade eingerichtet oder aktualisiert.\r\n\r\n" \
   L"Warte, bis das fertig ist, und \x00f6" L"ffne Keiko dann erneut."
 
+/* A start that met another start, stop or update of the same Keiko (the lifecycle guard is held):
+ * not a failure of this start, so it does not say that Keiko could not start. */
+#define KEIKO_FAILURE_LIFECYCLE_BUSY_EN \
+  L"Keiko is just being started, stopped or updated.\r\n\r\n" \
+  L"Wait a moment and open Keiko again."
+#define KEIKO_FAILURE_LIFECYCLE_BUSY_DE \
+  L"Keiko wird gerade gestartet, beendet oder aktualisiert.\r\n\r\n" \
+  L"Warte einen Moment und \x00f6" L"ffne Keiko erneut."
+
 static const keiko_failure_text KEIKO_FAILURE_TEXTS[] = {
   {"health-timeout", KEIKO_FAILURE_HEALTH_TIMEOUT_EN, KEIKO_FAILURE_HEALTH_TIMEOUT_DE},
   {"port-in-use", KEIKO_FAILURE_PORT_IN_USE_EN, KEIKO_FAILURE_PORT_IN_USE_DE},
   {"setup-busy", KEIKO_FAILURE_SETUP_BUSY_EN, KEIKO_FAILURE_SETUP_BUSY_DE},
+  {"lifecycle-busy", KEIKO_FAILURE_LIFECYCLE_BUSY_EN, KEIKO_FAILURE_LIFECYCLE_BUSY_DE},
 };
 
+/* The exit code a console child gets from Ctrl+C or a logoff (STATUS_CONTROL_C_EXIT): the child was
+ * ended on purpose, so it gets no failure box. A kill by the person (taskkill) is an ordinary
+ * non-zero code and may show the generic box. */
+#define KEIKO_STATUS_CONTROL_C_EXIT 0xC000013AUL
+
 /* Called before the child starts: a stale note of an earlier launcher with the same process id must
- * not be shown, and a launcher that cannot name the file simply shows the generic text. */
+ * not be shown, and a launcher that cannot name the file simply shows the generic text. The variable
+ * is cleared first, so that on every error path below an externally set value is never inherited by
+ * the child: the CLI honors only a path the launcher itself named. */
 static void prepare_failure_note(keiko_launcher_buffers *buffers) {
   wchar_t directory[KEIKO_NOTE_CAP];
-  DWORD length = GetTempPathW(KEIKO_NOTE_CAP, directory);
+  DWORD length;
   buffers->failure_note[0] = L'\0';
-  if (length == 0 || length >= KEIKO_NOTE_CAP) return;
+  (void)SetEnvironmentVariableW(L"KEIKO_PORTABLE_FAILURE_NOTE", NULL);
+  length = GetTempPathW((DWORD)KEIKO_NOTE_CAP, directory);
+  if (length == 0 || length >= (DWORD)KEIKO_NOTE_CAP) return;
   if (_snwprintf_s(buffers->failure_note, KEIKO_NOTE_CAP, _TRUNCATE, L"%lskeiko-launch-note-%lu.txt",
                    directory, (unsigned long)GetCurrentProcessId()) <= 0) {
     buffers->failure_note[0] = L'\0';
@@ -415,7 +459,7 @@ static const wchar_t *failure_text(const char *reason) {
 static void show_failure_box(const keiko_launcher_buffers *buffers) {
   char reason[32];
   read_failure_reason(buffers->failure_note, reason);
-  (void)MessageBoxW(NULL, failure_text(reason), L"Keiko", MB_OK | MB_ICONERROR);
+  show_box(failure_text(reason), MB_ICONERROR);
 }
 
 static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console,
@@ -432,7 +476,10 @@ static int run_with_feedback(keiko_launcher_buffers *buffers, int has_console) {
   feedback_stop(&feedback);
   if (instance != NULL) (void)CloseHandle(instance);
   /* After the mutex is released: a box the person leaves open never blocks a later start. */
-  if (!has_console && child_ended && result != 0) show_failure_box(buffers);
+  if (!has_console && child_ended && result != 0 &&
+      (DWORD)result != KEIKO_STATUS_CONTROL_C_EXIT) {
+    show_failure_box(buffers);
+  }
   return result;
 }
 

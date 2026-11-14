@@ -13,7 +13,7 @@ import {
 import { createHash } from "node:crypto";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 
@@ -3244,6 +3244,7 @@ describe("runPortableCli", () => {
       "foreign launcher\n",
     );
     const c = capture();
+    const logged: SecurityLogEvent[] = [];
 
     const code = await runPortableCli(
       portableLaunchArgs(target, newSource, managedRoot, stateDir),
@@ -3251,6 +3252,7 @@ describe("runPortableCli", () => {
       env,
       {
         homedir: () => home,
+        securityLogSinkFactory: () => ({ write: (event): void => void logged.push(event) }),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -3262,6 +3264,12 @@ describe("runPortableCli", () => {
     // command ends with 0 and not with the failure of the upgrade; the failure stays on its stream.
     // This pinned 1 before: that made a double-click that did start Keiko look like a failed start.
     expect(code).toBe(0);
+    // ... and it still leaves one body-free line, which is all a double-click keeps of it
+    expect(
+      logged.filter((event) => event.op === "portable.launch.failed").map((e) => e.extra),
+    ).toEqual([
+      expect.objectContaining({ reason: "upgrade-failed", launcherBox: "not-requested" }),
+    ]);
     expect(events).toEqual(["stop", "start"]);
     expect(packageVersionAt(managedRoot, target)).toBe("0.2.11");
     expect(readFileSync(activeMarker, "utf8")).toBe("old install marker\n");
@@ -3310,8 +3318,14 @@ describe("runPortableCli", () => {
     );
 
     expect(code).toBe(1);
+    // two lines, in order: the failed upgrade, then the end of the command. The command's reason (the
+    // one the box and the note carry) is the relaunch's: Keiko does not run at all, which is what the
+    // person must act on; the failed upgrade is recorded as its own line.
     const failed = logged.filter((event) => event.op === "portable.launch.failed");
-    expect(failed.map((event) => event.extra?.reason)).toEqual(["health-timeout"]);
+    expect(failed.map((event) => event.extra?.reason)).toEqual([
+      "upgrade-failed",
+      "health-timeout",
+    ]);
   });
 
   // #4358: every non-zero exit of `portable launch` leaves a closed reason (for the native
@@ -3367,12 +3381,22 @@ describe("runPortableCli", () => {
       return { code, logged, spawned };
     }
 
-    function noteIn(dir: string): string {
-      return join(dir, "keiko-launch-note-4711.txt");
+    // The launcher names its note inside the temporary directory and the CLI honors only that folder.
+    const notes: string[] = [];
+    afterEach(() => {
+      for (const note of notes.splice(0)) rmSync(note, { force: true });
+    });
+    function uniqueNote(): string {
+      const note = join(
+        tmpdir(),
+        `keiko-launch-note-${String(Math.floor(Math.random() * 1e9))}.txt`,
+      );
+      notes.push(note);
+      return note;
     }
 
     it("leaves the reason in the launcher's note and one log line, and starts no process", async () => {
-      const note = noteIn(tempRoot());
+      const note = uniqueNote();
 
       const { code, logged, spawned } = await installedLaunch(
         (deps) => {
@@ -3395,9 +3419,28 @@ describe("runPortableCli", () => {
       expect(spawned).toEqual([]);
     });
 
+    // The reasons the launcher has its own text for (keiko-portable-launcher.c, the token table; the
+    // table itself is pinned in portable-launcher-feedback.test.ts): each reaches the note unchanged.
+    it.each(["health-timeout", "port-in-use", "setup-busy", "lifecycle-busy"] as const)(
+      "hands the launcher the token %s",
+      async (reason) => {
+        const note = uniqueNote();
+
+        const { code } = await installedLaunch(
+          (deps) => {
+            deps.recordFailure?.(reason);
+            return 1;
+          },
+          { KEIKO_PORTABLE_UI_LAUNCH: "1", KEIKO_PORTABLE_FAILURE_NOTE: note },
+        );
+
+        expect(code).toBe(1);
+        expect(readFileSync(note, "utf8")).toBe(reason);
+      },
+    );
+
     it("names launch-error when no cause was recorded, and writes no note outside a double-click", async () => {
-      const dir = tempRoot();
-      const note = noteIn(dir);
+      const note = uniqueNote();
 
       const { code, logged } = await installedLaunch(() => 1, {
         KEIKO_PORTABLE_FAILURE_NOTE: note,
@@ -3439,8 +3482,7 @@ describe("runPortableCli", () => {
       ],
       ["any other error", new Error("boom"), "launch-error"],
     ] as const)("classifies %s as %s", async (_label, error, reason) => {
-      const dir = tempRoot();
-      const note = noteIn(dir);
+      const note = uniqueNote();
 
       const { code, logged } = await installedLaunch(
         () => {

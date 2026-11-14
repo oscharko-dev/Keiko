@@ -434,7 +434,12 @@ async function upgradeManagedWhileLocked(
       `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
     );
     // The upgrade failed and the previous version is started again: when that start succeeds Keiko
-    // runs and the command ends with 0, not with the failure of the upgrade (#4358).
+    // runs and the command ends with 0, not with the failure of the upgrade (#4358). The failed
+    // upgrade still leaves its line now, whatever the exit code, because stderr is all a double-click
+    // would otherwise keep of it. The recorder gets no `upgrade-failed` here on purpose: if the
+    // relaunch then fails too, the reason the person must act on is the relaunch's (Keiko does not
+    // run at all), and the first reason recorded is the one the box and the final line carry.
+    emitPortableLaunchFailed(options.securityLogSink, "upgrade-failed", "not-requested");
     return launchManaged(
       {
         target: current.manifest.platformTarget,

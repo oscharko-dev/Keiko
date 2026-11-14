@@ -8,16 +8,18 @@ import {
   writeLaunchFailureNote,
 } from "./launch-failure-note.js";
 
-const roots: string[] = [];
+const created: string[] = [];
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const path of created.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function notePath(name = "keiko-launch-note-4711.txt"): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-note-"));
-  roots.push(root);
-  return join(root, name);
+// The launcher names its note inside the temporary directory, and the CLI honors only that folder:
+// a test note lives there too, under a unique number.
+function notePath(): string {
+  const path = join(tmpdir(), `keiko-launch-note-${String(Math.floor(Math.random() * 1e9))}.txt`);
+  created.push(path);
+  return path;
 }
 
 describe("the failure note for the native launcher", () => {
@@ -68,6 +70,25 @@ describe("the failure note for the native launcher", () => {
       ),
     ).toThrow();
     expect(readFileSync(path, "utf8")).toBe("planted");
+  });
+
+  // #4358 head C: the note is honored only inside the temporary directory the launcher names.
+  it("refuses a well-named note outside the temporary directory, and in a folder below it", () => {
+    const below = mkdtempSync(join(tmpdir(), "keiko-note-below-"));
+    created.push(below);
+    const outside = mkdtempSync(join(process.cwd(), ".keiko-note-outside-"));
+    created.push(outside);
+
+    for (const folder of [below, outside]) {
+      const path = join(folder, "keiko-launch-note-4711.txt");
+      expect(() =>
+        writeLaunchFailureNote(
+          { KEIKO_PORTABLE_UI_LAUNCH: "1", [LAUNCH_FAILURE_NOTE_ENV]: path },
+          "launch-error",
+        ),
+      ).toThrow("not the launcher's own");
+      expect(existsSync(path)).toBe(false);
+    }
   });
 
   it("writes nothing into a folder that does not exist", () => {

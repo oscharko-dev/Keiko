@@ -52,7 +52,11 @@ stays until you close it and never blocks a later start. The Activity Log record
 `setup-busy`, `pid-publication`, `launch-error`, …) and whether the launcher's note was written; read it
 with `keiko support export` and `keiko support analyze`. A first start gives up when its UI process
 shows no progress for 20 seconds or is still not healthy after 15 minutes; the installation itself has
-no time limit, so a slow first setup that takes many minutes is not cut off.
+no time limit, so a slow first setup that takes many minutes is not cut off. The launcher shows a box
+only on a visible desktop: started by a scheduled task, a service or an automation step without one,
+it shows nothing and ends with the same exit code at once (the log line stays). A start that finds
+another start, stop or update of the same Keiko running says so ("Keiko is just being started, stopped
+or updated. Wait a moment and open Keiko again.") and does not claim that Keiko could not start.
 
 **Root Cause**
 

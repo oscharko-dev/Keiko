@@ -61,7 +61,8 @@ describe("the Windows launcher's own start feedback", () => {
 
   it("chooses the language from the Windows user interface language, no toolkit", () => {
     expect(launcherSource).toMatch(/GetUserDefaultUILanguage\(\)\) == LANG_GERMAN/u);
-    expect(launcherSource).toMatch(/L"Keiko", MB_OK \| MB_ICONINFORMATION/u);
+    expect(launcherSource).toMatch(/show_box\(feedback_text\(\), MB_ICONINFORMATION\)/u);
+    expect(launcherSource).toMatch(/MessageBoxW\(NULL, text, L"Keiko", MB_OK \| icon\)/u);
   });
 
   it("shows only a start that is still running after two seconds", () => {
@@ -120,7 +121,7 @@ describe("the Windows launcher's own start feedback", () => {
     const claim =
       /static int claim_launcher_instance[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
     const forward = claim.indexOf("if (!bring_feedback_forward())");
-    const message = claim.indexOf("MessageBoxW(NULL, already_starting_text()");
+    const message = claim.indexOf("show_box(already_starting_text(), MB_ICONINFORMATION)");
     const refusal = claim.indexOf("return 0;");
     expect(forward).toBeGreaterThan(-1);
     expect(message).toBeGreaterThan(forward);
@@ -159,6 +160,10 @@ describe("the Windows launcher's failure box", () => {
       "Keiko is already being set up or updated.\r\n\r\nWait until that has finished, then open Keiko again.",
       "Keiko wird gerade eingerichtet oder aktualisiert.\r\n\r\nWarte, bis das fertig ist, und öffne Keiko dann erneut.",
     ],
+    KEIKO_FAILURE_LIFECYCLE_BUSY: [
+      "Keiko is just being started, stopped or updated.\r\n\r\nWait a moment and open Keiko again.",
+      "Keiko wird gerade gestartet, beendet oder aktualisiert.\r\n\r\nWarte einen Moment und öffne Keiko erneut.",
+    ],
   } as const;
 
   it.each(Object.entries(EXPECTED))(
@@ -172,7 +177,7 @@ describe("the Windows launcher's failure box", () => {
   it("names only reasons the CLI can write, and reads only a closed token from the note", () => {
     const table = /KEIKO_FAILURE_TEXTS\[\] = \{([\s\S]*?)\n\};/u.exec(launcherSource)?.[1] ?? "";
     const tokens = [...table.matchAll(/\{"([a-z-]+)",/gu)].map((match) => match[1]);
-    expect(tokens).toEqual(["health-timeout", "port-in-use", "setup-busy"]);
+    expect(tokens).toEqual(["health-timeout", "port-in-use", "setup-busy", "lifecycle-busy"]);
     for (const token of tokens) {
       expect(LAUNCH_FAILURE_REASONS).toContain(token);
     }
@@ -197,7 +202,9 @@ describe("the Windows launcher's failure box", () => {
     expect(wrapper.indexOf("CloseHandle(instance)")).toBeLessThan(
       wrapper.indexOf("show_failure_box(buffers)"),
     );
-    expect(wrapper).toMatch(/if \(!has_console && child_ended && result != 0\) show_failure_box/u);
+    expect(wrapper).toMatch(
+      /if \(!has_console && child_ended && result != 0 &&\s*\(DWORD\)result != KEIKO_STATUS_CONTROL_C_EXIT\) \{\s*show_failure_box\(buffers\);/u,
+    );
     // the box follows the stop of the first-start message: they are never shown together
     expect(wrapper.indexOf("feedback_stop(&feedback)")).toBeLessThan(
       wrapper.indexOf("show_failure_box(buffers)"),
@@ -205,10 +212,83 @@ describe("the Windows launcher's failure box", () => {
   });
 
   it("shows the box as an error with the product title and removes the note it read", () => {
-    expect(launcherSource).toMatch(
-      /MessageBoxW\(NULL, failure_text\(reason\), L"Keiko", MB_OK \| MB_ICONERROR\)/u,
-    );
+    expect(launcherSource).toMatch(/show_box\(failure_text\(reason\), MB_ICONERROR\)/u);
     expect(launcherSource).toMatch(/\(void\)DeleteFileW\(path\);/u);
+  });
+});
+
+// #4358 head C: a start without a console and without a visible desktop (a scheduled task, a service,
+// an automation step) has nobody to close a box, so a box there would block for ever and the exit
+// code would never be returned. Every box goes through one function that asks for an interactive,
+// visible window station first; the update coordinator branches of wmain never reach a box.
+describe("the Windows launcher's boxes need a visible desktop", () => {
+  it("has exactly one MessageBoxW, inside show_box, after the desktop check", () => {
+    expect(launcherSource.match(/MessageBoxW\(/gu)).toHaveLength(1);
+    const showBox =
+      /static void show_box\([^)]*\) \{[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    expect(showBox).toMatch(/if \(!desktop_is_interactive\(\)\) return;/u);
+    expect(showBox.indexOf("desktop_is_interactive")).toBeLessThan(showBox.indexOf("MessageBoxW"));
+  });
+
+  it("asks for a visible window station and for a session that is not shutting down", () => {
+    const check =
+      /static int desktop_is_interactive\(void\) \{[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    expect(check).toMatch(/GetProcessWindowStation\(\)/u);
+    expect(check).toMatch(/GetUserObjectInformationW\(station, UOI_FLAGS/u);
+    expect(check).toMatch(/WSF_VISIBLE/u);
+    expect(check).toMatch(/GetSystemMetrics\(SM_SHUTTINGDOWN\) == 0/u);
+    // an unreadable window station is not a visible one
+    expect(check).toMatch(/GetUserObjectInformationW[\s\S]*?\{\s*return 0;/u);
+  });
+
+  it("starts no first-start thread without a desktop, and every box call site uses show_box", () => {
+    const start =
+      /static void feedback_start\([^)]*\) \{[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    expect(start).toMatch(/if \(!desktop_is_interactive\(\)\) return;/u);
+    for (const site of [
+      /show_box\(feedback_text\(\), MB_ICONINFORMATION\)/u,
+      /show_box\(already_starting_text\(\), MB_ICONINFORMATION\)/u,
+      /show_box\(failure_text\(reason\), MB_ICONERROR\)/u,
+      /show_box\(dialog_text, MB_ICONERROR\)/u,
+    ]) {
+      expect(launcherSource).toMatch(site);
+    }
+  });
+
+  it("returns the exit code at once when no box is shown: the note is read before the check", () => {
+    const failure =
+      /static void show_failure_box\([^)]*\) \{[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    // read (and removed) first, so no file is left behind where nothing could be shown
+    expect(failure.indexOf("read_failure_reason")).toBeLessThan(failure.indexOf("show_box"));
+  });
+
+  it("never reaches a box from the update coordinator branches of wmain", () => {
+    const main = launcherSource.slice(launcherSource.indexOf("int wmain("));
+    const beforeDefault = main.slice(0, main.lastIndexOf("run_launcher"));
+    expect(beforeDefault).toMatch(/--coordinate-update/u);
+    expect(beforeDefault).toMatch(/--recover-update/u);
+    expect(beforeDefault).not.toMatch(/show_box|show_failure_box|run_with_feedback|MessageBoxW/u);
+  });
+
+  // A child ended on purpose must not read as a failed start: a logoff or Ctrl+C ends a console child
+  // with STATUS_CONTROL_C_EXIT, and a session that is shutting down shows nothing (above).
+  it("shows no failure box for a child ended by Ctrl+C or a logoff", () => {
+    expect(launcherSource).toMatch(/KEIKO_STATUS_CONTROL_C_EXIT 0xC000013AUL/u);
+    expect(launcherSource).toMatch(
+      /result != 0 &&\s*\(DWORD\)result != KEIKO_STATUS_CONTROL_C_EXIT/u,
+    );
+  });
+
+  it("clears an externally set note variable before the launcher names its own", () => {
+    const prepare =
+      /static void prepare_failure_note\([^)]*\) \{[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    expect(
+      prepare.indexOf('SetEnvironmentVariableW(L"KEIKO_PORTABLE_FAILURE_NOTE", NULL)'),
+    ).toBeGreaterThan(-1);
+    expect(
+      prepare.indexOf('SetEnvironmentVariableW(L"KEIKO_PORTABLE_FAILURE_NOTE", NULL)'),
+    ).toBeLessThan(prepare.indexOf("GetTempPathW"));
+    expect(prepare).toMatch(/length >= \(DWORD\)KEIKO_NOTE_CAP/u);
   });
 });
 

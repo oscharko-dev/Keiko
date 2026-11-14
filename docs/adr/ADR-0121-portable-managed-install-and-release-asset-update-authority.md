@@ -167,6 +167,26 @@ up with that sentence. The installation itself (copying and attesting the tree) 
 a 26-minute setup passes; the 15 minutes apply to the UI's first answer after the installation, which
 was measured at up to 239 seconds on emulated x64. An explicit, longer `--start-timeout` raises both.
 
+None of the launcher's boxes can block a start that nobody watches (head C). Every box goes through one
+function that shows it only when the process's window station is visible (`WSF_VISIBLE`, the
+interactive desktop) and the session is not shutting down; a start without a console and without a
+visible desktop (a scheduled task, a service, an automation step) shows nothing and returns the exit
+code at once, and the activity-log line and the note stay. The launcher's callers were checked: the
+CLI starts the installed launcher detached and never waits for it, the update handoff starts
+`Keiko.exe --coordinate-update`, a separate branch of `wmain` that never reaches a box, the native
+quality check and the launcher tests call the launcher's internal functions only, and no CI step or
+end-to-end test starts the default path. A child that ended on purpose gets no failure box: a logoff
+or Ctrl+C ends a console child with `STATUS_CONTROL_C_EXIT`, and a session that is shutting down shows
+nothing; `keiko stop`, the uninstall and the update end the UI process, never the short-lived
+`portable launch` child the launcher waits for. A start that met another start, stop or update (the
+lifecycle guard) gets its own informational box, not "could not start". A kill by the person
+(taskkill) is an ordinary non-zero code and shows the generic box. The CLI honors the note path only
+inside the temporary directory the launcher names, and the launcher clears an externally set value of
+the variable before it names its own. A failed upgrade whose previous install starts again ends with
+exit 0 and leaves one `portable.launch.failed` line (`upgrade-failed`); if that relaunch fails too, the
+command's reason, in the box and the final line, is the relaunch's: Keiko does not run at all, which is
+what the person must act on.
+
 Native launcher integrity is part of portable installability and is established by the signed
 manifest's digest and provenance bindings. Native platform signatures, notarization, and publisher
 chains are verified and recorded when present, but their absence does not make a release or
