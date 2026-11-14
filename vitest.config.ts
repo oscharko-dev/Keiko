@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { vitestMaxWorkers } from "./scripts/lib/vitest-workers.mjs";
 export default defineConfig({
   // KEIKO-0251: the editor's component tests are .test.tsx and need JSX transformed. Without this
   // plugin the include entry below collects the files and then fails to parse them.
@@ -40,7 +41,10 @@ export default defineConfig({
     // GEN-TEST-FLAKE-002: the root suite has integration tests that start servers, parse PDFs, and
     // create/remove large temporary fixture trees. Letting Vitest fan out across every local core can
     // starve those tests enough to false-RED the verify receipt, so keep file parallelism bounded.
-    maxWorkers: 2,
+    // The bound comes from scripts/lib/vitest-workers.mjs: 2 under CI (the small shared runner, where
+    // starvation was observed), 4 on a development machine, `KEIKO_VITEST_MAX_WORKERS` (1 to 16) to
+    // choose. A full local run that shows a starvation flake goes back with KEIKO_VITEST_MAX_WORKERS=2.
+    maxWorkers: vitestMaxWorkers(),
     // The root suite includes integration-style tests that bind local servers, create git worktrees,
     // and parse binary documents. Keep a bounded timeout, but align the default with existing
     // integration-test allowances so full-suite scheduler load does not produce false red receipts.
