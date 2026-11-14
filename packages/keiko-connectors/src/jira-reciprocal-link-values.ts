@@ -142,6 +142,45 @@ export function parseReciprocalInput(args: CatalogJsonObject): ReciprocalInput |
     ? { actor: args.expectedActorKey, issue, application, ...remote }
     : undefined;
 }
+const NOTHING_CHANGED = "Nothing was changed.";
+/**
+ * The cause of a refused input, one sentence each (#4357 AC3): it names the rule the model must
+ * satisfy and never the refused value. Every text fits the 200-byte bound of a detail message, so
+ * the bound cannot cut the rule. It follows the order of `parseReciprocalInput`.
+ */
+export function reciprocalInputRefusal(args: CatalogJsonObject): ReciprocalFailure {
+  const refusal = (...messages: readonly string[]): ReciprocalFailure => ({
+    ok: false,
+    reason: "field-validation",
+    detail: { validation: "invalid-field", messages },
+  });
+  if (!savedExactKeys(args, INPUT_KEYS))
+    return refusal(
+      "This call takes only expectedActorKey, expectedIssue, expectedApplication, remoteIssueId, remoteIssueTitle,",
+      `sourceRelationship, targetRelationship, expectLocalLinkAbsent and acceptNativeDelegatedEffect. ${NOTHING_CHANGED}`,
+    );
+  if (!savedText(args.expectedActorKey, 255))
+    return refusal(
+      `expectedActorKey must be the key of the connected Jira user; jira.myself returns it. ${NOTHING_CHANGED}`,
+    );
+  if (args.expectLocalLinkAbsent !== true || args.acceptNativeDelegatedEffect !== true)
+    return refusal(
+      `Send expectLocalLinkAbsent:true and acceptNativeDelegatedEffect:true: the local link must not exist yet, and Jira performs the reciprocal effect itself. ${NOTHING_CHANGED}`,
+    );
+  if (issueLifecycleReview(args.expectedIssue) === undefined)
+    return refusal(
+      `expectedIssue must be the issue as reviewed: id, key, summary, projectId and issueTypeId, nothing else. ${NOTHING_CHANGED}`,
+    );
+  if (reciprocalApplication(args.expectedApplication, true) === undefined)
+    return refusal(
+      `expectedApplication must be the configured application link: id (UUID), name, displayUrl and rpcUrl, both HTTPS without credentials, query or fragment, at most 2048 characters. ${NOTHING_CHANGED}`,
+    );
+  // The remote issue is the last input the parser checks; the byte limit of one call cannot be
+  // reached by values that pass the field limits above.
+  return refusal(
+    `remoteIssueId must be a numeric ID; remoteIssueTitle, sourceRelationship and targetRelationship must be text of at most 255 characters. ${NOTHING_CHANGED}`,
+  );
+}
 export function reciprocalGlobalId(applicationId: string, issueId: string): string {
   return `appId=${applicationId}&issueId=${issueId}`;
 }

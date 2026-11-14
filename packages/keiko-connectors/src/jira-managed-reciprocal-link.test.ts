@@ -131,4 +131,61 @@ describe("one native delegated reciprocal link", () => {
     ).toMatchObject({ ok: false, reason: "field-validation" });
     expect(native.calls).toHaveLength(0);
   });
+  // #4357 AC3: a refused reciprocal-link input names the rule the model must satisfy, one fixed
+  // sentence per cause, pinned exactly and within the 200-byte bound of a detail message.
+  it.each([
+    [
+      "another argument",
+      { ...ARGS, headers: "x" },
+      [
+        "This call takes only expectedActorKey, expectedIssue, expectedApplication, remoteIssueId, remoteIssueTitle,",
+        "sourceRelationship, targetRelationship, expectLocalLinkAbsent and acceptNativeDelegatedEffect. Nothing was changed.",
+      ],
+    ],
+    [
+      "an actor key that is not text",
+      { ...ARGS, expectedActorKey: "" },
+      [
+        "expectedActorKey must be the key of the connected Jira user; jira.myself returns it. Nothing was changed.",
+      ],
+    ],
+    [
+      "a missing acceptance",
+      { ...ARGS, acceptNativeDelegatedEffect: false },
+      [
+        "Send expectLocalLinkAbsent:true and acceptNativeDelegatedEffect:true: the local link must not exist yet, and Jira performs the reciprocal effect itself. Nothing was changed.",
+      ],
+    ],
+    [
+      "an issue review of the wrong shape",
+      { ...ARGS, expectedIssue: { id: "10001" } },
+      [
+        "expectedIssue must be the issue as reviewed: id, key, summary, projectId and issueTypeId, nothing else. Nothing was changed.",
+      ],
+    ],
+    [
+      "an unsafe application destination",
+      { ...ARGS, expectedApplication: { ...ARGS.expectedApplication, rpcUrl: "http://x.invalid" } },
+      [
+        "expectedApplication must be the configured application link: id (UUID), name, displayUrl and rpcUrl, both HTTPS without credentials, query or fragment, at most 2048 characters. Nothing was changed.",
+      ],
+    ],
+    [
+      "a remote issue of the wrong shape",
+      { ...ARGS, remoteIssueId: "not-a-number" },
+      [
+        "remoteIssueId must be a numeric ID; remoteIssueTitle, sourceRelationship and targetRelationship must be text of at most 255 characters. Nothing was changed.",
+      ],
+    ],
+  ])("names the rule an input broke: %s", async (_name, args, messages) => {
+    const native = reciprocalLinkFixture();
+    expect(await execute(args, native.request, native.ports)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { validation: "invalid-field", messages },
+    });
+    expect(native.calls).toHaveLength(0);
+    for (const message of messages)
+      expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
+  });
 });
