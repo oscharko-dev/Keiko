@@ -2,7 +2,7 @@ import { globSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CI_MAX_WORKERS, vitestMaxWorkers } from "../lib/vitest-workers.mjs";
+import { vitestMaxWorkers } from "../lib/vitest-workers.mjs";
 
 // GEN-TEST-FLAKE-001: the release-blocking coverage run (vitest.coverage.packages.config.ts) and the
 // required UI suites were left at vitest's 5s default testTimeout while the root suite was hardened
@@ -67,9 +67,9 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
     ]);
     expect(coverageWorkers).toBe(rootWorkers);
     // Both come from the shared helper; the CI value itself stays pinned (to 2) in
-    // vitest-workers.test.mjs, so a local run of this test is not tied to the CI number.
+    // vitest-workers.test.mjs, so this test is not tied to the CI number: the gates container sets CI
+    // and also a worker override, and both are legitimate.
     expect(coverageWorkers).toBe(vitestMaxWorkers(process.env));
-    if (process.env.CI) expect(coverageWorkers).toBe(CI_MAX_WORKERS);
   });
 
   // GEN-TEST-FLAKE-002 is a per-process guarantee, and a shard is a process. Sharding across

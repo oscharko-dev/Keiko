@@ -64,8 +64,10 @@ is decided in one place, `scripts/lib/vitest-workers.mjs`, and every capped conf
 workers when `CI` is set (the small shared runner, exactly as before), four on a development machine,
 and `KEIKO_VITEST_MAX_WORKERS` (an integer from 1 to 16; anything else is ignored) chooses. Set it to
 `2` to reproduce CI when a full local run shows a starvation flake. This container sets `CI=true`
-itself, so it stays at two unless the variable is set; the compose file passes the variable through
-when it is set on the host and adds no default.
+itself, which alone would pin it to two, so local gate jobs run with four workers by default (the
+compose file passes the host's `KEIKO_VITEST_MAX_WORKERS` through and defaults it to 4), and
+`KEIKO_VITEST_MAX_WORKERS=2 npm run gates:local` reproduces CI's count exactly when a starvation flake
+is suspected. Real CI on GitHub does not use this compose file and is unchanged.
 
 ## Git worktrees
 
