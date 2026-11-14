@@ -1159,9 +1159,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":
-    "A previous action may already have changed files. Check its result before retrying; Keiko will not repeat it.",
+    "Keiko does not know whether the last action went through, for example a change in Jira or an edit to files. Check the result there first. Keiko never sends it again by itself.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
+  "codingWorkbench.recovery.newTask": "Start a new task",
+  "codingWorkbench.recovery.retryHint":
+    "To try the task again as a fresh run, describe it in the box below. Or start a new task.",
   "codingWorkbench.header.notReady": "Not ready to start",
   "codingWorkbench.header.readyEvaluation": "Start — unverified evaluation runtime",
   "codingWorkbench.runState.idle": "Ready to start",

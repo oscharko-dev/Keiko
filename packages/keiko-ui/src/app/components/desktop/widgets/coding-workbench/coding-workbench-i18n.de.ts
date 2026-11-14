@@ -1199,9 +1199,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":
-    "Eine vorherige Aktion kann bereits Dateien verändert haben. Prüfe ihr Ergebnis vor einem neuen Versuch; Keiko wiederholt sie nicht.",
+    "Keiko weiß nicht, ob die letzte Aktion durchgegangen ist, zum Beispiel eine Änderung in Jira oder eine Dateiänderung. Prüfe zuerst dort das Ergebnis. Keiko sendet sie nie von selbst erneut.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
+  "codingWorkbench.recovery.newTask": "Neue Aufgabe starten",
+  "codingWorkbench.recovery.retryHint":
+    "Um die Aufgabe als neuen Lauf zu wiederholen, beschreibe sie im Feld darunter. Oder starte eine neue Aufgabe.",
   "codingWorkbench.header.notReady": "Nicht startbereit",
   "codingWorkbench.header.readyEvaluation": "Start — ungeprüfte Evaluations-Runtime",
   "codingWorkbench.runState.idle": "Bereit zum Starten",

@@ -344,6 +344,72 @@ describe("coding task selection", () => {
     expect(result.current.visibleRun).toBe(true);
   });
 
+  // F30: an outcome-unknown run ends in "Recovery required". Its panel is forced visible so the
+  // person reads it, but New task must always be a way out: the run stays recoverable from
+  // Coding History, and it never locks the window onto itself.
+  describe("leaving a recovery-required run", () => {
+    const recovery = (): CodingWorkbenchRuntimeSnapshot => ({
+      ...snapshot("chat-one"),
+      state: "recovery-required",
+    });
+    const render = (
+      selection?: string,
+    ): ReturnType<
+      typeof renderHook<
+        ReturnType<typeof useCodingTaskSession>,
+        { readonly run: CodingWorkbenchRuntimeSnapshot | null }
+      >
+    > =>
+      renderHook(
+        ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+          useCodingTaskSession({
+            snapshot: run,
+            active: run?.state === "running",
+            root: "/repo",
+            workspace: null,
+            selection,
+          }),
+        { initialProps: { run: recovery() as CodingWorkbenchRuntimeSnapshot | null } },
+      );
+
+    it("lets New task detach the window from an acknowledged recovery run", async () => {
+      const { result } = render();
+      expect(result.current.visibleRun).toBe(true);
+      await act(async () => {
+        await result.current.newTask();
+      });
+      expect(result.current.visibleRun).toBe(false);
+      expect(result.current.conversationId).toBeUndefined();
+      const left = vi
+        .mocked(reportClientDiagnostic)
+        .mock.calls.filter(([message]) => message.endsWith("recovery-left"));
+      expect(left).toEqual([
+        [
+          "[keiko] coding workbench interaction: recovery-left",
+          {
+            correlationId: expect.any(String),
+            codingWorkbenchInteraction: { interaction: "recovery-left" },
+          },
+        ],
+      ]);
+    });
+
+    it("lets a New task pick from Coding History detach the window from the recovery run", async () => {
+      const { result } = render("new:1");
+      await waitFor(() => expect(result.current.pending).toBe(false));
+      expect(result.current.visibleRun).toBe(false);
+    });
+
+    it("follows the next run the window starts after leaving the recovery run", async () => {
+      const { result, rerender } = render();
+      await act(async () => {
+        await result.current.newTask();
+      });
+      rerender({ run: { ...snapshot("chat-next"), state: "running", runId: "run-next" } });
+      expect(result.current.visibleRun).toBe(true);
+    });
+  });
+
   it("does not reload a previous task after a new workspace is active", async () => {
     read.mockResolvedValue({ ...detail, task: { ...detail.task, workspaceId: "ws-previous" } });
     const { result } = renderHook(() =>
