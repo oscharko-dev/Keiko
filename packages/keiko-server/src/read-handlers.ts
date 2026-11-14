@@ -59,6 +59,7 @@ import {
 import {
   currentConversationReadinessObservation,
   currentGatewayConfig,
+  currentGateway,
   currentGatewayConfigPresent,
   currentGroundingLimits,
 } from "./deps.js";
@@ -106,6 +107,9 @@ export function handleModels(
               : {}),
             ...(isToolCallingRenewalPending(config, model.id)
               ? { toolCallingRenewalPending: true as const }
+              : {}),
+            ...(currentGateway(deps)?.learnedReasoningOnToolTurns(model.id) === true
+              ? { reasoningOnToolTurns: "detected" as const }
               : {}),
           };
         });

@@ -10,6 +10,7 @@ import type {
   CatalogJsonObject,
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { catalogObject, copyCatalogJson } from "./json.js";
 import { requireCatalog, ToolCatalogError, type CatalogSchemaMismatch } from "./errors.js";
@@ -142,7 +143,7 @@ export function externalCatalogSchemaMismatch(
 ): CatalogSchemaMismatch | undefined {
   const validate = validationFor(schema);
   if (validate(value)) return undefined;
-  return mismatchDetail(schema, validate.errors ?? []);
+  return mismatchDetail(schema, validate.errors ?? [], value);
 }
 function missingRequired(error: ErrorObject | undefined, path: string): string | undefined {
   if (error?.keyword !== "required" || typeof error.params.missingProperty !== "string")
@@ -236,9 +237,40 @@ function declaredOf(schema: CatalogJsonObject, error: ErrorObject | undefined): 
   const names = Object.keys(properties);
   return names.length <= MAX_DECLARED_PROPERTIES ? names : [];
 }
+const MAX_MISSING_ROOT_REQUIRED = 16;
+/**
+ * Every root property the schema requires and the value lacks, sorted. The first-error account
+ * names one missing property per rejection, but a model that omitted the identity of an entity
+ * (`issueIdOrKey` and `commentId`, `dashboardId` and `itemId`, or a property key beside a user
+ * choice) then needs one correction round per name, and a turn grants one (#4357 AC4). Only the
+ * root `required` list is read, from the schema's own names; a `required` inside a `oneOf` branch
+ * stays the choice's business.
+ */
+function missingRootRequired(
+  schema: CatalogJsonObject,
+  value: CatalogJsonValue,
+): readonly string[] | undefined {
+  const required = schema.required;
+  if (!Array.isArray(required) || !isObjectNode(value)) return undefined;
+  const names = required.filter(
+    (name): name is string => typeof name === "string" && !Object.hasOwn(value, name),
+  );
+  if (names.length === 0) return undefined;
+  names.sort(compareStrings);
+  return names.slice(0, MAX_MISSING_ROOT_REQUIRED);
+}
+/** Every missing root property when the schema lists any, else the first error's one name. */
+function missingAccount(
+  schema: CatalogJsonObject,
+  value: CatalogJsonValue,
+  first: string | undefined,
+): readonly string[] {
+  return missingRootRequired(schema, value) ?? (first === undefined ? [] : [first]);
+}
 function mismatchDetail(
   schema: CatalogJsonObject,
   errors: readonly ErrorObject[],
+  value: CatalogJsonValue,
 ): CatalogSchemaMismatch {
   const error = errors[0];
   const path = error === undefined ? "$" : declaredPath(error);
@@ -248,7 +280,7 @@ function mismatchDetail(
   const allowed = allowedOf(error, path);
   const declared = declaredOf(schema, error);
   return {
-    missingRequired: missing === undefined ? [] : [missing],
+    missingRequired: missingAccount(schema, value, missing),
     invalidPaths: missing !== undefined || extra ? [] : [path],
     unexpectedPropertyCount: extra ? 1 : 0,
     droppedPathCount: 0,

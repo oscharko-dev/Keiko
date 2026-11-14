@@ -199,6 +199,14 @@ export interface ModelCapability {
    * that the model is being checked. Absent when no check of it runs.
    */
   readonly conversationCheckPending?: true | undefined;
+  /**
+   * Transient server observation, never persisted and never configuration: this deployment rejected a
+   * tool-turn continuation for want of the previous assistant reasoning and accepted it restored, so
+   * Keiko returns that reasoning on tool turns from then on (#4351). It lives and dies with the
+   * configuration generation; Settings shows it so an operator can see what Keiko learned. Absent
+   * when nothing was detected.
+   */
+  readonly reasoningOnToolTurns?: "detected" | undefined;
   /** Observed repository-citation behavior; absent means unknown and grants no execution authority. */
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   /**

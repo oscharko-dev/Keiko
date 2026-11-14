@@ -2702,6 +2702,21 @@ export type GatewayReadinessProbeName =
 
 export type GatewayReadinessProbeStatus = "passed" | "failed" | "unsupported" | "skipped";
 
+/**
+ * How a tool-calling check ended (#4351). The check first offers the tool the way production does, with
+ * no forced `tool_choice`; only a model that called none gets a second attempt with the forced named call.
+ * `forced-refused` and `inconclusive` are never a verdict that the model cannot call tools.
+ */
+export const GATEWAY_TOOL_CALLING_OUTCOMES = [
+  "called-unforced",
+  "called-only-forced",
+  "forced-refused",
+  "no-call",
+  "tools-refused",
+  "inconclusive",
+] as const;
+export type GatewayToolCallingOutcome = (typeof GATEWAY_TOOL_CALLING_OUTCOMES)[number];
+
 export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
 
 export interface GatewayReadinessProbeResult {
@@ -2712,6 +2727,8 @@ export interface GatewayReadinessProbeResult {
   readonly latencyMs: number;
   readonly evidence: string;
   readonly warning?: string | undefined;
+  /** Only on the tool-calling probe: which closed outcome the two-step check reached. */
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
   // Present only when transport-level evidence conclusively proves a capability value. A semantic
   // sentinel mismatch remains unsupported in the report but must not rewrite durable capability
   // configuration as false.

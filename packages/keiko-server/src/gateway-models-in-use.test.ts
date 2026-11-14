@@ -8,6 +8,7 @@ import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
+  Gateway,
   parseGatewayConfig,
   type GatewayConfig,
   type ModelCapability,
@@ -239,6 +240,29 @@ it("adds no request on a page load or a model list read", async () => {
   }
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
   expect(gateway.requests).toHaveLength(before);
+});
+
+it("lists what Keiko learned about a deployment's reasoning, only when it learned it (#4351)", async () => {
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  const read = (): readonly { readonly id: string; readonly reasoningOnToolTurns?: string }[] =>
+    (
+      handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps).body as {
+        models: readonly { readonly id: string; readonly reasoningOnToolTurns?: string }[];
+      }
+    ).models;
+  expect(read().every((model) => model.reasoningOnToolTurns === undefined)).toBe(true);
+  const learned = vi
+    .spyOn(Gateway.prototype, "learnedReasoningOnToolTurns")
+    .mockImplementation((modelId) => modelId === CHAT_A);
+  try {
+    const listed = read();
+    expect(listed.find((model) => model.id === CHAT_A)?.reasoningOnToolTurns).toBe("detected");
+    expect(listed.find((model) => model.id === CHAT_B)?.reasoningOnToolTurns).toBeUndefined();
+  } finally {
+    learned.mockRestore();
+  }
 });
 
 it("adds no request when a person sends to or regenerates with an unselected, unchecked model", async () => {

@@ -29315,6 +29315,12 @@
               "required": true
             },
             {
+              "name": "toolCallingOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "verifiedContextTokens",
               "type": "integer",
               "dataClass": "count",
@@ -29548,6 +29554,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "toolCallingOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "trigger",

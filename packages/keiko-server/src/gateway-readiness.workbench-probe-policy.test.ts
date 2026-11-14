@@ -40,6 +40,8 @@ function provider(timeoutMs: number): ModelProviderConfig {
     baseUrl: "https://siu.llm.intern/v1",
     apiKey: "k",
     timeoutMs,
+    // The stored configuration names its timeout (an operator's choice), as every Setup-written one does.
+    timeoutConfigured: true,
     maxRetries: 0,
     retryBaseDelayMs: 1,
   };
@@ -788,7 +790,9 @@ it("does not mask a real tool refusal behind an inconclusive long-context result
   let calls = 0;
   const { deps } = workbenchDeps(() => {
     calls += 1;
-    return calls === 3
+    // The tool-calling check asks twice of a model that calls no tool (offered, then forced), so the
+    // long-context probe is the fourth request (#4351).
+    return calls === 4
       ? Promise.reject(new TimeoutError("Synthetic long-context outage"))
       : Promise.resolve(
           Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
@@ -808,7 +812,7 @@ it("does not mask a real tool refusal behind an inconclusive long-context result
   };
   holder.current = (): GatewayConfig => config;
   await initializeLiteLlmCodingReadiness(deps, "corr-tool-refuted-long-inconclusive");
-  expect(calls).toBe(3);
+  expect(calls).toBe(4);
   expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
   resetCodingWorkbenchContextWindowProbesForTests();
 });

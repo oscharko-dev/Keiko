@@ -104,7 +104,7 @@ export const JIRA_INSTANCE_READ_DEFINITIONS = {
   "jira.myself": {
     ...JIRA_DIRECTORY_READ_DEFINITIONS["jira.user"],
     description:
-      "Read the current authenticated Jira actor using the fixed myself endpoint. Reuse the bounded user projection, preserving observed key/name and optional display/active/deleted facts. No alternate-user selector, email, expanded groups, verification update or permission claim is offered.",
+      "Read the current authenticated Jira user, the one this connection acts as: key, name and, when known, display name, active and deleted state.",
     input: object({}),
   },
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
