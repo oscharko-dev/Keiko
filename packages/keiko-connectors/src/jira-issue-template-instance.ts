@@ -276,23 +276,28 @@ export function renderProposedJiraIssueTemplate(input: JiraTemplateProposalInput
   return [...front, `# ${input.issueType} template`, "", ...sections].join("\n").trimEnd() + "\n";
 }
 
+/** What one read of a type's facts gave: the facts, or that Jira did not answer (#4354). */
+type Read<T> = { readonly facts: T } | "unavailable";
+
 async function requiredCreateFields(
   request: JiraMutationRequest,
   project: ProjectFacts,
   issueTypeId: string,
-): Promise<readonly string[]> {
+): Promise<Read<readonly string[]>> {
   const metadata = await jiraCreateMutationMetadata(request, project.id, issueTypeId);
-  if (!metadata.ok) return [];
-  return metadata.fields
-    .filter((field) => field.required && !field.hasDefaultValue && !ROUTING_FIELDS.has(field.id))
-    .map((field) => field.name);
+  if (!metadata.ok) return "unavailable";
+  return {
+    facts: metadata.fields
+      .filter((field) => field.required && !field.hasDefaultValue && !ROUTING_FIELDS.has(field.id))
+      .map((field) => field.name),
+  };
 }
 
 async function sampledDescriptions(
   request: JiraMutationRequest,
   project: ProjectFacts,
   issueTypeId: string,
-): Promise<readonly string[]> {
+): Promise<Read<readonly string[]>> {
   const jql = `project = "${project.key}" AND issuetype = ${issueTypeId} ORDER BY created DESC`;
   const query = new URLSearchParams({
     jql,
@@ -301,10 +306,13 @@ async function sampledDescriptions(
   });
   const response = await request(`search?${query.toString()}`);
   const issues = response.ok ? asArray(response.body?.issues) : undefined;
-  return (issues ?? []).flatMap((issue): readonly string[] => {
-    const description = asRecord(asRecord(issue)?.fields)?.description;
-    return typeof description === "string" ? [description] : [];
-  });
+  if (issues === undefined) return "unavailable";
+  return {
+    facts: issues.flatMap((issue): readonly string[] => {
+      const description = asRecord(asRecord(issue)?.fields)?.description;
+      return typeof description === "string" ? [description] : [];
+    }),
+  };
 }
 
 export interface JiraTemplateProposal {
@@ -313,17 +321,43 @@ export interface JiraTemplateProposal {
   readonly sampledIssueCount: number;
 }
 
+/** Why a type has no proposal: a closed reason a person can act on (#4354). */
+export type JiraTemplateWithoutProposalReason =
+  "nothing-to-learn" | "template-invalid" | "jira-unavailable" | "beyond-limit";
+export interface JiraTemplateWithoutProposal {
+  readonly issueType: string;
+  readonly reason: JiraTemplateWithoutProposalReason;
+}
+const TYPE_NAME_MAX = 255;
+/** A type name as Jira states it, on one line and bounded; the person reads it in a count line. */
+function typeLabel(name: string): string {
+  return name.replace(/[\r\n]+/gu, " ").slice(0, TYPE_NAME_MAX);
+}
+
+type ProposalOutcome =
+  { readonly proposal: JiraTemplateProposal } | { readonly without: JiraTemplateWithoutProposal };
+
 async function proposalFor(
   request: JiraMutationRequest,
   project: ProjectFacts,
   type: { readonly id: string; readonly name: string },
-): Promise<JiraTemplateProposal | undefined> {
-  const [requiredFields, descriptions] = await Promise.all([
+): Promise<ProposalOutcome> {
+  const label = typeLabel(type.name);
+  const [fields, samples] = await Promise.all([
     requiredCreateFields(request, project, type.id),
     sampledDescriptions(request, project, type.id),
   ]);
+  const requiredFields = fields === "unavailable" ? [] : fields.facts;
+  const descriptions = samples === "unavailable" ? [] : samples.facts;
   const sections = deriveJiraTemplateSections(descriptions);
-  if (requiredFields.length === 0 && sections.length === 0) return undefined;
+  if (requiredFields.length === 0 && sections.length === 0) {
+    // A failed read is not "nothing to learn": Jira did not tell, so the lead can try again.
+    const reason =
+      fields === "unavailable" || samples === "unavailable"
+        ? "jira-unavailable"
+        : "nothing-to-learn";
+    return { without: { issueType: label, reason } };
+  }
   const markdown = renderProposedJiraIssueTemplate({
     projectKey: project.key,
     issueType: type.name,
@@ -331,29 +365,46 @@ async function proposalFor(
     sections,
   });
   return parseJiraIssueTemplate(markdown).ok
-    ? { issueType: type.name, markdown, sampledIssueCount: descriptions.length }
-    : undefined;
+    ? { proposal: { issueType: type.name, markdown, sampledIssueCount: descriptions.length } }
+    : { without: { issueType: label, reason: "template-invalid" } };
 }
 
 /**
  * Drafts one template per issue type of an existing project from its create metadata and a small
- * sample of its issues. Deterministic and read-only: the lead edits and saves what is proposed.
+ * sample of its issues. Deterministic and read-only: the lead edits and saves what is proposed. Every
+ * issue type of the project is accounted for: a proposal, or one closed reason why there is none, and
+ * `typeCount` is the number of types the project has (#4354).
  */
 export async function proposeJiraIssueTemplates(
   request: JiraMutationRequest,
   projectKey: string,
-): Promise<JiraTemplateInstanceRead<{ proposals: readonly JiraTemplateProposal[] }>> {
+): Promise<
+  JiraTemplateInstanceRead<{
+    proposals: readonly JiraTemplateProposal[];
+    withoutProposal: readonly JiraTemplateWithoutProposal[];
+    typeCount: number;
+  }>
+> {
   const read = await readProject(request, projectKey);
   if (!read.ok) return read;
   if (read.project === undefined) return { ok: false, reason: "not-found" };
   const { project } = read;
-  const proposals = await Promise.all(
+  const outcomes = await Promise.all(
     project.issueTypes.slice(0, ISSUE_TYPES_MAX).map((type) => proposalFor(request, project, type)),
   );
+  const beyondLimit = project.issueTypes
+    .slice(ISSUE_TYPES_MAX)
+    .map((type): JiraTemplateWithoutProposal => ({
+      issueType: typeLabel(type.name),
+      reason: "beyond-limit",
+    }));
   return {
     ok: true,
-    proposals: proposals.filter(
-      (proposal): proposal is JiraTemplateProposal => proposal !== undefined,
-    ),
+    proposals: outcomes.flatMap((outcome) => ("proposal" in outcome ? [outcome.proposal] : [])),
+    withoutProposal: [
+      ...outcomes.flatMap((outcome) => ("without" in outcome ? [outcome.without] : [])),
+      ...beyondLimit,
+    ],
+    typeCount: project.issueTypes.length,
   };
 }
