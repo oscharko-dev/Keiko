@@ -1254,6 +1254,52 @@ out of each format and compares them, including the v1 to v2 changes, with the t
 templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
 truth; the product under test may not.
 
+## Baseline templates: every lab write is governed (#4369, #4354)
+
+The product refuses a Jira write that no stored template governs. The existing lab lanes write
+without a template of their own (the document lanes, the project and role journeys, catalog Chat,
+the selection write cases, the restricted cases and the whole model-free AC7 driver), so one module
+keeps them working: `requirements/baseline-templates.mjs`.
+
+- **What it seeds.** At every lab product start, one fixture template per lab project and per issue
+  type that project has, imported through the product's own skill library routes (the path
+  `withTemplate` uses) and read back from the listing. Each template is named `Lab baseline <PROJECT>
+<Issue type>`, activates on `[create, edit]`, and carries one rule that no Jira summary can break
+  (`summaryMaxLength: 255`; the parser requires at least one rule). A plain activation governs every
+  write of that project and type under the current and the planned contract; `transition:<target>`
+  only adds rules for entering one status.
+- **Where it runs.** The templates live in the product's skill library, which is per product
+  instance, so the hook is the product start in `chat-read.mjs` (`runLabProduct` and the owned-child
+  path), shared by the Chat lanes and the model-free `withModelFreeJira`. A retained state that
+  already holds a pair is left untouched (idempotent); a missing pair is imported.
+- **Projects and issue types** are read natively as the lab administrator on every start
+  (`GET /rest/api/2/project`, then each project's `statuses`), bounded to 100 projects, 50 types per
+  project and 96 pairs in all (the library holds 128 skills). A listing that cannot be read or a
+  library that does not list every pair afterwards fails the lane as a lab error, never silently.
+- **Lab instances only.** The seed asserts `KEIKO_OS_KEYCHAIN=off` and a state directory the lab
+  created itself (`keiko-jira-live-chat-*`, under the session or the OS temporary directory). It is
+  never written into a real state directory.
+- **Journeys that install their own templates** keep them in full: the product ANDs every governing
+  template, so the rule-free baseline never narrows a journey's rules, and the journey's cleanup
+  removes only its own template.
+- **Opting out.** A lane that proves "no template governs" starts without the baseline. The
+  per-call option `baselineTemplates: false` (default on) exists on `withLiveChat` and
+  `withModelFreeJira`, so one journey of a run can differ from the others; the environment value
+  `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off` is the global switch and wins over a `true` option.
+  `withBaselineSuspended(request, projects, body)` removes the baseline for the duration of `body`
+  and seeds it again, verified, afterwards; it is for a journey that must switch inside one product
+  instance and is not wired anywhere.
+- **Effect before #4354.** The baseline adds no refusal: a template that cannot be violated changes
+  no verdict. It is not free of side effects, though. A template that activates on `create` switches
+  on the product's draft preflight (`firstJiraDraftTemplateRefusal`), which reads Jira once per draft
+  item before approval. A lab draft therefore causes extra native Jira reads (the create metadata
+  and field catalog) and a different read order. Writes, their dispatch count and their order are
+  unchanged. Of the lane observers, only `consent-lifecycle` counts reads (`GET` of one issue key)
+  and `pagination-chat` inspects search pages; neither observes the reads the preflight adds, and
+  the write witnesses (`restricted-cases`, the project-agile witness, the AC7 runtime) let `GET`
+  requests pass uncounted. A new lane that counts or orders native Jira reads of create drafts must
+  start without the baseline. After #4354 the baseline is what lets the existing lanes write.
+
 ## Moving the laboratory to the next Jira Data Center release
 
 The release is pinned in three places that must name the same `tag@sha256:digest`: the `jira`
@@ -1371,3 +1417,245 @@ results in `browser-limit-followup.pending.json`. The earlier `ac4-hierarchy` or
 unexpected, so do not run the limit run's hierarchy step against a project that holds these Stories.
 Hermetic tests: `scripts/__tests__/jira-lab-story-bulk.test.mjs`, `jira-lab-story-templates.test.mjs`,
 `jira-lab-coding-jira.test.mjs` and `jira-lab-limit-followup.test.mjs`; they are not live acceptance.
+
+## Release 1 lab: fixtures, German session, private address, renewal (#4369)
+
+**Which fixtures a fresh session holds.** `node release-1-fixtures.mjs <session> --inventory` reads them
+natively and prints closed facts; a missing fixture reads `false` or `0`, never an error.
+
+| Need of the Release 1 walk                                          | Provided by                                                                                      | Inventory fact                                     |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| A restricted second identity (reads `ISOLATED`, refused on `KEIKO`) | `seed.mjs` (restricted PAT) and `seed-permissions.mjs`                                           | `restrictedSecondIdentity`                         |
+| A required custom field (`Keiko required text`)                     | `qualify-fields.mjs`                                                                             | `requiredCustomFieldOnCreate`                      |
+| The required field on a transition screen (Done)                    | `qualify-fields.mjs`                                                                             | `requiredFieldOnTransitionScreen`                  |
+| Pagination volume beyond three pages of 100                         | `LRG` of `requirements/seed-projects.mjs` (2,490 issues) and the 21 issues of `seed-content.mjs` | `paginationIssues`, `paginationMoreThanThreePages` |
+| A project whose issue types differ in their estimate field          | `requirements/seed-estimate-mix.mjs` (`EST`)                                                     | `estimateMixTypes`                                 |
+| Epic Link and Parent Link side by side                              | `requirements/seed-parent-fields.mjs` (`PAR`)                                                    | `parentFieldsSideBySideTypes`                      |
+| A German-language Jira                                              | `seed-language.mjs`                                                                              | `language`                                         |
+
+`node release-1-fixtures.mjs <session> [--language de]` completes a seeded session with the last three in
+the one order that works and prints the inventory. Seed first (`seed.mjs`, `qualify-fields.mjs`,
+`seed-content.mjs`, `requirements/seed-projects.mjs`, `requirements/seed-estimates.mjs`).
+
+- **`EST` (estimate mix).** A project created from the Scrum template through REST offers Story Points on
+  Epic and Story only, through the field's own Jira Software context. The seed adds Story Points to the
+  default screen and time tracking to the Bug screen alone, so one project holds three shapes: Epic and
+  Story carry Story Points, Bug carries Original Estimate, Task and Sub-task carry no estimate field.
+  `<session>/estimate-mix-truth.json` holds, per type, what Jira's create metadata offers and the
+  `estimated`, `unestimated` (offered but empty) and `notApplicable` counts, read back natively. A report
+  that stops at the first issue of a type without the field, or that counts "not applicable" as
+  unestimated, is graded against it.
+- **`PAR` (parent fields).** Epic Link (Jira Software) and Parent Link (Advanced Roadmaps,
+  `com.atlassian.jpo:jpo-custom-field-parent`) are found by schema type and offered together on Epic,
+  Story, Task and Sub-task; Bug keeps Epic Link only. An instance without the Parent Link type fails the
+  seed closed: the lab never stands in for it with a text field of the same name.
+- **German session.** Jira Data Center localizes per user, and Keiko acts as the lab actor whose token it
+  holds. `seed-language.mjs <session> de` sets `de_DE` for every actor except the administrator through
+  `PUT /rest/api/2/mypreferences?key=jira.user.locale` (the body is the bare locale text) and proves it
+  by native reads: statuses read `Zu erledigen`, `In Arbeit`, `Fertig`. `en` restores the default. The
+  administrator stays English because the lab's administration automation drives labelled English pages,
+  and the German locale is applied last: `qualify-fields.mjs` failed on localized names (observed
+  2026-11-13). The report counts by status and the JQL by issue type name must work in this session.
+- **HTTPS front on a private address.** `KEIKO_JIRA_LAB_PRIVATE_ADDRESS=<private IP>` at
+  `session.mjs init` records one RFC 1918 or link-local IPv4 address. The certificate then names
+  it, the Host guard accepts it and `compose.private.yaml` publishes the TLS port on it beside loopback, so
+  a private-class Jira URL can be walked live and a Windows guest reaches the lab without a tunnel.
+  Loopback, wildcard, IPv6 and public addresses are refused; without the variable nothing changes.
+
+**Limit of the renewal (AC4).** A token revoked outside the lab is not recreated automatically: the owner of the
+tokens refuses to guess (`active-token-not-observed`, `initial-creation-unreconciled`) and the operator restores it by
+hand (remove the actor's `*-token` files and its `pat-creation-started` marker, then run `fixture-tokens.mjs`).
+
+**Document set and language.** The requirements (document) set reads the oracles as the administrator for a session
+without `language.json`, for any `en_*` and for any other locale, and as the localized lab actor only for `de_DE`; it
+refuses nothing, so its default path stays byte-identical for sessions that never ran `seed-language.mjs`. The Composer
+set refuses a session without a language record and any locale other than `en_*` and `de_DE`.
+
+**Renewal and isolation.** Every run starts with `prepareLabRun`: the license window (`ensureLicenseWindow`
+restarts the owned lab), the Personal Access Tokens (`ensureFixtureToken`) and the TLS certificate
+(`tls-window.mjs` runs the owned session's `start`, which regenerates the certificate generation and
+recreates only the TLS front) are renewed by the run itself, at a boundary where no other lane uses Jira.
+The limit run additionally checks the license window before every step (`ctx.checkLicense`). The lab sets
+`KEIKO_STATE_DIR` to `<session>/chat-read-logs` for its process and every child beside `KEIKO_MEMORY_DIR`,
+so no diagnostics writer falls back to `<cwd>/.keiko`.
+
+**Selection lane.** `catalog-selection.mjs` holds a case for `jira.update-comment`, `jira.get-comment`,
+`jira.create-issue-link`, `jira.link-types`, `jira.users`, `jira.myself`, `jira.fields`,
+`jira.priorities`, `jira.statuses`, `jira.resolutions`, `jira.project-statuses` and `jira.delete-issue`, all
+on lab-owned objects (a comment the api actor owns, and a fresh issue for each delete attempt). The report
+and `latest.md` carry a `jira.describe` line counting, per valid turn, the catalog's `invalid-arguments`
+refusals of the model's selection call, which the gateway-level refusal count never sees. Run new cases
+alone and repeat them: `node catalog-selection.mjs <session> <model> --only <ids> --repeat 3`.
+
+**Oracles.** Every report grader reads numbers and rows through `requirements/answer-cells.mjs`
+(German `1.170`, `;`, TAB and Markdown rows). S16 names the failed check (`summary`, `label` or `section`)
+with a count of issues each. S17 grades the interruption `unverified` when the 1,800 s lab limit ended the
+turn, like the refresh part.
+
+**Limit run without the sprint package.** `node browser-limit-run.mjs <session> <model> <embedding> <permitted-token>
+<denied-token> <LIMn> --steps without-sprint` runs templates and probes, the bulk write with deliberate
+violations and the kill at about 40 %, the hierarchy with relations, the report compared with JQL, and the
+English and German card checks, and leaves out the sprint-at-scale package (Agile child). It prints one
+closed verdict per step. Because a package was left out, its overall verdict is `partial`, never `green`:
+the printed line and the orchestrator record carry `steps: "without-sprint"`, `partial: true` and the skipped
+step names, and only a full set can end `green`.
+
+## Composer lane: Jira writes from the Chat composer (Release 1, #4369)
+
+A second lane inside this lab, not a second lab: same Jira, fixtures, template helpers, native oracles,
+scorecard, coverage, repeat and validity machinery. It needs **no Knowledge Pod and no requirements
+document** and **assumes no model**: it runs with any lab gateway configuration. Its Chats are bound to the
+Jira Pod only (no Knowledge scope, no structure skill, no `prepareDataPod`), and its scenarios have their own
+ids, `C01`–`C09`. `S01`–`S20` and the document lane are unchanged; the lane adds only parameters and exports
+to existing modules, and a hermetic test pins that a run without `--set composer` still prepares the Pod
+and binds it.
+
+```sh
+# The whole lane, three rounds each (a reachable Jira and a model slot are required)
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session \
+  --project REQ --set composer --model <chat-model-id> --repeat 3
+
+# One scenario, one type, one mode (a first functional pass on any gateway)
+... scorecard.mjs /absolute/private/session --project REQ --set composer --model <id> \
+  --only C02 --types task --modes ask
+```
+
+`--only` takes only ids of the selected set (`C01`…`C09` with `--set composer`); anything else is a usage
+error, never an empty report. `--types` (`epic,story,task,sub-task,bug`) and `--modes`
+(`ask,supervised,full-access`) narrow C01, C02 and C03; obligations of what was not selected stay uncovered,
+so the scenario reads `partial`. The report goes to `<session>/composer-scorecard/<model id>/` (`latest.md`,
+a JSON report and `trend.tsv`), apart from `requirements-scorecard/`, and its header names the model.
+
+Every journey empties the work project REQ first and creates its own parents natively (an Epic and a Task;
+required fields are read from REQ's own create metadata). From `requirements-truth.json` the lane reads only
+`fieldIds.epicName` and `fieldIds.epicLink`; C07 (S10 and S11) needs the whole file. A template of the
+work project that this lane did not create stops the journey as a lab state (`invalid`), a leftover of this
+lane (named `…-Composer-<Type>`) is removed at journey start, and a template named as a baseline is allowed for
+the types a journey governs itself. C03 and C04 prove a missing template, so the scorecard runs them in their
+own product start with `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off`.
+
+| Id  | Obligation (graded from Jira, never from the product's answer)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | With templates for Epic, Story, Task, Sub-task and Bug active at once, a plain titled instruction creates each type conformant (Story, Task and Bug in the named Epic, the Sub-task under the named Task, the Bug linked to it); one request creates three Tasks: all exist natively (hard), every key stands in a stored write result of the turn (hard, `multi-create-keys-listed`), and the answer lists every key (soft, `multi-create-answer-keys`)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| C02 | A request that violates the template is refused before any approval card and before any effect, per type and in each of the three autonomy modes; the corrected request then succeeds. A violating issue that exists in Jira is red whatever the tool trace says (15 runs)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| C03 | No template for the type, per type and mode, three obligations: `no-template-refused-*` (hard) nothing was created natively, any type; `no-template-hint-*` (hard) the stored tool exchange of the turn carries the product's closed missing-template refusal and its own guidance text, both derived from the producer of the build; `no-template-answer-*` (soft) the answer mentions the template and claims no created issue. **The hard hint half is `unverified` until the producer defines the refusal (#4354)**                                                                                                                                                                                                                                                                                                                                                                           |
+| C04 | The edit rules, compared natively before and after: a breaking edit (clear a section, remove the parent) is refused through any tool; an edit of an issue with a pre-existing violation in an untouched field passes with the product's stored notice (hard, `edit-preexisting-notice`) and the answer names the violation (soft, `edit-preexisting-answer`); an edit of a type without template and a status change without template pass. The breaking-edit obligations are red until #4354 lands                                                                                                                                                                                                                                                                                                                                                                                               |
+| C05 | One conversation, three turns in ONE Chat: an order creates one Task; the product's stored conversation is read again and must hold the messages the turn observed (`stored-conversation-matches-turn`; the lab has no browser and performs no page reload: it is a second read of the stored messages); the same order is sent again after that read (`repeat-after-reread-*`), and once more straight away (`repeat-in-chat-*`). Each repeat has a hard obligation (`repeat-after-reread-no-duplicate`, `repeat-in-chat-no-duplicate`): it created no issue of ANY summary or type and the issue of the first order still carries its title (a second issue is red as a model finding), and a soft obligation (`…-reply-refers`): the reply refers to the first issue by key in the answer or in a stored result card. A step that failed or answered nothing leaves the obligations unverified |
+| C06 | The three modes and a readable approval, with the document lane's S18 grader and a plain Bug request                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| C07 | S10 and S11 unchanged, in a Jira-Pod-only Chat                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| C08 | "Add me as a watcher", "write this comment" and "remove me again" by plain instruction: the native watcher list, the comment body and its author; no template involved                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| C09 | A request to attach a file: nothing reaches Jira, no attach call succeeds or is offered and no write succeeds (hard, `attachment-refused`; a turn that failed or answered nothing is `unverified`), and the answer says attachments are not part of this release (soft, `attachment-answer-readable`). Red until #4354 lands; no attachment case exists anywhere else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+
+Reused by parameter, not copied: `templateMarkdown` (`activateOn`), `gradeTemplateRepair` (`conforms`),
+`templateRefusals`, `modesAndReadableApproval` (`promptFor`, `query`), `runJourneys` (`set: "composer"`),
+`JOURNEYS.S10`/`S11`. A grade of `red` is a product finding, never `invalid`: only a lab outage, a transport
+failure, a lab state (a foreign template) or missing gateway evidence makes a run `invalid`.
+
+The selection lane (`catalog-selection.mjs`) holds one create case per issue type: `create-task` and
+`create-subtask` in the fixture project, and `create-epic`, `create-story` and `create-bug` in the Scrum
+work project REQ (the fixture project offers only Task and Sub-task; a session without REQ makes those three
+invalid, never wrong). The REQ cases hold the work-project lock a journey's reset takes.
+
+**What the REQ create cases ask of the product.** `create-epic`, `create-story` and `create-bug` name only the issue type
+and the summary. REQ's own required fields are the Epic Name (Epic) and, on every type, the system field `reporter`. The
+product's creates in the Azure pass of 2026-11-13 carried no `reporter` and succeeded, so the product path needs none; the
+lab's own native fixture creates fill it with the creating account. The Epic Name is not filled by the product: finding it
+through `jira.create-fields` and supplying it is part of what the case asks the model, and a refusal that names it is
+recoverable in the same turn. The baseline templates of the lab add no rule (see "Baseline templates"), so no template
+refuses these prompts.
+
+**German session and the Composer graders.** The Composer graders compare English issue type names. Jira shows the
+reading account its own names (in `de_DE` the Task type reads `Aufgabe`, the Sub-task type `Sub-Task`), so a German
+session runs only `--only C07 --parts s10`; any other Composer selection on it is refused before a journey starts.
+
+**S10 and the product's estimate rule.** S10 derives its expected estimate from native data: the board's
+configured estimation field is the figure when any issue holds a value in it; otherwise the other field
+(Original Estimate, or Story Points) becomes a labelled fallback and the configured field is stated unused;
+when both hold values the other field's count and sum are named; when neither does the figure is zero of N.
+The prompt asks for the statements as `QUELLE;…`, `UNGENUTZT;…` and `WEITERES;…` lines, graded as the
+obligations `estimate-source-labelled`, `configured-unused-stated` and `other-estimate-field-named`.
+`requirements/seed-estimate-cases.mjs` seeds one project per case (`ESF` fallback, `ESR` reverse, `ESB` both,
+`ESN` neither; configuring the board for `ESR` uses Jira's greenhopper estimation endpoint and fails closed
+when the board does not report the field afterwards) and `KEIKO_JIRA_LAB_ESTIMATE_PROJECT=ESF` points S10 at
+one of them. A lab context without a native reader keeps the truth file's estimate.
+
+**S10 without native estimate facts.** When the board's estimation field or the native reader is unavailable, the
+estimate figure and the three rule statements are `unverified` with the reason in the detail line, never green and never
+graded against the truth file's estimate. The prompt states that the WEITERES sum is a bare number (hours for the time
+field, points otherwise); a unit inside a cell is unparseable and red. Where no issue holds any estimate an UNGENUTZT
+statement naming the configured field is accepted. The report header lists two limits: S10's native reads are made as the
+lab administrator (an account that cannot read the field is not graded) and S11's unavailable case is graded partly on the
+product's own statement. The limit-run step set `release-1` was renamed `without-sprint`; the old name is refused.
+
+**Comparability of S10 (from 2026-11-13).** S10 always receives the estimate-rule prompt and carries three more
+obligations (`estimate-source-labelled`, `configured-unused-stated`, `other-estimate-field-named`) in the document
+lane and in C07. Its results are not comparable with any run before 2026-11-13.
+
+**Composer runs need a language record.** A Composer run reads the session's `language.json` (written by
+`seed-language.mjs <session> en|de`) and accepts only `en_*` (oracles read as the administrator) and `de_DE` (only
+`--only C07 --parts s10`); a missing record or another locale is refused before any journey, because the English
+graders would misjudge a Jira that shows other names.
+
+**What a Composer verdict rests on.** The hard verdict comes from what Jira and the PRODUCT state
+deterministically; the model's prose is graded softly and apart. A soft failure is a model observation: it is shown
+as `unverified` with the words "model observation", never red. The expected refusal ids and the hint text are derived
+from the producer (the built contracts and connectors packages: `JIRA_TEMPLATE_RULE_IDS` and
+`jiraTemplateViolationGuidance`), never from a copy; a producer that defines no such refusal in this build leaves the
+hard half `unverified`. `no-template-refused-*` is green only when nothing was created AND the turn ran and attempted a write or stored a refusal (a turn that only talked, stayed silent or failed is `unverified`; an issue that exists is red whatever the turn did). The stored guidance is compared with the producer's text for the union of every violation of the exchange (a draft carries one refusal per failed item); a replayed refusal (`replayed`, carrying `JIRA_ALREADY_REFUSED_GUIDANCE`) or a draft that mixes uncertain, pending or field-error items is `unverified`, never red. With a producer that defines no missing-template refusal the hint half still reds an approval card shown for the write and a write that succeeded. C03 is three obligations (nothing created natively, the stored product refusal and its own
+guidance, then the answer mentioning the template without claiming a created issue); the unrepairable parent request of
+C01 likewise (nothing created, the stored `parent-type-mismatch` refusal whose subject names the allowed parent type and
+whose text is the producer's guidance, then an answer without the bare rule id that names the parent type; the product's
+refusal does not name the type that was found). The two breaking edits of C04 require a traced `jira.edit` rejection
+naming a content rule of the template (`section-missing`, `section-empty`, `parent-missing`, `field-missing`); the
+pre-existing violation of C04 requires a succeeded `jira.edit` carrying a `templateNotices` entry for `section-missing`,
+and no other field of the issue may change. The wording of the answer (naming the remaining violation, saying
+attachments are not part of the release, listing the created keys, referring to the first issue) is never part of a hard obligation: each has its own soft obligation, a model observation.
+C09 binds to the `jira.attach` operation (model alias `jira_attach`): a call of it that succeeded, or that was
+offered to a human as an approval card, is red until #4354 switches attachments off; with it off no call can exist.
+In both states the native attachment count must stay and no write of any kind may have succeeded in the turn. A create of any other type than the requested one is red in C01 and C02. C01's
+several-at-once request is graded on the three requested titles. C08 reads the watcher list before the turn
+(the user already watching is an `invalid` lab state) and a comment on the fixture's other issue is red.
+**No-model rehearsal.** `scorecard.mjs <session> --project KEIKO --set composer --rehearse` (no `--model`, refused
+with one) runs every journey of the selected scenarios against the live Jira and a model-free product, with only the
+model turn replaced by an empty one: template preparation and hygiene, native fixture creation per issue type with the
+project's own required fields (a required user field such as `reporter` is the creating account; `parent` only from the
+fixture; any other unknown required field fails closed naming the field, its schema type and the issue type), native
+reads, and cleanup of every issue the rehearsal created in REQ. It prints one JSON line: `passed`, `exercised`,
+`failed` (the lab error per journey), `removedLeftovers` and `notExercised` (the model turn, the verdicts, the gate
+against a model's write). The verdicts of an empty turn are never read. A lane head goes to a model only after a green
+rehearsal on a live Jira. The rehearsal and the real Composer run write REQ inside `withFixtureFieldOptional`: a
+session that ran `qualify-fields.mjs` holds a field required in every project (not on REQ's screens, so unfillable),
+which the bracket lifts for the run and restores afterwards; without that field the bracket does nothing.
+
+**Disclosed limits of C05.** There is no same-summary detection across Chats: an explicit order in a new Chat is a new order,
+Jira itself permits equal summaries, and a title block would refuse legitimate work, so a duplicate across two fresh Chats
+is NOT covered, by design. Release 1 promises that a reload never duplicates a write; C05 proves that a repeated order in
+one conversation, after the product's stored conversation was read again and straight away, creates none, and makes no
+claim about reconciliation. The lab has no browser: no page reload is performed.
+
+**Declared exceptions to hard and soft.** Two kinds of obligation are graded from the answer's content and may go
+red from it, for the same reason: in them the stated figure or the absence of a raw key IS the product output under
+test, graded against an independent truth. (1) `answer-clean` (#4355): no raw result key in the answer, read against
+the stored result and the stored message flag. (2) The report graders C07 reuses from S10 and S11:
+`counts-by-type-status`, `per-epic-progress`, `estimate-totals`, `estimate-source-labelled`,
+`configured-unused-stated`, `other-estimate-field-named`, `deviating-issues` and `deviation-detail`; each compares the
+figure the report states with Jira's native truth. Inside C07 the S10 and S11 parts use the strict aggregate too, so an
+unverified part makes the scenario `unverified`, not `partial`. Every other Composer obligation is hard or soft as
+described above.
+
+**The unrepairable-parent gate on a build without the rule.** `unrepairable-refused-by-gate` is `unverified` on a build
+whose producer does not define `parent-type-mismatch` (the same way the missing-template hint is `unverified` without
+`template-missing` / `template-not-activated`): the expected value cannot be derived, and it is never guessed.
+
+**Statuses and exit code.** A journey with any part that could not be verified (a turn that never ran, evidence the
+product did not store, a model observation) is `unverified` and never logs `green`; its green parts still credit their own
+obligations, and the scenario is reported `unverified` in its own column of `latest.md` and `trend.tsv`, distinct from
+`partial` (which only misses obligations). A model run (`--model`) exits 0 only when EVERY selected scenario is green;
+red, partial, unverified, invalid, probe-only and unchecked exit 1. The rule applies to the document lane's model runs as well (a run without `--model`, the probes only, writes its report and exits 0).
+`--rehearse` keeps its own rule: it exits 0 when no
+journey stopped on a lab error.
+
+The Composer lane takes from `requirements-truth.json` only the work project and the two parent field ids
+(`projects.work`, `fieldIds.epicName`, `fieldIds.epicLink`); a group that contains C07 receives the whole record
+because S10 and S11 compare against it.

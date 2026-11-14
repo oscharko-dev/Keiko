@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -19,14 +20,16 @@ import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { chatReadLogDirectory, jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
 import { eachJourneyInLicenseWindow, ensureLicenseWindow } from "./license-window.mjs";
+import { LabOutageError, labJiraState } from "./lab-health.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
 import { WORK_PROJECT, clearWorkProject } from "./work-project-reset.mjs";
-import { basicAuth, labRequest } from "../lab-client.mjs";
+import { actorDetails, basicAuth, checked, labRequest } from "../lab-client.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { writeCorpusDocuments } from "./corpus-documents.mjs";
 import { FORMATS } from "./formats.mjs";
 import { startDuring } from "./mid-turn.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
+import { COMPOSER_JOURNEYS } from "./composer.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
 import { aggregateRuns } from "./repeat.mjs";
 import {
@@ -42,6 +45,7 @@ import {
   showsOutage,
 } from "./validity.mjs";
 import { sequentially } from "./journey-support.mjs";
+import { storedMessageOf } from "./raw-keys.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
 const READINESS_LIMIT_MS = 120_000;
@@ -224,6 +228,8 @@ async function settledTurn(ctx, chat, prior) {
   const toolExchanges = user?.toolTranscript?.exchanges ?? [];
   return {
     answer: assistant?.content ?? assistant?.groundedAnswer?.content ?? "",
+    // The ids of every message the conversation held when the turn settled (the stored-conversation obligation).
+    messageIds: observed.messages.map((message) => message.id),
     toolCalls: toolExchanges.length,
     toolExchanges,
     requirementReads: toolExchanges.filter((entry) =>
@@ -325,7 +331,20 @@ function appendJqlIssues(state, issues) {
 }
 
 /**
- * The existing independent admin search, with receipts of the actual GET pages. `maxResults`
+ * The account the oracles read Jira as. Jira localizes per user, and the product acts as the lab actor
+ * `api`: in a German-language session (`language.json` says `de_DE`) the oracle reads as that same
+ * actor, so the type, status and field names it compares are the names the product sees. Any other
+ * session reads as the administrator, as it always did.
+ */
+export function oracleReader(session) {
+  if (typeof session?.directory !== "string") return "admin";
+  const path = join(session.directory, "language.json");
+  if (!existsSync(path)) return "admin";
+  return JSON.parse(readFileSync(path, "utf8")).locale === "de_DE" ? "api" : "admin";
+}
+
+/**
+ * The existing independent search (as `oracleReader`), with receipts of the actual GET pages. `maxResults`
  * records the fixed requested size, not the report tool's own pagination. One flat continuation
  * keeps reads sequential without retaining one unresolved promise per native page.
  */
@@ -337,7 +356,7 @@ export function pagedJql(session, query, fields = "summary") {
       Promise.resolve()
         .then(() => {
           const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&startAt=${startAt}&maxResults=100&fields=${encodeURIComponent(fields)}`;
-          return labRequest(session, "GET", path, basicAuth(session, "admin"));
+          return labRequest(session, "GET", path, basicAuth(session, oracleReader(session)));
         })
         .then((response) => {
           const page = admitJqlPage(response, startAt, state.total);
@@ -365,7 +384,7 @@ async function jql(session, query, fields = "summary") {
 }
 async function jqlCount(session, query) {
   const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&maxResults=0`;
-  const page = await labRequest(session, "GET", path, basicAuth(session, "admin"));
+  const page = await labRequest(session, "GET", path, basicAuth(session, oracleReader(session)));
   if (page.status !== 200 || !Number.isSafeInteger(page.value?.total))
     throw new TypeError(`Oracle count failed (${page.status})`);
   return page.value.total;
@@ -444,14 +463,158 @@ async function freshBoundChat(ctx, session, modelId, capsuleId, toolMode) {
   return { ...bound, chat: { ...bound.chat, jiraPodBinding } };
 }
 
+/**
+ * A fresh Chat for the Composer lane: bound to the Jira Pod only (the default of every Chat), in the
+ * given mode. It carries no Knowledge Pod scope and no structure skill (#4369).
+ */
+async function composerChat(ctx, session, modelId, toolMode) {
+  const base = await prepareChat(ctx.origin, ctx.cookie, session, ctx.projectPath, modelId);
+  const bound = await api(
+    ctx,
+    "bind",
+    `/api/chats?id=${encodeURIComponent(base.id)}`,
+    { toolMode, expectedGroundingScopeIdentity: base.groundingScopeIdentity },
+    "PATCH",
+  );
+  const jiraPodBinding = bound.chat.jiraPodBinding ?? base.jiraPodBinding;
+  return { ...bound, chat: { ...bound.chat, jiraPodBinding } };
+}
+
+/** The two journey lanes: how a journey's Chat is bound, and which table its id is looked up in. */
+// The journey tables are read when a journey runs, not when this module loads: progress-report.mjs
+// imports this module, so the tables may still be initializing while the import graph is built.
+const DOCUMENT_LANE = Object.freeze({
+  get journeys() {
+    return JOURNEYS;
+  },
+  bind: (ctx, session, modelId, capsuleId, mode) =>
+    freshBoundChat(ctx, session, modelId, capsuleId, mode),
+});
+const COMPOSER_LANE = Object.freeze({
+  get journeys() {
+    return COMPOSER_JOURNEYS;
+  },
+  bind: (ctx, session, modelId, _capsuleId, mode) => composerChat(ctx, session, modelId, mode),
+});
+
+const SYNTHETIC_VALUE = "Synthetic required value";
+
+/**
+ * The required fields a native create must still fill, read from the project's own create metadata
+ * for the issue type (never from another project's fixture). See `requiredValue` for what each type
+ * of field gets; any other required field fails closed, naming the field and the issue type.
+ */
+export async function requiredFieldValues(session, fields) {
+  const auth = basicAuth(session, "admin");
+  const project = fields.project.key;
+  const typeName = fields.issuetype.name;
+  const base = `/rest/api/2/issue/createmeta/${encodeURIComponent(project)}/issuetypes`;
+  const types = await checked(session, "composer-create-types", "GET", base, auth);
+  const type = (types.values ?? []).find((entry) => entry.name === typeName);
+  if (type === undefined) throw new TypeError(`${project} has no issue type ${typeName}`);
+  const meta = await checked(
+    session,
+    "composer-create-meta",
+    "GET",
+    `${base}/${type.id}?maxResults=200`,
+    auth,
+  );
+  const missing = (meta.values ?? []).filter(
+    (field) => field.required && !Object.hasOwn(fields, field.fieldId),
+  );
+  return Object.fromEntries(
+    missing.map((field) => [field.fieldId, requiredValue({ project, typeName }, field)]),
+  );
+}
+
+/** The synthetic value of the schema types that need no allowed value (a user field is the creator). */
+const SCALAR_VALUES = new Map([
+  ["user", () => ({ name: actorDetails("admin").name })],
+  ["number", () => 1],
+  ["date", () => new Date().toISOString().slice(0, 10)],
+  ["datetime", () => new Date().toISOString().replace(/Z$/u, "+0000")],
+]);
+
+/** The synthetic value of a required field of one schema type, or undefined when none is known. */
+function syntheticValue(field) {
+  const type = field.schema?.type;
+  const first = Array.isArray(field.allowedValues) ? field.allowedValues[0] : undefined;
+  if (type === "string" && first === undefined) return SYNTHETIC_VALUE;
+  const scalar = SCALAR_VALUES.get(type)?.();
+  if (scalar !== undefined) return scalar;
+  if (first === undefined) return undefined;
+  const option = { id: String(first.id) };
+  return type === "array" ? [option] : option;
+}
+
+/**
+ * A required field gets: a synthetic text, the creating account (a user field such as `reporter`), a
+ * number, a date, or the first of its allowed values (an array of them for an array field). Anything
+ * else — `parent` included, which only the fixture can name — fails closed with the field's id, name
+ * and schema type and the issue type, so a lab error is never a bare "cannot be filled".
+ */
+function requiredValue({ project, typeName }, field) {
+  const value = syntheticValue(field);
+  if (value !== undefined) return value;
+  throw new TypeError(
+    `A required field of ${project} cannot be filled natively: ${field.fieldId} "${field.name ?? "unnamed"}" (schema type ${field.schema?.type ?? "unknown"}) on ${typeName}`,
+  );
+}
+
+/** What Jira said to a refused native create, as lab text: its messages and per-field errors, bounded. */
+function refusalText(value) {
+  const messages = Array.isArray(value?.errorMessages) ? value.errorMessages : [];
+  const fields = Object.entries(value?.errors ?? {}).map(([id, text]) => `${id}: ${text}`);
+  return redactLabDetail([...messages, ...fields].join("; ")).slice(0, 400);
+}
+
+/** A native admin create (fixtures of the Composer lane); returns the new issue key. */
+async function createNativeIssue(session, fields) {
+  const required = await requiredFieldValues(session, fields);
+  const created = await labRequest(
+    session,
+    "POST",
+    "/rest/api/2/issue",
+    basicAuth(session, "admin"),
+    { fields: { ...required, ...fields } },
+  );
+  if (created.status !== 201 || typeof created.value?.key !== "string")
+    throw new TypeError(
+      `The native create of a ${fields.issuetype.name} in ${fields.project.key} was refused (HTTP ${created.status}): ${refusalText(created.value)}`,
+    );
+  return created.value.key;
+}
+
 export { JOURNEY_IDS };
 
 /** The live plumbing the journey checks are given (see journey-checks.mjs). */
-function journeyContext(live, session, truth) {
+export function journeyContext(live, session, truth) {
   const ctx = {
     ...live,
     truth,
+    // The account the oracles read Jira as (the administrator unless the session is German).
+    oracleReader: oracleReader(session),
+    // The type and status names that account sees, for the oracles that compare names.
+    displayNames: async () => {
+      const reader = oracleReader(session);
+      if (reader === "admin") return { types: new Map(), statuses: new Map() };
+      const read = (actor) => (path) =>
+        checked(session, "native-read", "GET", path, basicAuth(session, actor));
+      const { displayNames } = await import("./large-project.mjs");
+      return displayNames({ english: read("admin"), local: read(reader) });
+    },
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
+    // The stored assistant message of the Chat (its grounded-answer uncertainty is the flag state).
+    storedAnswer: async (chat, answer) =>
+      storedMessageOf(
+        (await api(ctx, "stored-answer", messagesPath(ctx, chat), undefined, "GET")).messages,
+        answer,
+      ),
+    // The product's stored conversation, read again: the ids of the messages it holds (no browser, no reload).
+    readStoredConversation: async (chat) =>
+      (
+        await api(ctx, "read-stored-conversation", messagesPath(ctx, chat), undefined, "GET")
+      ).messages.map((message) => message.id),
     search: (query, fields) => jql(session, query, fields),
     searchPages: (query, fields) => pagedJql(session, query, fields),
     count: (query) => jqlCount(session, query),
@@ -468,6 +631,13 @@ function journeyContext(live, session, truth) {
         '"reason":"authority-invalid"',
       ),
     labSprint: () => labSprintSetup(session, WORK_PROJECT),
+    // The oracles that derive their expectation from Jira itself (the S10 estimate rule).
+    nativeGet: (path) =>
+      checked(session, "native-read", "GET", path, basicAuth(session, oracleReader(session))),
+    ...(/^[A-Z][A-Z0-9]{1,9}$/u.test(process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT ?? "")
+      ? { estimateProject: process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT }
+      : {}),
+    nativeCreate: (fields) => createNativeIssue(session, fields),
   };
   return ctx;
 }
@@ -507,7 +677,7 @@ async function restoreSpecification(ctx, check) {
 }
 
 /** One journey in its own fresh bound Chat; a lab error is an invalid check, a failed Keiko route stays red. */
-async function runJourney({ ctx, session, modelId, capsuleId, id }) {
+async function runJourney({ ctx, session, modelId, capsuleId, id, lane = DOCUMENT_LANE }) {
   let check;
   try {
     const mode = JOURNEY_MODES[id] ?? "autonomous-delivery";
@@ -515,8 +685,8 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
       session.directory,
       id,
       async () => {
-        const bound = await freshBoundChat(ctx, session, modelId, capsuleId, mode);
-        return JOURNEYS[id](ctx, bound.chat);
+        const bound = await lane.bind(ctx, session, modelId, capsuleId, mode);
+        return lane.journeys[id](ctx, bound.chat);
       },
       {
         log: (line) => console.log(JSON.stringify(line)),
@@ -579,7 +749,12 @@ export async function modelUnavailable(ctx, session, modelId) {
 }
 
 /** One graded run: readiness first, then the journey re-graded against its gateway evidence. */
-async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
+async function gradedRun({ lane, labState = labJiraState, ...run }) {
+  const { ctx, session, modelId, capsuleId, id, readiness } = run;
+  // A journey that starts while the lab's own Jira is down is invalid with that cause, never red.
+  const before = await labState(session);
+  if (before.state !== "licensed")
+    return invalidCheck("lab-outage", `the laboratory Jira was ${before.state} before the journey`);
   const refused = await readiness(ctx, session, modelId);
   if (refused !== undefined) {
     if (refused.unavailable)
@@ -590,26 +765,20 @@ async function gradedRun({ ctx, session, modelId, capsuleId, id, readiness }) {
     return redCheck("product-route-failed", `readiness turn failed: ${refused.detail}`);
   }
   const fromMs = Date.now();
-  const check = await runJourney({ ctx, session, modelId, capsuleId, id });
+  const check = await runJourney({ ctx, session, modelId, capsuleId, id, lane });
   const logRoot = chatReadLogDirectory(session);
   const failures = readGatewayFailures(logRoot, { fromMs, toMs: Date.now(), pid: process.pid });
-  return classifyJourney(check, failures, gatewayEvidenceTrusted(logRoot, failures));
+  // A failed journey is re-read against the lab's own Jira: an outage during it is the lab's.
+  const after = check.status === "green" ? undefined : (await labState(session)).state;
+  return classifyJourney(check, failures, gatewayEvidenceTrusted(logRoot, failures), after);
 }
 
 /**
  * Runs every selected journey `repeat` times, each in a fresh Chat, and returns the checks keyed
  * by scenario: the single run itself for `repeat` 1, otherwise the aggregate over the runs.
  */
-export async function runJourneys({
-  session,
-  directory,
-  modelId,
-  embeddingModelId,
-  truth,
-  ids,
-  repeat = 1,
-  readiness = modelUnavailable,
-}) {
+export async function runJourneys(options) {
+  const { session, modelId, embeddingModelId, repeat = 1 } = options;
   if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 20) {
     throw new TypeError("Invalid journey repeat count");
   }
@@ -620,36 +789,83 @@ export async function runJourneys({
     embeddingModelId,
     modelRetries: 1,
     retainState: true,
-    run: async (live) => {
-      const ctx = journeyContext(live, session, truth);
-      const capsuleId = await prepareDataPod(ctx);
-      // S14 replaces the specification with its next version; it runs last and restores version 1.
-      ctx.replaceSpecification = async (version) => {
-        writeSpecification(ctx, version);
-        await indexPod(ctx, capsuleId);
-      };
-      // S03 puts the specification into the Pod as one office format; S18 and S19 need further Chats.
-      ctx.useSpecificationFormat = async (format) => {
-        writeSpecificationAs(ctx, format);
-        await indexPod(ctx, capsuleId);
-      };
-      ctx.freshChat = async (toolMode) =>
-        (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
-      const ordered = [...ids.filter((id) => id !== "S14"), ...ids.filter((id) => id === "S14")];
-      await eachJourneyInLicenseWindow(
-        ordered,
-        (minimumSeconds) => ensureLicenseWindow(session, directory, minimumSeconds),
-        async (id) => {
-          const runs = await sequentially(
-            Array.from({ length: repeat }, (_, i) => i + 1),
-            (run) => timedRun({ ctx, session, modelId, capsuleId, id, readiness }, run),
-          );
-          checks[id] = repeat === 1 ? runs[0] : aggregateRuns(runs);
-        },
-      );
-    },
+    run: (live) => runLane(live, options, checks),
   });
   return checks;
+}
+
+/** The Knowledge Pod lane: the corpus, its Pod and the structure skill, as every journey had them. */
+async function prepareDocumentLane(ctx, session, modelId) {
+  const capsuleId = await prepareDataPod(ctx);
+  // S14 replaces the specification with its next version; it runs last and restores version 1.
+  ctx.replaceSpecification = async (version) => {
+    writeSpecification(ctx, version);
+    await indexPod(ctx, capsuleId);
+  };
+  // S03 puts the specification into the Pod as one office format; S18 and S19 need further Chats.
+  ctx.useSpecificationFormat = async (format) => {
+    writeSpecificationAs(ctx, format);
+    await indexPod(ctx, capsuleId);
+  };
+  ctx.freshChat = async (toolMode) =>
+    (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
+  return capsuleId;
+}
+
+/** The ordered ids; S14 replaces the shared specification, so it always runs last. */
+const journeyOrder = (ids) => [
+  ...ids.filter((id) => id !== "S14"),
+  ...ids.filter((id) => id === "S14"),
+];
+
+async function runLane(live, options, checks) {
+  const { session, directory, modelId, truth, ids, repeat = 1 } = options;
+  const ctx = journeyContext(live, session, truth);
+  // The Composer lane has no Knowledge Pod: nothing is prepared and no Pod is bound (#4369).
+  const composer = options.set === "composer";
+  const capsuleId = composer ? undefined : await prepareDocumentLane(ctx, session, modelId);
+  if (composer) {
+    ctx.freshChat = async (toolMode) => (await composerChat(ctx, session, modelId, toolMode)).chat;
+    // The types and modes this run selected (`--types`, `--modes`); empty means all of them.
+    ctx.composerSelection = options.composerSelection ?? {};
+  }
+  const guard = licenseGuard(session, directory);
+  const run = { ctx, session, modelId, capsuleId, lane: composer ? COMPOSER_LANE : DOCUMENT_LANE };
+  const ports = {
+    readiness: options.readiness ?? modelUnavailable,
+    labState: options.labState ?? labJiraState,
+  };
+  await eachJourneyInLicenseWindow(journeyOrder(ids), guard.ensure, async (id) => {
+    if (guard.outage() !== undefined) {
+      checks[id] = invalidCheck("lab-outage", guard.outage().message);
+      return;
+    }
+    const runs = await sequentially(
+      Array.from({ length: repeat }, (_, i) => i + 1),
+      (number) => timedRun({ ...run, id, ...ports }, number),
+    );
+    checks[id] = repeat === 1 ? runs[0] : aggregateRuns(runs);
+  });
+}
+
+/**
+ * The license window before each journey. A Jira that stays down past the bound ends that journey
+ * as a lab outage (`outage()`), not the whole run; any other failure still stops the run.
+ */
+function licenseGuard(session, directory) {
+  let outage;
+  return {
+    outage: () => outage,
+    ensure: async (minimumSeconds) => {
+      outage = undefined;
+      try {
+        await ensureLicenseWindow(session, directory, minimumSeconds);
+      } catch (error) {
+        if (!(error instanceof LabOutageError)) throw error;
+        outage = error;
+      }
+    },
+  };
 }
 
 async function timedRun(args, run) {

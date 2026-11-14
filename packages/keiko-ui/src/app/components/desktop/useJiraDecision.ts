@@ -108,6 +108,8 @@ export function useJiraDecision<T extends DecisionView>(input: {
   readonly observe?: () => Promise<T>;
 }): {
   view: T;
+  /** The latest decision as stored or observed, before the clock turns a lapsed one into "expired". */
+  settled: T;
   busy: boolean;
   failed: boolean;
   uncertain: boolean;
@@ -135,6 +137,7 @@ export function useJiraDecision<T extends DecisionView>(input: {
   return {
     verified,
     view,
+    settled: current,
     busy: local.busy,
     failed: local.failed,
     uncertain: local.uncertain,

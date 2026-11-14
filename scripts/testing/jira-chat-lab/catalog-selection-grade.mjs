@@ -12,6 +12,34 @@ export function selectionPath(exchanges) {
     : "direct";
 }
 
+const REFUSAL_REASON = "invalid-arguments";
+
+/** A catalog-level refusal: the dispatcher's own reason, or the tool's own failed result. */
+function refusedForArguments(exchange) {
+  const { result } = exchange;
+  return result?.reason === REFUSAL_REASON || result?.data?.reason === REFUSAL_REASON;
+}
+
+/**
+ * The model's `jira.describe` calls of a turn and how many the catalog refused for their arguments
+ * (an identity the registry does not know, or a repeated one). The gateway's own refusals never
+ * reach the transcript, so they are counted separately; this reads the transcript only.
+ * `firstRefused` says the first selection call of the turn failed, the case #4357 targets.
+ */
+export function describeTrace(exchanges, gateway = undefined) {
+  const calls = exchanges.filter((exchange) => toolAlias(exchange.call?.name) === "jira_describe");
+  const refused = calls.map((exchange) => refusedForArguments(exchange));
+  return {
+    calls: calls.length,
+    refused: refused.filter(Boolean).length,
+    // Any call that did not complete, so a refusal for another reason stays visible beside it.
+    failed: calls.filter((exchange) => exchange.result?.status !== "completed").length,
+    firstRefused: refused[0] === true,
+    // The gateway's own refusal of the call never reaches the transcript; it is counted apart.
+    gatewayRefused: refusedTarget(gateway, "jira.describe"),
+  };
+}
+
 /** Native operations the model actually called, without the local catalog lookups. */
 function operationCalls(exchanges) {
   return exchanges.filter((exchange) => !DISCOVERY_ALIASES.has(toolAlias(exchange.call?.name)));
@@ -134,6 +162,51 @@ export function callTrace(exchanges) {
   );
 }
 
+const REFUSAL_MESSAGE_CHARS = 400;
+const REFUSAL_NAMES_MAX = 16;
+const REFUSAL_NAME_CHARS = 64;
+const boundedText = (value, max) => (typeof value === "string" ? value.slice(0, max) : undefined);
+
+function refusalNames(data) {
+  const names = Array.isArray(data?.invalidArguments) ? data.invalidArguments : [];
+  return names
+    .map((name) => boundedText(name, REFUSAL_NAME_CHARS))
+    .filter((name) => name !== undefined)
+    .slice(0, REFUSAL_NAMES_MAX);
+}
+
+function refusalMessage(exchange) {
+  const { data } = exchange.result ?? {};
+  return [data?.message, data?.guidance, exchange.result?.message]
+    .map((text) => boundedText(text, REFUSAL_MESSAGE_CHARS))
+    .find((text) => text !== undefined);
+}
+
+/**
+ * Diagnosis of the calls that did not succeed: the closed reason, the names of the arguments the
+ * product refused, and the refusal message exactly as the model received it, bounded. The data
+ * itself and every argument value stay out.
+ */
+export function refusalTrace(exchanges) {
+  return exchanges.filter((exchange) => !succeeded(exchange)).map(refusalEntry);
+}
+
+const closedOf = (...values) =>
+  String(values.find((value) => value !== undefined) ?? "none").slice(0, REFUSAL_NAME_CHARS);
+
+function refusalEntry(exchange) {
+  const { result } = exchange;
+  const message = refusalMessage(exchange);
+  return {
+    call: toolAlias(exchange.call?.name),
+    status: closedOf(result?.status),
+    outcome: closedOf(result?.data?.outcome),
+    reason: closedOf(result?.reason, result?.data?.reason),
+    invalidArguments: refusalNames(result?.data),
+    ...(message === undefined ? {} : { message }),
+  };
+}
+
 /**
  * One attempt: `turn` is { failure, exchanges, gateway: { unrecovered, circuit } }, `tokens` the
  * native read truth, `effect` the native write verification. A gateway outage, an unavailable
@@ -142,7 +215,13 @@ export function callTrace(exchanges) {
  */
 export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavailable } = {}) {
   const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable });
-  return { ...verdict, calls: callTrace(turn.exchanges ?? []) };
+  const exchanges = turn.exchanges ?? [];
+  return {
+    ...verdict,
+    calls: callTrace(exchanges),
+    refusals: refusalTrace(exchanges),
+    describe: describeTrace(exchanges, turn.gateway),
+  };
 }
 
 function invalidReason(turn, exchanges, truthUnavailable) {
@@ -230,6 +309,7 @@ export function summarizeSelection(attempts) {
   });
   const total = (key) => rows.reduce((sum, row) => sum + row[key], 0);
   const valid = total("valid");
+  const describe = describeSummary(attempts);
   // Like the scorecard's repeat rule: a run that lost most of its attempts to outages measures
   // nothing, so it is reported as insufficient instead of as a low (or perfect) rate.
   const sufficient = attempts.length > 0 && valid >= Math.ceil(attempts.length / 2);
@@ -240,6 +320,25 @@ export function summarizeSelection(attempts) {
     alternative: total("alternative"),
     wrongArguments: total("wrongArguments"),
     invalid: total("invalid"),
+    describe,
     sufficient,
+  };
+}
+
+/**
+ * How often the catalog refused the model's selection call, over the valid attempts: turns that
+ * called `jira.describe` at all, turns whose first call was refused, and every refused call.
+ */
+export function describeSummary(attempts) {
+  const traced = attempts.filter((attempt) => attempt.status !== "invalid" && attempt.describe);
+  const sum = (pick) => traced.reduce((total, attempt) => total + pick(attempt.describe), 0);
+  return {
+    turns: traced.filter((attempt) => attempt.describe.calls > 0).length,
+    firstRefusedTurns: traced.filter((attempt) => attempt.describe.firstRefused).length,
+    calls: sum((trace) => trace.calls),
+    refused: sum((trace) => trace.refused),
+    failed: sum((trace) => trace.failed ?? 0),
+    gatewayRefused: sum((trace) => trace.gatewayRefused ?? 0),
+    validTurns: traced.length,
   };
 }

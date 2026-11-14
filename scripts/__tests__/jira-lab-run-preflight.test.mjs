@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareLabRun } from "../testing/jira-chat-lab/run-preflight.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
-const { native, window, token, tls } = vi.hoisted(() => ({
+const { native, window, token, tls, renewTls } = vi.hoisted(() => ({
   native: vi.fn(),
   window: vi.fn(),
   token: vi.fn(),
   tls: vi.fn(),
+  renewTls: vi.fn(),
 }));
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
   ...(await original()),
@@ -20,6 +21,7 @@ vi.mock("../testing/jira-chat-lab/requirements/license-window.mjs", () => ({
 }));
 vi.mock("../testing/jira-chat-lab/fixture-tokens.mjs", () => ({ ensureFixtureToken: token }));
 vi.mock("../testing/jira-chat-lab/tls-front.mjs", () => ({ labTlsRemainingSeconds: tls }));
+vi.mock("../testing/jira-chat-lab/tls-window.mjs", () => ({ renewTlsWindow: renewTls }));
 const roots = [];
 beforeEach(() => {
   native.mockResolvedValue({
@@ -29,6 +31,7 @@ beforeEach(() => {
   window.mockResolvedValue(9000);
   token.mockResolvedValue("Bearer synthetic");
   tls.mockReturnValue(9000);
+  renewTls.mockResolvedValue({ renewed: false, remainingBefore: 9000, remainingAfter: 9000 });
 });
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -77,6 +80,35 @@ it("requires a TLS window that outlasts the run before any network or renewal", 
   expect(native).not.toHaveBeenCalled();
   expect(window).not.toHaveBeenCalled();
 });
+it("renews an expired certificate itself before any Jira request, and then runs", async () => {
+  tls.mockReturnValue(-5);
+  renewTls.mockImplementation(async () => {
+    tls.mockReturnValue(31_536_000);
+    return { renewed: true };
+  });
+  const release = await prepareLabRun(fixture());
+  expect(renewTls).toHaveBeenCalledOnce();
+  expect(renewTls.mock.invocationCallOrder[0]).toBeLessThan(native.mock.invocationCallOrder[0]);
+  expect(window).toHaveBeenCalled();
+  release();
+});
+
+it("still withholds the run when the renewal did not give the run a certificate window", async () => {
+  tls.mockReturnValue(10);
+  await expect(prepareLabRun(fixture())).rejects.toThrow(TypeError);
+  expect(renewTls).toHaveBeenCalledOnce();
+  expect(native).not.toHaveBeenCalled();
+  expect(window).not.toHaveBeenCalled();
+  expect(token).not.toHaveBeenCalled();
+});
+
+it("withholds the run when the certificate renewal itself fails", async () => {
+  tls.mockReturnValue(10);
+  renewTls.mockRejectedValue(new TypeError("Laboratory session start failed"));
+  await expect(prepareLabRun(fixture())).rejects.toThrow(TypeError);
+  expect(native).not.toHaveBeenCalled();
+});
+
 it.each(["license", "token"])(
   "cleans up its lane and withholds the run when %s renewal fails",
   async (source) => {
