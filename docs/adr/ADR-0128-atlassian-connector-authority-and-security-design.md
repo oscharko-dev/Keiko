@@ -2400,6 +2400,18 @@ the same server-established read grant as any other read. Mixed Data-Pod/Jira tu
 existing grounding citations and attribute Jira results separately; their orchestration phases share
 the accepted turn's Authority Envelope, while the grounded answer keeps its own synthesis grant
 (ADR-0181, amended for #4175).
+A turn's deadline answers from its transcript or cancels by WHICH signal fired, never by re-reading the
+wall clock inside the timer's callback (#4355, CI run 43596154016: a person was told "Request failed ...
+CANCELLED" for a turn whose write Jira had accepted). The deadline signal carries a `TimeoutError`
+reason; a person's stop, a dropped request and an authority revocation carry their own, and the first
+cause to fire is the one a signal carries. A deadline that fires first answers when the turn settled an
+exchange (known in memory, never through a store read inside the abort listener; an unreadable store
+answers "unknown" under the closed `chat.tool-turn.state-unreadable` diagnostic and the settled exchanges
+are still the receipt); a deadline with no settled exchange stays a cancellation; a stop or drop that
+fires first cancels with its own reason, and one that follows a deadline answer cancels only the delivery
+to that request. The catalog settlement names a call that reached the same signal `timeout`, not
+`cancelled`. `chat.tool-turn.ended` records `deadline-cancelled` and `request-aborted` (a person's Stop
+and a dropped connection are one signal to the server) beside the existing reasons.
 
 ### D5 — Sync bounds and lifecycle
 

@@ -1,3 +1,4 @@
+import { isChatTurnDeadlineReason } from "../chat-tool-turn-deadline.js";
 import { catalogScopeDigest } from "./catalogToolRequest.js";
 import type {
   CatalogConsumer,
@@ -125,7 +126,9 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
   }
   public checkStopped(additionalSignal?: AbortSignal): boolean {
     if (this.settled) return true;
-    if (this.state.options.now() >= this.deadlineAt) {
+    // The deadline is also the signal that fired with its own reason: a timer a millisecond ahead of
+    // the wall clock must not turn a call that reached its deadline into a cancellation (#4355).
+    if (this.state.options.now() >= this.deadlineAt || this.abortedByDeadline(additionalSignal)) {
       this.finish("timeout", "deadline-exceeded");
       return true;
     }
@@ -134,6 +137,13 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
       return true;
     }
     return false;
+  }
+  /** Every aborted signal names the deadline as its cause; the first cause to fire is the one it carries. */
+  private abortedByDeadline(additionalSignal: AbortSignal | undefined): boolean {
+    const aborted = [this.context.signal, additionalSignal].filter(
+      (signal): signal is AbortSignal => signal?.aborted === true,
+    );
+    return aborted.length > 0 && aborted.every((signal) => isChatTurnDeadlineReason(signal.reason));
   }
   public reserve(): void {
     requireDispatch(this.handler !== undefined, "failed", "handler-unavailable");

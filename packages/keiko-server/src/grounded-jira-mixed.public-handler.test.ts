@@ -1224,6 +1224,7 @@ async function startDeadlineMixedTurn(): Promise<{
   readonly requests: string[];
   readonly pending: Promise<RouteResult>;
   readonly startedAt: number;
+  readonly request: RouteContext;
 }> {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
@@ -1267,14 +1268,12 @@ async function startDeadlineMixedTurn(): Promise<{
       );
     });
   });
-  const pending = handleGroundedAsk(
-    context({
-      chatId: f.chatId,
-      modelId: MODEL,
-      content: "Explain src/Feature.ts and list the Jira projects.",
-    }),
-    f.deps,
-  );
+  const request = context({
+    chatId: f.chatId,
+    modelId: MODEL,
+    content: "Explain src/Feature.ts and list the Jira projects.",
+  });
+  const pending = handleGroundedAsk(request, f.deps);
   void pending.catch(() => undefined);
   await vi.waitFor(
     () => {
@@ -1288,7 +1287,7 @@ async function startDeadlineMixedTurn(): Promise<{
   expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
     { result: { status: "timeout" } },
   ]);
-  return { f, requests, pending, startedAt };
+  return { f, requests, pending, startedAt, request };
 }
 
 it("answers mixed synthesis from its transcript at the accepted turn deadline after time spent before its first tool dispatch", async () => {
@@ -1310,6 +1309,79 @@ it("answers mixed synthesis from its transcript at the accepted turn deadline af
     await pending;
   }
 });
+
+// #4355: CI run 43596154016 told the person "Request failed ... CANCELLED" for a turn whose write Jira
+// had accepted. Which signal fired decides, never the wall clock re-read inside the timer's callback.
+it("answers from its transcript when the deadline signal fires 1 ms before the wall clock reaches it", async () => {
+  const { f, requests, pending } = await startDeadlineMixedTurn();
+  try {
+    // The clock reads a millisecond short at the instant the deadline's timer fires.
+    vi.setSystemTime(Date.now() - 1);
+    await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual([]);
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+      { result: { status: "timeout" } },
+    ]);
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it("answers from its transcript when the stored transcript cannot be read inside the deadline listener", async () => {
+  const { f, pending } = await startDeadlineMixedTurn();
+  try {
+    // The abort listeners run synchronously inside the timer advance: a turn that holds a settled
+    // exchange in memory needs no store read to know it answers at the deadline.
+    const read = vi.spyOn(f.deps.store, "findMessageById").mockImplementation(() => {
+      throw new Error("database is not open");
+    });
+    try {
+      vi.advanceTimersByTime(1001);
+    } finally {
+      read.mockRestore();
+    }
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it.each(["deadline-first", "abort-first"] as const)(
+  "keeps the settled exchange and repeats nothing when the deadline and a request abort share a tick (%s)",
+  async (order) => {
+    const { f, requests, pending, request } = await startDeadlineMixedTurn();
+    try {
+      if (order === "deadline-first") {
+        vi.advanceTimersByTime(1001);
+        request.req.emit("aborted");
+      } else {
+        request.req.emit("aborted");
+        vi.advanceTimersByTime(1001);
+      }
+      const result = await pending;
+      // The request is gone either way; what the person kept is the receipt of what settled.
+      expect(result).toMatchObject({ status: 499, body: { error: { code: "CANCELLED" } } });
+      expect(requests).toHaveLength(2);
+      expect(f.jiraRequests).toEqual([]);
+      expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+        { result: { status: "timeout" } },
+      ]);
+    } finally {
+      interruptChatGenerations(f.deps, f.chatId);
+      await pending;
+    }
+  },
+);
 
 it("keeps a human stop during mixed synthesis a cancellation although an exchange settled", async () => {
   const { f, requests, pending } = await startDeadlineMixedTurn();
