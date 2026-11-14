@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
@@ -548,6 +548,42 @@ it.each([
   },
 );
 
+// #4355: the evidence counts what the card opens: 60 rows of a write list, not the old five.
+it("records shownCount=60 for a draft write of 200 created issues", () => {
+  const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
+  try {
+    render(
+      <JiraChatTools
+        messageId="private-message-id"
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [
+            resultExchange("jira_draft", {
+              outcome: "succeeded",
+              items: Array.from({ length: 200 }, (_, index) => ({
+                ref: `r${String(index)}`,
+                state: "created",
+                issueKey: `SYN-${String(index + 1)}`,
+              })),
+            }),
+          ],
+        }}
+        turnState="pending"
+      />,
+    );
+    const events = report.mock.calls.filter(
+      ([, meta]) => meta?.jiraResultPresentation !== undefined,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.[1]?.jiraResultPresentation).toMatchObject({
+      itemCount: 200,
+      shownCount: 60,
+    });
+  } finally {
+    report.mockRestore();
+  }
+});
+
 it.each([
   ["jira_create", 1],
   ["jira_issue", 0],
@@ -991,8 +1027,10 @@ describe("Jira tool outcome for a business user (#4173)", () => {
     ).toHaveLength(1);
   });
 
-  it("shows at most five drafted issues and counts the rest", () => {
-    const items = Array.from({ length: 7 }, (_, index) => ({
+  // #4355 AC1 supersedes the former five-row bound: every created key is listed with its link. The
+  // bound that remains keeps the card finite: 60 rows stand open, the rest sit behind a disclosure.
+  it("lists every drafted issue, 60 open and the rest behind a disclosure", async () => {
+    const items = Array.from({ length: 70 }, (_, index) => ({
       ref: `item-${String(index)}`,
       state: "created",
       issueKey: `KER-${String(index + 1)}`,
@@ -1011,10 +1049,17 @@ describe("Jira tool outcome for a business user (#4173)", () => {
         turnState="completed"
       />,
     );
-    const list = screen.getByRole("list", { name: "Jira issues" });
-    expect(list).toHaveTextContent("KER-5");
-    expect(list).not.toHaveTextContent("KER-6");
-    expect(list).toHaveTextContent("and 2 more");
+    const open = screen.getByRole("list", { name: "Jira issues" });
+    expect(open).toHaveTextContent("KER-60");
+    expect(open).not.toHaveTextContent("KER-61");
+    // A closed disclosure mounts none of its rows; opening it mounts all ten.
+    expect(screen.getAllByRole("list", { name: "Jira issues", hidden: true })).toHaveLength(1);
+    await userEvent.click(screen.getByText("Show 10 more results"));
+    await waitFor(() => {
+      const rest = screen.getAllByRole("list", { name: "Jira issues", hidden: true })[1];
+      expect(rest).toHaveTextContent("KER-61");
+      expect(rest).toHaveTextContent("KER-70");
+    });
   });
 });
 

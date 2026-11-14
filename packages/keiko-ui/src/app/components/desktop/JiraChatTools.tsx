@@ -1,5 +1,5 @@
 "use client";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { JiraHumanInput } from "./JiraHumanInput";
 import { JiraWriteApproval } from "./JiraWriteApproval";
 import type {
@@ -237,6 +237,11 @@ const VALIDATION_MESSAGES = {
   "bounds-exceeded": "chat.jira.outcome.validation.bounds-exceeded",
 } as const;
 
+/** The issues a partial draft write left uncreated. */
+function JiraNotCreatedLine({ count }: { readonly count: number | undefined }): ReactNode {
+  const t = useTranslate();
+  return count === undefined ? null : <p>{t("chat.jira.outcome.notCreated", { count })}</p>;
+}
 function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   return (
@@ -259,6 +264,7 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
               })}
         </p>
       )}
+      <JiraNotCreatedLine count={view.notCreatedCount} />
       {view.stagedCount === undefined ? null : (
         <p>{t("chat.jira.outcome.staged", { count: view.stagedCount })}</p>
       )}
@@ -271,9 +277,39 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
     </>
   );
 }
+/** The rows past the open ones: a closed disclosure mounts none of them, so the card stays finite. */
+function JiraMoreRows({
+  items,
+  label,
+  lazy,
+}: {
+  readonly items: readonly JiraOutcomeItem[];
+  readonly label: WidgetMessageKey | undefined;
+  /** Mount the rows only once the disclosure is open (a draft write can list thousands). */
+  readonly lazy: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className={styles.cmpResultMore}
+      onToggle={(event) => {
+        setOpen(event.currentTarget.open);
+      }}
+    >
+      <summary>
+        {items.length === 1
+          ? t("chat.jira.outcome.moreResultsOne")
+          : t("chat.jira.outcome.moreResults", { count: items.length })}
+      </summary>
+      {open || !lazy ? <JiraResultItems items={items} label={label} /> : null}
+    </details>
+  );
+}
 function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   const { items, resultsLabel: label } = view;
+  const shown = view.visibleItems ?? JIRA_OUTCOME_ITEMS_SHOWN;
   if (view.overflow === "count") {
     const hidden = Math.max(0, items.length - JIRA_OUTCOME_ITEMS_SHOWN) + view.unlistedItemCount;
     return items.length === 0 ? null : (
@@ -286,16 +322,18 @@ function JiraResultList({ view }: { readonly view: JiraToolOutcomeView }): React
   }
   return (
     <>
-      {items.length === 0 ? null : (
-        <JiraResultItems items={items.slice(0, JIRA_OUTCOME_ITEMS_SHOWN)} label={label} />
+      {items.length === 0 ? null : <JiraResultItems items={items.slice(0, shown)} label={label} />}
+      {items.length <= shown ? null : (
+        <JiraMoreRows
+          items={items.slice(shown)}
+          label={label}
+          lazy={view.visibleItems !== undefined}
+        />
       )}
-      {items.length <= JIRA_OUTCOME_ITEMS_SHOWN ? null : (
-        <details className={styles.cmpResultMore}>
-          <summary>
-            {t("chat.jira.outcome.moreResults", { count: items.length - JIRA_OUTCOME_ITEMS_SHOWN })}
-          </summary>
-          <JiraResultItems items={items.slice(JIRA_OUTCOME_ITEMS_SHOWN)} label={label} />
-        </details>
+      {view.unlistedItemCount === 0 ? null : (
+        <p className={styles.cmpMoreIssues}>
+          {t("chat.jira.outcome.more", { count: view.unlistedItemCount })}
+        </p>
       )}
     </>
   );
@@ -329,15 +367,32 @@ function JiraProblemList({ view }: { readonly view: JiraToolOutcomeView }): Reac
     </ul>
   );
 }
+/** The problems about one item: their sentence continues after the item's name. */
+const ITEM_DRAFT_PROBLEMS: ReadonlySet<JiraDraftProblemCode> = new Set([
+  "item-shape",
+  "item-ref",
+  "item-ids",
+  "item-fields",
+  "item-parent",
+  "item-links",
+  "item-requirements",
+  "ref-self",
+  "ref-unknown",
+]);
 /** What to change in a refused draft, in one sentence per closed problem. */
 function JiraDraftProblemLine({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
-  const { draftProblem } = view;
-  return draftProblem === undefined ? null : (
-    <p>
-      {t(DRAFT_PROBLEM_MESSAGES[draftProblem.problem], { position: draftProblem.position ?? 0 })}
-    </p>
-  );
+  const { draftProblem, draftRefusal } = view;
+  if (draftRefusal !== undefined) return <p>{t(draftRefusal)}</p>;
+  if (draftProblem === undefined) return null;
+  const sentence = t(DRAFT_PROBLEM_MESSAGES[draftProblem.problem]);
+  if (!ITEM_DRAFT_PROBLEMS.has(draftProblem.problem)) return <p>{sentence}</p>;
+  // Without a position the sentence says "An item", never "Item 0".
+  const item =
+    draftProblem.position === undefined
+      ? t("chat.jira.outcome.draftItemUnknown")
+      : t("chat.jira.outcome.draftItem", { position: draftProblem.position });
+  return <p>{`${item} ${sentence}`}</p>;
 }
 function JiraRuleList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();

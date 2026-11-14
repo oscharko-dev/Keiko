@@ -1580,6 +1580,22 @@ most 64 rows, with the count of the rest), so the model copies them instead of r
 pattern. It is recorded as `report-coverage` with `mismatchedRequirementCount`, never the ids or
 keys.
 
+An answer that claims an effect the turn did not produce gets that same single round, answered
+without any tool so it can never write (2026-11-14, #4355 AC4): one that announces a created issue
+while the turn holds no create receipt, whatever the tool is called, or one that writes a tool call
+as text (`announced-create` with `announcementCount`, `tool-call-as-text`; never the text). The
+correction asks the model to say plainly what happened. When the round fails or the model repeats
+the claim, the answer is still published exactly as the model wrote it, and Keiko states a fact, not
+prose: the stored turn carries the closed marker `claimNotice` (`no-jira-create` or
+`tool-call-not-executed`, absent otherwise) on the user message's transcript, through a validated
+`claim-notice` transcript update that the log records as the closed value on
+`chat.tool-transcript.updated`. The Chat words the marker from its message catalog (English and
+German), under the answer and visibly apart from it, and a copy of the answer carries the note. The
+marker describes the turn's final answer: every final answer of the turn states it afresh, setting
+it while the answer still claims, judged against the text the first detection saw, and clearing it
+otherwise, so a marker an earlier leg stored never outlives the answer it described. A regenerated
+answer shows none, because regeneration runs no tool turn. Read-aloud does not carry the note yet.
+
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
 before every Jira write, so a Markdown skill's advice the model may ignore is no longer the only

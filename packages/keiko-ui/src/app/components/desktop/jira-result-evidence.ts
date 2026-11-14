@@ -37,7 +37,9 @@ function presentationCounts(exchange: ChatToolExchange, hasCard: boolean): Count
   return {
     exchangeCount: 1,
     itemCount: view.items.length,
-    shownCount: hasCard ? Math.min(view.items.length, JIRA_OUTCOME_ITEMS_SHOWN) : 0,
+    shownCount: hasCard
+      ? Math.min(view.items.length, view.visibleItems ?? JIRA_OUTCOME_ITEMS_SHOWN)
+      : 0,
     returnedCount: view.returnedCount ?? view.items.length,
     unreadableCount: view.unreadableCount,
     problemCount: view.problems.length,
