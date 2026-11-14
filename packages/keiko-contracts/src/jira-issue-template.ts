@@ -41,6 +41,18 @@ export type JiraTemplateActivation =
   /** No target: every transition. A target matches a transition name, id or target status name. */
   | { readonly kind: "transition"; readonly target?: string };
 
+/**
+ * A plain activation (`create` or `edit`, whichever the file says) makes a template govern creating
+ * and editing the issues of its project and issue type; the word only chooses the era the file was
+ * written for (#4354). A `transition:<target>` activation adds rules when an issue enters that
+ * status and does not make a template govern creation or editing by itself.
+ */
+export function jiraTemplateGovernsWrites(template: {
+  readonly activations: readonly JiraTemplateActivation[];
+}): boolean {
+  return template.activations.some((activation) => activation.kind !== "transition");
+}
+
 export interface JiraIssueTemplate {
   /** Upper-cased Jira project key. */
   readonly project: string;
@@ -108,6 +120,10 @@ export const JIRA_TEMPLATE_RULE_IDS = [
   "parent-missing",
   "parent-type-mismatch",
   "template-unreadable",
+  /** No template of this project and issue type exists: a creation is refused, nothing is sent. */
+  "template-missing",
+  /** Templates of this project and issue type exist, but only for entering a status: none governs a creation. */
+  "template-not-activated",
 ] as const;
 export type JiraTemplateRuleId = (typeof JIRA_TEMPLATE_RULE_IDS)[number];
 

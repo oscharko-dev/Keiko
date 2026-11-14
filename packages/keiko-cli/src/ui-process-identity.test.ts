@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -79,7 +80,7 @@ describe("default live identity readers", () => {
   it("return undefined for a pid that has no /proc identity files", () => {
     const missing = 2_147_483_647;
     expect(defaultReadProcessEnviron(missing, "linux")).toBeUndefined();
-    expect(defaultReadProcessCommandLine(missing, "linux")).toBeUndefined();
+    expect(defaultReadProcessCommandLine(missing, "linux", nullSecurityLogSink())).toBeUndefined();
   });
 
   it("spawns ps and PowerShell by absolute path, never a PATH basename", () => {
@@ -118,7 +119,7 @@ describe("default live identity readers", () => {
       );
       process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
       try {
-        defaultReadProcessCommandLine(process.pid, "darwin");
+        defaultReadProcessCommandLine(process.pid, "darwin", nullSecurityLogSink());
         expect(existsSync(marker)).toBe(false);
       } finally {
         if (previousPath === undefined) {

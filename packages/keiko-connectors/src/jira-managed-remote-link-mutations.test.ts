@@ -438,3 +438,105 @@ it.each([
   });
   expect(request).not.toHaveBeenCalled();
 });
+
+// #4354: one sentence for every cause left a model repeating the same refused call. Each refusal
+// names the rule the arguments broke, so the corrected call differs from the refused one.
+it.each([
+  [{ ...CREATE, method: "PUT" }, /takes only/u],
+  [{ ...CREATE, issueIdOrKey: "../x" }, /issueIdOrKey must be the issue key or id/u],
+  [{ ...CREATE, expectedActorKey: "" }, /jira\.myself returns it/u],
+  [{ ...CREATE, value: { title: "partial" } }, /complete remote link with every field present/u],
+  [{ ...CREATE, value: { ...VALUE, globalId: null } }, /value\.globalId is required/u],
+  [{ ...CREATE, globalId: "x" }, /not arguments of an upsert/u],
+  [{ ...CREATE, expected: EXPECTED }, /exactly one of expectAbsent:true or expected/u],
+  [{ ...CREATE, expectAbsent: false }, /expectAbsent must be true/u],
+  [{ ...BASE, value: VALUE }, /expectAbsent:true for a new link, or expected/u],
+  [
+    { ...BASE, value: VALUE, expected: { ...EXPECTED, globalId: "other" } },
+    /expected\.globalId must equal value\.globalId/u,
+  ],
+] as const)("names the rule an upsert broke: %#", async (args, rule) => {
+  const request = fixture();
+  const result = await run(request, "jira.upsert-remote-link", args);
+  expect(result).toMatchObject({ ok: false, reason: "field-validation" });
+  expect(JSON.stringify(result)).toMatch(rule);
+  expect(request).not.toHaveBeenCalled();
+});
+it.each([
+  [
+    "jira.update-remote-link",
+    { ...UPDATE, expected: undefined },
+    /expected must be the current link/u,
+  ],
+  [
+    "jira.delete-remote-link",
+    { ...DELETE, expectAbsent: true },
+    /expectAbsent is only for an upsert/u,
+  ],
+  [
+    "jira.delete-remote-link",
+    { ...DELETE, value: VALUE },
+    /Send linkId equal to expected\.id, and no value/u,
+  ],
+  [
+    "jira.delete-remote-link-by-global-id",
+    { ...BASE, expected: EXPECTED, linkId: ID },
+    /Send only globalId/u,
+  ],
+] as const)("names the rule %s broke: %#", async (operation, args, rule) => {
+  const request = fixture();
+  const result = await run(request, operation, args as CatalogJsonObject);
+  expect(result).toMatchObject({ ok: false, reason: "field-validation" });
+  expect(JSON.stringify(result)).toMatch(rule);
+  expect(request).not.toHaveBeenCalled();
+});
+
+// #4354, a finding of the gpt-5.4 run: a model that invents `expectedActorKey` was told that "the
+// connected Jira user no longer matches the reviewed user" and not to replay, although nothing was
+// sent and no user had been reviewed. Before any effect the refusal names the key's source.
+it.each(["?", "", "synthetic-actor-2"])(
+  "tells a model whose expectedActorKey %j is not the connected user's where the key comes from",
+  async (key) => {
+    const request = fixture();
+    const result = await run(request, "jira.upsert-remote-link", {
+      ...CREATE,
+      expectedActorKey: key,
+    });
+    expect(result).toMatchObject({ ok: false });
+    if (key !== "") {
+      expect(result).toMatchObject({ reason: "field-validation" });
+      expect(JSON.stringify(result)).toContain("must be the key jira.myself returns");
+      expect(JSON.stringify(result)).not.toMatch(/reviewed user|replayed/u);
+    }
+    expect(effects(request)).toHaveLength(0);
+  },
+);
+
+// #4354: every remote-link effect stands behind the saved issue templates like any other write; a
+// library that cannot be read refuses it before any write, in execution and in check.
+it.each([
+  ["jira.upsert-remote-link", CREATE],
+  ["jira.update-remote-link", UPDATE],
+  ["jira.delete-remote-link", DELETE],
+  [
+    "jira.delete-remote-link-by-global-id",
+    { ...BASE, globalId: VALUE.globalId, expected: EXPECTED },
+  ],
+] as const)(
+  "%s refuses an unreadable template library before any write",
+  async (operation, args) => {
+    for (const check of [false, true]) {
+      const request = fixture({ existing: operation !== "jira.upsert-remote-link" });
+      const refused = await executeJiraRemoteLinkMutation(operation, args, request, check, () => ({
+        templates: [],
+        unreadable: 1,
+      }));
+      expect(refused).toMatchObject({
+        ok: false,
+        reason: "field-validation",
+        violations: [{ ruleId: "template-unreadable" }],
+      });
+      expect(effects(request)).toHaveLength(0);
+    }
+  },
+);

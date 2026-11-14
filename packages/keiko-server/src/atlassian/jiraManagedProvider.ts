@@ -116,6 +116,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
+  isJiraReleaseScopeRefusal,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -128,7 +129,7 @@ import type {
   ManagedMcpToolDeclaration,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { recordJiraProviderCall } from "./jiraOperationActivity.js";
+import { recordJiraProviderCall, recordJiraReleaseScopeRefusal } from "./jiraOperationActivity.js";
 import {
   compileExternalCatalogSchema,
   createToolDescriptor,
@@ -629,6 +630,22 @@ export function isCurrentJiraOperationBinding(
   return contract !== undefined && matchesJiraOperationBinding(contract, value);
 }
 
+/**
+ * One closed line per provider call: the release switch's own refusal, or the call's completion.
+ * Only the refusal sentence the switch writes is labelled as the switch's; any other failure of an
+ * operation it withholds stays an ordinary failed call.
+ */
+function recordProviderResult(
+  correlationId: string,
+  operation: JiraManagedReadToolName | JiraMutationOperation,
+  result: ManagedMcpToolResult,
+): void {
+  const outcome = result.isError === true ? "failed" : "completed";
+  if (outcome === "failed" && isJiraReleaseScopeRefusal(operation, result.data.messages))
+    recordJiraReleaseScopeRefusal(correlationId, operation);
+  else recordJiraProviderCall(correlationId, operation, outcome);
+}
+
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
 export function createJiraProviderForCatalog<Context extends ManagedMcpInvocationContext>(
   connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>,
@@ -667,11 +684,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          recordJiraProviderCall(
-            args[1].correlationId,
-            operation,
-            result.isError === true ? "failed" : "completed",
-          );
+          recordProviderResult(args[1].correlationId, operation, result);
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },

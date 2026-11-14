@@ -110,6 +110,24 @@ export function isPortableExternallyManaged(
   );
 }
 
+/**
+ * Why the Windows installation folder stops in-app updates (#4358): it is not on a local disk, or
+ * Windows could not check it just now. Read from the blocker code, so it works without a session.
+ */
+export type PortableVolumeIssue = "notLocal" | "unverified";
+
+export function portableVolumeIssue(
+  report: UpdatePreflightReport,
+): PortableVolumeIssue | undefined {
+  if (report.blockers.some((blocker) => blocker.code === "portable-install-volume-not-local")) {
+    return "notLocal";
+  }
+  if (report.blockers.some((blocker) => blocker.code === "portable-install-volume-unverified")) {
+    return "unverified";
+  }
+  return undefined;
+}
+
 export function isPortableManagedOneClickPath(
   report: UpdatePreflightReport,
   session: UpdateSessionStatus,

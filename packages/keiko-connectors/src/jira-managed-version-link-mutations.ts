@@ -160,7 +160,14 @@ export async function executeJiraVersionLinkMutation(
         "conflict",
         receipt,
       ),
-      detail: { unchanged: true },
+      // The sentence stays with the flag: the existing-resource guidance tells the model to report
+      // what the messages say, and a flag alone leaves it nothing to report (#4357 AC3).
+      detail: {
+        unchanged: true,
+        messages: [
+          "The complete reviewed link set already matches the requested state. Nothing was written.",
+        ],
+      },
     };
   if (check) return { ok: true, receipt: {} };
   return writeVersionLink(request, input, context.value, receipt);

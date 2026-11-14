@@ -35,6 +35,7 @@ const FIELD_VALIDATIONS = [
   "invalid-field",
   "invalid-operation",
   "bounds-exceeded",
+  "invalid-epic-link",
 ] as const;
 const MUTATION_STATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",

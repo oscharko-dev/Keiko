@@ -30,7 +30,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts";
-import { emitSecurityLogEvent, type SecurityLogSink } from "./log-port.js";
+import { emitSecurityLogEvent, unwiredSecurityLogSink, type SecurityLogSink } from "./log-port.js";
 import {
   inspectWindowsOwnerPrivateFiles,
   protectWindowsOwnerPrivateFile,
@@ -225,7 +225,10 @@ function inspectCustody(subject: Subject): Verdicts | undefined {
   const inspect = subject.ports.inspect ?? inspectWindowsOwnerPrivateFiles;
   const paths =
     subject.keyfile === undefined ? [subject.directory] : [subject.directory, subject.keyfile.path];
-  return verdictsOf(subject, inspect(paths, { securityLogSink: subject.sink }));
+  return verdictsOf(
+    subject,
+    inspect(paths, { securityLogSink: subject.sink ?? unwiredSecurityLogSink() }),
+  );
 }
 
 function refusedTargets(verdicts: Verdicts): readonly CustodyTarget[] {
@@ -312,9 +315,14 @@ function protectTargets(subject: Subject, targets: readonly CustodyTarget[]): vo
       // The directory's entries are inheritable, so the key and store files Keiko writes below it
       // are owner-only from the moment they exist; the key file gets its own protected DACL.
       if (target === "directory") {
-        protect(subject.directory, { inheritToChildren: true, securityLogSink: subject.sink });
+        protect(subject.directory, {
+          inheritToChildren: true,
+          securityLogSink: subject.sink ?? unwiredSecurityLogSink(),
+        });
       } else if (subject.keyfile !== undefined) {
-        protect(subject.keyfile.path, { securityLogSink: subject.sink });
+        protect(subject.keyfile.path, {
+          securityLogSink: subject.sink ?? unwiredSecurityLogSink(),
+        });
       }
     } catch {
       reportCustodyRefused(subject.sink, target, "protect-failed");

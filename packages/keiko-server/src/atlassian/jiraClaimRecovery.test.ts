@@ -21,6 +21,10 @@ import { openTraceSession, type TraceSession } from "../requirement-trace.js";
 import { executeJiraChatMutation, type JiraChatMutationExecution } from "./jiraChatMutation.js";
 import { executeJiraChatDraft, type JiraChatDraftExecution } from "./jiraChatDraft.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../../tests/support/jira-test-templates.js";
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const close of cleanup.splice(0)) close();
@@ -256,7 +260,11 @@ function execution(jira: SyntheticJira, args: CatalogJsonObject): JiraChatDraftE
       signal: new AbortController().signal,
       beforeEffect: () => true,
     },
-    connection: { baseUrl: "https://jira.example.invalid", deployment: "data-center" },
+    connection: {
+      baseUrl: "https://jira.example.invalid",
+      deployment: "data-center",
+      issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+    },
   };
 }
 async function hierarchyMetadata(response: Response): Promise<Response> {

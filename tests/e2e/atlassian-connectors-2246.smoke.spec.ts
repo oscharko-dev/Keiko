@@ -60,19 +60,19 @@ const SUCCEEDED = {
   changeSummary: CHANGE_SUMMARY,
 } as const;
 
-// A pending governed write in Ask-for-approval mode (create-issue is high risk → review-required
+// A pending governed write in Ask-for-approval mode (create-page is high risk → review-required
 // in Ask-for-approval): approving it executes and returns a typed result.
 const APPROVAL = {
   schemaVersion: "1",
   approvalId: "ap-1",
   connectorId: "conn-1",
-  provider: "jira",
-  actionType: "create-issue",
+  provider: "confluence",
+  actionType: "create-page",
   actionClass: "connector-write",
-  requiredScope: "issue-tracker.write",
+  requiredScope: "knowledge-base.write",
   risk: "high",
   reviewReason: "deterministic-risk-approval-required",
-  targetRef: "PROJ-1",
+  targetRef: "4711",
   correlationId: "corr-1",
   requestedAt: 0,
   expiresAt: 10_000,
@@ -94,7 +94,7 @@ const CONNECTOR_STUBS: readonly Stub[] = [
   { re: /\/action-approvals$/u, method: "GET", body: { approvals: [APPROVAL] } },
   {
     re: /\/approve$/u,
-    body: { disposition: "review-required", result: { status: "succeeded", targetRef: "PROJ-1" } },
+    body: { disposition: "review-required", result: { status: "succeeded", targetRef: "4711" } },
   },
   {
     re: /\/reject$/u,
@@ -364,11 +364,11 @@ test.describe("Atlassian connectors cross-cutting @smoke", () => {
     await expect(docsCard.getByTestId("acx-sync-badge")).toHaveText("Succeeded");
     await expect(docsCard.getByTestId("acx-sync-changes")).toBeVisible();
 
-    // Governed write in Ask-for-approval mode → approve → typed result (create-issue, high risk).
+    // Governed write in Ask-for-approval mode → approve → typed result (create-page, high risk).
     const approval = page.getByTestId("acx-approval");
-    await expect(approval).toContainText("Create Jira issue");
+    await expect(approval).toContainText("Create Confluence page");
     await approval.getByRole("button", { name: "Approve" }).click();
-    await expect(page.getByTestId("acx-approval-result")).toContainText("Result: PROJ-1");
+    await expect(page.getByTestId("acx-approval-result")).toContainText("Result: 4711");
 
     assertNoPageErrors();
   });

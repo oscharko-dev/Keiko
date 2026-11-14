@@ -189,6 +189,13 @@ it.each([false, true])("dry-run %s sends no POST or DELETE", async (deleting) =>
   expect(await run(request, deleting, INPUT, true)).toEqual({ ok: true, receipt: {} });
   expect(effects(request)).toHaveLength(0);
 });
+it("jira.create-issue-link refuses an unreadable template library before any POST", async () => {
+  const request = fixture();
+  expect(
+    await run(request, false, INPUT, false, () => ({ templates: [], unreadable: 1 })),
+  ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  expect(effects(request)).toHaveLength(0);
+});
 it("refuses the last required parent relation using the planned complete post-delete state", async () => {
   const request = fixture({ deleting: true });
   expect(await run(request, true, INPUT, false, requiredLinkTemplate())).toMatchObject({

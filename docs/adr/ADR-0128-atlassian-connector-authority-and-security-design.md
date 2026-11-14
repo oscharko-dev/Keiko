@@ -1007,6 +1007,12 @@ uses only an existing configured application link, never an arbitrary model URL 
 Issue/project deletion evaluates surviving required parent/link/issue-picker references through
 the existing formal-impact owner, refusing an unresolved global population. Deleted objects' own
 summary/labels are not fabricated surviving post-states; archive does not invent a field migration.
+An issue deletion is the one lifecycle effect whose own read-back can confirm it (owner decision
+2026-11-13, #4354): when Jira's 2xx answer to this very DELETE was observed and the reviewed issue
+then reads as 404, the deletion is `succeeded`. A DELETE whose response was not observed (timeout,
+lost connection) never reaches the read-back and stays unconfirmed, because a 404 alone can also mean
+"not visible to this account"; any other read-back failure stays unconfirmed, and a refused DELETE
+stays failed. Archive, restore and subtask reordering keep their unconfirmed outcome.
 Project restore acknowledgement does not start a second reindex effect. Configuration observations
 alone still cannot establish effective access or full global consequences.
 
@@ -1580,6 +1586,23 @@ most 64 rows, with the count of the rest), so the model copies them instead of r
 pattern. It is recorded as `report-coverage` with `mismatchedRequirementCount`, never the ids or
 keys.
 
+An answer that claims an effect the turn did not produce gets that same single round, answered
+without any tool so it can never write (2026-11-14, #4355 AC4): one that announces a created issue
+while the turn holds no create receipt, whatever the tool is called, or one that writes a tool call
+as text (`announced-create` with `announcementCount`, `tool-call-as-text`; never the text). The
+correction asks the model to say plainly what happened. When the round fails or the model repeats
+the claim, the answer is still published exactly as the model wrote it, and Keiko states a fact, not
+prose: the stored turn carries the closed marker `claimNotice` (`no-jira-create` or
+`tool-call-not-executed`, absent otherwise) on the user message's transcript, through a validated
+`claim-notice` transcript update that the log records as the closed value on
+`chat.tool-transcript.updated`. The Chat words the marker from its message catalog (English and
+German), under the answer and visibly apart from it, and a copy of the answer carries the note. The
+marker describes the turn's final answer: every final answer of the turn states it afresh, setting
+it while the answer still claims, judged against the text the first detection saw, and clearing it
+otherwise, so a marker an earlier leg stored never outlives the answer it described. A regenerated
+answer shows none, because regeneration runs no tool turn. The voice dialogue reads the same note after
+the answer; its speech preparation counts are unchanged.
+
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
 before every Jira write, so a Markdown skill's advice the model may ignore is no longer the only
@@ -1652,9 +1675,11 @@ the approval.
   backtrack and an accepted pattern is always matchable. Matched text is at most 255 characters.
 - **One pure checker** (`keiko-connectors` `jira-issue-template-check.ts`) judges the state after
   the write: the proposed values merged over the issue's current values, resolved against the
-  instance's field names. For an edit and for a transition the whole merged state is checked, not
-  only the changed fields, so an issue that already violates a template is refused on its next
-  edit until the edit also repairs it. A transition whose template names a transition or target
+  instance's field names. A creation and a transition are judged on that state as a whole. An edit
+  is judged by one function over the issue's before-state and after-state (#4354,
+  `evaluateJiraTemplateChange`): a rule broken in a field the edit touches, or a rule the edit newly
+  breaks, refuses it; a rule the issue already broke in a field the edit does not touch does not
+  block and is returned as a `templateNotices` list that names it to the person. A transition whose template names a transition or target
   status that Jira's metadata does not name fails closed instead of passing unchecked. Write admission, the backlog draft and the compliance report share it. It
   is deterministic, performs no I/O and emits closed rule ids (`summary-too-short`,
   `section-missing`, `field-missing`, `field-unavailable`, `label-missing`, `parent-missing`, ...)
@@ -1666,8 +1691,9 @@ the approval.
   sent; the journal records it as `rejected` and the model receives `outcome: rejected`,
   `reason: field-validation` and the bounded `violations` list, with tool guidance to correct
   exactly those violations. A source that throws propagates to the executor's correlated
-  diagnostic, so the write is still not sent. When no template governs the write, no request is
-  added. Jira takes one `issuelinks` operation per request, so a `parentLink` rule is judged on the
+  diagnostic, so the write is still not sent. When no template governs an edit or a transition, no
+  request is added; a creation with no governing template is refused (see "Templates are required to
+  create"). Jira takes one `issuelinks` operation per request, so a `parentLink` rule is judged on the
   link that rides on the create or edit itself, never on one written afterwards: the gate puts a link
   of a required type first, and a state that the primary write cannot make conforming is refused
   before any request. (2) In every autonomy mode Chat additionally runs the same pipeline as a
@@ -1733,6 +1759,75 @@ the approval.
   `assignee` field and is. Organization-wide
   distribution is the skill library's import and export. No fixed hierarchy or issue model is
   built in.
+- **Templates are required to create, and govern every edit of their type (#4354, owner decision
+  2026-11-13).** Creating an issue (`jira.create`, each item of `jira.create-issues` and of a
+  `jira.draft`, a sub-task included) needs a saved template whose project and issue type (by name or
+  numeric id, whatever the instance calls it) govern it, and the new issue must conform fully. With no
+  library, no template for the type, or only `transition:<target>` templates, the gate refuses before
+  any effect with the closed rule ids `template-missing` or `template-not-activated` (naming
+  `PROJECT/Issue type`), and the guidance leads the person to Skills, "Propose from project" (the
+  proposal from an existing project) to create one. Any plain activation (`create` or `edit`) governs
+  both creating and editing the issues of its type; the word only records the era the file was
+  written for, no stored file changes and nothing migrates. `transition:<target>` only adds rules when
+  an issue enters that status, and a plain activation never governs a transition. An edit of an issue
+  whose type has no template always works. Comments, watchers and votes are never template-checked.
+  An edit that carries `project` or `issuetype` is refused before any request with the way out (Jira's
+  Move, or create the issue again): the template is chosen by those two, so Keiko does not change them.
+  **Attachments are not part of Release 1:** `jira.attach` and `jira.delete-attachment` stay in the
+  code and the registry behind one switch (`JIRA_ATTACHMENTS_AVAILABLE`, `jira-release-scope.ts`),
+  are not offered (Chat base set, discovery, describe, Coding) and are refused with a readable
+  message and no request in the executor and its dry run; Release 2 flips the switch.
+  **Retirement, named plainly:** the four legacy Jira write actions of
+  `POST /api/atlassian-connectors/credentials/:authRef/actions` (`create-issue`,
+  `update-issue-fields`, `transition-issue`, `add-issue-comment`) are retired in this change. The
+  route answers each of them, for every caller and in every autonomy mode, with the closed denial
+  `connector-write-denied` before any approval is created, any budget is reserved or any request is sent, and
+  records one body-free activity record. Their executors (`jira-write-actions.ts`) are deleted. They
+  created and changed issues with no template gate, had no caller in the product (UI, CLI, SDK, MCP,
+  scripts) and used the Jira Cloud REST shape, which is outside the supported scope. The action names
+  and their policy-class rows stay: the governed Jira tools map onto the same rows (`jira.create` is
+  `create-issue`, and so on), and the contract types are removed only after Release 1. The Confluence
+  actions of the same route are unchanged.
+- **Write-path inventory (#4354).** 224 mutation operations. Every operation that creates or changes
+  the fields or relations of an issue reaches `gateJiraMutationByTemplates` through the managed
+  executor `executeJiraManagedMutation`, the only production caller of which is `mutationTool`
+  (`jira-managed-tools.ts`), shared by Chat and by the Coding Workbench Jira Pod in every autonomy
+  mode (the gate sits below the modes). Operation to gate call site: `jira.create`, each item of
+  `jira.create-issues` and `jira.draft` (`createTemplateGate` in `jira-managed-mutations.ts`);
+  `jira.edit`, `jira.transition` (`admitFieldMutation`); `jira.assign` (`admitAssignment`);
+  `create-issue-link`, `delete-issue-link` (`jira-managed-issue-link-mutations.ts`); the four remote
+  link operations (`jira-managed-remote-link-mutations.ts`); `create-reciprocal-remote-link`
+  (`jira-managed-reciprocal-link.ts`); `create-worklog`, `update-worklog`, `delete-worklog`
+  (`jira-worklog-templates.ts`); `sprint-move-issues`, `backlog-move-issues`, `epic-move-issues`,
+  `epic-update` (`jira-agile-templates.ts`); `epic-remove-issues`, `rank-epic`, `rank-issues`,
+  `set-issue-estimation` (`jira-agile-planning-admission.ts`). 13 operations change issues in bulk or remove
+  them under the rule-impact gates (`gateJiraBulkReferenceChange`, `gateJiraSchemaRuleImpact`):
+  `sprint-update`, `delete-sprint`, `replace-sprint`, `delete-component`, `merge-version`,
+  `remove-and-swap-version`, `delete-issue`, `delete-project`, `delete-issue-type`,
+  `update-issue-type`, `delete-custom-fields`, `delete-link-type` and `update-link-type`. They refuse
+  when a saved rule names the field they re-reference or the issue they delete, and they never write a template-governed value into an issue. Four operations
+  have no template check because they change no governed field: `archive-issues`, `archive-issue`,
+  `restore-issue` (archive state) and `move-subtask` (position among siblings). Not template-governed,
+  by reason: comments, attachments (off), watchers, votes, notifications and entity properties carry no
+  field a template describes; the 172 administration operations (projects, versions, components,
+  workflows, schemes, users, groups, filters, boards, screens, instance, cluster, avatars) touch no
+  issue field. In Chat the same pipeline also runs as a dry run before any approval is asked. The
+  Coding Workbench raises its approval in OpenCode's own permission hook: when the autonomy mode
+  would ask the human about a write of the run's bound Jira Pod, the composition first calls the
+  Pod's `preflightWrite` (`checkJiraManagedMutation` with the template library, logged as stage
+  `pre-approval`), and a refusal becomes the model's deny message with the closed policy outcome
+  `template-refused`, so no card is raised for a write that cannot proceed. In Full access nothing
+  is asked and the dry run is skipped. A dry run that cannot complete decides nothing: the card is
+  asked and the executor gate refuses afterwards. The executor gate stays authoritative everywhere.
+  `JIRA_TEMPLATE_GOVERNANCE` (`jira-template-governance.ts` in `keiko-contracts`) classifies every
+  registered mutation exactly once (`create`, `create-batch`, `draft`, `edit`, `transition`,
+  `bulk-impact`, or `not-governed` with a closed reason) as a `Record` over the operation union, so
+  an unclassified operation does not compile; archive, restore and `move-subtask` (which
+  reorders the subtasks of one parent and never reparents) are named there as `issue-lifecycle`.
+  A template skill that no longer parses refuses every governed write and names the skill in the
+  refusal; it is repaired in Skills. A `transition:<target>` activation compares the target status
+  name Jira reports, so an instance in another language (German "In Bearbeitung") needs the
+  localized name in the template.
 
 **Deterministic project report (#4181, 2026-10-31).** `jira.report` is a tenth read tool (low risk,
 `issue-tracker.read`) and the one place where Keiko, not the model, produces project numbers. For a

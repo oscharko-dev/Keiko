@@ -924,6 +924,7 @@ describe("production OpenCode backend composition", () => {
         resolve: () => ({ ok: true, binding }),
         recordBind: () => undefined,
         connections,
+        preflightWrite: () => Promise.resolve(undefined),
         attach: () => undefined,
         close: () => Promise.resolve(),
         closeRun: () => Promise.resolve(),

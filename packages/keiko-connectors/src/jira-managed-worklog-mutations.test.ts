@@ -326,14 +326,14 @@ describe("native worklog changes with fixed remaining estimates", () => {
       await update(fixture(), { ...UPDATE, timeSpentSeconds: 1800 }, source("timetracking")),
     ).toEqual({ ok: true, receipt: RECEIPT });
   });
-  it("refuses a saved summary constraint before dispatch", async () => {
+  // #4354: a worklog change touches the time fields only; a rule the issue already broke in its
+  // summary does not block it.
+  it("does not let a saved summary constraint on an untouched field block the change", async () => {
     const request = fixture();
     expect(await create(request, CREATE, source("timespent", "^Required"))).toMatchObject({
-      ok: false,
-      reason: "field-validation",
-      violations: [{ ruleId: "summary-pattern" }],
+      ok: true,
     });
-    expect(request.mock.calls.every(([, method]) => method === undefined)).toBe(true);
+    expect(request.mock.calls.some(([, method]) => method !== undefined)).toBe(true);
   });
   it.each([null, undefined, Number.MAX_SAFE_INTEGER])(
     "does not invent a zero aggregate or overflow to satisfy a saved template",
@@ -372,6 +372,14 @@ describe("native worklog changes with fixed remaining estimates", () => {
       violations: [{ ruleId: "template-unreadable" }],
     });
     expect(request.mock.calls).toHaveLength(1);
+  });
+  it("jira.update-worklog refuses an unreadable template library before effect", async () => {
+    const request = fixture();
+    expect(await update(request, UPDATE, () => ({ templates: [], unreadable: 1 }))).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-unreadable" }],
+    });
+    expect(request.mock.calls.every(([, method]) => method === undefined)).toBe(true);
   });
   it("recognizes only the two closed write names", () => {
     expect(isJiraWorklogMutation("jira.create-worklog")).toBe(true);

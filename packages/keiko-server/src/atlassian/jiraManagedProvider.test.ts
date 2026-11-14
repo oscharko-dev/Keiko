@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
+import { jiraAttemptToolResult } from "./jiraMutationResult.js";
 import {
   createJiraProviderForCatalog,
   jiraOperationBindingForTool,
@@ -66,6 +67,79 @@ it.each(["jira.create", "jira.draft", "jira.edit", "jira.attach"] as const)(
     expect(line).not.toMatch(/jira\.proxy|SYN-1|jira\.example/u);
   },
 );
+
+// #4354 (AC6 f): an attachment call the Release 1 switch refuses leaves one closed line under the
+// turn's correlation, naming the refusal and the operation, nothing the model sent.
+it.each(["jira.attach", "jira.delete-attachment"] as const)(
+  "records a %s call refused by the release switch as one closed release-scope line",
+  async (operation) => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const provider = createJiraProviderForCatalog(
+      () => ({
+        deployment: "data-center",
+        baseUrl: "https://jira.example.invalid/context",
+        http: vi.fn(),
+      }),
+      [operation],
+      // The real connector runs behind `execute`: the refusal is the switch's own, not a stub's.
+      async (_operation, _args, _context, execute) =>
+        jiraAttemptToolResult("rejected", await execute(vi.fn())),
+    );
+    const tool = provider.tools()[0];
+    if (tool === undefined) throw new TypeError("Missing selected provider tool");
+    await tool.execute(
+      { fileName: "private-report.txt" },
+      {
+        invocationId: "release-scope",
+        correlationId: "turn-correlation",
+        signal: new AbortController().signal,
+        beforeEffect: () => true,
+      },
+    );
+    const events = sink.events.filter(({ op }) => op.startsWith("jira.operation."));
+    expect(events).toHaveLength(1);
+    const line = formatActivityLogProofLine(events[0] ?? {});
+    expect(expectActivityLogProof("jira.operation.core.line", line)).toMatchObject({
+      operation,
+      stage: "release-scope",
+      outcome: "refused",
+      reason: "unavailable",
+      correlationId: "turn-correlation",
+    });
+    expect(line).not.toMatch(/private-report|jira\.example/u);
+  },
+);
+
+// The label belongs to the switch's own refusal only: an attachment call that failed for another
+// reason is an ordinary failed provider call, not a release-scope line.
+it("does not label another failure of a withheld operation as the release switch's", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  const provider = createJiraProviderForCatalog(
+    () => ({
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid/context",
+      http: vi.fn(),
+    }),
+    ["jira.attach"],
+    () => Promise.resolve({ isError: true, data: { outcome: "rejected", reason: "timeout" } }),
+  );
+  const tool = provider.tools()[0];
+  if (tool === undefined) throw new TypeError("Missing selected provider tool");
+  await tool.execute(
+    {},
+    {
+      invocationId: "other-failure",
+      correlationId: "turn-correlation",
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    },
+  );
+  const events = sink.events.filter(({ op }) => op.startsWith("jira.operation."));
+  expect(events).toHaveLength(1);
+  expect(events[0]?.extra).toMatchObject({ stage: "provider-call", outcome: "failed" });
+});
 
 it("preserves a known unconfirmed receipt when the provider activity sink fails", async () => {
   const write = vi.fn(() => {

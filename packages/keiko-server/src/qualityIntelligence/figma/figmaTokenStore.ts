@@ -103,7 +103,7 @@ function isSymlink(path: string): boolean {
 // Delegated to the shared bounded owner, exactly as the memory vault does: a keychain that does not
 // answer (`unavailable`) skips the store attempt rather than spending a second timeout.
 // `options` is a test seam only — production calls it with none.
-export function keyFromKeychain(options: MacosKeychainOptions = {}): Buffer | undefined {
+export function keyFromKeychain(options: MacosKeychainOptions): Buffer | undefined {
   const account = userInfo().username;
   const read = readMacosKeychainSecret(KEYCHAIN_SERVICE, account, options);
   if (read.kind === "unavailable") return undefined;
@@ -143,7 +143,7 @@ export const NO_FIGMA_KEYCHAIN: FigmaKeychainAccess = () => undefined;
 export function resolveFigmaVaultKey(
   env: Readonly<Record<string, string | undefined>>,
   vaultDir: string,
-  keychainAccess: FigmaKeychainAccess = () => keyFromKeychain({ env }),
+  keychainAccess: FigmaKeychainAccess,
 ): ResolvedFigmaVaultKey {
   const fromEnv = keyFromEnv(env);
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };

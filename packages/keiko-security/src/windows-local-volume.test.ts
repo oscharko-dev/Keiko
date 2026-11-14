@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { SecurityLogEvent } from "./log-port.js";
 import {
   assertWindowsLocalVolume,
+  assertWindowsLocalVolumeForPassiveRead,
+  forgetRememberedWindowsLocalVolumesForTest,
+  WindowsLocalVolumeError,
+  windowsLocalVolumeVerdict,
   WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES,
   WINDOWS_LOCAL_VOLUME_TIMEOUT_MS,
   type WindowsLocalVolumeRunner,
@@ -330,5 +334,194 @@ describe("Windows local volume authority", () => {
       );
       expect(persisted).toMatchObject({ phase: "host-start" });
     });
+  });
+});
+
+// A caller must be able to tell "this folder is not on a local volume" from "the check could not
+// be made": the first is final for that folder, the second passes a moment later (#4358).
+describe("the verdict of a refusal", () => {
+  const caught = (run: () => void): unknown => {
+    try {
+      run();
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+  const check = (path: string, options: Parameters<typeof assertWindowsLocalVolume>[1]): unknown =>
+    caught(() => {
+      assertWindowsLocalVolume(path, {
+        platform: "win32",
+        resolvePowerShell: () => POWERSHELL,
+        ...options,
+      });
+    });
+
+  it.each([
+    [
+      "a volume that is not local",
+      { runner: runner({ status: 1, stdout: STARTED }) },
+      "not-local",
+      "verify",
+    ],
+    [
+      "a query the watchdog cut off",
+      { runner: runner({ status: WATCHDOG_STATUS, stdout: STARTED }) },
+      "unverifiable",
+      "verify",
+    ],
+    [
+      "a host that never started",
+      { runner: runner({ status: null, error: timedOut() }) },
+      "unverifiable",
+      "host-start",
+    ],
+    [
+      "Windows PowerShell that cannot be resolved",
+      {
+        resolvePowerShell: (): string => {
+          throw new WindowsSystemBinaryMissingError();
+        },
+      },
+      "unverifiable",
+      "resolve",
+    ],
+  ] as const)("names %s", (_name, options, verdict, phase) => {
+    const error = check(String.raw`C:\Keiko`, options);
+    expect(windowsLocalVolumeVerdict(error)).toBe(verdict);
+    if (phase === "resolve") {
+      // the resolver's own error keeps its class: the launcher matches it
+      expect(error).toBeInstanceOf(WindowsSystemBinaryMissingError);
+    } else {
+      expect(error).toBeInstanceOf(WindowsLocalVolumeError);
+      expect(error).toMatchObject({ verdict, phase });
+    }
+  });
+
+  // A process that never ran the query learned nothing about the volume: telling a person to
+  // "install on a local drive" for it would be wrong.
+  it.each([
+    ["a host that answered without running the program", { status: 0, stdout: "" }],
+    ["a process that could not be started", { status: null, error: new Error("spawn EPERM") }],
+    ["a process that was ended", { status: null, stdout: STARTED }],
+  ] as const)("reads %s as unverifiable", (_name, result) => {
+    const { message, events } = refusal((securityLogSink) => {
+      assertWindowsLocalVolume(String.raw`C:\Keiko`, {
+        platform: "win32",
+        resolvePowerShell: () => POWERSHELL,
+        runner: runner(result),
+        securityLogSink,
+      });
+    });
+    expect(message).toBe(
+      "Windows managed root could not be verified as a local volume: the check did not run",
+    );
+    const refused = events.find((event) => event.op === "security.windows-local-volume.refused");
+    expect(refused).toMatchObject({ level: "error", errorKind: "unavailable" });
+    expect(refused?.extra).toMatchObject({
+      failureKind: "query-not-run",
+      phase: "verify",
+      verdict: "unverifiable",
+    });
+  });
+
+  it("treats an input that can never be accepted as not local, and a foreign error as unverifiable", () => {
+    expect(check("", {})).toMatchObject({ verdict: "not-local", phase: "input" });
+    expect(windowsLocalVolumeVerdict(new Error("something else"))).toBe("unverifiable");
+  });
+
+  it("writes the verdict into the refusal line", () => {
+    const { events } = refusal((securityLogSink) => {
+      assertWindowsLocalVolume(String.raw`Z:\Keiko`, {
+        platform: "win32",
+        resolvePowerShell: () => POWERSHELL,
+        runner: runner({ status: 1, stdout: STARTED }),
+        securityLogSink,
+      });
+    });
+    const refused = events.find((event) => event.op === "security.windows-local-volume.refused");
+    expect(refused?.extra).toMatchObject({ phase: "verify", verdict: "not-local" });
+  });
+});
+
+// One check is one Windows PowerShell run. Passive reads may remember a pass; nothing that acts
+// on the verdict may.
+describe("a remembered pass is for passive reads only", () => {
+  const counting = (
+    result: Parameters<typeof runner>[0],
+  ): { readonly run: WindowsLocalVolumeRunner; readonly calls: () => number } => {
+    let calls = 0;
+    const inner = runner(result);
+    return {
+      run: (command, args, options): ReturnType<WindowsLocalVolumeRunner> => {
+        calls += 1;
+        return inner(command, args, options);
+      },
+      calls: (): number => calls,
+    };
+  };
+  const options = (
+    run: WindowsLocalVolumeRunner,
+  ): Parameters<typeof assertWindowsLocalVolume>[1] => ({
+    platform: "win32",
+    resolvePowerShell: () => POWERSHELL,
+    runner: run,
+  });
+  const quietly = (run: () => void): void => {
+    try {
+      run();
+    } catch {
+      // the refusal is what these tests count around
+    }
+  };
+
+  it("asks once for a folder that passed, and again for another folder", () => {
+    forgetRememberedWindowsLocalVolumesForTest();
+    const local = counting({ status: 0, stdout: OK });
+    assertWindowsLocalVolumeForPassiveRead(String.raw`C:\Keiko`, options(local.run));
+    assertWindowsLocalVolumeForPassiveRead(String.raw`C:\Keiko`, options(local.run));
+    expect(local.calls()).toBe(1);
+    assertWindowsLocalVolumeForPassiveRead(String.raw`D:\Keiko`, options(local.run));
+    expect(local.calls()).toBe(2);
+  });
+
+  it.each([
+    ["not local", { status: 1, stdout: STARTED }],
+    ["unverifiable", { status: WATCHDOG_STATUS, stdout: STARTED }],
+  ] as const)("never remembers a refusal (%s)", (_name, result) => {
+    forgetRememberedWindowsLocalVolumesForTest();
+    const refusing = counting(result);
+    quietly(() => {
+      assertWindowsLocalVolumeForPassiveRead(String.raw`C:\Keiko`, options(refusing.run));
+    });
+    quietly(() => {
+      assertWindowsLocalVolumeForPassiveRead(String.raw`C:\Keiko`, options(refusing.run));
+    });
+    expect(refusing.calls()).toBe(2);
+    // and a later pass is not blocked by the earlier refusals
+    const local = counting({ status: 0, stdout: OK });
+    assertWindowsLocalVolumeForPassiveRead(String.raw`C:\Keiko`, options(local.run));
+    expect(local.calls()).toBe(1);
+  });
+
+  it("is never consulted or filled by the enforcing check", () => {
+    forgetRememberedWindowsLocalVolumesForTest();
+    const local = counting({ status: 0, stdout: OK });
+    assertWindowsLocalVolumeForPassiveRead(String.raw`C:\Keiko`, options(local.run));
+    // the enforcing check asks Windows again although the passive read remembers a pass
+    assertWindowsLocalVolume(String.raw`C:\Keiko`, options(local.run));
+    assertWindowsLocalVolume(String.raw`C:\Keiko`, options(local.run));
+    expect(local.calls()).toBe(3);
+    // and a pass of the enforcing check is not something a passive read may reuse
+    forgetRememberedWindowsLocalVolumesForTest();
+    const fresh = counting({ status: 0, stdout: OK });
+    assertWindowsLocalVolume(String.raw`C:\Keiko`, options(fresh.run));
+    assertWindowsLocalVolumeForPassiveRead(String.raw`C:\Keiko`, options(fresh.run));
+    expect(fresh.calls()).toBe(2);
+    // a folder that moved to a volume that is not local is refused by the enforcing check at once
+    const moved = counting({ status: 1, stdout: STARTED });
+    expect(() => {
+      assertWindowsLocalVolume(String.raw`C:\Keiko`, options(moved.run));
+    }).toThrow("must be on a local volume");
   });
 });
