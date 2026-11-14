@@ -23,8 +23,7 @@ export function evaluateFloors<const Metric extends string>(
   minimums: EvalBudget<Metric>,
 ): EvalFloorResult<Metric> {
   const failures: Metric[] = [];
-  const metricNames = Object.keys(minimums) as Metric[];
-  for (const metric of metricNames) {
+  for (const metric in minimums) {
     const value = metrics[metric];
     if (value === undefined || !meetsFiniteFloor(value, minimums[metric])) failures.push(metric);
   }

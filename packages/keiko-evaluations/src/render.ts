@@ -17,7 +17,8 @@ function glyph(result: DimensionResult): string {
 }
 
 function fixtureLine(fixture: FixtureRunResult): string {
-  const status = (fixture.report.status as string | undefined) ?? "unknown";
+  const reported = fixture.report.status;
+  const status = typeof reported === "string" ? reported : "unknown";
   const dims = fixture.dimensionResults
     .filter((d) => d.outcome !== "not-applicable")
     .map((d) => `${d.dimension}=${glyph(d)}`)

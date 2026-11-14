@@ -18,6 +18,7 @@
 
 import type {
   CapsuleAnswerGroundingPolicy,
+  CapsuleSetId,
   ChunkId,
   DocumentId,
   EmbeddingModelIdentity,
@@ -102,7 +103,7 @@ export type EvalRetrievalScope =
   | { readonly kind: "capsule"; readonly capsuleId: KnowledgeCapsuleId }
   | {
       readonly kind: "capsule-set";
-      readonly capsuleSetId: string;
+      readonly capsuleSetId: CapsuleSetId;
       readonly capsuleIds: readonly KnowledgeCapsuleId[];
     };
 

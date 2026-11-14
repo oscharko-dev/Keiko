@@ -5178,6 +5178,14 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-evaluations/src/render.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
       "path": "packages/keiko-local-knowledge/src/_support.ts",
       "rule": "anti-slop/require-safety-comment-for-type-assertion",
       "from": 3,

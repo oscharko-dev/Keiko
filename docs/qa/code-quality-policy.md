@@ -180,8 +180,8 @@ memory-retrieval, verification and workflows, and no-reflect-get for verificatio
 sandbox (#3933), and no-chained-type-assertions became active for harness and model-gateway
 (#3933). On 2026-11-11 no-reflect-get became active for cli and tools, and then for security and ui,
 and no-chained-type-assertions became active for evaluations (#3933). On 2026-11-12
-require-safety-comment-for-type-assertion became active for harness (#3933). The engine refuses an
-active
+require-safety-comment-for-type-assertion became active for evaluations and harness (#3933). The
+engine refuses an active
 scope without files on the real repository. A hermetic test fixture writes its policy with only the
 scopes its own files certainly fall in.
 

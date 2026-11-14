@@ -284,7 +284,8 @@
         "package:@oscharko-dev/keiko-memory-retrieval",
         "package:@oscharko-dev/keiko-verification",
         "package:@oscharko-dev/keiko-workflows",
-        "package:@oscharko-dev/keiko-harness"
+        "package:@oscharko-dev/keiko-harness",
+        "package:@oscharko-dev/keiko-evaluations"
       ]
     },
     {

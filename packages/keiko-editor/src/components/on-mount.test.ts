@@ -761,6 +761,24 @@ describe("wireEditorOnMount inline completion (#1200)", () => {
     expect(languages.registeredLanguages()).toEqual(["typescript", "javascript"]);
   });
 
+  it("registers nothing when the registry lacks an inline-completion enum the bridge reads", () => {
+    const fakes = buildFakes();
+    const registered: (string | readonly string[])[] = [];
+    const registry: MountMonaco["languages"] = {
+      ...buildFakeLanguages().registrar,
+      InlineCompletionTriggerKind: { Automatic: 0, Explicit: 1 },
+      registerInlineCompletionsProvider: (languageSelector) => {
+        registered.push(languageSelector);
+        return { dispose: (): void => undefined };
+      },
+    };
+    wire(fakes, {
+      monaco: { ...fakes.monaco, languages: registry },
+      inlineCompletion: inlineCompletionArg(),
+    });
+    expect(registered).toEqual([]);
+  });
+
   it("registers only the requested inline languages", () => {
     const fakes = buildFakes();
     const languages = buildFakeInlineLanguages();

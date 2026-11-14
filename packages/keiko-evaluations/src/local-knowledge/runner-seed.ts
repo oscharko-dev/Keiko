@@ -9,7 +9,6 @@
 // ground-truth chunk always dominates the cosine ranking for its query.
 
 import type {
-  CapsuleSetId,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
   ParsedUnit,
@@ -81,10 +80,10 @@ function seedSource(
 }
 
 function composeParsedUnit(
-  documentId: string,
+  documentId: ParsedUnit["documentId"],
   unit: EvalDocumentSpec["parsedUnits"][number],
 ): ParsedUnit {
-  return { ...unit.unit, documentId: documentId as ParsedUnit["documentId"] };
+  return { ...unit.unit, documentId };
 }
 
 function seedDocument(
@@ -113,7 +112,7 @@ function seedDocument(
       store._internal.contentCipher,
       capsule.id,
       chunkParsedUnitId(String(doc.id), parsedUnit.id),
-      composeParsedUnit(String(doc.id), parsedUnit),
+      composeParsedUnit(doc.id, parsedUnit),
     );
   }
 }
@@ -151,7 +150,7 @@ function seedChunks(
   const lexicalRows: LexicalChunkIndexRow[] = [];
   for (const chunk of doc.chunks) {
     const parsedUnit = resolveChunkUnit(doc, chunk);
-    const composedUnit = composeParsedUnit(String(doc.id), parsedUnit);
+    const composedUnit = composeParsedUnit(doc.id, parsedUnit);
     insertChunkRow(store._internal.db, {
       id: chunk.id,
       capsuleId: capsule.id,
@@ -220,7 +219,7 @@ function collectTopicBoosts(fixture: RetrievalEvalFixture): Record<string, numbe
 function seedCapsuleSets(store: KnowledgeStore, fixture: RetrievalEvalFixture): void {
   for (const query of fixture.queries) {
     if (query.scope.kind !== "capsule-set") continue;
-    const id = query.scope.capsuleSetId as CapsuleSetId;
+    const id = query.scope.capsuleSetId;
     if (getCapsuleSet(store, id) !== undefined) continue;
     createCapsuleSet(store, {
       id,
