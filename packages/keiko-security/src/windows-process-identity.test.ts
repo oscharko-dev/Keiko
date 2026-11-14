@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import { describe, expect, it } from "vitest";
 import type { SecurityLogEvent } from "./log-port.js";
 import {
@@ -61,6 +62,7 @@ describe("readWindowsProcessCommandLine", () => {
         : { status: 0, stdout: `${STARTED}${COMMAND_LINE}`, stderr: "" };
     expect(
       readWindowsProcessCommandLine(4711, {
+        securityLogSink: nullSecurityLogSink(),
         resolvePowerShell: () => POWERSHELL,
         runner: slowHost,
       }),
@@ -92,7 +94,11 @@ describe("readWindowsProcessCommandLine", () => {
   }
 
   function readOn(runner: WindowsProgramRunner): string | undefined {
-    return readWindowsProcessCommandLine(4711, { resolvePowerShell: () => POWERSHELL, runner });
+    return readWindowsProcessCommandLine(4711, {
+      securityLogSink: nullSecurityLogSink(),
+      resolvePowerShell: () => POWERSHELL,
+      runner,
+    });
   }
 
   it("answers when the module loads slowly and the query is fast", () => {
@@ -163,7 +169,11 @@ describe("readWindowsProcessCommandLine", () => {
         throw new Error("must not run");
       };
       expect(
-        readWindowsProcessCommandLine(pid, { resolvePowerShell: () => POWERSHELL, runner }),
+        readWindowsProcessCommandLine(pid, {
+          securityLogSink: nullSecurityLogSink(),
+          resolvePowerShell: () => POWERSHELL,
+          runner,
+        }),
       ).toBeUndefined();
     },
   );
