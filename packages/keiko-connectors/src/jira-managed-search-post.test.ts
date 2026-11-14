@@ -86,6 +86,28 @@ it("uses one native POST read and preserves the exact query, selected fields and
   expect(result.data).not.toHaveProperty("receipt");
   expect(JSON.stringify(result)).not.toContain("untrusted.invalid");
 });
+it("steers a native POST search that asks for field values across more issues than one page", async () => {
+  const request = vi.fn<JiraMutationRequest>().mockResolvedValue({
+    ok: true,
+    status: 200,
+    body: {
+      startAt: 0,
+      maxResults: 1,
+      total: 90,
+      issues: [nativeIssue("10001", "SYN-1")],
+      names: { customfield_10000: "Estimate" },
+      schema: { customfield_10000: { type: "number", custom: "x:float" } },
+    },
+  });
+  const steered = await read(
+    { jql: "project = SYN", fields: ["customfield_10000"] },
+    request,
+    BASE,
+  );
+  expect(steered.data.guidance).toEqual(expect.stringContaining("90"));
+  const plain = await read({ jql: "project = SYN" }, request, BASE);
+  expect(plain.data).not.toHaveProperty("guidance");
+});
 it("returns native query diagnostics without attempting another method or disabling validation", async () => {
   const request = vi.fn<JiraMutationRequest>().mockResolvedValue({
     ok: false,

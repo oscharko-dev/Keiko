@@ -217,7 +217,17 @@ it("points figures across many issues to jira.report without attracting every pr
     expect(describe(name), name).toMatch(/across many issues come from jira\.report/u);
     expect(describe(name), name).toMatch(/not from (paging results|reading issues one by one)/u);
   }
-  expect(describe("jira.search")).toMatch(/progress, estimates and template compliance/iu);
+  // What a description promises the report computes must be in the report's own documented coverage:
+  // "totals across many issues" sent logged-time questions there, which the report does not answer.
+  const reportCoverage = describe("jira.report");
+  for (const name of ["jira.search", "jira.search-post", "jira.issue"]) {
+    expect(describe(name), name).toMatch(
+      /progress, estimates and template compliance across many issues come from jira\.report/iu,
+    );
+    expect(describe(name), name).not.toMatch(/\btotals across\b/iu);
+  }
+  for (const metric of ["progress", "estimates", "template compliance"])
+    expect(reportCoverage).toContain(metric);
   const report = provider.tools().find((tool) => tool.name === "jira.report");
   // Both attempts of the selection lane asked for project statuses and were answered by the report.
   expect(report?.descriptor.description).not.toMatch(
@@ -227,6 +237,37 @@ it("points figures across many issues to jira.report without attracting every pr
   expect(report?.descriptor.description).toContain("requirementsFromPods");
   expect(report?.descriptor.description).toContain("report.figures");
   expect(JSON.stringify(report?.descriptor.inputSchema)).toContain("requirementsFromPods");
+});
+
+it("describes jira.search by what it really does: page sizes, per-row field values and the report alternative", () => {
+  const provider = createJiraProviderForCatalog(vi.fn(), ["jira.search", "jira.search-post"]);
+  for (const name of ["jira.search", "jira.search-post"]) {
+    const tool = provider.tools().find((entry) => entry.name === name);
+    const text = tool?.descriptor.description ?? "";
+    expect(text).toMatch(/25 .*100/u);
+    expect(text).toMatch(/fields[^.]*per.issue|per.issue[^.]*fields/iu);
+    expect(text).toContain("jira.report");
+    expect(text).not.toMatch(/returns issue summaries; fetch an issue/iu);
+    const properties = (tool?.descriptor.inputSchema as { properties: Record<string, unknown> })
+      .properties;
+    expect((properties.fields as { description?: string }).description).toMatch(/\S/u);
+  }
+});
+
+it("admits the closed guidance member of a search result in the advertised result schema", () => {
+  const descriptor = createJiraProviderForCatalog(vi.fn(), ["jira.search"]).tools()[0]?.descriptor;
+  if (descriptor === undefined) throw new TypeError("Expected the search descriptor");
+  const operationBinding = jiraOperationBindingForTool("jira.search");
+  if (operationBinding === undefined) throw new TypeError("Expected search operation binding");
+  const data = {
+    outcome: "succeeded",
+    operationBinding,
+    items: [],
+    startAt: 0,
+    total: 240,
+    guidance: "Use jira.report.",
+  };
+  expect(describeCatalogSchemaMismatch(descriptor.resultSchema, data)).toBeUndefined();
 });
 
 it("advertises the real paging contract of jira.report: summary first, then sections with startAt", () => {

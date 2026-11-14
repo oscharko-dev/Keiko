@@ -125,6 +125,27 @@ describe("external JSON Schema catalog dialect", () => {
     expect(mismatch?.unexpectedPropertyCount).toBe(1);
     expect(JSON.stringify(mismatch)).not.toContain("private-extra");
   });
+  // #4357 AC4: a model that omitted several required properties is told all of them at once; the
+  // first-error account named one per rejection and a turn grants one correction round.
+  it("names every missing root property in one account, sorted, and nothing the value carries", () => {
+    const compiled = compileExternalCatalogSchema({
+      type: "object",
+      properties: { commentId: { type: "string" }, issueIdOrKey: { type: "string" } },
+      required: ["issueIdOrKey", "commentId"],
+      additionalProperties: false,
+    });
+    expect(describeCatalogSchemaMismatch(compiled, {})).toMatchObject({
+      missingRequired: ["commentId", "issueIdOrKey"],
+    });
+    const partial = describeCatalogSchemaMismatch(compiled, { commentId: "9" });
+    expect(partial?.missingRequired).toEqual(["issueIdOrKey"]);
+    const wrongType = describeCatalogSchemaMismatch(compiled, {
+      commentId: 9,
+      issueIdOrKey: "K-1",
+    });
+    expect(wrongType?.missingRequired).toEqual([]);
+    expect(wrongType?.invalidPaths).toEqual(["commentId"]);
+  });
   // #4357: the guarded Jira writes. A first-error account named `expectedValueNodes` as simply
   // missing although the rule is "exactly one of expectedValueNodes and expectAbsent", and named
   // `expectAbsent` as invalid without saying that only `true` is accepted.

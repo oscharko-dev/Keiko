@@ -6,6 +6,8 @@ import {
   resetLoadedMessageCatalogs,
   translate,
 } from "@/lib/i18n";
+import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
 import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
@@ -28,8 +30,8 @@ describe("formatUserError", () => {
         );
         expect(notice.remediation).toBe(
           locale === "en"
-            ? "Open the Knowledge Pods Hub, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira."
-            : "Öffne den Knowledge Pods Hub, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+            ? "Open the Local Knowledge window, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira."
+            : "Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
         );
         const restored = toUserErrorNotice(
           formatUserError(error, "Could not send message."),
@@ -76,6 +78,30 @@ describe("formatUserError", () => {
       if (locale === "de") {
         expect(`${notice.title} ${notice.message}`).toMatch(/[äöüÄÖÜ]|nicht|Wähle|Prüfe|Versuche/u);
       }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+  // The next step of a Jira Pod refusal names the control where the Pod is switched on. The name
+  // comes from that control's own catalog entry, so a rename fails here instead of leaving a clerk
+  // looking for a menu that no longer exists under that name (#4371).
+  it.each(
+    (["en", "de"] as const).flatMap((locale) =>
+      (["JIRA_POD_UNAVAILABLE", "JIRA_POD_CONNECTION_CHANGED"] as const).map(
+        (code) => [locale, code] as const,
+      ),
+    ),
+  )("names the Connectors menu as the control in the %s next step of %s", async (locale, code) => {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    try {
+      const optional = locale === "en" ? OPTIONAL_WIDGET_EN_MESSAGES : OPTIONAL_WIDGET_DE_MESSAGES;
+      const controlName = optional["chat.connectors.title"];
+      const notice = toUserErrorNotice(new ApiError(code, "Server text", 409), "Could not send.");
+
+      expect(notice.remediation).toContain(controlName);
+      expect(notice.remediation).not.toContain(optional["chat.grounding.dataLabel"]);
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
       resetLoadedMessageCatalogs();
