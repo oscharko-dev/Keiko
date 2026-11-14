@@ -11,8 +11,22 @@ const quietLedger = {
   request: async () => ({ status: 200, json: { captures: [], total: 0 } }),
 };
 
-function passEvent(op, correlationId, fields = {}) {
-  return { ts: new Date().toISOString(), op, correlationId, ...fields };
+// The wait takes its start (`startedAt`) before it first reads the pass events, and it counts only
+// a pass stamped at or after that start. Events stamped when the test built them can land one
+// millisecond before the wait began and never count (the wait then times out), so the test leaves
+// them unstamped and the reader stamps them as it hands them over: never earlier than the wait began.
+function passLog() {
+  const events = [];
+  return {
+    add(op, correlationId, fields = {}) {
+      events.push({ op, correlationId, ...fields });
+    },
+    read: async () => {
+      const ts = new Date().toISOString();
+      for (const event of events) event.ts ??= ts;
+      return events;
+    },
+  };
 }
 
 describe("memory lab learning wait after a model call ends", () => {
@@ -92,50 +106,39 @@ describe("memory lab learning wait after a model call ends", () => {
     // seconds after the answer. The earlier wait ended once the ledger was quiet and the grace
     // period had passed, before that pass ran, so the probes measured a vault nothing was learned
     // into and product recall read 0.
-    const events = [];
+    const log = passLog();
     const started = Date.now();
-    setTimeout(() => events.push(passEvent(LEARNING_PASS_STARTED_OP, "pass-1")), 150);
-    setTimeout(
-      () =>
-        events.push(
-          passEvent(LEARNING_PASS_SETTLED_OP, "pass-1", {
-            outcome: "completed",
-            pendingChatCount: 0,
-          }),
-        ),
-      400,
-    );
+    setTimeout(() => {
+      log.add(LEARNING_PASS_STARTED_OP, "pass-1");
+    }, 150);
+    setTimeout(() => {
+      log.add(LEARNING_PASS_SETTLED_OP, "pass-1", { outcome: "completed", pendingChatCount: 0 });
+    }, 400);
     await awaitLearning(quietLedger, {
       quietMs: 10,
       graceMs: 5,
       maxMs: 5000,
       openCalls: async () => 0,
-      passes: { idleMs: 100, events: async () => events },
+      passes: { idleMs: 100, events: log.read },
     });
     expect(Date.now() - started).toBeGreaterThanOrEqual(390);
   });
 
   it("waits for the continuation a pass announced by leaving Chats pending", async () => {
-    const events = [
-      passEvent(LEARNING_PASS_STARTED_OP, "pass-1"),
-      passEvent(LEARNING_PASS_SETTLED_OP, "pass-1", { outcome: "completed", pendingChatCount: 1 }),
-    ];
+    const log = passLog();
+    log.add(LEARNING_PASS_STARTED_OP, "pass-1");
+    log.add(LEARNING_PASS_SETTLED_OP, "pass-1", { outcome: "completed", pendingChatCount: 1 });
     const started = Date.now();
     setTimeout(() => {
-      events.push(passEvent(LEARNING_PASS_STARTED_OP, "pass-2"));
-      events.push(
-        passEvent(LEARNING_PASS_SETTLED_OP, "pass-2", {
-          outcome: "completed",
-          pendingChatCount: 0,
-        }),
-      );
+      log.add(LEARNING_PASS_STARTED_OP, "pass-2");
+      log.add(LEARNING_PASS_SETTLED_OP, "pass-2", { outcome: "completed", pendingChatCount: 0 });
     }, 300);
     await awaitLearning(quietLedger, {
       quietMs: 10,
       graceMs: 5,
       maxMs: 5000,
       openCalls: async () => 0,
-      passes: { idleMs: 100, events: async () => events },
+      passes: { idleMs: 100, events: log.read },
     });
     expect(Date.now() - started).toBeGreaterThanOrEqual(290);
   });
@@ -155,27 +158,26 @@ describe("memory lab learning wait after a model call ends", () => {
   it("fails the unit when a learning pass found its model unavailable", async () => {
     // The product retries such a pass only after a minute and learns no later turn until then, so a
     // unit that went on would measure a subject that does not learn.
-    const events = [
-      passEvent(LEARNING_PASS_STARTED_OP, "pass-1"),
-      passEvent(LEARNING_PASS_SETTLED_OP, "pass-1", {
-        outcome: "unavailable",
-        pendingChatCount: 1,
-      }),
-    ];
+    const log = passLog();
+    log.add(LEARNING_PASS_STARTED_OP, "pass-1");
+    log.add(LEARNING_PASS_SETTLED_OP, "pass-1", { outcome: "unavailable", pendingChatCount: 1 });
     await expect(
       awaitLearning(quietLedger, {
         quietMs: 10,
         graceMs: 5,
         maxMs: 5000,
         openCalls: async () => 0,
-        passes: { idleMs: 5000, events: async () => events },
+        passes: { idleMs: 5000, events: log.read },
       }),
     ).rejects.toThrow(/learning pass settled as unavailable/u);
   });
 
   it("counts a pass that started before the wait as open until it settles", () => {
-    const before = passEvent(LEARNING_PASS_STARTED_OP, "pass-1");
-    before.ts = new Date(Date.now() - 10_000).toISOString();
+    const before = {
+      ts: new Date(Date.now() - 10_000).toISOString(),
+      op: LEARNING_PASS_STARTED_OP,
+      correlationId: "pass-1",
+    };
     expect(learningPassProgress([before], Date.now())).toMatchObject({
       open: 1,
       started: 0,
