@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "658dae2dd4441e352606730dc9ddba68fceb35acb4ba31622dca821894aba502",
+    "catalogDigest": "6a0f945f8ce08a2ade128e414f83ea9482f01502b4e5a498154061e1ae5b7f6e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -37736,8 +37736,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["memory-vault.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:136",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:189"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:138",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:191"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43978,7 +43978,7 @@
         "proofIds": ["security.portable-tree-attestation.failed.driver"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/portable-tree-attestation.ts:36",
-        "emitterSites": ["packages/keiko-security/src/portable-tree-attestation.ts:793"]
+        "emitterSites": ["packages/keiko-security/src/portable-tree-attestation.ts:796"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44091,7 +44091,7 @@
         "failureClasses": ["security-vault-delete"],
         "proofIds": ["security.vault.entries-delete-failed.count"],
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:287",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:994"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:995"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44124,7 +44124,7 @@
         "proofIds": ["security.vault.entries-deleted.count"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:271",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:974"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:975"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44177,7 +44177,7 @@
         "failureClasses": ["security-vault-write"],
         "proofIds": ["security.vault.entries-merge-failed.count"],
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:299",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1021"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1022"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44210,7 +44210,7 @@
         "proofIds": ["security.vault.entries-merged.count"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:255",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:959"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:960"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44263,7 +44263,7 @@
         "failureClasses": ["security-vault-rollback"],
         "proofIds": ["security.vault.entries-rollback-failed.count"],
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:323",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1202"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1203"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44311,7 +44311,7 @@
         "failureClasses": ["security-vault-key-resolution"],
         "proofIds": ["security.vault.key-resolution-failed.evidence"],
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:246",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:645"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:646"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44345,7 +44345,7 @@
         "proofIds": ["security.vault.key-resolved.source"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:223",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:668"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:669"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44398,7 +44398,7 @@
         "failureClasses": ["security-vault-read"],
         "proofIds": ["security.vault.shard-unreadable.count"],
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:311",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1117"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:1118"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -118131,7 +118131,7 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:139",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:141",
       "package": "keiko-memory-vault"
     },
     {

@@ -99,7 +99,8 @@ async function readFileDigest(
   const buffer = Buffer.allocUnsafe(BUFFER_BYTES);
   let bytes = 0;
   let reads = 0;
-  for (;;) {
+  // One read per call instead of an await inside a loop: the same checks in the same order.
+  const readNext = async (): Promise<{ readonly bytes: number; readonly digest: Buffer }> => {
     assertPortableHandoffOperation(operation);
     const result = await handle.read(buffer, 0, buffer.length, null);
     if (result.bytesRead === 0) return { bytes, digest: hash.digest() };
@@ -108,7 +109,9 @@ async function readFileDigest(
     hash.update(buffer.subarray(0, result.bytesRead));
     reads += 1;
     if (reads % 64 === 0) await operation.yieldControl();
-  }
+    return readNext();
+  };
+  return readNext();
 }
 
 function assertStableFile(opened: Stats, after: Stats, current: Stats, bytes: number): void {

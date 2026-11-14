@@ -515,10 +515,11 @@ function keychainMemoFor(runCommand: KeychainCommandRunner): KeychainSecretMemo 
 // the reader/generate branches are deterministically testable without the real login keychain.
 export function createKeychainVaultKeyAccess(
   keychainService: string,
-  runCommand: KeychainCommandRunner = defaultKeychainCommandRunner,
+  injectedRunCommand: KeychainCommandRunner | undefined,
   sink: SecurityLogSink,
   env?: Readonly<Record<string, string | undefined>>,
 ): LocalVaultKeychainAccess {
+  const runCommand = injectedRunCommand ?? defaultKeychainCommandRunner;
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
     const withheld =

@@ -39,7 +39,7 @@ import {
   defineActivityLogOperation,
   recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { securityErrorKind, startSecurityLogTimer } from "@oscharko-dev/keiko-security";
+import { securityErrorKind } from "@oscharko-dev/keiko-security";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -113,8 +113,10 @@ export function nullMemoryVaultLogSink(): MemoryVaultLogSink {
 // each, so the two ports cannot drift into measuring or classifying differently (ADR-0173 D11). A
 // vault-open or an encryption sweep reads the same monotonic timer, and a thrown cause is reduced to
 // an identifier, a taxonomy code or a constructor name — never a message.
-export const startMemoryVaultLogTimer = startSecurityLogTimer;
-export const memoryVaultErrorKind = securityErrorKind;
+export {
+  securityErrorKind as memoryVaultErrorKind,
+  startSecurityLogTimer as startMemoryVaultLogTimer,
+} from "@oscharko-dev/keiko-security";
 
 // ─── Writing a line must never become the failure it describes ────────────────
 //
@@ -182,7 +184,7 @@ function reportFailedMemoryVaultLogSink(
 ): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;
   REPORTED_FAILED_SINKS.add(sink);
-  const errorKind = memoryVaultErrorKind(cause);
+  const errorKind = securityErrorKind(cause);
   const droppedOpDigest = operationDigest(droppedOp);
   try {
     sink.write(

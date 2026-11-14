@@ -764,20 +764,23 @@ async function runTreeMachineAsync(
   let response: unknown;
   let readSteps = 0;
   let ioSteps = 0;
-  try {
-    for (;;) {
-      assertAsyncOperation(operation);
-      const step = machine.next(response);
-      if (step.done) return step.value;
-      response = await io.execute(step.value);
-      if (step.value.kind === "read-file") readSteps += 1;
-      ioSteps += 1;
-      if (readSteps >= ASYNC_READS_PER_YIELD || ioSteps >= ASYNC_IO_STEPS_PER_YIELD) {
-        readSteps = 0;
-        ioSteps = 0;
-        await operation.yieldControl();
-      }
+  // One machine step per call instead of an await inside a loop: the same checks in the same order.
+  const advance = async (): Promise<PortableSidecarTreeAttestation> => {
+    assertAsyncOperation(operation);
+    const step = machine.next(response);
+    if (step.done) return step.value;
+    response = await io.execute(step.value);
+    if (step.value.kind === "read-file") readSteps += 1;
+    ioSteps += 1;
+    if (readSteps >= ASYNC_READS_PER_YIELD || ioSteps >= ASYNC_IO_STEPS_PER_YIELD) {
+      readSteps = 0;
+      ioSteps = 0;
+      await operation.yieldControl();
     }
+    return advance();
+  };
+  try {
+    return await advance();
   } finally {
     await io.closeAll();
   }
