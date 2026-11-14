@@ -30,7 +30,6 @@ import type {
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_WORKBENCH_RUNTIME_ORIGINS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   CODING_WORKBENCH_TASK_INTENT_MAX_CHARS,
   isLegalCodingWorkbenchRuntimeTransition,
@@ -38,6 +37,7 @@ import {
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import {
+  CODING_WORKBENCH_RUNTIME_ORIGINS,
   DEFAULT_CODING_WORKBENCH_AGENT,
   isCodingWorkbenchBuiltInAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
