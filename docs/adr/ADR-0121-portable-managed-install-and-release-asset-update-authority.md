@@ -798,6 +798,41 @@ own verification of the record. Before this, the flat rules knew none of these f
 installation that was never updated could neither be removed by `keiko uninstall` nor pass the
 upgrade precondition.
 
+The app files follow the payload's own package (#4358). `app/` is the extracted `npm pack` of the
+root package, so besides `dist/` and the bundled packages it holds what that package's
+`package.json` makes npm pack: the entries of its `files` list, the files of `bin`, `main` and
+`browser`, and README, COPYING, LICENSE and LICENCE files, which npm always adds. Inspection reads
+the installed `app/package.json`, the input npm packed from, and admits exactly those entries, as
+the file or folder each is on disk. The always-added names are admitted as files only, so a folder
+such as `LICENSE.d/` stays unknown. A pattern, a negation, an absolute or parent path, or a name
+that only resembles an always-packed one admits nothing, and a missing, oversized or invalid
+package file names nothing.
+
+What is static and what is derived. Static, in the fixed payload rules of `portable-maintenance.ts`:
+the root launcher, the setup manifest, the support launcher, `app/package.json` and
+`app/release-impact.catalog.json`, the Linux runtime supervisor and the fixed runtime files of a Windows generation, and the whole-tree
+prefixes `app/dist/`, `app/node_modules/` and `runtime/node/` (plus the macOS bundle folders). Those
+entries are fixed by the staging layout, not by what a release contains, and their integrity has
+other owners (launcher digests, the setup manifest, the tree attestation). Derived, per payload:
+the runtime files from `.portable/runtime-activation.json` and the app files from
+`app/package.json`, because those vary with the release and a hand-kept list of them is what made
+the earlier rules refuse real installations. A file added to the package's `files` list needs no
+edit here. `portable-maintenance.app-payload.test.ts` builds its fixtures from the pack step's own
+file listing and fails when that listing holds an entry the inspection would call unknown.
+
+Trust rule: `app/package.json` is read from the installation itself and can only name entries
+inside `app/`, where `dist/` and `node_modules/` were already admitted wholesale. Whether anything
+verifies it first depends on the layout. A Windows generation (setup manifest schema 2) is
+attested as a whole tree against the manifest's `treeSha256` in `validatePortableRoot`, which
+uninstall and the upgrade precondition run before they inspect, so `app/package.json` is covered
+there. A flat first installation (schema 1, every platform and the first Windows installation) has
+no tree attestation: `validatePortableRoot` checks only that its `app/package.json` carries the
+product name and the manifest's version, and the registration binds the setup manifest, the install
+root identity and the launcher, so the `files` list is read without an integrity check there.
+Before this, a real payload's `app/LICENSE`, `NOTICE`, `README.md`, `TRADEMARKS.md` and
+`scripts/lib/local-state-audit.mjs` were unknown entries, so `keiko uninstall` and the upgrade
+precondition refused every real installation.
+
 One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
 semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
 KHT1 walking, process/port checks and existing supervisor transport. Windows reuses the existing
