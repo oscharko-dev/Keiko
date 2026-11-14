@@ -1417,6 +1417,19 @@ no issue keys or provider bodies. This additive transcript field is readable by 
 older builds with exact-key transcript validation cannot read affected rows without an explicit
 compatible migration, so rollback compatibility is not implied.
 
+*Project names.* An approval names the projects its action targets by key and name on every
+card, the first of a Chat included. A card used to learn a name only from a `jira_projects` read of
+the same Chat, so a first create in a fresh Chat showed the bare numeric id. The server now reads
+each project once, when it builds the approval, through the same `project/{idOrKey}` read the write
+performs (bounded: at most eight projects, one five-second window, admitted as a GET only while the
+authority and the turn's read admission still hold), and stores the result as `projects` on the
+approval view, a list of `{ ref, key, name }`. A project Jira did not answer is listed as `{ ref }`
+and the card shows that reference marked as an id, never a name that was not read; the closed
+failure class is recorded body-free, with counts only, on `jira.approval.project`. The field is
+display data: it is never part of the action digest, so a name Jira later changes cannot invalidate
+an approval, and the UI only shows it
+(the card prefers it over names the Chat read earlier).
+
 *Deselection.* The approving human may deselect items; the deselection is bound into the approval
 proof and extends to every item that depends on a deselected one. The stored approval view carries
 it as `excludedItemRefs` (a subset of the draft, so no count of its own), and the transcript store admits exactly one

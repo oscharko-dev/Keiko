@@ -3,7 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { JiraChatTools } from "./JiraChatTools";
-import { JiraNamesContext, jiraNamesOf, restatesTarget } from "./jiraNames";
+import {
+  JiraNamesContext,
+  NO_JIRA_NAMES,
+  jiraNameOf,
+  jiraNamesOf,
+  restatesTarget,
+  withApprovalProjects,
+} from "./jiraNames";
 
 vi.mock("@/lib/atlassian-connectors-api", () => ({
   decideJiraChatWriteApproval: vi.fn(),
@@ -109,6 +116,42 @@ describe("the names on a Jira approval", () => {
     expect(screen.getByText("Description")).toBeVisible();
     expect(screen.getByText("Synthetic")).toBeVisible();
     expect(screen.getByText("customfield_1")).toBeVisible();
+  });
+  it("names the project on the first card of a Chat from the approval itself (F09)", () => {
+    const named = {
+      ...draft("10002"),
+      approval: {
+        ...approval,
+        projects: [{ ref: "10000", key: "KEIKO", name: "Keiko synthetic" }],
+      },
+    };
+    renderInChat(transcript(named));
+    expect(screen.getByText("Project Keiko synthetic (KEIKO) · Issue type 10002")).toBeVisible();
+    expect(screen.queryByText(/Project 10000/u)).toBeNull();
+  });
+  it("lets the approval's key and name win over what an earlier read of the Chat called the project", () => {
+    const named = {
+      ...draft("10002"),
+      approval: {
+        ...approval,
+        projects: [{ ref: "10000", key: "KEIKO", name: "Keiko synthetic" }],
+      },
+    };
+    renderInChat(
+      transcript(read("jira_projects", [{ id: "10000", name: "Stale name" }])),
+      transcript(named),
+    );
+    expect(screen.getByText("Project Keiko synthetic (KEIKO) · Issue type 10002")).toBeVisible();
+  });
+  it("marks a numeric id Jira did not answer as an id and shows a key as sent, never a bare number", () => {
+    const unnamed = { ...draft("10002"), approval: { ...approval, projects: [{ ref: "10000" }] } };
+    renderInChat(transcript(unnamed));
+    expect(screen.getByText("Project ID 10000 · Issue type 10002")).toBeVisible();
+    const keyed = withApprovalProjects(NO_JIRA_NAMES, "binding", {
+      ...approval,
+      projects: [{ ref: "KEIKO" }],
+    });
+    expect(jiraNameOf(keyed, "projects", "KEIKO")).toBe("KEIKO");
   });
   it("keeps a field visible that contradicts the item's target", () => {
     renderInChat(transcript(draft("10009")));

@@ -201,3 +201,34 @@ it.each(JIRA_AVATAR_UPLOAD_MUTATIONS)(
     ).toBe(true);
   },
 );
+
+describe("the projects a write approval names (F09)", () => {
+  const draft = { ...approval(), operation: "jira.draft" as const };
+  const named = { ref: "10002", key: "KEI", name: "Keiko synthetic" };
+  it("carries each project's reference with the key and name the server read, or the reference alone", () => {
+    for (const projects of [[named], [{ ref: "10002" }], [named, { ref: "KEI2" }]]) {
+      const value = { ...draft, projects };
+      expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
+    }
+    expect(validateChatToolWriteApprovalView(draft).ok).toBe(true);
+  });
+  it.each([
+    ["an empty list", []],
+    [
+      "more projects than a card can name",
+      Array.from({ length: 9 }, (_, i) => ({ ref: `P${String(i)}` })),
+    ],
+    ["a repeated reference", [named, { ref: "10002" }]],
+    ["a key without a name", [{ ref: "10002", key: "KEI" }]],
+    ["a name without a key", [{ ref: "10002", name: "Keiko synthetic" }]],
+    ["a name with a control character", [{ ...named, name: "Keiko\nsynthetic" }]],
+    ["a name past the bound", [{ ...named, name: "n".repeat(256) }]],
+    ["a surrounding blank in the name", [{ ...named, name: " Keiko " }]],
+    ["a reference that is a URL", [{ ref: "https://example.invalid/10002" }]],
+    ["a key that is a path", [{ ...named, key: "../KEI" }]],
+    ["an unknown member", [{ ...named, lead: "someone" }]],
+    ["not a list", "KEI"],
+  ])("refuses %s", (_label, projects) => {
+    expect(validateChatToolWriteApprovalView({ ...draft, projects }).ok).toBe(false);
+  });
+});

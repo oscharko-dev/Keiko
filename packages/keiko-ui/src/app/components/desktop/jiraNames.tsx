@@ -1,5 +1,7 @@
 import { createContext, useMemo, type ReactNode } from "react";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { JiraApprovalProject } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { JiraDraftField } from "./jiraDraftTree";
 import type { OptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { jiraStandardFieldLabel } from "./jira-standard-field-label";
@@ -62,6 +64,31 @@ export function jiraNamesOf(transcripts: Transcripts): JiraNames {
     fields: namesOf(reads, "jira_create_fields"),
     choices: jiraChoicesOf(transcripts),
   };
+}
+
+/**
+ * How an approval card names a project: the server read its key and name when it built the
+ * approval, so the first card of a Chat says the same as every later one. A project Jira did not
+ * answer is the reference the call carries, a numeric id marked as one, never taken for a name.
+ */
+function approvalProjectLabel(project: JiraApprovalProject): string {
+  if (project.key !== undefined && project.name !== undefined)
+    return `${project.name} (${project.key})`;
+  return /^\d+$/u.test(project.ref) ? `ID ${project.ref}` : project.ref;
+}
+
+/** The names the approval itself carries, over what this Chat's own reads called the same ids. */
+export function withApprovalProjects(
+  names: JiraNames,
+  binding: string | undefined,
+  approval: ChatToolWriteApprovalView,
+): JiraNames {
+  if (approval.kind !== "jira-chat-write" || approval.projects === undefined)
+    return { ...names, binding };
+  const projects = new Map(names.projects);
+  for (const project of approval.projects)
+    projects.set(JSON.stringify([binding, project.ref]), approvalProjectLabel(project));
+  return { ...names, projects, binding };
 }
 
 export function jiraNameOf(
