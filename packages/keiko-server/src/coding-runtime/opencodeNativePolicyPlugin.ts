@@ -32,6 +32,13 @@ export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
 export const OPENCODE_CODE_MODE_SESSION_MOVE = "opencode_session_move";
 
 /**
+ * The Code Mode program itself (`execute`, #4359): it asserts no permission, so the hook asks for
+ * one under its own name. On a runtime whose pin says every nested effect is decided on its own,
+ * the program sends no text to review and passes as a plain computation (`opencodeNativePolicy.ts`).
+ */
+export const OPENCODE_CODE_MODE_PROGRAM = "execute";
+
+/**
  * The governed management tool that would add an unmanaged worktree (#3903 AC4): the hook sends
  * the name it carries, and Keiko's managed task-workspace owner provisions an approved one.
  */
@@ -94,9 +101,12 @@ const OVERSIZED_MESSAGE =
  * bindings and the server password from every shell the agent starts, so no tool output can
  * carry them.
  */
-export function createGeneratedOpenCodeNativePolicyPlugin(): string {
+export function createGeneratedOpenCodeNativePolicyPlugin(
+  options: { readonly programReviewed?: boolean } = {},
+): string {
+  const programReviewed = options.programReviewed ?? true;
   return [
-    ...pluginConstantsSource(),
+    ...pluginConstantsSource(programReviewed),
     ...mcpMutationSource(),
     ...policyEvaluationSource(),
     ...pluginBodySource(),
@@ -114,7 +124,7 @@ function mcpMutationSource(): readonly string[] {
   ];
 }
 
-function pluginConstantsSource(): readonly string[] {
+function pluginConstantsSource(programReviewed: boolean): readonly string[] {
   return [
     `const ACTION = ${JSON.stringify(OPENCODE_NATIVE_POLICY_ACTION)};`,
     `const MAX_RESOURCES = ${String(OPENCODE_NATIVE_POLICY_MAX_RESOURCES)};`,
@@ -126,6 +136,7 @@ function pluginConstantsSource(): readonly string[] {
     `const OVERSIZED_MESSAGE = ${JSON.stringify(OVERSIZED_MESSAGE)};`,
     `const ENV_DENYLIST = new Set(${JSON.stringify(OPENCODE_NATIVE_SHELL_ENV_DENYLIST)});`,
     `const CODE_MODE_GOVERNED = new Set(${JSON.stringify(OPENCODE_CODE_MODE_GOVERNED_TOOLS)});`,
+    `const PROGRAM_REVIEWED = ${JSON.stringify(programReviewed)};`,
     "const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
@@ -271,7 +282,7 @@ function pluginBodySource(): readonly string[] {
     "        return;",
     "      }",
     '      if (event.tool !== "execute" && !CODE_MODE_GOVERNED.has(event.tool)) return;',
-    '      const resources = event.tool === "execute" ? programResources(event.input) : managementResources(event.tool, event.input);',
+    '      const resources = event.tool === "execute" ? (PROGRAM_REVIEWED ? programResources(event.input) : []) : managementResources(event.tool, event.input);',
     '      const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: event.tool, resources, targetSessionID: managementTarget(event.tool, event.input), effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
     '      if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',
     "    });",

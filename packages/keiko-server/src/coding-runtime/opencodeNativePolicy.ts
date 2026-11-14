@@ -28,6 +28,7 @@ import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE } from "./opencodeNativeDeliveryTools.js";
 import {
+  OPENCODE_CODE_MODE_PROGRAM,
   OPENCODE_CODE_MODE_SCHEDULE,
   OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS,
   OPENCODE_CODE_MODE_SESSION_MOVE,
@@ -718,6 +719,12 @@ export interface OpenCodeNativePolicyInput {
   readonly mcp?: OpenCodeNativeMcpGrants | undefined;
   /** Whether the operator admitted a web search integration (nativeWebSearch.ts, #3903 AC3). */
   readonly webSearch?: boolean | undefined;
+  /**
+   * The run's runtime decides every nested effect of a Code Mode program itself (its pin's
+   * `decidesNestedEffects`, #4359). Only then does the program, which asserts nothing on its own,
+   * pass without a card; absent or false keeps the program's own decision (fail closed).
+   */
+  readonly codeModeNestedEffectsDecided?: boolean | undefined;
 }
 
 export interface OpenCodeNativeMcpGrants {
@@ -822,13 +829,24 @@ function classifiedOrUnresolvable(input: OpenCodeNativePolicyInput): Classified 
   }
 }
 
-/** A read tool of a managed server the human chose for this run; a write never qualifies. */
+/**
+ * A read tool of a managed server the human chose for this run, or the resource listing and reading
+ * of such servers (#4359: a managed server exists only because the human chose it, so reading what
+ * it offers is no new decision); a write never qualifies.
+ */
 function runGrantedRead(
   request: OpenCodeNativePolicyRequest,
   mcp: OpenCodeNativeMcpGrants | undefined,
 ): boolean {
   const grant = mcp?.actions.get(request.permission);
-  return grant?.runGrantedRead === true && grant.managed === true && grant.risk === "read";
+  if (grant !== undefined) {
+    return grant.runGrantedRead === true && grant.managed === true && grant.risk === "read";
+  }
+  return (
+    MCP_RESOURCE_ACTIONS.has(request.permission) &&
+    request.resources.length > 0 &&
+    managedMcpRequest(request, mcp)
+  );
 }
 
 function nativeInternetUnavailable(input: OpenCodeNativePolicyInput): boolean {
@@ -853,6 +871,7 @@ function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
     planRoot: input.planRoot,
     externalRoots: input.externalRoots ?? [],
     webSearch: input.webSearch === true,
+    codeModeNestedEffectsDecided: input.codeModeNestedEffectsDecided === true,
   };
 }
 
@@ -880,6 +899,30 @@ interface AdmittedRoots {
   readonly externalRoots?: readonly string[] | undefined;
   /** The operator admitted a web search integration. */
   readonly webSearch?: boolean | undefined;
+  readonly codeModeNestedEffectsDecided?: boolean | undefined;
+}
+
+/** The Code Mode actions the hook sends under their own names: the program and its governed tools. */
+function classifyManagementAction(
+  request: OpenCodeNativePolicyRequest,
+  roots: AdmittedRoots,
+): Classified | undefined {
+  switch (request.permission) {
+    case OPENCODE_CODE_MODE_SESSION_MOVE:
+      return classifySessionMove(request, roots.workspaceRoot);
+    case OPENCODE_CODE_MODE_WORKTREE_CREATE:
+      return classifyWorktreeCreate(request);
+    case OPENCODE_CODE_MODE_SCHEDULE:
+      return classifySchedule(request);
+    case OPENCODE_CODE_MODE_PROGRAM:
+      return classifyCodeModeProgram(roots);
+    default:
+      return undefined;
+  }
+}
+
+function classifyCodeModeProgram(roots: AdmittedRoots): Classified {
+  return roots.codeModeNestedEffectsDecided === true ? CODE_MODE_PROGRAM : EXECUTE;
 }
 
 function classifyNativeAction(
@@ -887,10 +930,8 @@ function classifyNativeAction(
   roots: AdmittedRoots,
 ): Classified {
   const { permission, resources } = request;
-  if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
-    return classifySessionMove(request, roots.workspaceRoot);
-  if (permission === OPENCODE_CODE_MODE_WORKTREE_CREATE) return classifyWorktreeCreate(request);
-  if (permission === OPENCODE_CODE_MODE_SCHEDULE) return classifySchedule(request);
+  const managed = classifyManagementAction(request, roots);
+  if (managed !== undefined) return managed;
   if (permission === "websearch") return roots.webSearch === true ? EGRESS : WEBSEARCH_UNCONFIGURED;
   if (!KNOWN_ACTIONS.has(permission))
     return {
@@ -1092,6 +1133,20 @@ const EGRESS: OpenCodeNativeActionClassification = Object.freeze({
   scope: "internet",
   risk: "medium",
   label: "native-egress",
+});
+/**
+ * The Code Mode program itself (#4359). It asserts no permission and can do nothing but call its
+ * nested tools, each of which reaches this policy as its own decision on a runtime whose pin says
+ * so; such a program is a plain computation and passes in every mode. Anywhere else it keeps the
+ * command-execution decision (ask below Full access) and its text for the human to review; a
+ * request that offers none is refused as having nothing to review.
+ */
+const CODE_MODE_PROGRAM: OpenCodeNativeActionClassification = Object.freeze({
+  actionClass: "workspace-read",
+  kind: "workspace-write",
+  scope: "workspace-contained",
+  risk: "low",
+  label: "native-read",
 });
 const EXECUTE: OpenCodeNativeActionClassification = Object.freeze({
   actionClass: "command-execution",

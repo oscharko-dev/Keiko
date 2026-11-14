@@ -653,6 +653,10 @@ The order is by developer impact, not a schedule.
 - **Q4.** The runtime evaluates no permission for a Code Mode `execute` call (T21). In Ask and
   Supervised a script may therefore run without a decision, bounded by the confined interpreter,
   the kernel egress rule and the nested tools. Keep that, or ask for every `execute` call?
+  **Decided (owner, 2026-11-14, #4359):** no card for the program itself once every nested effect
+  is decided on its own, shown per effect kind and mode on the runtime (ADR-0137): on 2.2.5 each
+  effect reaches its own decision in Ask for approval and Full access, so the program passes in every
+  mode. The pin's `decidesNestedEffects` carries the fact; a runtime without it keeps asking.
 - **Q5.** ADR-0124 and the Workbench text say internet use asks below Full access, but the native
   policy refuses it at once because the kernel profile has no route outside the machine. Keep the
   immediate refusal, or ask and let the kernel profile follow the decision?

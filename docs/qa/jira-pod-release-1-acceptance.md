@@ -432,6 +432,24 @@ keiko support analyze <report.json> --json
   read an issue, add a comment and move an issue to another status.
 - **Expect:** the three operations work as in Chat; a run with no Pod switched on uses no Jira Pod.
   This step is a walk once; it does not block.
+- **Effects of a program (reference, counts and closed values only):** Measured 2026-11-14 on OpenCode 2.2.5 from the 1.1.5 npm runtime package (`coding-runtime.native-policy.decided`, closed values only; one program per row and mode, each with the program's own line first).
+
+| Effect a program can cause                      | Permission the policy decides | Ask for approval                 | Full access               |
+| ----------------------------------------------- | ----------------------------- | -------------------------------- | ------------------------- |
+| Session rename (own session)                    | `opencode_session_rename`     | allow, low                       | allow, low                |
+| Session move inside the workspace               | `opencode_session_move`       | allow, low                       | allow, low                |
+| Session move outside the workspace              | `opencode_session_move`       | deny (`workspace-escape`)        | deny (`workspace-escape`) |
+| Worktree creation                               | `opencode_worktree_create`    | ask, high                        | ask, high                 |
+| Worktree removal                                | `edit` (the directory)        | ask, medium                      | allow, medium             |
+| MCP resource listing and reading (managed Pod)  | `mcp`                         | ask, medium (now allow, see ADR) | allow, medium             |
+| MCP tool call, Jira read                        | `mcp`                         | allow                            | allow                     |
+| MCP tool call, Jira write                       | `mcp`                         | ask (the one write card)         | allow                     |
+| Web fetch                                       | `webfetch`                    | deny (`mode-denied`)             | allow, medium             |
+| Worktree listing, model search                  | none (pure reads)             | none                             | none                      |
+| File write, edit, patch, shell, sub-agent start | not callable from a program   | not reachable                    | not reachable             |
+
+- **Cards:** in Ask for approval a read shows no approval card (the program itself passes: its
+  nested effects are decided on their own); a Jira write shows exactly the one write card.
 - **Jira:** the comment and status are there.
 - **Proves:** AC4; #4359 "Workbench". Not available on Windows.
 

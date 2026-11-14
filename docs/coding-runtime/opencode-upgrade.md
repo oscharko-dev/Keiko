@@ -103,6 +103,14 @@ mode policy to make an upgrade pass: the failure-closed decoders and the protoco
 refuse it. Record the change in the affected ADR-0137 section and in the parity matrix
 (`docs/qa/opencode-capability-parity.md`), with its proof.
 
+### A pin may say the runtime decides every nested effect
+
+`decidesNestedEffects` on a pin (#4359) lets a Code Mode program pass without its own card. Set it
+only after repeating the effect inventory on the new version: one program per effect kind (session
+move and rename, worktree create and remove, MCP resources and tools including a Jira write, `fetch`)
+in Ask for approval and Full access, each leaving its `coding-runtime.native-policy.decided` line.
+Any effect that reaches no decision leaves the flag off and the card stays.
+
 ## 4. Rollback and persisted state
 
 Rolling back means reverting the bump commits. The previous pin, its fixtures and the

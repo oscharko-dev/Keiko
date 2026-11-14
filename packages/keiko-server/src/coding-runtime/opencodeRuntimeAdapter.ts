@@ -37,7 +37,11 @@ import {
   OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE,
 } from "./opencodeNativeLaunchSecrets.js";
 import { createGeneratedOpenCodeNativePolicyPlugin } from "./opencodeNativePolicyPlugin.js";
-import { isApprovedOpenCodeRuntimeVersion } from "./opencodeRuntimeVersions.js";
+import {
+  OPENCODE_PINNED_VERSION,
+  isApprovedOpenCodeRuntimeVersion,
+  openCodeRuntimeVersionPin,
+} from "./opencodeRuntimeVersions.js";
 import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -1683,7 +1687,11 @@ export function createGeneratedOpenCodeV2Plugins(
   const plugins: Record<string, string> =
     profile === "native"
       ? {
-          keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin(),
+          keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin({
+            // #4359: a runtime whose pin decides every nested effect sends no program for review.
+            programReviewed:
+              openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.decidesNestedEffects !== true,
+          }),
           [OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE]:
             createGeneratedOpenCodeLaunchSecretsPlugin(),
           keiko_native_context: createGeneratedOpenCodeNativeContextPlugin("native"),

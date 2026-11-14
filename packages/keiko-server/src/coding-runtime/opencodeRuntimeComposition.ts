@@ -4370,6 +4370,9 @@ async function handleNativePolicyRequest(
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
     webSearch: deps.nativeWebSearch?.admitted === true,
+    codeModeNestedEffectsDecided:
+      openCodeRuntimeVersionPin(run.verification.summary.upstreamVersion)?.decidesNestedEffects ===
+      true,
   };
   const decided = decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() });
   const decision = admittedSessionMove(run, request, decided);
