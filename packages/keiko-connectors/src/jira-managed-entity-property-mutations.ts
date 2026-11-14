@@ -91,7 +91,7 @@ function invalid(
 const NOTHING_CHANGED = "Nothing was changed.";
 const KEY_RULE = invalid(
   [
-    String.raw`propertyKey must be the exact property key: at most ${String(JIRA_PROPERTY_KEY_MAX_BYTES)} bytes, no / \ or %, no line breaks or tabs, and not . or .. ${NOTHING_CHANGED}`,
+    String.raw`propertyKey must be the exact property key: not blank, at most ${String(JIRA_PROPERTY_KEY_MAX_BYTES)} bytes, no control characters, no / \ or %, and not . or .. ${NOTHING_CHANGED}`,
   ],
   "propertyKey",
 );
@@ -123,9 +123,13 @@ function decodedState(
     },
   };
 }
-function expectedState(definition: Definition, args: CatalogJsonObject): StateSelection {
+function expectedState(
+  definition: Definition,
+  args: CatalogJsonObject,
+  takes: Failure,
+): StateSelection {
   const review = args.expectedValueNodes;
-  if (args.expectAbsent !== undefined) return absentReview(args);
+  if (args.expectAbsent !== undefined) return absentReview(definition, args, takes);
   if (review === undefined)
     return invalid(
       [
@@ -137,7 +141,13 @@ function expectedState(definition: Definition, args: CatalogJsonObject): StateSe
     );
   return decodedState(review, "expectedValueNodes");
 }
-function absentReview(args: CatalogJsonObject): StateSelection {
+function absentReview(
+  definition: Definition,
+  args: CatalogJsonObject,
+  takes: Failure,
+): StateSelection {
+  // A delete reviews the value it removes; expectAbsent belongs to a set that creates the property.
+  if (definition.remove) return takes;
   if (args.expectAbsent !== true)
     return invalid(
       [
@@ -162,13 +172,15 @@ function input(definition: Definition, args: CatalogJsonObject): InputSelection 
   if (entityFields === undefined)
     return invalid([`This operation is not available. ${NOTHING_CHANGED}`]);
   const nativeFields = new Set([...entityFields, "propertyKey"]);
-  const allowed = new Set([
+  const taken = [
     ...nativeFields,
     "expectedValueNodes",
     ...(definition.remove ? [] : ["valueNodes", "expectAbsent"]),
-  ]);
-  if (Object.keys(args).some((key) => !allowed.has(key)))
-    return invalid([`This call takes only ${[...allowed].join(", ")}. ${NOTHING_CHANGED}`]);
+  ];
+  const takes = invalid([`This call takes only ${taken.join(", ")}. ${NOTHING_CHANGED}`]);
+  // expectAbsent is known to a delete as well, so that the delete's own check refuses it by rule.
+  const known = new Set([...taken, "expectAbsent"]);
+  if (Object.keys(args).some((key) => !known.has(key))) return takes;
   if (!jiraPropertyPathKey(args.propertyKey)) return KEY_RULE;
   const entityArgs: CatalogJsonObject = Object.fromEntries(
     Object.entries(args).filter(([key]) => nativeFields.has(key)),
@@ -178,7 +190,7 @@ function input(definition: Definition, args: CatalogJsonObject): InputSelection 
     return invalid([
       `Name the entity with ${entityFields.join(", ")}, exactly as the property read for it takes them. ${NOTHING_CHANGED}`,
     ]);
-  const expected = expectedState(definition, args);
+  const expected = expectedState(definition, args, takes);
   if (!expected.ok) return expected;
   const desired = desiredState(definition, args);
   if (!desired.ok) return desired;
@@ -222,6 +234,24 @@ async function inspect(binding: BoundJiraProperty, selected: Input): Promise<Fai
       }
     : undefined;
 }
+/**
+ * After an acknowledged write the usual refusal sentences would be untrue: they end "Nothing was
+ * written". The model reads this one instead, beside the receipt that says the write happened, and
+ * does not repeat it (#4357 AC3).
+ */
+const ACKNOWLEDGED_UNVERIFIED =
+  "Jira acknowledged the write, but Keiko could not verify the property afterwards. Do not repeat the write: read the property to see its current value.";
+function unverified(
+  reason: Failure["reason"],
+  acknowledged: PropertyReceipt,
+): JiraEntityPropertyMutationAttempt {
+  return {
+    ok: false,
+    reason,
+    detail: { messages: [ACKNOWLEDGED_UNVERIFIED] },
+    receipt: acknowledged,
+  };
+}
 async function confirm(
   ports: JiraEntityPropertyPorts,
   binding: BoundJiraProperty,
@@ -231,14 +261,14 @@ async function confirm(
   try {
     // Rebind numeric/key identity, never the caller's former alias, before using the same resource.
     const current = await bindJiraPropertyEntity(binding.entity, ports);
-    if (!current.ok) return { ...jiraPropertyBindingFailure(current), receipt: acknowledged };
+    if (!current.ok) return unverified(jiraPropertyBindingFailure(current).reason, acknowledged);
     if (current.path !== binding.path || current.query !== binding.query)
-      return { ...CONFLICT, receipt: acknowledged };
+      return unverified("conflict", acknowledged);
     const observed = await readJiraPropertyState(current, selected.propertyKey);
-    if (!observed.ok) return { ...observed, receipt: acknowledged };
+    if (!observed.ok) return unverified(observed.reason, acknowledged);
     return jiraPropertyStatesEqual(observed.state, selected.desired)
       ? { ok: true, receipt: receipt(current, selected) }
-      : { ...CONFLICT, receipt: acknowledged };
+      : unverified("conflict", acknowledged);
   } catch (error) {
     throw new JiraAcknowledgedMutationError(error, acknowledged);
   }

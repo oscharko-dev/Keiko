@@ -449,7 +449,7 @@ it("names the version, project, actor and snapshot rule", async () => {
   });
 });
 const GLOBAL_ID_RULE =
-  "A globalId is text of at most 2048 characters without control characters; one that selects a link also has no / \\ or % and is not . or .. Nothing was written.";
+  "A globalId is non-blank text of at most 2048 characters without control characters; one that selects a link also has no / \\ or % and is not . or .. Nothing was written.";
 it.each([
   [
     "expectedLinks that is not a list",

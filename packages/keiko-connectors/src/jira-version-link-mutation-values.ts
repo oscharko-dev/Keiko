@@ -14,6 +14,7 @@ import { decodeJiraPropertyInput } from "./jira-entity-property-input.js";
 import { jiraPropertyStatesEqual } from "./jira-entity-property-write-admission.js";
 import {
   projectJiraRemoteVersionLinkValue,
+  JIRA_VERSION_LINK_GLOBAL_ID_MAX_CHARS,
   jiraRemoteVersionLinkGlobalId as versionLinkGlobalId,
 } from "./jira-managed-remote-version-links.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -69,7 +70,7 @@ const VALUE_BYTES = String(JIRA_PROPERTY_VALUE_MAX_BYTES);
 // never cuts the rule, and none naming a refused value.
 const EXPECTED_NOT_LIST = `expectedLinks must be the complete current list of the version's remote links, each as { globalId, valueNodes }. ${NOT_WRITTEN}`;
 const EXPECTED_ROW = `Each expectedLinks entry takes exactly globalId and valueNodes, as the version's remote link read lists them. ${NOT_WRITTEN}`;
-const GLOBAL_ID_RULE = String.raw`A globalId is text of at most 2048 characters without control characters; one that selects a link also has no / \ or % and is not . or .. ${NOT_WRITTEN}`;
+const GLOBAL_ID_RULE = String.raw`A globalId is non-blank text of at most ${String(JIRA_VERSION_LINK_GLOBAL_ID_MAX_CHARS)} characters without control characters; one that selects a link also has no / \ or % and is not . or .. ${NOT_WRITTEN}`;
 const EXPECTED_DUPLICATE = `expectedLinks must not repeat a globalId: list each remote link of the version once. ${NOT_WRITTEN}`;
 const CONFIRM_ALL = `Deleting all remote links takes confirmAll:true and expectedLinks, the complete current list. ${NOT_WRITTEN}`;
 const TOO_MANY_LINKS = `expectedLinks holds more links, or more argument bytes, than Keiko can review in one call. ${NOT_WRITTEN}`;

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -8,6 +8,7 @@ import {
   executeJiraEntityPropertyMutation as mutate,
   isJiraEntityPropertyMutation,
 } from "./jira-managed-entity-property-mutations.js";
+import { jiraPropertyBindingFailure } from "./jira-entity-property-write-admission.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import {
   BASE,
@@ -555,7 +556,7 @@ it("names the arguments a property write takes when another one is sent, without
     },
   });
 });
-it.each(["a/b", "a\\b", "a%b", ".", "..", "x".repeat(256), "line\nbreak", undefined])(
+it.each(["a/b", "a\\b", "a%b", ".", "..", "x".repeat(256), "line\nbreak", "   ", undefined])(
   "states the property key rule for a refused key %j",
   async (propertyKey) => {
     const { propertyKey: _dropped, ...rest } = SET_ARGS;
@@ -566,7 +567,7 @@ it.each(["a/b", "a\\b", "a%b", ".", "..", "x".repeat(256), "line\nbreak", undefi
         fieldId: "propertyKey",
         validation: "invalid-field",
         messages: [
-          "propertyKey must be the exact property key: at most 255 bytes, no / \\ or %, no line breaks or tabs, and not . or .. Nothing was changed.",
+          "propertyKey must be the exact property key: not blank, at most 255 bytes, no control characters, no / \\ or %, and not . or .. Nothing was changed.",
         ],
       },
     });
@@ -720,3 +721,105 @@ it.each([
     ).toEqual({ reason, detail: { messages: [message] } });
   },
 );
+
+// After an acknowledged write the model is never told that nothing was written (#4357 AC3).
+const UNVERIFIED_AFTER_ACK =
+  "Jira acknowledged the write, but Keiko could not verify the property afterwards. Do not repeat the write: read the property to see its current value.";
+const SET_AFTER_ARGS = {
+  issueIdOrKey: "syn-2",
+  propertyKey: KEY,
+  expectedValueNodes: OLD_NODES,
+  valueNodes: FALSE_NODES,
+};
+it.each([
+  ["the entity can no longer be bound", [ABSENT], "not-found"],
+  ["the key list cannot be read", [reply(ISSUE), reply({})], "malformed-payload"],
+  ["the value is still the old one", [reply(ISSUE), keys(KEY), value(OLD)], "conflict"],
+  [
+    "the value read is over the bound",
+    [
+      reply(ISSUE),
+      reply({
+        keys: Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
+          key: String(index),
+        })),
+      }),
+    ],
+    "bounds-exceeded",
+  ],
+] as const)(
+  "says the write was acknowledged, not that nothing was written, when %s",
+  async (_name, reread, reason) => {
+    const f = fixture(ISSUE_SCENARIO, [reply(ISSUE), keys(KEY), value(OLD), ACK, ...reread]);
+    const attempt = await mutate("jira.set-issue-property", SET_AFTER_ARGS, f.ports);
+    expect(attempt).toEqual({
+      ok: false,
+      reason,
+      detail: { messages: [UNVERIFIED_AFTER_ACK] },
+      receipt: { issueId: "10002", issueKey: "SYN-2", propertyKey: KEY, propertyPresent: true },
+    });
+    expect(effects(f.selected)).toHaveLength(1);
+    expect(JSON.stringify(attempt)).not.toContain("Nothing was written");
+  },
+);
+it("refuses a delete that claims absence by naming what a delete takes", async () => {
+  expect(
+    await refusal("jira.delete-issue-property", {
+      issueIdOrKey: "syn-2",
+      propertyKey: KEY,
+      expectedValueNodes: OLD_NODES,
+      expectAbsent: true,
+    }),
+  ).toMatchObject({
+    reason: "field-validation",
+    detail: {
+      messages: [
+        "This call takes only issueIdOrKey, propertyKey, expectedValueNodes. Nothing was changed.",
+      ],
+    },
+  });
+});
+describe("the sentence of a binding that failed", () => {
+  const failed = (
+    data: Record<string, unknown>,
+  ): Parameters<typeof jiraPropertyBindingFailure>[0] =>
+    ({ ok: false, result: { data } }) as unknown as Parameters<
+      typeof jiraPropertyBindingFailure
+    >[0];
+  it("is about the entity, not the property, for a reason it does not know", () => {
+    expect(jiraPropertyBindingFailure(failed({ outcome: "failed", reason: "unheard-of" }))).toEqual(
+      {
+        ok: false,
+        reason: "malformed-payload",
+        detail: {
+          messages: [
+            "Jira's answer about the entity could not be read completely. Nothing was written.",
+          ],
+        },
+      },
+    );
+  });
+  it("is added when a sanitized detail carries no explanation of its own", () => {
+    expect(
+      jiraPropertyBindingFailure(
+        failed({ outcome: "failed", reason: "not-found", fieldId: "issueIdOrKey" }),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "not-found",
+      detail: {
+        fieldId: "issueIdOrKey",
+        messages: [
+          "The entity, or the parent it belongs to, was not found or is not visible to this connection. Check the entity arguments. Nothing was written.",
+        ],
+      },
+    });
+  });
+  it("leaves Jira's own explanation as it is", () => {
+    expect(
+      jiraPropertyBindingFailure(
+        failed({ outcome: "failed", reason: "not-found", messages: ["Jira's words"] }),
+      ),
+    ).toEqual({ ok: false, reason: "not-found", detail: { messages: ["Jira's words"] } });
+  });
+});

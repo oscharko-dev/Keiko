@@ -12,7 +12,7 @@ import {
   reciprocalAlreadyPresent,
 } from "./jira-reciprocal-link-observations.js";
 import {
-  parseReciprocalInput,
+  checkReciprocalInput,
   reciprocalInputRefusal,
   reciprocalBody,
   reciprocalFailure,
@@ -120,8 +120,9 @@ export async function executeJiraReciprocalRemoteLink(
   check = false,
   templates?: JiraIssueTemplateSource,
 ): Promise<ReciprocalAttempt> {
-  const input = parseReciprocalInput(args);
-  if (input === undefined) return reciprocalInputRefusal(args);
+  const checked = checkReciprocalInput(args);
+  if (!checked.ok) return reciprocalInputRefusal(checked.cause);
+  const input = checked.input;
   if (ports === undefined)
     return reciprocalRefusal(
       "Fresh same-host application-link configuration and local manifest reads are unavailable. No request was sent.",

@@ -4,6 +4,7 @@ import {
   reciprocalLinkFixture,
 } from "../../../tests/support/jira-reciprocal-link-fixture.js";
 import { executeJiraReciprocalRemoteLink as execute } from "./jira-managed-reciprocal-link.js";
+import { checkReciprocalInput, reciprocalInputRefusal } from "./jira-reciprocal-link-values.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 const RECEIPT = {
   userKey: "synthetic-actor",
@@ -138,15 +139,14 @@ describe("one native delegated reciprocal link", () => {
       "another argument",
       { ...ARGS, headers: "x" },
       [
-        "This call takes only expectedActorKey, expectedIssue, expectedApplication, remoteIssueId, remoteIssueTitle,",
-        "sourceRelationship, targetRelationship, expectLocalLinkAbsent and acceptNativeDelegatedEffect. Nothing was changed.",
+        "This call takes only expectedActorKey, expectedIssue, expectedApplication, remoteIssueId, remoteIssueTitle, sourceRelationship, targetRelationship, expectLocalLinkAbsent, acceptNativeDelegatedEffect.",
       ],
     ],
     [
       "an actor key that is not text",
       { ...ARGS, expectedActorKey: "" },
       [
-        "expectedActorKey must be the key of the connected Jira user; jira.myself returns it. Nothing was changed.",
+        "expectedActorKey must be the key of the connected Jira user (non-blank, at most 255 characters); jira.myself returns it. Nothing was changed.",
       ],
     ],
     [
@@ -167,14 +167,14 @@ describe("one native delegated reciprocal link", () => {
       "an unsafe application destination",
       { ...ARGS, expectedApplication: { ...ARGS.expectedApplication, rpcUrl: "http://x.invalid" } },
       [
-        "expectedApplication must be the configured application link: id (UUID), name, displayUrl and rpcUrl, both HTTPS without credentials, query or fragment, at most 2048 characters. Nothing was changed.",
+        "expectedApplication must be the configured link: id (UUID), name (at most 255), displayUrl and rpcUrl (HTTPS, at most 2048, no credentials, query, fragment, whitespace or backslash).",
       ],
     ],
     [
       "a remote issue of the wrong shape",
       { ...ARGS, remoteIssueId: "not-a-number" },
       [
-        "remoteIssueId must be a numeric ID; remoteIssueTitle, sourceRelationship and targetRelationship must be text of at most 255 characters. Nothing was changed.",
+        "remoteIssueId must be a numeric ID; remoteIssueTitle, sourceRelationship and targetRelationship must be non-blank text of at most 255 characters. Nothing was changed.",
       ],
     ],
   ])("names the rule an input broke: %s", async (_name, args, messages) => {
@@ -187,5 +187,17 @@ describe("one native delegated reciprocal link", () => {
     expect(native.calls).toHaveLength(0);
     for (const message of messages)
       expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
+  });
+  it("names the size rule from the same check the parser uses", () => {
+    expect(checkReciprocalInput(ARGS, 10)).toEqual({ ok: false, cause: "size" });
+    expect(reciprocalInputRefusal("size")).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        validation: "invalid-field",
+        messages: ["The arguments are larger than one call may carry. Nothing was changed."],
+      },
+    });
+    expect(checkReciprocalInput(ARGS).ok).toBe(true);
   });
 });
