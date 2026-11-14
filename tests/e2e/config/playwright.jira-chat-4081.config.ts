@@ -22,9 +22,11 @@ export default defineConfig({
   timeout: 90_000,
   expect: { timeout: 20_000 },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
+  // The server's Activity Log of the run is copied beside the traces (#4355).
+  globalTeardown: join(root, "tests/e2e/support/jira-chat-4081-teardown.ts"),
   use: {
     baseURL: `http://127.0.0.1:${String(port)}`,
-    trace: "off",
+    trace: "retain-on-failure",
     video: "off",
     screenshot: "off",
   },

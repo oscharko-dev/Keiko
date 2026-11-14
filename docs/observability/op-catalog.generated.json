@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8076d24b03bf322480d8b27a1118f1d602d2cc27e7334808ff6b92e7b40a82d9",
+    "catalogDigest": "8f7b72db634a792d6b131eec09f0caf69583a7b068b2fe0f66f783b6caab8e44",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -998,7 +998,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["verify", "sync", "request"]
+            "values": ["verify", "verify-after-replace", "sync", "request"]
           },
           "outcome": {
             "type": "string",
@@ -1087,7 +1087,7 @@
         ],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:90",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:235"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:236"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1127,7 +1127,7 @@
         "proofIds": ["atlassian.credential.created.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:59",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:269"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:270"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1241,8 +1241,8 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.credential.updated.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:293",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:327"]
+        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:294",
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:328"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2001,8 +2001,8 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.jira.human-input.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:345",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:381"]
+        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:346",
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:382"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4269,8 +4269,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:559",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:606"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:572",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:619"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4313,8 +4313,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.context-fitted.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:327",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:374"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:340",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:387"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4398,8 +4398,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:391",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:541"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:404",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:554"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4437,7 +4437,9 @@
               "tool-failure",
               "output-exhausted",
               "context-overflow",
-              "model-failure"
+              "model-failure",
+              "deadline-cancelled",
+              "request-aborted"
             ]
           },
           "exchangeCount": {
@@ -4487,8 +4489,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.ended.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:180",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:240"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:188",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:248"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4531,8 +4533,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.result-condensed.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:264",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:310"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:277",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:323"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34337,6 +34339,78 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "jira.approval.project",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraChatApprovalProjects.recordJiraApprovalProjects",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "projectCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "resolvedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unresolvedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "failure": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "not-admitted",
+              "failed",
+              "malformed-payload",
+              "auth-failed",
+              "auth-unverified",
+              "permission-denied",
+              "effect-denied",
+              "cancelled",
+              "not-found",
+              "rate-limited",
+              "timeout",
+              "unavailable",
+              "bounds-exceeded",
+              "conflict",
+              "invalid-transition",
+              "field-validation",
+              "none"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["jira.approval.project.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:61",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:112"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "jira.attachment.source",
         "category": "process",
         "owner": "keiko-server",
@@ -51002,6 +51076,7 @@
             "atlassian.jira-draft",
             "atlassian.jira-draft-batch",
             "atlassian.jira-report",
+            "jira.approval.project",
             "jira.attachment.source",
             "jira.catalog.selection",
             "jira.citation.markers",
@@ -51029,6 +51104,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -51053,6 +51129,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -51077,6 +51154,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -64157,6 +64235,7 @@
               "atlassian.jira-draft",
               "atlassian.jira-draft-batch",
               "atlassian.jira-report",
+              "jira.approval.project",
               "jira.attachment.source",
               "jira.catalog.selection",
               "jira.citation.markers",
@@ -64194,6 +64273,10 @@
             },
             {
               "op": "atlassian.jira-report",
+              "mode": "correlation"
+            },
+            {
+              "op": "jira.approval.project",
               "mode": "correlation"
             },
             {
@@ -64271,6 +64354,7 @@
             "atlassian.jira-draft",
             "atlassian.jira-draft-batch",
             "atlassian.jira-report",
+            "jira.approval.project",
             "jira.attachment.source",
             "jira.catalog.selection",
             "jira.citation.markers",
@@ -65018,6 +65102,60 @@
                 "causeChain": false
               },
               "proofIds": ["atlassian.jira-report.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "jira.approval.project",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "failure",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "projectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "resolvedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unresolvedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["jira.approval.project.line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -119039,7 +119177,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:424",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:427",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119531,7 +119669,7 @@
     {
       "op": "atlassian.connection.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:254",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:255",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119551,7 +119689,7 @@
     {
       "op": "atlassian.credential.created",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:285",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:286",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119590,13 +119728,13 @@
     {
       "op": "atlassian.credential.updated",
       "category": "setup",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:296",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:297",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.credential.updated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:337",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:338",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119648,20 +119786,20 @@
     {
       "op": "atlassian.jira.human-input",
       "category": "security",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:348",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:349",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.jira.human-input",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:391",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:392",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.jira.human-input",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:419",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:420",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119895,37 +120033,37 @@
     {
       "op": "chat.tool-turn.batch-draft-offer",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:562",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:575",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.context-fitted",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:330",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:343",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.corrected",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:394",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:407",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.ended",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:183",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:191",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.result-condensed",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:267",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:280",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.state-unreadable",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-runtime.ts:93",
+      "site": "packages/keiko-server/src/chat-tool-runtime.ts:97",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122559,6 +122697,26 @@
       "package": "keiko-server"
     },
     {
+      "op": "jira.approval.project",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:64",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.approval.project-log-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:132",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.approval.project-read-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:190",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "jira.attachment.source",
       "category": "process",
       "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:73",
@@ -123657,7 +123815,7 @@
     {
       "op": "tool-catalog.completion-discarded",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:405",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:425",
       "package": "keiko-server"
     },
     {
@@ -123694,7 +123852,7 @@
     {
       "op": "tool-catalog.invocation-settled",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:367",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:387",
       "package": "keiko-server"
     },
     {
@@ -123718,7 +123876,7 @@
     {
       "op": "tool-catalog.invocation-started",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:173",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:193",
       "package": "keiko-server"
     },
     {
@@ -123761,14 +123919,14 @@
     {
       "op": "tool-catalog.provider-result-invalid",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:251",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:271",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.settlement-emit-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:388",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:408",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -124602,6 +124760,9 @@
     "indexing.start.accepted",
     "indexing.start.refused",
     "invalidation-failed",
+    "jira.approval.project",
+    "jira.approval.project-log-failed",
+    "jira.approval.project-read-failed",
     "jira.attachment.source",
     "jira.attachment.source-log-failed",
     "jira.attachment.source-read-failed",

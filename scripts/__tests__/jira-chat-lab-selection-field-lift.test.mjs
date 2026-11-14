@@ -4,6 +4,7 @@
 // the requirement for exactly the selections that write the work project.
 import { describe, expect, it } from "vitest";
 import {
+  LANGUAGE_SELECTION_CASES,
   SELECTION_CASES,
   selectionNeedsFieldLift,
 } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
@@ -29,5 +30,17 @@ describe("selection cases that write the work project", () => {
       "create-story",
       "create-bug",
     ]);
+  });
+});
+
+describe("the language selection cases", () => {
+  it("are not part of the default 35 and name the type as a German person says it", () => {
+    expect(SELECTION_CASES).toHaveLength(35);
+    const [entry] = LANGUAGE_SELECTION_CASES;
+    expect(SELECTION_CASES.some((other) => other.id === entry.id)).toBe(false);
+    expect(entry).toMatchObject({ id: "search-by-type", tool: "jira.search", effect: "read" });
+    expect(entry.prompt({ project: "KEIKO" })).toContain(
+      "Welche Aufgaben gibt es im Jira-Projekt KEIKO?",
+    );
   });
 });

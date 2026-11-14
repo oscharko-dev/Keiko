@@ -35,6 +35,7 @@ import {
   type SecureWorkspaceNativeStatResult,
 } from "./secureWorkspaceTextRead.js";
 import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
+import { secureWorkspaceReadTargetFor } from "./secureWorkspaceTextReadArtifact.js";
 import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import {
@@ -236,6 +237,23 @@ describe("SecureWorkspaceTextReadPort", () => {
     expect(unknown.verify).not.toHaveBeenCalled();
     expect(linux.create).not.toHaveBeenCalled();
     expect(unknown.create).not.toHaveBeenCalled();
+  });
+
+  it("reports itself unavailable, never failing a request, on a Linux host without a native target (arm64)", async () => {
+    const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
+    const { port, verify, create } = createPort(run, { os: "linux", arch: "arm64" });
+    expect(secureWorkspaceReadTargetFor({ os: "linux", arch: "arm64" })).toBeUndefined();
+    expect(secureWorkspaceReadTargetFor({ os: "linux", arch: "x64" })).toBe("linux-x64");
+    await expect(port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "unsupported-platform",
+    });
+    await expect(port.nativeFileIO?.list({ relativePath: "" })).resolves.toEqual({
+      ok: false,
+      reason: "unsupported-platform",
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("returns exactly the pinned maximum safe bytes and maps helper oversize status to a content-free denial", async () => {
@@ -930,7 +948,14 @@ function requireNativeFacet(
   return port.nativeFileIO;
 }
 
-describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+// The helper exists for the host targets the product itself supports; Linux ships x64 only, and on
+// any other host (a Linux arm64 container on Apple silicon) the port answers its closed
+// `unsupported-platform` by design, which the unavailable-target test above pins. The condition is
+// the product's own target decision, never a restated platform list.
+const HAS_NATIVE_TARGET =
+  secureWorkspaceReadTargetFor({ os: process.platform, arch: process.arch }) !== undefined;
+const RUN_NATIVE_HELPER = HAS_NATIVE_TARGET && ["darwin", "linux"].includes(process.platform);
+describe.skipIf(!RUN_NATIVE_HELPER)(
   "private native file IO using the actual descriptor helper",
   () => {
     let base: string;

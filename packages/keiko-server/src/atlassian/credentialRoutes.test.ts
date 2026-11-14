@@ -39,8 +39,9 @@ import {
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
+import { request as httpRequest, type Server } from "node:http";
+import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AtlassianCredentialCustodyError,
@@ -1830,12 +1831,100 @@ function credentialForPod(podId: string): AtlassianCredentialMetadata {
 }
 
 describe("authenticated Live Pod credential updates", () => {
-  it("a delayed verification cannot restore readiness after the token replacement route", async () => {
+  it("a delayed verification of the older token cannot mark the replacing token verified (#4353)", async () => {
     const credential = credentialForPod(await readyJiraPod());
+    const entered = probeSignal();
+    const release = probeSignal();
+    let probes = 0;
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory: () => {
+        probes += 1;
+        const older = probes === 1;
+        return async (request): Promise<AtlassianHttpBodyResult> => {
+          if (!older) return jiraProbeResponse(request, 401);
+          entered.resolve();
+          await release.promise;
+          return jiraProbeResponse(request);
+        };
+      },
+    });
+    const pending = verifyCredentialRequest(credential.authRef);
+    await entered.promise;
+    // The replacing token is verified by its own request; Jira rejects it, while the older token's
+    // probe is still in flight and would answer ok if it were allowed to land.
+    const changed = await updateJiraCredential(credential.authRef, {
+      expectedGeneration: 1,
+      apiToken: SYNTHETIC_TOKEN + "rotated",
+    }).finally(release.resolve);
+    const stale = await pending;
+    expect(changed.status).toBe(200);
+    expect(await changed.json()).toMatchObject({ livePod: { verificationStatus: "auth-failed" } });
+    expect(stale.status).toBe(409);
+    expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+      livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+    });
+  });
+
+  it("verifies a replaced token in the same request, so a closed tab leaves the true state, and records it as its own action (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    const requests: AtlassianHttpBodyRequest[] = [];
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> => {
+          requests.push(request);
+          return Promise.resolve(jiraProbeResponse(request));
+        },
+    });
+    try {
+      // The only call: the browser never makes a second one (its tab may be closed already).
+      const response = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        authRef: credential.authRef,
+        generation: 2,
+        livePod: { verificationStatus: "ok", verificationInProgress: false },
+      });
+      expect(requests.length).toBeGreaterThan(0);
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        generation: 2,
+        livePod: { verificationStatus: "ok" },
+      });
+      const checks = readVerificationEvidence(sink);
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({
+        action: "verify-after-replace",
+        outcome: "ok",
+        verificationState: "applied",
+      });
+      const updated = persistedActivityLogLines(
+        readPersistedActivityLog(configDir),
+        "atlassian.credential.updated",
+      ).map((line) => expectActivityLogProof("atlassian.credential.updated.line", line));
+      // One logical operation: the replacement and its check share the request's correlation.
+      expect(updated.map((event) => event.correlationId)).toEqual([checks[0]?.correlationId]);
+      expect(JSON.stringify(checks)).not.toContain(SYNTHETIC_TOKEN);
+      expect(JSON.stringify(checks)).not.toContain(credential.authRef);
+    } finally {
+      sink.close?.();
+    }
+  });
+
+  it("a client that disconnects while the probe is in flight does not cancel it: the probe completes, the stored state is its result and one line is written (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
     const entered = probeSignal();
     const release = probeSignal();
     await rebuild({
       ...wiring,
+      activityLog: sink,
       httpBodyPortFactory:
         () =>
         async (request): Promise<AtlassianHttpBodyResult> => {
@@ -1844,18 +1933,92 @@ describe("authenticated Live Pod credential updates", () => {
           return jiraProbeResponse(request);
         },
     });
-    const pending = verifyCredentialRequest(credential.authRef);
-    await entered.promise;
-    const changed = await updateJiraCredential(credential.authRef, {
+    try {
+      const serverSockets: Socket[] = [];
+      server.on("connection", (socket) => serverSockets.push(socket));
+      const body = JSON.stringify({
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      // A fresh connection of its own, so the test can wait for the server to see it close.
+      const client = httpRequest({
+        host: UI_HOST,
+        port,
+        path: `/api/atlassian-connectors/credentials/${credential.authRef}`,
+        method: "PATCH",
+        agent: false,
+        headers: { ...csrfHeaders(), "Content-Length": Buffer.byteLength(body) },
+      });
+      const answered = vi.fn();
+      client.on("response", answered);
+      client.on("error", () => undefined);
+      client.end(body);
+      await entered.promise;
+      const serverSocket = serverSockets.at(-1);
+      if (serverSocket === undefined) throw new Error("Expected the request's server connection");
+      const closed = once(serverSocket, "close");
+      client.destroy();
+      await closed;
+      // The server has seen the client leave; the probe is still waiting and nothing settled it.
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        livePod: { verificationInProgress: true },
+      });
+      release.resolve();
+      await expect
+        .poll(() => wiring.custody.getMetadata(credential.authRef))
+        .toMatchObject({ generation: 2, livePod: { verificationStatus: "ok" } });
+      expect(answered).not.toHaveBeenCalled();
+      const checks = readVerificationEvidence(sink).filter(
+        (event) => event.action === "verify-after-replace",
+      );
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({ outcome: "ok", verificationState: "applied" });
+    } finally {
+      release.resolve();
+      sink.close?.();
+    }
+  });
+
+  it.each([
+    [{ kind: "response", status: 401, authenticationFailure: "jira" } as const, "auth-failed"],
+    [{ kind: "timeout" } as const, "timeout"],
+    [{ kind: "network-error" } as const, "unreachable"],
+  ])(
+    "stores the replaced token and answers the state its failed check left: %o -> %s (#4353)",
+    async (probeResult, expected) => {
+      const credential = credentialForPod(await readyJiraPod());
+      await rebuild({
+        ...wiring,
+        httpBodyPortFactory: () => (): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(probeResult as AtlassianHttpBodyResult),
+      });
+      const response = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(JSON.parse(body)).toMatchObject({ livePod: { verificationStatus: expected } });
+      expect(body).not.toContain(SYNTHETIC_TOKEN);
+      // The token stays stored (the replacement generation advanced) and the Pod is not verified.
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        livePod: { verificationStatus: expected, verificationInProgress: false },
+      });
+      expect((wiring.custody.getMetadata(credential.authRef)?.generation ?? 0) > 1).toBe(true);
+    },
+  );
+
+  it("verifies nothing after a rename (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    fakePortRequests.length = 0;
+    const response = await updateJiraCredential(credential.authRef, {
       expectedGeneration: 1,
-      apiToken: SYNTHETIC_TOKEN + "rotated",
-    }).finally(release.resolve);
-    const stale = await pending;
-    expect(changed.status).toBe(200);
-    expect(stale.status).toBe(409);
+      displayName: "Renamed Jira",
+    });
+    expect(response.status).toBe(200);
+    expect(fakePortRequests).toHaveLength(0);
     expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
-      generation: 2,
-      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+      livePod: { verificationStatus: "ok" },
     });
   });
 
@@ -1920,7 +2083,8 @@ describe("authenticated Live Pod credential updates", () => {
     expect(rotated.status).toBe(200);
     const current = real.custody.getMetadata(authRef);
     if (current === undefined) throw new Error("Expected rotated credential");
-    expect(current).toMatchObject({ generation: 2, livePod: { verificationStatus: "unverified" } });
+    // The replacement request verified the new token itself (#4353).
+    expect(current).toMatchObject({ generation: 2, livePod: { verificationStatus: "ok" } });
     // The binding survives the rotation: no URL, configuration entry or second admission is needed.
     expect(store.getTargetAdmission(current)).toEqual(binding);
     expect(
@@ -1946,7 +2110,14 @@ describe("authenticated Live Pod credential updates", () => {
     const otherStoredBefore = structuredClone(fixtureStore.findChatById(other.id));
     const grants = [first, second, other].map((chat) => retainedChatReadGrant(chat));
     const sink = createFileServerLogSink(configDir, { level: "debug" });
-    await rebuild({ ...wiring, activityLog: sink });
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(jiraProbeResponse(request)),
+    });
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const correlations: (string | null)[] = [];
     try {
@@ -1992,7 +2163,7 @@ describe("authenticated Live Pod credential updates", () => {
       expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
       expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
         generation: 3,
-        livePod: { verificationStatus: "unverified" },
+        livePod: { verificationStatus: "ok" },
       });
     } finally {
       sink.close?.();
