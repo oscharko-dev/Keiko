@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b0732e9adaeb3ab836cd3b965369020c8e6e2b4c07d138abdce3014f2b67ac49",
+    "catalogDigest": "9cd32fbd139fa741cbe781fc849fb767cc6238bd71b41cda4ff2805a33c682ff",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -37833,8 +37833,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["memory-vault.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:136",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:189"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:138",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:191"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -118290,7 +118290,7 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:139",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:141",
       "package": "keiko-memory-vault"
     },
     {
