@@ -46,7 +46,11 @@ import {
   type CodingJiraPodBinding,
 } from "./codingJiraPodBinding.js";
 import { codingJiraCatalogAccounting } from "./codingJiraCatalogBudget.js";
-import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
+import {
+  createCodingRuntimeContextUsageRegistry,
+  type CodingRuntimeConversation,
+} from "./codingRuntimeContextUsage.js";
+import { observeGatewayPromptTokens } from "./codingRuntimeContextUsageObservation.js";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import { jiraOperationDefinitions } from "../atlassian/jiraOperationRegistry.js";
 import { postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
@@ -598,7 +602,7 @@ describe("serving the bound Pod through the relay", () => {
         currentScopes: () => ["issue-tracker.read"],
         ...codingJiraCatalogAccounting({
           geometry,
-          usage: () => registry.read(h.context.correlationId),
+          usage: () => registry.readLargest(h.context.correlationId),
         }),
       }),
     );
@@ -617,13 +621,24 @@ describe("serving the bound Pod through the relay", () => {
       stage: "fits",
       fitBasis: "no-sample",
     });
-    registry.recordProviderSample(h.context.correlationId, {
-      sampleId: "first-provider-usage",
+    // What the gateway settle point hands the production observer, per conversation of the run.
+    const gatewaySample = (conversation: CodingRuntimeConversation, tokens: number): void => {
+      observeGatewayPromptTokens(
+        registry,
+        h.context.correlationId,
+        conversation,
+        tokens,
+        undefined,
+        { write: (): void => undefined },
+      );
+    };
+    const primary = { agentKey: "build", headKey: "build-head", toolBearing: true };
+    registry.bindGeometry(h.context.correlationId, {
       capacityTokens: geometry.contextWindowTokens,
       reservedOutputTokens: geometry.maxOutputTokens,
-      inputTokens: 7_303,
-      updatedAt: "2026-11-14T14:34:10.000Z",
     });
+    gatewaySample(primary, 7_303);
+    gatewaySample({ agentKey: "explore", headKey: "explore-head", toolBearing: true }, 3_001);
     const selected = await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
     expect(selected.structuredContent).toMatchObject({ outcome: "succeeded" });
     expect(await client.list()).toContain("jira.issue");
@@ -634,6 +649,22 @@ describe("serving the bound Pod through the relay", () => {
     expect(proofLines(h)).toEqual([
       expect.objectContaining({ action: "call", outcome: "completed", toolClass: "jira-read" }),
     ]);
+    // The primary fills up: a further describe is refused on its budget, then a compaction gives
+    // the primary a new head and the pressure is gone.
+    gatewaySample(primary, 232_005);
+    expect((await client.select(["GET /rest/api/2/project"])).structuredContent).toMatchObject({
+      outcome: "failed",
+    });
+    expect(discoveryLines(h).at(-1)).toMatchObject({
+      action: "describe",
+      outcome: "refused",
+      stage: "fits",
+      fitBasis: "provider-sample",
+    });
+    gatewaySample({ ...primary, headKey: "build-head-after-compaction" }, 9_006);
+    expect((await client.select(["GET /rest/api/2/project"])).structuredContent).toMatchObject({
+      outcome: "succeeded",
+    });
   });
 
   // #4359: a refused describe reached the model only as a generic tool error and left no line, so

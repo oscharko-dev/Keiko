@@ -12,6 +12,8 @@ import {
   openCodeV2StepChanges,
 } from "./opencodeV2History.js";
 import { createOpenCodeReconciler } from "./opencodeReconciler.js";
+import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
+import { recordContextTelemetry } from "./productionOpenCodeBackend.js";
 import { recordCompactionActivity } from "./opencodeRuntimeAdapter.js";
 import {
   expectActivityLogProof,
@@ -1140,6 +1142,36 @@ describe("OpenCode V2 actual compaction history", () => {
       expect(line.extra).not.toHaveProperty("tailStartIdSha256");
     }
     expect(JSON.stringify(lines)).not.toMatch(/PRIVATE_|summary|recentID/);
+  });
+
+  // #4359: the compaction signal a native run delivers comes from this V2 history, and it is what
+  // the run's context usage counts (the legacy V1 sync parser is not a live source).
+  it("delivers a completed compaction to the run's context usage", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    const contextUsage = createCodingRuntimeContextUsageRegistry();
+    contextUsage.bindGeometry("run-v2-compaction", {
+      capacityTokens: 128_000,
+      reservedOutputTokens: 4_096,
+    });
+    contextUsage.recordGatewayPrompt(
+      "run-v2-compaction",
+      { agentKey: "build", headKey: "build-head", toolBearing: true },
+      "call-1",
+      90_000,
+      "2026-09-15T06:30:00.000Z",
+    );
+    const events = projection.project("ses_compaction", [nativeCompaction("completed")], undefined);
+    const applied = reconciler.ingest(events);
+    if (!applied.ok) throw new Error("expected admitted compaction observations");
+    for (const event of events)
+      recordContextTelemetry(
+        { request: { runId: "run-v2-compaction" }, contextUsage } as Parameters<
+          typeof recordContextTelemetry
+        >[0],
+        event,
+      );
+    expect(contextUsage.read("run-v2-compaction")).toMatchObject({ compaction: { count: 1 } });
   });
 
   it.each([

@@ -199,8 +199,7 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
     if (narrowed.length > 0) {
       trace.stage = "fits";
       const fits = this.input.fits(next, result);
-      if (fits === undefined && this.input.fitBasis !== undefined)
-        trace.fitBasis = this.input.fitBasis();
+      if (this.input.fitBasis !== undefined) trace.fitBasis = this.input.fitBasis();
       requireDispatch(fits !== undefined, "failed", "handler-unavailable");
       requireDispatch(fits, "denied", "budget-exhausted");
     }

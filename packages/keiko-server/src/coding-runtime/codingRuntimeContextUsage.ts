@@ -18,16 +18,49 @@ export interface CodingRuntimeProviderUsageSample {
   readonly updatedAt: string;
 }
 
-/** The session a sample has no identity for: the runtime's own report (kept for that reader). */
-const UNATTRIBUTED_SESSION = "runtime";
+/** The conversation a sample has no identity for. */
+const UNATTRIBUTED_CONVERSATION: CodingRuntimeConversation = {
+  agentKey: "runtime",
+  headKey: "runtime",
+  toolBearing: true,
+};
 const MAX_SESSIONS_PER_RUN = 8;
+/**
+ * A conversation that has seen no request while the run served this many further requests of
+ * other conversations has ended: its last prompt size no longer describes the run's pressure.
+ */
+const LIVE_REQUEST_WINDOW = 16;
+
+/**
+ * Which conversation of a run a call belongs to, from what the model gateway sees of the request.
+ * The rule: only requests that offer tools count (the runtime's title and summary requests do
+ * not); a conversation is its agent (the digest of its system prompt) plus its head (that digest
+ * with the first user message); a new head of the same agent supersedes the old one (a
+ * compaction or history rewrite continues the conversation under a new head); the primary is the
+ * first agent that offered tools; a conversation unheard of for {@link LIVE_REQUEST_WINDOW}
+ * further requests has ended.
+ */
+export interface CodingRuntimeConversation {
+  readonly agentKey: string;
+  readonly headKey: string;
+  readonly toolBearing: boolean;
+}
+
+interface SessionSample {
+  readonly sample: CodingRuntimeProviderUsageSample;
+  readonly agentKey: string;
+  /** The run's request counter when this conversation was last heard from. */
+  readonly seq: number;
+}
 
 interface RunUsage {
   readonly sampleIds: Set<string>;
-  /** The latest provider sample of each conversation of the run, the primary one first. */
-  readonly sessions: Map<string, CodingRuntimeProviderUsageSample>;
-  /** The conversation the run was started with: the first one the registry heard from. */
-  primaryKey: string | undefined;
+  /** The latest provider sample of each live conversation of the run, by head. */
+  readonly sessions: Map<string, SessionSample>;
+  /** The agent of the first request that offered tools: the run's own conversation. */
+  primaryAgent: string | undefined;
+  /** Requests that offered tools so far: the clock a conversation's liveness is read against. */
+  requestSeq: number;
   cumulativePromptTokens: number;
   latest: CodingWorkbenchContextUsage | undefined;
   compactionCount: number;
@@ -52,7 +85,7 @@ export interface CodingRuntimeContextUsageRegistry {
   readonly recordProviderSample: (
     runId: string,
     sample: CodingRuntimeProviderUsageSample,
-    sessionKey?: string,
+    conversation?: CodingRuntimeConversation,
   ) => boolean;
   /** The context window and output reserve the run's model was admitted with (set once at start). */
   readonly bindGeometry: (runId: string, geometry: CodingRuntimeUsageGeometry) => void;
@@ -66,7 +99,7 @@ export interface CodingRuntimeContextUsageRegistry {
    */
   readonly recordGatewayPrompt: (
     runId: string,
-    conversationKey: string,
+    conversation: CodingRuntimeConversation,
     sampleId: string,
     inputTokens: number,
     updatedAt: string,
@@ -100,7 +133,8 @@ function runUsage(records: Map<string, RunUsage>, runId: string): RunUsage {
   const created: RunUsage = {
     sampleIds: new Set(),
     sessions: new Map(),
-    primaryKey: undefined,
+    primaryAgent: undefined,
+    requestSeq: 0,
     cumulativePromptTokens: 0,
     latest: undefined,
     compactionCount: 0,
@@ -158,19 +192,44 @@ interface UsageState {
   readonly geometries: Map<string, CodingRuntimeUsageGeometry>;
 }
 
+/** The held conversation with the most input tokens: the one a describe must size against. */
+function fullestHead(record: RunUsage): string | undefined {
+  let fullest: [string, number] | undefined;
+  for (const [head, held] of record.sessions)
+    if (fullest === undefined || held.sample.inputTokens > fullest[1])
+      fullest = [head, held.sample.inputTokens];
+  return fullest?.[0];
+}
+
+/** The oldest idle conversation that is neither the fullest nor the primary's, if any. */
+function evictable(record: RunUsage): string | undefined {
+  const fullest = fullestHead(record);
+  const candidates = [...record.sessions].filter(
+    ([head, held]) => head !== fullest && held.agentKey !== record.primaryAgent,
+  );
+  return candidates.sort((a, b) => a[1].seq - b[1].seq)[0]?.[0];
+}
+
 function rememberSession(
   record: RunUsage,
-  key: string,
+  conversation: CodingRuntimeConversation,
   sample: CodingRuntimeProviderUsageSample,
 ): void {
-  record.primaryKey ??= key;
-  record.sessions.set(key, sample);
+  record.primaryAgent ??= conversation.agentKey;
+  record.requestSeq += 1;
+  // A new head of the same agent continues that conversation: the old head is superseded.
+  for (const [head, held] of record.sessions)
+    if (held.agentKey === conversation.agentKey && head !== conversation.headKey)
+      record.sessions.delete(head);
+  record.sessions.set(conversation.headKey, {
+    sample,
+    agentKey: conversation.agentKey,
+    seq: record.requestSeq,
+  });
   while (record.sessions.size > MAX_SESSIONS_PER_RUN) {
-    const evictable = [...record.sessions.keys()].find(
-      (candidate) => candidate !== record.primaryKey,
-    );
-    if (evictable === undefined) break;
-    record.sessions.delete(evictable);
+    const victim = evictable(record);
+    if (victim === undefined) break;
+    record.sessions.delete(victim);
   }
 }
 
@@ -178,7 +237,7 @@ function recordSample(
   state: UsageState,
   runId: string,
   sample: CodingRuntimeProviderUsageSample,
-  sessionKey: string,
+  conversation: CodingRuntimeConversation,
 ): boolean {
   if (!validSample(sample)) return false;
   const record = runUsage(state.records, runId);
@@ -186,8 +245,13 @@ function recordSample(
   if (!Number.isSafeInteger(cumulativePromptTokens)) return false;
   if (!rememberSample(record, sample.sampleId)) return false;
   record.cumulativePromptTokens = cumulativePromptTokens;
-  rememberSession(record, sessionKey, sample);
-  if (sessionKey === record.primaryKey) record.latest = contextUsage(record, sample);
+  if (!conversation.toolBearing) {
+    if (record.latest?.state === "available")
+      record.latest = { ...record.latest, cumulativePromptTokens };
+    return true;
+  }
+  rememberSession(record, conversation, sample);
+  if (conversation.agentKey === record.primaryAgent) record.latest = contextUsage(record, sample);
   return true;
 }
 
@@ -195,8 +259,12 @@ function readLargest(state: UsageState, runId: string): CodingWorkbenchContextUs
   const record = state.records.get(runId);
   if (record === undefined) return undefined;
   let fullest: CodingRuntimeProviderUsageSample | undefined;
-  for (const sample of record.sessions.values())
-    if (fullest === undefined || sample.inputTokens > fullest.inputTokens) fullest = sample;
+  for (const held of record.sessions.values()) {
+    if (held.seq <= record.requestSeq - LIVE_REQUEST_WINDOW && held.seq !== record.requestSeq)
+      continue;
+    if (fullest === undefined || held.sample.inputTokens > fullest.inputTokens)
+      fullest = held.sample;
+  }
   return fullest === undefined ? undefined : contextUsage(record, fullest);
 }
 
@@ -242,7 +310,7 @@ export function createCodingRuntimeContextUsageRegistry(): CodingRuntimeContextU
     },
     recordGatewayPrompt: (
       runId,
-      conversationKey,
+      conversation,
       sampleId,
       inputTokens,
       updatedAt,
@@ -250,12 +318,12 @@ export function createCodingRuntimeContextUsageRegistry(): CodingRuntimeContextU
       const geometry = state.geometries.get(runId);
       if (geometry === undefined) return undefined;
       const sample = { sampleId, ...geometry, inputTokens, updatedAt };
-      return { accepted: recordSample(state, runId, sample, conversationKey), ...geometry };
+      return { accepted: recordSample(state, runId, sample, conversation), ...geometry };
     },
     read: (runId): CodingWorkbenchContextUsage | undefined => state.records.get(runId)?.latest,
     readLargest: (runId): CodingWorkbenchContextUsage | undefined => readLargest(state, runId),
-    recordProviderSample: (runId, sample, sessionKey = UNATTRIBUTED_SESSION): boolean =>
-      recordSample(state, runId, sample, sessionKey),
+    recordProviderSample: (runId, sample, conversation = UNATTRIBUTED_CONVERSATION): boolean =>
+      recordSample(state, runId, sample, conversation),
     recordCompaction: (runId, compactionId, updatedAt): boolean =>
       recordCompactionOf(state.records, runId, compactionId, updatedAt),
   };

@@ -9,6 +9,8 @@ import {
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import { observeGatewayPromptTokens } from "./codingRuntimeContextUsageObservation.js";
 
+const CONVERSATION = { agentKey: "agent", headKey: "head", toolBearing: true } as const;
+
 function observed(): { events: ServerLogEvent[]; log: { write: (event: ServerLogEvent) => void } } {
   const events: ServerLogEvent[] = [];
   return { events, log: { write: (event): void => void events.push(event) } };
@@ -18,15 +20,15 @@ describe("gateway prompt observation", () => {
   it("records an accepted and a rejected sample as body-free lines, and nothing without a geometry", () => {
     const registry = createCodingRuntimeContextUsageRegistry();
     const { events, log } = observed();
-    observeGatewayPromptTokens(registry, "run-context-1", "head", 7_303, 1, log);
+    observeGatewayPromptTokens(registry, "run-context-1", CONVERSATION, 7_303, 1, log);
     expect(events).toEqual([]);
 
     registry.bindGeometry("run-context-1", {
       capacityTokens: 272_000,
       reservedOutputTokens: 32_768,
     });
-    observeGatewayPromptTokens(registry, "run-context-1", "head", 7_303, 1, log);
-    observeGatewayPromptTokens(registry, "run-context-1", "head", 7_303, 1, log);
+    observeGatewayPromptTokens(registry, "run-context-1", CONVERSATION, 7_303, 1, log);
+    observeGatewayPromptTokens(registry, "run-context-1", CONVERSATION, 7_303, 1, log);
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({
       op: "coding-runtime.context-usage.observed",

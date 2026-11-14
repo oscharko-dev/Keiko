@@ -310,24 +310,34 @@ function canonicalIdentities(
   );
   const resolved: string[] = [];
   for (const entry of requested) {
-    const identity = known.has(entry) ? entry : namedOperation(listed, entry)?.identity;
+    const identity = known.has(entry) ? entry : resolveNamedOperation(listed, entry)?.identity;
     if (identity === undefined) return undefined;
     resolved.push(identity);
   }
   return new Set(resolved).size === resolved.length ? resolved : undefined;
 }
 /**
+ * The form two names of one operation share: the dotted registry name and its underscore form
+ * (`jira.issue-types`, `jira_issue_types`) name the same operation.
+ */
+export function jiraOperationNameKey(tool: string): string {
+  return tool.replace(/[.-]/gu, "_");
+}
+
+/**
  * One matcher for Chat and Coding: the dotted registry name and its underscore form name the same
  * operation. `nativeToolNames` only chooses which of the two jira.discover shows; the description
- * promises both, so both must resolve (#4359: a Coding model copying `jira_issue` was refused).
+ * promises both, so both must resolve (#4359: a Coding model copying `jira_issue` was refused). An
+ * exact tool name wins; any other spelling must name exactly one operation, and a name two
+ * operations share after normalisation is refused, never resolved to the first (#4359 audit).
  */
-function namedOperation(
-  listed: readonly { readonly identity: string; readonly tool: string }[],
-  entry: string,
-): { readonly identity: string } | undefined {
-  return listed.find(
-    (definition) => definition.tool === entry || definition.tool.replace(/[.-]/gu, "_") === entry,
-  );
+export function resolveNamedOperation<
+  T extends { readonly identity: string; readonly tool: string },
+>(listed: readonly T[], entry: string): T | undefined {
+  const exact = listed.filter((definition) => definition.tool === entry);
+  if (exact.length > 0) return exact.length === 1 ? exact[0] : undefined;
+  const named = listed.filter((definition) => jiraOperationNameKey(definition.tool) === entry);
+  return named.length === 1 ? named[0] : undefined;
 }
 
 function discover(

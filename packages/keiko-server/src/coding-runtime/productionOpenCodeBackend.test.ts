@@ -392,7 +392,13 @@ describe("production OpenCode backend composition", () => {
         capacityTokens: 128_000,
         reservedOutputTokens: 4_096,
       });
-      contextUsage.recordGatewayPrompt("run-windows", "head", "call-1", 42_000, AT);
+      contextUsage.recordGatewayPrompt(
+        "run-windows",
+        { agentKey: "build", headKey: "build-head", toolBearing: true },
+        "call-1",
+        42_000,
+        AT,
+      );
 
       recordContextTelemetry(run, event);
       expect(contextUsage.read("run-windows")?.compaction).toBeUndefined();

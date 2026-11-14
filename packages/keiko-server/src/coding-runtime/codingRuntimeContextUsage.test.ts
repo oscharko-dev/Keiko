@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
+import {
+  createCodingRuntimeContextUsageRegistry,
+  type CodingRuntimeConversation,
+} from "./codingRuntimeContextUsage.js";
+
+const BUILD: CodingRuntimeConversation = {
+  agentKey: "agent-build",
+  headKey: "head-build",
+  toolBearing: true,
+};
+const EXPLORE: CodingRuntimeConversation = {
+  agentKey: "agent-explore",
+  headKey: "head-explore",
+  toolBearing: true,
+};
+const TITLE: CodingRuntimeConversation = {
+  agentKey: "agent-title",
+  headKey: "head-title",
+  toolBearing: false,
+};
 
 const AT = "2026-09-15T06:30:00.000Z";
 
@@ -9,17 +28,15 @@ describe("coding runtime context usage", () => {
   // with; a run without one has nothing to read it against and records nothing.
   it("records a gateway-reported prompt size only for a run with a bound geometry", () => {
     const registry = createCodingRuntimeContextUsageRegistry();
-    expect(registry.recordGatewayPrompt("run-1", "head", "call-1", 7_303, AT)).toBeUndefined();
+    expect(registry.recordGatewayPrompt("run-1", BUILD, "call-1", 7_303, AT)).toBeUndefined();
     expect(registry.read("run-1")).toBeUndefined();
     registry.bindGeometry("run-1", { capacityTokens: 272_000, reservedOutputTokens: 32_768 });
-    expect(registry.recordGatewayPrompt("run-1", "head", "call-1", 7_303, AT)).toEqual({
+    expect(registry.recordGatewayPrompt("run-1", BUILD, "call-1", 7_303, AT)).toEqual({
       accepted: true,
       capacityTokens: 272_000,
       reservedOutputTokens: 32_768,
     });
-    expect(registry.recordGatewayPrompt("run-1", "head", "call-1", 7_303, AT)?.accepted).toBe(
-      false,
-    );
+    expect(registry.recordGatewayPrompt("run-1", BUILD, "call-1", 7_303, AT)?.accepted).toBe(false);
     expect(registry.read("run-1")).toMatchObject({
       state: "available",
       source: "provider-reported",
@@ -30,21 +47,85 @@ describe("coding runtime context usage", () => {
     expect(registry.read("run-2")).toBeUndefined();
   });
 
-  // #4359: a run holds several conversations (subagents); a small subagent prompt is never read as
-  // the primary conversation's context, and a caller that cannot say who asks sizes against the
-  // fullest conversation.
-  it("attributes a gateway sample to its conversation, and sizes an unattributed asker on the fullest", () => {
-    const registry = createCodingRuntimeContextUsageRegistry();
-    registry.bindGeometry("run-1", { capacityTokens: 272_000, reservedOutputTokens: 32_768 });
-    registry.recordGatewayPrompt("run-1", "primary", "call-1", 90_000, AT);
-    registry.recordGatewayPrompt("run-1", "subagent", "call-2", 3_000, AT);
-    expect(registry.read("run-1")?.usedInputTokens).toBe(90_000);
-    expect(registry.readLargest("run-1")?.usedInputTokens).toBe(90_000);
-    registry.recordGatewayPrompt("run-1", "primary", "call-3", 91_000, AT);
-    registry.recordGatewayPrompt("run-1", "subagent", "call-4", 120_000, AT);
-    expect(registry.read("run-1")?.usedInputTokens).toBe(91_000);
-    expect(registry.readLargest("run-1")?.usedInputTokens).toBe(120_000);
-    expect(registry.readLargest("run-2")).toBeUndefined();
+  // The rule, in one sentence: only requests that offer tools count, a conversation is its agent
+  // plus its head, a new head of the same agent supersedes the old one, the primary is the first
+  // agent that offered tools, and a conversation unheard of for 16 further requests has ended.
+  describe("which conversation a sample belongs to", () => {
+    function bound(): ReturnType<typeof createCodingRuntimeContextUsageRegistry> {
+      const registry = createCodingRuntimeContextUsageRegistry();
+      registry.bindGeometry("run-1", { capacityTokens: 272_000, reservedOutputTokens: 32_768 });
+      return registry;
+    }
+    let sample = 0;
+    const record = (
+      registry: ReturnType<typeof createCodingRuntimeContextUsageRegistry>,
+      conversation: CodingRuntimeConversation,
+      tokens: number,
+    ): void => {
+      sample += 1;
+      registry.recordGatewayPrompt("run-1", conversation, `call-${String(sample)}`, tokens, AT);
+    };
+
+    it("never makes a title or summary request the primary, or the fullest", () => {
+      const registry = bound();
+      record(registry, TITLE, 120_000);
+      expect(registry.read("run-1")).toBeUndefined();
+      expect(registry.readLargest("run-1")).toBeUndefined();
+      record(registry, BUILD, 9_000);
+      record(registry, TITLE, 150_000);
+      expect(registry.read("run-1")?.usedInputTokens).toBe(9_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(9_000);
+      expect(registry.read("run-1")?.cumulativePromptTokens).toBe(120_000 + 9_000 + 150_000);
+    });
+
+    it("keeps a subagent apart from the primary", () => {
+      const registry = bound();
+      record(registry, BUILD, 90_000);
+      record(registry, EXPLORE, 3_000);
+      expect(registry.read("run-1")?.usedInputTokens).toBe(90_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(90_000);
+      record(registry, EXPLORE, 120_000);
+      expect(registry.read("run-1")?.usedInputTokens).toBe(90_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(120_000);
+    });
+
+    it("lets a new head of the same agent supersede the old one, so a compaction frees a describe", () => {
+      const registry = bound();
+      record(registry, BUILD, 180_000);
+      record(registry, { ...BUILD, headKey: "build-after-compaction" }, 12_000);
+      expect(registry.read("run-1")?.usedInputTokens).toBe(12_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(12_000);
+    });
+
+    it("ends a conversation that has seen no request while the run served 16 others", () => {
+      const registry = bound();
+      record(registry, BUILD, 180_000);
+      for (let round = 0; round < 15; round += 1) record(registry, EXPLORE, 2_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
+      record(registry, EXPLORE, 2_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(2_000);
+      expect(registry.read("run-1")?.usedInputTokens).toBe(180_000);
+      record(registry, BUILD, 40_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(40_000);
+    });
+
+    it("never evicts the fullest conversation, or the primary, past the retention bound", () => {
+      const registry = bound();
+      record(registry, BUILD, 5_000);
+      record(registry, { agentKey: "agent-big", headKey: "head-big", toolBearing: true }, 200_000);
+      for (let agent = 0; agent < 12; agent += 1)
+        record(
+          registry,
+          {
+            agentKey: `agent-${String(agent)}`,
+            headKey: `head-${String(agent)}`,
+            toolBearing: true,
+          },
+          1_000 + agent,
+        );
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(200_000);
+      expect(registry.read("run-1")?.usedInputTokens).toBe(5_000);
+    });
   });
 
   it("separates current provider context from cumulative prompt usage", () => {

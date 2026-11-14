@@ -8,8 +8,11 @@ import {
   createJiraCatalogDiscoveryProvider,
   JIRA_CATALOG_DISCOVERY_TOOLS,
   JIRA_OUT_OF_RELEASE_GUIDANCE,
+  jiraOperationNameKey,
   jiraToolsForIdentities,
+  resolveNamedOperation,
 } from "./jiraCatalogDiscovery.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
 import { jiraChatCatalogRoutes, type JiraChatCatalogConsumer } from "./jiraChatCatalogConsumer.js";
 import { createManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
@@ -254,6 +257,40 @@ describe("local Jira operation discovery", () => {
     expect(unknown.isError).toBe(true);
     expect(unknown.data).toMatchObject({ reason: "invalid-arguments" });
     expect(JSON.stringify(unknown.data.guidance)).toContain("jira.priorities");
+  });
+
+  // #4359 audit: the dotted and the underscore spelling of a tool name resolve to one operation
+  // only while no two registered names share a normalised form; a future operation that collides
+  // fails the build instead of making a model reach another tool than the one it named.
+  it("registers no two tool names that collapse to one normalised form", () => {
+    const tools = jiraOperationDefinitions().map((definition) => definition.tool);
+    expect(new Set(tools).size).toBe(tools.length);
+    const byKey = new Map<string, string[]>();
+    for (const tool of tools)
+      byKey.set(jiraOperationNameKey(tool), [
+        ...(byKey.get(jiraOperationNameKey(tool)) ?? []),
+        tool,
+      ]);
+    expect([...byKey.values()].filter((names) => names.length > 1)).toEqual([]);
+  });
+
+  it("resolves every registered tool name, by either spelling, to its own operation only", () => {
+    const listed = jiraOperationDefinitions();
+    for (const definition of listed) {
+      for (const spelling of [definition.tool, jiraOperationNameKey(definition.tool)])
+        expect(resolveNamedOperation(listed, spelling), spelling).toBe(definition);
+    }
+  });
+
+  it("refuses a name two operations share after normalisation, and never returns the first", () => {
+    const listed = [
+      { identity: "GET /a", tool: "jira.x-y" },
+      { identity: "GET /b", tool: "jira.x.y" },
+    ];
+    expect(resolveNamedOperation(listed, "jira_x_y")).toBeUndefined();
+    expect(resolveNamedOperation(listed, "jira.x-y")).toBe(listed[0]);
+    expect(resolveNamedOperation(listed, "jira.x.y")).toBe(listed[1]);
+    expect(resolveNamedOperation(listed, "jira.unknown")).toBeUndefined();
   });
 
   it("accepts the dotted tool name only where jira.discover returns it, and never twice for one operation", async () => {

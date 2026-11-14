@@ -159,6 +159,7 @@ import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import {
   createCodingRuntimeContextUsageRegistry,
   type CodingRuntimeContextUsageRegistry,
+  type CodingRuntimeConversation,
 } from "./codingRuntimeContextUsage.js";
 import { observeGatewayPromptTokens } from "./codingRuntimeContextUsageObservation.js";
 import {
@@ -598,7 +599,7 @@ type ResolverCapabilityAuthenticator = NonNullable<
   readonly observeProviderPromptTokens: (
     capability: string,
     providerPromptTokens: number,
-    conversationKey: string,
+    conversation: CodingRuntimeConversation,
     modelCallId?: number,
   ) => unknown;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
@@ -641,7 +642,7 @@ function runtimeCapabilityAuthenticatorFor(
     observeProviderPromptTokens: (
       capability,
       providerPromptTokens,
-      conversationKey,
+      conversation,
       modelCallId,
     ): void => {
       const authenticated = authority.authenticateCapability(capability, "model-gateway");
@@ -649,7 +650,7 @@ function runtimeCapabilityAuthenticatorFor(
       observeGatewayPromptTokens(
         contextUsage,
         authenticated.binding.runId,
-        conversationKey,
+        conversation,
         providerPromptTokens,
         modelCallId,
       );

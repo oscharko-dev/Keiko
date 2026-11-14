@@ -29,6 +29,7 @@ import {
   type JiraChatCatalogRuntime,
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import type { CodingRuntimeConversation } from "./coding-runtime/codingRuntimeContextUsage.js";
 import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
 import { jiraEmailTemplateInspection } from "./atlassian/jiraEmailTemplateComposition.js";
 import {
@@ -904,7 +905,7 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
           | ((
               capability: string,
               providerPromptTokens: number,
-              conversationKey: string,
+              conversation: CodingRuntimeConversation,
               modelCallId?: number,
             ) => unknown)
           | undefined;

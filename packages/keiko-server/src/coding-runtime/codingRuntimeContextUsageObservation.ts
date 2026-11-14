@@ -5,7 +5,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { CodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
+import type {
+  CodingRuntimeContextUsageRegistry,
+  CodingRuntimeConversation,
+} from "./codingRuntimeContextUsage.js";
 
 const CONTEXT_USAGE_OBSERVED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -42,7 +45,7 @@ const CONTEXT_USAGE_OBSERVED_OPERATION = defineActivityLogOperation({
 export function observeGatewayPromptTokens(
   contextUsage: CodingRuntimeContextUsageRegistry,
   runId: string,
-  conversationKey: string,
+  conversation: CodingRuntimeConversation,
   providerPromptTokens: number,
   modelCallId: number | undefined,
   log: ServerLogSink = processServerLogSink(),
@@ -51,7 +54,7 @@ export function observeGatewayPromptTokens(
   const sampleId = `gateway-call:${String(modelCallId ?? `${String(providerPromptTokens)}@${String(now.getTime())}`)}`;
   const outcome = contextUsage.recordGatewayPrompt(
     runId,
-    conversationKey,
+    conversation,
     sampleId,
     providerPromptTokens,
     now.toISOString(),
