@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d4924dfc4a66caf3d4d4953446b73e1794196a2fddcc8aea770fa19caad72f17"
+    "catalogDigest": "b0732e9adaeb3ab836cd3b965369020c8e6e2b4c07d138abdce3014f2b67ac49"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2744,6 +2744,7 @@
       "packages/keiko-server/src/atlassian/jiraCitationMarkers.test.ts"
     ],
     "jira.field.admission.line": [
+      "packages/keiko-server/src/atlassian/jiraFieldRefusalLog.test.ts",
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
     ],
     "jira.operation.avatars.line": [
@@ -2790,6 +2791,7 @@
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.template.admission.line": [
+      "packages/keiko-server/src/atlassian/jiraFieldRefusalLog.test.ts",
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
     ],
     "jira.template.metadata.line": [
