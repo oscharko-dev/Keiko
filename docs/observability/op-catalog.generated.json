@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "da6fd422792e48fced61d9b5b67d55a33f3b0308f4066a57f2abedfaa586e0a2",
+    "catalogDigest": "0b930d2277a0cd48945b92b22fab0a56a345f750c1afb7b895545e1c629a819c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -34373,6 +34373,7 @@
             "required": true,
             "values": [
               "not-admitted",
+              "failed",
               "malformed-payload",
               "auth-failed",
               "auth-unverified",
@@ -34402,8 +34403,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.approval.project.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:52",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:89"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:61",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:112"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -122696,13 +122697,20 @@
     {
       "op": "jira.approval.project",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:55",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:64",
       "package": "keiko-server"
     },
     {
       "op": "jira.approval.project-log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:109",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:132",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.approval.project-read-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:190",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -124752,6 +124760,7 @@
     "invalidation-failed",
     "jira.approval.project",
     "jira.approval.project-log-failed",
+    "jira.approval.project-read-failed",
     "jira.attachment.source",
     "jira.attachment.source-log-failed",
     "jira.attachment.source-read-failed",

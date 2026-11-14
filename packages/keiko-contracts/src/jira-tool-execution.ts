@@ -514,8 +514,9 @@ export function isJiraAttachmentPreview(value: unknown): value is JiraAttachment
 /**
  * The projects a write approval names, read by the server when the approval was requested: the
  * project reference exactly as the call carries it (`ref`, a numeric id or a key) and, when Jira
- * answered, the project's key and name. A reference Jira did not answer carries no key or name;
- * the approval then shows that reference and never invents a name. Bounded; never a remote body.
+ * answered, the project's key and name. A name a card cannot show (too long, a control character)
+ * is dropped on its own and the key stays; a reference Jira did not answer carries neither, and the
+ * approval then shows that reference and never invents a name. Bounded; never a remote body.
  */
 export const JIRA_APPROVAL_PROJECTS_MAX = 8;
 const APPROVAL_PROJECT_REF = /^\w{1,32}$/u;
@@ -528,7 +529,8 @@ export interface JiraApprovalProject {
 }
 // eslint-disable-next-line no-control-regex -- a project name is shown to people.
 const DISPLAY_TEXT_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f]/u;
-function isApprovalProjectName(value: unknown): value is string {
+/** A project name a card can show: bounded, trimmed, no control characters. */
+export function isJiraApprovalProjectName(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.trim() === value &&
@@ -537,19 +539,22 @@ function isApprovalProjectName(value: unknown): value is string {
     !DISPLAY_TEXT_FORBIDDEN.test(value)
   );
 }
+function isApprovalProjectIdentity(value: object, keys: string): boolean {
+  if (keys === "ref") return true;
+  const key: unknown = Reflect.get(value, "key");
+  if (typeof key !== "string" || !APPROVAL_PROJECT_KEY.test(key)) return false;
+  return (
+    keys === "key,ref" ||
+    (keys === "key,name,ref" && isJiraApprovalProjectName(Reflect.get(value, "name")))
+  );
+}
 export function isJiraApprovalProject(value: unknown): value is JiraApprovalProject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const keys = Object.keys(value).sort(compareStrings).join();
-  const key: unknown = Reflect.get(value, "key");
-  const name: unknown = Reflect.get(value, "name");
   const ref: unknown = Reflect.get(value, "ref");
-  if (typeof ref !== "string" || !APPROVAL_PROJECT_REF.test(ref)) return false;
-  if (keys === "ref") return true;
   return (
-    keys === "key,name,ref" &&
-    typeof key === "string" &&
-    APPROVAL_PROJECT_KEY.test(key) &&
-    isApprovalProjectName(name)
+    typeof ref === "string" &&
+    APPROVAL_PROJECT_REF.test(ref) &&
+    isApprovalProjectIdentity(value, Object.keys(value).sort(compareStrings).join())
   );
 }
 export function isJiraApprovalProjects(value: unknown): value is readonly JiraApprovalProject[] {

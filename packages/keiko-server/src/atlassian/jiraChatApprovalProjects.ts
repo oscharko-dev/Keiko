@@ -1,7 +1,12 @@
-import { readJiraProjectIdentity, parseJiraDraft } from "@oscharko-dev/keiko-connectors";
+import {
+  parseJiraDraft,
+  readJiraProjectIdentity,
+  type JiraProjectIdentityResult,
+} from "@oscharko-dev/keiko-connectors";
 import type { EditorAgentGovernedAuthorityReference } from "@oscharko-dev/keiko-contracts";
 import {
   JIRA_APPROVAL_PROJECTS_MAX,
+  isJiraApprovalProject,
   type AtlassianConnectorWriteFailureReason,
   type JiraApprovalProject,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -27,11 +32,15 @@ import {
  * displays what the approval carries.
  */
 const PROJECT_REFERENCE = /^\w{1,32}$/u;
-/** One bounded read: a slow Jira must not hold a person's approval card back. */
-const PROJECT_READ_TIMEOUT_MS = 5_000;
+/**
+ * One bounded window for every read together: a name is a convenience, so a slow Jira must not
+ * hold a person's approval card back. A normal answer takes a few tens of milliseconds.
+ */
+export const PROJECT_READ_TIMEOUT_MS = 2_000;
 
 const FAILURES = [
   "not-admitted",
+  "failed",
   "malformed-payload",
   "auth-failed",
   "auth-unverified",
@@ -46,7 +55,7 @@ const FAILURES = [
   "conflict",
   "invalid-transition",
   "field-validation",
-] as const satisfies readonly (AtlassianConnectorWriteFailureReason | "not-admitted")[];
+] as const satisfies readonly (AtlassianConnectorWriteFailureReason | "not-admitted" | "failed")[];
 type Failure = (typeof FAILURES)[number];
 
 const PROJECT_NAMES = defineActivityLogOperation({
@@ -78,6 +87,20 @@ const PROJECT_NAMES = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/**
+ * An outcome the system expects in ordinary use (nothing was admitted to read, the project is not
+ * visible to this actor, the turn was stopped) is routine; an unreachable or misbehaving Jira is not.
+ */
+function routineOutcome(failure: Failure | undefined): boolean {
+  return (
+    failure === undefined ||
+    failure === "not-admitted" ||
+    failure === "not-found" ||
+    failure === "permission-denied" ||
+    failure === "cancelled"
+  );
+}
+
 function recordJiraApprovalProjects(
   correlationId: string,
   counts: { readonly requested: number; readonly resolved: number },
@@ -88,7 +111,7 @@ function recordJiraApprovalProjects(
     processServerLogSink().write(
       activityLogEvent(
         PROJECT_NAMES,
-        { correlationId, level: failure === undefined ? "info" : "warn" },
+        { correlationId, level: routineOutcome(failure) ? "info" : "warn" },
         {
           projectCount: counts.requested,
           resolvedCount: counts.resolved,
@@ -145,28 +168,77 @@ interface ReadOutcome {
   readonly project: JiraApprovalProject;
   readonly failure?: Failure;
 }
+type ApprovalProjectDeps = JiraChatAuthorityDeps &
+  Pick<UiHandlerDeps, "atlassianConnectorCredentials" | "redactor">;
+interface ApprovalProjectOptions {
+  readonly chatId: string;
+  readonly authorityReference: EditorAgentGovernedAuthorityReference;
+  readonly signal: AbortSignal;
+  readonly correlationId: string;
+  /** Every source of a combined turn still admits this metadata read. */
+  readonly readAllowed?: () => boolean;
+  /** The one window of all reads together; tests shorten it. */
+  readonly timeoutMs?: number;
+}
+
+/** A lookup that faulted is a failure of the convenience, never of the card: the reference stays. */
+function reportReadFault(correlationId: string, error: unknown): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "jira.approval.project-read-failed",
+      source: "jira-chat-approval-projects",
+      error,
+      redact: () => "server-operation-failed",
+    }),
+  );
+}
 
 /**
- * Key and name of each referenced project as Jira answers now. A reference Jira does not answer
- * is listed by itself, so the card never shows a name that was not read; the closed failure is
- * recorded body-free on `jira.approval.project`. Absent when nothing is referenced.
+ * Key and name of each referenced project as Jira answers now. A reference Jira does not answer is
+ * listed by itself, so the card never shows a name that was not read, and a lookup that throws, runs
+ * out of its window or is stopped with its turn leaves the approval exactly as it would be without
+ * names. The closed failure is recorded body-free on `jira.approval.project`. Absent when nothing
+ * is referenced.
  */
 export async function reviewedJiraProjects(
-  deps: JiraChatAuthorityDeps & Pick<UiHandlerDeps, "atlassianConnectorCredentials">,
-  options: {
-    readonly chatId: string;
-    readonly authorityReference: EditorAgentGovernedAuthorityReference;
-    readonly signal: AbortSignal;
-    readonly correlationId: string;
-    /** Every source of a combined turn still admits this metadata read. */
-    readonly readAllowed?: () => boolean;
-  },
+  deps: ApprovalProjectDeps,
+  options: ApprovalProjectOptions,
   references: readonly string[],
 ): Promise<readonly JiraApprovalProject[] | undefined> {
   if (references.length === 0) return undefined;
   const started = Date.now();
+  const { correlationId } = options;
+  let outcomes: readonly ReadOutcome[];
+  try {
+    outcomes = await lookup(deps, options, references);
+  } catch (error) {
+    reportReadFault(correlationId, error);
+    outcomes = references.map((ref) => ({ project: { ref }, failure: "failed" }));
+  }
+  recordJiraApprovalProjects(
+    correlationId,
+    {
+      requested: references.length,
+      resolved: outcomes.filter((outcome) => outcome.failure === undefined).length,
+    },
+    outcomes.find((outcome) => outcome.failure !== undefined)?.failure,
+    Date.now() - started,
+  );
+  return outcomes.map((outcome) => outcome.project);
+}
+
+async function lookup(
+  deps: ApprovalProjectDeps,
+  options: ApprovalProjectOptions,
+  references: readonly string[],
+): Promise<readonly ReadOutcome[]> {
   const { chatId, authorityReference, correlationId } = options;
-  const signal = AbortSignal.any([options.signal, AbortSignal.timeout(PROJECT_READ_TIMEOUT_MS)]);
+  const signal = AbortSignal.any([
+    options.signal,
+    AbortSignal.timeout(options.timeoutMs ?? PROJECT_READ_TIMEOUT_MS),
+  ]);
   const allowed = (): boolean => {
     if (signal.aborted) return false;
     const admitted: unknown = options.readAllowed?.() ?? true;
@@ -180,43 +252,65 @@ export async function reviewedJiraProjects(
     correlationId,
   );
   const credentials = deps.atlassianConnectorCredentials;
-  const outcomes: readonly ReadOutcome[] =
-    !current.ok || credentials === undefined || !allowed()
-      ? references.map((ref) => ({ project: { ref }, failure: "not-admitted" }))
-      : await readAll(current, credentials, references, { signal, allowed, correlationId });
-  const failure = outcomes.find((outcome) => outcome.failure !== undefined)?.failure;
-  recordJiraApprovalProjects(
-    correlationId,
-    {
-      requested: references.length,
-      resolved: outcomes.filter((outcome) => outcome.failure === undefined).length,
-    },
-    failure,
-    Date.now() - started,
-  );
-  return outcomes.map((outcome) => outcome.project);
-}
-
-async function readAll(
-  current: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>,
-  credentials: NonNullable<UiHandlerDeps["atlassianConnectorCredentials"]>,
-  references: readonly string[],
-  run: {
-    readonly signal: AbortSignal;
-    readonly allowed: () => boolean;
-    readonly correlationId: string;
-  },
-): Promise<readonly ReadOutcome[]> {
-  const http = credentials.httpBodyPortFactory(current.credential, run.correlationId, {
-    beforeDispatch: (request) => request.method === "GET" && run.allowed(),
+  if (!current.ok || credentials === undefined || !allowed())
+    return references.map((ref) => ({ project: { ref }, failure: "not-admitted" }));
+  const http = credentials.httpBodyPortFactory(current.credential, correlationId, {
+    beforeDispatch: (request) => request.method === "GET" && allowed(),
   });
   const connection = {
     baseUrl: current.credential.baseUrl,
     deployment: current.credential.deployment,
     http,
   };
-  return Promise.all(
-    references.map(async (ref, index): Promise<ReadOutcome> => {
+  const run = { signal, turn: options.signal, allowed, correlationId, redactor: deps.redactor };
+  return Promise.all(references.map((ref, index) => readOne(connection, run, ref, index)));
+}
+
+interface ReadRun {
+  readonly signal: AbortSignal;
+  readonly turn: AbortSignal;
+  readonly allowed: () => boolean;
+  readonly correlationId: string;
+  readonly redactor: UiHandlerDeps["redactor"];
+}
+
+/** Resolves when the window ends or the turn stops, whichever comes first, so no read outlives it. */
+function windowEnded(run: ReadRun, ref: string): Promise<ReadOutcome> {
+  return new Promise((resolve) => {
+    const settle = (): void => {
+      resolve({ project: { ref }, failure: run.turn.aborted ? "cancelled" : "timeout" });
+    };
+    if (run.signal.aborted) settle();
+    else run.signal.addEventListener("abort", settle, { once: true });
+  });
+}
+
+/**
+ * What a card may show of Jira's answer: the key, and the name only when it is a name a card can
+ * show and the credential floor leaves it unchanged. Anything else drops that name alone; a key
+ * the contract refuses drops the project to its bare reference.
+ */
+function shown(
+  ref: string,
+  read: Extract<JiraProjectIdentityResult, { readonly ok: true }>,
+  redactor: UiHandlerDeps["redactor"],
+): JiraApprovalProject {
+  const redacted: unknown = read.name === undefined ? undefined : redactor(read.name);
+  const named =
+    read.name !== undefined && redacted === read.name
+      ? { ref, key: read.key, name: read.name }
+      : { ref, key: read.key };
+  return isJiraApprovalProject(named) ? named : { ref };
+}
+
+function readOne(
+  connection: Parameters<typeof readJiraProjectIdentity>[0],
+  run: ReadRun,
+  ref: string,
+  index: number,
+): Promise<ReadOutcome> {
+  const attempt = (async (): Promise<ReadOutcome> => {
+    try {
       const read = await readJiraProjectIdentity(
         connection,
         {
@@ -228,8 +322,12 @@ async function readAll(
         ref,
       );
       return read.ok
-        ? { project: { ref, key: read.key, name: read.name } }
+        ? { project: shown(ref, read, run.redactor) }
         : { project: { ref }, failure: read.reason };
-    }),
-  );
+    } catch (error) {
+      reportReadFault(run.correlationId, error);
+      return { project: { ref }, failure: "failed" };
+    }
+  })();
+  return Promise.race([attempt, windowEnded(run, ref)]);
 }

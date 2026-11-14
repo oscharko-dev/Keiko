@@ -2,6 +2,8 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import type { OptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { JiraChatTools } from "./JiraChatTools";
 import {
   JiraNamesContext,
@@ -147,11 +149,34 @@ describe("the names on a Jira approval", () => {
     const unnamed = { ...draft("10002"), approval: { ...approval, projects: [{ ref: "10000" }] } };
     renderInChat(transcript(unnamed));
     expect(screen.getByText("Project ID 10000 · Issue type 10002")).toBeVisible();
-    const keyed = withApprovalProjects(NO_JIRA_NAMES, "binding", {
-      ...approval,
-      projects: [{ ref: "KEIKO" }],
-    });
+    const keyed = withApprovalProjects(
+      NO_JIRA_NAMES,
+      "binding",
+      { ...approval, projects: [{ ref: "KEIKO" }, { ref: "10001", key: "TWO" }] },
+      ((key: string) => key) as unknown as OptionalWidgetTranslate,
+    );
     expect(jiraNameOf(keyed, "projects", "KEIKO")).toBe("KEIKO");
+    // A project whose name could not be shown is its key.
+    expect(jiraNameOf(keyed, "projects", "10001")).toBe("TWO");
+  });
+  it("words the marked id from the message catalog, in English and German", () => {
+    const named = { ...draft("10002"), approval: { ...approval, projects: [{ ref: "10000" }] } };
+    for (const [locale, id] of [
+      ["en", "ID"],
+      ["de", "ID"],
+    ] as const) {
+      localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const { unmount } = render(
+        <I18nProvider>
+          <JiraNamesContext.Provider value={jiraNamesOf([transcript(named)])}>
+            <JiraChatTools transcript={transcript(named)} turnState="pending" />
+          </JiraNamesContext.Provider>
+        </I18nProvider>,
+      );
+      expect(screen.getByText(new RegExp(`${id} 10000`, "u"))).toBeVisible();
+      unmount();
+    }
+    localStorage.removeItem(I18N_STORAGE_KEY);
   });
   it("keeps a field visible that contradicts the item's target", () => {
     renderInChat(transcript(draft("10009")));

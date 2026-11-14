@@ -69,12 +69,13 @@ export function jiraNamesOf(transcripts: Transcripts): JiraNames {
 /**
  * How an approval card names a project: the server read its key and name when it built the
  * approval, so the first card of a Chat says the same as every later one. A project Jira did not
- * answer is the reference the call carries, a numeric id marked as one, never taken for a name.
+ * answer is the reference the call carries, a numeric id marked as one ("ID 10000" from the message
+ * catalog), never taken for a name; a project whose name could not be shown is its key.
  */
-function approvalProjectLabel(project: JiraApprovalProject): string {
-  if (project.key !== undefined && project.name !== undefined)
-    return `${project.name} (${project.key})`;
-  return /^\d+$/u.test(project.ref) ? `ID ${project.ref}` : project.ref;
+function approvalProjectLabel(project: JiraApprovalProject, t: OptionalWidgetTranslate): string {
+  if (project.key !== undefined)
+    return project.name === undefined ? project.key : `${project.name} (${project.key})`;
+  return /^\d+$/u.test(project.ref) ? `${t("memoria.id")} ${project.ref}` : project.ref;
 }
 
 /** The names the approval itself carries, over what this Chat's own reads called the same ids. */
@@ -82,12 +83,13 @@ export function withApprovalProjects(
   names: JiraNames,
   binding: string | undefined,
   approval: ChatToolWriteApprovalView,
+  t: OptionalWidgetTranslate,
 ): JiraNames {
   if (approval.kind !== "jira-chat-write" || approval.projects === undefined)
     return { ...names, binding };
   const projects = new Map(names.projects);
   for (const project of approval.projects)
-    projects.set(JSON.stringify([binding, project.ref]), approvalProjectLabel(project));
+    projects.set(JSON.stringify([binding, project.ref]), approvalProjectLabel(project, t));
   return { ...names, projects, binding };
 }
 

@@ -2026,6 +2026,7 @@ export {
   type JiraAttachmentPreview,
   JIRA_APPROVAL_PROJECTS_MAX,
   isJiraApprovalProject,
+  isJiraApprovalProjectName,
   isJiraApprovalProjects,
   type JiraApprovalProject,
   JIRA_DRAFT_RESULT_ROWS_MAX,

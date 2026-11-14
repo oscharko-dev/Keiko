@@ -360,7 +360,11 @@ function ApprovalStatus({
 function useApprovalNames(approval: ChatToolWriteApprovalView): JiraNames {
   const names = useContext(JiraNamesContext);
   const binding = jiraNamesBinding(approval);
-  return useMemo(() => withApprovalProjects(names, binding, approval), [names, binding, approval]);
+  const t = useTranslate();
+  return useMemo(
+    () => withApprovalProjects(names, binding, approval, t),
+    [names, binding, approval, t],
+  );
 }
 
 export function JiraWriteApproval({

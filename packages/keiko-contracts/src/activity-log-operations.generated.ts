@@ -32967,6 +32967,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "not-admitted",
+          "failed",
           "malformed-payload",
           "auth-failed",
           "auth-unverified",
