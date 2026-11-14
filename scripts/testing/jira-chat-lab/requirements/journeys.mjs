@@ -20,6 +20,7 @@ import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   chatReadLogDirectory,
+  createLabPodId,
   jsonRequest,
   prepareChat,
   requestStatus,
@@ -612,10 +613,8 @@ function nativeReads(session, readAs) {
 }
 
 /** The live plumbing the journey checks are given (see journey-checks.mjs). */
-/** The Pod the lab's Chats are bound to, read through a throwaway Chat (the bind route needs its id). */
-const podOfLabChat = (ctx, session) => async () =>
-  (await prepareChat(ctx.origin, ctx.cookie, session, ctx.projectPath, ctx.modelId)).jiraPodBinding
-    ?.podId;
+/** The Pod a template bind goes through: a verified Pod of the API account (the bind route needs a Pod id, not a Chat or a model). */
+const podOfLabChat = (ctx, session) => () => createLabPodId(ctx.origin, ctx.cookie, session);
 
 /** What the template binding needs from the live product and Jira: plain requests, the bind post, the Pod and the Pod account's profile. */
 const templateIo = (ctx, session) => ({

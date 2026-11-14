@@ -351,6 +351,11 @@ async function createVerifiedPod(origin, cookie, session, actor, administration 
   assert.equal(verification.status, "ok");
   return credential;
 }
+/** The id of a freshly created, verified Pod for the actor: what a template bind goes through (no Chat, no model). */
+export async function createLabPodId(origin, cookie, session, actor = "api") {
+  return (await createVerifiedPod(origin, cookie, session, actor)).livePod.podId;
+}
+
 /**
  * A new Chat's tool mode is Full access (owner decision 2026-11-02). A scenario that proves a write
  * approval passes its own mode, so the Chat asks exactly as the scenario expects.
