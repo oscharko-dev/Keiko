@@ -4032,6 +4032,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "read-consent",
           "write-approval",
           "human-input",
+          "claim-notice",
         ],
       },
       batchPhase: {
@@ -4054,6 +4055,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      claimNotice: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["no-jira-create", "tool-call-not-executed"],
       },
       exchangeCount: {
         type: "integer",
@@ -4212,6 +4219,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unsupported-issue-key",
           "knowledge-coverage",
           "raw-report-key",
+          "announced-create",
+          "tool-call-as-text",
         ],
       },
       omittedFindingCount: {
@@ -4230,6 +4239,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       rawReportKeyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      announcementCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -42942,6 +42956,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["input", "resolve", "host-start", "verify"],
       },
+      verdict: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["not-local", "unverifiable"],
+      },
     },
     causal: "none",
     lifecycle: "failure",
@@ -47465,6 +47485,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "portable-setup-failed",
           "portable-it-managed",
           "portable-registration-invalid",
+          "portable-volume-not-local",
+          "portable-volume-unverified",
           "portable-non-stable",
         ],
       },

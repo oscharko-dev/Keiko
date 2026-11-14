@@ -136,7 +136,7 @@ function harness(
         return answer;
       },
       protect: (path, options): void => {
-        protectedPaths.push({ path, inherit: options?.inheritToChildren === true });
+        protectedPaths.push({ path, inherit: options.inheritToChildren === true });
         protect?.(path);
       },
       directoryIdentity: () => DIRECTORY_ID,

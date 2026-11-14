@@ -2313,6 +2313,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.permissionGranted": "Berechtigung erteilt",
   "chat.jira.outcome.permissionDenied": "Berechtigung nicht erteilt",
   "chat.jira.outcome.moreResults": "{count} weitere Ergebnisse anzeigen",
+  "chat.jira.outcome.moreResultsOne": "1 weiteres Ergebnis anzeigen",
   "chat.jira.outcome.openBoard": "Board öffnen",
   "chat.jira.outcome.returned": "Zurückgegebene Ergebnisse: {count}.",
   "chat.jira.outcome.returnedTotal": "{count} von {total} Ergebnissen zurückgegeben.",
@@ -2545,32 +2546,41 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.issues": "Jira-Vorgänge",
   "chat.jira.outcome.problems": "Was Jira gemeldet hat",
   "chat.jira.outcome.itemOrdinal": "Eintrag {position}",
+  "chat.jira.outcome.notCreated": "Nicht angelegt: {count}",
   "chat.jira.outcome.draftProblem.draft-shape":
-    "Der Entwurf hat kein lesbares Format. Bitten Sie Keiko, die Vorgänge neu zu entwerfen.",
+    "Der Entwurf hat kein lesbares Format. Bitte Keiko, die Vorgänge neu zu entwerfen.",
   "chat.jira.outcome.draftProblem.items-missing":
-    "Der Entwurf enthält keine Vorgänge. Bitten Sie Keiko, die anzulegenden Vorgänge zu nennen.",
+    "Der Entwurf enthält keine Vorgänge. Bitte Keiko, die anzulegenden Vorgänge zu nennen.",
   "chat.jira.outcome.draftProblem.item-shape":
-    "Eintrag {position} enthält Angaben, die Keiko nicht lesen kann. Bitten Sie Keiko, diesen Vorgang neu zu formulieren.",
+    "enthält Angaben, die Keiko nicht lesen kann. Bitte Keiko, diesen Vorgang neu zu formulieren.",
   "chat.jira.outcome.draftProblem.item-ref":
-    "Eintrag {position} hat keinen verwendbaren Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen kurzen Namen zu geben.",
+    "hat keinen verwendbaren Namen. Bitte Keiko, jedem Vorgang einen eigenen kurzen Namen zu geben.",
   "chat.jira.outcome.draftProblem.item-ids":
-    "Eintrag {position} hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wählen Sie Projekt und Vorgangstyp erneut aus.",
+    "hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wähle Projekt und Vorgangstyp erneut aus.",
   "chat.jira.outcome.draftProblem.item-fields":
-    "Eintrag {position} braucht eine Zusammenfassung und darf kein anderes Projekt oder keinen anderen Vorgangstyp nennen. Bitten Sie Keiko, die Felder zu vervollständigen.",
+    "braucht eine Zusammenfassung und darf kein anderes Projekt oder keinen anderen Vorgangstyp nennen. Bitte Keiko, die Felder zu vervollständigen.",
   "chat.jira.outcome.draftProblem.item-parent":
-    "Eintrag {position} hat einen übergeordneten Vorgang, den Keiko nicht lesen kann. Bitten Sie Keiko, den übergeordneten Vorgang erneut zu nennen.",
+    "hat einen übergeordneten Vorgang, den Keiko nicht lesen kann. Bitte Keiko, den übergeordneten Vorgang erneut zu nennen.",
   "chat.jira.outcome.draftProblem.item-links":
-    "Eintrag {position} hat eine Verknüpfung, die Keiko nicht lesen kann. Bitten Sie Keiko, Verknüpfungstyp, Richtung und Ziel erneut zu nennen.",
+    "hat eine Verknüpfung, die Keiko nicht lesen kann. Bitte Keiko, Verknüpfungstyp, Richtung und Ziel erneut zu nennen.",
   "chat.jira.outcome.draftProblem.item-requirements":
-    "Eintrag {position} hat Anforderungsverweise, die Keiko nicht lesen kann. Bitten Sie Keiko, sie erneut aufzulisten.",
+    "hat Anforderungsverweise, die Keiko nicht lesen kann. Bitte Keiko, sie erneut aufzulisten.",
   "chat.jira.outcome.draftProblem.ref-duplicate":
-    "Zwei Vorgänge haben denselben Namen. Bitten Sie Keiko, jedem Vorgang einen eigenen Namen zu geben.",
+    "Zwei Vorgänge haben denselben Namen. Bitte Keiko, jedem Vorgang einen eigenen Namen zu geben.",
   "chat.jira.outcome.draftProblem.ref-self":
-    "Eintrag {position} nennt sich selbst als übergeordneten Vorgang oder Verknüpfungsziel. Bitten Sie Keiko, auf einen anderen Vorgang zu verweisen.",
+    "nennt sich selbst als übergeordneten Vorgang oder Verknüpfungsziel. Bitte Keiko, auf einen anderen Vorgang zu verweisen.",
   "chat.jira.outcome.draftProblem.ref-unknown":
-    "Eintrag {position} verweist auf einen Vorgang, der nicht im Entwurf steht. Fügen Sie ihn dem Entwurf hinzu oder nennen Sie einen vorhandenen Vorgangsschlüssel.",
+    "verweist auf einen Vorgang, der nicht im Entwurf steht. Füge ihn dem Entwurf hinzu oder nenne einen vorhandenen Vorgangsschlüssel.",
   "chat.jira.outcome.draftProblem.ref-cycle":
-    "Die Beziehungen zwischen übergeordneten Vorgängen und Verknüpfungen bilden einen Kreis. Bitten Sie Keiko, jeden übergeordneten Vorgang so zu wählen, dass er nicht von seinem Unterpunkt abhängt.",
+    "Die Beziehungen zwischen übergeordneten Vorgängen und Verknüpfungen bilden einen Kreis. Bitte Keiko, jeden übergeordneten Vorgang so zu wählen, dass er nicht von seinem Unterpunkt abhängt.",
+  "chat.jira.outcome.draftItem": "Eintrag {position}",
+  "chat.jira.outcome.draftItemUnknown": "Ein Eintrag",
+  "chat.jira.outcome.draftRefusal.draft-not-found":
+    "Der Entwurf ist nicht mehr verfügbar, deshalb wurde nichts geändert. Bitte Keiko, die Vorgänge neu zu entwerfen.",
+  "chat.jira.outcome.draftRefusal.draft-changed":
+    "Der Entwurf hat sich geändert, seit du ihn geprüft hast. Deshalb wurde nichts geändert. Prüfe den aktuellen Entwurf und gib ihn erneut frei.",
+  "chat.jira.outcome.draftRefusal.connection-changed":
+    "Die Jira-Verbindung hat sich geändert, seit dieser Entwurf erstellt wurde. Deshalb wurde nichts geändert. Erstelle den Entwurf erneut für das aktuelle Jira.",
   "chat.jira.outcome.itemUnlisted": "Eintrag, der nicht in Ihrer Anfrage stand",
   "chat.jira.outcome.more": "und {count} weitere",
   "chat.jira.outcome.newTab": "(öffnet Jira in einem neuen Tab)",
@@ -3156,6 +3166,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",
   "chat.turn.cancelled": "Beitrag abgebrochen",
+  "chat.claimNotice.label": "Hinweis von Keiko",
+  "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
+  "chat.claimNotice.toolCallNotExecuted":
+    "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
   "chat.contextWindow.label": "Hinweis zum Kontextfenster",
   "chat.contextWindow.notice":
     "Der sichtbare Verlauf enthält {count} Beiträge. Kontext jenseits der Grenze von 48 Beiträgen kann komprimiert werden.",
@@ -5170,6 +5184,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Gerade geprüft. Keiko kann die Update-Download-Informationen weiterhin nicht prüfen.",
   "updates.check.portableSetupRequired":
     "Gerade geprüft. Portable Setup ist weiterhin erforderlich, bevor App-interne Updates funktionieren können.",
+  "updates.status.portableVolume.notLocal": "Nicht auf einem lokalen Laufwerk",
+  "updates.status.portableVolume.unverified": "Installationsordner nicht geprüft",
+  "updates.check.portableVolume.notLocal":
+    "Gerade geprüft. Keiko ist nicht auf einem lokalen Laufwerk installiert und kann sich deshalb nicht selbst aktualisieren.",
+  "updates.check.portableVolume.unverified":
+    "Gerade geprüft. Keiko konnte seinen Installationsordner nicht prüfen; versuch es gleich noch einmal.",
+  "updates.portableVolume.notLocal.title": "Keiko ist nicht auf einem lokalen Laufwerk installiert",
+  "updates.portableVolume.notLocal.body":
+    "Keiko liegt in einem Netzwerkordner oder einem umgeleiteten Ordner. App-interne Updates funktionieren nur von der eigenen Festplatte dieses Computers.",
+  "updates.portableVolume.notLocal.action":
+    "Installiere Keiko auf einem lokalen Laufwerk dieses Computers und prüfe dann erneut.",
+  "updates.portableVolume.unverified.title": "Keiko konnte seinen Installationsordner nicht prüfen",
+  "updates.portableVolume.unverified.body":
+    "Windows hat gerade zu langsam geantwortet. App-interne Updates pausieren, bis die Prüfung gelingt.",
+  "updates.portableVolume.unverified.action":
+    "Versuch es gleich noch einmal. Wenn es so bleibt, starte Keiko neu.",
   "updates.check.portableExternallyManaged":
     "Gerade geprüft. Diese Installation wird weiterhin außerhalb von Keiko verwaltet, daher sind App-interne Updates nicht verfügbar.",
   "updates.check.policyDisabled":

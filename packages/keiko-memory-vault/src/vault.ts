@@ -24,7 +24,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { unwiredSecurityLogSink, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
 import {
@@ -463,7 +463,7 @@ function resolveCipherWithSource(
   }
   const memoryDir = resolveMemoryDir(opts?.memoryDir, env);
   const resolved = resolveVaultKey(env, memoryDir, () =>
-    keyFromKeychain({ sink: securityLogSink, env }),
+    keyFromKeychain({ sink: securityLogSink ?? unwiredSecurityLogSink(), env }),
   );
   return { cipher: createMemoryContentCipher(resolved.key), keySource: resolved.source };
 }

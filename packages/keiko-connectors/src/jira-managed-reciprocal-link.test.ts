@@ -4,6 +4,7 @@ import {
   reciprocalLinkFixture,
 } from "../../../tests/support/jira-reciprocal-link-fixture.js";
 import { executeJiraReciprocalRemoteLink as execute } from "./jira-managed-reciprocal-link.js";
+import { checkReciprocalInput, reciprocalInputRefusal } from "./jira-reciprocal-link-values.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 const RECEIPT = {
   userKey: "synthetic-actor",
@@ -130,6 +131,74 @@ describe("one native delegated reciprocal link", () => {
       ),
     ).toMatchObject({ ok: false, reason: "field-validation" });
     expect(native.calls).toHaveLength(0);
+  });
+  // #4357 AC3: a refused reciprocal-link input names the rule the model must satisfy, one fixed
+  // sentence per cause, pinned exactly and within the 200-byte bound of a detail message.
+  it.each([
+    [
+      "another argument",
+      { ...ARGS, headers: "x" },
+      [
+        "This call takes only expectedActorKey, expectedIssue, expectedApplication, remoteIssueId, remoteIssueTitle, sourceRelationship, targetRelationship, expectLocalLinkAbsent, acceptNativeDelegatedEffect.",
+      ],
+    ],
+    [
+      "an actor key that is not text",
+      { ...ARGS, expectedActorKey: "" },
+      [
+        "expectedActorKey must be the key of the connected Jira user (non-blank, at most 255 characters); jira.myself returns it. Nothing was changed.",
+      ],
+    ],
+    [
+      "a missing acceptance",
+      { ...ARGS, acceptNativeDelegatedEffect: false },
+      [
+        "Send expectLocalLinkAbsent:true and acceptNativeDelegatedEffect:true: the local link must not exist yet, and Jira performs the reciprocal effect itself. Nothing was changed.",
+      ],
+    ],
+    [
+      "an issue review of the wrong shape",
+      { ...ARGS, expectedIssue: { id: "10001" } },
+      [
+        "expectedIssue must be the issue as reviewed: id, key, summary, projectId and issueTypeId, nothing else. Nothing was changed.",
+      ],
+    ],
+    [
+      "an unsafe application destination",
+      { ...ARGS, expectedApplication: { ...ARGS.expectedApplication, rpcUrl: "http://x.invalid" } },
+      [
+        "expectedApplication must be the configured link: id (UUID), name (at most 255), displayUrl and rpcUrl (HTTPS, at most 2048, no credentials, query, fragment, whitespace or backslash).",
+      ],
+    ],
+    [
+      "a remote issue of the wrong shape",
+      { ...ARGS, remoteIssueId: "not-a-number" },
+      [
+        "remoteIssueId must be a numeric ID; remoteIssueTitle, sourceRelationship and targetRelationship must be non-blank text of at most 255 characters. Nothing was changed.",
+      ],
+    ],
+  ])("names the rule an input broke: %s", async (_name, args, messages) => {
+    const native = reciprocalLinkFixture();
+    expect(await execute(args, native.request, native.ports)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { validation: "invalid-field", messages },
+    });
+    expect(native.calls).toHaveLength(0);
+    for (const message of messages)
+      expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
+  });
+  it("names the size rule from the same check the parser uses", () => {
+    expect(checkReciprocalInput(ARGS, 10)).toEqual({ ok: false, cause: "size" });
+    expect(reciprocalInputRefusal("size")).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        validation: "invalid-field",
+        messages: ["The arguments are larger than one call may carry. Nothing was changed."],
+      },
+    });
+    expect(checkReciprocalInput(ARGS).ok).toBe(true);
   });
   // #4354: the saved issue templates stand in front of this write like every other write path; a
   // library that cannot be read refuses it before any request, in check and in execution.

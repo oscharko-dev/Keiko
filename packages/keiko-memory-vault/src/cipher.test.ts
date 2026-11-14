@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,25 +26,33 @@ describe("resolveVaultKey — env tier", () => {
   it("uses KEIKO_MEMORY_KEY when it decodes to 32 bytes", () => {
     const raw = randomBytes(32);
     const env = { KEIKO_MEMORY_KEY: raw.toString("base64") };
-    const resolved = resolveVaultKey(env, dir);
+    const resolved = resolveVaultKey(env, dir, () =>
+      keyFromKeychain({ sink: nullSecurityLogSink() }),
+    );
     expect(resolved.source).toBe("env");
     expect(resolved.key.equals(raw)).toBe(true);
   });
 
   it("throws when KEIKO_MEMORY_KEY decodes to the wrong length", () => {
     const env = { KEIKO_MEMORY_KEY: randomBytes(16).toString("base64") };
-    expect(() => resolveVaultKey(env, dir)).toThrow(MemoryStorageError);
+    expect(() =>
+      resolveVaultKey(env, dir, () => keyFromKeychain({ sink: nullSecurityLogSink() })),
+    ).toThrow(MemoryStorageError);
   });
 
   it("throws when KEIKO_MEMORY_KEY is not valid base64 of 32 bytes", () => {
     const env = { KEIKO_MEMORY_KEY: "not-a-real-key" };
-    expect(() => resolveVaultKey(env, dir)).toThrow(MemoryStorageError);
+    expect(() =>
+      resolveVaultKey(env, dir, () => keyFromKeychain({ sink: nullSecurityLogSink() })),
+    ).toThrow(MemoryStorageError);
   });
 
   it("env tier wins over the keyfile tier", () => {
     const raw = randomBytes(32);
     resolveVaultKey({}, dir, NO_KEYCHAIN); // materialise a keyfile first
-    const resolved = resolveVaultKey({ KEIKO_MEMORY_KEY: raw.toString("base64") }, dir);
+    const resolved = resolveVaultKey({ KEIKO_MEMORY_KEY: raw.toString("base64") }, dir, () =>
+      keyFromKeychain({ sink: nullSecurityLogSink() }),
+    );
     expect(resolved.source).toBe("env");
     expect(resolved.key.equals(raw)).toBe(true);
   });
@@ -81,7 +90,12 @@ describe("resolveVaultKey — keyfile tier", () => {
 
       const started = process.hrtime.bigint();
       const resolved = resolveVaultKey({}, dir, () =>
-        keyFromKeychain({ executable: hangs, timeoutMs: 250, platform: "darwin" }),
+        keyFromKeychain({
+          sink: nullSecurityLogSink(),
+          executable: hangs,
+          timeoutMs: 250,
+          platform: "darwin",
+        }),
       );
       const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
 
@@ -131,7 +145,7 @@ describe("resolveVaultKey — keychain tier", () => {
   it("uses a stored keychain key in preference to a keyfile", () => {
     const security = fakeSecurity(stored.toString("base64"));
     const resolved = resolveVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: security, platform: "darwin" }),
+      keyFromKeychain({ sink: nullSecurityLogSink(), executable: security, platform: "darwin" }),
     );
     expect(resolved.source).toBe("keychain");
     expect(resolved.key.equals(stored)).toBe(true);
@@ -142,7 +156,7 @@ describe("resolveVaultKey — keychain tier", () => {
     // bricking the vault. The generated key is what the caller receives.
     const security = fakeSecurity("not-a-32-byte-key");
     const resolved = resolveVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: security, platform: "darwin" }),
+      keyFromKeychain({ sink: nullSecurityLogSink(), executable: security, platform: "darwin" }),
     );
     expect(resolved.source).toBe("keychain");
     expect(resolved.key).toHaveLength(32);
@@ -152,7 +166,7 @@ describe("resolveVaultKey — keychain tier", () => {
   it("generates and stores a key on the first run, when the keychain has none", () => {
     const security = fakeSecurity("");
     const resolved = resolveVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: security, platform: "darwin" }),
+      keyFromKeychain({ sink: nullSecurityLogSink(), executable: security, platform: "darwin" }),
     );
     expect(resolved.source).toBe("keychain");
     expect(resolved.key).toHaveLength(32);
@@ -161,7 +175,7 @@ describe("resolveVaultKey — keychain tier", () => {
   it("falls through to the keyfile when the keychain has none and will not store one", () => {
     const security = fakeSecurity("", 1);
     const resolved = resolveVaultKey({}, dir, () =>
-      keyFromKeychain({ executable: security, platform: "darwin" }),
+      keyFromKeychain({ sink: nullSecurityLogSink(), executable: security, platform: "darwin" }),
     );
     expect(resolved.source).toBe("keyfile");
     expect(resolved.key).toHaveLength(32);
