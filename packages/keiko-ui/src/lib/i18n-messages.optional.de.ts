@@ -2623,6 +2623,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Für den Vorgangstyp „{subject}“ gibt es keine Vorlage, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere die Vorlage und frage dann erneut.",
   "chat.jira.outcome.rule.template-not-activated":
     "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere eine Vorlage zum Anlegen und frage dann erneut.",
+  "chat.jira.outcome.rule.template-binding-unresolved":
+    "Die Vorlage „{subject}“ nennt einen Vorgangstyp oder einen Status, den dieses Jira dir nicht zeigt, deshalb wurde nichts geändert. Öffne die Vorlage in Skills, schreibe ihn so, wie dieses Jira ihn dir zeigt, und speichere sie, oder bitte die Autorin oder den Autor, sie gegen Jira zu prüfen. Frage dann erneut.",
   "chat.jira.outcome.templateNotices":
     "Die Änderung wurde vorgenommen. Der Vorgang verletzt bereits diese Vorlagenregeln in Feldern, die diese Änderung nicht berührt hat. Bitte Keiko, sie zu beheben, oder korrigiere sie in Jira.",
   "chat.jira.outcome.failure.releaseScope":
@@ -2821,13 +2823,29 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Mehrere Felder heißen {subject}. Verwende die Feld-ID, um eindeutig zu sein.",
   "chat.skills.jira.finding.unknown-link-type": "Der Verknüpfungstyp {subject} existiert nicht.",
   "chat.skills.jira.finding.unknown-transition-target":
-    "{subject} ist kein Status des Projekts. Ein Übergangsname oder eine ID lässt sich hier nicht prüfen.",
+    "{subject} ist kein Status des Projekts. Ein Übergangsname lässt sich nicht sprachübergreifend verbinden: Nenne den Zielstatus so, wie dieses Jira ihn zeigt, dann gilt die Regel für alle.",
   "chat.skills.jira.finding.wrong-parent-field":
     "Das Eltern-Feld verknüpft diesen Vorgangstyp hier nicht mit seinem Elternvorgang: {subject}. Davon betroffene Schreibvorgänge lassen sich nicht erfüllen.",
   "chat.skills.jira.projectKey": "Projektschlüssel",
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalCount":
+    "{types} Vorgangstypen: {proposals} mit Vorschlag, {without} ohne.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn":
+    "Von diesem Typ gibt es noch keine Vorgänge, aus denen sich etwas ableiten lässt.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "Die abgeleitete Vorlage war nicht gültig, deshalb gibt es keinen Vorschlag.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira hat für diesen Typ nicht geantwortet. Versuch es noch einmal.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Nicht geprüft: Das Projekt hat mehr Vorgangstypen, als ein Vorschlagslauf abdeckt.",
+  "chat.skills.jira.withoutProposalMore": "und {count} weitere ohne Vorschlag.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira hat für die Pflichtfelder dieses Typs nicht geantwortet; prüf sie, bevor du speicherst.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira hat für die Beispielvorgänge dieses Typs nicht geantwortet; prüf die Abschnitte, bevor du speicherst.",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
   "chat.skills.jira.error":
@@ -2876,6 +2894,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.useInChat": "In diesem Chat verwenden",
   "chat.skills.jira.proposeDescription":
     "Keiko liest aktuelle Vorgänge eines Projekts und schlägt je Vorgangstyp eine Vorlage vor. Jede öffnet sich zur Prüfung im Editor, bevor du sie speicherst.",
+  "chat.skills.jira.bind": "Mit diesem Jira verbinden",
+  "chat.skills.jira.binding": "Verbinde…",
+  "chat.skills.jira.bound": "Mit dem Vorgangstyp „{issueType}“ dieses Jiras verbunden.",
+  "chat.skills.jira.boundParents":
+    "Mit dem Vorgangstyp „{issueType}“ und {count} erlaubten übergeordneten Typen dieses Jiras verbunden.",
+  "chat.skills.jira.validBound": "Passt zu Jira und ist mit dessen Vorgangstypen verbunden.",
+  "chat.skills.jira.bindOffer":
+    "Passt zu Jira nur über den Namen. Verbinde sie, damit sie auch für Kolleginnen und Kollegen gilt, die Jira in einer anderen Sprache nutzen.",
+  "chat.skills.jira.bindAmbiguous":
+    "Mehrere Vorgangstypen heißen in diesem Jira „{subject}“, deshalb kann die Vorlage nicht verbunden werden.",
+  "chat.skills.jira.bindFailed":
+    "Die Vorlage konnte gerade nicht verbunden werden. Versuche es noch einmal.",
+  "chat.skills.jira.sharedType":
+    "Eine weitere Vorlage gilt auch für diesen Vorgangstyp: Jede Änderung muss beide erfüllen.",
+  "chat.skills.jira.bindDead":
+    "Diese Vorlage ist mit einem Vorgangstyp verbunden, den es in diesem Projekt nicht mehr gibt („{subject}“), deshalb gilt sie für nichts und blockiert nichts. Ändere den Vorgangstyp oder lösche die Vorlage.",
   "chat.skills.jira.openProposal": "Im Editor öffnen",
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} Agenten",

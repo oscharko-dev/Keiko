@@ -1380,6 +1380,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      templateBindingUnresolvedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       settledCount: {
         type: "integer",
         dataClass: "count",
@@ -1628,6 +1633,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       templateNotActivatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateBindingUnresolvedCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -34994,8 +35004,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "template-unreadable",
           "template-missing",
           "template-not-activated",
+          "template-binding-unresolved",
         ],
         maxItems: 25,
+      },
+      gateFacts: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["type-list-unavailable", "status-list-unavailable"],
+        maxItems: 4,
       },
     },
     causal: "correlation",
@@ -44026,6 +44044,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "jira-template-list",
           "jira-template-validate",
           "jira-template-propose",
+          "jira-template-bind",
         ],
       },
       phase: {
@@ -44038,6 +44057,41 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      typeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      proposalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      nothingToLearnCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateInvalidCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      jiraUnavailableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      beyondLimitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      partialProposalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",

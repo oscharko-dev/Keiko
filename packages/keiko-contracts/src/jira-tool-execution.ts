@@ -1,5 +1,5 @@
 import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
-import type { JiraTemplateViolation } from "./jira-issue-template.js";
+import type { JiraTemplateGateFact, JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
 export const JIRA_AVATAR_MUTATIONS = Object.freeze([
@@ -772,6 +772,8 @@ export type JiraMutationAttempt =
        * the write; the person is told (#4354).
        */
       readonly templateNotices?: readonly JiraTemplateViolation[];
+      /** Closed facts of the template gate that went on with less than the full picture; Activity Log only. */
+      readonly templateGateFacts?: readonly JiraTemplateGateFact[];
     }
   | {
       readonly ok: false;
@@ -785,6 +787,8 @@ export type JiraMutationAttempt =
       /** A prepared description is evidence even when the provider refuses the subsequent write. */
       readonly descriptionConvertedHeadingCount?: number;
       readonly descriptionProjection?: "supported-markdown";
+      /** Closed facts of the template gate; a write the gate let through may still fail afterwards. */
+      readonly templateGateFacts?: readonly JiraTemplateGateFact[];
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.
@@ -913,8 +917,8 @@ export function sanitizeJiraMutationLinkAccount(
 
 /**
  * The most characters of the `guidance` sentence any Jira write result may carry. It is not a guess:
- * the template refusals' guidance (a parent rule, a section rule, every rule hint) is the longest the
- * producers write, 1135 characters at its worst, and `jiraTemplateGuidanceVariants` in the producer
+ * the template refusals' guidance (a parent rule, a section rule, every rule hint, several templates)
+ * is the longest the producers write, and `jiraTemplateGuidanceVariants` in the producer
  * enumerates every variant, so one test holds the longest of them within this bound AND the bound
  * within a stated margin of it. The result schemas of every write tool (the mutation tools, the draft
  * run, draft-stage) and the producer share this one value: a longer guidance made the catalog reject

@@ -639,7 +639,7 @@ class CodingJiraPodService implements CodingJiraPods {
       http: factory(credential, context.correlationId, {
         beforeDispatch: () => this.admit(binding, context),
       }),
-      issueTemplates: jiraIssueTemplateSource(deps.store),
+      issueTemplates: jiraIssueTemplateSource(deps.store, credential.baseUrl),
       ...this.privateConnection(binding, context, credential, privateLifetime),
       ...(deps.emailTemplateInspection === undefined
         ? {}

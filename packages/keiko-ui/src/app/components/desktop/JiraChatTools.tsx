@@ -216,6 +216,7 @@ const RULE_MESSAGES = {
   "template-unreadable": "chat.jira.outcome.rule.template-unreadable",
   "template-missing": "chat.jira.outcome.rule.template-missing",
   "template-not-activated": "chat.jira.outcome.rule.template-not-activated",
+  "template-binding-unresolved": "chat.jira.outcome.rule.template-binding-unresolved",
 } as const satisfies Readonly<Record<JiraOutcomeRule["ruleId"], string>>;
 /** One sentence per closed draft problem; it says what to change, and "{position}" is the item. */
 const DRAFT_PROBLEM_MESSAGES = {

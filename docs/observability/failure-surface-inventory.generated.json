@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7b8506fa4a1e1bba0f28f6d569695b0bddc34e4988385e9b60e6885355dfde96"
+    "catalogDigest": "47fa0b8da167e60dbeb18d39cdc6d82a8c3e495ee826b68fe7a61ea5066e3f10"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -3212,6 +3212,7 @@
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "skills.library.operation.lifecycle": [
+      "packages/keiko-server/src/markdown-skill-jira-template-routes.test.ts",
       "packages/keiko-server/src/markdown-skill-routes.test.ts"
     ],
     "skills.workflow.attached.line": [

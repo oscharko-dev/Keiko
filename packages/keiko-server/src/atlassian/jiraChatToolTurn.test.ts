@@ -1516,7 +1516,7 @@ async function awaitReadGrantedForWrite(f: ReturnType<typeof fixture>): Promise<
     () => {
       expect(f.acceptedReadGrants.length).toBeGreaterThan(0);
     },
-    { timeout: 5000 },
+    { timeout: 60_000 },
   );
   expect(acceptedReadGrant(f).grant.state).toBe("granted");
   expect(readConsentPart(f)).toMatchObject({ state: "granted" });
@@ -2246,11 +2246,17 @@ it.each([false, true])(
 async function pendingWriteApproval(
   f: ReturnType<typeof fixture>,
 ): Promise<ChatToolWriteApprovalView> {
-  await vi.waitFor(() => {
-    expect(
-      f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
-    ).toBe("pending");
-  });
+  // The wait ends when the approval is pending, not at a wall-clock guess: staging, digesting and gating
+  // a 1,200-item draft takes seconds on a loaded machine, and vitest's default of one second made this
+  // test fail under load while it passed alone. The test's own timeout is the bound.
+  await vi.waitFor(
+    () => {
+      expect(
+        f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
+      ).toBe("pending");
+    },
+    { timeout: 60_000 },
+  );
   expect(f.writes()).toBe(0);
   const approval = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval;
   if (approval === undefined) throw new Error("Missing exact write approval");
@@ -4947,7 +4953,7 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
           beforeDispatch: () => context.beforeEffect(),
         }),
         // The stage dry-runs each item against the saved templates; without them a create is refused.
-        issueTemplates: jiraIssueTemplateSource(f.deps.store),
+        issueTemplates: jiraIssueTemplateSource(f.deps.store, credential.baseUrl),
       },
       draftTool(f.deps, store),
     );

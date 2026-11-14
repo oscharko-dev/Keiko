@@ -1790,6 +1790,56 @@ the approval.
   and their policy-class rows stay: the governed Jira tools map onto the same rows (`jira.create` is
   `create-issue`, and so on), and the contract types are removed only after Release 1. The Confluence
   actions of the same route are unchanged.
+- **Templates are matched by id where the product can bind them, by name where it cannot (#4354).**
+  Jira Data Center localizes per user: in a German profile the system fields (41 of 55 measured on 10.3),
+  the statuses, the transition names, the resolutions and the issue types are German, while link types,
+  priority names and custom fields were not in the lab. A template types its names once, in its
+  author's language. The product therefore resolves what Jira localizes to its stable ids in
+  the author's own view of the project (`POST /api/skills/jira-templates/bind`, called by the Skills editor
+  after every save of a Jira template, and again once a Pod is available when the first save found none; the
+  button stays as a re-check) and writes them into the template's front matter. **By id:** the issue type
+  (`issueTypeId`), the allowed parent types (`parentIssueTypeIds`), every required field, system or custom
+  (`requiredFieldIds`, aligned to the typed list), the parent-link field (`parentFieldId`), and the target of
+  each status-bound transition rule (`transitionStatusIds`, the id of the status; Jira keeps that id under
+  every profile language). An entry that did not resolve is written as `none` and that one entry is matched by
+  name. **By name, because nothing stable answers it:** link types, priorities, labels, section and summary
+  text, the project key (language independent already), and a transition typed as a transition id (an id
+  already). The file stays a plain Markdown document and the binding travels with an exported copy.
+  **The binding is in force only for what it was resolved from:** `jiraBinding` is one digest (version 2) over
+  the Jira's identity (a digest of its normalised base URL), the typed names and every written id, and the
+  single source of templates (`jiraTemplateForInstance`) drops a binding whose digest no longer matches
+  (another Jira, an edited typed name or id), so that template is matched by name again; ids without a digest
+  or with counts that do not align with the typed lists are no binding at all, not a parse error. One matcher
+  (`jiraTemplateIssueTypeMatches`, `jiraTemplateParentEntryMatches`, `jiraTemplateBoundFieldId`,
+  `jiraTemplateBoundStatusId`) decides for the gate, the report, the settings validator and the
+  offered-template metadata. A gated write is refused with the closed rule `template-binding-unresolved` when
+  a template of its project that is matched by name names an issue type nobody sees in this Jira (a name in
+  another profile language), and likewise a transition beside a template that governs this very issue (its
+  type matches by the one matcher; a template of another type is not this rule's business) and has a
+  transition rule that nothing explains: a target counts as explained when it is bound to a status id, is
+  the name or the id of one of the transitions THIS issue offers now (a numeric target is a transition id
+  only where the issue offers that id, never assumed), or is a status name of the project; the normal
+  matching then decides. Only a target that is none of these could belong to another language, and a
+  transition must not pass unchecked on that doubt. The
+  refusal names that template and the two ways out (write the name as this Jira shows it and save the
+  template, or have the author check it against Jira), and the bind route's 422 says the same. A template that
+  is bound for this Jira whose bound id is no type of the project is **dead**: it governs nothing and blocks
+  nothing, and the template list says so; a bound field id the instance no longer has is `field-unavailable`,
+  never satisfied, and a bound status the project no longer has makes the transition rule dead. When Jira's
+  project read lists no issue types (or more than the gate reads), the unresolved rule cannot be judged and the
+  write goes on, as before, but the decision is recorded on `jira.template.admission`
+  (`gateFacts: ["type-list-unavailable"]`). The unreadable status list is the one case where a transition
+  rule typed in another language is not applied: a Jira that cannot list statuses would otherwise block
+  every transition of every template, so the transition goes on, and the log shows it
+  (`gateFacts: ["status-list-unavailable"]`); a numeric target that is no transition id of the issue is
+  still refused, as it needs no status list. When
+  several templates govern one write, every one of them must be met: each violation carries its
+  template's place (`#N`), a rule that several of them require is named once (by the first), and the
+  guidance says so. The template list marks the templates that share a type by the same rule
+  (`jiraTemplatesShareIssueType`, over each template as it governs the caller's ready Jiras), so list and
+  gate cannot disagree. A report issue record without a type id is
+  neither covered nor uncovered by a bound template: the report says the check is unavailable instead of
+  counting it "without template".
 - **Write-path inventory (#4354).** 224 mutation operations. Every operation that creates or changes
   the fields or relations of an issue reaches `gateJiraMutationByTemplates` through the managed
   executor `executeJiraManagedMutation`, the only production caller of which is `mutationTool`

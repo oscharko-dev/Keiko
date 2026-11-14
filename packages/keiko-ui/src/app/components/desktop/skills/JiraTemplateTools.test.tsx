@@ -1,11 +1,12 @@
 import userEvent from "@testing-library/user-event";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import * as templates from "@/lib/jira-templates-api";
 import * as skills from "@/lib/markdown-skills-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { ApiError } from "@/lib/api";
 import type { JiraTemplateValidation } from "@/lib/jira-templates-api";
 import {
   JiraTemplateList,
@@ -13,9 +14,11 @@ import {
   useJiraTemplates,
   type JiraTemplates,
 } from "./JiraTemplateTools";
+import { useAutomaticTemplateBinding } from "./useJiraTemplateBinding";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 
 vi.mock("@/lib/jira-templates-api", () => ({
+  bindJiraTemplate: vi.fn(),
   fetchJiraTemplates: vi.fn(),
   validateJiraTemplate: vi.fn(),
   proposeJiraTemplates: vi.fn(),
@@ -145,6 +148,17 @@ describe("the template list", () => {
     expect(latest?.templateIds?.has(ENTRY.id)).toBe(true);
     expect(latest?.templateIds?.has("skill-2")).toBe(true);
     expect(latest?.templateIds?.has("unrelated")).toBe(false);
+  });
+
+  // F07a (#4354): a template whose type another template governs too says so on its row.
+  it("says on a row that another template governs the same issue type", async () => {
+    vi.mocked(templates.fetchJiraTemplates).mockResolvedValue([
+      { ...ENTRY, sharedWith: 1 },
+      { ...TASK, sharedWith: 0 },
+    ]);
+    render(<Panel stored={library} />);
+    const shared = await screen.findAllByText(/Another template governs this issue type too/u);
+    expect(shared).toHaveLength(1);
   });
 
   it("has no template ids until the list was read, and an empty set when the read failed", async () => {
@@ -463,15 +477,31 @@ describe("the automatic check follows the selected Pod", () => {
   });
 });
 
+/** A proposal run as the route answers it: every issue type is a proposal or a closed reason. */
+function runOf(
+  proposals: readonly templates.JiraTemplateProposal[],
+  withoutProposal: readonly templates.JiraTemplateWithoutProposal[] = [],
+  withoutProposalMoreCount = 0,
+): templates.JiraTemplateProposalRun {
+  return {
+    proposals,
+    withoutProposal,
+    withoutProposalMoreCount,
+    typeCount: proposals.length + withoutProposal.length + withoutProposalMoreCount,
+  };
+}
+
 describe("template proposals", () => {
   it("proposes templates from a project and opens one in the editor with a safe file name", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      {
-        issueType: "Sub-task / Bug",
-        markdown: "---\nkeiko: jira-issue-template\n---\n",
-        sampledIssueCount: 3,
-      },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([
+        {
+          issueType: "Sub-task / Bug",
+          markdown: "---\nkeiko: jira-issue-template\n---\n",
+          sampledIssueCount: 3,
+        },
+      ]),
+    );
     const user = userEvent.setup();
     render(<Panel stored={library} />);
     await screen.findByText("Story template");
@@ -491,9 +521,9 @@ describe("template proposals", () => {
   });
 
   it("withdraws a completed proposal across Pod A to B to A and logs its original request once", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      { issueType: "Story", markdown: "PRIVATE_DRAFT", sampledIssueCount: 3 },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([{ issueType: "Story", markdown: "PRIVATE_DRAFT", sampledIssueCount: 3 }]),
+    );
     const user = userEvent.setup();
     render(<Panel stored={library} />);
     await screen.findByText("Story template");
@@ -513,17 +543,17 @@ describe("template proposals", () => {
     expect(discarded).toEqual([["Jira template proposal superseded.", { correlationId }]]);
     expect(JSON.stringify(discarded)).not.toMatch(/PRIVATE|pod-1|pod-2|Story/u);
     expect(onDraft).not.toHaveBeenCalled();
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      { issueType: "Story", markdown: "CURRENT_DRAFT", sampledIssueCount: 4 },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([{ issueType: "Story", markdown: "CURRENT_DRAFT", sampledIssueCount: 4 }]),
+    );
     await user.click(screen.getByRole("button", { name: "Propose from project" }));
     expect(await screen.findByText("Proposed for Story (4 issues sampled)")).toBeInTheDocument();
   });
 
   it("withdraws a completed proposal when a same-count stored library revision changes", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
-      { issueType: "Story", markdown: "STALE_DRAFT", sampledIssueCount: 3 },
-    ]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([{ issueType: "Story", markdown: "STALE_DRAFT", sampledIssueCount: 3 }]),
+    );
     const user = userEvent.setup();
     const view = render(<Panel stored={libraryOf([DOCUMENT])} />);
     await screen.findByText(ENTRY.name);
@@ -538,13 +568,15 @@ describe("template proposals", () => {
 
   it("starts each proposal from its own Markdown, never the previous project's", async () => {
     vi.mocked(templates.proposeJiraTemplates).mockImplementation((_pod, projectKey) =>
-      Promise.resolve([
-        {
-          issueType: "Story",
-          markdown: `---\nproject: ${projectKey}\n---\n`,
-          sampledIssueCount: projectKey === "OLD" ? 3 : 5,
-        },
-      ]),
+      Promise.resolve(
+        runOf([
+          {
+            issueType: "Story",
+            markdown: `---\nproject: ${projectKey}\n---\n`,
+            sampledIssueCount: projectKey === "OLD" ? 3 : 5,
+          },
+        ]),
+      ),
     );
     const user = userEvent.setup();
     render(<Panel stored={library} />);
@@ -568,8 +600,114 @@ describe("template proposals", () => {
     expect(onDraft).toHaveBeenCalledTimes(2);
   });
 
+  it("accounts for every issue type: the count, each proposal and one plain line per type without one (#4354)", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf(
+        [
+          { issueType: "Task", markdown: "T", sampledIssueCount: 3 },
+          { issueType: "Epic", markdown: "E", sampledIssueCount: 0 },
+          { issueType: "Story", markdown: "S", sampledIssueCount: 2 },
+        ],
+        [
+          { issueType: "Bug", reason: "nothing-to-learn" },
+          { issueType: "Sub-task", reason: "jira-unavailable" },
+        ],
+      ),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("5 issue types: 3 with a proposal, 2 without.");
+    expect(screen.getByText("Bug: No issues of this type to learn from yet.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Sub-task: Jira did not answer for this type. Try again."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Open in editor" })).toHaveLength(3);
+  });
+
+  it("tells on the proposal itself which Jira read did not answer, and nothing on a complete one (#4354)", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([
+        {
+          issueType: "Task",
+          markdown: "T",
+          sampledIssueCount: 3,
+          partial: "required-fields-unavailable",
+        },
+        { issueType: "Story", markdown: "S", sampledIssueCount: 0, partial: "samples-unavailable" },
+        { issueType: "Epic", markdown: "E", sampledIssueCount: 2 },
+      ]),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("3 issue types: 3 with a proposal, 0 without.");
+    const notes = screen.getAllByRole("note").map((note) => note.textContent);
+    expect(notes).toEqual([
+      "Jira did not answer for the required fields of this type; check them before saving.",
+      "Jira did not answer for the sample issues of this type; check the sections before saving.",
+    ]);
+    const epic = screen.getByText("Proposed for Epic (2 issues sampled)").closest("li");
+    expect(epic).not.toBeNull();
+    expect(epic?.querySelector('[role="note"]')).toBeNull();
+  });
+
+  it("keeps the exact count when the list of types without a proposal is bounded, and says how many more", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf(
+        [{ issueType: "Task", markdown: "T", sampledIssueCount: 3 }],
+        [
+          { issueType: "Bug", reason: "nothing-to-learn" },
+          { issueType: "Epic", reason: "beyond-limit" },
+        ],
+        137,
+      ),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("140 issue types: 1 with a proposal, 139 without.");
+    expect(screen.getByText("and 137 more without a proposal.")).toBeInTheDocument();
+    // Only the listed types are named; the others are counted, never one line each.
+    expect(screen.getByText("Bug: No issues of this type to learn from yet.")).toBeInTheDocument();
+    expect(screen.getAllByText(/^(Bug|Epic): /u)).toHaveLength(2);
+  });
+
+  it("names the reason of each type without a proposal, also when none has one", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf(
+        [],
+        [
+          { issueType: "Task", reason: "template-invalid" },
+          { issueType: "Epic", reason: "beyond-limit" },
+        ],
+      ),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("2 issue types: 0 with a proposal, 2 without.");
+    expect(
+      screen.getByText("Task: The derived template was not valid, so none is proposed."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Epic: Not examined: the project has more issue types than one proposal run covers.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+  });
+
   it("says when a project yields nothing, and rejects keys that are not a project key", async () => {
-    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([]);
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(runOf([]));
     const user = userEvent.setup();
     render(<Panel stored={library} />);
     await screen.findByText("Story template");
@@ -601,5 +739,141 @@ describe("template proposals", () => {
       "Jira template request failed.",
       expect.objectContaining({ correlationId: expect.any(String) }),
     );
+  });
+});
+
+// #4354: a template names its issue type by a typed string and a name is localized per user. The
+// automatic check tells when the typed names resolve to exactly one type here, and the person binds
+// the template in one click; the ids are written by the server, never typed.
+describe("binding a template to this Jira", () => {
+  const bindable: JiraTemplateValidation = {
+    ...MATCH,
+    binding: { state: "bindable", issueType: "Story" },
+  };
+  const refresh = vi.fn(() => Promise.resolve());
+  const stored = { ...library, refresh } as unknown as MarkdownSkillLibrary;
+
+  // The lead saves a template; nobody has to find a button: the check offers the binding and it is
+  // made once for that revision.
+  it("binds automatically once per saved revision, says what was bound and reloads the library", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    vi.mocked(templates.bindJiraTemplate).mockResolvedValue({
+      changed: true,
+      issueType: "Story",
+      parentTypeCount: 0,
+    });
+    render(<Panel stored={stored} />);
+    const story = await row("Story template");
+    expect(await within(story).findByText(/Bound to the issue type “Story”/u)).toBeInTheDocument();
+    expect(templates.bindJiraTemplate).toHaveBeenCalledTimes(1);
+    expect(templates.bindJiraTemplate).toHaveBeenCalledWith(
+      "pod-1",
+      ENTRY.id,
+      ENTRY.revision,
+      expect.any(String),
+    );
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("says what a bound template is and does not bind it again", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      ...MATCH,
+      binding: { state: "bound", issueType: "Story" },
+    });
+    render(<Panel stored={stored} />);
+    const bound = await row("Story template");
+    expect(await within(bound).findByText(/bound to its issue types/u)).toBeInTheDocument();
+    expect(within(bound).queryByRole("button", { name: "Bind to this Jira" })).toBeNull();
+    expect(templates.bindJiraTemplate).not.toHaveBeenCalled();
+  });
+
+  it("shows a template bound to a type that is gone as dead", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      ...MATCH,
+      binding: { state: "dead", subject: "Aufgabe" },
+    });
+    render(<Panel stored={stored} />);
+    const dead = await row("Story template");
+    expect(
+      await within(dead).findByText(
+        /no longer exists in this project \(“Aufgabe”\).*blocks nothing/u,
+      ),
+    ).toBeInTheDocument();
+    expect(templates.bindJiraTemplate).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's plain sentence for a refused binding and keeps a button to check again", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    const sentence =
+      'This Jira shows no issue type called "Aufgabe" to you, so the template "SYN/Aufgabe" cannot be bound. Write the type as this Jira shows it to you and save the template again, or ask its author to check it against Jira.';
+    vi.mocked(templates.bindJiraTemplate).mockRejectedValueOnce(
+      new ApiError("INVALID_REQUEST", sentence, 422),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={stored} />);
+    const story = await row("Story template");
+    expect(await within(story).findByRole("alert")).toHaveTextContent(sentence);
+    expect(refresh).not.toHaveBeenCalled();
+    vi.mocked(templates.bindJiraTemplate).mockResolvedValue({
+      changed: true,
+      issueType: "Story",
+      parentTypeCount: 0,
+    });
+    await user.click(within(story).getByRole("button", { name: "Bind to this Jira" }));
+    expect(await within(story).findByText(/Bound to the issue type “Story”/u)).toBeInTheDocument();
+    expect(templates.bindJiraTemplate).toHaveBeenCalledTimes(2);
+  });
+
+  it("tells a failed binding in plain words, keeps the template and offers the button again", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    vi.mocked(templates.bindJiraTemplate).mockRejectedValue(new Error("offline"));
+    render(<Panel stored={stored} />);
+    const story = await row("Story template");
+    expect(await within(story).findByRole("alert")).toHaveTextContent(
+      /could not be bound right now/u,
+    );
+    expect(within(story).getByRole("button", { name: "Bind to this Jira" })).toBeInTheDocument();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Jira template binding failed.",
+      expect.objectContaining({ correlationId: expect.any(String) }),
+    );
+  });
+
+  it("names a type that two issue types share, instead of offering a binding", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      ...MATCH,
+      binding: { state: "ambiguous", subject: "Story" },
+    });
+    render(<Panel stored={stored} />);
+    const story = await row("Story template");
+    expect(
+      await within(story).findByText(/More than one issue type is called “Story”/u),
+    ).toBeInTheDocument();
+    expect(within(story).queryByRole("button", { name: "Bind to this Jira" })).toBeNull();
+  });
+});
+
+// #4354 audit: a template saved before any Jira Pod is ready must not be marked as attempted, or it would
+// stay unbound until the next edit.
+describe("automatic binding waits for a Pod and then binds once", () => {
+  it("attempts nothing without a Pod, binds the same revision when one appears, and not twice", () => {
+    const bind = vi.fn(() => Promise.resolve());
+    const pending = [ENTRY];
+    const { rerender } = renderHook(
+      ({ podId }: { podId: string | undefined }) =>
+        useAutomaticTemplateBinding(bind, pending, podId),
+      { initialProps: { podId: undefined as string | undefined } },
+    );
+    expect(bind).not.toHaveBeenCalled();
+    rerender({ podId: "pod-1" });
+    expect(bind).toHaveBeenCalledTimes(1);
+    expect(bind).toHaveBeenCalledWith(ENTRY);
+    rerender({ podId: "pod-1" });
+    expect(bind).toHaveBeenCalledTimes(1);
+    // Another Pod is another view of the project: the same revision is bound against it too.
+    rerender({ podId: "pod-2" });
+    expect(bind).toHaveBeenCalledTimes(2);
   });
 });
