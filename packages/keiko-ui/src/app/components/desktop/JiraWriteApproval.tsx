@@ -40,6 +40,26 @@ const APPROVAL_KEYS: Readonly<Record<ChatToolWriteApprovalView["state"], WidgetM
   expired: "chat.jira.writeApproval.expired",
   revoked: "chat.jira.writeApproval.revoked",
 };
+/** What a person does after an approval ended without their decision (#4355 AC5). */
+const APPROVAL_HINT_KEYS: Readonly<
+  Partial<Record<ChatToolWriteApprovalView["state"], WidgetMessageKey>>
+> = {
+  expired: "chat.jira.writeApproval.expiredHint",
+  revoked: "chat.jira.writeApproval.revokedHint",
+};
+function ApprovalHint({
+  verified,
+  state,
+  ended,
+}: {
+  readonly verified: boolean;
+  readonly state: ChatToolWriteApprovalView["state"];
+  readonly ended: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  const hint = APPROVAL_HINT_KEYS[ended && state === "pending" ? "expired" : state];
+  return verified && hint !== undefined ? <p>{t(hint)}</p> : null;
+}
 interface ApprovalProps {
   readonly approval: ChatToolWriteApprovalView;
   readonly call: ChatToolExchange["call"];
@@ -343,6 +363,7 @@ export function JiraWriteApproval({
         <output aria-live="polite">
           {t(state.busy ? "chat.jira.writeApproval.working" : status)}
         </output>
+        <ApprovalHint verified={state.verified} state={state.view.state} ended={ended} />
         <WriteApprovalActions state={state} turnState={turnState} empty={blocked} />
       </section>
     </JiraNamesContext.Provider>

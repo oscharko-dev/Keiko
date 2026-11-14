@@ -9,6 +9,9 @@ import {
   JIRA_TEMPLATE_RULE_IDS,
   type JiraFieldValidationFailure,
   type JiraTemplateRuleId,
+  JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_ATTACHMENT_OPERATIONS,
+  isJiraReleaseScopeRefusal,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -260,6 +263,8 @@ export interface JiraToolOutcomeView {
   /** The sentence for a refusal that is not a field problem (not found, changed, connection). */
   readonly draftRefusal?: WidgetMessageKey;
   readonly rules: readonly JiraOutcomeRule[];
+  /** Template rules an edit that succeeded left broken in fields it did not touch (#4354). */
+  readonly templateNotices: readonly JiraOutcomeRule[];
   readonly validation: JiraFieldValidationFailure | undefined;
   /** Keiko's own field check refused these draft items; each is named by its summary. */
   readonly itemValidations: readonly JiraOutcomeItemValidation[];
@@ -915,7 +920,10 @@ function problemsOf(
     }),
     ...messages.flatMap((entry): JiraOutcomeProblem[] => {
       const message = text(entry);
-      return message === undefined ? [] : [{ ...own, message }];
+      // The release switch's own sentence is worded from the catalog (failureMessage), not shown raw.
+      return message === undefined || message === JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE
+        ? []
+        : [{ ...own, message }];
     }),
   ];
 }
@@ -1062,15 +1070,9 @@ function itemValidationsOf(
   });
 }
 
-function rulesOf(data: UnknownRecord | undefined): JiraOutcomeRule[] {
-  const own = Array.isArray(data?.violations) ? data.violations : [];
-  const items = Array.isArray(data?.items) ? data.items : [];
-  const nested = items.flatMap((item): unknown[] => {
-    const violations = record(item)?.violations;
-    return Array.isArray(violations) ? violations : [];
-  });
+function ruleList(entries: readonly unknown[]): JiraOutcomeRule[] {
   const seen = new Set<string>();
-  return [...own, ...nested].flatMap((entry): JiraOutcomeRule[] => {
+  return entries.flatMap((entry): JiraOutcomeRule[] => {
     const rule = record(entry);
     const ruleId = JIRA_TEMPLATE_RULE_IDS.find((id) => id === rule?.ruleId);
     const subject = text(rule?.subject);
@@ -1080,6 +1082,19 @@ function rulesOf(data: UnknownRecord | undefined): JiraOutcomeRule[] {
     seen.add(identity);
     return [{ ruleId, subject }];
   });
+}
+function rulesOf(data: UnknownRecord | undefined): JiraOutcomeRule[] {
+  const own = Array.isArray(data?.violations) ? data.violations : [];
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const nested = items.flatMap((item): unknown[] => {
+    const violations = record(item)?.violations;
+    return Array.isArray(violations) ? violations : [];
+  });
+  return ruleList([...own, ...nested]);
+}
+/** Only closed rule ids and their subjects are read; the model's own words never reach the card. */
+function templateNoticesOf(data: UnknownRecord | undefined): JiraOutcomeRule[] {
+  return Array.isArray(data?.templateNotices) ? ruleList(data.templateNotices) : [];
 }
 const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   "catalog:invalid-arguments": "chat.jira.catalog.invalidArguments",
@@ -1158,6 +1173,12 @@ function outcomeStatedElsewhere(exchange: ChatToolExchange): boolean {
   // A refused or stopped draft batch names its own reason in the state line.
   return jiraBatchRefusalKey(exchange) !== undefined;
 }
+/** The release switch's refusal of an attachment call: the sentence only the switch writes (#4354). */
+function releaseScopeRefusal(data: UnknownRecord | undefined): boolean {
+  return JIRA_ATTACHMENT_OPERATIONS.some((operation) =>
+    isJiraReleaseScopeRefusal(operation, data?.messages),
+  );
+}
 function failureMessage(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
@@ -1165,6 +1186,7 @@ function failureMessage(
   if (outcomeStatedElsewhere(exchange)) return undefined;
   const localRead = jiraLocalReadFailureNotice(exchange);
   if (localRead !== undefined) return localRead;
+  if (releaseScopeRefusal(data)) return "chat.jira.outcome.failure.releaseScope";
   const reason = failureReason(data, exchange);
   if (reason !== undefined && Object.hasOwn(FAILURE_MESSAGES, reason))
     return FAILURE_MESSAGES[reason];
@@ -1467,6 +1489,7 @@ export function knowledgeToolOutcomeView(
     unresolvedCount: undefined,
     problems: [],
     rules: [],
+    templateNotices: [],
     validation: undefined,
     itemValidations: [],
     hiddenProblemCount: 0,
@@ -1597,6 +1620,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     unresolvedCount: count(data.unresolvedRefCount),
     ...problemViews(exchange, data),
     rules: privateAccount(exchange.call.name) ? [] : rulesOf(data),
+    templateNotices: privateAccount(exchange.call.name) ? [] : templateNoticesOf(data),
     validation: JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === data.validation),
     itemValidations: privateAccount(exchange.call.name)
       ? []

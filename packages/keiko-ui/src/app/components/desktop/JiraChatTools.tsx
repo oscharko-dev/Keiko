@@ -409,6 +409,22 @@ function JiraRuleList({ view }: { readonly view: JiraToolOutcomeView }): ReactNo
     </ul>
   );
 }
+/** A change that was made although the issue already broke template rules in untouched fields. */
+function JiraRuleNotices({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  const t = useTranslate();
+  return view.templateNotices.length === 0 ? null : (
+    <>
+      <p>{t("chat.jira.outcome.templateNotices")}</p>
+      <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.rules")}>
+        {view.templateNotices.map((rule) => (
+          <li key={`${rule.ruleId}:${rule.subject}`}>
+            {t(RULE_MESSAGES[rule.ruleId], { subject: rule.subject })}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
 function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   const nothingSent =
@@ -453,6 +469,7 @@ function JiraToolOutcome({ exchange }: { readonly exchange: ChatToolExchange }):
         <JiraResultList view={view} />
       )}
       <JiraResultProblems view={view} />
+      <JiraRuleNotices view={view} />
     </>
   );
 }

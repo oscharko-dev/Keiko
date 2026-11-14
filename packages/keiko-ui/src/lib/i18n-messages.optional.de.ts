@@ -1012,6 +1012,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.rejected": "Aktion abgelehnt",
   "chat.jira.writeApproval.expired": "Aktionsfreigabe abgelaufen",
   "chat.jira.writeApproval.revoked": "Aktionsfreigabe widerrufen",
+  "chat.jira.writeApproval.expiredHint":
+    "Die Freigabe ist abgelaufen, bevor jemand entschieden hat, deshalb wurde in Jira nichts geändert. Frage erneut an und gib die Freigabe frei, solange die Karte offen ist.",
+  "chat.jira.writeApproval.revokedHint":
+    "Die Freigabe wurde widerrufen, deshalb wurde in Jira nichts geändert. Frage erneut an, wenn du die Änderung noch willst, und gib sie dann frei.",
   "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
   "chat.jira.writeApproval.working": "Aktion wird geprüft…",
   "chat.jira.writeApproval.failed":
@@ -2617,6 +2621,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Für den Vorgangstyp „{subject}“ gibt es keine Vorlage, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere die Vorlage und frage dann erneut.",
   "chat.jira.outcome.rule.template-not-activated":
     "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere eine Vorlage zum Anlegen und frage dann erneut.",
+  "chat.jira.outcome.templateNotices":
+    "Die Änderung wurde vorgenommen. Der Vorgang verletzt bereits diese Vorlagenregeln in Feldern, die diese Änderung nicht berührt hat. Bitte Keiko, sie zu beheben, oder korrigiere sie in Jira.",
+  "chat.jira.outcome.failure.releaseScope":
+    "Anhänge gehören nicht zu diesem Release, deshalb wurde in Jira nichts geändert. Beschreibe die Datei stattdessen in einem Kommentar oder füge sie direkt in Jira hinzu.",
   "chat.jira.tool": "Jira-Aktion",
   "chat.jira.catalog.discover": "Jira-Aktionen finden",
   "chat.jira.catalog.describe": "Jira-Aktionen auswählen",
