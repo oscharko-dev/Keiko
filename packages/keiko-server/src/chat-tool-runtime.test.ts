@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import type { IncomingMessage } from "node:http";
@@ -64,6 +64,25 @@ import {
   syntheticJira,
   SYNTHETIC_JIRA_BASE_URL,
 } from "../../../tests/support/jira-synthetic-draft-remote.js";
+import { seedPermissiveJiraTemplates } from "../../../tests/support/jira-test-templates.js";
+
+// Release 1 switches the attachment operations off (#4354). The switch is the production one by
+// default; only the attachment describe block turns it on, because it exercises their review and
+// upload mechanics, which stay in the code for Release 2. That they are not offered is pinned in
+// jiraChatCatalogRuntime.test.ts and codingJiraPodBinding.test.ts, and the base round here is
+// pinned as production offers it, without `jira_attach`.
+const releaseScope = vi.hoisted(() => ({ attachmentsOn: false }));
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+    >();
+  return {
+    ...original,
+    jiraOperationInReleaseScope: (operation: string): boolean =>
+      releaseScope.attachmentsOn || original.jiraOperationInReleaseScope(operation),
+  };
+});
 
 const MODEL = "synthetic-combined-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -312,6 +331,7 @@ function fixture(options: Options = {}): Fixture {
     env: { KEIKO_STATE_DIR: root },
     modelPortFactory: () => model(calls, options),
   });
+  seedPermissiveJiraTemplates(base.store, ["SYN"], ["Story"]);
   const settings = base.mcpSettings;
   if (settings === undefined) throw new Error("Missing MCP settings owner");
   const server: McpServerDefinition = {
@@ -1072,7 +1092,6 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
       "jira_assign",
       "jira_comment",
       "jira_transition",
-      "jira_attach",
       "jira_discover",
       "jira_describe",
       "jira_myself",
@@ -1519,7 +1538,8 @@ describe("combined Jira review admission parity", () => {
       fileName: "combined-story-template.md",
       contentBase64: Buffer.from(markdown).toString("base64"),
     });
-    expect(f.deps.store.markdownSkills.jiraTemplates()).toHaveLength(1);
+    // The fixture's own permissive template of the type and the one saved here.
+    expect(f.deps.store.markdownSkills.jiraTemplates()).toHaveLength(2);
     const pending = send(f);
     void pending.catch(() => undefined);
     try {
@@ -1548,163 +1568,176 @@ describe("combined Jira review admission parity", () => {
       await settlePendingJira(f, pending);
     }
   });
-  it("presents the connected file's name, size and digest in a combined-path Jira attachment approval", async () => {
-    const body = "Synthetic reviewed attachment.";
-    const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-combined-attachment-")));
-    cleanup.push(() => {
-      rmSync(folder, { recursive: true, force: true });
-      return Promise.resolve();
+  // The attachment mechanics stay in the code for Release 2: the switch is forced on for these only.
+  describe("attachment review with the Release 1 switch forced on", () => {
+    beforeEach(() => {
+      releaseScope.attachmentsOn = true;
     });
-    mkdirSync(join(folder, "docs"));
-    writeFileSync(join(folder, "docs", "report.txt"), body);
-    let connect = (): void => undefined;
-    const f = fixture({
-      jiraAction: {
-        canonicalId: "keiko.jira.attach",
-        arguments: () => {
-          connect();
-          return {
-            issueKey: "KEIKO-1",
-            source: { kind: "connected-file", path: "docs/report.txt" },
-          };
-        },
-      },
+    afterEach(() => {
+      releaseScope.attachmentsOn = false;
     });
-    connect = (): void => {
-      f.deps.store.updateChat(f.chatId, {
-        connectedScopes: [
-          { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
-        ],
+
+    it("presents the connected file's name, size and digest in a combined-path Jira attachment approval", async () => {
+      const body = "Synthetic reviewed attachment.";
+      const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-combined-attachment-")));
+      cleanup.push(() => {
+        rmSync(folder, { recursive: true, force: true });
+        return Promise.resolve();
       });
-    };
-    const credentials = f.deps.atlassianConnectorCredentials;
-    if (credentials === undefined) throw new TypeError("Missing credential owner");
-    vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
-      (_metadata, _correlation, lifecycle) =>
-        (request): ReturnType<AtlassianHttpBodyPort> => {
-          if (lifecycle?.beforeDispatch?.(request) !== true)
-            throw new TypeError("Expected actual attachment read admission");
-          if (request.method !== "GET") throw new TypeError("Rejected preview must never upload");
-          const response = JSON.stringify(
-            new URL(request.url).pathname.endsWith("/attachment/meta")
-              ? { enabled: true, uploadLimit: 1e6 }
-              : { id: "10001", key: "KEIKO-1", fields: { attachment: [] } },
-          );
-          lifecycle.onResponse?.(request, 200);
-          return Promise.resolve({
-            kind: "response",
-            status: 200,
-            bodyText: response,
-            bodyBytes: Buffer.byteLength(response),
-            truncated: false,
-          });
-        },
-    );
-    const pending = send(f);
-    void pending.catch(() => undefined);
-    try {
-      const exchange = await observedJiraExchange(f);
-      expect(exchange.approval).toMatchObject({
-        kind: "jira-chat-write",
-        operation: "jira.attach",
-        state: "pending",
-        attachment: {
-          name: "report.txt",
-          sizeBytes: Buffer.byteLength(body),
-          sha256: sha256Hex(body),
+      mkdirSync(join(folder, "docs"));
+      writeFileSync(join(folder, "docs", "report.txt"), body);
+      let connect = (): void => undefined;
+      const f = fixture({
+        jiraAction: {
+          canonicalId: "keiko.jira.attach",
+          arguments: () => {
+            connect();
+            return {
+              issueKey: "KEIKO-1",
+              source: { kind: "connected-file", path: "docs/report.txt" },
+            };
+          },
         },
       });
-      expect(exchange.result).toBeUndefined();
-      expect(JSON.stringify(exchange.call.arguments)).not.toContain(body);
-      expect(f.effects).toEqual(["mcp-read"]);
-    } finally {
-      await settlePendingJira(f, pending);
-    }
-    expect(jiraExchange(f)?.approval?.state).toBe("rejected");
-  });
-  it("refuses the held attachment metadata read after the configured MCP source generation is revoked", async () => {
-    const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-combined-revoked-attachment-")));
-    cleanup.push(() => {
-      rmSync(folder, { recursive: true, force: true });
-      return Promise.resolve();
-    });
-    mkdirSync(join(folder, "docs"));
-    writeFileSync(join(folder, "docs", "report.txt"), "Synthetic attachment.");
-    let connect = (): void => undefined;
-    const f = fixture({
-      jiraAction: {
-        canonicalId: "keiko.jira.attach",
-        arguments: () => {
-          connect();
-          return {
-            issueKey: "KEIKO-1",
-            source: { kind: "connected-file", path: "docs/report.txt" },
-          };
-        },
-      },
-    });
-    connect = (): void => {
-      f.deps.store.updateChat(f.chatId, {
-        connectedScopes: [
-          { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
-        ],
-      });
-    };
-    const credentials = f.deps.atlassianConnectorCredentials;
-    const settings = f.deps.mcpSettings;
-    if (credentials === undefined || settings === undefined)
-      throw new TypeError("Missing source owners");
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let limitRequested = false;
-    let dispatched = 0;
-    const admissions: boolean[] = [];
-    vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
-      (_metadata, _correlation, lifecycle) =>
-        async (request): ReturnType<AtlassianHttpBodyPort> => {
-          if (request.method !== "GET") throw new TypeError("Revoked source must never upload");
-          limitRequested = true;
-          await held;
-          const admitted = lifecycle?.beforeDispatch?.(request) === true;
-          admissions.push(admitted);
-          if (!admitted) return { kind: "network-error" };
-          dispatched++;
-          const response = JSON.stringify({ enabled: true, uploadLimit: 1e6 });
-          lifecycle.onResponse?.(request, 200);
-          return {
-            kind: "response",
-            status: 200,
-            bodyText: response,
-            bodyBytes: Buffer.byteLength(response),
-            truncated: false,
-          };
-        },
-    );
-    const pending = send(f);
-    void pending.catch(() => undefined);
-    try {
-      await vi.waitFor(() => {
-        expect(limitRequested).toBe(true);
-      }, TURN_PROGRESS);
-      expect(jiraExchange(f)?.approval).toBeUndefined();
-      const snapshot = settings.read(CORRELATION);
-      settings.update(
-        { expectedRevision: snapshot.revision, servers: [], secrets: {} },
-        CORRELATION,
+      connect = (): void => {
+        f.deps.store.updateChat(f.chatId, {
+          connectedScopes: [
+            { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
+          ],
+        });
+      };
+      const credentials = f.deps.atlassianConnectorCredentials;
+      if (credentials === undefined) throw new TypeError("Missing credential owner");
+      vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
+        (_metadata, _correlation, lifecycle) =>
+          (request): ReturnType<AtlassianHttpBodyPort> => {
+            if (lifecycle?.beforeDispatch?.(request) !== true)
+              throw new TypeError("Expected actual attachment read admission");
+            if (request.method !== "GET") throw new TypeError("Rejected preview must never upload");
+            const response = JSON.stringify(
+              new URL(request.url).pathname.endsWith("/attachment/meta")
+                ? { enabled: true, uploadLimit: 1e6 }
+                : { id: "10001", key: "KEIKO-1", fields: { attachment: [] } },
+            );
+            lifecycle.onResponse?.(request, 200);
+            return Promise.resolve({
+              kind: "response",
+              status: 200,
+              bodyText: response,
+              bodyBytes: Buffer.byteLength(response),
+              truncated: false,
+            });
+          },
       );
-      release();
-      await settlePendingJira(f, pending);
-      expect(admissions).toEqual([false]);
-      expect(dispatched).toBe(0);
-      expect(jiraExchange(f)?.approval).toBeUndefined();
-      expect(f.effects).toEqual(["mcp-read"]);
-    } finally {
-      release();
-      await settlePendingJira(f, pending);
-    }
+      const pending = send(f);
+      void pending.catch(() => undefined);
+      try {
+        const exchange = await observedJiraExchange(f);
+        expect(exchange.approval).toMatchObject({
+          kind: "jira-chat-write",
+          operation: "jira.attach",
+          state: "pending",
+          attachment: {
+            name: "report.txt",
+            sizeBytes: Buffer.byteLength(body),
+            sha256: sha256Hex(body),
+          },
+        });
+        expect(exchange.result).toBeUndefined();
+        expect(JSON.stringify(exchange.call.arguments)).not.toContain(body);
+        expect(f.effects).toEqual(["mcp-read"]);
+      } finally {
+        await settlePendingJira(f, pending);
+      }
+      expect(jiraExchange(f)?.approval?.state).toBe("rejected");
+    });
+    it("refuses the held attachment metadata read after the configured MCP source generation is revoked", async () => {
+      const folder = realpathSync(
+        mkdtempSync(join(tmpdir(), "keiko-combined-revoked-attachment-")),
+      );
+      cleanup.push(() => {
+        rmSync(folder, { recursive: true, force: true });
+        return Promise.resolve();
+      });
+      mkdirSync(join(folder, "docs"));
+      writeFileSync(join(folder, "docs", "report.txt"), "Synthetic attachment.");
+      let connect = (): void => undefined;
+      const f = fixture({
+        jiraAction: {
+          canonicalId: "keiko.jira.attach",
+          arguments: () => {
+            connect();
+            return {
+              issueKey: "KEIKO-1",
+              source: { kind: "connected-file", path: "docs/report.txt" },
+            };
+          },
+        },
+      });
+      connect = (): void => {
+        f.deps.store.updateChat(f.chatId, {
+          connectedScopes: [
+            { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
+          ],
+        });
+      };
+      const credentials = f.deps.atlassianConnectorCredentials;
+      const settings = f.deps.mcpSettings;
+      if (credentials === undefined || settings === undefined)
+        throw new TypeError("Missing source owners");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let limitRequested = false;
+      let dispatched = 0;
+      const admissions: boolean[] = [];
+      vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
+        (_metadata, _correlation, lifecycle) =>
+          async (request): ReturnType<AtlassianHttpBodyPort> => {
+            if (request.method !== "GET") throw new TypeError("Revoked source must never upload");
+            limitRequested = true;
+            await held;
+            const admitted = lifecycle?.beforeDispatch?.(request) === true;
+            admissions.push(admitted);
+            if (!admitted) return { kind: "network-error" };
+            dispatched++;
+            const response = JSON.stringify({ enabled: true, uploadLimit: 1e6 });
+            lifecycle.onResponse?.(request, 200);
+            return {
+              kind: "response",
+              status: 200,
+              bodyText: response,
+              bodyBytes: Buffer.byteLength(response),
+              truncated: false,
+            };
+          },
+      );
+      const pending = send(f);
+      void pending.catch(() => undefined);
+      try {
+        await vi.waitFor(() => {
+          expect(limitRequested).toBe(true);
+        }, TURN_PROGRESS);
+        expect(jiraExchange(f)?.approval).toBeUndefined();
+        const snapshot = settings.read(CORRELATION);
+        settings.update(
+          { expectedRevision: snapshot.revision, servers: [], secrets: {} },
+          CORRELATION,
+        );
+        release();
+        await settlePendingJira(f, pending);
+        expect(admissions).toEqual([false]);
+        expect(dispatched).toBe(0);
+        expect(jiraExchange(f)?.approval).toBeUndefined();
+        expect(f.effects).toEqual(["mcp-read"]);
+      } finally {
+        release();
+        await settlePendingJira(f, pending);
+      }
+    });
   });
+
   it("retains stored draft refs and applies the human's dependent-item deselection on the combined path", async () => {
     let reference: Record<string, unknown> = {};
     const f = fixture({

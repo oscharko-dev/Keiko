@@ -160,6 +160,7 @@
     "keiko-connectors/jira-entity-property-input",
     "keiko-connectors/jira-entity-property-values",
     "keiko-connectors/jira-entity-property-write-admission",
+    "keiko-connectors/jira-epic-link-target",
     "keiko-connectors/jira-field-metadata",
     "keiko-connectors/jira-filter-permission-values",
     "keiko-connectors/jira-filter-reads",
@@ -359,6 +360,7 @@
     "keiko-connectors/jira-store-bounds",
     "keiko-connectors/jira-sync-adapter",
     "keiko-connectors/jira-sync-fixtures",
+    "keiko-connectors/jira-template-notices",
     "keiko-connectors/jira-template-parent-types",
     "keiko-connectors/jira-test-request/_support",
     "keiko-connectors/jira-user-selector-reads",
@@ -514,7 +516,9 @@
     "keiko-contracts/jira-issue-template",
     "keiko-contracts/jira-markdown-wiki",
     "keiko-contracts/jira-read-tools",
+    "keiko-contracts/jira-release-scope",
     "keiko-contracts/jira-report",
+    "keiko-contracts/jira-template-governance",
     "keiko-contracts/jira-template-pattern",
     "keiko-contracts/jira-tool-execution",
     "keiko-contracts/jira-tool-fields",
@@ -1547,6 +1551,7 @@
     "keiko-server/chat-prompt-compaction",
     "keiko-server/chat-scope-update-log",
     "keiko-server/chat-stream-handlers",
+    "keiko-server/chat-tool-announced-create",
     "keiko-server/chat-tool-approvals",
     "keiko-server/chat-tool-authority",
     "keiko-server/chat-tool-batch-draft",
@@ -2652,6 +2657,7 @@
     "keiko-ui/app/components/desktop/ChatProcessingPipeline",
     "keiko-ui/app/components/desktop/ChatScopeNotice",
     "keiko-ui/app/components/desktop/ChatWindow",
+    "keiko-ui/app/components/desktop/ClaimNoticeLine",
     "keiko-ui/app/components/desktop/ConnectedEvidenceInspection",
     "keiko-ui/app/components/desktop/ConnectedScopePill",
     "keiko-ui/app/components/desktop/ConnectorScopePill",
@@ -2822,6 +2828,7 @@
     "keiko-ui/app/components/desktop/jira-agile-presentation",
     "keiko-ui/app/components/desktop/jira-anonymization-unlock-presentation",
     "keiko-ui/app/components/desktop/jira-application-settings-presentation",
+    "keiko-ui/app/components/desktop/jira-approval-dispatch",
     "keiko-ui/app/components/desktop/jira-avatar-identity-presentation",
     "keiko-ui/app/components/desktop/jira-collaboration-presentation",
     "keiko-ui/app/components/desktop/jira-configuration-mutation-approval",
@@ -4960,6 +4967,7 @@
     "workspace.root.restore.reason",
     "worktree-status",
     "write",
-    "write-failed"
+    "write-failed",
+    "wrong-parent-field"
   ]
 }

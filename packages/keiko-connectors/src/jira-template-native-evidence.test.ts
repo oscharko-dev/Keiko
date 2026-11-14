@@ -251,8 +251,19 @@ describe("unknown native field evidence never becomes a passing formal rule", ()
       await admission(
         transport({ issues: [issue({ ...fields(), description: null })] }),
         savedRule("Task", [], "## Acceptance criteria\n"),
+        "edit",
+        { description: null },
       ),
     ).toMatchObject({ ok: false, violations: [{ ruleId: "section-missing" }] });
+  });
+  // #4354: a null description the edit does not touch is an existing violation, named, not blocking.
+  it("names a known missing section as a notice when the edit leaves the description alone", async () => {
+    expect(
+      await admission(
+        transport({ issues: [issue({ ...fields(), description: null })] }),
+        savedRule("Task", [], "## Acceptance criteria\n"),
+      ),
+    ).toMatchObject({ ok: true, notices: [{ ruleId: "section-missing" }] });
   });
   it.each([
     { fields: { summary: "Not a native parent identity" } },
@@ -286,6 +297,8 @@ describe("unknown native field evidence never becomes a passing formal rule", ()
       await admission(
         transport({ issues: [issue({ ...fields(), parent: null })] }),
         savedRule("Task", ["parentField: parent"]),
+        "edit",
+        { parent: null },
       ),
     ).toMatchObject({ ok: false, violations: [{ ruleId: "parent-missing" }] });
   });

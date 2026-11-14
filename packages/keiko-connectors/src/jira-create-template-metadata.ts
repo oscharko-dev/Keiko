@@ -1,6 +1,7 @@
-import type {
-  JiraFieldMetadata,
-  JiraIssueTemplate,
+import {
+  jiraTemplateGovernsWrites,
+  type JiraFieldMetadata,
+  type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
@@ -148,11 +149,7 @@ export async function withCreateTemplateMetadata(
   if (!admitted(context)) return jiraReadFailure("permission-denied");
   const initial = connection.issueTemplates();
   if (initial.unreadable > 0) return unreadableRules(connection, initial.unreadable);
-  if (
-    !initial.templates.some((template) =>
-      template.activations.some((activation) => activation.kind === "create"),
-    )
-  )
+  if (!initial.templates.some((template) => jiraTemplateGovernsWrites(template)))
     return matchedRulesResult(result, [], initial, connection);
   const identity = await readIdentity(args, context, connection);
   if ("ok" in identity) return jiraReadFailure(identity.reason);
@@ -229,12 +226,7 @@ async function storedTemplateRules(
   if (connection.issueTemplates === undefined) return NO_RULES;
   const initial = connection.issueTemplates();
   if (initial.unreadable > 0) return { ok: false, reason: "template-unreadable" };
-  if (
-    !initial.templates.some((template) =>
-      template.activations.some((activation) => activation.kind === "create"),
-    )
-  )
-    return NO_RULES;
+  if (!initial.templates.some((template) => jiraTemplateGovernsWrites(template))) return NO_RULES;
   const identity = await readJiraCreateTemplateIdentity(
     requestFor(connection, context),
     projectId,

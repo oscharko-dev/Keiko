@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,6 +82,7 @@ describe("inspecting files through the fixed PowerShell program", () => {
       `P|${USER}|${USER}\nF|0|32|7|1|1|2|${ownerOnlyDescriptor()}\nE|1\n`,
     );
     const inspection = inspectWindowsOwnerPrivateFiles([FILE, String.raw`D:\missing.json`], {
+      securityLogSink: nullSecurityLogSink(),
       runner: run,
       resolvePowerShell: () => POWERSHELL,
     });
@@ -135,7 +137,11 @@ describe("inspecting files through the fixed PowerShell program", () => {
   ])("treats %s as an unavailable inspection", (_name, overrides) => {
     const { run } = runner("", overrides);
     expect(() =>
-      inspectWindowsOwnerPrivateFiles([FILE], { runner: run, resolvePowerShell: () => POWERSHELL }),
+      inspectWindowsOwnerPrivateFiles([FILE], {
+        securityLogSink: nullSecurityLogSink(),
+        runner: run,
+        resolvePowerShell: () => POWERSHELL,
+      }),
     ).toThrow("windows-owner-private-unavailable");
   });
 
@@ -148,7 +154,11 @@ describe("inspecting files through the fixed PowerShell program", () => {
   ])("refuses %s before starting PowerShell", (_name, path) => {
     const { run, calls } = runner("");
     expect(() =>
-      inspectWindowsOwnerPrivateFiles([path], { runner: run, resolvePowerShell: () => POWERSHELL }),
+      inspectWindowsOwnerPrivateFiles([path], {
+        securityLogSink: nullSecurityLogSink(),
+        runner: run,
+        resolvePowerShell: () => POWERSHELL,
+      }),
     ).toThrow("windows-owner-private-input-invalid");
     expect(calls).toEqual([]);
   });
@@ -218,7 +228,11 @@ describe("protecting a file Keiko writes", () => {
       const stdout = command.endsWith("whoami.exe") ? `"host\\dev","${USER}"\r\n` : "";
       return { status: 0, stdout, stderr: "" };
     };
-    protectWindowsOwnerPrivateFile(FILE, { runner: run, resolveSystemBinary: binaries });
+    protectWindowsOwnerPrivateFile(FILE, {
+      securityLogSink: nullSecurityLogSink(),
+      runner: run,
+      resolveSystemBinary: binaries,
+    });
 
     expect(calls.map((call) => call.command)).toEqual([
       binaries("whoami.exe"),
@@ -251,6 +265,7 @@ describe("protecting a file Keiko writes", () => {
       return { status: 0, stdout, stderr: "" };
     };
     protectWindowsOwnerPrivateFile(FILE, {
+      securityLogSink: nullSecurityLogSink(),
       runner: run,
       resolveSystemBinary: binaries,
       inheritToChildren: true,
@@ -273,7 +288,11 @@ describe("protecting a file Keiko writes", () => {
       calls.push({ command, args, input: options.input, env: options.env });
       return { status: 0, stdout: "", stderr: "" };
     };
-    inheritWindowsParentDacl(FILE, { runner: run, resolveSystemBinary: binaries });
+    inheritWindowsParentDacl(FILE, {
+      securityLogSink: nullSecurityLogSink(),
+      runner: run,
+      resolveSystemBinary: binaries,
+    });
 
     expect(calls.map((call) => [call.command, call.args])).toEqual([
       [binaries("icacls.exe"), [FILE, "/reset"]],
@@ -324,11 +343,18 @@ describe("protecting a file Keiko writes", () => {
     ]) {
       const { run, calls } = runner("");
       expect(() => {
-        protectWindowsOwnerPrivateFile(bad, { runner: run, resolveSystemBinary: binaries });
+        protectWindowsOwnerPrivateFile(bad, {
+          securityLogSink: nullSecurityLogSink(),
+          runner: run,
+          resolveSystemBinary: binaries,
+        });
       }).toThrow("windows-owner-private-input-invalid");
-      expect(() => inspectWindowsOwnerPrivateFiles([bad], { runner: run })).toThrow(
-        "windows-owner-private-input-invalid",
-      );
+      expect(() =>
+        inspectWindowsOwnerPrivateFiles([bad], {
+          securityLogSink: nullSecurityLogSink(),
+          runner: run,
+        }),
+      ).toThrow("windows-owner-private-input-invalid");
       expect(calls).toEqual([]);
     }
   });
@@ -337,6 +363,7 @@ describe("protecting a file Keiko writes", () => {
     const { run, calls } = runner("");
     expect(() => {
       protectWindowsOwnerPrivateFile(String.raw`\\server\share\x.json`, {
+        securityLogSink: nullSecurityLogSink(),
         runner: run,
         resolveSystemBinary: binaries,
       });
@@ -403,14 +430,17 @@ describe.skipIf(process.platform !== "win32")("a copy handed to a private direct
   it("inherits a later directory grant only once it is handed back", () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-inherited-copy-"));
     try {
-      protectWindowsOwnerPrivateFile(directory, { inheritToChildren: true });
+      protectWindowsOwnerPrivateFile(directory, {
+        securityLogSink: nullSecurityLogSink(),
+        inheritToChildren: true,
+      });
       const handed = join(directory, "handed.db");
       const kept = join(directory, "kept.db");
       for (const file of [handed, kept]) {
         writeFileSync(file, "x");
-        protectWindowsOwnerPrivateFile(file);
+        protectWindowsOwnerPrivateFile(file, { securityLogSink: nullSecurityLogSink() });
       }
-      inheritWindowsParentDacl(handed);
+      inheritWindowsParentDacl(handed, { securityLogSink: nullSecurityLogSink() });
       expect(grantees(handed)).not.toContain("BU");
 
       execFileSync(icacls, [directory, "/grant", USERS], { stdio: "ignore" });

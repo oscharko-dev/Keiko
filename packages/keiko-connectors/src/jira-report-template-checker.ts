@@ -1,6 +1,7 @@
-import type {
-  JiraIssueTemplate,
-  JiraTemplateViolation,
+import {
+  jiraTemplateGovernsWrites,
+  type JiraIssueTemplate,
+  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   checkJiraIssueTemplates,
@@ -38,9 +39,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 const CHECKED_FIELDS = ["summary", "description", "labels", "issuelinks"] as const;
 
 function definesStructure(template: JiraIssueTemplate): boolean {
-  return template.activations.some(
-    (activation) => activation.kind === "edit" || activation.kind === "create",
-  );
+  return jiraTemplateGovernsWrites(template);
 }
 
 /** The report judges the state an edit would leave, whatever write the template was meant for. */

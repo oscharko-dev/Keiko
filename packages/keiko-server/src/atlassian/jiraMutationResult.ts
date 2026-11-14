@@ -693,10 +693,15 @@ export function validJiraMutationAttempt(
       ? failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation)
       : { ok: false, reason: "malformed-payload" };
   const links = sanitizeJiraMutationLinkAccount(value.links);
+  const notices = boundedViolations(value.templateNotices);
   return {
     ok: true,
     receipt: snapshotReceipt(receipt),
     ...(links === undefined ? {} : { links }),
+    // The rules an untouched field already broke (#4354): the executor's collector attached them to
+    // the attempt, and this validated copy is what the model's result and the log are built from,
+    // so they are bounded and checked against the closed rule ids here, like a refusal's violations.
+    ...(notices === undefined ? {} : { templateNotices: notices }),
     ...descriptionFormattingFacts(value),
   };
 }
@@ -853,11 +858,18 @@ function attemptReceipt(
   if (attempt.ok) return outcome === "succeeded" ? attempt.receipt : {};
   return attempt.receipt ?? {};
 }
+/**
+ * Fixed words for a change that succeeded although the issue already broke template rules in fields
+ * the change did not touch: the change is not undone and not blocked, and the person is told.
+ */
+export const TEMPLATE_NOTICE_GUIDANCE =
+  "The change was made. The issue already broke these template rules in fields this change did not touch (templateNotices: ruleId, subject). " +
+  "Tell the person plainly what is still missing and offer to repair it; do not repeat the change.";
 export function jiraAttemptToolResult(
   outcome: JiraMutationOutcome,
   attempt: JiraMutationAttempt,
 ): ManagedMcpToolResult {
-  return jiraMutationToolResult(
+  const result = jiraMutationToolResult(
     outcome,
     attempt.ok ? undefined : attempt.reason,
     attemptReceipt(outcome, attempt),
@@ -866,4 +878,14 @@ export function jiraAttemptToolResult(
     attempt.links,
     attempt.ok ? undefined : attempt.violations,
   );
+  const notices = attempt.ok ? boundedViolations(attempt.templateNotices) : undefined;
+  if (notices === undefined || outcome !== "succeeded") return result;
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      guidance: TEMPLATE_NOTICE_GUIDANCE,
+      templateNotices: notices.map((item) => ({ ...item })),
+    },
+  };
 }

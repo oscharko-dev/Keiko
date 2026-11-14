@@ -7,6 +7,7 @@ import {
   useWorkspaceConnectorWindows,
 } from "./connector-windows-context";
 import { JiraChatTools } from "./JiraChatTools";
+import { ClaimNoticeLine, useClaimNoticeText } from "./ClaimNoticeLine";
 import { ChatJiraNames } from "./jiraNames";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
@@ -50,7 +51,10 @@ import {
   type SyntheticEvent,
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
-import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_DESKTOP_CHAT_INPUT_CHARS,
+  type ChatClaimNotice,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   citationMarkerIndices,
   findCitationMarkerGroups,
@@ -563,6 +567,28 @@ const AssessedAnswerBody = dynamic(
 );
 
 /**
+ * The stored claim marker of the turn an assistant answer closes (#4355): the closest earlier user
+ * message's. Only the turn's first answer carries it; a regenerated one never does.
+ */
+export function claimNoticeOfAnswer(
+  messages: readonly ChatMessage[],
+  answer: ChatMessage | undefined,
+): ChatClaimNotice | undefined {
+  if (answer === undefined || (answer.responseVersion ?? 1) !== 1) return undefined;
+  const at = messages.findIndex((message) => message.id === answer.id);
+  for (let index = at - 1; index >= 0; index -= 1) {
+    const earlier = messages[index];
+    if (earlier?.role === "user") return earlier.toolTranscript?.claimNotice;
+  }
+  return undefined;
+}
+
+/** What is read aloud: the answer, then Keiko's note when the turn carries one, as a copy does. */
+export function speechTextWithNote(answerText: string, noteText: string | undefined): string {
+  return noteText === undefined ? answerText : `${answerText}\n\n${noteText}`;
+}
+
+/**
  * The body-free evidence of `speakableAnswerText` by the same rule: whether the answer is grounded
  * and how many marker groups the spoken text drops and keeps (PR #3678 review). Never the text.
  */
@@ -967,9 +993,12 @@ function ChatBubbleFooterActions({
   collapsed,
   onToggleCollapsed,
   contentId,
+  claimNoticeText,
 }: {
   readonly isUser: boolean;
   readonly message: ChatMessage;
+  /** Keiko's note about the answer; a copy carries it, so the claim never travels without it. */
+  readonly claimNoticeText: string | undefined;
   readonly showRegenerate: boolean;
   readonly regenerating: boolean;
   readonly onRegenerate: ((assistantMessageId: string) => Promise<void>) | undefined;
@@ -992,7 +1021,11 @@ function ChatBubbleFooterActions({
         />
       ) : null}
       <MessageCopyButton
-        content={answerReadingText(message)}
+        content={
+          claimNoticeText === undefined
+            ? answerReadingText(message)
+            : `${answerReadingText(message)}\n\n${claimNoticeText}`
+        }
         citationCeiling={groundedCitationCeiling(message.groundedAnswer)}
         grounded={message.groundedAnswer !== undefined}
       />
@@ -1063,8 +1096,11 @@ function ChatBubbleImpl({
   streaming = false,
   waitingForDecision = false,
   layout = "stack",
+  claimNotice,
 }: {
   readonly message: ChatMessage;
+  /** The stored turn's marker; only the first answer of the turn carries it, never a regeneration. */
+  readonly claimNotice?: ChatClaimNotice | undefined;
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly onRegenerate?: (assistantMessageId: string) => Promise<void>;
   readonly onCancelRegenerate?: () => void;
@@ -1102,6 +1138,9 @@ function ChatBubbleImpl({
   const evidence = useConnectedEvidenceReferences(displayedMessage.groundedAnswer, repositoryRoots);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
+  const claimNoticeText = useClaimNoticeText(
+    !isUser && (displayedMessage.responseVersion ?? 1) === 1 ? claimNotice : undefined,
+  );
   const citationPreview = usePdfCitationPreviewController({
     answer: displayedMessage.groundedAnswer,
     chatId: activeChat?.id,
@@ -1165,6 +1204,7 @@ function ChatBubbleImpl({
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
         />
+        <ClaimNoticeLine text={claimNoticeText} />
         <JiraChatTools
           transcript={message.toolTranscript}
           messageId={message.id}
@@ -1195,6 +1235,7 @@ function ChatBubbleImpl({
           <ChatBubbleFooterActions
             isUser={isUser}
             message={displayedMessage}
+            claimNoticeText={claimNoticeText}
             showRegenerate={
               showRegenerate &&
               message.groundedAnswer === undefined &&
@@ -1384,6 +1425,11 @@ function ConversationThreadImpl({
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
+                  claimNotice={
+                    index === turn.responses.length - 1
+                      ? userMessage?.toolTranscript?.claimNotice
+                      : undefined
+                  }
                   onRegenerate={onRegenerate}
                   onCancelRegenerate={onCancelRegenerate}
                   showRegenerate={showRegenerateControls && latestAssistantId === response.id}
@@ -3525,12 +3571,17 @@ function ComposerCoreImpl({
             message.chatId === pendingVoiceAnswer.chatId &&
             message.role === "assistant",
         );
+  const voiceClaimNoticeText = useClaimNoticeText(claimNoticeOfAnswer(messages, voiceAnswer));
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
-    // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
+    // pre-existing history remain silent, while synthesized speech is the visible answer followed by
+    // Keiko's visible note, when the turn carries one.
     enabled: voiceDialogActive && voiceAnswer !== undefined,
-    text: voiceAnswer === undefined ? undefined : speakableAnswerText(voiceAnswer),
+    text:
+      voiceAnswer === undefined
+        ? undefined
+        : speechTextWithNote(speakableAnswerText(voiceAnswer), voiceClaimNoticeText),
     preparation: voiceAnswer === undefined ? undefined : speechPreparationEvidence(voiceAnswer),
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,

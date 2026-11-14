@@ -13,6 +13,7 @@ import {
   resolveWindowsUrlOpener,
   securityErrorKind,
   bindSecurityLogCorrelation,
+  unwiredSecurityLogSink,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import {
@@ -1077,7 +1078,12 @@ function trackedEndpointOptions(
   if (record.launchId === undefined) return options;
   const read =
     deps.readCommandLine ??
-    ((pid: number): string | undefined => defaultReadProcessCommandLine(pid, deps.platform));
+    ((pid: number): string | undefined =>
+      defaultReadProcessCommandLine(
+        pid,
+        deps.platform,
+        deps.securityLogSink ?? unwiredSecurityLogSink(),
+      ));
   const commandLine = read(record.pid);
   if (commandLine === undefined || !liveIdentityTextHasLaunchId(commandLine, record.launchId)) {
     return options;

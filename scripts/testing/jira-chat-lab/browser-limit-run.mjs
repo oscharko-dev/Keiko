@@ -33,6 +33,25 @@ const OWNERS = {
   setUiLanguage: "./browser-a11y.mjs",
 };
 
+/**
+ * `all` runs every work package. `without-sprint` runs everything except the sprint-at-scale package,
+ * which the Agile child owns, and the card check that follows it; the remaining steps and their order
+ * are unchanged. It still runs the document steps (templates, the bulk write from a requirements
+ * document, the hierarchy and the report), which are Release 2 groundwork.
+ */
+export const LIMIT_RUN_STEP_SETS = Object.freeze(["all", "without-sprint"]);
+/** The steps each partial set leaves out; a run of such a set can end `partial`, never `green`. */
+export const LIMIT_RUN_SKIPPED_STEPS = Object.freeze({
+  "without-sprint": ["ac6-sprint", "ac9-sprint-*"],
+});
+
+function stepSetOf(extra) {
+  if (extra.length === 0) return "all";
+  assert.ok(extra.length === 2 && extra[0] === "--steps", "Unexpected limit-run argument");
+  assert.ok(LIMIT_RUN_STEP_SETS.includes(extra[1]), "Unknown limit-run step set");
+  return extra[1];
+}
+
 export function limitRunArguments(argv) {
   const [sessionDir, modelId, embeddingModelId, permittedToken, deniedToken, projectKey, ...extra] =
     argv;
@@ -47,8 +66,8 @@ export function limitRunArguments(argv) {
   );
   assert.notEqual(resolve(permittedToken), resolve(deniedToken));
   assert.match(projectKey ?? "", /^LIM[1-9][0-9]{0,6}$/u);
-  assert.equal(extra.length, 0);
-  return { sessionDir, modelId, embeddingModelId, permittedToken, deniedToken, projectKey };
+  const steps = stepSetOf(extra);
+  return { sessionDir, modelId, embeddingModelId, permittedToken, deniedToken, projectKey, steps };
 }
 
 /** Missing owner exports are an incomplete build, never a successful skipped step. */
@@ -325,10 +344,12 @@ async function stages(ctx, options, blocks, results) {
     blocks.runHierarchyBulk(ctx, { faults: hierarchyFaults }),
   );
   await finishFaultPlan(ctx, results, "hierarchy", hierarchyFaults);
-  await runLimitStep(ctx, results, "ac6-sprint", () =>
-    blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
-  );
-  await cards(ctx, blocks, results, "sprint");
+  if (options.steps !== "without-sprint") {
+    await runLimitStep(ctx, results, "ac6-sprint", () =>
+      blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
+    );
+    await cards(ctx, blocks, results, "sprint");
+  }
   ctx.faults = faultPlan(blocks, "progress");
   const progress = await runLimitStep(ctx, results, "progress-simulation", () =>
     blocks.simulateProgress(ctx, { seedDeviations: true }),
@@ -350,31 +371,47 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
   const results = [];
   try {
     await stages(ctx, selected, blocks, results);
-    const verified = results.every((result) => result.status === "green");
-    ctx.intent.record("orchestrator", {
-      phase: verified ? "steps-verified" : "steps-unverified",
-      results,
-    });
-    if (!verified) ctx.intent.failed();
-    return {
-      step: "browser-limit-run",
-      status: verified ? "green" : "unverified",
-      detail: verified
-        ? "All limit-run steps independently verified"
-        : "Fault evidence remains incomplete",
-      counts: { steps: results.length },
-      evidenceFile: ctx.intent.path,
-    };
+    return limitRunOutcome(ctx, selected, results);
   } catch (error) {
     ctx.intent.failed();
     throw error;
   }
 }
 
+/** The terminal verdict of the steps that ran: green, partial (a package left out) or unverified. */
+function limitRunOutcome(ctx, selected, results) {
+  const verified = results.every((result) => result.status === "green");
+  const skipped = LIMIT_RUN_SKIPPED_STEPS[selected.steps] ?? [];
+  const partial = verified && skipped.length > 0;
+  ctx.intent.record("orchestrator", {
+    phase: verified ? "steps-verified" : "steps-unverified",
+    steps: selected.steps,
+    partial,
+    skipped,
+    results,
+  });
+  if (!verified) ctx.intent.failed();
+  return {
+    step: "browser-limit-run",
+    status: verified ? (partial ? "partial" : "green") : "unverified",
+    detail: limitRunDetail({ verified, partial, selected, skipped }),
+    counts: { steps: results.length },
+    ...(partial ? { partial: true, skipped } : {}),
+    evidenceFile: ctx.intent.path,
+  };
+}
+
+function limitRunDetail({ verified, partial, selected, skipped }) {
+  if (!verified) return "Fault evidence remains incomplete";
+  if (!partial) return "All limit-run steps independently verified";
+  return `All ${selected.steps} limit-run steps independently verified; ${skipped.join(", ")} not run`;
+}
+
 /** Finalization runs only after the owned browser/server cleanup has completed. */
 export function finalizeLimitRun(intent, result) {
   assert.ok(
-    result?.step === "browser-limit-run" && new Set(["green", "unverified"]).has(result.status),
+    result?.step === "browser-limit-run" &&
+      new Set(["green", "partial", "unverified"]).has(result.status),
     "A terminal run verdict is required",
   );
   if (result.status === "unverified") {
@@ -382,12 +419,15 @@ export function finalizeLimitRun(intent, result) {
     return "unverified";
   }
   assert.equal(intent.state.orchestrator?.phase, "steps-verified");
+  // A partial set is complete as a set but never a full green: the status stays distinct.
+  assert.equal(result.status === "partial", intent.state.orchestrator?.partial === true);
   intent.complete();
-  return "green";
+  return result.status;
 }
 
 function validateLimitOptions(ctx, options, blocks) {
-  const selected = { violationRate: 0.125, sprintSize: 250, ...options };
+  const selected = { violationRate: 0.125, sprintSize: 250, steps: "all", ...options };
+  assert.ok(LIMIT_RUN_STEP_SETS.includes(selected.steps), "Unknown limit-run step set");
   assert.ok(selected.violationRate >= 0.1 && selected.violationRate <= 0.15);
   assert.ok(
     Number.isInteger(selected.sprintSize) &&
@@ -676,6 +716,24 @@ export async function createLimitRunContext(live, handles, options, intent, sign
   return ctx;
 }
 
+/** One closed verdict per step: names and statuses only, never a detail or a path. */
+export function printLimitVerdict(intent, status) {
+  const orchestrator = intent.state.orchestrator;
+  const steps = (intent.state.orchestrator?.results ?? []).map(({ step, status: verdict }) => ({
+    step,
+    status: verdict,
+  }));
+  console.log(
+    JSON.stringify({
+      operation: "jira-browser-limit-run",
+      status,
+      steps: orchestrator?.steps ?? "all",
+      partial: orchestrator?.partial === true,
+      verdicts: steps,
+    }),
+  );
+}
+
 async function main(argv) {
   const options = limitRunArguments(argv);
   const session = loadSession(options.sessionDir);
@@ -706,7 +764,7 @@ async function main(argv) {
             try {
               outcome = await runBrowserLimitRun(
                 await createLimitRunContext(live, opened, options, intent, signal),
-                {},
+                { steps: options.steps },
                 blocks,
               );
             } finally {
@@ -722,7 +780,7 @@ async function main(argv) {
         releaseLane();
       }
       if (status === "unverified") process.exitCode = 1;
-      console.log(JSON.stringify({ operation: "jira-browser-limit-run", status }));
+      printLimitVerdict(intent, status);
     },
   );
 }

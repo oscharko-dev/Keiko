@@ -1099,3 +1099,18 @@ describe("description admission before requirement trace", () => {
     });
   });
 });
+
+describe("a key that is not a field id (#4357 AC3)", () => {
+  it("names the tool that lists the field ids, as registered, for a create and for an edit", () => {
+    const result = parsed();
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(
+      validateJiraFieldChanges(result.fields, { "not a field id": "x" }, "create", "data-center"),
+    ).toMatchObject({
+      ok: false,
+      reason: "invalid-field",
+      message:
+        "A key in fields is not a field id. Use the field ids jira.create-fields returns for a create, or jira.edit-fields for an edit.",
+    });
+  });
+});

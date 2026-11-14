@@ -1,12 +1,23 @@
 // The Markdown report of the requirements scorecard (epic #4173).
 import { evidenceLines } from "./coverage.mjs";
 
+/** Limits of two oracles that a reader of a report containing them must know. */
+const ORACLE_LIMITS = Object.freeze({
+  C07: "C07's `answer-clean` flag half holds by construction on a Jira-Pod-only Chat, which never runs the entailment stage and sets no groundedAnswer; the lane proves it on the stored message. The mixed-Chat behaviour (computed figures accepted, document claims still flagged) is proven by the product's hermetic tests, not by this lane.",
+  S10: "S10 derives its estimate expectation from native data read as the lab administrator (in a German-language session as the product's own actor, so names match what the product sees); the case of an account that cannot read the estimate field is not graded, and reading as the product's own actor hides a visibility or permission defect of the product from the oracle. The flag half of `answer-clean` holds by construction on a Jira-Pod-only Chat, which never runs the entailment stage; the lane proves it on the stored message, and the mixed-Chat behaviour (computed figures accepted, document claims still flagged) is proven by the product's hermetic tests, not by this lane.",
+  S11: "S11's unavailable-report case is graded partly on the product's own statement that the report is unavailable.",
+});
+
 export function scorecardMarkdown(report) {
+  const limits = Object.entries(ORACLE_LIMITS)
+    .filter(([id]) => report.results.some((result) => result.id === id))
+    .map(([, text]) => `Limit: ${text}`);
   const invalid = report.counts.invalid ?? 0;
   const icon = {
     green: "🟢",
     red: "🔴",
     partial: "🟠",
+    unverified: "🟤",
     invalid: "⛔",
     "probe-only": "🟡",
     unchecked: "⚪",
@@ -24,8 +35,15 @@ export function scorecardMarkdown(report) {
           "",
         ]
       : []),
+    ...((report.counts.unverified ?? 0) > 0
+      ? [
+          "Unverified scenarios ran without a red verdict, but some of their parts could not be verified (a turn that never ran, evidence the product did not store, or a model observation); they are not passed.",
+          "",
+        ]
+      : []),
     ...(report.repeat > 1 ? [`Each journey ran ${report.repeat} times in fresh Chats.`, ""] : []),
-    `Green ${report.counts.green} · red ${report.counts.red} · partial ${report.counts.partial} · invalid ${invalid} · probe-only ${report.counts["probe-only"]} · unchecked ${report.counts.unchecked} of ${report.results.length}`,
+    ...(limits.length > 0 ? [...limits, ""] : []),
+    `Green ${report.counts.green} · red ${report.counts.red} · partial ${report.counts.partial} · unverified ${report.counts.unverified ?? 0} · invalid ${invalid} · probe-only ${report.counts["probe-only"]} · unchecked ${report.counts.unchecked} of ${report.results.length}`,
     "",
     "| Scenario | Status | Requirement | Issue | Title | Evidence |",
     "| --- | --- | --- | --- | --- | --- |",

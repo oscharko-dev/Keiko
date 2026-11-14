@@ -71,8 +71,17 @@ export function gradeCatalogRefresh({ induced, refused, failure, termination }) 
  * as created in the turn. `ended` says the Activity Log recorded an early ending for this turn;
  * `created` are the epics Jira holds that the turn produced.
  */
-export function gradeInterruption({ induced, ended, created, answer }) {
+export function gradeInterruption({ induced, ended, created, answer, termination }) {
   const covers = ["interrupted-turn-reports-created-keys"];
+  // The lab cancelled the turn at its own limit: the product never got to write its answer, so a
+  // missing key list is no evidence about the product.
+  if (termination === "lab-limit") {
+    return {
+      status: "unverified",
+      covers,
+      detail: "the lab stopped supervision before the product's early-ending answer",
+    };
+  }
   if (induced === undefined || !induced.ok || !induced.startedOpen) {
     return {
       status: "unverified",
@@ -191,6 +200,7 @@ async function interruptionPart(ctx) {
     ended: ctx.turnEnds() > endsBefore,
     created: epics.credited,
     answer: turn.answer,
+    termination: turn.termination,
   });
   return { turn, parts: [{ label: "interruption", ...grade }] };
 }

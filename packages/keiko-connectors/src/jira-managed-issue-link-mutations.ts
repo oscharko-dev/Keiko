@@ -93,8 +93,9 @@ function input(operation: Operation, args: CatalogJsonObject): Input | undefined
 async function inspect(
   request: JiraMutationRequest,
   selected: Input,
+  preDispatch = false,
 ): Promise<LinkObservation<State>> {
-  const actor = await bindLinkActor(request, selected.actorKey);
+  const actor = await bindLinkActor(request, selected.actorKey, preDispatch);
   if (!actor.ok) return actor;
   const type = await readLinkType(request, selected.type);
   if (!type.ok) return type;
@@ -298,7 +299,7 @@ async function admitIssueLink(
   selected: Input,
   templates: JiraIssueTemplateSource | undefined,
 ): Promise<LinkObservation<State>> {
-  const prior = await inspect(request, selected);
+  const prior = await inspect(request, selected, true);
   if (!prior.ok) return prior;
   const refusal = beforeEffect(selected, prior.value);
   if (refusal !== undefined) return refusal;
@@ -314,11 +315,15 @@ async function admitIssueLink(
   }
   const gate = await templateAdmission(request, selected, prior.value, templates);
   if (!gate.ok) return gate;
-  const rechecked = await inspect(request, {
-    ...selected,
-    inward: prior.value.inward.issue.id,
-    outward: prior.value.outward.issue.id,
-  });
+  const rechecked = await inspect(
+    request,
+    {
+      ...selected,
+      inward: prior.value.inward.issue.id,
+      outward: prior.value.outward.issue.id,
+    },
+    true,
+  );
   if (!rechecked.ok) return rechecked;
   if (!sameState(prior.value, rechecked.value))
     return linkConflict(

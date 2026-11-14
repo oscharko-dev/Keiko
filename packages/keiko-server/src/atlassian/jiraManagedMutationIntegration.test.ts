@@ -30,10 +30,15 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { TEMPLATE_NOTICE_GUIDANCE } from "./jiraMutationResult.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gateway";
 import {
   JIRA_MUTATION_OPERATIONS,
+  jiraOperationInReleaseScope,
+  parseJiraIssueTemplate,
   jiraRequiredConnectorScope,
   type JiraMutationOperation,
   type JiraLivePodMetadata,
@@ -113,14 +118,22 @@ import { verifyStoredCredential } from "./credentialVerification.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../../tests/support/jira-test-templates.js";
 
 const cleanup: (() => void | Promise<void>)[] = [];
 const BASE_URL = "https://203.0.113.10/context";
 afterEach(async () => {
+  resetServerLogger();
   for (const close of cleanup.splice(0).reverse()) await close();
 });
+// The attachment operations are switched off for Release 1 (#4354); their mechanics are proved
+// at the connector with the switch forced on, and the refusal is pinned where the switch lives.
 const SINGLE_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation): operation is SingleMutation => operation !== "jira.draft",
+  (operation): operation is SingleMutation =>
+    operation !== "jira.draft" && jiraOperationInReleaseScope(operation),
 );
 const ADMIN_MUTATIONS = SINGLE_MUTATIONS.filter(
   (operation) => jiraRequiredConnectorScope(operation) === "issue-tracker.admin",
@@ -175,12 +188,18 @@ function database(): {
 type RemoteMode =
   | "confirmed"
   | "readback-denied"
+  | "issue-gone-after-write"
   | "lost-response"
   | "jira-error-document"
   | "html-error-page"
   | "server-error"
   | "voting-disabled"
-  | "time-tracking-disabled";
+  | "time-tracking-disabled"
+  | "transition-moved-404"
+  | "transition-moved-400"
+  | "transition-moved-empty"
+  | "transition-moved-html"
+  | "transition-moved-truncated";
 /** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
@@ -195,9 +214,40 @@ const REFUSALS: Readonly<Record<string, { readonly status: number; readonly body
   "html-error-page": { status: 400, body: "<html><body>Bad Request</body></html>" },
   "server-error": { status: 503, body: JIRA_ERROR_DOCUMENT },
 };
+/** The workflow moved between the listing and the write: Jira refuses the listed transition (KEIKO-0814). */
+const MOVED_TRANSITION: Readonly<
+  Record<string, { readonly status: number; readonly body: string }>
+> = {
+  "transition-moved-404": {
+    status: 404,
+    body: JSON.stringify({ errorMessages: ["Issue Does Not Exist"], errors: {} }),
+  },
+  "transition-moved-400": {
+    status: 400,
+    body: JSON.stringify({
+      errorMessages: ["Transition id '31' is not valid for this issue."],
+      errors: {},
+    }),
+  },
+  // No Jira error document: a proxy or a cut connection may have answered, not Jira.
+  "transition-moved-empty": { status: 404, body: "" },
+  "transition-moved-html": { status: 400, body: "<html><body>Bad Request</body></html>" },
+  "transition-moved-truncated": { status: 400, body: '{"errorMessages":["Transition id' },
+};
+function movedTransitionRefusal(mode: RemoteMode, request: Request): Response | undefined {
+  const moved = MOVED_TRANSITION[mode];
+  if (moved === undefined || request.method !== "POST") return undefined;
+  if (!new URL(request.url).pathname.endsWith("/transitions")) return undefined;
+  return new Response(moved.body, {
+    status: moved.status,
+    headers: { "content-type": "application/json" },
+  });
+}
 async function scriptedRefusal(mode: RemoteMode, request: Request): Promise<Response | undefined> {
   const native = nativeOperationRefusal(mode, request);
   if (native !== undefined) return native;
+  const moved = movedTransitionRefusal(mode, request);
+  if (moved !== undefined) return moved;
   const refusal = REFUSALS[mode];
   if (refusal === undefined || !(await request.clone().text()).includes(REJECTED_VALUE))
     return undefined;
@@ -242,6 +292,36 @@ function verificationProbe(path: string): ReturnType<typeof response> | undefine
   }
   return undefined;
 }
+/**
+ * A template gate learns which project and type an issue is by asking for those two fields by name
+ * (#4354). Whatever the operation's own fixture answers for that issue is kept, and the two fields
+ * are added to it, so every other read of the same issue is unchanged.
+ */
+function withIssueIdentity(
+  url: string,
+  path: string,
+  answer: ReturnType<typeof fixtureRead>,
+): ReturnType<typeof fixtureRead> {
+  // An issue is read by key or, from a worklog, by its numeric id.
+  const match = /^\/context\/rest\/api\/2\/issue\/(?:SYN-(\d{1,3})|1000(\d))$/u.exec(path);
+  const number = match?.[1] ?? match?.[2];
+  const requested = new URL(url).searchParams.get("fields")?.split(",") ?? [];
+  if (number === undefined || !requested.includes("issuetype")) return answer;
+  const base =
+    answer.kind === "response" && answer.status === 200
+      ? (JSON.parse(answer.bodyText) as { fields?: Record<string, unknown> })
+      : {};
+  return response({
+    id: String(10000 + Number(number)),
+    key: `SYN-${number}`,
+    ...base,
+    fields: {
+      ...base.fields,
+      project: { id: "10000", key: "SYN" },
+      issuetype: { id: "3", name: "Task" },
+    },
+  });
+}
 async function fixtureReadResult(
   mode: RemoteMode,
   url: string,
@@ -252,12 +332,25 @@ async function fixtureReadResult(
 ): Promise<ReturnType<typeof fixtureRead>> {
   if (mode === "readback-denied" && writes > 0) return response({}, 403);
   const path = new URL(url).pathname;
+  // The deleted issue: after the DELETE, a read of any issue is a 404, as Jira answers for a gone one.
+  if (mode === "issue-gone-after-write" && writes > 0 && path.includes("/rest/api/2/issue/"))
+    return response({ errorMessages: ["Issue Does Not Exist"], errors: {} }, 404);
   if (operation === "jira.set-instance-base-url" && path.endsWith("/serverInfo")) {
     const observed = await lifecycle.read(url);
     if (observed === undefined)
       throw new TypeError("Missing independent configured URL observation");
     return observed;
   }
+  const answer = await fixtureOperationRead(url, path, state, lifecycle);
+  // Only the gate's read before the write is given an identity; a readback shows what was written.
+  return writes === 0 ? withIssueIdentity(url, path, answer) : answer;
+}
+async function fixtureOperationRead(
+  url: string,
+  path: string,
+  state: MutationRemoteState,
+  lifecycle: ReturnType<typeof lifecycleRemoteFixture>,
+): Promise<ReturnType<typeof fixtureRead>> {
   return (
     verificationProbe(path) ??
     (await lifecycle.read(url)) ??
@@ -484,11 +577,25 @@ function privateFixturePod(metadata: AtlassianCredentialMetadata): JiraLivePodMe
     throw new TypeError("Missing real private Pod binding");
   return metadata.livePod;
 }
+/**
+ * Every write is judged against a template of its type (#4354), so the fixture holds a rule-free
+ * template for each synthetic issue type. Deleting an issue type that a template names is refused
+ * on purpose (a saved rule would change meaning), so that one case holds a template of a type the
+ * deletion does not touch.
+ */
+function integrationTemplates(
+  operation: JiraMutationOperation | undefined,
+): ReturnType<typeof permissiveJiraTemplates> {
+  return operation === "jira.delete-issue-type"
+    ? permissiveJiraTemplates(["SYN"], ["Epic"])
+    : permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES);
+}
 async function fixture(
   mode: RemoteMode = "confirmed",
   afterAcknowledgement?: "binding-revoked" | "cancelled",
   initialOperation?: JiraMutationOperation,
   authoritySelection: FixtureAuthoritySelection = {},
+  templates?: () => ReturnType<typeof integrationTemplates>,
 ): Promise<{
   invoke: (
     operation: JiraMutationOperation,
@@ -626,7 +733,12 @@ async function fixture(
       arguments: args,
       deselected: [],
       context,
-      connection: { deployment: "data-center", baseUrl: BASE_URL },
+      connection: {
+        deployment: "data-center",
+        baseUrl: BASE_URL,
+        issueTemplates: (): ReturnType<typeof integrationTemplates> =>
+          templates?.() ?? integrationTemplates(initialOperation),
+      },
     });
   };
   // A case offers its actual operation and the explicit next write used to prove that an
@@ -642,6 +754,8 @@ async function fixture(
         throw new Error("Mutation must use the journal-owned HTTP port");
       }),
       emailTemplates: emailTemplateFixtureAdmission(),
+      issueTemplates: (): ReturnType<typeof integrationTemplates> =>
+        templates?.() ?? integrationTemplates(initialOperation),
       attachmentSource: (): ReturnType<JiraAttachmentSource> => {
         const sha256 = createHash("sha256").update(ATTACHED).digest("hex");
         return Promise.resolve({
@@ -976,6 +1090,87 @@ it.each(SINGLE_MUTATIONS)(
     }
   },
 );
+// #4354, owner decision 2026-11-13: a 404 read-back of the issue after Jira accepted this very
+// DELETE is the deletion confirmed; the lab session saw it settle as "may not have been applied".
+it("settles an accepted jira.delete-issue as succeeded when the read-back finds the issue gone", async () => {
+  const operation = "jira.delete-issue";
+  const f = await fixture(
+    "issue-gone-after-write",
+    undefined,
+    operation,
+    reviewedAuthority(operation),
+  );
+  expect(await f.invoke(operation)).toMatchObject({
+    kind: "settled",
+    result: { status: "completed", data: { outcome: "succeeded" } },
+  });
+});
+// #4354 (AC7): an edit is judged by what it touches. The synthetic issue SYN-1 already breaks the
+// summary rule of its type; an edit that does not touch the summary goes through, the model is told
+// in the result, and the log has the notice, all from the one real executor run.
+function brokenSummaryRule(): ReturnType<typeof integrationTemplates> {
+  const parsed = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Task",
+      "activateOn: [edit]",
+      "summaryMinLength: 40",
+      "---",
+      "# Task",
+    ].join("\n"),
+  );
+  if (!parsed.ok) throw new TypeError("Expected a parseable template");
+  return { templates: [parsed.template], unreadable: 0 };
+}
+const NOTICE = { ruleId: "summary-too-short", template: "SYN/Task" } as const;
+it.each([
+  ["jira.edit", { issueKey: "SYN-1", fields: { labels: ["noted"] } }],
+  [
+    "jira.transition",
+    { issueKey: "SYN-1", transitionId: "31", fields: { customfield_10000: "Required" } },
+  ],
+] as const)(
+  "names the rule an untouched field already broke as a notice on %s, in the result and the log",
+  async (operation, args) => {
+    // The template line goes through the process logger, not the fixture's journal sink.
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const f = await fixture("confirmed", undefined, operation, {}, brokenSummaryRule);
+    const outcome = await f.invoke(operation, args);
+    expect(f.writes()).toBe(1);
+    expect(outcome).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "succeeded", templateNotices: [NOTICE] } },
+    });
+    expect(JSON.stringify(outcome)).toContain(TEMPLATE_NOTICE_GUIDANCE);
+    const notices = sink.events.filter(
+      (event) => event.op === "jira.template.admission" && event.extra?.stage === "notice",
+    );
+    expect(notices).toHaveLength(1);
+    const line = expectRegisteredActivityLogLine(
+      "jira.template.admission",
+      formatActivityLogProofLine(notices[0] ?? {}),
+    );
+    expect(line).toMatchObject({ stage: "notice" });
+    expect(sink.lines().join()).not.toMatch(/Original|SYN-1|noted/u);
+  },
+);
+it("sends an edit of a conforming issue without any notice", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  const f = await fixture("confirmed", undefined, "jira.edit");
+  const outcome = await f.invoke("jira.edit", { issueKey: "SYN-1", fields: { labels: ["noted"] } });
+  expect(outcome).toMatchObject({ kind: "settled", result: { data: { outcome: "succeeded" } } });
+  expect(JSON.stringify(outcome)).not.toContain("templateNotices");
+  expect(
+    sink.events.some(
+      (event) => event.op === "jira.template.admission" && event.extra?.stage === "notice",
+    ),
+  ).toBe(false);
+});
 it.each(SINGLE_MUTATIONS)(
   "keeps %s unconfirmed when readback is denied and blocks further writes",
   async (operation) => {
@@ -1081,6 +1276,62 @@ it("returns Jira's field error and lets the corrected retry succeed in the same 
   expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
   expect(f.logs.lines().join()).not.toContain(JIRA_FIELD_ERROR);
 });
+// A transition Jira listed and then refused because the workflow moved: it settles `rejected` with
+// the typed invalid-transition reason and Jira's own words, and a later write of the turn is not
+// blocked. Without the error document it would settle `unknown` and block the turn (#4354).
+it.each(["transition-moved-404", "transition-moved-400"] as const)(
+  "settles a moved-away transition as rejected, not unknown, and does not block the turn (%s)",
+  async (mode) => {
+    const f = await fixture(mode, undefined, "jira.transition");
+
+    const refused = await f.invoke("jira.transition", {
+      issueKey: "SYN-1",
+      transitionId: "31",
+      fields: { customfield_10000: "Required" },
+    });
+
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "rejected", reason: "invalid-transition" } },
+    });
+    expect(f.journal.find(f.intent().invocationId)).toMatchObject({
+      phase: "settled",
+      outcome: "rejected",
+    });
+    expect(f.writes()).toBe(1);
+    expect(await f.invoke("jira.comment", { issueKey: "SYN-1", body: "Moving on" })).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "succeeded" } },
+    });
+    expect(f.writes()).toBe(2);
+  },
+);
+// The no-replay rule (#2953): a moved-away transition answered WITHOUT Jira's error document (an
+// empty, HTML or truncated body) is still told to the model as invalid-transition, but the journal
+// cannot say that Jira, and not a proxy, refused it, so the write stays uncertain and the turn's
+// later writes are blocked. Only the error document settles it rejected (the test above).
+it.each(["transition-moved-empty", "transition-moved-html", "transition-moved-truncated"] as const)(
+  "keeps a moved-away transition answered without Jira's error document uncertain under the no-replay rule (%s)",
+  async (mode) => {
+    const f = await fixture(mode, undefined, "jira.transition");
+
+    const refused = await f.invoke("jira.transition", {
+      issueKey: "SYN-1",
+      transitionId: "31",
+      fields: { customfield_10000: "Required" },
+    });
+
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "unknown" } },
+    });
+    expect(await f.invoke("jira.comment", { issueKey: "SYN-1", body: "Moving on" })).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "not-dispatched", reason: "conflict" } },
+    });
+    expect(f.writes()).toBe(1);
+  },
+);
 it.each(["html-error-page", "server-error"] as const)(
   "keeps the turn blocked after %s: the write may have been applied (#2953)",
   async (mode) => {
@@ -1312,8 +1563,10 @@ it.each([51, 100])(
 
 it("keeps an independent complete argument/state/receipt case for every registered native mutation", () => {
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
-  expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
+  const inScope = (names: readonly string[]): string[] =>
+    names.filter((name) => jiraOperationInReleaseScope(name)).sort();
+  expect(inScope(Object.keys(REMOTE_STATE))).toEqual([...SINGLE_MUTATIONS].sort());
+  expect(inScope(Object.keys(SUCCESS_RECEIPTS))).toEqual([...SINGLE_MUTATIONS].sort());
   expect(ADMIN_MUTATIONS).toHaveLength(139);
   expect(Object.keys(FINAL_EXPECTED_OUTCOMES)).toHaveLength(42);
   expect(

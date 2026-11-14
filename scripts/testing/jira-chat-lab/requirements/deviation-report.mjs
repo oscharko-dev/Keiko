@@ -7,6 +7,7 @@ import {
   createJiraReportTemplateChecker,
   resolveJiraTemplateFieldIds,
 } from "@oscharko-dev/keiko-connectors";
+import { cellsOf, integerCell } from "./answer-cells.mjs";
 import { completedToolExchange } from "./tool-exchanges.mjs";
 const ISSUE_KEY = /RPT-\d+/g;
 
@@ -574,17 +575,19 @@ const largeUnverified = (detail, counts = {}) => ({ status: "unverified", detail
 const largeGradeStatus = (grade, exact, falseFindings) =>
   grade.keysOk && grade.detailOk && exact && falseFindings === 0 ? "green" : "red";
 
-function templateGapsLabelled(answer, without) {
+const TEMPLATE_GAP_ROW = /^VORLAGENLÜCKE$/iu;
+
+export function templateGapsLabelled(answer, without) {
   const rows = answer
     .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("VORLAGENLÜCKE;"));
+    .map((line) => cellsOf(line))
+    .filter((cells) => cells !== undefined && TEMPLATE_GAP_ROW.test(cells[0]));
   const observed = new Map();
-  for (const row of rows) {
-    const cells = row.split(";");
-    if (cells.length !== 3 || observed.has(cells[1]) || !/^[1-9][0-9]*$/u.test(cells[2]))
+  for (const cells of rows) {
+    const count = integerCell(cells[2] ?? "");
+    if (cells.length !== 3 || observed.has(cells[1]) || count === undefined || count < 1)
       return false;
-    observed.set(cells[1], Number(cells[2]));
+    observed.set(cells[1], count);
   }
   return sameUncoveredTypes(
     [...observed].map(([typeName, count]) => ({ typeName, count })),

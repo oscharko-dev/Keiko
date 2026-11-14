@@ -656,7 +656,7 @@ function unknownFieldMessage(named: readonly JiraFieldMetadata[], key: string): 
     return `Fields are keyed by field id, not display name: send "${key}" as ${only.id}.`;
   }
   if (isJiraFieldId(key)) return undefined;
-  return "A key in fields is not a field id. Use the field ids jira.create.fields returns.";
+  return "A key in fields is not a field id. Use the field ids jira.create-fields returns for a create, or jira.edit-fields for an edit.";
 }
 function unknownFieldFailure(
   byId: ReadonlyMap<string, JiraFieldMetadata>,

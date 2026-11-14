@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
   readinessError: undefined,
   indexes: 0,
   failIndexAfter: undefined,
+  requests: [],
   refuseLateIndex(name) {
     if (name !== "pod-index") return;
     this.indexes += 1;
@@ -29,6 +30,11 @@ vi.mock("node:timers/promises", () => ({
 }));
 vi.mock("../testing/jira-chat-lab/requirements/work-project-lock.mjs", () => ({
   withWorkProjectLock: async (_directory, _id, run) => run(),
+}));
+// The journeys now read the lab's own Jira before and after a run (#4369); these tests have none.
+vi.mock("../testing/jira-chat-lab/requirements/lab-health.mjs", async (original) => ({
+  ...(await original()),
+  labJiraState: async () => ({ state: "licensed", remaining: 9999 }),
 }));
 vi.mock("../testing/jira-chat-lab/requirements/license-window.mjs", () => ({
   ensureLicenseWindow: async () => undefined,
@@ -50,6 +56,19 @@ vi.mock("../testing/jira-chat-lab/requirements/journey-checks.mjs", () => ({
     }),
   },
 }));
+vi.mock("../testing/jira-chat-lab/requirements/composer.mjs", () => ({
+  COMPOSER_JOURNEY_IDS: ["C05"],
+  COMPOSER_JOURNEYS: {
+    C05: async (ctx) => ({
+      status: "unverified",
+      covers: [],
+      ...(await ctx.turn(
+        await ctx.freshChat("autonomous-delivery"),
+        "Synthetischer Composer-Turn",
+      )),
+    }),
+  },
+}));
 vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
   const responses = {
     "pod-create": { capsule: { id: "capsule" } },
@@ -66,7 +85,8 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
     chatReadLogDirectory: () => "/unused-synthetic-log-directory",
     prepareChat: async () => ({ id: "chat", groundingScopeIdentity: "scope" }),
     withLiveChat: async ({ run }) => run(fixture.live),
-    jsonRequest: async (_origin, _cookie, name, _path, _body, _method, signal) => {
+    jsonRequest: async (_origin, _cookie, name, _path, body, _method, signal) => {
+      fixture.requests.push({ name, body });
       if (name === "readiness" && fixture.readinessError) throw fixture.readinessError;
       fixture.refuseLateIndex(name);
       if (Object.hasOwn(responses, name)) return responses[name];
@@ -116,6 +136,7 @@ beforeEach(() => {
     readinessError: undefined,
     indexes: 0,
     failIndexAfter: undefined,
+    requests: [],
     live: {
       projectPath: directory,
       origin: "http://127.0.0.1:19999",
@@ -200,6 +221,86 @@ describe("requirements lab turn-limit provenance", () => {
     expect(fixture.sends).toBe(0);
   });
 
+  describe("the Composer lane has no Knowledge Pod (#4369)", () => {
+    const names = () => fixture.requests.map((request) => request.name);
+
+    it("prepares no Pod, imports no skill and binds the Chat to nothing but its mode", async () => {
+      fixture.mode = "completed";
+      const result = await runJourneys({
+        session: { directory },
+        directory,
+        modelId: "synthetic-model",
+        embeddingModelId: "synthetic-embedding",
+        truth: {},
+        ids: ["C05"],
+        set: "composer",
+      });
+      expect(fixture.sends).toBe(1);
+      expect(result.C05).toBeDefined();
+      for (const forbidden of [
+        "pod-create",
+        "pod-connect",
+        "pod-index",
+        "skill-import",
+        "skill-select",
+      ])
+        expect(names()).not.toContain(forbidden);
+      const binds = fixture.requests.filter((request) => request.name === "bind");
+      expect(binds.length).toBeGreaterThan(0);
+      for (const { body } of binds) {
+        expect(Object.keys(body).sort()).toEqual(["expectedGroundingScopeIdentity", "toolMode"]);
+        expect(body.toolMode).toBe("autonomous-delivery");
+      }
+    });
+
+    it("leaves the document lane exactly as it was: Pod, skill and a Pod-bound Chat", async () => {
+      fixture.mode = "completed";
+      await observedTurn();
+      // prepareDataPod and the Knowledge Pod binding, exactly as before the Composer lane existed.
+      expect(names()).toEqual(
+        expect.arrayContaining([
+          "pod-create",
+          "pod-connect",
+          "pod-index",
+          "skill-import",
+          "skill-select",
+        ]),
+      );
+      expect(names().filter((name) => name === "pod-create")).toHaveLength(1);
+      const bind = fixture.requests.find((request) => request.name === "bind");
+      expect(bind.body.localKnowledgeScopes).toHaveLength(1);
+    });
+  });
+
+  describe("the lab's own Jira being down (#4369)", () => {
+    const down = (state) => ({ state });
+    const up = { state: "licensed", remaining: 9000 };
+
+    it("a journey that starts while Jira is down is invalid lab-outage and sends nothing", async () => {
+      for (const state of ["unreachable", "starting", "expired"]) {
+        fixture.sends = 0;
+        const turn = await observedTurn({ labState: async () => down(state) });
+        expect(turn).toMatchObject({ status: "invalid", reason: "lab-outage" });
+        expect(turn.detail).toContain(state);
+        expect(fixture.sends).toBe(0);
+      }
+    });
+
+    it("a failed journey during which Jira went down is invalid, not red", async () => {
+      fixture.mode = "product-failure";
+      const readings = [up, down("unreachable")];
+      const turn = await observedTurn({ labState: async () => readings.shift() });
+      expect(turn).toMatchObject({ status: "invalid", reason: "lab-outage" });
+      expect(fixture.sends).toBe(1);
+    });
+
+    it("a failed journey with a healthy Jira keeps its own verdict", async () => {
+      fixture.mode = "product-failure";
+      const turn = await observedTurn({ labState: async () => up });
+      expect(turn.reason).not.toBe("lab-outage");
+    });
+  });
+
   it("invalidates S14 and starts no further run when the specification restore fails", async () => {
     fixture.mode = "completed";
     fixture.failIndexAfter = 1;
@@ -216,6 +317,42 @@ describe("requirements lab turn-limit provenance", () => {
     expect(result.S14.runs.map((run) => run.status)).toEqual(["invalid", "invalid", "invalid"]);
     expect(result.S14.runs[0].detail).toContain("specification restore failed");
     expect(JSON.stringify(result.S14)).not.toContain("litellm.internal.example");
+  });
+
+  describe("the Composer lane goes through the same gates (#4369)", () => {
+    const composerRun = (extra = {}) =>
+      runJourneys({
+        set: "composer",
+        session: { directory },
+        directory,
+        modelId: "synthetic-model",
+        truth: {},
+        ids: ["C05"],
+        ...extra,
+      });
+    const up = async () => ({ state: "licensed", remaining: 9999 });
+
+    it("grades a journey during a lab outage invalid with that cause, never red or green", async () => {
+      fixture.mode = "completed";
+      const result = await composerRun({ labState: async () => ({ state: "unreachable" }) });
+      expect(result.C05.status).toBe("invalid");
+      expect(result.C05.reason).toBe("lab-outage");
+      expect(fixture.sends).toBe(0);
+    });
+
+    it("never turns a scenario that could not prove anything green", async () => {
+      fixture.mode = "completed";
+      const result = await composerRun({ labState: up });
+      expect(fixture.sends).toBe(1);
+      expect(result.C05.status).toBe("unverified");
+    });
+
+    it("never turns a failed model turn into a green scenario", async () => {
+      fixture.mode = "product-failure";
+      const result = await composerRun({ labState: up });
+      expect(result.C05.status).not.toBe("green");
+      expect(result.C05.reason).not.toBe("lab-outage");
+    });
   });
 
   it("runs a journey --repeat times in fresh Chats and aggregates the runs", async () => {
