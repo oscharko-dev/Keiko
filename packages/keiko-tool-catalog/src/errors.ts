@@ -14,6 +14,12 @@ export type CatalogFailureReason =
   | "expired-compatibility"
   | "result-contract-failed";
 
+/** One rejected or missing property and the rule the schema states there. */
+export interface CatalogExpectation {
+  readonly path: string;
+  readonly rule: string;
+}
+
 /**
  * Body-free account of why a value fails a compiled catalog schema. Every path is built from the
  * schema's own property names (array items as `[]`, additional properties as `*`), never from the
@@ -52,6 +58,12 @@ export interface CatalogSchemaMismatch {
    * names come from the schema, never from the value.
    */
   readonly declaredProperties?: readonly string[];
+  /**
+   * What the schema states at each rejected or missing property (type, allowed values, format,
+   * length and numeric bounds), as a phrase completing "<path> must be …"; from the schema only.
+   * Covers every mismatching property, not just the first one an external validator reports.
+   */
+  readonly expected?: readonly CatalogExpectation[];
   /** The values a `const` or `enum` property accepts, from the schema; never the rejected value. */
   readonly allowed?: {
     readonly path: string;

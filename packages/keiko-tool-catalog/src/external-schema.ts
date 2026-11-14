@@ -14,6 +14,7 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { catalogObject, copyCatalogJson } from "./json.js";
 import { requireCatalog, ToolCatalogError, type CatalogSchemaMismatch } from "./errors.js";
+import { collectExpectations } from "./schema-expectation.js";
 
 const OPTIONS = {
   strict: true,
@@ -32,12 +33,17 @@ const OPTIONS = {
   logger: false as const,
   code: { optimize: 0 },
 };
-function compiler(dialect: CatalogJsonValue | undefined): Ajv {
+// The account of a rejection reads every mismatching property in one pass, so the correction can
+// name them all in one round. It is compiled only when a value was already refused, from the same
+// schema, with the one option that differs; acceptance is always decided by the first-error set.
+const DIAGNOSTIC_OPTIONS = { ...OPTIONS, allErrors: true };
+function compiler(dialect: CatalogJsonValue | undefined, diagnostic = false): Ajv {
+  const options = diagnostic ? DIAGNOSTIC_OPTIONS : OPTIONS;
   let validator: Ajv;
-  if (dialect === EXTERNAL_JSON_SCHEMA_DEFAULT) validator = new Ajv2020(OPTIONS);
+  if (dialect === EXTERNAL_JSON_SCHEMA_DEFAULT) validator = new Ajv2020(options);
   else if (dialect === "https://json-schema.org/draft/2019-09/schema")
-    validator = new Ajv2019(OPTIONS);
-  else validator = new Ajv(OPTIONS);
+    validator = new Ajv2019(options);
+  else validator = new Ajv(options);
   addFormats.default(validator, {
     mode: "full",
     formats: [
@@ -67,22 +73,22 @@ function compiler(dialect: CatalogJsonValue | undefined): Ajv {
 // carry `$id`, `$anchor` or dynamic anchors at all (`isBoundedExternalJsonSchema`), so a `$ref` can
 // only resolve inside its own schema, as on a fresh instance.
 const SHARED_COMPILERS = new Map<string, Ajv>();
-function sharedCompiler(dialect: CatalogJsonValue | undefined): Ajv {
-  const key = typeof dialect === "string" ? dialect : "";
+function sharedCompiler(dialect: CatalogJsonValue | undefined, diagnostic: boolean): Ajv {
+  const key = `${diagnostic ? "all" : "first"}:${typeof dialect === "string" ? dialect : ""}`;
   const existing = SHARED_COMPILERS.get(key);
   if (existing !== undefined) return existing;
-  const created = compiler(dialect);
+  const created = compiler(dialect, diagnostic);
   SHARED_COMPILERS.set(key, created);
   return created;
 }
-function compileValidator(schema: CatalogJsonObject): ValidateFunction {
-  const shared = sharedCompiler(schema.$schema);
+function compileValidator(schema: CatalogJsonObject, diagnostic = false): ValidateFunction {
+  const shared = sharedCompiler(schema.$schema, diagnostic);
   try {
     return shared.compile(schema);
   } catch (sharedError) {
     // A refusal is only ever decided by a fresh instance, exactly as before sharing: its own
     // compile error propagates and the caller reports the closed `unsupported-schema` refusal.
-    compiler(schema.$schema).compile(schema);
+    compiler(schema.$schema, diagnostic).compile(schema);
     // The fresh instance accepted what the shared one refused, so sharing itself is defective.
     // That is never a valid schema's compilation: it fails closed and keeps its cause.
     throw new Error("Shared external-schema compiler refused a schema a fresh one accepts", {
@@ -137,13 +143,93 @@ function declaredPath(error: ErrorObject): string {
   }
   return path === "" ? "$" : path;
 }
+const DIAGNOSTIC_VALIDATORS = new Map<string, ValidateFunction>();
+function diagnosticErrors(
+  schema: CatalogJsonObject,
+  value: CatalogJsonValue,
+): readonly ErrorObject[] {
+  const identity = canonicalise(schema);
+  let validate = DIAGNOSTIC_VALIDATORS.get(identity);
+  if (validate === undefined) {
+    validate = compileValidator(schema, true);
+    if (DIAGNOSTIC_VALIDATORS.size >= 64) {
+      const oldest = DIAGNOSTIC_VALIDATORS.keys().next().value;
+      if (oldest !== undefined) DIAGNOSTIC_VALIDATORS.delete(oldest);
+    }
+    DIAGNOSTIC_VALIDATORS.set(identity, validate);
+  }
+  validate(value);
+  return validate.errors ?? [];
+}
 export function externalCatalogSchemaMismatch(
   schema: CatalogJsonObject,
   value: CatalogJsonValue,
 ): CatalogSchemaMismatch | undefined {
   const validate = validationFor(schema);
   if (validate(value)) return undefined;
-  return mismatchDetail(schema, validate.errors ?? [], value);
+  const errors = validate.errors ?? [];
+  const expected = collectExpectations(
+    expectationSites(schema, diagnosticErrors(schema, value).concat(errors)),
+  );
+  return {
+    ...mismatchDetail(schema, errors, value),
+    ...(expected.length === 0 ? {} : { expected }),
+  };
+}
+const MAX_DIAGNOSTIC_ERRORS = 64;
+/** Keywords that say which alternative or which extra property failed, not what a property needs. */
+const NO_PROPERTY_RULE = new Set([
+  "additionalProperties",
+  "oneOf",
+  "anyOf",
+  "allOf",
+  "not",
+  "if",
+  "then",
+  "else",
+  "dependentRequired",
+  "dependentSchemas",
+  "propertyNames",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+]);
+const ALTERNATIVE_SEGMENT = /\/(?:oneOf|anyOf|not|if|then|else)\//u;
+/** Whether an error says what a property needs, as opposed to which alternative failed. */
+function statesPropertyRule(error: ErrorObject, ownerPath: string): boolean {
+  // A property that accepts several shapes fails as one `anyOf`/`oneOf` error of its own; the
+  // errors of the branches are skipped, and the property's rule states every shape.
+  const propertyChoice =
+    (error.keyword === "anyOf" || error.keyword === "oneOf") && error.instancePath !== "";
+  return (
+    (propertyChoice || !NO_PROPERTY_RULE.has(error.keyword)) &&
+    !ALTERNATIVE_SEGMENT.test(`${ownerPath}/`)
+  );
+}
+function siteOf(
+  schema: CatalogJsonObject,
+  error: ErrorObject,
+): { readonly path: string; readonly node: CatalogJsonValue | undefined } | undefined {
+  const ownerPath = error.schemaPath.slice(0, error.schemaPath.lastIndexOf("/"));
+  if (!statesPropertyRule(error, ownerPath)) return undefined;
+  const owner = schemaAt(schema, ownerPath);
+  const path = declaredPath(error);
+  const missing = missingRequired(error, path);
+  if (missing === undefined) return { path, node: owner };
+  const properties = isObjectNode(owner) ? owner.properties : undefined;
+  const property = error.params.missingProperty as string;
+  const declared = isObjectNode(properties) && Object.hasOwn(properties, property);
+  return { path: missing, node: declared ? properties[property] : undefined };
+}
+/**
+ * Each rejected or missing property with the schema node that states what it needs, for the rule
+ * the correction gives. Errors inside an alternative are skipped: which branch the caller meant is
+ * the choice's business, and a branch's own requirement is not a rule of the property.
+ */
+function expectationSites(
+  schema: CatalogJsonObject,
+  errors: readonly ErrorObject[],
+): readonly { readonly path: string; readonly node: CatalogJsonValue | undefined }[] {
+  return errors.slice(0, MAX_DIAGNOSTIC_ERRORS).flatMap((error) => siteOf(schema, error) ?? []);
 }
 function missingRequired(error: ErrorObject | undefined, path: string): string | undefined {
   if (error?.keyword !== "required" || typeof error.params.missingProperty !== "string")

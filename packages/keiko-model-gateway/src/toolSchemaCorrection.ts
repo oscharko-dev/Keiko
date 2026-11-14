@@ -30,8 +30,31 @@ export function schemaMismatchGuidance(repair: GatewayToolCallRepair | undefined
     choice === "" || !choiceCoversMissing(shape) ? missingGuidance(shape) : "",
     choice,
     invalidGuidance(shape),
+    expectedGuidance(shape),
     countGuidance(shape),
   ].join("");
+}
+
+/** The ceiling of the sentence that states each rejected property's rule (the Jira result-guidance bound). */
+const EXPECTED_GUIDANCE_CHARS_MAX = 1280;
+/**
+ * What the schema states at each rejected or missing property, in one sentence of one form for
+ * every tool ("path must be a string in uri format, 1 to 255 characters"). The rules come from the
+ * tool's own schema, never from the arguments, so the correction says what to send without
+ * quoting what was sent. A property whose allowed values the sentence above already names is not
+ * repeated.
+ */
+function expectedGuidance(shape: CatalogSchemaMismatch): string {
+  const entries = (shape.expected ?? []).filter((entry) => entry.path !== shape.allowed?.path);
+  const kept: string[] = [];
+  let chars = " Expected: .".length;
+  for (const entry of entries) {
+    const text = `${entry.path} must be ${entry.rule}`;
+    chars += text.length + 2;
+    if (chars > EXPECTED_GUIDANCE_CHARS_MAX) break;
+    kept.push(text);
+  }
+  return kept.length === 0 ? "" : ` Expected: ${kept.join("; ")}.`;
 }
 
 function missingGuidance(shape: CatalogSchemaMismatch): string {

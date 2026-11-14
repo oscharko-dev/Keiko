@@ -83,3 +83,52 @@ describe("schema correction guidance", () => {
     );
   });
 });
+
+describe("the rule of each rejected property", () => {
+  it("states each property's rule in one sentence of one form, from the schema only", () => {
+    expect(
+      schemaMismatchGuidance(
+        repair({
+          optionalProperties: true,
+          invalidPaths: ["value.iconUrl"],
+          expected: [
+            { path: "value.iconTitle", rule: "a string, 1 to 255 characters or null" },
+            { path: "value.iconUrl", rule: "a string, 1 to 2048 characters or null" },
+          ],
+        }),
+      ),
+    ).toBe(
+      " Properties whose value does not match the schema: value.iconUrl. Expected: value.iconTitle must be a string, 1 to 255 characters or null; value.iconUrl must be a string, 1 to 2048 characters or null.",
+    );
+  });
+  it("does not repeat the allowed values the sentence above already names", () => {
+    const text = schemaMismatchGuidance(
+      repair({
+        optionalProperties: true,
+        invalidPaths: ["mode"],
+        allowed: { path: "mode", values: ["a", "b"] },
+        expected: [
+          { path: "limit", rule: "an integer, 1 to 5 as its value" },
+          { path: "mode", rule: 'one of "a", "b"' },
+        ],
+      }),
+    );
+    expect(text).toContain('The value of mode must be one of: "a", "b".');
+    expect(text).toContain(" Expected: limit must be an integer, 1 to 5 as its value.");
+    expect(text).not.toContain('mode must be one of "a", "b";');
+  });
+  it("stays inside one bounded sentence however many properties the schema explains", () => {
+    const expected = Array.from({ length: 8 }, (_, index) => ({
+      path: `property${String(index)}`,
+      rule: "x".repeat(160),
+    }));
+    const text = schemaMismatchGuidance(repair({ optionalProperties: true, expected }));
+    expect(text.length).toBeLessThanOrEqual(1280 + 64);
+    expect(text.startsWith(" Expected: property0 must be ")).toBe(true);
+  });
+  it("adds nothing for a schema with nothing to state", () => {
+    expect(
+      schemaMismatchGuidance(repair({ optionalProperties: true, invalidPaths: ["x"] })),
+    ).not.toContain("Expected:");
+  });
+});
