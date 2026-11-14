@@ -410,3 +410,116 @@ it.each([{ exitCode: 1, stderr: "PRIVATE_CHILD_FAILURE" }, { stdout: "PRIVATE_CH
     expect(readPersistedActivityLog(log.stateRoot)).not.toContain("PRIVATE_CHILD_FAILURE");
   },
 );
+
+// The runtime-target probe may drop the "every non-allowlisted environment value" output scrub in
+// favour of "credentials-only" because it runs one fixed, repository-independent metadata script of
+// Node's own process data and its output is bounded to 1 KiB. A host that exports an ordinary value
+// equal to part of the Node version (the official Node image exports NODE_VERSION=24.18.0) used to
+// get the version back as "[REDACTED]" and the target refused as unavailable. These tests pin the
+// narrowing and its limits.
+
+it("launches only Node's fixed metadata script, with no repository path in the argument vector", async () => {
+  const workspace = fixture();
+  const run = vi.spyOn(tools, "runCommand").mockResolvedValue(result(workspace));
+  await resolveVerificationRuntimeTarget({ workspace, signal: new AbortController().signal });
+  const [input, deps] = run.mock.calls[0] ?? [];
+  // `node -e <constant source>` from the execution root: no script file, no module, no repository path.
+  expect(input?.command).toBe("node");
+  expect(input?.cwd).toBeUndefined();
+  expect(input?.args).toHaveLength(2);
+  expect(input?.args[0]).toBe("-e");
+  const source = input?.args[1] ?? "";
+  expect(source).toContain('require("node:process")');
+  expect(source).not.toContain(workspace.root);
+  expect(source).not.toMatch(/require\((?!"node:process")/u);
+  expect(deps?.commandRules).toHaveLength(1);
+  expect(deps?.commandRules[0]).toMatchObject({
+    executable: "node",
+    requiredLeadingFlags: ["-e"],
+    allowedSubcommands: [source],
+  });
+});
+
+it("narrows only this probe's output scrub to credentials", async () => {
+  const workspace = fixture();
+  const run = vi.spyOn(tools, "runCommand").mockResolvedValue(result(workspace));
+  await resolveVerificationRuntimeTarget({ workspace, signal: new AbortController().signal });
+  expect(run.mock.calls[0]?.[1].policy.outputScrub).toBe("credentials-only");
+  // Every other command keeps the fail-closed default: the shared default policy names no mode.
+  expect(tools.DEFAULT_SANDBOX_POLICY.outputScrub).toBeUndefined();
+});
+
+// Substitutes the probe's script with one that prints a chosen metadata document, keeping the real
+// command owner, scrub and attestation in the path.
+function probeWith(nodeVersion: string | undefined): void {
+  const original = tools.runCommand;
+  vi.spyOn(tools, "runCommand").mockImplementation((input, deps) =>
+    original(input, {
+      ...deps,
+      spawn: (command, args, options) =>
+        nodeSpawnFn(
+          command,
+          args.map((argument) =>
+            nodeVersion !== undefined && argument.startsWith('const p = require("node:process")')
+              ? `process.stdout.write(JSON.stringify({os:"linux",cpu:"x64",libc:"glibc",nodeVersion:${JSON.stringify(nodeVersion)},nodeAbi:"137",napiVersion:"10"}) + "\\n");`
+              : argument,
+          ),
+          options,
+        ),
+    }),
+  );
+}
+
+it("resolves the real runtime when the parent environment exports NODE_VERSION", async () => {
+  const workspace = fixture();
+  if (!probeNetworkIsolation(workspace.root).available) return;
+  // The value the official Node image exports, which is also a substring of process.version.
+  vi.stubEnv("NODE_VERSION", process.version.slice(1));
+  probeWith(undefined);
+  const target = await resolveVerificationRuntimeTarget({
+    workspace,
+    signal: new AbortController().signal,
+  });
+  expect(target.nodeVersion).toBe(process.version);
+}, 20_000);
+
+it("still scrubs a credential-named value and then refuses the target", async () => {
+  const workspace = fixture();
+  if (!probeNetworkIsolation(workspace.root).available) return;
+  vi.stubEnv("RUNTIME_PROBE_API_TOKEN", "v24.18.0-credential-value");
+  // A probe that echoes the credential as its version: the fail-closed behaviour for real secrets.
+  probeWith("v24.18.0-credential-value");
+  await expect(
+    resolveVerificationRuntimeTarget({ workspace, signal: new AbortController().signal }),
+  ).rejects.toThrow("VERIFICATION_RUNTIME_TARGET_UNAVAILABLE");
+}, 20_000);
+
+it("keeps scrubbing the same ordinary value for every other command under the default policy", async () => {
+  const workspace = fixture();
+  vi.stubEnv("NODE_VERSION", process.version.slice(1));
+  const output = await tools.runCommand(
+    {
+      command: "node",
+      args: ["-e", "process.stdout.write(process.version)"],
+      cwd: undefined,
+      timeoutMs: 15_000,
+      signal: new AbortController().signal,
+    },
+    {
+      workspace,
+      policy: { ...tools.DEFAULT_SANDBOX_POLICY, network: "inherit" },
+      commandRules: [
+        {
+          executable: "node",
+          allowedSubcommands: ["process.stdout.write(process.version)"],
+          requiredLeadingFlags: ["-e"],
+        },
+      ],
+      spawn: nodeSpawnFn,
+      processEnv: process.env,
+      now: Date.now,
+    },
+  );
+  expect(output.outputRedacted).toBe(true);
+  expect(output.stdout).not.toContain(process.version.slice(1));
+}, 20_000);
