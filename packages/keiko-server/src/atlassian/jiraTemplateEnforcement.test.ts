@@ -503,6 +503,13 @@ describe("a refused write through the Chat mutation journal", () => {
       guidance: SECTION_GUIDANCE,
       violations: [VIOLATION],
     });
+    // The wording the model passes on, held by this full refusal and not by one assertion alone.
+    const { guidance } = result.data;
+    expect(guidance).toContain(
+      "Nothing was changed: Keiko's template check (not Jira) refused this",
+    );
+    expect(guidance).toContain("send it so");
+    expect(guidance).toContain("never quote the rule id or a field id as the explanation");
     expect(http).not.toHaveBeenCalled();
     expect(journal.find(intent.invocationId)).toMatchObject({ outcome: "rejected" });
     const events = sink.events.filter((event) => event.op === "jira.template.admission");

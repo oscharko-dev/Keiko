@@ -274,6 +274,38 @@ interface ReadRoute {
   readonly body: unknown;
   readonly status?: number;
 }
+/** The transitions the issue offers: unnamed, in the acting user's German, or in English. */
+function transitionsOf(remote: Remote): readonly Record<string, unknown>[] {
+  if (remote.unnamedTransitions)
+    return [
+      { id: "31", to: { id: "3" }, fields: {} },
+      { id: "41", to: { id: "4" }, fields: {} },
+    ];
+  const [start, park, ready, parked] = remote.german
+    ? ["Fortschritt starten", "Parken", "In Arbeit", "Geparkt"]
+    : ["Start", "Park", "Ready", "Parked"];
+  return [
+    { id: "31", name: start, to: { id: "3", name: ready }, fields: {} },
+    { id: "41", name: park, to: { id: "4", name: parked }, fields: {} },
+  ];
+}
+/** The statuses of the project's workflows in the acting user's language. */
+function statusesOf(remote: Remote): readonly Record<string, unknown>[] {
+  const [todo, ready, parked] = remote.german
+    ? ["Zu erledigen", "In Arbeit", "Geparkt"]
+    : ["To Do", "Ready", "Parked"];
+  return [
+    {
+      id: "10001",
+      name: "Story",
+      statuses: [
+        { id: "1", name: todo },
+        { id: "3", name: ready },
+        { id: "4", name: parked },
+      ],
+    },
+  ];
+}
 function readRoutes(remote: Remote): readonly ReadRoute[] {
   return [
     ...(remote.statusList === "absent"
@@ -292,36 +324,10 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
         total: (remote.createFields ?? CREATE_FIELDS).length,
       },
     },
-    {
-      suffix: "/project/SYN/statuses",
-      body: [
-        {
-          id: "10001",
-          name: "Story",
-          statuses: [
-            { id: "1", name: "To Do" },
-            { id: "3", name: "Ready" },
-            { id: "4", name: "Parked" },
-          ],
-        },
-      ],
-    },
+    { suffix: "/project/SYN/statuses", body: statusesOf(remote) },
     { suffix: "editmeta", body: { fields: EDIT_FIELDS } },
     { suffix: "assignable/search", body: [{ name: "alice", active: true }] },
-    {
-      suffix: "/transitions",
-      body: {
-        transitions: remote.unnamedTransitions
-          ? [
-              { id: "31", to: { id: "3" }, fields: {} },
-              { id: "41", to: { id: "4" }, fields: {} },
-            ]
-          : [
-              { id: "31", name: "Start", to: { id: "3", name: "Ready" }, fields: {} },
-              { id: "41", name: "Park", to: { id: "4", name: "Parked" }, fields: {} },
-            ],
-      },
-    },
+    { suffix: "/transitions", body: { transitions: transitionsOf(remote) } },
     remote.fieldCatalog
       ? { suffix: "/field", body: [{ id: "customfield_10016", name: "Story Points" }] }
       : { suffix: "/field", body: {}, status: 404 },
@@ -368,6 +374,8 @@ interface Remote {
   projectTypes?: readonly { id: string; name: string }[];
   issue: Record<string, unknown>;
   fieldCatalog: boolean;
+  /** The acting user's profile is German: statuses and transitions carry German names. */
+  german?: boolean;
   /** Jira answered transitions without transition or status names. */
   unnamedTransitions?: boolean;
   parentType?: { id: string; name: string };
@@ -1547,6 +1555,42 @@ describe("localized field names and transition targets", () => {
     const other = fixture(SET(named), missing);
     await other.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" });
     expect(other.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  // Audit (#4354): the same unbound rule, typed in English, for a user whose Jira shows German names.
+  it("refuses, naming the template, a rule typed in English for a user whose transitions and statuses are German", async () => {
+    const english = template(
+      ["activateOn: [transition:Start Progress]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const f = fixture(SET(english), { ...conforming, german: true });
+    expect(await f.run("jira.transition", move)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [
+        { ruleId: "template-binding-unresolved", subject: "SYN/Story", template: "SYN/Story" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+    // The same rule is checked normally once the target is one this user's Jira shows.
+    const shown = template(
+      ["activateOn: [transition:Fortschritt starten]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const ok = fixture(SET(shown), { ...conforming, german: true });
+    await ok.run("jira.transition", move);
+    expect(ok.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("lets a Story transition through beside an unbound template of another issue type that types a name target", async () => {
+    const bugByName = template(
+      ["activateOn: [transition:Start Progress]", "requiredFields: [Story Points]"],
+      "# T",
+      "Bug",
+    );
+    const f = fixture(SET(bugByName), { ...conforming, german: true });
+    await f.run("jira.transition", move);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
   });
 
   it("lets a Story transition through beside an unbound template of another issue type", async () => {
