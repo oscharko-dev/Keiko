@@ -1846,7 +1846,9 @@ describe.each([false, true])("the claim marker follows the final answer (stream=
     deps: UiHandlerDeps = f.deps,
   ): Promise<void> {
     const ctx = context(body);
-    const pending = stream ? handleSendDesktopChatStream(ctx, deps) : handleSendDesktopChat(ctx, deps);
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, deps)
+      : handleSendDesktopChat(ctx, deps);
     void pending.catch(() => undefined);
     await awaitReadGrantedForWrite(f);
     await pending;

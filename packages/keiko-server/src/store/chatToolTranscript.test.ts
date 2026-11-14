@@ -314,9 +314,15 @@ describe("ordinary Chat structured tool transcript", () => {
     store.updateChatToolTranscript(id, { kind: "claim-notice", notice: undefined }, "n");
     expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBeUndefined();
     // The cleared state is a line without the closed value: absent means cleared.
-    const cleared = logs.events.filter((entry) => entry.op === "chat.tool-transcript.updated").at(-1);
+    const cleared = logs.events
+      .filter((entry) => entry.op === "chat.tool-transcript.updated")
+      .at(-1);
     expect(formatActivityLogProofLine(cleared ?? {})).not.toContain("no-jira-create");
-    store.updateChatToolTranscript(id, { kind: "claim-notice", notice: "tool-call-not-executed" }, "n");
+    store.updateChatToolTranscript(
+      id,
+      { kind: "claim-notice", notice: "tool-call-not-executed" },
+      "n",
+    );
     const other = store.createMessage({
       chatId,
       role: "user",
