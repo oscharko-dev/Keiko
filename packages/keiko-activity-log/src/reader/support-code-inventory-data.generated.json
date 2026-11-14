@@ -1483,6 +1483,7 @@
     "keiko-server/atlassian/jiraProjectLifecycleMutationDescriptors",
     "keiko-server/atlassian/jiraProjectLifecycleSchemas",
     "keiko-server/atlassian/jiraProjectStructureDescriptors",
+    "keiko-server/atlassian/jiraReadFailureGuidance",
     "keiko-server/atlassian/jiraReceiptValues",
     "keiko-server/atlassian/jiraReciprocalLinkDescriptors",
     "keiko-server/atlassian/jiraRelationLifecycleReceipts",
