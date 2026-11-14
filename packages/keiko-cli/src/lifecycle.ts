@@ -685,6 +685,20 @@ function waitForExternalOpener(child: ChildProcess, timeoutMs: number): Promise<
   });
 }
 
+/**
+ * How the platform opener is started. On Windows it runs attached with a hidden window: a detached
+ * PowerShell host owns no console, exited 0 and opened no browser on the Windows guest (#4358). The
+ * opener is bounded and awaited, so it never needed to outlive `keiko start`; every other platform
+ * keeps the detached start.
+ */
+function browserOpenerSpawnOptions(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): SpawnOptions {
+  if (platform === "win32") return { detached: false, windowsHide: true, stdio: "ignore", env };
+  return { detached: true, stdio: "ignore", env };
+}
+
 export async function defaultOpenExternal(
   url: string,
   platform: NodeJS.Platform,
@@ -692,11 +706,11 @@ export async function defaultOpenExternal(
 ): Promise<void> {
   const { buildSandboxEnv } = await import("@oscharko-dev/keiko-tools");
   const opener = resolveExternalOpener(url, platform, env);
-  const child = spawn(opener.command, [...opener.args], {
-    detached: true,
-    stdio: "ignore",
-    env: buildSandboxEnv(env, BROWSER_OPENER_ENVIRONMENT),
-  });
+  const child = spawn(
+    opener.command,
+    [...opener.args],
+    browserOpenerSpawnOptions(platform, buildSandboxEnv(env, BROWSER_OPENER_ENVIRONMENT)),
+  );
   await waitForExternalOpener(child, opener.timeoutMs ?? EXTERNAL_OPENER_RESULT_TIMEOUT_MS);
 }
 
