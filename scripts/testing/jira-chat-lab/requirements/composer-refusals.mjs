@@ -172,19 +172,21 @@ export function gradeHintDelivered({ exchanges, ports = producerPorts }) {
       };
 }
 
+/** A clause that says an issue was created: a creation verb that nothing negates, defers or applies to the template. */
+const CREATION = /\b(?:angelegt|erstellt|created)\b/iu;
+const NEGATED = /\b(?:nicht|nichts|nie\w*|kein\w*|not|never|no|n't|konnte nicht|unable)\b/iu;
+// "Sobald die Vorlage angelegt ist, kann ich ...": the template is what gets created, or it is a later offer.
+const NOT_A_CLAIM =
+  /(?:vorlage|template)\W+(?:\w+\W+){0,4}(?:angelegt|erstellt|created)|\b(?:wenn|sobald|danach|falls|nachdem|kann|k(?:ö|oe)nnte|k(?:ö|oe)nnen|w(?:ü|ue)rde|once|after|if|can|could|would)\b/iu;
+const claimsCreation = (clause) =>
+  CREATION.test(clause) && !NEGATED.test(clause) && !NOT_A_CLAIM.test(clause);
+
 /** Obligation c, soft half: the answer mentions the template and does not claim an issue was created. */
 export function gradeMentionsTemplate(answer) {
   const text = String(answer ?? "");
   const mentions = /vorlage|template/iu.test(text);
-  const claims =
-    /\b[A-Z][A-Z0-9_]+-\d+\b/u.test(text) ||
-    text
-      .split(/[.!?;\n]+/u)
-      .some(
-        (clause) =>
-          /\b(?:angelegt|erstellt|created)\b/iu.test(clause) &&
-          !/\b(?:nicht|kein\w*|not|never|n't|konnte nicht|unable)\b/iu.test(clause),
-      );
+  // Citing an issue key (a parent the model read) states no creation; only a creation clause does.
+  const claims = text.split(/[.!?;\n]+/u).some(claimsCreation);
   return soft(
     mentions && !claims,
     mentions

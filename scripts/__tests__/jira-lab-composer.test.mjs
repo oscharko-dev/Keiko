@@ -120,6 +120,19 @@ describe("templates and prompts of the lane", () => {
       expect(markdown).toContain("activateOn: [create, edit]");
   });
 
+  // gpt-5.4, 2026-11-14: the violating request named no content for the sections the template asks
+  // for, so a model that does not invent content asked the person instead of repairing in the same
+  // turn. The repair now carries the content, exactly as the create prompts do.
+  it("gives the model the section content for the repair, after the violating first request", () => {
+    for (const type of COMPOSER_TYPES) {
+      const prompt = violationPrompt(type, "Mein Titel", FIXTURE);
+      expect(prompt).toContain("genau der Beschreibung „Kurzer Test.“");
+      const repair = prompt.slice(prompt.indexOf("Für die Korrektur gilt:"));
+      expect(repair).toContain("Synthetischer Inhalt zum Abschnitt");
+      for (const name of SECTIONS[type]) expect(repair).toContain(`${name}:`);
+    }
+  });
+
   it("asks in plain words: a title and the named parents, never a requirement or a structure", () => {
     for (const type of COMPOSER_TYPES) {
       for (const prompt of [
@@ -770,6 +783,26 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
       expect(grade.observation).toBe(true);
       expect(grade.detail).toContain("model observation");
     }
+  });
+
+  // The gpt-5.4 answers of 2026-11-14 that the heuristic once read as "claims an issue was created":
+  // none of them did. "nichts erstellt" is a negation, "sobald die Vorlage angelegt ist" is about the
+  // template and a later offer, and a parent key the model read is no creation.
+  it("does not read a negation, a template creation, an offer or a cited parent key as a creation claim", () => {
+    for (const answer of [
+      "Es wurde nichts erstellt. Für REQ / Epic existiert keine gespeicherte Vorlage.",
+      "Sobald die Vorlage angelegt ist, kann ich denselben Sub-task erstellen.",
+      "Laut Jira-Hinweis muss diese Vorlage hier angelegt werden: REQ / Sub-task.",
+      "Danach kann derselbe Vorgang angelegt werden; die Vorlage fehlt.",
+      "Keine Vorlage für REQ / Bug. Die Eltern REQ-491 und REQ-492 habe ich gelesen, nichts wurde geändert.",
+    ])
+      expect(gradeMentionsTemplate(answer).status, answer).toBe("green");
+    // A real claim, also about another issue key, stays an observation.
+    for (const answer of [
+      "Der Vorgang REQ-5 wurde angelegt; die Vorlage dazu fehlt noch.",
+      "I created REQ-6 although the template is missing.",
+    ])
+      expect(gradeMentionsTemplate(answer).status, answer).toBe("unverified");
   });
 
   it("the three obligations of one turn are separate verdicts", () => {

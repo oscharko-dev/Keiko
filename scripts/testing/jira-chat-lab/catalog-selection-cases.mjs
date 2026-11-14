@@ -474,6 +474,9 @@ const CREATE_WRITES = [
   createCase("Bug", { id: "create-bug", project: () => "REQ", workProject: true }),
 ];
 
+/** Whether a selection holds a case that writes the work project, where the lab's required field applies. */
+export const selectionNeedsFieldLift = (cases) => cases.some((entry) => entry.workProject === true);
+
 export const SELECTION_CASES = Object.freeze([
   ...DISCOVERY_READS.map((entry) => ({ ...entry, effect: "read", catalog: "discovery" })),
   ...BASE_READS.map((entry) => ({ ...entry, effect: "read", catalog: "base" })),

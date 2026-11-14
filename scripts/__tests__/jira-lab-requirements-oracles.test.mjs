@@ -96,6 +96,18 @@ describe("rule ids as the description of a deviation (S11)", () => {
     expect(result.undescribed).toEqual([]);
   });
 
+  // Lab C07 (gpt-5.4, 2026-11-14): "Summary erfüllt Muster nicht" states the deviation, but "erfüllt" read as a
+  // fine-claim because the German negator follows the verb; 7 of 53 deviations were credited to nobody.
+  it("credits a deviation negated after the verb, and still denies the bare fine-claim", () => {
+    expect(grade("RPT-5 — Summary erfüllt Muster nicht: `^[LH-d]`").undescribed).not.toContain(
+      "RPT-5 summary",
+    );
+    expect(grade("RPT-5: Summary entspricht der Vorgabe nicht").undescribed).not.toContain(
+      "RPT-5 summary",
+    );
+    expect(grade("RPT-5: Summary erfüllt das Muster").undescribed).toContain("RPT-5 summary");
+  });
+
   it("still credits nothing for a bare field word, and nothing for a denial", () => {
     expect(grade("RPT-5: Zusammenfassung").undescribed).toContain("RPT-5 summary");
     expect(

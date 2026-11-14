@@ -120,7 +120,12 @@ const NEGATOR = phrase(
 const NOT_A_PROBLEM = phrase(
   String.raw`(?:nicht|not|never|nie|kein\p{L}*)\s+(?:\p{L}+\s+)?(?:leer|fehlend|fehlt|missing|empty|ungültig|invalid|falsch|wrong|unset|absent|fehlerhaft|incorrect)|fehl\p{L}*\s+(?:nicht|nirgends)|nichts\s+(?:fehlt|ist\s+falsch)`,
 );
-const NEGATED_FINE = new RegExp(String.raw`${NEGATOR}(?:\s+\p{L}+){0,2}\s+${FINE}`, "giu");
+// German puts the negation after the verb as well: "erfüllt das Muster nicht", "entspricht der Vorgabe
+// nicht" state a deviation; "Summary erfüllt das Muster" alone is a fine-claim and stays a denial.
+const NEGATED_FINE = new RegExp(
+  String.raw`${NEGATOR}(?:\s+\p{L}+){0,2}\s+${FINE}|${FINE}(?:\s+\p{L}+){0,3}\s+${NEGATOR}`,
+  "giu",
+);
 const NOTHING_FOUND_RE = new RegExp(NOTHING_FOUND, "iu");
 const NOT_A_PROBLEM_RE = new RegExp(NOT_A_PROBLEM, "iu");
 const FINE_RE = new RegExp(FINE, "iu");
