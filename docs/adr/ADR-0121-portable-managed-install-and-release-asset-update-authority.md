@@ -181,8 +181,13 @@ nothing; `keiko stop`, the uninstall and the update end the UI process, never th
 `portable launch` child the launcher waits for. A start that met another start, stop or update (the
 lifecycle guard) gets its own informational box, not "could not start". A kill by the person
 (taskkill) is an ordinary non-zero code and shows the generic box. The CLI honors the note path only
-inside the temporary directory the launcher names, and the launcher clears an externally set value of
-the variable before it names its own. A failed upgrade whose previous install starts again ends with
+directly inside the temporary directory the launcher names, and the launcher clears an externally set
+value of the variable before it names its own, with a console too. The two sides resolve that
+directory differently (GetTempPathW takes TMP, then TEMP; `os.tmpdir()` takes TEMP, then TMP), so the
+CLI accepts the real path of TMP, of TEMP or of `os.tmpdir()`; the launcher's folder is always one of
+them. Remaining limit: a visible but unattended session (a scheduled task that runs "only when the
+user is logged on") has a visible window station, so its box waits for a person; only a start without
+a visible desktop returns at once. A failed upgrade whose previous install starts again ends with
 exit 0 and leaves one `portable.launch.failed` line (`upgrade-failed`); if that relaunch fails too, the
 command's reason, in the box and the final line, is the relaunch's: Keiko does not run at all, which is
 what the person must act on.

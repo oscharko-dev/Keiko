@@ -402,13 +402,15 @@ static const keiko_failure_text KEIKO_FAILURE_TEXTS[] = {
 
 /* Called before the child starts: a stale note of an earlier launcher with the same process id must
  * not be shown, and a launcher that cannot name the file simply shows the generic text. The variable
- * is cleared first, so that on every error path below an externally set value is never inherited by
- * the child: the CLI honors only a path the launcher itself named. */
-static void prepare_failure_note(keiko_launcher_buffers *buffers) {
+ * is cleared first, so that on every error path below, and for a start WITH a console too, an
+ * externally set value is never inherited by the child: the CLI honors only a path the launcher
+ * itself named, and a start with a console names none. */
+static void prepare_failure_note(keiko_launcher_buffers *buffers, int has_console) {
   wchar_t directory[KEIKO_NOTE_CAP];
   DWORD length;
   buffers->failure_note[0] = L'\0';
   (void)SetEnvironmentVariableW(L"KEIKO_PORTABLE_FAILURE_NOTE", NULL);
+  if (has_console) return;
   length = GetTempPathW((DWORD)KEIKO_NOTE_CAP, directory);
   if (length == 0 || length >= (DWORD)KEIKO_NOTE_CAP) return;
   if (_snwprintf_s(buffers->failure_note, KEIKO_NOTE_CAP, _TRUNCATE, L"%lskeiko-launch-note-%lu.txt",
@@ -555,7 +557,7 @@ static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_conso
     return 1;
   }
 
-  if (!has_console) prepare_failure_note(buffers);
+  prepare_failure_note(buffers, has_console);
 
   /* Built AFTER the pre-parse: the check reuses the same command buffer. */
   int written = _snwprintf_s(

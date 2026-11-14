@@ -41,16 +41,32 @@ export const LAUNCH_FAILURE_NOTE_ENV = "KEIKO_PORTABLE_FAILURE_NOTE";
 
 const NOTE_FILE_NAME = /^keiko-launch-note-\d{1,10}\.txt$/u;
 
-// The launcher names its note inside the user's temporary directory (GetTempPathW) and the CLI
-// resolves the same directory (os.tmpdir): the note path is honored only there, compared by real
-// path so that a short (8.3) spelling of the same folder is accepted and a link elsewhere is not.
-function inTemporaryDirectory(path: string): boolean {
+// The launcher names its note inside the user's temporary directory (GetTempPathW), and the CLI
+// honors the path only there. The two sides resolve that directory differently: GetTempPathW takes
+// TMP, then TEMP, then the user profile, then the Windows directory; os.tmpdir() takes TEMP, then
+// TMP, then the system root. When TMP and TEMP differ they disagree, so the note is accepted in the
+// real path of TMP, of TEMP or of os.tmpdir(): the launcher's folder is always one of them. Compared
+// by real path, so that a short (8.3) spelling of the same folder is accepted and a link elsewhere
+// is not; the folder must still be the note's direct parent.
+function temporaryDirectories(env: EnvSource): string[] {
+  const named = Object.entries(env)
+    .filter(([key]) => ["TMP", "TEMP"].includes(key.toUpperCase()))
+    .map(([, value]) => value);
+  return [...named, tmpdir()].filter(
+    (value): value is string => typeof value === "string" && value !== "",
+  );
+}
+
+function sameRealDirectory(left: string, right: string): boolean {
+  if (!existsSync(left) || !existsSync(right)) return false;
+  const a = realpathSync.native(left);
+  const b = realpathSync.native(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function inTemporaryDirectory(path: string, env: EnvSource): boolean {
   const parent = dirname(path);
-  const temporary = tmpdir();
-  if (!existsSync(parent) || !existsSync(temporary)) return false;
-  const left = realpathSync.native(parent);
-  const right = realpathSync.native(temporary);
-  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+  return temporaryDirectories(env).some((candidate) => sameRealDirectory(parent, candidate));
 }
 
 /**
@@ -73,7 +89,7 @@ export function writeLaunchFailureNote(
     path.split(/[\\/]/u).includes("..") ||
     !(isAbsolute(path) || win32.isAbsolute(path)) ||
     !NOTE_FILE_NAME.test(basename(path.replaceAll("\\", "/"))) ||
-    !inTemporaryDirectory(path)
+    !inTemporaryDirectory(path, env)
   ) {
     throw new Error("launch failure note path is not the launcher's own");
   }

@@ -191,8 +191,8 @@ describe("the Windows launcher's failure box", () => {
     const preflight = launcherSource.slice(
       launcherSource.search(/static int launch_after_preflight\([^)]*\) \{/u),
     );
-    expect(preflight.indexOf("prepare_failure_note(buffers)")).toBeGreaterThan(-1);
-    expect(preflight.indexOf("prepare_failure_note(buffers)")).toBeLessThan(
+    expect(preflight.indexOf("prepare_failure_note(buffers, has_console)")).toBeGreaterThan(-1);
+    expect(preflight.indexOf("prepare_failure_note(buffers, has_console)")).toBeLessThan(
       preflight.indexOf("CreateProcessW("),
     );
     expect(preflight).toMatch(/\*child_ended = 1;\s*return \(int\)exit_code;/u);
@@ -289,6 +289,21 @@ describe("the Windows launcher's boxes need a visible desktop", () => {
       prepare.indexOf('SetEnvironmentVariableW(L"KEIKO_PORTABLE_FAILURE_NOTE", NULL)'),
     ).toBeLessThan(prepare.indexOf("GetTempPathW"));
     expect(prepare).toMatch(/length >= \(DWORD\)KEIKO_NOTE_CAP/u);
+  });
+
+  // #4358 head D: a start WITH a console names no note, but an inherited value must not reach the
+  // child either: the variable is cleared before the console check returns.
+  it("clears the note variable for a start with a console too, and names no note there", () => {
+    const prepare =
+      /static void prepare_failure_note\([^)]*\) \{[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    expect(prepare).toMatch(
+      /prepare_failure_note\(keiko_launcher_buffers \*buffers, int has_console\)/u,
+    );
+    const clear = prepare.indexOf('SetEnvironmentVariableW(L"KEIKO_PORTABLE_FAILURE_NOTE", NULL)');
+    const consoleReturn = prepare.indexOf("if (has_console) return;");
+    expect(clear).toBeGreaterThan(-1);
+    expect(consoleReturn).toBeGreaterThan(clear);
+    expect(consoleReturn).toBeLessThan(prepare.indexOf("GetTempPathW"));
   });
 });
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -89,6 +89,52 @@ describe("the failure note for the native launcher", () => {
       ).toThrow("not the launcher's own");
       expect(existsSync(path)).toBe(false);
     }
+  });
+
+  // GetTempPathW (the launcher) takes TMP first, os.tmpdir() (the CLI) takes TEMP first: with the two
+  // set to different folders the launcher's note must still be honored, in either of them.
+  it("honors the note in the folder of TMP and in the folder of TEMP when they differ", () => {
+    const tmpFolder = mkdtempSync(join(tmpdir(), "keiko-note-tmp-"));
+    const tempFolder = mkdtempSync(join(tmpdir(), "keiko-note-temp-"));
+    const third = mkdtempSync(join(tmpdir(), "keiko-note-third-"));
+    created.push(tmpFolder, tempFolder, third);
+    const env = { KEIKO_PORTABLE_UI_LAUNCH: "1", TMP: tmpFolder, TEMP: tempFolder };
+
+    for (const folder of [tmpFolder, tempFolder]) {
+      const path = join(folder, "keiko-launch-note-4711.txt");
+      expect(
+        writeLaunchFailureNote({ ...env, [LAUNCH_FAILURE_NOTE_ENV]: path }, "port-in-use"),
+      ).toBe("written");
+      expect(readFileSync(path, "utf8")).toBe("port-in-use");
+    }
+    // a third folder is still refused, and so is the name that only lives below one of them
+    expect(() =>
+      writeLaunchFailureNote(
+        { ...env, [LAUNCH_FAILURE_NOTE_ENV]: join(third, "keiko-launch-note-4711.txt") },
+        "port-in-use",
+      ),
+    ).toThrow("not the launcher's own");
+    const below = join(tmpFolder, "below");
+    mkdirSync(below);
+    expect(() =>
+      writeLaunchFailureNote(
+        { ...env, [LAUNCH_FAILURE_NOTE_ENV]: join(below, "keiko-launch-note-4711.txt") },
+        "port-in-use",
+      ),
+    ).toThrow("not the launcher's own");
+  });
+
+  it("reads the variable names case-insensitively, as Windows spells them", () => {
+    const folder = mkdtempSync(join(tmpdir(), "keiko-note-lower-"));
+    created.push(folder);
+    const path = join(folder, "keiko-launch-note-4711.txt");
+
+    expect(
+      writeLaunchFailureNote(
+        { KEIKO_PORTABLE_UI_LAUNCH: "1", Tmp: folder, [LAUNCH_FAILURE_NOTE_ENV]: path },
+        "launch-error",
+      ),
+    ).toBe("written");
   });
 
   it("writes nothing into a folder that does not exist", () => {
