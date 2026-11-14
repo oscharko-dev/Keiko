@@ -1,6 +1,7 @@
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
+  type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { JIRA_DIRECTORY_READ_DEFINITIONS } from "./jiraDirectoryDescriptors.js";
@@ -78,6 +79,19 @@ function read(
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 
+/** The Jira this connection reads, as the person typed it: host and port only (#4357). */
+const INSTANCE = object({ host: { ...text(255), minLength: 1 } }, ["host"]);
+function isSchemaObject(value: CatalogJsonValue | undefined): value is CatalogJsonObject {
+  return (
+    value !== undefined && value !== null && typeof value === "object" && !Array.isArray(value)
+  );
+}
+function withInstanceHost(schema: CatalogJsonObject): CatalogJsonObject {
+  const { properties } = schema;
+  if (!isSchemaObject(properties)) throw new TypeError("Missing authored user result schema");
+  return { ...schema, properties: { ...properties, instance: INSTANCE } };
+}
+
 export const JIRA_INSTANCE_READ_DEFINITIONS = {
   "jira.server-info": read(
     "Read observed Jira version, deployment and build metadata. These facts do not verify stored credentials, qualify a release, assert API availability or update compatibility state. Keep exact numeric build identities as strings. A safe configuredBaseUrl is comparison-only plain text, with configuredBaseUrlState observed/unavailable; HTTP may be native metadata behind a proxy, never a trusted request or navigation destination. Withhold URL credentials, query, fragment and malformed values. Omit health-check bodies, clocks and SCM details.",
@@ -104,8 +118,9 @@ export const JIRA_INSTANCE_READ_DEFINITIONS = {
   "jira.myself": {
     ...JIRA_DIRECTORY_READ_DEFINITIONS["jira.user"],
     description:
-      "Read the current authenticated Jira user, the one this connection acts as: key, name and, when known, display name, active and deleted state.",
+      "Read the current authenticated Jira user, the one this connection acts as: key, name and, when known, display name, active and deleted state. It also names the Jira this connection reads (instance.host, the address the Pod was created with): the answer to which account and which Jira am I connected to.",
     input: object({}),
+    result: withInstanceHost(JIRA_DIRECTORY_READ_DEFINITIONS["jira.user"].result),
   },
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
