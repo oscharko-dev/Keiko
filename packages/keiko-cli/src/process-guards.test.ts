@@ -5,7 +5,7 @@
 // test here calls the captured listener and then waits for the observable side effect (`err`/
 // `exit` being called) rather than awaiting a return value — the same way Node itself never waits.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -451,6 +451,127 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR unset", 
       ]);
       expect(err).toHaveBeenCalledWith(
         "keiko: fatal uncaught exception (RangeError). The process will exit.\n",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// #4358: a start the native Windows launcher began has no console; the launcher's failure box reads a
+// note the process leaves, and a slow machine needs far longer than two seconds to load the
+// classifier. The note is written first and without the classifier, and the import bound for that
+// start is long enough for a slow machine; every other start keeps the two seconds.
+describe("installProcessGuards — a start the native launcher began (#4358)", () => {
+  const noteName = "keiko-launch-note-4711.txt";
+
+  function launcherEnv(dir: string): NodeJS.ProcessEnv {
+    return { KEIKO_PORTABLE_UI_LAUNCH: "1", KEIKO_PORTABLE_FAILURE_NOTE: join(dir, noteName) };
+  }
+
+  it("leaves the fatal note before it even asks for the classifier", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-fatal-note-"));
+    vi.useFakeTimers();
+    const err = vi.fn();
+    const exit = vi.fn();
+    let noteWhenImportStarted: string | undefined;
+    const loadServer = vi.fn((): Promise<FatalDiagnosticsModule> => {
+      noteWhenImportStarted = existsSync(join(dir, noteName))
+        ? readFileSync(join(dir, noteName), "utf8")
+        : undefined;
+      return new Promise<FatalDiagnosticsModule>(() => undefined);
+    });
+    const { rejection, cleanup } = installAndCapture({
+      err,
+      exit,
+      loadServer,
+      env: launcherEnv(dir),
+    });
+    try {
+      rejection?.(new Error("boom"));
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalledWith(1);
+      });
+
+      expect(noteWhenImportStarted).toBe("fatal");
+      expect(readFileSync(join(dir, noteName), "utf8")).toBe("fatal");
+    } finally {
+      cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits up to thirty seconds for the classifier, not two", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-fatal-note-"));
+    vi.useFakeTimers();
+    const err = vi.fn();
+    const exit = vi.fn();
+    const loadServer = (): Promise<FatalDiagnosticsModule> =>
+      new Promise<FatalDiagnosticsModule>(() => undefined);
+    const { rejection, cleanup } = installAndCapture({
+      err,
+      exit,
+      loadServer,
+      env: launcherEnv(dir),
+    });
+    try {
+      rejection?.(new Error("boom"));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(28_000);
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalledWith(1);
+      });
+    } finally {
+      cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the two-second bound and writes no note for every other start", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-fatal-note-"));
+    vi.useFakeTimers();
+    const exit = vi.fn();
+    const { rejection, cleanup } = installAndCapture({
+      err: vi.fn(),
+      exit,
+      loadServer: () => new Promise<FatalDiagnosticsModule>(() => undefined),
+      env: { KEIKO_PORTABLE_FAILURE_NOTE: join(dir, noteName) },
+    });
+    try {
+      rejection?.(new Error("boom"));
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalledWith(1);
+      });
+
+      expect(existsSync(join(dir, noteName))).toBe(false);
+    } finally {
+      cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a note that cannot be written on stderr and still exits", async () => {
+    vi.useFakeTimers();
+    const err = vi.fn();
+    const exit = vi.fn();
+    const { rejection, cleanup } = installAndCapture({
+      err,
+      exit,
+      loadServer: () => new Promise<FatalDiagnosticsModule>(() => undefined),
+      env: { KEIKO_PORTABLE_UI_LAUNCH: "1", KEIKO_PORTABLE_FAILURE_NOTE: "/tmp/elsewhere.txt" },
+    });
+    try {
+      rejection?.(new Error("boom"));
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalledWith(1);
+      });
+
+      expect(err).toHaveBeenCalledWith(
+        "keiko: the failure note for the launcher could not be written\n",
       );
     } finally {
       cleanup();

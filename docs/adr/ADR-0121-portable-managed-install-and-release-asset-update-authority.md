@@ -131,9 +131,41 @@ shown, closed by the person, or a first launcher that hangs), the second start s
 "Keiko is already starting" message in the same two languages and exits 0, so a hung first launcher
 cannot make every later double-click silent; it still starts nothing. A start from a terminal shows the CLI's output and neither
 the box nor the guard. The PowerShell notice the CLI showed for the same purpose is removed: one
-mechanism, and the failure alert is unchanged. The native box cannot write the Activity Log; its
-proof is a measurement on Windows, and the wording, delay, close and single-instance promises are
-pinned structurally from the C source in `portable-launcher-feedback.test.ts`.
+mechanism. The native box cannot write the Activity Log; its proof is a measurement on Windows, and
+the wording, delay, close and single-instance promises are pinned structurally from the C source in
+`portable-launcher-feedback.test.ts`.
+
+The same launcher shows the failure box (#4358, head B). When the `portable launch` child ended with
+a non-zero code and there is no console, the launcher shows one error message titled `Keiko`, after
+it has released the mutex, so a box left open never blocks a later start. The CLI used to start a
+PowerShell for it; the measured start of such a helper on the Windows guest took up to 31 seconds and
+an attached child ends with the process that started it, so on a slow machine the person saw nothing,
+and a crash or a kill left no box at all. The launcher outlives its child and sees every non-zero exit.
+The CLI leaves only a closed reason token (`launch-failure-note.ts`, the same vocabulary as the log
+line) in a file named by `KEIKO_PORTABLE_FAILURE_NOTE`, created exclusively with the launcher's own
+file-name shape; the launcher removes any earlier file before it starts the child, reads at most 31
+bytes of lowercase letters and hyphens and shows its own fixed German or English text for the reasons
+it knows (a start that took too long, a port in use, a busy setup) and a generic text for every other
+reason and for a child that left nothing. The file's text is never displayed. On Windows the CLI
+starts no notifier process; macOS keeps its alert.
+
+Every non-zero exit of `portable launch` leaves one registered line, `portable.launch.failed`, with
+the closed reason and whether the note was written. The reason is recorded where the failure arises
+(the start's exit sites in `lifecycle.ts`, the launch's catch in `portable.ts`); the first recorded
+reason wins. The command's runner flushes the deferred Windows security collector before the process
+ends, on a normal return and on a throw. Two ways still lose it: a process that is killed, and the
+fatal handler, which writes its own `process.fatal` line directly and leaves the note first, without
+the classifier. For a start the launcher began, that handler waits up to 30 seconds for the
+classifier instead of 2, because a slow machine needs it; after that bound only the note and stderr
+remain. A start that gives up because its UI process did not answer says in one sentence that Keiko
+is still starting or took too long and what to do, before the technical outcome. A failed upgrade
+whose previous install starts again ends with exit code 0: Keiko runs.
+
+The first-start bound on a slow machine: the start waits while the UI process makes progress, and a
+start that records none for 20 seconds, or that is still not healthy after 15 minutes in total, gives
+up with that sentence. The installation itself (copying and attesting the tree) has no time bound and
+a 26-minute setup passes; the 15 minutes apply to the UI's first answer after the installation, which
+was measured at up to 239 seconds on emulated x64. An explicit, longer `--start-timeout` raises both.
 
 Native launcher integrity is part of portable installability and is established by the signed
 manifest's digest and provenance bindings. Native platform signatures, notarization, and publisher
@@ -877,8 +909,7 @@ and the uninstall helper must outlive that process. It therefore starts in two s
 hidden first PowerShell only starts the real helper as its own process (a hidden window) and ends, and
 the real helper, a grandchild outside the job, survives (confirmed on the guest, also for a message
 box). The helper's text, flags and inputs reach it through its environment, so nothing of it is ever
-quoted. The failure alert, which is shown just before the keiko process ends, starts the same way; the
-browser opener needs no second stage, because the browser is already a grandchild. The real helper reports ready by writing its own process id into a file (and a refusal of
+quoted. The browser opener needs no second stage, because the browser is already a grandchild. The real helper reports ready by writing its own process id into a file (and a refusal of
 its own start check into another), which the command reads before it ends and probes again when it
 commits. The ready wait is two minutes, measured at up to 58 seconds for the two stages beside other
 work; after a few seconds the command says once that it is preparing the removal. If the helper does
@@ -1277,4 +1308,6 @@ Security review for implementation under this ADR must cover:
 - **2026-11-14 — Issue #4358:** Amended D2. The Windows launcher itself shows the first-start
   message and keeps one launcher per installation, replacing the CLI's PowerShell notice; the
   uninstall and its helper paragraphs under D5 state how the removal completes from inside the
-  installation.
+  installation. The launcher also shows the failure box of a start that ended non-zero, from a
+  closed reason note, every such end leaves one `portable.launch.failed` line, and the first-start
+  bound is stated.

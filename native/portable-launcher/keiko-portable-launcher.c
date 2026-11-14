@@ -14,6 +14,7 @@
 #endif
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <wchar.h>
 #include <wctype.h>
 #include <windows.h>
@@ -121,9 +122,10 @@ static int run_hidden_and_wait(const wchar_t *application, wchar_t *command,
   return 1;
 }
 
-enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304 };
+enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304, KEIKO_NOTE_CAP = 320 };
 
 typedef struct {
+  wchar_t failure_note[KEIKO_NOTE_CAP]; /* where the CLI leaves the reason of a failed start */
   wchar_t root[KEIKO_PATH_CAP];
   wchar_t node[KEIKO_PATH_CAP];
   wchar_t cli[KEIKO_PATH_CAP];
@@ -290,7 +292,7 @@ static int bring_feedback_forward(void) {
  * is started either way. When the guard cannot be created the start goes on without it. */
 static int claim_launcher_instance(const wchar_t *root, HANDLE *instance) {
   wchar_t name[64];
-  unsigned long long hash = 1469598103934665603ULL;
+  unsigned long long hash = 14695981039346656037ULL; /* FNV-1a 64-bit offset basis */
   for (const wchar_t *cursor = root; *cursor != L'\0'; ++cursor) {
     hash ^= (unsigned long long)towlower(*cursor);
     hash *= 1099511628211ULL;
@@ -311,17 +313,126 @@ static int claim_launcher_instance(const wchar_t *root, HANDLE *instance) {
   return 1;
 }
 
-static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console);
+/* The failure box of a start without a console (#4358). The CLI used to start a PowerShell for it,
+ * which a slow machine could not finish before the CLI ended (the process and its attached children
+ * end together), so the person saw nothing. The launcher outlives its child and is a native program:
+ * when the `portable launch` child ended with a non-zero code, the launcher itself shows one message,
+ * after it has released the one-launcher-per-installation mutex, so a box left open never blocks a
+ * later start. The CLI leaves only a closed reason token in a file whose path it gets in
+ * KEIKO_PORTABLE_FAILURE_NOTE; the launcher shows its own fixed text for it, never the file's text,
+ * and a child that left nothing (crashed, was killed) gets the generic text. Wide escapes end their
+ * string literal so that no hex digit that follows is read into them. */
+#define KEIKO_FAILURE_GENERIC_EN \
+  L"Keiko could not start.\r\n\r\n" \
+  L"Start Keiko again. If this happens again, contact support and tell them the time of the start."
+#define KEIKO_FAILURE_GENERIC_DE \
+  L"Keiko konnte nicht starten.\r\n\r\n" \
+  L"Starte Keiko neu. Tritt der Fehler wieder auf, wende dich an den Support und nenne die Uhrzeit des Starts."
+
+typedef struct {
+  const char *reason;
+  const wchar_t *english;
+  const wchar_t *german;
+} keiko_failure_text;
+
+#define KEIKO_FAILURE_HEALTH_TIMEOUT_EN \
+  L"Keiko is still starting or took too long to start.\r\n\r\n" \
+  L"Wait a moment and open Keiko again. If it happens again, contact support and tell them the time of the start."
+#define KEIKO_FAILURE_HEALTH_TIMEOUT_DE \
+  L"Keiko startet noch oder hat zu lange gebraucht.\r\n\r\n" \
+  L"Warte einen Moment und \x00f6" L"ffne Keiko erneut. Tritt es wieder auf, wende dich an den Support und nenne die Uhrzeit des Starts."
+#define KEIKO_FAILURE_PORT_IN_USE_EN \
+  L"Keiko could not start because its port is already in use.\r\n\r\n" \
+  L"Close the other Keiko or program that uses it and start Keiko again."
+#define KEIKO_FAILURE_PORT_IN_USE_DE \
+  L"Keiko konnte nicht starten, weil sein Port schon belegt ist.\r\n\r\n" \
+  L"Schlie\x00df" L"e das andere Keiko oder Programm, das ihn nutzt, und starte Keiko neu."
+#define KEIKO_FAILURE_SETUP_BUSY_EN \
+  L"Keiko is already being set up or updated.\r\n\r\n" \
+  L"Wait until that has finished, then open Keiko again."
+#define KEIKO_FAILURE_SETUP_BUSY_DE \
+  L"Keiko wird gerade eingerichtet oder aktualisiert.\r\n\r\n" \
+  L"Warte, bis das fertig ist, und \x00f6" L"ffne Keiko dann erneut."
+
+static const keiko_failure_text KEIKO_FAILURE_TEXTS[] = {
+  {"health-timeout", KEIKO_FAILURE_HEALTH_TIMEOUT_EN, KEIKO_FAILURE_HEALTH_TIMEOUT_DE},
+  {"port-in-use", KEIKO_FAILURE_PORT_IN_USE_EN, KEIKO_FAILURE_PORT_IN_USE_DE},
+  {"setup-busy", KEIKO_FAILURE_SETUP_BUSY_EN, KEIKO_FAILURE_SETUP_BUSY_DE},
+};
+
+/* Called before the child starts: a stale note of an earlier launcher with the same process id must
+ * not be shown, and a launcher that cannot name the file simply shows the generic text. */
+static void prepare_failure_note(keiko_launcher_buffers *buffers) {
+  wchar_t directory[KEIKO_NOTE_CAP];
+  DWORD length = GetTempPathW(KEIKO_NOTE_CAP, directory);
+  buffers->failure_note[0] = L'\0';
+  if (length == 0 || length >= KEIKO_NOTE_CAP) return;
+  if (_snwprintf_s(buffers->failure_note, KEIKO_NOTE_CAP, _TRUNCATE, L"%lskeiko-launch-note-%lu.txt",
+                   directory, (unsigned long)GetCurrentProcessId()) <= 0) {
+    buffers->failure_note[0] = L'\0';
+    return;
+  }
+  (void)DeleteFileW(buffers->failure_note);
+  if (!SetEnvironmentVariableW(L"KEIKO_PORTABLE_FAILURE_NOTE", buffers->failure_note)) {
+    buffers->failure_note[0] = L'\0';
+  }
+}
+
+/* The reason token the CLI wrote: lowercase letters and hyphens up to the first other byte, at most
+ * 31 of them. Anything else, or no file, is an empty reason. The file is removed once read. */
+static void read_failure_reason(const wchar_t *path, char reason[32]) {
+  char text[32];
+  DWORD bytes_read = 0;
+  DWORD index;
+  HANDLE file;
+  ZeroMemory(text, sizeof(text));
+  reason[0] = '\0';
+  if (path[0] == L'\0') return;
+  file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+  if (file == INVALID_HANDLE_VALUE) return;
+  if (!ReadFile(file, text, (DWORD)(sizeof(text) - 1u), &bytes_read, NULL)) bytes_read = 0;
+  (void)CloseHandle(file);
+  (void)DeleteFileW(path);
+  for (index = 0; index < bytes_read && index < 31u; ++index) {
+    if (!((text[index] >= 'a' && text[index] <= 'z') || text[index] == '-')) break;
+    reason[index] = text[index];
+  }
+  reason[index] = '\0';
+}
+
+static const wchar_t *failure_text(const char *reason) {
+  const int german = ui_language_is_german();
+  size_t index;
+  for (index = 0; index < sizeof(KEIKO_FAILURE_TEXTS) / sizeof(KEIKO_FAILURE_TEXTS[0]); ++index) {
+    if (strcmp(KEIKO_FAILURE_TEXTS[index].reason, reason) == 0) {
+      return german ? KEIKO_FAILURE_TEXTS[index].german : KEIKO_FAILURE_TEXTS[index].english;
+    }
+  }
+  return german ? KEIKO_FAILURE_GENERIC_DE : KEIKO_FAILURE_GENERIC_EN;
+}
+
+static void show_failure_box(const keiko_launcher_buffers *buffers) {
+  char reason[32];
+  read_failure_reason(buffers->failure_note, reason);
+  (void)MessageBoxW(NULL, failure_text(reason), L"Keiko", MB_OK | MB_ICONERROR);
+}
+
+static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console,
+                                  int *child_ended);
 
 static int run_with_feedback(keiko_launcher_buffers *buffers, int has_console) {
   HANDLE instance = NULL;
   keiko_feedback feedback = {NULL, NULL, 0};
+  int child_ended = 0;
   int result;
   if (!has_console && !claim_launcher_instance(buffers->root, &instance)) return 0;
   if (!has_console) feedback_start(&feedback);
-  result = launch_after_preflight(buffers, has_console);
+  result = launch_after_preflight(buffers, has_console, &child_ended);
   feedback_stop(&feedback);
   if (instance != NULL) (void)CloseHandle(instance);
+  /* After the mutex is released: a box the person leaves open never blocks a later start. */
+  if (!has_console && child_ended && result != 0) show_failure_box(buffers);
   return result;
 }
 
@@ -339,8 +450,8 @@ static int run_selected_launcher(keiko_launcher_buffers *buffers, int has_consol
   /* The CLI's own failure dialog cannot load when the Node runtime or the app bundle itself is
    * gone, and with CREATE_NO_WINDOW the child's stderr would be invisible — the exact broken
    * install would fail with no signal at all. Only this pre-flight class gets a native dialog
-   * here: any later failure is the CLI notifier's job, and a second generic dialog on a nonzero
-   * exit would double-report it. */
+   * here: a `portable launch` child that ended non-zero is reported by the failure box in
+   * run_with_feedback (the CLI no longer starts a notifier of its own on Windows), never by both. */
   if (bootstrap_artifact_unusable(buffers->node) || bootstrap_artifact_unusable(buffers->cli)) {
     report_bootstrap_failure(
       has_console,
@@ -354,7 +465,8 @@ static int run_selected_launcher(keiko_launcher_buffers *buffers, int has_consol
   return run_with_feedback(buffers, has_console);
 }
 
-static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console) {
+static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console,
+                                  int *child_ended) {
   /* Explorer starts pre-parse the CLI bundle: `node --check` refuses a truncated or
    * syntax-broken app/dist/cli/index.js WITHOUT executing it — the class where Node would die
    * during module load, before the notifier exists, with CREATE_NO_WINDOW hiding the only
@@ -395,6 +507,8 @@ static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_conso
     );
     return 1;
   }
+
+  if (!has_console) prepare_failure_note(buffers);
 
   /* Built AFTER the pre-parse: the check reuses the same command buffer. */
   int written = _snwprintf_s(
@@ -443,6 +557,7 @@ static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_conso
   GetExitCodeProcess(process.hProcess, &exit_code);
   CloseHandle(process.hThread);
   CloseHandle(process.hProcess);
+  *child_ended = 1;
   return (int)exit_code;
 }
 

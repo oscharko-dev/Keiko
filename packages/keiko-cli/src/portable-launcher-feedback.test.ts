@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { LAUNCH_FAILURE_REASONS } from "./launch-failure-note.js";
 
 // #4358 v5: the Windows launcher itself answers a double-click before Node loads. The C source
 // cannot be executed here (the Windows behavior is measured on Windows), so this file pins what
@@ -89,9 +90,7 @@ describe("the Windows launcher's own start feedback", () => {
       wrapper.indexOf("launch_after_preflight(buffers"),
     );
     const preflight = launcherSource.slice(
-      launcherSource.indexOf(
-        "static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console) {",
-      ),
+      launcherSource.search(/static int launch_after_preflight\([^)]*\) \{/u),
     );
     expect(preflight).toMatch(/--check/u);
   });
@@ -136,15 +135,92 @@ describe("the Windows launcher's own start feedback", () => {
   });
 });
 
-describe("the CLI no longer starts a PowerShell for the setup notice", () => {
+// #4358 head B: when the `portable launch` child ends non-zero under a double-click, the launcher
+// shows the failure box itself, from the closed reason the CLI leaves in a note. What this proves
+// from any host: both languages' wording, that every reason the C table names is one the CLI can
+// write, and the order of the calls (the note is prepared before the child starts, the box comes
+// after the mutex is released, and only for a child that ended non-zero). The behavior is measured
+// on Windows.
+describe("the Windows launcher's failure box", () => {
+  const EXPECTED = {
+    KEIKO_FAILURE_GENERIC: [
+      "Keiko could not start.\r\n\r\nStart Keiko again. If this happens again, contact support and tell them the time of the start.",
+      "Keiko konnte nicht starten.\r\n\r\nStarte Keiko neu. Tritt der Fehler wieder auf, wende dich an den Support und nenne die Uhrzeit des Starts.",
+    ],
+    KEIKO_FAILURE_HEALTH_TIMEOUT: [
+      "Keiko is still starting or took too long to start.\r\n\r\nWait a moment and open Keiko again. If it happens again, contact support and tell them the time of the start.",
+      "Keiko startet noch oder hat zu lange gebraucht.\r\n\r\nWarte einen Moment und öffne Keiko erneut. Tritt es wieder auf, wende dich an den Support und nenne die Uhrzeit des Starts.",
+    ],
+    KEIKO_FAILURE_PORT_IN_USE: [
+      "Keiko could not start because its port is already in use.\r\n\r\nClose the other Keiko or program that uses it and start Keiko again.",
+      "Keiko konnte nicht starten, weil sein Port schon belegt ist.\r\n\r\nSchließe das andere Keiko oder Programm, das ihn nutzt, und starte Keiko neu.",
+    ],
+    KEIKO_FAILURE_SETUP_BUSY: [
+      "Keiko is already being set up or updated.\r\n\r\nWait until that has finished, then open Keiko again.",
+      "Keiko wird gerade eingerichtet oder aktualisiert.\r\n\r\nWarte, bis das fertig ist, und öffne Keiko dann erneut.",
+    ],
+  } as const;
+
+  it.each(Object.entries(EXPECTED))(
+    "carries the %s wording in both languages",
+    (name, [en, de]) => {
+      expect(decodedFeedbackText(`${name}_EN`)).toBe(en);
+      expect(decodedFeedbackText(`${name}_DE`)).toBe(de);
+    },
+  );
+
+  it("names only reasons the CLI can write, and reads only a closed token from the note", () => {
+    const table = /KEIKO_FAILURE_TEXTS\[\] = \{([\s\S]*?)\n\};/u.exec(launcherSource)?.[1] ?? "";
+    const tokens = [...table.matchAll(/\{"([a-z-]+)",/gu)].map((match) => match[1]);
+    expect(tokens).toEqual(["health-timeout", "port-in-use", "setup-busy"]);
+    for (const token of tokens) {
+      expect(LAUNCH_FAILURE_REASONS).toContain(token);
+    }
+    // the file's own text is never shown: only lowercase letters and hyphens are taken as a token
+    expect(launcherSource).toMatch(/text\[index\] >= 'a' && text\[index\] <= 'z'/u);
+    expect(launcherSource).toMatch(/L"KEIKO_PORTABLE_FAILURE_NOTE"/u);
+    expect(launcherSource).toMatch(/keiko-launch-note-%lu\.txt/u);
+  });
+
+  it("prepares the note before the child starts and shows the box after the mutex is released", () => {
+    const preflight = launcherSource.slice(
+      launcherSource.search(/static int launch_after_preflight\([^)]*\) \{/u),
+    );
+    expect(preflight.indexOf("prepare_failure_note(buffers)")).toBeGreaterThan(-1);
+    expect(preflight.indexOf("prepare_failure_note(buffers)")).toBeLessThan(
+      preflight.indexOf("CreateProcessW("),
+    );
+    expect(preflight).toMatch(/\*child_ended = 1;\s*return \(int\)exit_code;/u);
+
+    const wrapper = /static int run_with_feedback[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    expect(wrapper.indexOf("CloseHandle(instance)")).toBeGreaterThan(-1);
+    expect(wrapper.indexOf("CloseHandle(instance)")).toBeLessThan(
+      wrapper.indexOf("show_failure_box(buffers)"),
+    );
+    expect(wrapper).toMatch(/if \(!has_console && child_ended && result != 0\) show_failure_box/u);
+    // the box follows the stop of the first-start message: they are never shown together
+    expect(wrapper.indexOf("feedback_stop(&feedback)")).toBeLessThan(
+      wrapper.indexOf("show_failure_box(buffers)"),
+    );
+  });
+
+  it("shows the box as an error with the product title and removes the note it read", () => {
+    expect(launcherSource).toMatch(
+      /MessageBoxW\(NULL, failure_text\(reason\), L"Keiko", MB_OK \| MB_ICONERROR\)/u,
+    );
+    expect(launcherSource).toMatch(/\(void\)DeleteFileW\(path\);/u);
+  });
+});
+
+describe("the CLI starts no notifier process of its own on Windows", () => {
   const notifierSource = readFileSync(
     fileURLToPath(new URL("./portable-launch-notifier.ts", import.meta.url)),
     "utf8",
   );
 
-  it("keeps the failure alert as its only Windows box", () => {
+  it("has no PowerShell box, neither a setup notice nor a failure alert", () => {
     expect(notifierSource).not.toMatch(/setup-notice|SETUP_NOTICE|notifyPortableSetupStarted/u);
-    expect(notifierSource).not.toMatch(/'Information'/u);
-    expect(notifierSource).toMatch(/'Keiko could not start', 'OK', 'Error'/u);
+    expect(notifierSource).not.toMatch(/PresentationFramework|MessageBox|Start-Process|-Command/u);
+    expect(notifierSource).not.toMatch(/windows-helper-start/u);
   });
 });

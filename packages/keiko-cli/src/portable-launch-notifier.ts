@@ -1,87 +1,39 @@
 import { spawn } from "node:child_process";
-import {
-  activityLogEvent,
-  defineActivityLogOperation,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import {
-  emitSecurityLogEvent,
-  securityErrorKind,
-  type SecurityLogSink,
-  type WindowsBinaryExistsCheck,
-  type WindowsSystemDirectoryIdentityCheck,
-} from "@oscharko-dev/keiko-security";
-import { emitCliWindowsSystemFailure } from "./security-log.js";
-import {
-  resolveWindowsPowerShellHelper,
-  startOutlivingWindowsHelper,
-  type WindowsHelperSystem,
-} from "./windows-helper-start.js";
 
 /**
  * A desktop double-click gives the portable launcher no terminal: every `io.err` line vanishes and
  * a failed first start looks like the app simply did nothing. This surfaced twice in the 0.3.0
  * beta on macOS — a Gatekeeper-blocked bundle and a refused runtime activation both died without
- * a visible word — and again on Windows when the console-backed Node child was hidden. When a
- * setup or launch command fails under a double-click, this notifier shows the recorded reason in a
- * native alert instead.
+ * a visible word. When a setup or launch command fails under a double-click on macOS, this
+ * notifier shows the recorded reason in a native alert instead.
+ *
+ * Windows has no notifier process (#4358): the native launcher outlives its `portable launch`
+ * child and shows the failure box itself, from the closed reason the CLI leaves in a note
+ * (launch-failure-note.ts). A PowerShell started for it from here ended with the CLI process on a
+ * slow machine, before it could show anything.
  *
  * The double-click is detected by `KEIKO_PORTABLE_UI_LAUNCH=1`, which only the native launcher
  * binary sets. A TTY heuristic is deliberately NOT used: it cannot tell a Finder launch from a
  * test runner or CI pipe, and the first version of this notifier proved it by raising real alert
  * dialogs on the desktop while the test suite exercised its failure paths.
  *
- * The alert runs unreferenced: it waits for the human at its own pace and never blocks the CLI
- * process, and is strictly best-effort — it must never turn a diagnosable failure into a different
- * one. On macOS it is detached; on Windows it starts through the shared visible-helper start
- * (attached, hidden window), because a detached PowerShell showed no box there (#4358).
+ * The alert runs detached and unreferenced: it waits for the human at its own pace and never blocks
+ * the CLI process, and is strictly best-effort — it must never turn a diagnosable failure into a
+ * different one.
  */
 
 const MAX_ALERT_MESSAGE_LENGTH = 400;
 const OSASCRIPT_EXECUTABLE = "/usr/bin/osascript";
-
-const WINDOWS_ALERT_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "portable.windows-alert.spawn-failed",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "portable-launch-notifier.logWindowsAlertSpawnFailure",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["portable-failure-alert"],
-    },
-    failureKind: {
-      type: "string",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 64,
-    },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-alert-spawn"],
-  proofIds: ["portable.windows-alert.spawn-failed.emitted-line"],
-  releaseImpact: "patch",
-});
 
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
 
 export interface PortableFailureNotifierDeps {
   readonly platform?: (() => NodeJS.Platform) | undefined;
   readonly runAlert?: ((script: string) => void) | undefined;
-  readonly runWindowsAlert?: ((message: string, env: EnvSource) => void) | undefined;
-  readonly securityLogSink?: SecurityLogSink | undefined;
-  readonly windowsBinaryExists?: WindowsBinaryExistsCheck | undefined;
-  readonly windowsSystemDirectoryIdentity?: WindowsSystemDirectoryIdentityCheck | undefined;
   /**
    * Receives one fixed, content-free line when the alert itself cannot be shown. The CLI keeps
-   * this stderr fallback for the person who launched it; `securityLogSink` separately carries the
-   * correlated machine-reconstruction event for resolver and spawn failures.
+   * this stderr fallback for the person who launched it.
    */
   readonly reportAlertFailure?: ((line: string) => void) | undefined;
 }
@@ -108,8 +60,6 @@ function alertScript(message: string): string {
 interface DetachedAlertChild {
   on(event: "error", listener: (error: Error) => void): unknown;
   unref(): void;
-  readonly exitCode?: number | null;
-  readonly signalCode?: NodeJS.Signals | null;
 }
 
 type DetachedAlertSpawn = (
@@ -120,8 +70,6 @@ type DetachedAlertSpawn = (
     readonly env: NodeJS.ProcessEnv;
     readonly shell: false;
     readonly stdio: "ignore";
-    readonly windowsHide?: boolean;
-    readonly cwd?: string;
   },
 ) => DetachedAlertChild;
 
@@ -146,138 +94,12 @@ export function runDetachedAlert(
   child.unref();
 }
 
-function powershellSingleQuoted(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function windowsAlertCommand(message: string): string {
-  const text = powershellSingleQuoted(displayableAlertMessage(message));
-  return [
-    "Add-Type -AssemblyName PresentationFramework",
-    `[System.Windows.MessageBox]::Show(${text}, 'Keiko could not start', 'OK', 'Error') | Out-Null`,
-  ].join("; ");
-}
-
-export function runDetachedWindowsAlert(
-  message: string,
-  env: EnvSource,
-  spawnFn: DetachedAlertSpawn = spawn,
-  reportAlertFailure: (line: string) => void = defaultAlertFailureReport,
-  identityCheck?: WindowsSystemDirectoryIdentityCheck,
-  securityLogSink?: SecurityLogSink,
-  existsAsFile?: WindowsBinaryExistsCheck,
-): void {
-  const system = resolveWindowsHelperSystem(env, identityCheck, existsAsFile, securityLogSink);
-  const child = spawnWindowsAlertChild(message, env, system, spawnFn, securityLogSink);
-  child.on("error", (error) => {
-    logWindowsAlertSpawnFailure(error, securityLogSink);
-    reportAlertFailure(ALERT_FAILURE_LINE);
-  });
-  child.unref();
-}
-
-function resolveWindowsHelperSystem(
-  env: EnvSource,
-  identityCheck: WindowsSystemDirectoryIdentityCheck | undefined,
-  existsAsFile: WindowsBinaryExistsCheck | undefined,
-  sink: SecurityLogSink | undefined,
-): WindowsHelperSystem {
-  try {
-    return resolveWindowsPowerShellHelper(env, identityCheck, existsAsFile);
-  } catch (error) {
-    emitCliWindowsSystemFailure(error, sink, "portable-failure-alert");
-    throw error;
-  }
-}
-
-function spawnWindowsAlertChild(
-  message: string,
-  env: EnvSource,
-  system: WindowsHelperSystem,
-  spawnFn: DetachedAlertSpawn,
-  sink: SecurityLogSink | undefined,
-): DetachedAlertChild {
-  try {
-    // The failure alert is shown just before the keiko process ends with its failure, and on Windows
-    // an attached child ends with the process that started it (libuv's job object): it needs the
-    // second stage, so the box outlives this process.
-    return startOutlivingWindowsHelper(
-      { system, env, stageTwoFlags: ["-Sta"], script: windowsAlertCommand(message) },
-      spawnFn,
-    );
-  } catch (error) {
-    logWindowsAlertSpawnFailure(error, sink);
-    throw error;
-  }
-}
-
-function logWindowsAlertSpawnFailure(error: unknown, sink: SecurityLogSink | undefined): void {
-  emitSecurityLogEvent(
-    sink,
-    activityLogEvent(
-      WINDOWS_ALERT_SPAWN_FAILED_OPERATION,
-      { level: "error", errorKind: "unavailable" },
-      { surface: "portable-failure-alert", failureKind: securityErrorKind(error) },
-    ),
-  );
-}
-
 function defaultAlertFailureReport(line: string): void {
   process.stderr.write(line);
 }
 
 function launchFailureMessage(message: string): string {
   return message.trim() === "" ? "The portable launch failed without a reason." : message;
-}
-
-function notifyMacosLaunchFailure(
-  text: string,
-  deps: PortableFailureNotifierDeps,
-  reportAlertFailure: (line: string) => void,
-): void {
-  const runAlert =
-    deps.runAlert ??
-    ((script: string): void => {
-      runDetachedAlert(script, undefined, reportAlertFailure);
-    });
-  runAlert(alertScript(text));
-}
-
-function notifyWindowsLaunchFailure(
-  text: string,
-  env: EnvSource,
-  deps: PortableFailureNotifierDeps,
-  reportAlertFailure: (line: string) => void,
-): void {
-  const runWindowsAlert =
-    deps.runWindowsAlert ??
-    ((alertMessage: string, notifyEnv: EnvSource): void => {
-      runDetachedWindowsAlert(
-        alertMessage,
-        notifyEnv,
-        undefined,
-        reportAlertFailure,
-        deps.windowsSystemDirectoryIdentity,
-        deps.securityLogSink,
-        deps.windowsBinaryExists,
-      );
-    });
-  runWindowsAlert(text, env);
-}
-
-function notifySupportedPlatformLaunchFailure(
-  hostPlatform: NodeJS.Platform,
-  text: string,
-  env: EnvSource,
-  deps: PortableFailureNotifierDeps,
-  reportAlertFailure: (line: string) => void,
-): void {
-  if (hostPlatform === "darwin") {
-    notifyMacosLaunchFailure(text, deps, reportAlertFailure);
-  }
-  if (hostPlatform === "win32") {
-    notifyWindowsLaunchFailure(text, env, deps, reportAlertFailure);
-  }
 }
 
 export function notifyPortableLaunchFailure(
@@ -287,12 +109,15 @@ export function notifyPortableLaunchFailure(
 ): void {
   if (env.KEIKO_PORTABLE_UI_LAUNCH !== "1") return;
   const platform = deps.platform ?? ((): NodeJS.Platform => process.platform);
-  const hostPlatform = platform();
-  if (hostPlatform !== "darwin" && hostPlatform !== "win32") return;
-  const text = launchFailureMessage(message);
+  if (platform() !== "darwin") return;
   const reportAlertFailure = deps.reportAlertFailure ?? defaultAlertFailureReport;
+  const runAlert =
+    deps.runAlert ??
+    ((script: string): void => {
+      runDetachedAlert(script, undefined, reportAlertFailure);
+    });
   try {
-    notifySupportedPlatformLaunchFailure(hostPlatform, text, env, deps, reportAlertFailure);
+    runAlert(alertScript(launchFailureMessage(message)));
   } catch {
     // Best-effort by contract — see runDetachedAlert; the fixed line below is the evidence.
     reportAlertFailure(ALERT_FAILURE_LINE);

@@ -39,8 +39,20 @@ starting. Your browser opens when it is ready."; German: "Keiko startet bereits.
 sich, sobald Keiko bereit ist.") and also starts nothing. If every double-click only answers that
 message and no browser opens, the first start is stuck: end the `Keiko.exe` and `node.exe` processes
 in Task Manager and start it again. A start from a terminal shows the CLI's
-own output instead and no box. A setup that fails afterwards shows one of the dialogs above. This box
-leaves no Activity Log line: the native launcher cannot write the log, and the CLI cannot observe it.
+own output instead and no box. This box leaves no Activity Log line: the native launcher cannot write
+the log, and the CLI cannot observe it.
+
+A start that ends without a running Keiko shows one error message titled `Keiko`, from the launcher
+itself: "Keiko is still starting or took too long to start. Wait a moment and open Keiko again. …" (a
+start that did not answer in time), "… its port is already in use …", "… already being set up or
+updated …", or a generic "Keiko could not start. Start Keiko again. …" for every other cause, and for a
+start that crashed or was killed and left no reason. German Windows shows the German texts. The box
+stays until you close it and never blocks a later start. The Activity Log records every such end as
+`portable.launch.failed` with a closed reason (`port-in-use`, `health-timeout`, `process-exited`,
+`setup-busy`, `pid-publication`, `launch-error`, …) and whether the launcher's note was written; read it
+with `keiko support export` and `keiko support analyze`. A first start gives up when its UI process
+shows no progress for 20 seconds or is still not healthy after 15 minutes; the installation itself has
+no time limit, so a slow first setup that takes many minutes is not cut off.
 
 **Root Cause**
 
