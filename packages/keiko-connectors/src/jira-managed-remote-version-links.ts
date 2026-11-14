@@ -32,9 +32,11 @@ interface Selection {
 const GLOBAL_ARGS = new Set(["globalId", "startAt", "maxResults"]);
 const VERSION_ARGS = new Set(["versionId", "startAt", "maxResults"]);
 const SINGLE_ARGS = new Set(["versionId", "globalId"]);
+/** Longest global ID of a version remote link, in characters. */
+export const JIRA_VERSION_LINK_GLOBAL_ID_MAX_CHARS = 2048;
 export function jiraRemoteVersionLinkGlobalId(value: unknown, path: boolean): value is string {
   return (
-    jiraNativeText(value, 2048) &&
+    jiraNativeText(value, JIRA_VERSION_LINK_GLOBAL_ID_MAX_CHARS) &&
     !/[\p{Cc}\p{Surrogate}]/u.test(value) &&
     (!path || (value !== "." && value !== ".." && !/[/\\%]/u.test(value)))
   );

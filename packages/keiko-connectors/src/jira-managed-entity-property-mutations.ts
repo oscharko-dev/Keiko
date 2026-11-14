@@ -9,6 +9,11 @@ import {
 } from "./jira-entity-property-bindings.js";
 import { decodeJiraPropertyInput } from "./jira-entity-property-input.js";
 import {
+  JIRA_PROPERTY_KEY_MAX_BYTES,
+  JIRA_PROPERTY_VALUE_MAX_BYTES,
+  jiraPropertyPathKey,
+} from "./jira-entity-property-values.js";
+import {
   jiraPropertyBindingFailure,
   jiraPropertyStatesEqual,
   readJiraPropertyState,
@@ -67,16 +72,29 @@ interface Input extends JiraPropertyReadSelection {
   readonly expected: JiraPropertyState;
   readonly desired: JiraPropertyState;
 }
-const INVALID: Failure = {
-  ok: false,
-  reason: "field-validation",
-  detail: {
-    validation: "invalid-field",
-    messages: [
-      "Review the entity, exact property key and complete typed value first. Set needs valueNodes and either expectedValueNodes or expectAbsent=true. Delete needs expectedValueNodes. Nothing was changed.",
-    ],
-  },
-};
+/**
+ * One refused input, one sentence per cause (#4357 AC3): each text names the rule the model must
+ * satisfy and stays within the 200-byte bound of a detail message, so the bound never cuts it. A
+ * text never carries the refused value, key or entity.
+ */
+function invalid(
+  messages: readonly string[],
+  fieldId?: string,
+  validation: "invalid-field" | "bounds-exceeded" = "invalid-field",
+): Failure {
+  return {
+    ok: false,
+    reason: "field-validation",
+    detail: { ...(fieldId === undefined ? {} : { fieldId }), validation, messages },
+  };
+}
+const NOTHING_CHANGED = "Nothing was changed.";
+const KEY_RULE = invalid(
+  [
+    String.raw`propertyKey must be the exact property key: not blank, at most ${String(JIRA_PROPERTY_KEY_MAX_BYTES)} bytes, no control characters, no / \ or %, and not . or .. ${NOTHING_CHANGED}`,
+  ],
+  "propertyKey",
+);
 const CONFLICT: Failure = { ok: false, reason: "conflict" };
 const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
 type StateSelection = Failure | { readonly ok: true; readonly state: JiraPropertyState };
@@ -95,21 +113,54 @@ function decodedState(
     detail: {
       fieldId,
       validation: bounds ? "bounds-exceeded" : "invalid-field",
-      messages: [
-        bounds
-          ? "A property value must fit 32768 UTF-8 JSON bytes and the existing depth, field and node limits. Shorten or simplify the complete value. Nothing was written."
-          : "The typed property value is incomplete or invalid. Read its complete typed nodes, correct the structure and unsupported values, then review it again. Nothing was written.",
-      ],
+      messages: bounds
+        ? [
+            `A property value must fit ${String(JIRA_PROPERTY_VALUE_MAX_BYTES)} UTF-8 JSON bytes and the depth, field and node limits. A larger value cannot be written as one value: shorten it or split it across property keys. Nothing was written.`,
+          ]
+        : [
+            "The typed property value is incomplete or invalid. Read its complete typed nodes, correct the structure and unsupported values, then review it again. Nothing was written.",
+          ],
     },
   };
 }
-function expectedState(definition: Definition, args: CatalogJsonObject): StateSelection {
-  if (args.expectAbsent !== undefined) {
-    if (definition.remove || args.expectAbsent !== true || args.expectedValueNodes !== undefined)
-      return INVALID;
-    return { ok: true, state: { present: false } };
-  }
-  return decodedState(args.expectedValueNodes, "expectedValueNodes");
+function expectedState(
+  definition: Definition,
+  args: CatalogJsonObject,
+  takes: Failure,
+): StateSelection {
+  const review = args.expectedValueNodes;
+  if (args.expectAbsent !== undefined) return absentReview(definition, args, takes);
+  if (review === undefined)
+    return invalid(
+      [
+        definition.remove
+          ? `Send expectedValueNodes: the complete current value as the property read lists it. ${NOTHING_CHANGED}`
+          : `Send expectAbsent:true for a property that does not exist yet, or expectedValueNodes: the complete current value as the property read lists it. ${NOTHING_CHANGED}`,
+      ],
+      "expectedValueNodes",
+    );
+  return decodedState(review, "expectedValueNodes");
+}
+function absentReview(
+  definition: Definition,
+  args: CatalogJsonObject,
+  takes: Failure,
+): StateSelection {
+  // A delete reviews the value it removes; expectAbsent belongs to a set that creates the property.
+  if (definition.remove) return takes;
+  if (args.expectAbsent !== true)
+    return invalid(
+      [
+        `expectAbsent must be true, and only for a property that does not exist yet. ${NOTHING_CHANGED}`,
+      ],
+      "expectAbsent",
+    );
+  if (args.expectedValueNodes !== undefined)
+    return invalid(
+      [`Send exactly one of expectAbsent:true or expectedValueNodes, not both. ${NOTHING_CHANGED}`],
+      "expectAbsent",
+    );
+  return { ok: true, state: { present: false } };
 }
 function desiredState(definition: Definition, args: CatalogJsonObject): StateSelection {
   return definition.remove
@@ -118,20 +169,28 @@ function desiredState(definition: Definition, args: CatalogJsonObject): StateSel
 }
 function input(definition: Definition, args: CatalogJsonObject): InputSelection {
   const entityFields = jiraPropertyEntityFields(definition.read);
-  if (entityFields === undefined) return INVALID;
+  if (entityFields === undefined)
+    return invalid([`This operation is not available. ${NOTHING_CHANGED}`]);
   const nativeFields = new Set([...entityFields, "propertyKey"]);
-  const allowed = new Set([
+  const taken = [
     ...nativeFields,
     "expectedValueNodes",
     ...(definition.remove ? [] : ["valueNodes", "expectAbsent"]),
-  ]);
-  if (Object.keys(args).some((key) => !allowed.has(key))) return INVALID;
+  ];
+  const takes = invalid([`This call takes only ${taken.join(", ")}. ${NOTHING_CHANGED}`]);
+  // expectAbsent is known to a delete as well, so that the delete's own check refuses it by rule.
+  const known = new Set([...taken, "expectAbsent"]);
+  if (Object.keys(args).some((key) => !known.has(key))) return takes;
+  if (!jiraPropertyPathKey(args.propertyKey)) return KEY_RULE;
   const entityArgs: CatalogJsonObject = Object.fromEntries(
     Object.entries(args).filter(([key]) => nativeFields.has(key)),
   );
   const selected = selectJiraPropertyRead(definition.read, entityArgs);
-  if (selected?.propertyKey === undefined) return INVALID;
-  const expected = expectedState(definition, args);
+  if (selected?.propertyKey === undefined)
+    return invalid([
+      `Name the entity with ${entityFields.join(", ")}, exactly as the property read for it takes them. ${NOTHING_CHANGED}`,
+    ]);
+  const expected = expectedState(definition, args, takes);
   if (!expected.ok) return expected;
   const desired = desiredState(definition, args);
   if (!desired.ok) return desired;
@@ -175,6 +234,24 @@ async function inspect(binding: BoundJiraProperty, selected: Input): Promise<Fai
       }
     : undefined;
 }
+/**
+ * After an acknowledged write the usual refusal sentences would be untrue: they end "Nothing was
+ * written". The model reads this one instead, beside the receipt that says the write happened, and
+ * does not repeat it (#4357 AC3).
+ */
+const ACKNOWLEDGED_UNVERIFIED =
+  "Jira acknowledged the write, but Keiko could not verify the property afterwards. Do not repeat the write: read the property to see its current value.";
+function unverified(
+  reason: Failure["reason"],
+  acknowledged: PropertyReceipt,
+): JiraEntityPropertyMutationAttempt {
+  return {
+    ok: false,
+    reason,
+    detail: { messages: [ACKNOWLEDGED_UNVERIFIED] },
+    receipt: acknowledged,
+  };
+}
 async function confirm(
   ports: JiraEntityPropertyPorts,
   binding: BoundJiraProperty,
@@ -184,14 +261,14 @@ async function confirm(
   try {
     // Rebind numeric/key identity, never the caller's former alias, before using the same resource.
     const current = await bindJiraPropertyEntity(binding.entity, ports);
-    if (!current.ok) return { ...jiraPropertyBindingFailure(current), receipt: acknowledged };
+    if (!current.ok) return unverified(jiraPropertyBindingFailure(current).reason, acknowledged);
     if (current.path !== binding.path || current.query !== binding.query)
-      return { ...CONFLICT, receipt: acknowledged };
+      return unverified("conflict", acknowledged);
     const observed = await readJiraPropertyState(current, selected.propertyKey);
-    if (!observed.ok) return { ...observed, receipt: acknowledged };
+    if (!observed.ok) return unverified(observed.reason, acknowledged);
     return jiraPropertyStatesEqual(observed.state, selected.desired)
       ? { ok: true, receipt: receipt(current, selected) }
-      : { ...CONFLICT, receipt: acknowledged };
+      : unverified("conflict", acknowledged);
   } catch (error) {
     throw new JiraAcknowledgedMutationError(error, acknowledged);
   }
