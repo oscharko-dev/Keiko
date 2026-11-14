@@ -27,6 +27,9 @@ services:
     shm_size: 2gb
     environment:
       CI: "true"
+      # The vitest worker count (scripts/lib/vitest-workers.mjs): passed through when set on the host,
+      # empty (ignored, so the CI default of two applies) when not. docs/qa/local-gates.md.
+      KEIKO_VITEST_MAX_WORKERS: "${KEIKO_VITEST_MAX_WORKERS:-}"
       # Marks evidence produced here as local. Nothing downstream may treat it as authoritative:
       # this container is not the reference architecture for wall-clock measurement.
       KEIKO_LOCAL_GATE_CONTAINER: "1"

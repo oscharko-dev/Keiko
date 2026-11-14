@@ -56,6 +56,17 @@ yet `debug-launch-policy.test.ts` asserts the exact pair: outside CI it skips it
 and names the reason, and with `CI=true` it never skips, so run `node scripts/check-runtime-toolchain.mjs --exact`
 to see whether your host qualifies (#4111).
 
+## Test worker count
+
+Vitest is capped (GEN-TEST-FLAKE-001/002): the integration tests start servers, parse PDFs and build
+large temporary trees, and fanning out over every core starves them into false-red failures. The cap
+is decided in one place, `scripts/lib/vitest-workers.mjs`, and every capped config imports it: two
+workers when `CI` is set (the small shared runner, exactly as before), four on a development machine,
+and `KEIKO_VITEST_MAX_WORKERS` (an integer from 1 to 16; anything else is ignored) chooses. Set it to
+`2` to reproduce CI when a full local run shows a starvation flake. This container sets `CI=true`
+itself, so it stays at two unless the variable is set; the compose file passes the variable through
+when it is set on the host and adds no default.
+
 ## Git worktrees
 
 A linked worktree's `.git` is a file pointing at the parent checkout, which is outside the mount, so
