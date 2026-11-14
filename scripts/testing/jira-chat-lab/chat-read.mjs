@@ -41,6 +41,7 @@ import {
 import { sessionVerificationPort } from "./product-port.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
 import { prepareLabRun } from "./run-preflight.mjs";
+import { seedProductBaseline } from "./requirements/baseline-templates.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 import { createOwnedLiveChatProcess, runOwnedLiveChatLifecycle } from "./owned-live-chat.mjs";
 
@@ -57,6 +58,22 @@ process.on("warning", (warning) => {
 
 /** Where the lab's live Keiko writes its Activity Log; a lane's state directory holds none. */
 export const chatReadLogDirectory = (session) => join(session.directory, "chat-read-logs");
+
+/**
+ * The lab holds no product state outside its private session (#4369). Besides the explicit
+ * `KEIKO_MEMORY_DIR` and database paths of the deps, the process-wide diagnostics writers resolve
+ * `KEIKO_STATE_DIR`, else `<cwd>/.keiko`: without it a lab run would write into the working
+ * directory of whoever started it. The variable is set for this process and every child it forks,
+ * and restored when the run ends.
+ */
+export function isolateRuntimeState(session, env = process.env) {
+  const previous = env.KEIKO_STATE_DIR;
+  env.KEIKO_STATE_DIR = chatReadLogDirectory(session);
+  return () => {
+    if (previous === undefined) delete env.KEIKO_STATE_DIR;
+    else env.KEIKO_STATE_DIR = previous;
+  };
+}
 
 async function unusedPort() {
   const probe = createServer();
@@ -503,6 +520,7 @@ function createLiveDeps(root, session, secret, retainState, restoring = false, m
     env: {
       ...modelEnv,
       KEIKO_OS_KEYCHAIN: "off",
+      KEIKO_STATE_DIR: chatReadLogDirectory(session),
       KEIKO_MEMORY_DIR: join(root, "memory"),
       [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
       KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: credentialKey,
@@ -787,6 +805,14 @@ async function withOwnedLiveChat(options) {
     run: async () => {
       await controller.start();
       await context.pair();
+      await seedProductBaseline({
+        origin: context.live.origin,
+        cookie: context.live.cookie,
+        root,
+        session: options.session,
+        baselineTemplates: options.baselineTemplates,
+        jsonRequest,
+      });
       await options.run(context.live);
       assert.notEqual(process.exitCode, 1);
     },
@@ -810,6 +836,7 @@ export async function withLiveChat({
   modelRetries,
   embeddingModelId,
   ownedChild = false,
+  baselineTemplates = true,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
   return withLabProduct({
@@ -825,18 +852,26 @@ export async function withLiveChat({
     ownedChild,
     modelRetries,
     embeddingModelId,
+    baselineTemplates,
     prepareModel: (root) =>
       prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId }),
   });
 }
 
 /** Same paired server/vault/transport as the Chat lab, with no provider or model probe. */
-export async function withModelFreeJira({ session, run, stateReady, decorateAtlassianHttp }) {
+export async function withModelFreeJira({
+  session,
+  run,
+  stateReady,
+  decorateAtlassianHttp,
+  baselineTemplates = true,
+}) {
   return withLabProduct({
     session,
     run,
     stateReady,
     decorateAtlassianHttp,
+    baselineTemplates,
     modelId: undefined,
     retainState: true,
     browser: false,
@@ -848,11 +883,14 @@ export async function withModelFreeJira({ session, run, stateReady, decorateAtla
 }
 
 async function withLabProduct(options) {
-  const release = await prepareLabRun(options.session);
+  const restoreState = isolateRuntimeState(options.session);
+  let release;
   try {
+    release = await prepareLabRun(options.session);
     return await (options.ownedChild ? withOwnedLiveChat(options) : runLabProduct(options));
   } finally {
-    release();
+    release?.();
+    restoreState();
   }
 }
 
@@ -867,6 +905,7 @@ async function runLabProduct({
   decorateAtlassianHttp,
   configureServer,
   prepareModel,
+  baselineTemplates,
 }) {
   await requireLicense(session);
   const root = liveStateDirectory(session, retainState, restoreState);
@@ -890,6 +929,7 @@ async function runLabProduct({
     });
     const origin = `http://127.0.0.1:${product.port}`;
     const cookie = await pairedCookie(origin, secret);
+    await seedProductBaseline({ origin, cookie, root, session, baselineTemplates, jsonRequest });
     await run({ origin, cookie, session, projectPath, modelId, secret, root, deps: product.deps });
     await requireLicense(session);
     assert.notEqual(process.exitCode, 1);

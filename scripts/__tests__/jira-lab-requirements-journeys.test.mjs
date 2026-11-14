@@ -53,11 +53,24 @@ function issue(key, type, status, fields = {}) {
 }
 
 /** A context whose `act` runs the product's effects for one turn. */
+/**
+ * Jira's own account of the board of the instance: its estimation field is the one the truth names
+ * as the estimate field, and no field at all when the instance has none (S10 then cannot grade it).
+ */
+const boardReader = (estimateField) => async (path) => {
+  if (path === "/rest/api/2/field") return [];
+  if (path.startsWith("/rest/agile/1.0/board?"))
+    return { values: estimateField === undefined ? [] : [{ id: 1 }] };
+  return { estimation: { field: { fieldId: estimateField } } };
+};
+
 function context({ issues = [], truth = {}, act = () => ({}), extra = {} } = {}) {
   const calls = { turns: 0 };
+  const fieldIds = { fieldIds: FIELDS, ...truth }.fieldIds;
   return {
     calls,
     truth: { fieldIds: FIELDS, issues: [], ...truth },
+    nativeGet: boardReader(fieldIds.storyPoints),
     refusals: () => 0,
     search: async (query) => {
       const type = /issuetype = (\w+)/.exec(query)?.[1];
@@ -121,6 +134,7 @@ describe("S10 progress of a project", () => {
     "EPIC;RPT-1;3;2",
     "EPIC;RPT-2;1;0",
     "SCHÄTZUNG;10;8;2",
+    "QUELLE;Story Points;KONFIGURIERT",
   ];
   const grade = (lines, overrides = {}) =>
     JOURNEYS.S10(
@@ -132,13 +146,55 @@ describe("S10 progress of a project", () => {
   it("is green and covers all three obligations for an exact answer", async () => {
     const check = await grade(GREEN);
     expect(check.status).toBe("green");
-    expect(check.covers).toEqual(["counts-by-type-status", "per-epic-progress", "estimate-totals"]);
+    expect(check.covers).toEqual([
+      "counts-by-type-status",
+      "per-epic-progress",
+      "estimate-totals",
+      "estimate-source-labelled",
+      "configured-unused-stated",
+      "other-estimate-field-named",
+    ]);
+  });
+
+  it("S10 credits answer-clean only with a stored report result, a readable message and no flag", async () => {
+    const stored = { report: { progress: { byStatus: {} }, completeness: { issuesRead: 7 } } };
+    const run = (answer, storedMessage = { role: "assistant" }) =>
+      JOURNEYS.S10(
+        context({
+          issues: world,
+          act: () => ({ answer, toolExchanges: [reportExchange(stored)] }),
+          extra: { storedAnswer: async () => storedMessage },
+        }),
+        CHAT,
+      );
+    expect((await run(GREEN.join("\n"))).covers).toContain("answer-clean");
+    const dirty = await run(`${GREEN.join("\n")}\nbyStatus: siehe oben`);
+    expect(dirty.status).toBe("red");
+    expect(dirty.detail).toContain("raw result keys");
+    const flagged = await run(GREEN.join("\n"), {
+      role: "assistant",
+      groundedAnswer: {
+        uncertainty: [{ kind: "unsupported-claim", claim: "2 unsupported claims" }],
+      },
+    });
+    expect(flagged.status).toBe("red");
+    expect(flagged.detail).toContain("unsupported-claim");
+    // Without a stored report result or a readable stored message nothing is credited.
+    expect((await grade(GREEN)).covers).not.toContain("answer-clean");
+    const unreadable = await JOURNEYS.S10(
+      context({
+        issues: world,
+        act: () => ({ answer: GREEN.join("\n"), toolExchanges: [reportExchange(stored)] }),
+      }),
+      CHAT,
+    );
+    expect(unreadable.covers).not.toContain("answer-clean");
   });
 
   it("reads a comma decimal and ignores lines that are no data lines", async () => {
     const check = await grade([
       "Hier das Ergebnis:",
-      ...GREEN.slice(0, -1),
+      ...GREEN.filter((line) => !line.startsWith("SCH")),
       "SCHÄTZUNG;10,0;8,0;2,0",
     ]);
     expect(check.status).toBe("green");
@@ -223,6 +279,7 @@ describe("S10 with a time-tracking estimate", () => {
     "ANZAHL;Task;Done;2",
     "ANZAHL;Task;In Progress;1",
     "EPIC;RPT-1;2;1",
+    "QUELLE;Original Estimate;KONFIGURIERT",
   ];
   const grade = (estimateLine, issues = world) =>
     JOURNEYS.S10(
@@ -254,6 +311,7 @@ describe("S10 with a time-tracking estimate", () => {
       "ANZAHL;Task;Done;1",
       "EPIC;RPT-1;1;1",
       "SCHÄTZUNG;1,5;1,5;0",
+      "QUELLE;Original Estimate;KONFIGURIERT",
     ].join("\n");
     const check = await JOURNEYS.S10(
       context({ issues: half, truth, act: () => ({ answer }) }),
@@ -295,11 +353,13 @@ describe("S10 with a time-tracking estimate", () => {
 
   it("names the recorded story-points field in the points prompt", async () => {
     const prompts = [];
+    // No native reader: the prompt follows the recorded descriptor and the estimate stays ungraded.
     const ctx = context({
       issues: [],
       truth: {
         estimate: { fieldId: "customfield_10002", unit: "points", label: "Aufwandspunkte" },
       },
+      extra: { nativeGet: undefined },
     });
     const turn = ctx.turn;
     ctx.turn = (chat, prompt) => {

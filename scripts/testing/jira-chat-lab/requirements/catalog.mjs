@@ -83,6 +83,13 @@ export const SCENARIOS = Object.freeze([
       "estimate-totals",
       "large-project-report",
       "unavailable-metrics-labelled",
+      // The product's estimate rule (#4356): the source of the figure, an unused configured field
+      // and a second field that holds values are stated, graded against the native data.
+      "estimate-source-labelled",
+      "configured-unused-stated",
+      "other-estimate-field-named",
+      // #4355: the answer shows the figures, no raw result keys, and no unsupported-claim flag.
+      "answer-clean",
     ],
   },
   {
