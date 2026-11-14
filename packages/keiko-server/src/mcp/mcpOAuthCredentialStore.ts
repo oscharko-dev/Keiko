@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
@@ -166,12 +167,12 @@ function openVault(input: McpOAuthCredentialStoreInput): LocalSecretVault {
     keychainService: VAULT_KEYCHAIN_SERVICE,
     keyfileName: VAULT_KEYFILE,
     ...(input.keychainAccess === undefined ? {} : { keychainAccess: input.keychainAccess }),
-    sink: input.securityLogSink,
+    sink: input.securityLogSink ?? serverSecurityLogSink(),
   });
   return createLocalSecretVault({
     key,
     storePath: join(vaultDir, VAULT_FILE),
-    ...(input.securityLogSink === undefined ? {} : { sink: input.securityLogSink }),
+    sink: input.securityLogSink ?? serverSecurityLogSink(),
   });
 }
 

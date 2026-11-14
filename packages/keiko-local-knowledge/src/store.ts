@@ -11,6 +11,7 @@
 //
 // Crash-safe write tradeoffs documented inline next to each PRAGMA call.
 
+import { unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -415,13 +416,19 @@ function quarantineFile(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinedPath = `${target}.corrupt.${ts}`;
   if (existsSync(target)) {
-    atomicPublishRename(target, quarantinedPath, { rename: renameSync });
+    atomicPublishRename(target, quarantinedPath, {
+      rename: renameSync,
+      securityLogSink: unwiredSecurityLogSink(),
+    });
   }
   const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
       const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
-      atomicPublishRename(sidecar, sidecarQuarantinePath, { rename: renameSync });
+      atomicPublishRename(sidecar, sidecarQuarantinePath, {
+        rename: renameSync,
+        securityLogSink: unwiredSecurityLogSink(),
+      });
       sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }

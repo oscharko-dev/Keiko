@@ -74,7 +74,8 @@ export interface AtomicPublishRenameOptions {
   readonly platform?: NodeJS.Platform;
   readonly rename?: AtomicPublishRenameFn;
   readonly sleep?: (ms: number) => void;
-  readonly securityLogSink?: SecurityLogSink;
+  /** Required: the retry and failure lines of a publish go here. A seam passes the null sink. */
+  readonly securityLogSink: SecurityLogSink;
   readonly backoffMs?: readonly number[] | undefined;
 }
 
@@ -192,7 +193,7 @@ function retryWindowsPublishRename(
 export function atomicPublishRename(
   from: string,
   to: string,
-  options: AtomicPublishRenameOptions = {},
+  options: AtomicPublishRenameOptions,
 ): void {
   const rename = options.rename ?? renameSync;
   if ((options.platform ?? process.platform) !== "win32") {
@@ -210,7 +211,7 @@ export function atomicPublishRename(
 export function atomicPublishTreeSwap(
   from: string,
   to: string,
-  options: Omit<AtomicPublishRenameOptions, "backoffMs"> = {},
+  options: Omit<AtomicPublishRenameOptions, "backoffMs">,
 ): void {
   atomicPublishRename(from, to, {
     ...options,

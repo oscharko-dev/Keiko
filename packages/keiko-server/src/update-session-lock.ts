@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import {
   chmodSync,
   closeSync,
@@ -297,9 +298,9 @@ function publishLockRename(
 function boundLockRenameSink(
   sink: SecurityLogSink | undefined,
   correlationId: string,
-): { readonly securityLogSink: SecurityLogSink } | Record<string, never> {
-  const bound = bindSecurityLogCorrelation(sink, correlationId);
-  return bound === undefined ? {} : { securityLogSink: bound };
+): { readonly securityLogSink: SecurityLogSink } {
+  const bound = bindSecurityLogCorrelation(sink ?? serverSecurityLogSink(), correlationId);
+  return { securityLogSink: bound ?? serverSecurityLogSink() };
 }
 
 function flushLockParent(path: string): void {

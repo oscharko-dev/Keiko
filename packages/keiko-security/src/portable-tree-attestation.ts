@@ -62,7 +62,8 @@ export interface PortableTreeKht1Operation {
   readonly deadline: number;
   readonly now: () => number;
   readonly yieldControl: () => Promise<void>;
-  readonly securityLogSink?: SecurityLogSink | undefined;
+  /** Required: an attestation failure goes here. A seam passes the null sink. */
+  readonly securityLogSink: SecurityLogSink;
 }
 
 export class PortableTreeAttestationError extends Error {
@@ -839,7 +840,7 @@ export function attestPortableSidecarTreeSync(
   root: string,
   selectedRelativePath: string,
   deadline: number,
-  securityLogSink?: SecurityLogSink,
+  securityLogSink: SecurityLogSink,
   selectedRelativePaths?: readonly string[],
 ): PortableSidecarTreeAttestation {
   try {
@@ -857,7 +858,7 @@ export function attestPortableTreeKht1Sync(
   root: string,
   expectedSha256: string,
   deadline: number,
-  securityLogSink?: SecurityLogSink,
+  securityLogSink: SecurityLogSink,
 ): void {
   try {
     if (!SHA256.test(expectedSha256)) fail("portable handoff tree digest is invalid");

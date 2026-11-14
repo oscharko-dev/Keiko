@@ -43,7 +43,7 @@ import { join } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { assertValidRunId, unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import {
   fsyncDirectoryContaining,
@@ -991,7 +991,10 @@ function publishStagedSideFiles(
     return;
   }
   rmSync(sideFileDir, { recursive: true, force: true });
-  atomicPublishRename(stagedRunDir, sideFileDir, { rename: renameSync });
+  atomicPublishRename(stagedRunDir, sideFileDir, {
+    rename: renameSync,
+    securityLogSink: unwiredSecurityLogSink(),
+  });
   // Matches atomicWriteOnce's own durability discipline (durable-write.ts): a rename's directory
   // entry is not guaranteed durable until the containing directory is fsynced, so without this a
   // crash right after renameSync returns can lose the entry while the JSON record — already

@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -884,7 +885,7 @@ export function publishStagedArchiveTree(
 function boundRenameSink(
   sink: SecurityLogSink | undefined,
   correlationId: string,
-): { readonly securityLogSink: SecurityLogSink } | Record<string, never> {
-  const bound = bindSecurityLogCorrelation(sink, correlationId);
-  return bound === undefined ? {} : { securityLogSink: bound };
+): { readonly securityLogSink: SecurityLogSink } {
+  const bound = bindSecurityLogCorrelation(sink ?? serverSecurityLogSink(), correlationId);
+  return { securityLogSink: bound ?? serverSecurityLogSink() };
 }

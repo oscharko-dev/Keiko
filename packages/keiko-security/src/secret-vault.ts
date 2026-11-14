@@ -71,6 +71,7 @@ import {
   emitSecurityLogEvent,
   securityErrorKind,
   startSecurityLogTimer,
+  unwiredSecurityLogSink,
   type SecurityLogSink,
 } from "./log-port.js";
 import {
@@ -385,9 +386,9 @@ export interface ResolveLocalVaultKeyOptions {
    *   - a keychain read that fails for a reason other than "no such item" additionally emits
    *     `security.keychain.fallback`, the same shape `readMacosKeychainSecret` reports for its
    *     own read tier.
-   * Omitted or `undefined` keeps this resolver exactly as silent as before.
+   * Required: a caller names where these lines go; a seam passes the null sink.
    */
-  readonly sink?: SecurityLogSink | undefined;
+  readonly sink: SecurityLogSink;
   /**
    * Test seam for the Windows custody attestation of the keyfile tier (#4358). On Windows the key
    * file and its directory are attested as private to the current principal before the key is
@@ -439,11 +440,11 @@ export interface LocalSecretVaultDeps {
   readonly key: Buffer;
   readonly storePath: string;
   /**
-   * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired, {@link LocalSecretVault.setMany}
-   * emits one `security.vault.entries-merged` event with the sealed entry count. Omitted or
-   * `undefined` keeps this layout exactly as silent as before.
+   * Activity-log seam (ADR-0019; see `log-port.ts`). {@link LocalSecretVault.setMany} emits one
+   * `security.vault.entries-merged` event with the sealed entry count. Required: a caller names where
+   * it goes; a seam passes the null sink.
    */
-  readonly sink?: SecurityLogSink | undefined;
+  readonly sink: SecurityLogSink;
 }
 
 function decodeKeyOrThrow(raw: string): Buffer {
@@ -515,7 +516,7 @@ function keychainMemoFor(runCommand: KeychainCommandRunner): KeychainSecretMemo 
 export function createKeychainVaultKeyAccess(
   keychainService: string,
   runCommand: KeychainCommandRunner = defaultKeychainCommandRunner,
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
   env?: Readonly<Record<string, string | undefined>>,
 ): LocalVaultKeychainAccess {
   return (): Buffer | undefined => {
@@ -820,7 +821,7 @@ function writeStore(
     chmodIfPresent(tempPath, FILE_MODE);
     atomicPublishRename(tempPath, resolvedPath, {
       rename: renameSync,
-      ...(sink === undefined ? {} : { securityLogSink: sink }),
+      securityLogSink: sink ?? unwiredSecurityLogSink(),
     });
     chmodIfPresent(resolvedPath, FILE_MODE);
     fsyncDirectory(dir);
@@ -856,9 +857,9 @@ export interface ShardedLocalSecretVaultDeps {
    *     emits one `security.vault.shard-unreadable` event instead of failing silently;
    *   - {@link LocalSecretVault.setMany} emits one `security.vault.entries-merged` event with the
    *     sealed entry count.
-   * Omitted or `undefined` keeps this layout exactly as silent as before.
+   * Required: a caller names where these lines go; a seam passes the null sink.
    */
-  readonly sink?: SecurityLogSink | undefined;
+  readonly sink: SecurityLogSink;
 }
 
 // References are opaque, NON-SECRET identifiers, so the filename may carry one — the single-file
@@ -933,7 +934,7 @@ function writeShard(dir: string, filePath: string, envelope: string, sink?: Secu
     chmodIfPresent(tempPath, FILE_MODE);
     atomicPublishRename(tempPath, filePath, {
       rename: renameSync,
-      ...(sink === undefined ? {} : { securityLogSink: sink }),
+      securityLogSink: sink ?? unwiredSecurityLogSink(),
     });
     chmodIfPresent(filePath, FILE_MODE);
     fsyncDirectory(dir);
@@ -1497,7 +1498,7 @@ export function resolveLocalVaultKeyOnce(
       source: resolved.source,
       announcedTo: new WeakSet(),
     };
-    if (options.sink !== undefined) entry.announcedTo.add(options.sink);
+    entry.announcedTo.add(options.sink);
     resolvedKeyCache.set(cacheKey, entry);
   }
   return resolved;

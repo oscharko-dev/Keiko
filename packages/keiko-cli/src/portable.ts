@@ -53,7 +53,7 @@ import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { inspectStateRoot } from "./state-paths.js";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { unwiredSecurityLogSink, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 type LifecycleFn = (
   command: "start" | "stop",
@@ -714,7 +714,12 @@ function emitPortableManagedRoot(
   options: PortableCliOptions,
   io: CliIo,
 ): void {
-  assertManagedRootAllowed(managedRoot, options.stateDir, options.target, options.securityLogSink);
+  assertManagedRootAllowed(
+    managedRoot,
+    options.stateDir,
+    options.target,
+    options.securityLogSink ?? unwiredSecurityLogSink(),
+  );
   const hasControlCharacter = Array.from(managedRoot).some(
     (character): boolean => (character.codePointAt(0) ?? 0) <= 0x1f,
   );

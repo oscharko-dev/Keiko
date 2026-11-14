@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import {
   chmodSync,
   existsSync,
@@ -72,6 +73,7 @@ describe("resolveLocalVaultKey — ENV tier", () => {
   it("decodes a valid base64-32-byte env var and returns source=env", () => {
     const raw = Buffer.alloc(32, 5).toString("base64");
     const resolved = resolveLocalVaultKey({
+      sink: nullSecurityLogSink(),
       env: { KEIKO_TEST_VAULT_KEY: raw },
       vaultDir: dir,
       envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -88,6 +90,7 @@ describe("resolveLocalVaultKey — ENV tier", () => {
     const raw = Buffer.alloc(16, 3).toString("base64");
     expect(() =>
       resolveLocalVaultKey({
+        sink: nullSecurityLogSink(),
         env: { KEIKO_TEST_VAULT_KEY: raw },
         vaultDir: dir,
         envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -103,6 +106,7 @@ describe("resolveLocalVaultKey — KEYCHAIN tier", () => {
   it("returns source=keychain when env tier is absent and keychainAccess returns a key", () => {
     const keychainKey = Buffer.alloc(32, 9);
     const resolved = resolveLocalVaultKey({
+      sink: nullSecurityLogSink(),
       env: {},
       vaultDir: dir,
       envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -118,6 +122,7 @@ describe("resolveLocalVaultKey — KEYCHAIN tier", () => {
     const envKey = Buffer.alloc(32, 5);
     const keychainKey = Buffer.alloc(32, 9);
     const resolved = resolveLocalVaultKey({
+      sink: nullSecurityLogSink(),
       env: { KEIKO_TEST_VAULT_KEY: envKey.toString("base64") },
       vaultDir: dir,
       envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -134,6 +139,7 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
   it("generates a keyfile and returns source=keyfile when env and keychain are absent", () => {
     const keyfileName = "test-vault.key";
     const resolved = resolveLocalVaultKey({
+      sink: nullSecurityLogSink(),
       env: {},
       vaultDir: dir,
       envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -164,6 +170,7 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
       keychainService: "keiko-test-vault",
       keyfileName: "test-vault.key",
       keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      sink: nullSecurityLogSink(),
     } as const;
     const first = resolveLocalVaultKey(opts);
     const second = resolveLocalVaultKey(opts);
@@ -179,6 +186,7 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
 
     expect(() =>
       resolveLocalVaultKey({
+        sink: nullSecurityLogSink(),
         env: {},
         vaultDir: linkSub,
         envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -196,6 +204,7 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
 
     expect(() =>
       resolveLocalVaultKey({
+        sink: nullSecurityLogSink(),
         env: {},
         vaultDir: dir,
         envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -221,6 +230,7 @@ describe("resolveLocalVaultKey — default keychainAccess when the option is omi
     // construction path rather than an injected stand-in.
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const resolved = resolveLocalVaultKey({
+      sink: nullSecurityLogSink(),
       env: {},
       vaultDir: dir,
       envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -389,7 +399,7 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       keychainService: "keiko-test-vault",
       keyfileName: "test-vault.key",
       keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
-      sink: bound,
+      sink: bound ?? sink,
     });
 
     expect(events).toHaveLength(1);
@@ -399,6 +409,7 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
   it("stays exactly as silent as before when no sink is wired", () => {
     expect(() =>
       resolveLocalVaultKey({
+        sink: nullSecurityLogSink(),
         env: {},
         vaultDir: dir,
         envVarName: "KEIKO_TEST_VAULT_KEY",
@@ -415,7 +426,7 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
 // ---------------------------------------------------------------------------
 
 function vaultAt(storePath: string): ReturnType<typeof createLocalSecretVault> {
-  return createLocalSecretVault({ key: KEY, storePath });
+  return createLocalSecretVault({ sink: nullSecurityLogSink(), key: KEY, storePath });
 }
 
 function expectStoreFault(
@@ -776,10 +787,18 @@ describe("createLocalSecretVault — wrong key tamper", () => {
   it("a vault opened with a different key over the same storePath throws on get", () => {
     const storePath = join(dir, "vault.enc.json");
 
-    const vaultA = createLocalSecretVault({ key: Buffer.alloc(32, 7), storePath });
+    const vaultA = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
+      key: Buffer.alloc(32, 7),
+      storePath,
+    });
     vaultA.set("cred:a", "PLAINTEXT_SHOULD_NOT_LEAK");
 
-    const vaultB = createLocalSecretVault({ key: Buffer.alloc(32, 13), storePath });
+    const vaultB = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
+      key: Buffer.alloc(32, 13),
+      storePath,
+    });
 
     let caughtError: unknown;
     try {
@@ -882,6 +901,7 @@ describe("createLocalSecretVault — symlink guard", () => {
     symlinkSync(realSub, linkSub);
 
     const vault = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
       key: KEY,
       storePath: join(linkSub, "vault.enc.json"),
     });
@@ -947,6 +967,7 @@ describe("createLocalSecretVault — symlink guard", () => {
     symlinkSync(realSub, linkSub);
 
     const vault = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
       key: KEY,
       storePath: join(linkSub, "vault.enc.json"),
     });
@@ -963,7 +984,11 @@ describe("createLocalSecretVault — symlink guard", () => {
     const linkStore = join(dir, "link-vault.enc.json");
     symlinkSync(realStore, linkStore);
 
-    const vault = createLocalSecretVault({ key: KEY, storePath: linkStore });
+    const vault = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
+      key: KEY,
+      storePath: linkStore,
+    });
 
     expect(() => vault.list()).toThrow("symlinked path");
     expect(() => {
@@ -979,6 +1004,7 @@ describe("createLocalSecretVault — symlink guard", () => {
     symlinkSync(realSub, linkSub);
 
     const vault = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
       key: KEY,
       storePath: join(linkSub, "vault.enc.json"),
     });
@@ -1132,7 +1158,7 @@ describe("createKeychainVaultKeyAccess", () => {
       called = true;
       return "";
     };
-    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())()).toBeUndefined();
     expect(called).toBe(false);
   });
 
@@ -1145,7 +1171,7 @@ describe("createKeychainVaultKeyAccess", () => {
       commands.push([...args]);
       throw new Error("keychain did not answer");
     };
-    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())()).toBeUndefined();
     expect(commands.map((c) => c[0])).toEqual(["find-generic-password"]);
   });
 
@@ -1156,7 +1182,7 @@ describe("createKeychainVaultKeyAccess", () => {
       if (args[0] === "find-generic-password") return `${stored}\n`;
       throw new Error("unexpected command");
     };
-    const key = createKeychainVaultKeyAccess("svc", runner)();
+    const key = createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
     expect(key).toBeInstanceOf(Buffer);
     expect(key?.length).toBe(32);
   });
@@ -1171,7 +1197,7 @@ describe("createKeychainVaultKeyAccess", () => {
       if (args[0] === "find-generic-password") throw itemNotFound();
       return "";
     };
-    const key = createKeychainVaultKeyAccess("svc", runner)();
+    const key = createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
     expect(key?.length).toBe(32);
     expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
     // The key persisted to the keychain must be exactly the key returned to the caller, so a later
@@ -1191,11 +1217,11 @@ describe("createKeychainVaultKeyAccess", () => {
       commands.push([...args]);
       return `${stored}\n`;
     };
-    const first = createKeychainVaultKeyAccess("svc", runner)();
-    const second = createKeychainVaultKeyAccess("svc", runner)();
+    const first = createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
+    const second = createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
     expect(second).toEqual(first);
     expect(commands).toHaveLength(1);
-    createKeychainVaultKeyAccess("other-svc", runner)();
+    createKeychainVaultKeyAccess("other-svc", runner, nullSecurityLogSink())();
     expect(commands).toHaveLength(2);
   });
 
@@ -1214,8 +1240,8 @@ describe("createKeychainVaultKeyAccess", () => {
       if (stored === undefined) throw itemNotFound();
       return `${stored}\n`;
     };
-    createKeychainVaultKeyAccess("svc", runner)();
-    const next = createKeychainVaultKeyAccess("svc", runner)();
+    createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
+    const next = createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
     expect(next?.toString("base64")).toBe(winner);
     expect(commands.map((c) => c[0])).toEqual([
       "find-generic-password",
@@ -1232,8 +1258,8 @@ describe("createKeychainVaultKeyAccess", () => {
       commands.push([...args]);
       return args[0] === "find-generic-password" ? `${undecodable}\n` : "";
     };
-    createKeychainVaultKeyAccess("svc", runner)();
-    createKeychainVaultKeyAccess("svc", runner)();
+    createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
+    createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
     expect(commands.map((c) => c[0])).toEqual([
       "find-generic-password",
       "add-generic-password",
@@ -1247,7 +1273,7 @@ describe("createKeychainVaultKeyAccess", () => {
     const runner = (): string => {
       throw new Error("security unavailable");
     };
-    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())()).toBeUndefined();
   });
 
   it("regenerates the key when the stored keychain value cannot be decoded (corrupt/garbage bytes)", () => {
@@ -1262,7 +1288,7 @@ describe("createKeychainVaultKeyAccess", () => {
       if (args[0] === "find-generic-password") return `${undecodable}\n`;
       return "";
     };
-    const key = createKeychainVaultKeyAccess("svc", runner)();
+    const key = createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())();
     expect(key?.length).toBe(32);
     expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
   });
@@ -1275,7 +1301,7 @@ describe("createKeychainVaultKeyAccess", () => {
       if (args[0] === "find-generic-password") throw itemNotFound();
       throw new Error("add-generic-password failed");
     };
-    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())()).toBeUndefined();
     expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
   });
 
@@ -1343,7 +1369,9 @@ describe("createKeychainVaultKeyAccess", () => {
         throw Object.assign(new Error("keychain refused"), { status: 45 });
       };
 
-      expect(() => createKeychainVaultKeyAccess("svc", runner)()).not.toThrow();
+      expect(() =>
+        createKeychainVaultKeyAccess("svc", runner, nullSecurityLogSink())(),
+      ).not.toThrow();
     });
   });
 });
@@ -1353,7 +1381,7 @@ describe("createKeychainVaultKeyAccess", () => {
 // ---------------------------------------------------------------------------
 
 function shardedVaultAt(storeDir: string): ReturnType<typeof createShardedLocalSecretVault> {
-  return createShardedLocalSecretVault({ key: KEY, storeDir });
+  return createShardedLocalSecretVault({ sink: nullSecurityLogSink(), key: KEY, storeDir });
 }
 
 describe("createShardedLocalSecretVault — CRUD parity with the single-file layout", () => {
@@ -1699,7 +1727,11 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
 
   it("stays exactly as silent as before when no sink is wired", () => {
     const storeDir = join(dir, "sharded");
-    const vault = createShardedLocalSecretVault({ key: KEY, storeDir });
+    const vault = createShardedLocalSecretVault({
+      sink: nullSecurityLogSink(),
+      key: KEY,
+      storeDir,
+    });
     vault.set("cred:a", "secret-A");
     const [name] = readdirSync(storeDir);
     rmSync(join(storeDir, name ?? "missing"));

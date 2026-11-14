@@ -3,6 +3,7 @@
 // module graph, so keeping the blast radius to two narrow, precisely-targeted scenarios is
 // deliberate. Both mocked functions pass every other call straight through to the real
 // implementation, so nothing outside the exact matched path/flags combination is affected.
+import { nullSecurityLogSink } from "./log-port.js";
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -110,7 +111,11 @@ describe("fsyncDirectory — the directory itself cannot be opened for fsync", (
     const dir = tempDir("secret-vault-fsync-open-");
     blockedOpenDir = dir;
 
-    const vault = createLocalSecretVault({ key: KEY, storePath: join(dir, "vault.enc.json") });
+    const vault = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
+      key: KEY,
+      storePath: join(dir, "vault.enc.json"),
+    });
     expect(() => {
       vault.set("cred:a", "value");
     }).not.toThrow();
@@ -127,7 +132,11 @@ describe("fsyncDirectory — the directory itself cannot be opened for fsync", (
     const storeDir = join(dir, "sharded");
     blockedOpenDir = storeDir;
 
-    const vault = createShardedLocalSecretVault({ key: KEY, storeDir });
+    const vault = createShardedLocalSecretVault({
+      sink: nullSecurityLogSink(),
+      key: KEY,
+      storeDir,
+    });
     expect(() => {
       vault.set("cred:a", "value");
     }).not.toThrow();
@@ -141,7 +150,7 @@ describe("createLocalSecretVault — writeStore leaves no temp file behind when 
   it("cleans up the temp file when renameSync cannot replace the store path", () => {
     const dir = tempDir("secret-vault-rename-fail-");
     const storePath = join(dir, "vault.enc.json");
-    const deps: LocalSecretVaultDeps = { key: KEY, storePath };
+    const deps: LocalSecretVaultDeps = { key: KEY, storePath, sink: nullSecurityLogSink() };
     blockedRenameDest = resolve(storePath);
 
     const vault = createLocalSecretVault(deps);

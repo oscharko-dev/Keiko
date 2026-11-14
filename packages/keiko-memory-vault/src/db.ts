@@ -2,6 +2,7 @@
 // proven ADR-0013 D3 pattern in keiko-server/store/db.ts so the two SQLite surfaces have the
 // same operational shape (audit, rotation, recovery).
 
+import { unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, writeFileSync } from "node:fs";
@@ -101,7 +102,10 @@ function assertQuickCheckOk(db: DatabaseSync): void {
 // file was found corrupt. Returns silently when there's nothing to rotate.
 function rotateSidecar(sourcePath: string, stampedPath: string, hadAtSnapshot: boolean): void {
   if (existsSync(sourcePath)) {
-    atomicPublishRename(sourcePath, stampedPath, { rename: renameSync });
+    atomicPublishRename(sourcePath, stampedPath, {
+      rename: renameSync,
+      securityLogSink: unwiredSecurityLogSink(),
+    });
     return;
   }
   if (hadAtSnapshot && !existsSync(stampedPath)) {

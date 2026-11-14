@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { updateChatToolTranscript } from "./chatToolTranscript.js";
 import { readContinuityCheckpoint, writeContinuityCheckpoint } from "./chatContinuity.js";
 import { createChatToolMutationStore } from "./chatToolMutations.js";
@@ -938,12 +939,18 @@ function assertQuickCheckOk(db: DatabaseSync): void {
 function quarantineCorruptDb(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinedPath = `${target}.corrupt.${ts}`;
-  atomicPublishRename(target, quarantinedPath, { rename: renameSync });
+  atomicPublishRename(target, quarantinedPath, {
+    rename: renameSync,
+    securityLogSink: serverSecurityLogSink(),
+  });
   const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
       const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
-      atomicPublishRename(sidecar, sidecarQuarantinePath, { rename: renameSync });
+      atomicPublishRename(sidecar, sidecarQuarantinePath, {
+        rename: renameSync,
+        securityLogSink: serverSecurityLogSink(),
+      });
       sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }

@@ -1,9 +1,9 @@
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import {
   attestPortableSidecarTreeSync,
   computePortableSidecarPayloadTreeDigest,
   type PortableSidecarTreeAttestation,
 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
-import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -18,8 +18,6 @@ import {
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import { productionUpdateFacts } from "../update-install-mode.js";
-import { processServerLogSink } from "../process-log-sink.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
@@ -703,7 +701,7 @@ function discoveryPayloadAttestation(
     join(installRoot, "payload"),
     selectedRelativePath,
     Number.MAX_SAFE_INTEGER,
-    bindSecurityLogCorrelation(processServerLogSink(), UNKNOWN_CORRELATION_ID),
+    serverSecurityLogSink(),
     [selectedRelativePath, "evidence/LICENSE", "evidence/sbom.cdx.json"],
   );
 }

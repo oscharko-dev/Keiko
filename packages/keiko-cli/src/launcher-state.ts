@@ -18,6 +18,7 @@
 //     throw on a missing/corrupt state file at read-time, but we DO refuse to write into
 //     a symlinked state path.
 
+import { unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   closeSync,
   constants as fsConstants,
@@ -274,6 +275,7 @@ export function saveState(stateDir: string, state: LauncherState): void {
     atomicPublishRename(tmpFile, file, {
       rename: renameSync,
       backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+      securityLogSink: unwiredSecurityLogSink(),
     });
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });

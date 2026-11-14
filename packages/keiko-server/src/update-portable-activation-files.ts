@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -817,7 +818,10 @@ export function refreshPortableRegistration(input: {
   const registration = portableRegistrationDocument(input);
   const temporaryPath = `${path}.${String(process.pid)}.tmp`;
   writeExclusiveFile(temporaryPath, registration);
-  atomicPublishRename(temporaryPath, path, { rename: renameSync });
+  atomicPublishRename(temporaryPath, path, {
+    rename: renameSync,
+    securityLogSink: serverSecurityLogSink(),
+  });
   try {
     chmodSync(path, 0o600);
   } catch {

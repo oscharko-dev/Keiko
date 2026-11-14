@@ -1,3 +1,4 @@
+import { unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
@@ -76,7 +77,10 @@ export function replaceViaDurableTempFile(
   // written" signal it always saw.
   try {
     writeDurableTempFile(temp, content, mode);
-    atomicPublishRename(temp, target, { rename: renameSync });
+    atomicPublishRename(temp, target, {
+      rename: renameSync,
+      securityLogSink: unwiredSecurityLogSink(),
+    });
   } catch (error) {
     rmSync(temp, { force: true });
     throw error;

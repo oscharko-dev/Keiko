@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   mkdtempSync,
   mkdirSync,
@@ -292,6 +293,7 @@ describe("editor local-history store", () => {
       limits: { coalesceMs: 0 },
       vaultFactory: (workspaceDir) => {
         const inner = createShardedLocalSecretVault({
+          sink: nullSecurityLogSink(),
           key: Buffer.from(VAULT_KEY, "base64"),
           storeDir: join(workspaceDir, "checkpoints"),
         });
@@ -400,6 +402,7 @@ describe("editor local-history store", () => {
       limits: { maxEntries: 3, coalesceMs: 0 },
       vaultFactory: (workspaceDir) => {
         const inner = createShardedLocalSecretVault({
+          sink: nullSecurityLogSink(),
           key: Buffer.from(VAULT_KEY, "base64"),
           storeDir: join(workspaceDir, "checkpoints"),
         });
@@ -441,6 +444,7 @@ describe("editor local-history store", () => {
     const historyRoot = join(fx.stateDir, "editor-local-history");
     const workspaceDir = join(historyRoot, readdirSync(historyRoot)[0] ?? "missing");
     createShardedLocalSecretVault({
+      sink: nullSecurityLogSink(),
       key: Buffer.from(VAULT_KEY, "base64"),
       storeDir: join(workspaceDir, "checkpoints"),
     }).set("vault-orphaned-body", "{}");
@@ -487,6 +491,7 @@ describe("editor local-history store", () => {
       limits: { maxEntries: 1, coalesceMs: 0 },
       vaultFactory: (workspaceDir) => {
         const inner = createShardedLocalSecretVault({
+          sink: nullSecurityLogSink(),
           key: Buffer.from(VAULT_KEY, "base64"),
           storeDir: join(workspaceDir, "checkpoints"),
         });
@@ -536,6 +541,7 @@ describe("editor local-history store", () => {
       ...storeOptions(fx),
       vaultFactory: (workspaceDir) => {
         vault = createShardedLocalSecretVault({
+          sink: nullSecurityLogSink(),
           key: Buffer.alloc(32, 0x44),
           storeDir: join(workspaceDir, "checkpoints"),
         });

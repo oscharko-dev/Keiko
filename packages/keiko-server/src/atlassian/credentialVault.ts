@@ -12,6 +12,7 @@
 // keychain entry or keyfile, and a deployment that never stores an Atlassian credential must never
 // grow one.
 
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { dirname, join } from "node:path";
 import {
   createLocalSecretVault,
@@ -58,5 +59,6 @@ export function openAtlassianCredentialVault(
   return createLocalSecretVault({
     key,
     storePath: atlassianCredentialStorePath(options.configPath),
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
   });
 }

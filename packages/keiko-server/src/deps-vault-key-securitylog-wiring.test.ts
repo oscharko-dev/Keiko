@@ -109,8 +109,8 @@ afterEach(() => {
 function expectRealServerLogSink(envVarName: string, op: string): void {
   const matching = calls.filter((c) => c.envVarName === envVarName);
   expect(matching.length).toBeGreaterThan(0);
-  expect(matching.every((c) => c.sink !== undefined)).toBe(true);
-  matching[0]?.sink?.write({ level: "info", category: "security", op, extra: {} });
+  expect(matching.every((c) => typeof c.sink.write === "function")).toBe(true);
+  matching[0]?.sink.write({ level: "info", category: "security", op, extra: {} });
   expect(sink.events).toContainEqual(expect.objectContaining({ category: "security", op }));
 }
 

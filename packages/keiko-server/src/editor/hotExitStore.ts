@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -130,9 +131,13 @@ function hotExitVault(options: CreateEditorHotExitStoreOptions): LocalSecretVaul
     keychainService: HOT_EXIT_KEYCHAIN_SERVICE,
     keyfileName: HOT_EXIT_KEYFILE,
     ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
-    sink: options.securityLogSink,
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
   });
-  return createLocalSecretVault({ key, storePath: join(vaultDir, HOT_EXIT_STORE_FILE) });
+  return createLocalSecretVault({
+    key,
+    storePath: join(vaultDir, HOT_EXIT_STORE_FILE),
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
+  });
 }
 
 function isNonNegativeNumber(value: unknown): value is number {

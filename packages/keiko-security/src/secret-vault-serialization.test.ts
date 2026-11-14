@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -24,8 +25,8 @@ describe("existing sealed vault atomic ownership", () => {
       const key = Buffer.alloc(32, 19);
       const open = (): ReturnType<typeof createLocalSecretVault> =>
         layout === "file"
-          ? createLocalSecretVault({ key, storePath: path })
-          : createShardedLocalSecretVault({ key, storeDir: path });
+          ? createLocalSecretVault({ sink: nullSecurityLogSink(), key, storePath: path })
+          : createShardedLocalSecretVault({ sink: nullSecurityLogSink(), key, storeDir: path });
       const first = open();
       const second = open();
       first.set("one-use", "synthetic ready");
@@ -41,8 +42,8 @@ describe("existing sealed vault atomic ownership", () => {
   it("holds a session lease across owner instances until explicit release", () => {
     const storePath = join(location(), "secrets");
     const key = Buffer.alloc(32, 19);
-    const first = createLocalSecretVault({ key, storePath });
-    const second = createLocalSecretVault({ key, storePath });
+    const first = createLocalSecretVault({ sink: nullSecurityLogSink(), key, storePath });
+    const second = createLocalSecretVault({ sink: nullSecurityLogSink(), key, storePath });
     const release = first.acquireLease?.("session-context");
     if (release === undefined) throw new TypeError("Expected private session lease");
     expect(second.acquireLease?.("session-context")).toBeUndefined();
@@ -56,7 +57,7 @@ describe("existing sealed vault atomic ownership", () => {
   it("refuses writes while another process owns the same kernel guard, then recovers on exit", async () => {
     const storePath = join(location(), "secrets");
     const key = Buffer.alloc(32, 19);
-    const vault = createLocalSecretVault({ key, storePath });
+    const vault = createLocalSecretVault({ sink: nullSecurityLogSink(), key, storePath });
     vault.set("one-use", "synthetic ready");
     const path = secretVaultGuardPath(storePath, "store-write");
     const child = spawn(

@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +32,7 @@ function options(
     keychainService: "keiko-test-once",
     keyfileName: "once.key",
     keychainAccess,
-    sink,
+    sink: sink ?? nullSecurityLogSink(),
   };
 }
 

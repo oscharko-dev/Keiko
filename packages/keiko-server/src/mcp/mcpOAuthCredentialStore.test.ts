@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -175,6 +176,7 @@ function staticFixture(metadata: McpRemoteOAuth | undefined): {
   } satisfies McpServerDefinition;
   const vaultPath = join(stateDir, "credentials", "mcp-oauth-credentials.vault");
   const vault = createLocalSecretVault({
+    sink: nullSecurityLogSink(),
     key: Buffer.from(randomKey, "base64"),
     storePath: vaultPath,
   });

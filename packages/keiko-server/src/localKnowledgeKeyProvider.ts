@@ -14,6 +14,7 @@
 // ciphertext. The store directory is created and hardened to 0700 by the store before the key is
 // resolved; resolveLocalVaultKeyOnce additionally hardens it and writes the keyfile at 0600.
 
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { dirname } from "node:path";
 import {
   resolveLocalVaultKeyOnce,
@@ -59,7 +60,7 @@ export function createLocalKnowledgeKeyProvider(
         keychainService: LOCAL_KNOWLEDGE_KEYCHAIN_SERVICE,
         keyfileName: LOCAL_KNOWLEDGE_KEYFILE,
         ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
-        sink: options.securityLogSink,
+        sink: options.securityLogSink ?? serverSecurityLogSink(),
       });
       return key;
     },

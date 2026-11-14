@@ -18,7 +18,10 @@ vi.mock("@oscharko-dev/keiko-security/fs-atomic-rename", async (importOriginal) 
       options?: Parameters<typeof actual.atomicPublishRename>[2],
     ): void => {
       capturedBackoff.push(options?.backoffMs);
-      actual.atomicPublishRename(from, to, options);
+      actual.atomicPublishRename(from, to, {
+        ...options,
+        securityLogSink: options?.securityLogSink ?? { write: (): void => undefined },
+      });
     },
   };
 });

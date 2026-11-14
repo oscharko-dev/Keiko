@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "../../serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -576,12 +577,12 @@ function createVault(options: CreateEditorLocalHistoryStoreOptions, dir: string)
     keychainService: HISTORY_KEYCHAIN_SERVICE,
     keyfileName: HISTORY_KEYFILE,
     keychainAccess: options.keychainAccess,
-    sink: options.securityLogSink,
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
   });
   return createShardedLocalSecretVault({
     key: resolved.key,
     storeDir: join(dir, HISTORY_BODIES_DIR),
-    sink: options.securityLogSink,
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
   });
 }
 

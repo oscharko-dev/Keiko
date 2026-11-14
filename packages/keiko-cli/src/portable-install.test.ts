@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { PathLike } from "node:fs";
 import { createHash } from "node:crypto";
 import {
@@ -165,6 +166,7 @@ async function seedWindowsGenerationRoot(root: string): Promise<string> {
     '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n',
   );
   const treeSha256 = await hashPortableTreeKht1(provisionalRoot, {
+    securityLogSink: nullSecurityLogSink(),
     deadline: Date.now() + 5_000,
     now: Date.now,
     yieldControl: () => Promise.resolve(),

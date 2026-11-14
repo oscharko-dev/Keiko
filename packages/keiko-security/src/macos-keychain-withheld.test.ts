@@ -159,7 +159,11 @@ describe("the vault's own keychain runner in a test process", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const key = Buffer.alloc(32, 7);
     try {
-      const access = createKeychainVaultKeyAccess("svc", () => key.toString("base64"));
+      const access = createKeychainVaultKeyAccess(
+        "svc",
+        () => key.toString("base64"),
+        nullSecurityLogSink(),
+      );
       expect(access()?.equals(key)).toBe(true);
     } finally {
       platform.mockRestore();

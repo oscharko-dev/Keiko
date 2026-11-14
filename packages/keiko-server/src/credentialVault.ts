@@ -12,6 +12,7 @@
 // offline `keiko run` and `keiko repair` commands can resolve/detect credentials without loading the
 // full BFF runtime. Figma PAT routing and the migration orchestration live in credentialPersistence.
 
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -93,7 +94,7 @@ export function resolveCredentialVaultKey(
     vaultDir: credentialVaultDir(options.configPath),
     ...namespace,
     ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
-    sink: options.securityLogSink,
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
   }).key;
 }
 
@@ -106,7 +107,7 @@ export function openProviderCredentialVault(options: OpenCredentialVaultOptions)
   return createLocalSecretVault({
     key,
     storePath: credentialStorePath(options.configPath),
-    ...(options.securityLogSink !== undefined ? { sink: options.securityLogSink } : {}),
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
   });
 }
 

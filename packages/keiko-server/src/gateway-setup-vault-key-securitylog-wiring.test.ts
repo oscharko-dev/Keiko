@@ -149,7 +149,7 @@ describe("gateway-setup.ts — provider-credential vault wires resolveLocalVault
 
       const matching = calls.filter((c) => c.envVarName === "KEIKO_PROVIDER_CREDENTIALS_KEY");
       expect(matching.length).toBeGreaterThan(1);
-      expect(matching.every((c) => c.sink !== undefined)).toBe(true);
+      expect(matching.every((c) => typeof c.sink.write === "function")).toBe(true);
 
       expect(sink.events).toContainEqual(
         expect.objectContaining({

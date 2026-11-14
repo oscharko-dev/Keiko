@@ -85,7 +85,7 @@ export function assertManagedRootAllowed(
   path: string,
   stateDir: string,
   target: PortableTarget,
-  securityLogSink?: SecurityLogSink,
+  securityLogSink: SecurityLogSink,
 ): void {
   assertPathAllowed(path, target);
   assertNoSymlinkedAncestor(path);

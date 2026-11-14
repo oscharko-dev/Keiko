@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -377,10 +378,10 @@ export function createConversationAttachmentStore(
         envVarName: KEY_ENV,
         keychainService: KEY_SERVICE,
         keyfileName: KEY_FILE,
-        sink: options.securityLogSink,
+        sink: options.securityLogSink ?? serverSecurityLogSink(),
       }).key,
       storeDir: join(options.runtimeStateDir, STORE_DIR),
-      sink: options.securityLogSink,
+      sink: options.securityLogSink ?? serverSecurityLogSink(),
     });
     return cachedVault;
   };

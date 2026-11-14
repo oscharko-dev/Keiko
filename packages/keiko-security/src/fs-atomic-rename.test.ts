@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import {
   existsSync,
   mkdtempSync,
@@ -82,7 +83,12 @@ describe("atomicPublishRename", () => {
     });
     const sleep = vi.fn();
     expect(() => {
-      atomicPublishRename("/from", "/to", { platform: "darwin", rename, sleep });
+      atomicPublishRename("/from", "/to", {
+        securityLogSink: nullSecurityLogSink(),
+        platform: "darwin",
+        rename,
+        sleep,
+      });
     }).toThrow(error);
     expect(rename).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
@@ -91,6 +97,7 @@ describe("atomicPublishRename", () => {
   it("refuses an empty backoffMs list instead of throwing undefined", () => {
     expect(() => {
       atomicPublishRename("/from", "/to", {
+        securityLogSink: nullSecurityLogSink(),
         platform: "win32",
         rename: () => {
           throw eperm();
@@ -149,6 +156,7 @@ describe("atomicPublishRename", () => {
     const { rename } = failingThenSucceeding([ebusy()]);
     const sleep = vi.fn();
     atomicPublishRename("from", "to", {
+      securityLogSink: nullSecurityLogSink(),
       platform: "win32",
       rename,
       sleep,
@@ -163,6 +171,7 @@ describe("atomicPublishRename", () => {
     const sleep = vi.fn();
     expect(() => {
       atomicPublishRename("from", "to", {
+        securityLogSink: nullSecurityLogSink(),
         platform: "win32",
         rename: (): void => {
           throw missing;
@@ -172,6 +181,7 @@ describe("atomicPublishRename", () => {
     }).toThrow(missing);
     expect(() => {
       atomicPublishRename("from", "to", {
+        securityLogSink: nullSecurityLogSink(),
         platform: "win32",
         rename: (): void => {
           throw denied;
@@ -235,7 +245,7 @@ describe("atomicPublishRename", () => {
     const to = join(dir, "to.txt");
     writeFileSync(from, "ok\n");
     try {
-      atomicPublishRename(from, to, { platform: "linux" });
+      atomicPublishRename(from, to, { securityLogSink: nullSecurityLogSink(), platform: "linux" });
       expect(existsSync(to)).toBe(true);
       expect(existsSync(from)).toBe(false);
       expect(readFileSync(to, "utf8")).toBe("ok\n");
@@ -252,7 +262,12 @@ describe("atomicPublishRename", () => {
     const rename = vi.fn((): void => {
       if (locked) throw eperm();
     });
-    atomicPublishRename("from", "to", { platform: "win32", rename, sleep });
+    atomicPublishRename("from", "to", {
+      securityLogSink: nullSecurityLogSink(),
+      platform: "win32",
+      rename,
+      sleep,
+    });
     expect(rename.mock.calls.length).toBeGreaterThan(1);
     expect(sleep).toHaveBeenCalledWith(20);
   });
@@ -292,6 +307,7 @@ describe("atomicPublishRename", () => {
   it("wraps a non-Error rename failure", () => {
     expect(() => {
       atomicPublishRename("from", "to", {
+        securityLogSink: nullSecurityLogSink(),
         platform: "linux",
         rename: (): void => {
           throw Object.create(null);
@@ -311,13 +327,22 @@ describe("atomicPublishTreeSwap", () => {
   it("uses the tree-swap backoff series", () => {
     const { rename } = failingThenSucceeding([eperm()]);
     const sleep = vi.fn();
-    atomicPublishTreeSwap("from", "to", { platform: "win32", rename, sleep });
+    atomicPublishTreeSwap("from", "to", {
+      securityLogSink: nullSecurityLogSink(),
+      platform: "win32",
+      rename,
+      sleep,
+    });
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
   it("sleeps on the default backoff when no sleep seam is injected", () => {
     const { rename, calls } = failingThenSucceeding([eperm()]);
-    atomicPublishTreeSwap("from", "to", { platform: "win32", rename });
+    atomicPublishTreeSwap("from", "to", {
+      securityLogSink: nullSecurityLogSink(),
+      platform: "win32",
+      rename,
+    });
     expect(calls).toHaveLength(2);
   });
 });

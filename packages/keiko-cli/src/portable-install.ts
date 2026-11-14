@@ -1,3 +1,4 @@
+import { unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { currentProcessId, isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -451,7 +452,7 @@ function validateWindowsGenerationLayout(
     layout.resourceRoot,
     manifest.windowsGeneration.treeSha256,
     deadline,
-    securityLogSink,
+    securityLogSink ?? unwiredSecurityLogSink(),
   );
   assertPortableValidationDeadline(deadline);
   assertPortableFilePresent(layout.runtimeSupervisorPath, "missing portable runtime supervisor");
@@ -678,8 +679,14 @@ function promoteToManaged(
   managedRoot: string,
   stateDir: string,
   dryRun: boolean,
+  securityLogSink: SecurityLogSink | undefined,
 ): PortableLayout {
-  assertManagedRootAllowed(managedRoot, stateDir, target);
+  assertManagedRootAllowed(
+    managedRoot,
+    stateDir,
+    target,
+    securityLogSink ?? unwiredSecurityLogSink(),
+  );
   if (sameRealPath(source.installRoot, managedRoot)) return source;
   if (existsSync(managedRoot)) throw new Error("managed install root already exists");
   if (dryRun) return layoutFor(target, managedRoot);
@@ -688,7 +695,10 @@ function promoteToManaged(
   const stagedTarget = join(stagingRoot, basename(managedRoot));
   try {
     copyTreeSafe(source.installRoot, stagedTarget);
-    atomicPublishTreeSwap(stagedTarget, managedRoot, { rename: renameSync });
+    atomicPublishTreeSwap(stagedTarget, managedRoot, {
+      rename: renameSync,
+      securityLogSink: unwiredSecurityLogSink(),
+    });
     return validatePortableRoot(target, managedRoot).layout;
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -727,15 +737,26 @@ function assertPortableInputManagedRoot(input: {
   readonly target: PortableTarget;
   readonly securityLogSink?: SecurityLogSink | undefined;
 }): void {
-  assertManagedRootAllowed(input.managedRoot, input.stateDir, input.target, input.securityLogSink);
+  assertManagedRootAllowed(
+    input.managedRoot,
+    input.stateDir,
+    input.target,
+    input.securityLogSink ?? unwiredSecurityLogSink(),
+  );
 }
 
 function createPortableUpgradePaths(
   target: PortableTarget,
   managedRoot: string,
   stateDir: string,
+  securityLogSink: SecurityLogSink | undefined,
 ): PortableUpgradePaths {
-  assertManagedRootAllowed(managedRoot, stateDir, target);
+  assertManagedRootAllowed(
+    managedRoot,
+    stateDir,
+    target,
+    securityLogSink ?? unwiredSecurityLogSink(),
+  );
   const parent = dirname(managedRoot);
   mkdirSync(parent, { recursive: true, mode: 0o755 });
   const stagingRoot = mkdtempSync(join(parent, ".keiko-portable-upgrade-"));
@@ -763,7 +784,10 @@ function restoreManagedUpgradeInside(
   try {
     if (promoted) rmSync(paths.managedRoot, { recursive: true, force: true });
     if (existsSync(paths.backupTarget) && !existsSync(paths.managedRoot)) {
-      atomicPublishTreeSwap(paths.backupTarget, paths.managedRoot, { rename: renameSync });
+      atomicPublishTreeSwap(paths.backupTarget, paths.managedRoot, {
+        rename: renameSync,
+        securityLogSink: unwiredSecurityLogSink(),
+      });
     }
     if (!existsSync(paths.managedRoot) || existsSync(paths.backupTarget)) {
       return { restored: false, cause: new Error("portable rollback could not be verified") };
@@ -802,12 +826,12 @@ function swapStagedUpgrade(
     if (verifyCurrent !== undefined) verifyCurrent();
     atomicPublishTreeSwap(paths.managedRoot, paths.backupTarget, {
       rename: renameSync,
-      ...(input.securityLogSink !== undefined ? { securityLogSink: input.securityLogSink } : {}),
+      securityLogSink: input.securityLogSink ?? unwiredSecurityLogSink(),
     });
     moved = true;
     atomicPublishTreeSwap(paths.stagedTarget, paths.managedRoot, {
       rename: renameSync,
-      ...(input.securityLogSink !== undefined ? { securityLogSink: input.securityLogSink } : {}),
+      securityLogSink: input.securityLogSink ?? unwiredSecurityLogSink(),
     });
     promoted = true;
     const layout = validatePortableInputRoot(input, paths.managedRoot).layout;
@@ -843,7 +867,12 @@ function recoverFailedManagedInstall(
   input: PortableManagedReplacementInput,
   verifyCurrent: () => void,
 ): PortableLayout {
-  const paths = createPortableUpgradePaths(input.target, input.managedRoot, input.stateDir);
+  const paths = createPortableUpgradePaths(
+    input.target,
+    input.managedRoot,
+    input.stateDir,
+    input.securityLogSink,
+  );
   let removeBackup = true;
   try {
     copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
@@ -864,7 +893,12 @@ export function upgradeManagedInstall(input: PortableManagedUpgradeInput): Porta
 
 function upgradeLockedManagedInstall(input: PortableManagedUpgradeInput): PortableLayout {
   requireAttestedManagedUpgradeCurrent(input);
-  const paths = createPortableUpgradePaths(input.target, input.managedRoot, input.stateDir);
+  const paths = createPortableUpgradePaths(
+    input.target,
+    input.managedRoot,
+    input.stateDir,
+    input.securityLogSink,
+  );
   let removeBackup = true;
   try {
     copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
@@ -931,7 +965,7 @@ function managedRootAllowedForTarget(
   target: PortableTarget,
 ): boolean {
   try {
-    assertManagedRootAllowed(managedRoot, stateDir, target);
+    assertManagedRootAllowed(managedRoot, stateDir, target, unwiredSecurityLogSink());
     return true;
   } catch {
     return false;
@@ -1118,6 +1152,7 @@ function attestedFailedManagedInstall(
   target: PortableTarget,
   managedRoot: string,
   stateDir: string,
+  securityLogSink?: SecurityLogSink,
 ): ValidatedPortableRoot | undefined {
   const registration = readPortableInstallRegistration(stateDir);
   if (registration?.status !== "setup-failed" || registration.platformTarget !== target)
@@ -1125,7 +1160,12 @@ function attestedFailedManagedInstall(
   const attestation = failedManagedAttestation(registration);
   if (attestation === undefined) return undefined;
   try {
-    assertManagedRootAllowed(managedRoot, stateDir, attestation.platformTarget);
+    assertManagedRootAllowed(
+      managedRoot,
+      stateDir,
+      attestation.platformTarget,
+      securityLogSink ?? unwiredSecurityLogSink(),
+    );
     const current = validatePortableRoot(attestation.platformTarget, managedRoot);
     if (!registrationMatches(attestation, current.layout, current.manifest)) return undefined;
     if (inspectPortableManagedInstall(current.layout).issues.length > 0) return undefined;
@@ -1256,7 +1296,10 @@ function samePortableSetupLock(
 
 function restoreClaimedPortableSetupLock(claimedPath: string, path: string): void {
   try {
-    atomicPublishRename(claimedPath, path, { rename: renameSync });
+    atomicPublishRename(claimedPath, path, {
+      rename: renameSync,
+      securityLogSink: unwiredSecurityLogSink(),
+    });
   } catch {
     // Preserve the claimed directory when the canonical path was concurrently recreated.
   }
@@ -1269,7 +1312,10 @@ function reclaimPortableSetupLock(path: string): boolean {
     const inspected = stalePortableSetupLock(path);
     if (inspected === undefined) return false;
     stale = inspected;
-    atomicPublishRename(path, claimedPath, { rename: renameSync });
+    atomicPublishRename(path, claimedPath, {
+      rename: renameSync,
+      securityLogSink: unwiredSecurityLogSink(),
+    });
   } catch {
     return false;
   }
@@ -1621,6 +1667,7 @@ function requireAttestedFailedManagedInstall(options: SetupPortableOptions): Val
     options.target,
     options.managedRoot,
     options.stateDir,
+    options.securityLogSink,
   );
   if (current === undefined) throw new Error("failed managed install changed during recovery");
   return current;
@@ -1642,6 +1689,7 @@ function preparePortableSetup(
     options.managedRoot,
     options.stateDir,
     options.dryRun,
+    options.securityLogSink,
   );
   const createdManagedInstall =
     !options.dryRun && !sameRealPath(source.layout.installRoot, layout.installRoot);
@@ -1773,9 +1821,15 @@ function attestedManagedLayout(
   registration: ManagedSetupRegistration,
   managedRoot: string,
   stateDir: string,
+  securityLogSink?: SecurityLogSink,
 ): { readonly layout: PortableLayout; readonly manifest: SetupManifest } | undefined {
   try {
-    assertManagedRootAllowed(managedRoot, stateDir, registration.platformTarget);
+    assertManagedRootAllowed(
+      managedRoot,
+      stateDir,
+      registration.platformTarget,
+      securityLogSink ?? unwiredSecurityLogSink(),
+    );
     const { layout, manifest } = validatePortableRoot(registration.platformTarget, managedRoot);
     return registrationMatches(registration, layout, manifest) ? { layout, manifest } : undefined;
   } catch {

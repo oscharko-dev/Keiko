@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -121,6 +122,7 @@ function operation(overrides: Partial<PortableTreeKht1Operation> = {}): Portable
     deadline: Date.now() + 5_000,
     now: Date.now,
     yieldControl: () => Promise.resolve(),
+    securityLogSink: nullSecurityLogSink(),
     ...overrides,
   };
 }
@@ -183,14 +185,14 @@ describe("portable KHT1 tree attestation", () => {
     expect(expected).toBe("4d120aeb0383a39dfd0d1782e7cb3e4d0ed6b0e86658842e1b8db2c1efdafca4");
     await expect(hashPortableTreeKht1(root, operation())).resolves.toBe(expected);
     expect(() => {
-      attestPortableTreeKht1Sync(root, expected, Date.now() + 5_000);
+      attestPortableTreeKht1Sync(root, expected, Date.now() + 5_000, nullSecurityLogSink());
     }).not.toThrow();
   });
 
   async function expectUnsupportedEntry(root: string): Promise<void> {
     await expect(hashPortableTreeKht1(root, operation())).rejects.toThrow(/unsupported entry/u);
     expect(() => {
-      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000);
+      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000, nullSecurityLogSink());
     }).toThrow(/unsupported entry/u);
   }
 
@@ -218,7 +220,12 @@ describe("portable KHT1 tree attestation", () => {
       /unsupported entry/u,
     );
     expect(() => {
-      attestPortableTreeKht1Sync(hardLinkRoot, "0".repeat(64), Date.now() + 5_000);
+      attestPortableTreeKht1Sync(
+        hardLinkRoot,
+        "0".repeat(64),
+        Date.now() + 5_000,
+        nullSecurityLogSink(),
+      );
     }).toThrow(/unsupported entry/u);
   });
 
@@ -295,7 +302,7 @@ describe("portable KHT1 tree attestation", () => {
     );
 
     expect(() => {
-      attestPortableTreeKht1Sync(root, expected, Date.now() + 5_000);
+      attestPortableTreeKht1Sync(root, expected, Date.now() + 5_000, nullSecurityLogSink());
     }).toThrow();
   });
 
@@ -327,7 +334,7 @@ describe("portable KHT1 tree attestation", () => {
     );
 
     expect(() => {
-      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000);
+      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000, nullSecurityLogSink());
     }).toThrow();
   });
 
@@ -427,13 +434,13 @@ describe("portable KHT1 tree attestation", () => {
     writeFileSync(join(root, "file.txt"), "content");
 
     expect(() => {
-      attestPortableTreeKht1Sync(root, "0".repeat(64), 1);
+      attestPortableTreeKht1Sync(root, "0".repeat(64), 1, nullSecurityLogSink());
     }).toThrow(/timed out/u);
     expect(() => {
-      attestPortableTreeKht1Sync(root, "ABC", Date.now() + 5_000);
+      attestPortableTreeKht1Sync(root, "ABC", Date.now() + 5_000, nullSecurityLogSink());
     }).toThrow(/digest is invalid/u);
     expect(() => {
-      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000);
+      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000, nullSecurityLogSink());
     }).toThrow(/digest mismatch/u);
   });
 
@@ -532,7 +539,9 @@ describe("portable legacy sidecar tree attestation", () => {
     });
     expect(observedIo.selectedOpens).toBe(1);
     expect(observedIo.openHandles).toBe(0);
-    expect(attestPortableSidecarTreeSync(root, "a.txt", Date.now() + 5_000)).toEqual({
+    expect(
+      attestPortableSidecarTreeSync(root, "a.txt", Date.now() + 5_000, nullSecurityLogSink()),
+    ).toEqual({
       treeSha256: expected,
       selectedFileSha256: createHash("sha256").update(portableFiles[1][1]).digest("hex"),
     });
@@ -540,7 +549,9 @@ describe("portable legacy sidecar tree attestation", () => {
     expect(await attestPortableSidecarTree(root, "../outside", operation())).toEqual({
       treeSha256: expected,
     });
-    expect(attestPortableSidecarTreeSync(root, "../outside", Date.now() + 5_000)).toEqual({
+    expect(
+      attestPortableSidecarTreeSync(root, "../outside", Date.now() + 5_000, nullSecurityLogSink()),
+    ).toEqual({
       treeSha256: expected,
     });
   });
@@ -561,7 +572,13 @@ describe("portable legacy sidecar tree attestation", () => {
       observedIo.selectedPath = join(root, "bin");
       const result =
         driver === "sync"
-          ? attestPortableSidecarTreeSync(root, "bin", Date.now() + 5_000, undefined, requested)
+          ? attestPortableSidecarTreeSync(
+              root,
+              "bin",
+              Date.now() + 5_000,
+              nullSecurityLogSink(),
+              requested,
+            )
           : await attestPortableSidecarTree(root, "bin", operation(), requested);
       expect(observedIo.selectedOpens).toBe(driver === "async" ? 1 : 0);
       const inventory = result.selectedFileSha256ByPath;
@@ -622,7 +639,7 @@ describe("portable legacy sidecar tree attestation", () => {
     writeFileSync(join(root, "bin"), "executable");
     observedIo.selectedPath = join(root, "bin");
     expect(() =>
-      attestPortableSidecarTreeSync(root, "bin", Date.now() + 5_000, undefined, paths),
+      attestPortableSidecarTreeSync(root, "bin", Date.now() + 5_000, nullSecurityLogSink(), paths),
     ).toThrow(PortableTreeAttestationError);
     await expect(attestPortableSidecarTree(root, "bin", operation(), paths)).rejects.toThrow(
       PortableTreeAttestationError,
@@ -659,9 +676,10 @@ describe("portable legacy sidecar tree attestation", () => {
     const collation = vi.spyOn(String.prototype, "localeCompare").mockReturnValue(0);
     try {
       const expected = computePortableSidecarPayloadTreeDigest(historicalOrder);
-      expect(attestPortableSidecarTreeSync(root, "a/nested", Date.now() + 5_000).treeSha256).toBe(
-        expected,
-      );
+      expect(
+        attestPortableSidecarTreeSync(root, "a/nested", Date.now() + 5_000, nullSecurityLogSink())
+          .treeSha256,
+      ).toBe(expected);
       expect((await attestPortableSidecarTree(root, "a/nested", operation())).treeSha256).toBe(
         expected,
       );
@@ -675,7 +693,7 @@ describe("portable legacy sidecar tree attestation", () => {
     writeFileSync(join(root, "a.txt"), "first");
     writeFileSync(join(root, "z.txt"), "second");
     observedIo.directoryOrderRoot = root;
-    attestPortableSidecarTreeSync(root, "a.txt", Date.now() + 5_000);
+    attestPortableSidecarTreeSync(root, "a.txt", Date.now() + 5_000, nullSecurityLogSink());
     await attestPortableSidecarTree(root, "a.txt", operation());
     expect(observedIo.directoryOrderReads).toBe(0);
   });
@@ -690,9 +708,9 @@ describe("portable legacy sidecar tree attestation", () => {
         names.push("added.txt");
       };
       if (driver === "sync") {
-        expect(() => attestPortableSidecarTreeSync(root, "a", Date.now() + 5_000)).toThrow(
-          /changed during attestation/u,
-        );
+        expect(() =>
+          attestPortableSidecarTreeSync(root, "a", Date.now() + 5_000, nullSecurityLogSink()),
+        ).toThrow(/changed during attestation/u);
       } else {
         await expect(attestPortableSidecarTree(root, "a", operation())).rejects.toThrow(
           /changed during attestation/u,
@@ -727,7 +745,9 @@ describe("portable legacy sidecar tree attestation", () => {
       const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
       try {
         if (driver === "sync") {
-          expect(() => attestPortableSidecarTreeSync(root, "a", 2)).toThrow(/timed out/u);
+          expect(() => attestPortableSidecarTreeSync(root, "a", 2, nullSecurityLogSink())).toThrow(
+            /timed out/u,
+          );
         } else {
           await expect(
             attestPortableSidecarTree(root, "a", operation({ deadline: 2 })),
@@ -835,9 +855,14 @@ describe("portable legacy sidecar tree attestation", () => {
     await expect(
       attestPortableSidecarTree(inspectedRoot, "a.txt", operation()),
     ).rejects.toBeInstanceOf(PortableTreeAttestationError);
-    expect(() => attestPortableSidecarTreeSync(inspectedRoot, "a.txt", Date.now() + 5_000)).toThrow(
-      PortableTreeAttestationError,
-    );
+    expect(() =>
+      attestPortableSidecarTreeSync(
+        inspectedRoot,
+        "a.txt",
+        Date.now() + 5_000,
+        nullSecurityLogSink(),
+      ),
+    ).toThrow(PortableTreeAttestationError);
     expect(observedIo.openHandles).toBe(0);
   });
 

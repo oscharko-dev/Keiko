@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   currentProcessId,
@@ -589,7 +590,10 @@ function discardRemediationLease(
 ): boolean {
   const claimedPath = `${path}.reclaim.${randomUUID()}`;
   try {
-    atomicPublishRename(path, claimedPath, { rename: renameSync });
+    atomicPublishRename(path, claimedPath, {
+      rename: renameSync,
+      securityLogSink: serverSecurityLogSink(),
+    });
   } catch {
     return false;
   }
@@ -607,7 +611,10 @@ function discardRemediationLease(
   try {
     if (expected === undefined) {
       const suffix = new Date(now()).toISOString().replace(/[:.]/g, "-");
-      atomicPublishRename(claimedPath, `${path}.corrupt.${suffix}`, { rename: renameSync });
+      atomicPublishRename(claimedPath, `${path}.corrupt.${suffix}`, {
+        rename: renameSync,
+        securityLogSink: serverSecurityLogSink(),
+      });
     } else {
       unlinkSync(claimedPath);
     }
@@ -629,7 +636,10 @@ function releaseRemediationLease(path: string, token: string): void {
     return;
   }
   const claimedPath = `${path}.release.${token}`;
-  atomicPublishRename(path, claimedPath, { rename: renameSync });
+  atomicPublishRename(path, claimedPath, {
+    rename: renameSync,
+    securityLogSink: serverSecurityLogSink(),
+  });
   if (readRemediationLease(claimedPath)?.token === token) {
     unlinkSync(claimedPath);
     return;
@@ -1772,7 +1782,10 @@ function durableReplace(path: string, content: string): void {
     fsyncSync(fileDescriptor);
     closeSync(fileDescriptor);
     fileDescriptor = undefined;
-    atomicPublishRename(tempPath, path, { rename: renameSync });
+    atomicPublishRename(tempPath, path, {
+      rename: renameSync,
+      securityLogSink: serverSecurityLogSink(),
+    });
     try {
       directoryDescriptor = openSync(dirname(path), constants.O_RDONLY);
       fsyncSync(directoryDescriptor);

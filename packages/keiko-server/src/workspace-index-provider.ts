@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -302,6 +303,21 @@ function createGenerationWorkspaceIndex(
   return generationBoundWorkspaceIndex(fileIndex, generation, options);
 }
 
+function resolveWorkspaceIndexKey(
+  options: ServerWorkspaceIndexProviderOptions,
+  runtimeDir: string,
+): ReturnType<typeof resolveLocalVaultKeyOnce> {
+  return resolveLocalVaultKeyOnce({
+    env: options.env ?? process.env,
+    vaultDir: runtimeDir,
+    envVarName: WORKSPACE_INDEX_KEY_ENV,
+    keychainService: WORKSPACE_INDEX_KEYCHAIN_SERVICE,
+    keyfileName: WORKSPACE_INDEX_KEYFILE,
+    ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
+    sink: options.securityLogSink ?? serverSecurityLogSink(),
+  });
+}
+
 export function createServerWorkspaceIndexProvider(
   options: ServerWorkspaceIndexProviderOptions,
 ): WorkspaceIndexProvider {
@@ -319,15 +335,7 @@ export function createServerWorkspaceIndexProvider(
     // is the id that failure — and only that failure — is reported under.
     const correlationId = randomUUID();
     try {
-      const { key } = resolveLocalVaultKeyOnce({
-        env: options.env ?? process.env,
-        vaultDir: runtimeDir,
-        envVarName: WORKSPACE_INDEX_KEY_ENV,
-        keychainService: WORKSPACE_INDEX_KEYCHAIN_SERVICE,
-        keyfileName: WORKSPACE_INDEX_KEYFILE,
-        ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
-        sink: options.securityLogSink,
-      });
+      const { key } = resolveWorkspaceIndexKey(options, runtimeDir);
       const keyFingerprint = workspaceIndexKeyFingerprint(key);
       if (existing?.generation.active === true && existing.keyFingerprint === keyFingerprint) {
         return existing.index;

@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   copyFileSync,
   existsSync,
@@ -179,6 +180,7 @@ async function writeWindowsGenerationFixture(root: string, version = "0.3.17"): 
     '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n',
   );
   const treeSha256 = await hashPortableTreeKht1(provisionalRoot, {
+    securityLogSink: nullSecurityLogSink(),
     deadline: Date.now() + 5_000,
     now: Date.now,
     yieldControl: () => Promise.resolve(),
@@ -712,13 +714,28 @@ describe("runPortableCli", () => {
     const stateDir = join(tempRoot(), "state");
 
     expect(() => {
-      assertManagedRootAllowed("/Applications/Keiko.app", stateDir, "macos-arm64");
+      assertManagedRootAllowed(
+        "/Applications/Keiko.app",
+        stateDir,
+        "macos-arm64",
+        nullSecurityLogSink(),
+      );
     }).not.toThrow();
     expect(() => {
-      assertManagedRootAllowed("/Applications/Other.app", stateDir, "macos-arm64");
+      assertManagedRootAllowed(
+        "/Applications/Other.app",
+        stateDir,
+        "macos-arm64",
+        nullSecurityLogSink(),
+      );
     }).toThrow("managed install root must be user-local or the canonical Keiko macOS app");
     expect(() => {
-      assertManagedRootAllowed("/Applications/Keiko.app", stateDir, "windows-x64");
+      assertManagedRootAllowed(
+        "/Applications/Keiko.app",
+        stateDir,
+        "windows-x64",
+        nullSecurityLogSink(),
+      );
     }).toThrow("managed install root must be user-local or the canonical Keiko macOS app");
   });
 

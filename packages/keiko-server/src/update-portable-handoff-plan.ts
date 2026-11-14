@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -504,7 +505,10 @@ export function writePortableHandoffPlan(input: {
   const sha256 = createHash("sha256").update(content).digest("hex");
   const temporary = join(root, `.plan-${String(process.pid)}.tmp`);
   durableWrite(temporary, content);
-  atomicPublishRename(temporary, path, { rename: renameSync });
+  atomicPublishRename(temporary, path, {
+    rename: renameSync,
+    securityLogSink: serverSecurityLogSink(),
+  });
   durableWrite(digestPath, `${sha256}\n`);
   syncPortableHandoffDirectory(root);
   assertRegularSingleLink(path, "portable handoff plan");

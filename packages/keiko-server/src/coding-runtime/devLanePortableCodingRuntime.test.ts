@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { createHash } from "node:crypto";
 import {
   mkdirSync,
@@ -246,6 +247,7 @@ describe("discovery's historical recursive tuple ordering", () => {
         executableTreeDigestVerified: true,
       });
       const asynchronous = await attestPortableSidecarTree(payload, "bin/opencode", {
+        securityLogSink: nullSecurityLogSink(),
         deadline: Date.now() + 5_000,
         now: Date.now,
         yieldControl: () => Promise.resolve(),

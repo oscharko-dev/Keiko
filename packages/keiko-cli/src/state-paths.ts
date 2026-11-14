@@ -47,7 +47,7 @@ import {
   isActivityLogCorrelationId,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { assertValidRunId, unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { isSafeArtifactStageFileName } from "@oscharko-dev/keiko-security/fs-hardening";
 import { assertRealpathContained } from "./launcher-paths.js";
 import {
@@ -357,7 +357,10 @@ function publishNativePidFile(path: string, contents: string, pid: number, launc
     writeCompletePidRecord(record, contents);
     if (!nativePidSlotMatches(path, pid, launchId))
       throw new Error("Native UI reservation changed");
-    atomicPublishRename(record, path, { rename: renameSync });
+    atomicPublishRename(record, path, {
+      rename: renameSync,
+      securityLogSink: unwiredSecurityLogSink(),
+    });
     syncPidDirectory(path);
   } finally {
     rmSync(temporary, { recursive: true, force: true });

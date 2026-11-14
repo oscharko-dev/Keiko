@@ -1,3 +1,4 @@
+import { unwiredSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -221,6 +222,7 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
     atomicPublishRename(tmpFile, path, {
       rename: renameSync,
       backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+      securityLogSink: unwiredSecurityLogSink(),
     });
   } finally {
     // PR-review follow-up (Codex thread 3771256638): rmSync failure MUST NOT masquerade as

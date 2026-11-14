@@ -3,6 +3,7 @@
 // acceptance criterion. Secrets are synthetic and assembled at runtime by concatenation so no
 // committed byte sequence resembles a live credential.
 
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -1074,7 +1075,11 @@ describe("ciphertext on disk — real keiko-security vault", () => {
 
   it("persists no token or email plaintext in the vault store bytes", () => {
     const storePath = join(tempDir, "atlassian-connector-credentials.vault");
-    const vault = createLocalSecretVault({ key: randomBytes(32), storePath });
+    const vault = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
+      key: randomBytes(32),
+      storePath,
+    });
     const metadataStore = inMemoryMetadataStore();
     const { custody, executionResolver } = createAtlassianCredentialCustody({
       vault,

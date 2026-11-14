@@ -1119,9 +1119,24 @@ function trackedUiStillOwned(
   if (!sameTrackedUiRecord(current, record) || !deps.isProcessAlive(record.pid)) {
     return false;
   }
-  const verify = deps.verifyLaunchIdentity ?? liveProcessHasLaunchId;
+  const verify = launchIdentityVerifier(deps);
   if (record.launchId !== undefined && !verify(record.pid, record.launchId)) return false;
   return record.nativeAppRuntime !== true || nativeUiGenerationOwned(options.stateDir, record);
+}
+
+/**
+ * The launch-identity check of a tracked UI process. The default reads the process through the
+ * command's own sink, so a slow or unavailable Windows query leaves its line instead of being lost
+ * as an unwired port (#4351); a test seam replaces the whole check.
+ */
+export function launchIdentityVerifier(
+  deps: Pick<LifecycleRuntimeDeps, "verifyLaunchIdentity" | "securityLogSink">,
+): (pid: number, launchId: string) => boolean {
+  return (
+    deps.verifyLaunchIdentity ??
+    ((pid, launchId): boolean =>
+      liveProcessHasLaunchId(pid, launchId, { securityLogSink: deps.securityLogSink }))
+  );
 }
 
 function sameTrackedUiRecord(current: PidRecord | undefined, expected: PidRecord): boolean {

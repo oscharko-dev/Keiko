@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,6 +276,7 @@ describe("editor hot-exit server store", () => {
     const stateDir = tempStateDir();
     const storePath = join(stateDir, "editor-hot-exit", "snapshots.vault");
     const vault = createLocalSecretVault({
+      sink: nullSecurityLogSink(),
       key: Buffer.from(VAULT_KEY, "base64"),
       storePath,
     });

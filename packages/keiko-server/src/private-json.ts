@@ -6,6 +6,7 @@
 // path segment is checked for symlinks first so a hostile symlink cannot redirect the write outside
 // the intended private directory.
 
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { processServerLogSinkFor } from "./process-log-sink.js";
 import {
@@ -79,7 +80,10 @@ export function savePrivateJson(path: string, raw: Record<string, unknown>): voi
     } else {
       chmodSync(tempPath, 0o600);
     }
-    atomicPublishRename(tempPath, resolvedPath, { rename: renameSync });
+    atomicPublishRename(tempPath, resolvedPath, {
+      rename: renameSync,
+      securityLogSink: serverSecurityLogSink(),
+    });
     fsyncDirectory(dir);
   } finally {
     if (existsSync(tempPath)) {

@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import { mkdtempSync, rmSync, writeFileSync, type Dir, type Dirent, type PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +61,7 @@ describe("portable KHT1 opened-directory identity", () => {
 
     await expect(
       hashPortableTreeKht1(root, {
+        securityLogSink: nullSecurityLogSink(),
         deadline: Date.now() + 5_000,
         now: Date.now,
         yieldControl: () => Promise.resolve(),

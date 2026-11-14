@@ -1,3 +1,4 @@
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
@@ -25,7 +26,7 @@ export interface PortableHandoffOperation {
   readonly deadline: number;
   readonly now: () => number;
   readonly yieldControl: () => Promise<void>;
-  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly securityLogSink: SecurityLogSink;
 }
 
 export class PortableHandoffBuilderError extends Error {
@@ -54,7 +55,7 @@ export function portableHandoffOperationFrom(
     deadline: options.deadline,
     now: options.now ?? Date.now,
     yieldControl: options.yieldControl ?? defaultYieldControl,
-    ...(options.securityLogSink === undefined ? {} : { securityLogSink: options.securityLogSink }),
+    securityLogSink: options.securityLogSink ?? serverSecurityLogSink(),
   };
 }
 

@@ -1,6 +1,7 @@
 // Isolated so the `node:fs` mock never leaks into secret-vault.test.ts. Counts how many times
 // writeStore commits the vault file: persistVaultEntries used to call set() per credential, and
 // each set() is one whole-file rewrite. setMany must commit that file once for N entries (#3346).
+import { nullSecurityLogSink } from "./log-port.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -34,7 +35,7 @@ describe("createLocalSecretVault — setMany write cost (#3346)", () => {
     const dir = realpathSync(mkdtempSync(join(REAL_TMPDIR, "secret-vault-set-many-io-")));
     dirs.push(dir);
     const storePath = resolve(join(dir, "vault.enc.json"));
-    const vault = createLocalSecretVault({ key: KEY, storePath });
+    const vault = createLocalSecretVault({ sink: nullSecurityLogSink(), key: KEY, storePath });
     const batch = new Map(
       Array.from({ length: 20 }, (_unused, index) => [
         `cred:m${String(index)}`,
@@ -55,7 +56,7 @@ describe("createLocalSecretVault — setMany write cost (#3346)", () => {
     const dir = realpathSync(mkdtempSync(join(REAL_TMPDIR, "secret-vault-delete-many-io-")));
     dirs.push(dir);
     const storePath = resolve(join(dir, "vault.enc.json"));
-    const vault = createLocalSecretVault({ key: KEY, storePath });
+    const vault = createLocalSecretVault({ sink: nullSecurityLogSink(), key: KEY, storePath });
     vault.setMany(
       new Map([
         ["cred:a", "secret-a"],

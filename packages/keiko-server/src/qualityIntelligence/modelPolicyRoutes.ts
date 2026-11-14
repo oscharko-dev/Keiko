@@ -3,6 +3,7 @@
 // The browser receives only configured capability metadata and redacted routing/preflight status.
 // Provider URLs, headers, keys, and raw provider errors never cross this surface.
 
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import type { IncomingMessage } from "node:http";
 import {
   lstatSync,
@@ -215,7 +216,10 @@ function savePolicy(evidenceDir: string, policy: QualityIntelligenceModelPolicy)
     if (tempStats.isSymbolicLink() || !tempStats.isFile()) {
       throw policyStorageError();
     }
-    atomicPublishRename(temp, location.target, { rename: renameSync });
+    atomicPublishRename(temp, location.target, {
+      rename: renameSync,
+      securityLogSink: serverSecurityLogSink(),
+    });
   } catch (error) {
     rmSync(temp, { force: true });
     throw error;

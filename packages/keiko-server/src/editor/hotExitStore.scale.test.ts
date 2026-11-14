@@ -3,6 +3,7 @@
 // backed by a real encrypted on-disk vault and count get() calls (each is one full-file read + one
 // AES-GCM decrypt) as the direct proxy for "decrypt every snapshot". Content stays AES-GCM sealed
 // (asserted in hotExitStore.test.ts); the injected vault delegates to the real sealing vault.
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,7 +40,7 @@ interface CountingVault {
 
 function countingVault(stateDir: string): CountingVault {
   const storePath = join(stateDir, "editor-hot-exit", "snapshots.vault");
-  const inner = createLocalSecretVault({ key: VAULT_KEY, storePath });
+  const inner = createLocalSecretVault({ sink: nullSecurityLogSink(), key: VAULT_KEY, storePath });
   let gets = 0;
   const vault: LocalSecretVault = {
     get: (reference) => {

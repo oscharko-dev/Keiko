@@ -8,6 +8,7 @@
 // packages/keiko-server/src/credentialVault.test.ts uses: no real OS keychain, no real login
 // session, no cross-test state leaks.
 
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   chmodSync,
   existsSync,
@@ -98,6 +99,7 @@ describe("openAtlassianCredentialVault", () => {
       const keychainAccess = createKeychainVaultKeyAccess(
         "keiko-atlassian-connector-credentials-vault",
         createKeychainCommandRunner(executable),
+        nullSecurityLogSink(),
       );
       const vault = openAtlassianCredentialVault({ configPath, env: {}, keychainAccess });
       const metadataStore = createAtlassianCredentialMetadataStore({ configPath });
@@ -116,6 +118,7 @@ describe("openAtlassianCredentialVault", () => {
         keychainAccess: createKeychainVaultKeyAccess(
           "keiko-atlassian-connector-credentials-vault",
           createKeychainCommandRunner(executable),
+          nullSecurityLogSink(),
         ),
       });
       const resolver = createAtlassianCredentialCustody({
