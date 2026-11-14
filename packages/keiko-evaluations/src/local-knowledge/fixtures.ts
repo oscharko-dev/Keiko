@@ -11,6 +11,7 @@
 //     multi-page citations without requiring customer data or network access.
 
 import type {
+  CapsuleSetId,
   ChunkId,
   DocumentId,
   EmbeddingModelIdentity,
@@ -49,15 +50,23 @@ export const EVAL_ALT_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
 export const EVAL_TOPIC_BOOST = 1.0;
 
 export function chunkId(value: string): ChunkId {
+  // SAFETY: fixture helper; every caller passes a fixed fixture literal, so this erases nothing.
   return value as ChunkId;
 }
 export function documentId(value: string): DocumentId {
+  // SAFETY: fixture helper; every caller passes a fixed fixture literal, so this erases nothing.
   return value as DocumentId;
 }
 export function sourceId(value: string): KnowledgeSourceId {
+  // SAFETY: fixture helper; every caller passes a fixed fixture literal, so this erases nothing.
   return value as KnowledgeSourceId;
 }
+export function capsuleSetId(value: string): CapsuleSetId {
+  // SAFETY: fixture helper; every caller passes a fixed fixture literal, so this erases nothing.
+  return value as CapsuleSetId;
+}
 export function capsuleId(value: string): KnowledgeCapsuleId {
+  // SAFETY: fixture helper; every caller passes a fixed fixture literal, so this erases nothing.
   return value as KnowledgeCapsuleId;
 }
 
@@ -190,7 +199,7 @@ export const multiCapsuleFixture: RetrievalEvalFixture = {
       topic: "shared",
       scope: {
         kind: "capsule-set",
-        capsuleSetId: "set-multi",
+        capsuleSetId: capsuleSetId("set-multi"),
         capsuleIds: [capsuleId("cap-multi-a"), capsuleId("cap-multi-b")],
       },
       expectedChunkIds: [chunkId("c-multi-a-shared"), chunkId("c-multi-b-shared")],
@@ -283,7 +292,7 @@ export const multiSpaceFixture: RetrievalEvalFixture = {
       topic: "multi-space",
       scope: {
         kind: "capsule-set",
-        capsuleSetId: "set-space",
+        capsuleSetId: capsuleSetId("set-space"),
         capsuleIds: [capsuleId("cap-space-a"), capsuleId("cap-space-b")],
       },
       expectedChunkIds: [chunkId("c-space-a"), chunkId("c-space-b")],

@@ -221,6 +221,8 @@ function checkCliExpectation(expectation: CliExpectation): SurfaceParityCheckRes
 async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
   const sdkPath = "@oscharko-dev/keiko-sdk";
   const sdkModule: unknown = await import(sdkPath);
+  // SAFETY: an imported module namespace is always a non-null object with string keys, and every
+  // read below treats its value as unknown.
   const sdk = sdkModule as Record<string, unknown>;
   return SDK_EXPORT_EXPECTATIONS.map((expectation) => {
     const missing = [
