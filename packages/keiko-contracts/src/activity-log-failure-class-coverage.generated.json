@@ -6340,10 +6340,10 @@
       "failureClass": "cli-uninstall",
       "requirementContract": "cli-uninstall",
       "productSurfaces": ["keiko-cli"],
-      "lifecycleTransitions": ["end", "failure", "start"],
+      "lifecycleTransitions": ["end", "failure", "start", "state"],
       "lifecycleOperations": {
         "start": ["cli.uninstall.started"],
-        "state": [],
+        "state": ["cli.uninstall.handoff"],
         "end": ["cli.uninstall.completed"],
         "failure": ["cli.uninstall.failed"],
         "loss": []
@@ -6358,12 +6358,20 @@
           "mode": "none"
         },
         {
+          "op": "cli.uninstall.handoff",
+          "mode": "none"
+        },
+        {
           "op": "cli.uninstall.started",
           "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["cli.uninstall.completed", "cli.uninstall.started"],
+      "resourceSignals": [
+        "cli.uninstall.completed",
+        "cli.uninstall.handoff",
+        "cli.uninstall.started"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -6471,6 +6479,85 @@
             "causeChain": false
           },
           "proofIds": ["cli.uninstall.failed.persisted"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "cli.uninstall.handoff",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "packageTargetSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "removedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "residueDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "residueFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resumeState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "targetSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.uninstall.handoff.persisted"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -42084,6 +42171,62 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "portable-launch-failure",
+      "requirementContract": "portable-launch-failure",
+      "productSurfaces": ["keiko-cli"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["portable.launch.failed"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "portable.launch.failed",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "portable.launch.failed",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "none",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "launcherBox",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["portable.launch.failed.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "portable-native-helper-binding",
       "requirementContract": "portable-native-helper-binding",
       "productSurfaces": ["keiko-server"],
@@ -52690,90 +52833,6 @@
             "causeChain": false
           },
           "proofIds": ["voice.realtime.session-started.profile"],
-          "replayReferences": [],
-          "missingObligations": []
-        }
-      ],
-      "missingObligations": [],
-      "completeness": "complete"
-    },
-    {
-      "failureClass": "windows-alert-spawn",
-      "requirementContract": "windows-alert-spawn",
-      "productSurfaces": ["keiko-cli"],
-      "lifecycleTransitions": ["failure", "state"],
-      "lifecycleOperations": {
-        "start": [],
-        "state": ["portable.setup-notice.requested"],
-        "end": [],
-        "failure": ["portable.windows-alert.spawn-failed"],
-        "loss": []
-      },
-      "causalEdges": [
-        {
-          "op": "portable.setup-notice.requested",
-          "mode": "none"
-        },
-        {
-          "op": "portable.windows-alert.spawn-failed",
-          "mode": "none"
-        }
-      ],
-      "lossSignals": [],
-      "resourceSignals": ["portable.setup-notice.requested"],
-      "replayReferences": [],
-      "operations": [
-        {
-          "op": "portable.setup-notice.requested",
-          "owner": "keiko-cli",
-          "category": "diagnostic",
-          "lifecycle": "state",
-          "causal": "none",
-          "analyzerProjection": "timeline",
-          "safeContextFields": [
-            {
-              "name": "surface",
-              "type": "string",
-              "dataClass": "closed-enum",
-              "required": true
-            }
-          ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
-          "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
-          },
-          "proofIds": ["portable.setup-notice.requested.emitted-line"],
-          "replayReferences": [],
-          "missingObligations": []
-        },
-        {
-          "op": "portable.windows-alert.spawn-failed",
-          "owner": "keiko-cli",
-          "category": "diagnostic",
-          "lifecycle": "failure",
-          "causal": "none",
-          "analyzerProjection": "failure-cluster",
-          "safeContextFields": [
-            {
-              "name": "failureKind",
-              "type": "string",
-              "dataClass": "error-kind",
-              "required": true
-            },
-            {
-              "name": "surface",
-              "type": "string",
-              "dataClass": "closed-enum",
-              "required": true
-            }
-          ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
-          "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
-          },
-          "proofIds": ["portable.windows-alert.spawn-failed.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

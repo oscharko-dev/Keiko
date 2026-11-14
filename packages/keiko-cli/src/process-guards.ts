@@ -34,6 +34,9 @@
 // The fallback never reads `.message` either: see `fallbackErrorKind`.
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-server";
+// Node built-ins only (no server graph): the one runtime import this module keeps, for the note the
+// native launcher reads (#4358).
+import { LAUNCH_FAILURE_NOTE_ENV, writeLaunchFailureNote } from "./launch-failure-note.js";
 import {
   processExitingActivityLogEvent,
   processFatalActivityLogEvent,
@@ -107,6 +110,21 @@ const DEFAULT_PROCESS_GUARD_SINK: ProcessGuardSink = {
 // hangs. Two seconds is generous for a healthy install (the import itself costs low tens of
 // milliseconds) and still short enough that an operator never mistakes the wait for a second hang.
 const FATAL_IMPORT_TIMEOUT_MS = 2_000;
+
+// A start the native Windows launcher began has no console and nobody waiting at a terminal: the
+// person sees the launcher's failure box only after this process ends, and a slow machine needs far
+// longer than two seconds to load the classifier and write the `process.fatal` line (#4358: the
+// guest's first start left no such line). The longer bound applies only to that start.
+const FATAL_IMPORT_TIMEOUT_LAUNCHED_MS = 30_000;
+
+// Only the `portable launch` process the launcher started carries the note path: the UI process it
+// starts does not inherit it (lifecycle.ts, uiProcessEnvironment), so a later crash of the long-lived
+// server keeps the short bound.
+function fatalImportTimeoutMs(env: NodeJS.ProcessEnv): number {
+  return env.KEIKO_PORTABLE_UI_LAUNCH === "1" && env[LAUNCH_FAILURE_NOTE_ENV] !== undefined
+    ? FATAL_IMPORT_TIMEOUT_LAUNCHED_MS
+    : FATAL_IMPORT_TIMEOUT_MS;
+}
 
 type FatalReasonKind = "uncaught-exception" | "unhandled-rejection";
 
@@ -218,6 +236,22 @@ function boundedSinkWrite(invoke: () => void | Promise<void>): Promise<void> {
   });
 }
 
+function reportFatalNoteFailure(sink: ProcessGuardSink): void {
+  void boundedSinkWrite(() =>
+    sink.err("keiko: the failure note for the launcher could not be written\n"),
+  );
+}
+
+// The reason note the Windows launcher reads (launch-failure-note.ts). A write that fails is
+// reported on stderr and never stops the exit.
+function leaveFatalLaunchNote(env: NodeJS.ProcessEnv, sink: ProcessGuardSink): void {
+  try {
+    writeLaunchFailureNote(env, "fatal");
+  } catch {
+    reportFatalNoteFailure(sink);
+  }
+}
+
 // Races the classifier import against the bounded timeout above. Exactly one of the two paths
 // calls `finish()` for real (the guard makes the other a no-op), so stderr is written and the
 // process exits exactly once, whichever settles first. Returned as a Promise (rather than
@@ -231,6 +265,9 @@ async function handleFatalReason(
 ): Promise<void> {
   const loadServer = sink.loadServer ?? loadServerModule;
   const env = sink.env ?? process.env;
+  // First, and without the classifier: the native launcher's failure box reads this note after the
+  // process has ended, so it must exist whatever the import below does or how long it takes.
+  leaveFatalLaunchNote(env, sink);
   let line = fatalProcessLine(humanKind, fallbackErrorKind(reason));
   let settled = false;
   // KEIKO-0837: await the sink.err write BEFORE sink.exit so an async stderr transport
@@ -256,7 +293,7 @@ async function handleFatalReason(
     // `process.fatal` record — silently swallowing the very crash this file exists to report.
     const timer = setTimeout(() => {
       void finish().finally(resolve);
-    }, FATAL_IMPORT_TIMEOUT_MS);
+    }, fatalImportTimeoutMs(env));
     writeFatalLine(humanKind, machineKind, reason, loadServer, env)
       .then((resolvedLine) => {
         line = resolvedLine;

@@ -40,6 +40,9 @@ it("starts the Windows opener attached with a hidden window", async () => {
   expect(options.detached).toBe(false);
   expect(options.windowsHide).toBe(true);
   expect(options.stdio).toBe("ignore");
+  // not the caller's directory: a helper that inherits it holds that folder
+  expect(options.cwd).toBeDefined();
+  expect(options.cwd).not.toBe(process.cwd());
 });
 
 it.each(["linux", "darwin"] as const)("keeps the detached opener on %s", async (platform) => {

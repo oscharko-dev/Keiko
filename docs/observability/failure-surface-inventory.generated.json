@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8edc6fdd43d6b947029493670afdd53768889fed734688cdc5c42f4dbaed5cd3"
+    "catalogDigest": "4a25fe5eb10896cc949766b112630d544e137a63ff4fe3e174238da4ae5069b9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -789,8 +789,7 @@
         "activity-log.writer-rejected",
         "chat.content-policy.resolved",
         "memory.audit.state-cache.seeded",
-        "portable.setup-notice.requested",
-        "portable.windows-alert.spawn-failed",
+        "portable.launch.failed",
         "process.exiting",
         "process.fatal",
         "server-log.line-dropped",
@@ -828,6 +827,7 @@
         "cli.support.export.failed",
         "cli.uninstall.completed",
         "cli.uninstall.failed",
+        "cli.uninstall.handoff",
         "cli.uninstall.started",
         "evidence.retention",
         "portable.normal-startup-recovery.completed",
@@ -1283,7 +1283,7 @@
     "voice-live-dictation-admission": ["model-gateway.rejection"],
     "voice-realtime-policy": ["model-gateway.dependency-failure"],
     "voice-realtime-session": ["model-gateway.dependency-failure"],
-    "windows-alert-spawn": ["lifecycle-crash.dependency-failure"],
+    "portable-launch-failure": ["lifecycle-crash.dependency-failure"],
     "windows-authenticode-system-binary": ["runtime-packages.rejection"],
     "windows-local-volume": ["runtime-packages.rejection"],
     "windows-owner-private": ["runtime-packages.rejection"],
@@ -1560,6 +1560,7 @@
     "cli.uninstall.failed.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
+    "cli.uninstall.handoff.persisted": ["packages/keiko-cli/src/uninstall.test.ts"],
     "cli.uninstall.started.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
@@ -2885,6 +2886,9 @@
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],
+    "portable.launch.failed.emitted-line": [
+      "packages/keiko-cli/src/portable-launch-failure.activity-log-proof.test.ts"
+    ],
     "portable.normal-startup-recovery.completed.outcome": [
       "packages/keiko-server/src/update-portable-normal-startup.test.ts"
     ],
@@ -2893,12 +2897,6 @@
     ],
     "portable.runtime.native-helper-bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.test.ts"
-    ],
-    "portable.setup-notice.requested.emitted-line": [
-      "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"
-    ],
-    "portable.windows-alert.spawn-failed.emitted-line": [
-      "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"
     ],
     "portable.windows-authenticode.system-binary-refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.test.ts"

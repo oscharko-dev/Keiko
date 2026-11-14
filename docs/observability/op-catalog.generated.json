@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8edc6fdd43d6b947029493670afdd53768889fed734688cdc5c42f4dbaed5cd3",
+    "catalogDigest": "4a25fe5eb10896cc949766b112630d544e137a63ff4fe3e174238da4ae5069b9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5318,7 +5318,7 @@
         "op": "cli.uninstall.completed",
         "category": "diagnostic",
         "owner": "keiko-cli",
-        "emitter": "uninstall.executeUninstall",
+        "emitter": "uninstall.emitUninstallCompleted",
         "fields": {
           "completeness": {
             "type": "string",
@@ -5352,7 +5352,8 @@
               "removed",
               "retained",
               "would-remove",
-              "would-retain"
+              "would-retain",
+              "handed-off"
             ]
           },
           "ownedFileCount": {
@@ -5382,8 +5383,8 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.completed.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:785",
-        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1023"]
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:862",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1239"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5416,7 +5417,9 @@
               "operation-error",
               "launcher-error",
               "package-read-failed",
-              "package-parse-failed"
+              "package-parse-failed",
+              "helper-refused",
+              "removal-incomplete"
             ]
           },
           "failureKind": {
@@ -5444,11 +5447,103 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.failed.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:760",
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:769",
         "emitterSites": [
-          "packages/keiko-cli/src/uninstall.ts:838",
-          "packages/keiko-cli/src/uninstall.ts:981"
+          "packages/keiko-cli/src/uninstall.ts:923",
+          "packages/keiko-cli/src/uninstall.ts:1067"
         ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "cli.uninstall.handoff",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "uninstall.emitUninstallHandoff",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "resumed",
+              "helper-ready",
+              "helper-refused",
+              "helper-lost",
+              "residue-committed",
+              "residue-reported"
+            ]
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "none",
+              "powershell-unavailable",
+              "temp-inside-installation",
+              "spawn-failed",
+              "not-ready"
+            ]
+          },
+          "resumeState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["none", "files-remaining", "installation-gone"]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          },
+          "removedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "residueFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "residueDirectoryCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "targetSha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "packageTargetSha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "none",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["cli-uninstall"],
+        "proofIds": ["cli.uninstall.handoff.persisted"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:822",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1139"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5512,8 +5607,8 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.started.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:723",
-        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:877"]
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:730",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:962"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38866,6 +38961,70 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "portable.launch.failed",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "portable-launch-failure.emitPortableLaunchFailed",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "port-in-use",
+              "stale-shutdown-request",
+              "invalid-launch-id",
+              "missing-child-pid",
+              "pid-publication",
+              "state-dir",
+              "spawn-refused",
+              "health-timeout",
+              "process-exited",
+              "identity-mismatch",
+              "stop-failed",
+              "browser-handoff",
+              "native-runtime-unverified",
+              "native-ownership",
+              "lifecycle-busy",
+              "setup-busy",
+              "setup-failed",
+              "recovery-required",
+              "registration-invalid",
+              "upgrade-failed",
+              "macos-activation",
+              "launch-error",
+              "fatal"
+            ]
+          },
+          "launcherBox": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["written", "not-requested", "failed"]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["portable-launch-failure"],
+        "proofIds": ["portable.launch.failed.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-cli/src/portable-launch-failure.ts:17",
+        "emitterSites": ["packages/keiko-cli/src/portable-launch-failure.ts:89"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "portable.normal-startup-recovery.completed",
         "category": "diagnostic",
         "owner": "keiko-server",
@@ -38988,80 +39147,6 @@
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:364"
         ]
-      },
-      {
-        "contractKind": "activity-log-operation",
-        "schemaVersion": 1,
-        "op": "portable.setup-notice.requested",
-        "category": "diagnostic",
-        "owner": "keiko-cli",
-        "emitter": "portable-launch-notifier.emitSetupNoticeRequested",
-        "fields": {
-          "completeness": {
-            "type": "string",
-            "dataClass": "completeness-state",
-            "required": true
-          },
-          "loss": {
-            "type": "string",
-            "dataClass": "loss-state",
-            "required": true
-          },
-          "surface": {
-            "type": "string",
-            "dataClass": "closed-enum",
-            "required": true,
-            "values": ["portable-setup-notice"]
-          }
-        },
-        "causal": "none",
-        "lifecycle": "state",
-        "analyzerProjection": "timeline",
-        "failureClasses": ["windows-alert-spawn"],
-        "proofIds": ["portable.setup-notice.requested.emitted-line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/portable-launch-notifier.ts:72",
-        "emitterSites": ["packages/keiko-cli/src/portable-launch-notifier.ts:357"]
-      },
-      {
-        "contractKind": "activity-log-operation",
-        "schemaVersion": 1,
-        "op": "portable.windows-alert.spawn-failed",
-        "category": "diagnostic",
-        "owner": "keiko-cli",
-        "emitter": "portable-launch-notifier.logWindowsAlertSpawnFailure",
-        "fields": {
-          "completeness": {
-            "type": "string",
-            "dataClass": "completeness-state",
-            "required": true
-          },
-          "loss": {
-            "type": "string",
-            "dataClass": "loss-state",
-            "required": true
-          },
-          "surface": {
-            "type": "string",
-            "dataClass": "closed-enum",
-            "required": true,
-            "values": ["portable-failure-alert", "portable-setup-notice"]
-          },
-          "failureKind": {
-            "type": "string",
-            "dataClass": "error-kind",
-            "required": true,
-            "maxLength": 64
-          }
-        },
-        "causal": "none",
-        "lifecycle": "failure",
-        "analyzerProjection": "failure-cluster",
-        "failureClasses": ["windows-alert-spawn"],
-        "proofIds": ["portable.windows-alert.spawn-failed.emitted-line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/portable-launch-notifier.ts:39",
-        "emitterSites": ["packages/keiko-cli/src/portable-launch-notifier.ts:346"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52268,7 +52353,7 @@
         "requiredProductSurfaces": ["keiko-cli"],
         "requiredLifecycleOperations": {
           "start": ["cli.uninstall.started"],
-          "state": [],
+          "state": ["cli.uninstall.handoff"],
           "end": ["cli.uninstall.completed"],
           "failure": ["cli.uninstall.failed"],
           "loss": []
@@ -52278,10 +52363,15 @@
         "requiredProofOperations": [
           "cli.uninstall.completed",
           "cli.uninstall.failed",
+          "cli.uninstall.handoff",
           "cli.uninstall.started"
         ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["cli.uninstall.completed", "cli.uninstall.started"],
+        "requiredResourceOperations": [
+          "cli.uninstall.completed",
+          "cli.uninstall.handoff",
+          "cli.uninstall.started"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -62223,29 +62313,21 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
-        "failureClass": "windows-alert-spawn",
+        "failureClass": "portable-launch-failure",
         "requiredProductSurfaces": ["keiko-cli"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["portable.setup-notice.requested"],
+          "state": [],
           "end": [],
-          "failure": ["portable.windows-alert.spawn-failed"],
+          "failure": ["portable.launch.failed"],
           "loss": []
         },
         "requiredCausalOperations": [],
         "requiredLossOperations": [],
-        "requiredProofOperations": [
-          "portable.setup-notice.requested",
-          "portable.windows-alert.spawn-failed"
-        ],
+        "requiredProofOperations": ["portable.launch.failed"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["portable.setup-notice.requested"],
-        "requiredEvidenceClasses": [
-          "closed-enum",
-          "completeness-state",
-          "error-kind",
-          "loss-state"
-        ],
+        "requiredResourceOperations": [],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -69124,10 +69206,10 @@
           "failureClass": "cli-uninstall",
           "requirementContract": "cli-uninstall",
           "productSurfaces": ["keiko-cli"],
-          "lifecycleTransitions": ["end", "failure", "start"],
+          "lifecycleTransitions": ["end", "failure", "start", "state"],
           "lifecycleOperations": {
             "start": ["cli.uninstall.started"],
-            "state": [],
+            "state": ["cli.uninstall.handoff"],
             "end": ["cli.uninstall.completed"],
             "failure": ["cli.uninstall.failed"],
             "loss": []
@@ -69142,12 +69224,20 @@
               "mode": "none"
             },
             {
+              "op": "cli.uninstall.handoff",
+              "mode": "none"
+            },
+            {
               "op": "cli.uninstall.started",
               "mode": "none"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["cli.uninstall.completed", "cli.uninstall.started"],
+          "resourceSignals": [
+            "cli.uninstall.completed",
+            "cli.uninstall.handoff",
+            "cli.uninstall.started"
+          ],
           "replayReferences": [],
           "operations": [
             {
@@ -69261,6 +69351,85 @@
                 "causeChain": false
               },
               "proofIds": ["cli.uninstall.failed.persisted"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "cli.uninstall.handoff",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "packageTargetSha256",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "removedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "residueDirectoryCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "residueFileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "resumeState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "targetSha256",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "error-kind",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["cli.uninstall.handoff.persisted"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -105184,6 +105353,62 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "portable-launch-failure",
+          "requirementContract": "portable-launch-failure",
+          "productSurfaces": ["keiko-cli"],
+          "lifecycleTransitions": ["failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": [],
+            "failure": ["portable.launch.failed"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "portable.launch.failed",
+              "mode": "none"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "portable.launch.failed",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "none",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "launcherBox",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["portable.launch.failed.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "portable-native-helper-binding",
           "requirementContract": "portable-native-helper-binding",
           "productSurfaces": ["keiko-server"],
@@ -115825,90 +116050,6 @@
           "completeness": "complete"
         },
         {
-          "failureClass": "windows-alert-spawn",
-          "requirementContract": "windows-alert-spawn",
-          "productSurfaces": ["keiko-cli"],
-          "lifecycleTransitions": ["failure", "state"],
-          "lifecycleOperations": {
-            "start": [],
-            "state": ["portable.setup-notice.requested"],
-            "end": [],
-            "failure": ["portable.windows-alert.spawn-failed"],
-            "loss": []
-          },
-          "causalEdges": [
-            {
-              "op": "portable.setup-notice.requested",
-              "mode": "none"
-            },
-            {
-              "op": "portable.windows-alert.spawn-failed",
-              "mode": "none"
-            }
-          ],
-          "lossSignals": [],
-          "resourceSignals": ["portable.setup-notice.requested"],
-          "replayReferences": [],
-          "operations": [
-            {
-              "op": "portable.setup-notice.requested",
-              "owner": "keiko-cli",
-              "category": "diagnostic",
-              "lifecycle": "state",
-              "causal": "none",
-              "analyzerProjection": "timeline",
-              "safeContextFields": [
-                {
-                  "name": "surface",
-                  "type": "string",
-                  "dataClass": "closed-enum",
-                  "required": true
-                }
-              ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
-              "frameCauseEvidence": {
-                "frames": false,
-                "causeChain": false
-              },
-              "proofIds": ["portable.setup-notice.requested.emitted-line"],
-              "replayReferences": [],
-              "missingObligations": []
-            },
-            {
-              "op": "portable.windows-alert.spawn-failed",
-              "owner": "keiko-cli",
-              "category": "diagnostic",
-              "lifecycle": "failure",
-              "causal": "none",
-              "analyzerProjection": "failure-cluster",
-              "safeContextFields": [
-                {
-                  "name": "failureKind",
-                  "type": "string",
-                  "dataClass": "error-kind",
-                  "required": true
-                },
-                {
-                  "name": "surface",
-                  "type": "string",
-                  "dataClass": "closed-enum",
-                  "required": true
-                }
-              ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
-              "frameCauseEvidence": {
-                "frames": false,
-                "causeChain": false
-              },
-              "proofIds": ["portable.windows-alert.spawn-failed.emitted-line"],
-              "replayReferences": [],
-              "missingObligations": []
-            }
-          ],
-          "missingObligations": [],
-          "completeness": "complete"
-        },
-        {
           "failureClass": "windows-authenticode-system-binary",
           "requirementContract": "windows-authenticode-system-binary",
           "productSurfaces": ["keiko-server"],
@@ -117686,31 +117827,31 @@
     {
       "op": "cli.uninstall.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:788",
+      "site": "packages/keiko-cli/src/uninstall.ts:865",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:763",
+      "site": "packages/keiko-cli/src/uninstall.ts:772",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.handoff",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:825",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:726",
+      "site": "packages/keiko-cli/src/uninstall.ts:733",
       "package": "keiko-cli"
     },
     {
-      "op": "portable.setup-notice.requested",
+      "op": "portable.launch.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/portable-launch-notifier.ts:75",
-      "package": "keiko-cli"
-    },
-    {
-      "op": "portable.windows-alert.spawn-failed",
-      "category": "diagnostic",
-      "site": "packages/keiko-cli/src/portable-launch-notifier.ts:42",
+      "site": "packages/keiko-cli/src/portable-launch-failure.ts:20",
       "package": "keiko-cli"
     },
     {
@@ -124383,6 +124524,7 @@
     "cli.support.export.failed",
     "cli.uninstall.completed",
     "cli.uninstall.failed",
+    "cli.uninstall.handoff",
     "cli.uninstall.started",
     "client.answer.copied",
     "client.answer.speech-prepared",
@@ -124922,11 +125064,10 @@
     "memory.retrieval.semantic-skipped",
     "memory.salience",
     "native-file-dialog.selection.projected",
+    "portable.launch.failed",
     "portable.normal-startup-recovery.completed",
     "portable.normal-startup-recovery.required",
     "portable.runtime.native-helper-bound",
-    "portable.setup-notice.requested",
-    "portable.windows-alert.spawn-failed",
     "portable.windows-authenticode.system-binary-refused",
     "pr-description.apply.blocked",
     "pr-description.apply.failed",
