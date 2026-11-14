@@ -158,7 +158,10 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Do:** open **Local Knowledge**, section **Jira Live Pods**, select **Create Jira Pod**. Enter a
   **Label**, the **Base URL** (HTTPS, with any context path) and the **API token**, then select
   **Create Jira Pod** once. Then ask in a Chat which Jira account you are connected as (Keiko answers
-  through "Read the current Jira account").
+  through "Read the current Jira account"). Jira Pods are created only here, under **Local
+  Knowledge**, section **Jira Live Pods**; **Manage** in the Chat's **Connectors** menu leads to the
+  same place by design. Without a configured model the workspace stays behind **Model gateway
+  setup**: finish that first.
 - **Expect:** the form shows **Verifying…** and closes; the Pod card shows **Connection verified** and
   the status **Ready**. The Pod card itself shows no user: the account is read in Chat. The answer
   names the user and instance you expect.
@@ -453,6 +456,21 @@ release under emulation or on real hardware, whichever is recorded in the eviden
 | AC9 Readable results  | W15, W16, W20                                 |               |                 |                                    |         |
 | AC10 Platforms        | W01, W02, W04, W09, W22                       |               |                 |                                    |         |
 
+Disclosed limitations that bound these verdicts (the long text is section 5):
+
+| Limitation                                                       | Epic criterion it bounds                     | Where it is disclosed                         |
+| ---------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------- |
+| S14 edit items are not in Release 1                              | AC4 (edits driven by a changed document)     | Section 5; #4359 narrowings                   |
+| The S19 oracle credits a refused create onto its twin            | AC1 (refused creates)                        | Section 5; #4359 narrowings                   |
+| The Pod card does not show the connected account                 | AC10 (W02)                                   | Section 5; W02                                |
+| The notice on an edit of a violating issue is only in the answer | AC1 (W10)                                    | Section 5; W10                                |
+| No detection of the same summary across chats                    | AC8                                          | Section 5; epic #4351 decision 2026-11-13     |
+| Attachments are off                                              | AC4 (W13)                                    | Section 5; W13                                |
+| A model without tool calling gets no tool tasks                  | AC1, AC3, AC4                                | Section 5; section 6                          |
+| Windows results come from an emulated x64 virtual machine        | AC10 and every Windows verdict               | Section 5; `windows-vm-cross-test-machine.md` |
+| Linux is a community tier                                        | AC10                                         | Section 5; ADR-0183                           |
+| The requirements-document path is Release 2                      | AC2 (not walked), AC3 (requirement coverage) | Section 5; section 1                          |
+
 ## 5. Disclosed limitations
 
 Each one is part of what Release 1 delivers; a verdict does not hide it.
@@ -543,6 +561,8 @@ Read the current Jira account: atlassianConnectors.action.jira.myself (OPT)
 Connectors: chat.connectors.title (OPT)
 Connectors: 1 active: chat.connectors.active (OPT) "Connectors: {count} active"
 Jira Pods: chat.connectors.jira (OPT)
+Manage: chat.connectors.manage (OPT)
+Model gateway setup: gatewaySetup.badge.setup (OPT)
 Access: chat.connectors.access (OPT)
 Ask for approval / Supervised workspace / Full access:
   codingWorkbench.mode.governed-assist.label, ...supervised-coding.label, ...autonomous-delivery.label
