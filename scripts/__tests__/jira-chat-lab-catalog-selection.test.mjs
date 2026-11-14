@@ -6,11 +6,17 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (importOriginal) => ({
   basicAuth: (_session, actor) => `auth:${actor}`,
   checked: vi.fn(async (_session, _name, _method, path) => structuredClone(nativeReads.get(path))),
 }));
-import { SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
+import {
+  SELECTION_CASES,
+  selectionTruth,
+} from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 import {
   callTrace,
   carriesTruth,
+  describeSummary,
+  describeTrace,
   gradeSelection,
+  refusalTrace,
   selectionPath,
   summarizeSelection,
 } from "../testing/jira-chat-lab/catalog-selection-grade.mjs";
@@ -29,6 +35,9 @@ import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
 const FIXTURE = {
   project: "KEIKO",
   selection: {
+    commentId: "77",
+    commentBody: "Auswahl Kommentar t",
+    extraIssueKeys: [],
     issueKey: "KEIKO-1",
     linkTargetKey: "KEIKO-2",
     componentName: "Auswahl Komponente t",
@@ -52,7 +61,7 @@ const healthy = { unrecovered: 0, circuit: 0 };
 describe("catalog selection cases", () => {
   it("never names the tool, its alias or an argument object in the request", () => {
     for (const entry of SELECTION_CASES) {
-      const prompt = entry.prompt(FIXTURE, "Auswahl m", "tag");
+      const prompt = entry.prompt(FIXTURE, "Auswahl m", "tag", { key: "KEIKO-9" });
       expect(prompt).not.toContain(entry.tool);
       expect(prompt).not.toContain(entry.tool.replaceAll(/[.-]/gu, "_"));
       expect(prompt).not.toMatch(/jira[._]/u);
@@ -407,6 +416,357 @@ describe("selection helpers", () => {
   });
 });
 
+describe("everyday operations beyond the base set (#4369)", () => {
+  const entryOf = (id) => SELECTION_CASES.find((entry) => entry.id === id);
+  const comment = "/rest/api/2/issue/KEIKO-1/comment/77";
+  const session = {};
+
+  it("holds a case for every everyday operation the child names", () => {
+    const tools = new Set(SELECTION_CASES.map((entry) => entry.tool));
+    for (const tool of [
+      "jira.update-comment",
+      "jira.get-comment",
+      "jira.create-issue-link",
+      "jira.link-types",
+      "jira.users",
+      "jira.myself",
+      "jira.fields",
+      "jira.priorities",
+      "jira.statuses",
+      "jira.resolutions",
+      "jira.project-statuses",
+      "jira.delete-issue",
+    ])
+      expect(tools, tool).toContain(tool);
+  });
+
+  it("grades get-comment from the native comment text", async () => {
+    nativeReads.set(comment, { id: "77", body: "Auswahl Kommentar t" });
+    expect(await entryOf("get-comment").truth(session, FIXTURE)).toEqual(["Auswahl Kommentar t"]);
+  });
+
+  it("credits an updated comment only with the requested text and expects its own change", async () => {
+    const entry = entryOf("update-comment");
+    nativeReads.set(comment, { body: "Auswahl t-1 U" });
+    expect(await entry.verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 1,
+      wrongValue: false,
+      changed: [comment],
+    });
+    nativeReads.set(comment, { body: "Something else" });
+    expect(await entry.verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      wrongValue: true,
+    });
+    nativeReads.set(comment, { body: "Auswahl Kommentar t" });
+    expect(await entry.verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      wrongValue: false,
+    });
+  });
+
+  it("does not count the case's own comment change or issue removal as stray writes", () => {
+    const row = (label) => ({ owned: true, label });
+    const before = {
+      issueState: "a",
+      objects: new Map([
+        [comment, row("old")],
+        ["/rest/api/2/issue/KEIKO-9", { owned: false, label: "Auswahl Löschen t", stamp: "s" }],
+      ]),
+    };
+    const after = { issueState: "a", objects: new Map([[comment, row("new")]]) };
+    expect(strayWrites(before, after, [], "Auswahl t").count).toBe(2);
+    expect(
+      strayWrites(before, after, [], "Auswahl t", {
+        changed: [comment],
+        removed: ["/rest/api/2/issue/KEIKO-9"],
+      }).count,
+    ).toBe(0);
+  });
+});
+
+describe("catalog-level refusals of jira.describe (#4369)", () => {
+  const refused = (name = "jira_describe") => ({
+    call: { name },
+    result: {
+      status: "failed",
+      reason: "provider-reported-error",
+      data: { outcome: "failed", reason: "invalid-arguments" },
+    },
+  });
+  const rejected = {
+    call: { name: "jira.describe" },
+    result: { status: "rejected", reason: "invalid-arguments", data: null },
+  };
+
+  it("counts a tool's own failed result and a dispatcher rejection, and the first call", () => {
+    expect(describeTrace([refused(), call("jira_describe"), rejected])).toEqual({
+      calls: 3,
+      refused: 2,
+      failed: 2,
+      gatewayRefused: 0,
+      firstRefused: true,
+    });
+    expect(describeTrace([call("jira_describe"), refused()])).toEqual({
+      calls: 2,
+      refused: 1,
+      failed: 1,
+      gatewayRefused: 0,
+      firstRefused: false,
+    });
+  });
+
+  it("counts neither other tools nor another failure of describe", () => {
+    const other = {
+      call: { name: "jira_describe" },
+      result: { status: "failed", data: { outcome: "failed", reason: "selection-too-large" } },
+    };
+    expect(describeTrace([refused("jira_priorities"), other, call("jira_discover")])).toEqual({
+      calls: 1,
+      refused: 0,
+      failed: 1,
+      gatewayRefused: 0,
+      firstRefused: false,
+    });
+    expect(describeTrace([])).toEqual({
+      calls: 0,
+      refused: 0,
+      failed: 0,
+      gatewayRefused: 0,
+      firstRefused: false,
+    });
+  });
+
+  it("reports the trace on every graded attempt and summarizes the valid ones", () => {
+    const graded = gradeSelection(
+      READ,
+      { exchanges: [refused(), call("jira_describe"), call("jira_priorities")], gateway: healthy },
+      { tokens: ["High"] },
+    );
+    expect(graded.describe).toEqual({
+      calls: 2,
+      refused: 1,
+      failed: 1,
+      gatewayRefused: 0,
+      firstRefused: true,
+    });
+    const invalid = {
+      status: "invalid",
+      describe: { calls: 1, refused: 1, failed: 1, firstRefused: true },
+    };
+    expect(
+      describeSummary([
+        { status: "selected", describe: graded.describe },
+        { status: "selected", describe: { calls: 0, refused: 0, failed: 0, firstRefused: false } },
+        invalid,
+      ]),
+    ).toEqual({
+      turns: 1,
+      firstRefusedTurns: 1,
+      calls: 2,
+      refused: 1,
+      failed: 1,
+      gatewayRefused: 0,
+      validTurns: 2,
+    });
+    expect(summarizeSelection([{ id: "a", catalog: "base", ...graded }]).describe).toMatchObject({
+      firstRefusedTurns: 1,
+    });
+  });
+});
+
+describe("the gateway's own refusal of jira.describe (#4369)", () => {
+  it("is counted apart from the transcript, which never holds it", () => {
+    const rejected = { "keiko.jira.describe": 2, "keiko.jira.edit": 1 };
+    expect(describeTrace([], { rejected })).toMatchObject({ calls: 0, gatewayRefused: 2 });
+    const graded = gradeSelection(
+      READ,
+      { exchanges: [call("jira_priorities")], gateway: { ...healthy, rejected } },
+      { tokens: ["High"] },
+    );
+    expect(graded.describe.gatewayRefused).toBe(2);
+    expect(
+      describeSummary([{ status: "selected", describe: graded.describe }]).gatewayRefused,
+    ).toBe(2);
+  });
+});
+
+describe("a native truth beyond the bound is refused, never cut (#4369)", () => {
+  const entry = (id) => SELECTION_CASES.find((candidate) => candidate.id === id);
+  const rows = (count) =>
+    Array.from({ length: count }, (_, index) => ({ name: `Status ${index}` }));
+
+  it.each([21, 25])(
+    "refuses %s native statuses instead of grading against twenty",
+    async (count) => {
+      nativeReads.set("/rest/api/2/status", rows(count));
+      await expect(selectionTruth({}, FIXTURE, entry("statuses"))).rejects.toThrow(TypeError);
+    },
+  );
+
+  it("keeps all twenty statuses and a duplicate name counts once", async () => {
+    nativeReads.set("/rest/api/2/status", [...rows(20), { name: "Status 0" }].slice(0, 20));
+    expect(await selectionTruth({}, FIXTURE, entry("statuses"))).toHaveLength(20);
+  });
+
+  it("refuses any generic truth beyond twenty distinct tokens", async () => {
+    nativeReads.set("/rest/api/2/priority", rows(21));
+    await expect(selectionTruth({}, FIXTURE, entry("priorities"))).rejects.toThrow(RangeError);
+  });
+});
+
+describe("the new cases grade red where the product is wrong (#4369)", () => {
+  const entry = (id) => SELECTION_CASES.find((candidate) => candidate.id === id);
+  const grade = (id, exchanges, proof) =>
+    gradeSelection(entry(id), { exchanges, gateway: healthy }, proof);
+
+  it("delete-issue: the target succeeded but the issue is still present", () => {
+    const verdict = grade("delete-issue", [call("jira_delete_issue")], {
+      effect: { effects: 0, stray: 0 },
+    });
+    expect(verdict.status).toBe("wrong-result");
+  });
+
+  it("delete-issue: another issue was deleted too, so the deletion is a stray write", () => {
+    const verdict = grade("delete-issue", [call("jira_delete_issue")], {
+      effect: { effects: 1, stray: 1 },
+    });
+    expect(verdict).toMatchObject({
+      status: "wrong-result",
+      detail: expect.stringContaining("1 writes"),
+    });
+  });
+
+  it("delete-issue: no call and no deletion is no-tool, a deletion without the tool is wrong-tool", () => {
+    expect(grade("delete-issue", [], { effect: { effects: 0, stray: 0 } }).status).toBe("no-tool");
+    expect(
+      grade("delete-issue", [call("jira_edit")], { effect: { effects: 0, stray: 0 } }).status,
+    ).toBe("wrong-tool");
+  });
+
+  it("update-comment: a wrong value is red, the exact text is green", () => {
+    const wrong = { effects: 0, wrongValue: true, stray: 0 };
+    expect(grade("update-comment", [call("jira_update_comment")], { effect: wrong }).status).toBe(
+      "wrong-result",
+    );
+    const exact = { effects: 1, wrongValue: false, stray: 0 };
+    expect(grade("update-comment", [call("jira_update_comment")], { effect: exact }).status).toBe(
+      "selected",
+    );
+  });
+
+  it.each([
+    ["users", "jira_users", ["Synthetic api"], { items: [{ displayName: "Somebody else" }] }],
+    ["fields", "jira_fields", ["customfield_10112"], { items: [{ id: "customfield_10999" }] }],
+    [
+      "get-comment",
+      "jira_get_comment",
+      ["Auswahl Kommentar t"],
+      { body: "Auswahl Kommentar other" },
+    ],
+  ])("%s: a result without the native token is wrong-result", (id, tool, tokens, data) => {
+    const verdict = grade(id, [call(tool, { outcome: "succeeded", ...data })], { tokens });
+    expect(verdict.status).toBe("wrong-result");
+    expect(verdict.missingTokens).toEqual(tokens);
+  });
+
+  it("statuses: one status missing from an otherwise complete answer is wrong-result", () => {
+    const tokens = ["To Do", "In Progress", "Done"];
+    const data = { outcome: "succeeded", items: [{ name: "To Do" }, { name: "Done" }] };
+    const verdict = grade("statuses", [call("jira_statuses", data)], { tokens });
+    expect(verdict).toMatchObject({ status: "wrong-result", missingTokens: ["In Progress"] });
+    const full = { outcome: "succeeded", items: tokens.map((name) => ({ name })) };
+    expect(grade("statuses", [call("jira_statuses", full)], { tokens }).status).toBe("selected");
+  });
+});
+
+describe("issue-create cases, one per type (#4369)", () => {
+  const entry = (id) => SELECTION_CASES.find((candidate) => candidate.id === id);
+  const session = {};
+  const searchPath = (project, type, summary) =>
+    `/rest/api/2/search?jql=${encodeURIComponent(`project = ${project} AND issuetype = "${type}" AND summary ~ "\\"${summary}\\""`)}&fields=summary,parent&maxResults=10`;
+  const found = (key, summary, extra = {}) => ({
+    issues: [{ key, fields: { summary, ...extra } }],
+  });
+  const CASES = [
+    ["create-task", "Task", "KEIKO"],
+    ["create-subtask", "Sub-task", "KEIKO"],
+    ["create-epic", "Epic", "REQ"],
+    ["create-story", "Story", "REQ"],
+    ["create-bug", "Bug", "REQ"],
+  ];
+
+  it("holds one write case per issue type, naming the type and the summary but never the tool", () => {
+    for (const [id, type, project] of CASES) {
+      const create = entry(id);
+      expect(create).toMatchObject({ effect: "write", tool: "jira.create", catalog: "base" });
+      const prompt = create.prompt(FIXTURE, "Auswahl t-1", "tag");
+      expect(prompt).toContain(`Vorgang vom Typ ${type}`);
+      expect(prompt).toContain(`Auswahl t-1 ${type}`);
+      expect(prompt).toContain(project);
+      expect(prompt).not.toMatch(/jira[._]/u);
+    }
+    expect(entry("create-subtask").prompt(FIXTURE, "m", "t")).toContain("KEIKO-1");
+  });
+
+  it.each(CASES)(
+    "%s: one exact new issue is the effect and is removed by its plain path",
+    async (id, type, project) => {
+      const summary = `Auswahl t-1 ${type}`;
+      nativeReads.set(
+        searchPath(project, type, summary),
+        found("KEIKO-7", summary, type === "Sub-task" ? { parent: { key: "KEIKO-1" } } : {}),
+      );
+      const effect = await entry(id).verify(session, FIXTURE, "Auswahl t-1");
+      expect(effect).toMatchObject({ effects: 1, wrongValue: false });
+      expect(effect.cleanup).toEqual(["/rest/api/2/issue/KEIKO-7"]);
+    },
+  );
+
+  it("is no effect for a differing summary, and a wrong parent is a wrong value", async () => {
+    nativeReads.set(
+      searchPath("KEIKO", "Task", "Auswahl t-1 Task"),
+      found("KEIKO-7", "Andere Zusammenfassung"),
+    );
+    expect(await entry("create-task").verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      cleanup: [],
+    });
+    nativeReads.set(
+      searchPath("KEIKO", "Sub-task", "Auswahl t-1 Sub-task"),
+      found("KEIKO-8", "Auswahl t-1 Sub-task", { parent: { key: "KEIKO-99" } }),
+    );
+    expect(await entry("create-subtask").verify(session, FIXTURE, "Auswahl t-1")).toMatchObject({
+      effects: 0,
+      wrongValue: true,
+    });
+  });
+
+  it("grades red where the product is wrong: no write, a stray write, a refused call", () => {
+    const create = entry("create-story");
+    const turn = (exchanges) => ({ exchanges, gateway: healthy });
+    expect(gradeSelection(create, turn([]), { effect: { effects: 0, stray: 0 } }).status).toBe(
+      "no-tool",
+    );
+    expect(
+      gradeSelection(create, turn([call("jira_create")]), { effect: { effects: 1, stray: 2 } })
+        .status,
+    ).toBe("wrong-result");
+    expect(
+      gradeSelection(create, turn([call("jira_create")]), { effect: { effects: 0, stray: 0 } })
+        .status,
+    ).toBe("wrong-result");
+    expect(
+      gradeSelection(create, turn([call("jira_create")]), { effect: { effects: 1, stray: 0 } })
+        .status,
+    ).toBe("selected");
+    expect(
+      gradeSelection(create, turn([call("jira_edit")]), { effect: { effects: 0, stray: 0 } })
+        .status,
+    ).toBe("wrong-tool");
+  });
+});
+
 describe("attemptBatches", () => {
   // One credential per attempt; a product instance retains at most 64 (#4352).
   const PRODUCT_CREDENTIAL_BOUND = 64;
@@ -437,5 +797,89 @@ describe("attemptBatches", () => {
     expect(attemptBatches(one, 4, 2).map((batch) => batch.length)).toEqual([2, 2]);
     expect(attemptBatches(one, 5, 2).map((batch) => batch.length)).toEqual([2, 2, 1]);
     expect(attemptBatches([], 3)).toEqual([]);
+  });
+});
+
+describe("refusalTrace", () => {
+  const ok = {
+    call: { name: "jira.priorities" },
+    result: { status: "completed", data: { outcome: "succeeded" } },
+  };
+
+  it("keeps nothing for calls that succeeded", () => {
+    expect(refusalTrace([ok])).toEqual([]);
+  });
+
+  it("keeps the closed reason, the refused argument names and the message as received", () => {
+    const refused = {
+      call: {
+        name: "jira.upsert-remote-link",
+        arguments: { url: "https://example.invalid/secret" },
+      },
+      result: {
+        status: "failed",
+        data: {
+          outcome: "rejected",
+          reason: "invalid-arguments",
+          invalidArguments: ["globalId", "object.url"],
+          guidance: "Name the link target.",
+          items: [{ summary: "issue content that must not be copied" }],
+        },
+      },
+    };
+    const [entry] = refusalTrace([ok, refused]);
+    expect(entry).toEqual({
+      call: "jira_upsert_remote_link",
+      status: "failed",
+      outcome: "rejected",
+      reason: "invalid-arguments",
+      invalidArguments: ["globalId", "object.url"],
+      message: "Name the link target.",
+    });
+    expect(JSON.stringify(entry)).not.toMatch(/example\.invalid|issue content/u);
+  });
+
+  it("prefers the dispatcher's reason and bounds every field", () => {
+    const [entry] = refusalTrace([
+      {
+        call: { name: "jira.describe" },
+        result: {
+          status: "failed",
+          reason: "invalid-arguments",
+          data: {
+            message: "m".repeat(1000),
+            invalidArguments: Array.from({ length: 40 }, () => "n".repeat(200)),
+          },
+        },
+      },
+    ]);
+    expect(entry.reason).toBe("invalid-arguments");
+    expect(entry.message).toHaveLength(400);
+    expect(entry.invalidArguments).toHaveLength(16);
+    expect(entry.invalidArguments.every((name) => name.length === 64)).toBe(true);
+  });
+
+  it("reports a call with no result at all with closed placeholders", () => {
+    expect(refusalTrace([{ call: { name: "jira.issue" } }])).toEqual([
+      { call: "jira_issue", status: "none", outcome: "none", reason: "none", invalidArguments: [] },
+    ]);
+  });
+
+  it("bounds the closed status, outcome and reason like the other fields", () => {
+    const long = "x".repeat(500);
+    const [entry] = refusalTrace([
+      {
+        call: { name: "jira.issue" },
+        result: { status: long, data: { outcome: long, reason: long } },
+      },
+    ]);
+    expect(entry.status).toHaveLength(64);
+    expect(entry.outcome).toHaveLength(64);
+    expect(entry.reason).toHaveLength(64);
+  });
+
+  it("is carried by every graded attempt", () => {
+    const turn = { exchanges: [ok], gateway: { unrecovered: 0, rejected: {} } };
+    expect(gradeSelection(READ, turn, { tokens: ["High"] }).refusals).toEqual([]);
   });
 });

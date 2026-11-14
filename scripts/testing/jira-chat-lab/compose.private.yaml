@@ -1,0 +1,18 @@
+# Optional override (#4369): serves the HTTPS front on one private-class address of the lab host
+# besides loopback, so a Windows guest or a private-class Jira URL reaches the lab without a tunnel.
+# Used by session.mjs only when `secrets/tls/private-address` exists. The loopback default of
+# compose.yaml is unchanged without it. The address is validated before it reaches this file.
+services:
+  tls:
+    ports:
+      - "${KEIKO_JIRA_LAB_PRIVATE_ADDRESS:?private address required}:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}"
+    command:
+      [
+        node,
+        /opt/tls-front.mjs,
+        /tls,
+        "${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}",
+        "8080",
+        compose,
+        "${KEIKO_JIRA_LAB_PRIVATE_ADDRESS:?private address required}",
+      ]

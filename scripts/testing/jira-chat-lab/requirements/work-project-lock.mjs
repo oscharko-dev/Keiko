@@ -23,7 +23,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 /** Journeys that write no shared Jira issue: they never take the lock. */
-const LANE_LOCAL_JOURNEYS = new Set(["S02", "S03", "S04", "S10", "S11", "S12"]);
+// C07 is the Composer lane's S10 and S11: it reads the report projects and writes nothing shared.
+const LANE_LOCAL_JOURNEYS = new Set(["S02", "S03", "S04", "S10", "S11", "S12", "C07"]);
 /** Journeys that write a shared issue outside REQ: serialized, but REQ is left as it is. */
 const OUTSIDE_WORK_PROJECT = new Set(["S13"]);
 
