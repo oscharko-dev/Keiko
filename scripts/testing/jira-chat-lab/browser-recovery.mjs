@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonRequest } from "./chat-read.mjs";
 import { commentState } from "./chat-write.mjs";
+import { projectState } from "./catalog-state.mjs";
 import { loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
 import { privateJson } from "./private-json.mjs";
 
@@ -20,6 +21,26 @@ const LABELS = new Map([
   ["succeeded", "Jira change confirmed"],
 ]);
 
+/** The tool a browser write intent calls: a comment unless the intent names its own operation. */
+export function browserWriteTool(intent) {
+  return (intent.operation ?? "jira.comment").replaceAll(/[.-]/gu, "_");
+}
+
+/** The exact arguments that intent sends. */
+function browserWriteArguments(intent) {
+  return intent.arguments ?? { issueKey: intent.key, body: intent.marker };
+}
+
+/** What the native Jira shows for the intent's effect, read outside Chat: a comment count or the project's issues. */
+export async function browserNativeState(session, intent) {
+  if (intent.operation !== "jira.create") return commentState(session, intent.key, intent.marker);
+  const project = await projectState(session);
+  return {
+    total: project.count,
+    matches: project.issues.filter((issue) => issue.fields.summary === intent.marker).length,
+  };
+}
+
 export function verifyBrowserToolTurn(completed, intent, outcome) {
   assert.ok(LABELS.has(outcome));
   const user = completed.messages.find((message) => message.role === "user");
@@ -27,8 +48,8 @@ export function verifyBrowserToolTurn(completed, intent, outcome) {
   const writes = user.toolTranscript.exchanges.filter((exchange) => WRITES.has(exchange.call.name));
   assert.equal(writes.length, 1);
   const exchange = writes[0];
-  assert.equal(exchange.call.name, "jira_comment");
-  assert.deepEqual(exchange.call.arguments, { issueKey: intent.key, body: intent.marker });
+  assert.equal(exchange.call.name, browserWriteTool(intent));
+  assert.deepEqual(exchange.call.arguments, browserWriteArguments(intent));
   assert.equal(exchange.mutationOutcome, outcome);
   assert.equal(exchange.result.data.outcome, outcome);
   const assistant = completed.messages.filter((message) => message.role === "assistant").at(-1);
@@ -106,7 +127,7 @@ export async function prepareBrowserWrite(context, group) {
     selectedModel: context.modelId,
   });
   intent.chat = created.chat;
-  intent.before = await commentState(context.session, intent.key, intent.marker);
+  intent.before = await browserNativeState(context.session, intent);
   assert.equal(intent.before.matches, 0);
   intent.phase = "dispatch-may-have-started";
   privateJson(group.pendingPath, group);
@@ -120,7 +141,7 @@ export async function browserQualificationArguments(prefix) {
   if (process.argv[4] === "--reconcile") {
     const group = JSON.parse(readPrivateFile(pendingPath));
     const intent = group.current;
-    const state = await commentState(session, intent.key, intent.marker);
+    const state = await browserNativeState(session, intent);
     privateJson(
       join(session.directory, `${prefix}-reconciliation-${randomUUID()}.json`),
       { groupId: group.id, phase: intent.phase, state },
@@ -134,5 +155,5 @@ export async function browserQualificationArguments(prefix) {
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
   const key = fixture.issueKeys[1];
   assert.match(key, /^KEIKO-\d+$/u);
-  return { session, modelId, pendingPath, key };
+  return { session, modelId, pendingPath, key, fixture };
 }
