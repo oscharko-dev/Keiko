@@ -14,6 +14,7 @@ import { isMainModule } from "../../lib/is-main-module.mjs";
 import { chatReadLogDirectory, jsonRequest, prepareChat, withLiveChat } from "./chat-read.mjs";
 import { privateJson } from "./chat-write.mjs";
 import {
+  LANGUAGE_SELECTION_CASES,
   SELECTION_CASES,
   selectionNeedsFieldLift,
   selectionTruth,
@@ -434,7 +435,10 @@ async function main() {
     throw new TypeError("A previous write attempt is pending; reconcile it natively first");
   await requireLicense(session);
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
-  const cases = SELECTION_CASES.filter((entry) => only === undefined || only.has(entry.id));
+  // The default selection is the 35 cases; a language case runs only when `--only` names it.
+  const cases = (
+    only === undefined ? SELECTION_CASES : [...SELECTION_CASES, ...LANGUAGE_SELECTION_CASES]
+  ).filter((entry) => only === undefined || only.has(entry.id));
   const run = selectionRun(fixture, repeat, pendingPath);
   // A signal stops the run between steps: the turn in flight is aborted, its effect is still
   // verified and removed, and the owned objects are cleaned up before the process exits.

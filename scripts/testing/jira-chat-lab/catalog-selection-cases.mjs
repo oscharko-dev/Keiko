@@ -487,6 +487,36 @@ export const SELECTION_CASES = Object.freeze([
   })),
 ]);
 
+/**
+ * Cases that exist for a German-language session and are never part of the default 35 (#4369): the
+ * question names an issue TYPE the way a German person says it, and Jira only knows the localized name
+ * (JQL `issuetype = Aufgabe` answers 400 for `Task` to a German user, #4335). Selected with `--only`.
+ */
+export const LANGUAGE_SELECTION_CASES = Object.freeze([
+  {
+    id: "search-by-type",
+    tool: "jira.search",
+    alternatives: ["jira.search-post"],
+    prompt: (f) => `Welche Aufgaben gibt es im Jira-Projekt ${f.project}? Nenne die Schlüssel.`,
+    // The Tasks of the fixture project, as Jira holds them (read as the administrator, English names).
+    truth: async (s, f) => {
+      const jql = encodeURIComponent(
+        `project = ${f.project} AND issuetype = Task ORDER BY key ASC`,
+      );
+      const page = await native(
+        s,
+        `/rest/api/2/search?jql=${jql}&fields=summary&maxResults=20`,
+        "admin",
+      );
+      return page.total <= page.issues.length
+        ? page.issues.map((issue) => issue.key)
+        : [f.selection.issueKey, f.selection.linkTargetKey];
+    },
+    effect: "read",
+    catalog: "base",
+  },
+]);
+
 /** The bounded set of native tokens a correct read result must carry. */
 export async function selectionTruth(session, fixture, entry) {
   return bounded(await entry.truth(session, fixture));
