@@ -181,7 +181,7 @@ describe("default Jira catalog set", () => {
 });
 
 describe("application-owned Jira catalog initialization", () => {
-  it("advertises all 21 curated Jira tools with discovery, Knowledge and batch before selection", async () => {
+  it(`advertises all ${String(CURATED_JIRA_ALIASES.length)} curated Jira tools with discovery, Knowledge and batch before selection`, async () => {
     const f = fixture();
     expect(
       f.runtime

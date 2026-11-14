@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { jiraEpicLinkRefusalMessage } from "@oscharko-dev/keiko-connectors";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
@@ -151,7 +152,7 @@ describe("the lines of the #4354 write path", () => {
       detail: {
         fieldId: "customfield_10014",
         validation: "invalid-epic-link",
-        messages: ["SYN-5 is not an Epic, or this account cannot see it."],
+        messages: [jiraEpicLinkRefusalMessage("SYN-5")],
       },
     });
     const events = sink.events.filter(({ op }) => op === "jira.field.admission");
