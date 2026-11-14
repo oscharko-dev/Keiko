@@ -31,6 +31,15 @@ function exchange(
   };
 }
 
+const RESULT_IDENTITY = {
+  schemaVersion: 1 as const,
+  invocationId: "invocation-1",
+  toolRef: null,
+  projectionDigest: null,
+  effectStarted: false,
+  metrics: { inputBytes: 10, outputBytes: 10, resultCount: 1, durationMs: 20 },
+};
+
 it.each([
   ["en", true],
   ["en", false],
@@ -1155,31 +1164,27 @@ describe.each(["en", "de"] as const)("local Jira catalog results in %s", (locale
   );
 
   it("does not call a page of the action catalog a partial Jira result (#4371)", () => {
-    const base = exchange("succeeded", {
+    const withPage: ChatToolExchange = {
       call: { id: "find", name: "jira_discover", arguments: {} },
-      data: {
-        outcome: "succeeded",
-        items: Array.from({ length: 10 }, (_, index) => ({
-          identity: `GET /rest/api/2/thing/${String(index)}`,
-          tool: "jira_projects",
-          description: "Catalog entry.",
-          kind: "native",
-          effects: ["remote-read"],
-        })),
-        startAt: 0,
-        total: 188,
+      result: {
+        ...RESULT_IDENTITY,
+        status: "completed",
+        reason: "none",
+        page: { truncated: true, reason: "result-cap", cursor: null },
+        data: {
+          outcome: "succeeded",
+          items: Array.from({ length: 10 }, (_, index) => ({
+            identity: `GET /rest/api/2/thing/${String(index)}`,
+            tool: "jira_projects",
+            description: "Catalog entry.",
+            kind: "native",
+            effects: ["remote-read"],
+          })),
+          startAt: 0,
+          total: 188,
+        },
       },
-    });
-    const withPage: ChatToolExchange =
-      base.result === undefined
-        ? base
-        : {
-            ...base,
-            result: {
-              ...base.result,
-              page: { truncated: true, reason: "result-cap", cursor: null },
-            },
-          };
+    };
     const { container } = render(
       <I18nProvider>
         <JiraChatTools
@@ -1212,12 +1217,16 @@ describe.each(["en", "de"] as const)("local Jira catalog results in %s", (locale
       const completed = /(Completed|Abgeschlossen)(?! (with|mit))/u;
       const withData = (data: CatalogJsonObject): ChatToolExchange =>
         exchange("failed", { call: { id: name, name, arguments: {} }, data });
-      const failedResult = (): ChatToolExchange => {
-        const base = withData({ outcome: "failed", reason: "unavailable", items: [] });
-        return base.result === undefined
-          ? base
-          : { ...base, result: { ...base.result, status: "failed" } };
-      };
+      const failedResult = (): ChatToolExchange => ({
+        call: { id: name, name, arguments: {} },
+        result: {
+          ...RESULT_IDENTITY,
+          status: "failed",
+          reason: "provider-reported-error",
+          page: null,
+          data: { outcome: "failed", reason: "unavailable", items: [] },
+        },
+      });
       const cases: readonly {
         readonly label: string;
         readonly exchange: ChatToolExchange;

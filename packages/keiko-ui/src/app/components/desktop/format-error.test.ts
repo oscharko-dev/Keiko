@@ -114,7 +114,10 @@ describe("formatUserError", () => {
 
       expect(notice.remediation).toContain(controlName);
       // The picker above the conversation is "Sources"; the refusal must not send the clerk there.
-      expect(namesControl(notice.remediation, optional["chat.grounding.label"])).toBe(false);
+      const groundingLabel = optional["chat.grounding.label"];
+      if (groundingLabel === undefined) throw new TypeError("Missing the picker's label");
+      if (notice.remediation === undefined) throw new TypeError("Missing the next step");
+      expect(namesControl(notice.remediation, groundingLabel)).toBe(false);
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
       resetLoadedMessageCatalogs();
