@@ -13,9 +13,10 @@ fills the trace table in section 4. Nothing here is automated; the walk is the e
 | Walker (Windows)    | _filled at the walk_                                     |
 | Independent auditor | _filled at the walk_                                     |
 
-**Last checked against integration head `e138fc9f6`** (`feat/jira-pod-release-1`, 2026-11-13). The
-walk is written for the Release 1 target, not for that head: steps W07–W13 and W19 are revised
-against the real build and its real labels once the write-path (#4354) package is integrated.
+**Last checked against integration head `a60fe469a`** (`feat/jira-pod-release-1`, 2026-11-14). The
+write-path steps (W06 to W13 and W19) are written against the product texts of that head. Texts that
+come from a catalog are quoted as the catalog has them; a sentence the model says (for example the
+notice on an edit) is described in words, because the model words it.
 
 The build must be one that contains the whole Release 1 scope: the template rule for Jira writes
 (#4354), attachments switched off, the connection and credential repairs (#4353), the Windows
@@ -200,7 +201,18 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Expect:** each proposal shows **Matches Jira.**; a template that does not match shows **Needs
   repair**. A saved template appears in the group.
 - **Jira:** the project and issue types named in the templates exist.
-- **Proves:** AC1; #4359 step 2.
+- **Proves:** epic AC1; #4354 "A Task or Sub-task template validates the actual parent relation of
+  the instance"; #4359 step 2.
+
+### W06a A template for a project Jira does not have
+
+- **Do:** save a template whose `project` names a key that the connected Jira does not have (or that
+  this account cannot see), then look at its check line in **Jira templates**.
+- **Expect:** the template is marked **Not applied:** with the reason "Project {subject} does not
+  exist or is not visible."; it is never silently ignored.
+- **Jira:** the project key does not exist, or the account cannot browse it.
+- **Proves:** epic AC1; #4354 "Templates that name a project the target Jira does not have produce a
+  visible message."
 
 ### W07 A violating create is refused, in all three modes
 
@@ -208,21 +220,30 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   create an issue that breaks a rule (for example a summary below the template's minimum, or a missing
   required section).
 - **Expect:** the result card shows **Template rules not met** and one line per rule, for example
-  "The summary is too short." or "The description lacks the section “{subject}”."; no approval card is
-  shown in a mode that would ask, because a draft that would be refused is never put to the person.
-  Keiko tells you what to change.
-- **Jira:** search the project: no issue was created.
-- **Proves:** AC1; #4359 step 2.
+  "The summary is too short." or "The description lacks the section “{subject}”." In **Ask for
+  approval** and **Supervised workspace** no **Review Jira action** card appears, because a request
+  that would be refused is never put to the person. In **Full access** nothing was asked either. Keiko
+  tells you what to change and, when you agree, creates the corrected issue without you repairing the
+  draft by hand.
+- **Jira:** search the project: no issue was created by the refused request.
+- **Proves:** epic AC1; #4354 "In all three autonomy modes a violating write is refused before any
+  effect, and the corrected write satisfies the saved rules" and template rule 1; #4359 step 2.
 
 ### W08 A create with no governing template is refused with a hint
 
 - **Do:** ask Keiko to create an issue of a type that has no saved template (delete or rename the
-  template of one type, or use a second project).
-- **Expect:** the create is refused before anything is sent, and Keiko tells you to create a template
-  first: the refusal reads "No template exists for the issue type “{subject}”, so nothing was created.
-  Open Skills, choose “Propose from project”, review and save the template, then ask again."
+  template of one type, or use a second project). Repeat once with a type whose only template is for
+  entering a status (activation `transition:<status>`).
+- **Expect:** the result card shows **Template rules not met** and, for no template at all: "No
+  template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose
+  “Propose from project”, review and save the template, then ask again." For the status-only template
+  the line reads: "Only rules for entering a status exist for “{subject}”, so nothing was created.
+  Open Skills, choose “Propose from project”, review and save a template for creating, then ask
+  again." (`{subject}` is `PROJECT/Issue type`.) Following the hint creates the template and the
+  repeated request then passes.
 - **Jira:** no issue was created.
-- **Proves:** AC1; #4359 step 2.
+- **Proves:** epic AC1; #4354 template rule 1 ("With no template it is refused before any effect, with
+  the hint to create one").
 
 ### W09 The corrected create passes, for each of the four types
 
@@ -234,43 +255,78 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Expect:** the result card lists each issue as a link with **Created**; the issues carry the
   relations you asked for. After approval the card shows **Approval used for this action**.
 - **Jira:** each issue exists with the right type, parent or Epic, and fields; the umlaut is exact.
-- **Proves:** AC1, AC4, and AC10 (encoding on the platform); #4359 step 4.
+- **Proves:** epic AC1, AC4, and AC10 (encoding on the platform); #4354 template rule 1; #4359 step 4.
+
+### W09a An Epic Link whose target is not an Epic
+
+- **Do:** in **Ask for approval**, ask Keiko to create a Task whose Epic Link is the key of another
+  Task (not an Epic).
+- **Expect:** the request is refused before any approval: no **Review Jira action** card, and the
+  result card says "The Epic Link points to an issue that is not an Epic, or that this account cannot
+  see." and "Nothing was sent to Jira." Keiko offers to use an Epic instead.
+- **Jira:** no issue was created, and Jira never answered with a "not found" for the Epic.
+- **Proves:** epic AC4; #4354 "An Epic Link target that is not an Epic is refused before the review
+  card."
 
 ### W10 An edit on an issue that already violates its template
 
 - **Do:** in Jira, create or edit an issue so that it breaks a template rule in one field (for example
   remove a required section from its description). In Keiko ask for an edit of a different field of
   that issue (for example the priority).
-- **Expect:** the edit is made, not refused; Keiko tells you plainly which template rule the issue
-  still breaks and offers to repair it. (This notice reaches the person through Keiko's answer.)
-- **Jira:** the edited field changed; the other field is as it was.
-- **Proves:** AC1; #4359 step 5.
+- **Expect:** the edit is made, not refused. In its answer Keiko says the change was made, names in its
+  own words the template rule the issue still breaks, and offers to repair it; it does not repeat the
+  change. (The notice is told to the model with fixed guidance; the card shows no separate notice, so
+  this reaches you through Keiko's answer.)
+- **Jira:** the edited field changed; the field that violated the rule is as it was.
+- **Proves:** epic AC1; #4354 template rule 2 ("Pre-existing violations in untouched fields do not
+  block and are named as a notice").
 
 ### W11 An edit that makes the issue worse is refused
 
 - **Do:** ask Keiko to change a field of a conforming issue so that it breaks a rule (for example
-  remove a required label).
-- **Expect:** the edit is refused under **Template rules not met**; nothing is sent to Jira.
-- **Jira:** the issue is unchanged.
-- **Proves:** AC1; #4359 step 5.
+  remove a required label). Then ask for an edit of the issue's project or issue type.
+- **Expect:** the first edit is refused under **Template rules not met** with the rule lines. The
+  second is refused too: Keiko says an edit does not change the project or issue type and points to
+  Jira's Move or to creating the issue again.
+- **Jira:** both issues are unchanged.
+- **Proves:** epic AC1; #4354 template rule 2 ("the change must not make it worse").
 
 ### W12 A status change needs no template
 
-- **Do:** in a project or for a type that has no template, ask Keiko to move an issue to another status.
-- **Expect:** the change is made (an explicit entry rule of a template is the only thing that can stop
-  it, and then the card names the rule).
+- **Do:** for a type that has no template, ask Keiko to move an issue to another status.
+- **Expect:** the issue moves; no template was needed.
 - **Jira:** the issue is in the new status.
-- **Proves:** AC4; #4359 step 5.
+- **Proves:** epic AC4; #4354 template rule 3.
 
-### W13 Comment, watcher, link, assignee, and the refused attachment
+### W12a A transition that carries a field, and an entry rule
+
+- **Do:** ask Keiko to move an issue to a status while setting a field that Jira asks for on that
+  transition (for example a resolution), once with a value that keeps the template satisfied and once
+  with a value that breaks one of its rules. If a template has a rule for entering that status
+  (activation `transition:<status>`), move an issue into that status without meeting the rule. A
+  Jira in another language needs the status name as Jira reports it, for example "In Bearbeitung",
+  in that rule.
+- **Expect:** the first move happens. The second is refused under **Template rules not met** with the
+  rule lines (a field carried by a transition follows the edit rule). The entry-rule move is refused
+  the same way, naming the rule.
+- **Jira:** the issues are in the statuses you expect; the refused ones did not move.
+- **Proves:** epic AC1, AC4; #4354 template rule 3 ("Only a template's explicit rules for entering a
+  status apply") and rule 2 for the carried field.
+
+### W13 Comment, watcher, link, assignee, and the switched-off attachment
 
 - **Do:** ask Keiko to add a comment, edit that comment, add a watcher, link two issues, and assign an
   issue to a person found by name. Then ask it to attach a file to an issue.
-- **Expect:** the first five are done without any template rule; the card shows **Jira change
-  confirmed** for each. The attachment request is refused: "Attachments are not part of this release,
-  so nothing was changed in Jira. Describe the file in a comment instead, or add it in Jira itself."
-- **Jira:** the comment (in its edited form), watcher, link and assignee are there; no attachment was added.
-- **Proves:** AC4; #4359 step 5.
+- **Expect:** the comment, its edit and the watcher are done without any template rule. Assigning
+  and linking follow the issue's template like any other change: they work unless they would break a
+  saved rule (link behaviour is to be confirmed at the first rehearsal of the walk). The card shows
+  **Jira change confirmed** for each. Keiko does not offer attachments: asked anyway, it says in its
+  own words what the product tells it: "Attachments are not part of this release, so nothing was
+  changed in Jira. Describe the file in a comment instead, or add it in Jira itself."
+- **Jira:** the comment (in its edited form), watcher, link and assignee are there; no attachment was
+  added.
+- **Proves:** epic AC4; #4354 template rule 4 (comments and watchers never template-checked) and
+  rule 5 (attachments are blocked and left out in Release 1); #4359 step 5.
 
 ### W14 The progress and compliance report
 
@@ -316,24 +372,30 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 
 ### W18 An expired approval
 
-- **Do:** in **Ask for approval**, ask for a create and leave the **Review Jira action** card undecided
-  for more than ten minutes.
-- **Expect:** the card shows **Action approval expired**; Keiko says that the approval expired and
-  that nothing was changed, and offers to ask again; a new request gets a new card.
-- **Jira:** no issue was created by the expired request.
-- **Proves:** AC8; #4359 step 7.
+- **Do:** in **Ask for approval**, ask Keiko to draft several issues (so that the draft stays the Chat's
+  open draft) and leave the **Review Jira action** card undecided for more than ten minutes. Then
+  tell Keiko to ask again.
+- **Expect:** the card shows **Action approval expired**. Keiko says in plain language that the
+  approval expired, that nothing was changed and that this was not a refusal by you. It does not draft
+  the issues anew: the same draft comes back with a new **Review Jira action** card. For a single
+  create without a draft, asking again makes a new card.
+- **Jira:** no issue was created by the expired request; after the new approval, each issue exists once.
+- **Proves:** epic AC8; #4354 "An expired approval says that it expired. The draft remains the Chat's
+  open draft and can be resubmitted."; #4359 step 7.
 
 ### W19 A Pod switch with an open draft
 
 - **Do:** (the two preparations here, a draft left open and a second verified Jira Pod, are to be
   confirmed at the first rehearsal of the walk) with a second verified Jira Pod available, ask Keiko
-  to draft several issues and leave the draft undecided. In **Connectors** switch the second Pod on (one Chat binds one Pod). Then ask Keiko to
-  continue with the draft.
-- **Expect:** the notice **Jira connection changed** with "Choose the Jira Pod again" and the hint to
-  open the Data sources menu above the conversation; nothing is sent to Jira; the Chat and its draft
-  text stay.
+  to draft several issues and leave the draft undecided. In **Connectors** switch the second Pod on
+  (one Chat binds one Pod). Then approve or resubmit the draft.
+- **Expect:** nothing is sent to Jira. The result card says "The Jira connection changed since this
+  draft was made, so nothing was changed. Create the draft again for the current Jira." A message
+  sent after the switch without choosing the Pod again shows the notice **Jira connection changed**
+  with "Choose the Jira Pod again" and the hint to open the Data sources menu above the conversation.
+  The Chat and its draft text stay.
 - **Jira:** nothing was created.
-- **Proves:** AC8; #4359 step 7.
+- **Proves:** epic AC8; #4359 step 7.
 
 ### W20 Support export
 
@@ -382,14 +444,14 @@ Fill one row per epic criterion for each platform. A verdict is **pass**, **fail
 evidence cell names the run, the file and the comment link. The Windows run that binds is the x64
 release under emulation or on real hardware, whichever is recorded in the evidence.
 
-| Epic criterion        | Walk steps                        | macOS verdict | Windows verdict | Evidence (run, file, comment link) | Auditor |
-| --------------------- | --------------------------------- | ------------- | --------------- | ---------------------------------- | ------- |
-| AC1 Structures        | W03, W06, W07, W08, W09, W10, W11 |               |                 |                                    |         |
-| AC3 Evaluation        | W14, W15                          |               |                 |                                    |         |
-| AC4 Development tasks | W03, W09, W12, W13, W21           |               |                 |                                    |         |
-| AC8 Reliability       | W04, W05, W16, W17, W18, W19, W20 |               |                 |                                    |         |
-| AC9 Readable results  | W15, W16, W20                     |               |                 |                                    |         |
-| AC10 Platforms        | W01, W02, W04, W09, W22           |               |                 |                                    |         |
+| Epic criterion        | Walk steps                                    | macOS verdict | Windows verdict | Evidence (run, file, comment link) | Auditor |
+| --------------------- | --------------------------------------------- | ------------- | --------------- | ---------------------------------- | ------- |
+| AC1 Structures        | W03, W06, W06a, W07, W08, W09, W10, W11, W12a |               |                 |                                    |         |
+| AC3 Evaluation        | W14, W15                                      |               |                 |                                    |         |
+| AC4 Development tasks | W03, W09, W09a, W12, W12a, W13, W21           |               |                 |                                    |         |
+| AC8 Reliability       | W04, W05, W16, W17, W18, W19, W20             |               |                 |                                    |         |
+| AC9 Readable results  | W15, W16, W20                                 |               |                 |                                    |         |
+| AC10 Platforms        | W01, W02, W04, W09, W22                       |               |                 |                                    |         |
 
 ## 5. Disclosed limitations
 
@@ -401,9 +463,9 @@ Each one is part of what Release 1 delivers; a verdict does not hide it.
   "the S19 oracle that credits a refused create onto its twin" (#4359, narrowings).
 - **The Pod card does not show the connected account.** For Release 1 the account is confirmed by
   asking in Chat (W02).
-- **Several Release 1 outcomes reach the person only through Keiko's answer, not on a card:** the edit
-  of an already-violating issue, and the draft that is refused after a Pod switch. Their card
-  sentences are routed to the owning children; this page changes when the product shows them.
+- **The notice on an edit of an already-violating issue reaches the person only through Keiko's
+  answer, not on a card** (W10). The product tells the model to say which rule is still broken; a card
+  sentence for it is routed to the owning child, and this page changes when the product shows it.
 - **No detection of the same summary across chats.** The same order given in two fresh chats creates
   two issues by design (epic #4351, decision of 2026-11-13).
 - **Attachments are off** until Release 2 (epic #4351, template rule; `jira.attach` and
@@ -427,17 +489,25 @@ Three steps for a person who adds a model to a Keiko that already uses a Jira Po
    LiteLLM (`docs/troubleshooting/litellm-production-gateway.md`). A model that offers no tool calling
    at its endpoint cannot be used for Jira tasks.
 2. **Run the check in Settings > Models** and read the result. Open **Settings → Models**, select
-   **Run readiness check**, and read the model's capability line (`tools yes` or `tools no`) and its
-   evidence. The check first offers a tool the way production does and, only if the model called none,
-   asks again with the call forced. It ends in one of six closed outcomes:
-   - `called-unforced`: verified; the model calls the tool on its own.
-   - `called-only-forced`: verified with a warning; Settings says "Calls a tool only when forced. In
-     conversations it may not use tools."
-   - `forced-refused`: no verdict; the provider refused the forced call (often a model in thinking
-     mode). Turn thinking off and verify again.
-   - `no-call`: not supported; the model answered without a tool call in both steps.
-   - `tools-refused`: not supported; the endpoint refused a request that offers a tool.
-   - `inconclusive`: no verdict; the gateway timed out or was busy. Verify again when it is idle.
+   **Run readiness check**, and read the model's capability line (`tools yes` or `tools no`) and the
+   sentence under it. The check first offers a tool the way production does and, only if the model
+   called none, asks again with the call forced. It ends in one of six closed outcomes, and Settings
+   words each one:
+   - `called-unforced`: "Tools work: the model called the test tool on its own."
+   - `called-only-forced`: "Calls a tool only when forced. In conversations it may not use tools.
+     Choose a model that calls tools on its own, or turn its thinking mode off, then check again."
+   - `forced-refused`: "The model did not call the tool on its own, and the provider refused the
+     forced call (a thinking mode often does). That does not prove the model cannot call tools, but it
+     is not confirmed either, so tool tasks are not available for it. Turn its thinking mode off and
+     check again."
+   - `no-call`: "The model answered in words, also when the call was forced. It does not call tools
+     through this endpoint, so tool tasks are not available for it. Choose a model that supports tool
+     calling, or ask your administrator to enable tool-call support for it."
+   - `tools-refused`: "The endpoint refused the request that offers a tool, so tool tasks are not
+     available for this model. Ask your administrator to enable tool calling for it, or choose another
+     model."
+   - `inconclusive`: "Tool calling could not be confirmed: the gateway timed out, was busy or answered
+     with an error, or the model did not complete the test steps. Check again in a few minutes."
 3. **Run one three-step Jira task** in a Chat with the Pod on, for example: list the projects, find
    the three newest issues of one project, and name the status of each. A model that answers in words
    and calls no tool fails this step even when the check passed.
@@ -451,8 +521,8 @@ and then `keiko support analyze <report.json> --json`. Look for `toolCallingOutc
 
 <!--
 Catalog check for the walk (every quoted UI label, with its message key). Paths are under
-packages/keiko-ui/src. Keys marked [branch] exist only on the named unmerged branch at the time of
-writing; keys marked [not a label] are not UI labels.
+packages/keiko-ui/src. Every key below was read on integration head a60fe469a; keys marked
+[not a label] are not UI labels.
 
 Catalogs: CORE = lib/i18n-messages.en.ts, OPT = lib/i18n-messages.optional.en.ts,
 SET = app/components/desktop/widgets/panels/settings-i18n.messages.json,
@@ -490,8 +560,13 @@ Needs repair: chat.skills.jira.invalid (OPT)
 Template rules not met: chat.jira.outcome.rules (OPT)
 The summary is too short.: chat.jira.outcome.rule.summary-too-short (OPT)
 The description lacks the section “{subject}”.: chat.jira.outcome.rule.section-missing (OPT)
-No template exists for the issue type “{subject}”, ...: chat.jira.outcome.rule.template-missing
-  [branch child/4354-jira-write-path]
+No template exists for the issue type “{subject}”, ...: chat.jira.outcome.rule.template-missing (OPT)
+Only rules for entering a status exist for “{subject}”, ...: chat.jira.outcome.rule.template-not-activated (OPT)
+Project {subject} does not exist or is not visible.: chat.skills.jira.finding.unknown-project (OPT)
+Not applied: {reasons}: chat.skills.jira.notApplied (OPT)
+The Epic Link points to an issue that is not an Epic, ...: chat.jira.outcome.validation.invalid-epic-link (OPT)
+Nothing was sent to Jira.: chat.jira.outcome.nothingSent (OPT)
+The Jira connection changed since this draft was made, ...: chat.jira.outcome.draftRefusal.connection-changed (OPT)
 Review Jira action: chat.jira.writeApproval.title (OPT)
 Proposed action details: chat.jira.writeApproval.preview (OPT)
 Approve this action: chat.jira.writeApproval.allow (OPT)
@@ -501,7 +576,8 @@ Created: chat.jira.outcome.state.created (OPT)
 Jira change confirmed: chat.jira.write.succeeded (OPT)
 View Jira result: chat.jira.details (OPT)
 Attachments are not part of this release, ...: the Jira refusal text of child/4354-jira-write-path
-  (packages/keiko-contracts/src/jira-release-scope.ts) [branch] [not a label: shown through Keiko's answer]
+  (packages/keiko-contracts/src/jira-release-scope.ts, JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE)
+  [not a catalog label: the product's own refusal sentence, shown through Keiko's answer]
 Complete: {read} issues read: chat.jira.report.complete (OPT)
 Incomplete ({reason}): chat.jira.report.incomplete (OPT)
 To do / In progress / Done: chat.jira.report.todo, chat.jira.report.inProgress, chat.jira.report.done (OPT)
@@ -518,7 +594,8 @@ Create error report / Download report: supportReport.create, supportReport.downl
 Support ID: chat.error.supportId (CORE) "Support ID: {correlationId}"
 Report ready. Download it and send it to support.: supportReport.saved (CORE)
 Settings → Models / Run readiness check: settings.tabs.models, settings.models.runReadiness (SET)
-Calls a tool only when forced. ...: settings.models.toolCallingForcedOnly (SET) [branch child/4351-model-compat]
+The six sentences of section 6: settings.models.toolOutcome.called-unforced, ...called-only-forced,
+  ...forced-refused, ...no-call, ...tools-refused, ...inconclusive (SET)
 tools yes / tools no: settings.models.capabilitySummary, settings.models.yes, settings.models.no (SET)
 Windows SmartScreen "More info → Run anyway", macOS "Open Anyway": README.md (Download), operating-system
   text, not a Keiko catalog label [not a label]
