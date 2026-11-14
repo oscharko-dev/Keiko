@@ -136,6 +136,8 @@ const REVIEW_RUN_PHASE = defineActivityLogOperation({
     usedTokens: OPTIONAL_COUNT,
     // #4130: the diff package parts, one Reviewer session each; `budgetTokens` is one part's.
     partCount: OPTIONAL_COUNT,
+    // #4130: the Git hunks larger than one part that the package shows as consecutive windows.
+    windowedHunks: OPTIONAL_COUNT,
     candidateCount: OPTIONAL_COUNT,
     // #4130: the prompt tokens all counter-checks of the run may spend, the configured allowance
     // once per diff package part; only on the `counter-checking` line.
@@ -313,6 +315,8 @@ export interface ReviewRunPackageCounts {
   readonly budgetTokens: number;
   readonly usedTokens: number;
   readonly partCount: number;
+  /** The Git hunks shown as consecutive windows because no part could hold them (#4130). */
+  readonly windowedHunks: number;
 }
 
 export function logReviewRunPhase(

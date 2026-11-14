@@ -7,7 +7,7 @@ import { reviewDiffCoverageSettlement } from "@oscharko-dev/keiko-contracts/runt
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { buildReviewDiffPackage } from "./builder.js";
 import { DiffFixtureRepository, realRunnerDeps } from "./diffFixtures.test-support.js";
-import { build, numbered, packaged } from "./diffPackageAssertions.test-support.js";
+import { build, numbered, numberedBody, packaged } from "./diffPackageAssertions.test-support.js";
 import { renderReviewHunk } from "./render.js";
 
 let fixture: DiffFixtureRepository;
@@ -49,7 +49,10 @@ const ACCOUNTINGS: readonly (ContextTokenAccounting | undefined)[] = [
 ];
 
 describe("token budget (AC3)", () => {
-  it("never exceeds the budget as the gateway counts it and never splits a hunk", async () => {
+  // #4134 pinned whole hunks: a file kept the hunks that fit and never a cut one. #4130 shows a hunk
+  // that no part can hold as consecutive windows, so the rule is now about lines: what a file shows
+  // is a leading run of its change, every line once, in order and on its own line numbers.
+  it("never exceeds the budget as the gateway counts it and never drops or reorders a line", async () => {
     const { base, head } = changeSet();
     const full = await packaged(fixture, base, head, { budgetTokens: 1_000_000 });
     const fullHunks = new Map(full.files.map((file) => [file.coverage.path, file.hunks]));
@@ -61,11 +64,11 @@ describe("token budget (AC3)", () => {
         expect(measured, `budget ${String(budgetTokens)}`).toBeLessThanOrEqual(budgetTokens);
         expect(result.coverage.summary.usedTokens).toBe(measured);
         for (const file of result.files) {
-          // Whole hunks only: each included hunk is the same hunk the unbounded package has, in order.
-          const all = fullHunks.get(file.coverage.path) ?? [];
-          expect(file.hunks).toEqual(all.slice(0, file.hunks.length));
+          const all = numberedBody(fullHunks.get(file.coverage.path) ?? []);
+          const shown = numberedBody(file.hunks);
+          expect(shown, `budget ${String(budgetTokens)}`).toEqual(all.slice(0, shown.length));
           for (const hunk of file.hunks) expect(result.text).toContain(renderReviewHunk(hunk));
-          expect(file.coverage.partial).toBe(file.hunks.length < all.length);
+          expect(file.coverage.partial).toBe(shown.length < all.length);
         }
       }
     }

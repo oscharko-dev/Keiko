@@ -1,6 +1,10 @@
 // Shared helpers of the review diff package suites (Issue #4134).
 
-import type { ReviewDiffCoverage, ReviewDiffFileRef } from "@oscharko-dev/keiko-contracts";
+import type {
+  PatchHunk,
+  ReviewDiffCoverage,
+  ReviewDiffFileRef,
+} from "@oscharko-dev/keiko-contracts";
 import { buildReviewDiffPackage } from "./builder.js";
 import { realRunnerDeps, type DiffFixtureRepository } from "./diffFixtures.test-support.js";
 import type {
@@ -45,6 +49,34 @@ export async function packaged(
   const result = await build(fixture, baseSha, headSha, config, deps);
   if (!result.ok) throw new Error(`packaging failed: ${JSON.stringify(result.failure)}`);
   return result.package;
+}
+
+/** One hunk's body lines with the base and head line number each stands on. */
+function numberedHunkBody(hunk: PatchHunk): string[] {
+  const body: string[] = [];
+  let oldNext = hunk.oldLines === 0 ? hunk.oldStart + 1 : hunk.oldStart;
+  let newNext = hunk.newLines === 0 ? hunk.newStart + 1 : hunk.newStart;
+  for (const line of hunk.lines) {
+    const marker = line.charAt(0);
+    if (marker === "\\") {
+      body.push(`${body.pop() ?? ""} (no newline)`);
+      continue;
+    }
+    body.push(
+      `${marker === "+" ? "" : String(oldNext)}|${marker === "-" ? "" : String(newNext)}|${line}`,
+    );
+    if (marker !== "+") oldNext += 1;
+    if (marker !== "-") newNext += 1;
+  }
+  return body;
+}
+
+/**
+ * Every body line of the hunks, in order, with the base and head line number it stands on. Two
+ * lists of hunks that show the same change read the same here, however the hunks are cut.
+ */
+export function numberedBody(hunks: readonly PatchHunk[]): string[] {
+  return hunks.flatMap(numberedHunkBody);
 }
 
 /** Every coverage list by name. */

@@ -15,7 +15,7 @@ import type { PatchHunk, ReviewDiffLanguage } from "@oscharko-dev/keiko-contract
 import type { ReviewDiffChangedFile } from "./classify.js";
 import type { ReviewDiffCoverageBuilder } from "./coverage.js";
 import { throwIfReviewDiffStopped, tooLarge } from "./failure.js";
-import type { ReviewDiffContextOptions } from "./hunks.js";
+import { splitReviewHunk, type ReviewDiffContextOptions } from "./hunks.js";
 import { ReviewDiffPartPacker, type ReviewTokenCounter } from "./pack.js";
 import { compareReviewPathBytes } from "./paths.js";
 import {
@@ -28,6 +28,12 @@ import type { ReviewDiffPackageFile, ReviewDiffPackagePart } from "./types.js";
 
 const READ_CONCURRENCY = 4;
 const MAX_BUDGET_MISSES = 32;
+/**
+ * The share of a part's budget one window of a split hunk may take, in percent (Issue #4130). Two
+ * windows then share a part and leave a tenth of it for the file header and for the estimator,
+ * which is not additive over joined texts.
+ */
+const REVIEW_HUNK_WINDOW_BUDGET_PERCENT = 45;
 /** Joins the parts' texts into the whole package text (tests and digests; never one prompt). */
 const REVIEW_PART_SEPARATOR = "\n";
 
@@ -47,11 +53,28 @@ interface Packed {
   readonly usedTokens: number;
   readonly files: readonly ReviewDiffPackageFile[];
   readonly parts: readonly ReviewDiffPackagePart[];
+  /** The Git hunks shown as windows, counted over the hunks the package holds (Issue #4130). */
+  readonly windowedHunks: number;
 }
 
-interface Offered {
-  readonly file: ReviewDiffChangedFile;
+/** A file's hunks as they are offered to the packer (Issue #4130). */
+interface Windowed {
   readonly hunks: readonly PatchHunk[];
+  /** For each offered hunk the index of the Git hunk it is a window of; `undefined` when whole. */
+  readonly windowOf: readonly (number | undefined)[];
+}
+
+interface Offered extends Windowed {
+  readonly file: ReviewDiffChangedFile;
+}
+
+/** How many split Git hunks the first `kept` offered hunks belong to. */
+function windowedHunksOf(entry: Windowed, kept: number): number {
+  const origins = new Set<number>();
+  for (const origin of entry.windowOf.slice(0, kept)) {
+    if (origin !== undefined) origins.add(origin);
+  }
+  return origins.size;
 }
 
 function changeSize(file: ReviewDiffChangedFile): number {
@@ -127,14 +150,38 @@ class PackingRun {
     }
     this.patchBytes += content.bytes;
     if (this.patchBytes > this.options.maxTotalPatchBytes) throw tooLarge("patch-bytes");
-    const section = { header: headerOf(file), hunks: content.hunks.map(renderReviewHunk) };
+    const header = headerOf(file);
+    const windowed = this.windowed(header, content.hunks);
+    const section = { header, hunks: windowed.hunks.map(renderReviewHunk) };
     const placed = this.packer.place(index, section);
     if (placed === undefined) {
       this.missedBudget(file);
       return;
     }
     this.budgetMisses = placed < section.hunks.length ? this.budgetMisses + 1 : 0;
-    this.offered.set(index, { file, hunks: content.hunks });
+    this.offered.set(index, { file, ...windowed });
+  }
+
+  /**
+   * The file's hunks, each hunk that no part can hold as consecutive windows (Issue #4130). A hunk
+   * that fits a part beside its file header stays whole.
+   */
+  private windowed(header: string, hunks: readonly PatchHunk[]): Windowed {
+    const { budgetTokens, count } = this.options;
+    const windowBudget = Math.floor((budgetTokens * REVIEW_HUNK_WINDOW_BUDGET_PERCENT) / 100);
+    const offered: PatchHunk[] = [];
+    const windowOf: (number | undefined)[] = [];
+    hunks.forEach((hunk, index) => {
+      const windows = splitReviewHunk(hunk, {
+        whole: (candidate) => count(header + renderReviewHunk(candidate)) <= budgetTokens,
+        window: (candidate) => count(renderReviewHunk(candidate)) <= windowBudget,
+      });
+      for (const window of windows) {
+        offered.push(window);
+        windowOf.push(windows.length > 1 ? index : undefined);
+      }
+    });
+    return { hunks: offered, windowOf };
   }
 
   private missedBudget(file: ReviewDiffChangedFile): void {
@@ -145,6 +192,7 @@ class PackingRun {
   public finish(): Packed {
     const { parts, covered } = this.packer.finish();
     const files: ReviewDiffPackageFile[] = [];
+    let windowedHunks = 0;
     for (const [index, entry] of this.offered) {
       const kept = covered.get(index);
       if (kept === undefined) {
@@ -154,10 +202,11 @@ class PackingRun {
       }
       const coverage = this.options.coverage.addIncluded(entry.file, entry.hunks.length, kept);
       files.push({ coverage, hunks: entry.hunks.slice(0, kept) });
+      windowedHunks += windowedHunksOf(entry, kept);
     }
     const usedTokens = parts.reduce((sum, part) => sum + part.usedTokens, 0);
     const text = parts.map((part) => part.text).join(REVIEW_PART_SEPARATOR);
-    return { text, usedTokens, files, parts };
+    return { text, usedTokens, files, parts, windowedHunks };
   }
 }
 

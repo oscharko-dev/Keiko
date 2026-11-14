@@ -510,7 +510,17 @@ every part is open, the single-part rules apply to the last one. Each part is ve
 and a file keeps only the hunks that follow each other without a gap from its first hunk, so a hunk
 a part's verification drops ends that file. Whatever does not fit the last part is `unprocessed`
 (`budget`) and settles the run `incomplete/files-unprocessed` exactly as before; `usedTokens` is the
-sum of the parts' counts. PR-Agent applies its extra lines (five before, one after) on top of the
+sum of the parts' counts. A hunk that no part can hold beside its file header is shown as
+consecutive windows (Issue #4130, `splitReviewHunk`): every body line of the hunk is in exactly one
+window, in order, and each window is a hunk of its own with the base and head line numbers of its
+first line, so the Reviewer's cited lines stay those of the head commit. A window takes at most 45 %
+of a part's budget, so two share a part. The rule "whole hunks only" therefore holds for every hunk
+that fits a part; for a larger one the rule is about lines: none is dropped, repeated or reordered.
+Before, such a hunk could not be shown at all and its file stayed `unprocessed`. A large new file is
+one hunk, and in development iteration 7 five of 30 reviews left seven such files unprocessed (13,500
+to 19,500 tokens each as a plain Git diff), which alone makes a review incomplete. A sixth needed
+more than 12 parts, which this does not change. The `reviewing` line of
+`review.run.phase` counts the Git hunks shown this way as `windowedHunks`. PR-Agent applies its extra lines (five before, one after) on top of the
 provider's three default context lines; Keiko applies its own counts exactly. Child 8 measurement
 changed the lines after a change from one to three (Issue #4130): with one line, a guard two lines
 below a changed condition lay outside the hunk, and the Reviewer reported the value that guard
