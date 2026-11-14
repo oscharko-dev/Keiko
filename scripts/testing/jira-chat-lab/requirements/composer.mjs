@@ -35,9 +35,22 @@ import {
   composerRelation,
   ofType,
 } from "./composer-graders.mjs";
-import { gradeNoTemplate, gradeUnrepairable } from "./composer-refusals.mjs";
+import {
+  SUBTASK_PARENT_TYPES,
+  gradeNoTemplate,
+  gradeTemplateRecognised,
+  gradeUnrepairable,
+} from "./composer-refusals.mjs";
+import { isLocalized, typeLabel } from "./language-names.mjs";
+import { withActorLocale } from "../seed-language.mjs";
 import { JOURNEYS } from "./journey-checks.mjs";
-import { NO_TURN, aggregateParts, sequentially, snapshotBefore } from "./journey-support.mjs";
+import {
+  NO_TURN,
+  aggregateParts,
+  result,
+  sequentially,
+  snapshotBefore,
+} from "./journey-support.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
 import { turnIssues } from "./oracles.mjs";
 import { listTemplates, removeTemplate, withTemplates } from "./templates.mjs";
@@ -90,7 +103,10 @@ async function composerFixture(ctx) {
     [epicLink]: epic,
     description: SYNTHETIC_BODY(requiredSections("Story")),
   });
-  return { epic, task, story, epicLink };
+  // How the session's audience names a type (the localized name in a German session) and whether the
+  // requests speak German words: from the language data the seed recorded, never from a word list.
+  const label = (type, kind = "name") => typeLabel(ctx.language, type, kind);
+  return { epic, task, story, epicLink, german: isLocalized(ctx.language), label };
 }
 
 const OWN_TEMPLATE = /Composer-/u;
@@ -125,7 +141,10 @@ export async function templateState(ctx) {
  * as a lab state (`invalid`), never a verdict about the product. `ungoverned` types must have no
  * template at all, baseline included.
  */
-export async function prepareTemplates(ctx, { types, ungoverned = [] }) {
+export async function prepareTemplates(ctx, { types: english, ungoverned: untemplated = [] }) {
+  // Templates are stored under the name their author wrote: the localized one in a German session.
+  const types = english.map((type) => typeLabel(ctx.language, type));
+  const ungoverned = untemplated.map((type) => typeLabel(ctx.language, type));
   const state = await templateState(ctx);
   for (const entry of state.own) {
     if (entry.revision === undefined)
@@ -149,7 +168,8 @@ export async function prepareTemplates(ctx, { types, ungoverned = [] }) {
     );
 }
 
-const templatesOf = (fixture, options) => composerTemplates(PROJECT, fixture.epicLink, options);
+const templatesOf = (fixture, options) =>
+  composerTemplates(PROJECT, fixture.epicLink, { label: fixture.label, ...options });
 
 /** One fresh composer Chat and one turn; every issue the project gained is read natively. */
 async function composerTurn(
@@ -210,6 +230,7 @@ async function unrepairableRequest(ctx, fixture) {
     prompt: unrepairablePrompt("Composer Teilaufgabe unter Story", fixture),
   });
   const grade = gradeUnrepairable({
+    allowed: SUBTASK_PARENT_TYPES.map((type) => fixture.label(type)),
     created: issues.created,
     exchanges: turn.toolExchanges,
     answer: turn.answer,
@@ -650,17 +671,89 @@ async function attachmentRefused(ctx) {
   );
 }
 
+/**
+ * C10: a template written for a LOCALIZED issue type (what a German project lead types: the name the
+ * German session shows) must govern a create, whoever asks. The same violating Task request is sent
+ * with the template written by name and a German profile, by name and an English profile (the acting
+ * user's token then shows another name than the author wrote), and by id and an English profile. The
+ * product binds a template to a type by comparing the free string with the name the calling user's
+ * token sees, or the id; the middle case is where that differs. Needs a session that recorded its
+ * localized type names.
+ */
+const LOCALIZED_VARIANTS = [
+  {
+    id: "localized-template-german-user-governs",
+    kind: "name",
+    locale: "de_DE",
+    label: "template by name, German profile",
+  },
+  {
+    id: "localized-template-english-user-governs",
+    kind: "name",
+    locale: "en_US",
+    label: "template by name, English profile",
+  },
+  {
+    id: "id-template-english-user-governs",
+    kind: "id",
+    locale: "en_US",
+    label: "template by id, English profile",
+  },
+];
+
+async function localizedTemplates(ctx) {
+  if (!isLocalized(ctx.language))
+    return result(
+      "unverified",
+      NO_TURN,
+      "this session shows no localized issue type names; run seed-language.mjs <session> de",
+      [],
+    );
+  const fixture = await composerFixture(ctx);
+  await prepareTemplates(ctx, { types: ["Task"] });
+  const runs = await sequentially(LOCALIZED_VARIANTS, (variant) => {
+    const label = (type) => typeLabel(ctx.language, type, variant.kind);
+    const templates = templatesOf(fixture, { label }).filter((entry) => entry.issueType === "Task");
+    return withTemplates(ctx.http, templates, () =>
+      (ctx.withActorLocale ?? withActorLocale)(ctx.session, "api", variant.locale, async () => {
+        const { turn, issues } = await composerTurn(ctx, fixture, {
+          prompt: violationPrompt("Task", `Sprachtest ${variant.kind} ${variant.locale}`, fixture),
+        });
+        const grade = gradeTemplateRecognised({
+          created: ofType(issues, "Task").created,
+          exchanges: turn.toolExchanges,
+          turn,
+        });
+        return { turn, part: part(variant.label, [variant.id], grade) };
+      }),
+    );
+  });
+  return parts(runs);
+}
+
+/** Every Composer journey but C07 reads the native state as the administrator: English names, in any session. */
+const asAdministrator = (journey) => async (ctx, chat) => {
+  ctx.readAs = "admin";
+  try {
+    return await journey(ctx, chat);
+  } finally {
+    ctx.readAs = undefined;
+  }
+};
+
 export const COMPOSER_JOURNEYS = Object.freeze({
-  C01: createEveryType,
-  C02: refuseViolations,
-  C03: refuseWithoutTemplate,
-  C04: editRules,
-  C05: rereadAndRepeat,
-  C06: modesAndApproval,
+  C01: asAdministrator(createEveryType),
+  C02: asAdministrator(refuseViolations),
+  C03: asAdministrator(refuseWithoutTemplate),
+  C04: asAdministrator(editRules),
+  C05: asAdministrator(rereadAndRepeat),
+  C06: asAdministrator(modesAndApproval),
+  // C07 runs the document lane's S10 and S11, which read as the product's own account in a German session.
   C07: reportsOnJiraPodOnly,
-  C08: watchAndComment,
-  C09: attachmentRefused,
+  C08: asAdministrator(watchAndComment),
+  C09: asAdministrator(attachmentRefused),
+  C10: asAdministrator(localizedTemplates),
 });
 export const COMPOSER_JOURNEY_IDS = Object.freeze(Object.keys(COMPOSER_JOURNEYS));
 /** Journeys that need a product started without the lab's baseline template set (#4369). */
-export const COMPOSER_WITHOUT_BASELINE = Object.freeze(["C03", "C04"]);
+export const COMPOSER_WITHOUT_BASELINE = Object.freeze(["C03", "C04", "C10"]);

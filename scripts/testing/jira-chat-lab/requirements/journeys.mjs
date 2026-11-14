@@ -31,6 +31,7 @@ import { startDuring } from "./mid-turn.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
 import { COMPOSER_JOURNEYS } from "./composer.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
+import { languageData } from "./language-names.mjs";
 import { aggregateRuns } from "./repeat.mjs";
 import {
   classifyJourney,
@@ -348,7 +349,7 @@ export function oracleReader(session) {
  * records the fixed requested size, not the report tool's own pagination. One flat continuation
  * keeps reads sequential without retaining one unresolved promise per native page.
  */
-export function pagedJql(session, query, fields = "summary") {
+export function pagedJql(session, query, fields = "summary", reader = oracleReader(session)) {
   const state = { issues: [], pages: [], keys: new Set(), ids: new Set(), total: undefined };
   return new Promise((resolve, reject) => {
     const next = () => {
@@ -356,7 +357,7 @@ export function pagedJql(session, query, fields = "summary") {
       Promise.resolve()
         .then(() => {
           const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&startAt=${startAt}&maxResults=100&fields=${encodeURIComponent(fields)}`;
-          return labRequest(session, "GET", path, basicAuth(session, oracleReader(session)));
+          return labRequest(session, "GET", path, basicAuth(session, reader));
         })
         .then((response) => {
           const page = admitJqlPage(response, startAt, state.total);
@@ -379,12 +380,12 @@ export function pagedJql(session, query, fields = "summary") {
   });
 }
 
-async function jql(session, query, fields = "summary") {
-  return (await pagedJql(session, query, fields)).issues;
+async function jql(session, query, fields = "summary", reader = oracleReader(session)) {
+  return (await pagedJql(session, query, fields, reader)).issues;
 }
-async function jqlCount(session, query) {
+async function jqlCount(session, query, reader = oracleReader(session)) {
   const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&maxResults=0`;
-  const page = await labRequest(session, "GET", path, basicAuth(session, oracleReader(session)));
+  const page = await labRequest(session, "GET", path, basicAuth(session, reader));
   if (page.status !== 200 || !Number.isSafeInteger(page.value?.total))
     throw new TypeError(`Oracle count failed (${page.status})`);
   return page.value.total;
@@ -587,6 +588,22 @@ async function createNativeIssue(session, fields) {
 
 export { JOURNEY_IDS };
 
+/**
+ * The native reads of a journey context. `readAs()` names the account of the next reads: the Composer
+ * journeys read the native state as the administrator (English names) in every session, C07 and the
+ * document lane as `oracleReader`. `nativeGet` also serves the oracles that derive their expectation
+ * from Jira itself (the S10 estimate rule).
+ */
+function nativeReads(session, readAs) {
+  const reader = () => readAs() ?? oracleReader(session);
+  return {
+    search: (query, fields) => jql(session, query, fields, reader()),
+    searchPages: (query, fields) => pagedJql(session, query, fields, reader()),
+    count: (query) => jqlCount(session, query, reader()),
+    nativeGet: (path) => checked(session, "native-read", "GET", path, basicAuth(session, reader())),
+  };
+}
+
 /** The live plumbing the journey checks are given (see journey-checks.mjs). */
 export function journeyContext(live, session, truth) {
   const ctx = {
@@ -594,6 +611,8 @@ export function journeyContext(live, session, truth) {
     truth,
     // The account the oracles read Jira as (the administrator unless the session is German).
     oracleReader: oracleReader(session),
+    // The names the session's actors see next to the administrator's, when seed-language recorded them.
+    language: languageData(session),
     // The type and status names that account sees, for the oracles that compare names.
     displayNames: async () => {
       const reader = oracleReader(session);
@@ -615,9 +634,7 @@ export function journeyContext(live, session, truth) {
       (
         await api(ctx, "read-stored-conversation", messagesPath(ctx, chat), undefined, "GET")
       ).messages.map((message) => message.id),
-    search: (query, fields) => jql(session, query, fields),
-    searchPages: (query, fields) => pagedJql(session, query, fields),
-    count: (query) => jqlCount(session, query),
+    ...nativeReads(session, () => ctx.readAs),
     http: (name, path, body, method = "POST") => api(ctx, name, path, body, method),
     deselectSkill: (chat) => deselectSkill(ctx, chat),
     comments: (key) => issueComments(session, key),
@@ -631,9 +648,6 @@ export function journeyContext(live, session, truth) {
         '"reason":"authority-invalid"',
       ),
     labSprint: () => labSprintSetup(session, WORK_PROJECT),
-    // The oracles that derive their expectation from Jira itself (the S10 estimate rule).
-    nativeGet: (path) =>
-      checked(session, "native-read", "GET", path, basicAuth(session, oracleReader(session))),
     ...(/^[A-Z][A-Z0-9]{1,9}$/u.test(process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT ?? "")
       ? { estimateProject: process.env.KEIKO_JIRA_LAB_ESTIMATE_PROJECT }
       : {}),

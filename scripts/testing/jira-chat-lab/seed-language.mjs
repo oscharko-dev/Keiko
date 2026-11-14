@@ -91,6 +91,60 @@ export async function ensureLabLocale(port, locale, actors) {
   return { locale, actors: actors.length, localizedStatusNames, localizedIssueTypeNames };
 }
 
+/**
+ * The names a lab actor sees next to the administrator's English ones, joined by id: the data the
+ * Composer lane takes its localized type names and its type ids from (never a hard-coded word list).
+ * Rows without an id cannot be joined and are left out.
+ */
+export async function languageTables(port, actor) {
+  const table = async (path) => {
+    const withId = (rows) => rows.filter((row) => row.id !== undefined && row.id !== null);
+    const english = new Map(
+      withId(await expectOk(port, "admin", path)).map((row) => [String(row.id), String(row.name)]),
+    );
+    return withId(await expectOk(port, actor, path))
+      .filter((row) => english.has(String(row.id)))
+      .map((row) => ({
+        id: String(row.id),
+        english: english.get(String(row.id)),
+        localized: String(row.name),
+      }));
+  };
+  return {
+    issueTypes: await table("/rest/api/2/issuetype"),
+    statuses: await table("/rest/api/2/status"),
+  };
+}
+
+/**
+ * Runs `run` with one actor's profile language set to `locale`, and puts the previous language back
+ * afterwards, also on failure. The product reads type names as the calling user's token sees them,
+ * so this is how a lab shows an acting user whose profile differs from the template author's.
+ */
+export async function withActorLocale(
+  session,
+  actor,
+  locale,
+  run,
+  port = nativeLocalePort(session),
+) {
+  if (!Object.values(LAB_LOCALES).includes(locale)) throw new TypeError("Unsupported lab locale");
+  const previous = (await expectOk(port, actor, "/rest/api/2/myself")).locale;
+  const set = async (value) => {
+    if ((await expectOk(port, actor, "/rest/api/2/myself")).locale === value) return;
+    if ((await port.put(actor, PREFERENCE, value)).status !== 204)
+      throw new TypeError("Jira refused the profile language of an actor");
+    if ((await expectOk(port, actor, "/rest/api/2/myself")).locale !== value)
+      throw new TypeError("An actor does not report the requested profile language");
+  };
+  await set(locale);
+  try {
+    return await run();
+  } finally {
+    await set(previous);
+  }
+}
+
 /** The actors this session holds credentials for. */
 export function presentActors(session, exists = existsSync) {
   return LOCALIZED_ACTORS.filter((actor) =>
@@ -106,8 +160,12 @@ export async function main(args) {
   const session = loadSession(directory);
   const actors = presentActors(session);
   if (!actors.includes("api")) throw new TypeError("The session holds no api actor to localize");
-  const facts = await ensureLabLocale(nativeLocalePort(session), LAB_LOCALES[language], actors);
-  privateJson(join(session.directory, "language.json"), { schemaVersion: 1, ...facts });
+  const port = nativeLocalePort(session);
+  const facts = await ensureLabLocale(port, LAB_LOCALES[language], actors);
+  // The tables are private lab data (names and ids of the lab's own types and statuses); the console
+  // line keeps the counts only.
+  const tables = await languageTables(port, actors[0]);
+  privateJson(join(session.directory, "language.json"), { schemaVersion: 1, ...facts, ...tables });
   console.log(JSON.stringify({ operation: "jira-lab-language", ...facts }));
   return facts;
 }

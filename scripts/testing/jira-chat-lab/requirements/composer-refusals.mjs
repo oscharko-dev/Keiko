@@ -246,6 +246,42 @@ export function gradeParentRefusal({
   return gradeGuidance(stored, ports.guidance);
 }
 
+/**
+ * A template exists for the type (in whatever words its author wrote it): the product must find it.
+ * A stored refusal that names a missing template means the product did not bind the template to the
+ * type the person asked for (the type's NAME as the acting user sees it differs from the name the
+ * author wrote) and is red; a refusal for a content rule shows it governed the create; an issue
+ * created although the request violates the template shows the same silent miss and is red too.
+ */
+export function gradeTemplateRecognised({ created, exchanges, turn, ports = producerPorts }) {
+  const refusals = templateRefusals(exchanges);
+  const missing = namesRule(refusals, ports.noTemplateRules);
+  if (missing.length > 0)
+    return {
+      status: "red",
+      detail: `the product refused with ${ruleNames(missing)} although a template exists for the type`,
+    };
+  const governed = refusals.filter(
+    (refusal) => !refusal.violations.every((item) => ports.noTemplateRules.includes(item.ruleId)),
+  );
+  if (governed.length > 0)
+    return {
+      status: "green",
+      detail: `the template governed the create: refused with ${ruleNames(governed)}`,
+    };
+  if (created.length > 0)
+    return {
+      status: "red",
+      detail: `${created.length} issues were created without any template refusal although the request violates the template: ${created.map((issue) => issue.key).join(", ")}`,
+    };
+  return (
+    stepProof(turn, "the request") ?? {
+      status: "unverified",
+      detail: "no write was attempted and no refusal is stored; the template was not exercised",
+    }
+  );
+}
+
 /** The own-word parent type: "Teilaufgabe" and "Sub-task" are the request's words, not the answer's. */
 const PARENT_TYPE_WORD = /(?<![\p{L}-])(?:aufgaben?|tasks?)(?![\p{L}])/iu;
 
@@ -264,7 +300,7 @@ export function gradeParentAnswer(answer, ports = producerPorts) {
 }
 
 /** The two obligations of the unrepairable request, with the native first obligation: hard, hard, soft. */
-export function gradeUnrepairable({ created, exchanges, answer, turn, ports }) {
+export function gradeUnrepairable({ created, exchanges, answer, turn, ports, allowed }) {
   return {
     refused: gradeRefusedNatively({
       created,
@@ -272,7 +308,7 @@ export function gradeUnrepairable({ created, exchanges, answer, turn, ports }) {
       turn,
       exchanges,
     }),
-    gate: gradeParentRefusal({ exchanges, ports }),
+    gate: gradeParentRefusal({ exchanges, ports, allowed }),
     plain: gradeParentAnswer(answer, ports),
   };
 }

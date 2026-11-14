@@ -105,4 +105,16 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     title: "An attachment request is refused readably and nothing reaches Jira",
     obligations: ["attachment-refused", "attachment-answer-readable"],
   },
+  {
+    id: "C10",
+    requirement: "composer",
+    issue: 4354,
+    title:
+      "A template written for a localized issue type governs the create, by name and by id, for a German and for an English profile",
+    obligations: [
+      "localized-template-german-user-governs",
+      "localized-template-english-user-governs",
+      "id-template-english-user-governs",
+    ],
+  },
 ]);

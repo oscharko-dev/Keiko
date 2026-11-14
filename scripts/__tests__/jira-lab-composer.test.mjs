@@ -210,7 +210,7 @@ describe("conformity of each type, as Jira holds it", () => {
 });
 
 describe("the catalog", () => {
-  it("adds C01-C09 beside S01-S20 and leaves those untouched", () => {
+  it("adds C01-C10 beside S01-S20 and leaves those untouched", () => {
     expect(COMPOSER_SCENARIOS.map((entry) => entry.id)).toEqual([
       "C01",
       "C02",
@@ -221,6 +221,7 @@ describe("the catalog", () => {
       "C07",
       "C08",
       "C09",
+      "C10",
     ]);
     expect(COMPOSER_JOURNEY_IDS).toEqual(COMPOSER_SCENARIOS.map((entry) => entry.id));
     const ids = SCENARIOS.map((entry) => entry.id);
@@ -2306,6 +2307,114 @@ describe("C07 reports run the real S10 and S11 graders", () => {
   });
 });
 
+describe("C10 a template for a localized issue type", () => {
+  const TYPES = [
+    { id: "10002", english: "Task", localized: "Aufgabe" },
+    { id: "10003", english: "Sub-task", localized: "Sub-Task" },
+    { id: "10001", english: "Story", localized: "Story" },
+    { id: "10000", english: "Epic", localized: "Epic" },
+    { id: "10004", english: "Bug", localized: "Bug" },
+  ];
+  const GERMAN_DATA = { locale: "de_DE", issueTypes: TYPES, statuses: [] };
+
+  const templateMissing = () =>
+    createExchange(
+      {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations: [{ ruleId: "template-missing", subject: "REQ/Task" }],
+      },
+      "failed",
+    );
+
+  /** A product that binds a template to a type by the name the calling profile shows (`byId` adds the id). */
+  const german = ({ byId }) => {
+    const ctx = lane({
+      selection: { types: ["task"] },
+      act: ({ ctx: self }) => {
+        const seen = self.locales.at(-1) === "de_DE" ? "Aufgabe" : "Task";
+        const found = self.library.some(
+          (entry) => entry.issueType === seen || (byId && entry.issueType === "10002"),
+        );
+        return {
+          answer: "Abgelehnt.",
+          toolExchanges: [found ? refusal("Task") : templateMissing()],
+        };
+      },
+    });
+    ctx.language = GERMAN_DATA;
+    ctx.session = {};
+    ctx.locales = [];
+    ctx.withActorLocale = async (_session, _actor, locale, run) => {
+      ctx.locales.push(locale);
+      return run();
+    };
+    return ctx;
+  };
+
+  it("exposes a product that matches by name: green for the German profile and for the id, RED for the English profile", async () => {
+    // The customer's case: the template author is German, the acting user's profile is English.
+    const ctx = german({ byId: true });
+    const check = await COMPOSER_JOURNEYS.C10(ctx, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("template by name, German profile: green");
+    expect(check.detail).toContain("template by name, English profile: red");
+    expect(check.detail).toContain("template-missing");
+    // The id-bound template is found by id, whatever the profile.
+    expect(check.detail).toContain("template by id, English profile: green");
+    expect(ctx.locales).toEqual(["de_DE", "en_US", "en_US"]);
+  });
+
+  it("is green for a product that binds by id (the profile language no longer matters)", async () => {
+    // A product that finds the template whatever the name shown (it binds by id).
+    const bound = lane({
+      selection: { types: ["task"] },
+      act: () => ({ answer: "Abgelehnt.", toolExchanges: [refusal("Task")] }),
+    });
+    bound.language = GERMAN_DATA;
+    bound.session = {};
+    bound.withActorLocale = async (_s, _a, _l, run) => run();
+    const check = await COMPOSER_JOURNEYS.C10(bound, undefined);
+    expect(check.status).toBe("green");
+    expect(check.covers).toEqual([
+      "localized-template-german-user-governs",
+      "localized-template-english-user-governs",
+      "id-template-english-user-governs",
+    ]);
+    // Each variant installs ONE template, labelled as its author would write it, and removes it again.
+    expect(bound.calls.http.filter((name) => name === "template-import")).toHaveLength(3);
+    expect(bound.calls.http.filter((name) => name === "template-delete")).toHaveLength(3);
+  });
+
+  it("is unverified, with no turn, in a session that shows no localized names", async () => {
+    const plain = lane({ act: () => ({ answer: "x" }) });
+    for (const language of [
+      undefined,
+      { ...GERMAN_DATA, issueTypes: TYPES.map((row) => ({ ...row, localized: row.english })) },
+    ]) {
+      plain.language = language;
+      const check = await COMPOSER_JOURNEYS.C10(plain, undefined);
+      expect(check.status).toBe("unverified");
+      expect(check.detail).toContain("no localized issue type names");
+    }
+    expect(plain.calls.turns).toHaveLength(0);
+  });
+
+  it("every Composer journey but C07 reads the native state as the administrator, and puts it back", async () => {
+    const seen = [];
+    const ctx = lane({ selection: { types: ["task"] }, act: () => ({ answer: "x" }) });
+    const search = ctx.search;
+    ctx.search = async (...args) => {
+      seen.push(ctx.readAs);
+      return search(...args);
+    };
+    await COMPOSER_JOURNEYS.C05(ctx, undefined);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((reader) => reader === "admin")).toBe(true);
+    expect(ctx.readAs).toBeUndefined();
+  });
+});
+
 describe("C08 watcher and comment, C09 attachment", () => {
   it("C08 is green when the native watcher list and comment show the instructions, and removal works", async () => {
     const ctx = lane({
@@ -2402,6 +2511,6 @@ describe("C08 watcher and comment, C09 attachment", () => {
   });
 
   it("names the journeys that need a product without the baseline template set", () => {
-    expect(COMPOSER_WITHOUT_BASELINE).toEqual(["C03", "C04"]);
+    expect(COMPOSER_WITHOUT_BASELINE).toEqual(["C03", "C04", "C10"]);
   });
 });
