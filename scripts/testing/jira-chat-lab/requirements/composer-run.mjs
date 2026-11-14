@@ -3,6 +3,7 @@
 // report goes. Pure, so the usage errors and the grouping are testable without a scorecard run.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { languageData } from "./language-names.mjs";
 import { COMPOSER_MODES, COMPOSER_WITHOUT_BASELINE } from "./composer.mjs";
 import { COMPOSER_TYPES, typeSlug } from "./composer-templates.mjs";
 
@@ -92,7 +93,10 @@ export function composerReader(session) {
     );
   const locale = JSON.parse(readFileSync(path, "utf8")).locale;
   if (typeof locale === "string" && /^en_[A-Z]{2}$/u.test(locale)) return "admin";
-  if (locale === "de_DE") return "api";
+  // A German session whose seed recorded its type names takes every Composer journey: they read the
+  // native state as the administrator and name types as their audience does. Without that data the
+  // old rule stands: only the S10 report, which reads as the product's own actor.
+  if (locale === "de_DE") return languageData(session) === undefined ? "api" : "admin";
   throw new TypeError(
     `The session's locale ${String(locale).slice(0, 12)} is neither en_* nor de_DE; a Composer run accepts only those`,
   );
@@ -112,7 +116,7 @@ export function assertComposerLanguageFit(reader, ids, selection) {
     selection.parts[0] === "s10";
   if (!onlyS10)
     throw new TypeError(
-      "This session is German-language: the Composer journeys grade English issue type names. Run them on an English session; a German one takes only --only C07 --parts s10",
+      "This session is German-language and holds no recorded type names (run seed-language.mjs <session> de again): the Composer journeys grade English issue type names. Run them on an English session; a German one without that data takes only --only C07 --parts s10",
     );
 }
 

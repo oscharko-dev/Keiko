@@ -31,6 +31,7 @@ import {
   turnRefusals,
 } from "../testing/jira-chat-lab/catalog-selection.mjs";
 import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
+import { LANGUAGE_SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 
 const FIXTURE = {
   project: "KEIKO",
@@ -916,5 +917,62 @@ describe("refusalTrace", () => {
   it("is carried by every graded attempt", () => {
     const turn = { exchanges: [ok], gateway: { unrecovered: 0, rejected: {} } };
     expect(gradeSelection(READ, turn, { tokens: ["High"] }).refusals).toEqual([]);
+  });
+});
+
+describe("a read restricted to one type (search-by-type, #4369)", () => {
+  const [entry] = LANGUAGE_SELECTION_CASES;
+  const restriction = {
+    forbidden: ["KEIKO-5", "KEIKO-6"],
+    typeWords: ["10002", "Task", "Aufgabe"],
+  };
+  const search = (jql, keys) => ({
+    exchanges: [
+      {
+        call: { name: "jira_search", arguments: { jql } },
+        result: {
+          status: "completed",
+          data: { outcome: "succeeded", issues: keys.map((key) => ({ key })) },
+        },
+      },
+    ],
+    gateway: healthy,
+  });
+  const grade = (jql, keys) =>
+    gradeSelection(entry, search(jql, keys), { tokens: ["KEIKO-1", "KEIKO-2"], restriction });
+
+  it("is wrong when the JQL names no type and the result carries the other types' keys too", () => {
+    // gpt-5.4, de_DE, 2026-11-14: "project = KEIKO ORDER BY key ASC" listed all 36 issues.
+    const verdict = grade("project = KEIKO ORDER BY key ASC", ["KEIKO-1", "KEIKO-2", "KEIKO-5"]);
+    expect(verdict).toMatchObject({ status: "wrong-result" });
+    expect(verdict.detail).toContain("1 issues of other types");
+  });
+
+  it.each([
+    "project = KEIKO AND issuetype = Task",
+    "project = KEIKO AND issuetype = Aufgabe ORDER BY key",
+    "project = KEIKO AND type = 10002",
+    'project = KEIKO AND issuetype in ("Aufgabe")',
+  ])("is selected when the JQL names the type by id or name: %s", (jql) => {
+    expect(grade(jql, ["KEIKO-1", "KEIKO-2"]).status).toBe("selected");
+  });
+
+  it("is selected when the result holds no other type although the JQL named none", () => {
+    expect(grade("project = KEIKO", ["KEIKO-1", "KEIKO-2"]).status).toBe("selected");
+  });
+
+  it("does not read a type word inside another word or another type as a restriction", () => {
+    expect(
+      grade("project = KEIKO AND issuetype = Subtask", ["KEIKO-1", "KEIKO-2", "KEIKO-5"]).status,
+    ).toBe("wrong-result");
+    expect(
+      grade("project = KEIKO AND summary ~ Aufgabe", ["KEIKO-1", "KEIKO-2", "KEIKO-6"]).status,
+    ).toBe("wrong-result");
+  });
+
+  it("changes nothing for a case without a restriction", () => {
+    const turn = { exchanges: [call("jira_priorities")], gateway: healthy };
+    expect(gradeSelection(READ, turn, { tokens: ["High"], restriction }).status).toBe("selected");
+    expect(gradeSelection(READ, turn, { tokens: ["High"] }).status).toBe("selected");
   });
 });

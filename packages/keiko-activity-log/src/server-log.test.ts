@@ -644,6 +644,19 @@ function processIsRunning(pid: number): boolean {
   return !processIsZombie(pid);
 }
 
+// Ends a writer this test no longer wants. A writer may stop by itself between whatever told the
+// test it was still running and this signal, and a process that is already gone is exactly the state
+// the cleanup wants: ESRCH is "already gone", any other error is a real fault and propagates.
+function signalWriter(pid: number, signal: NodeJS.Signals = "SIGKILL"): "signalled" | "gone" {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return "gone";
+    throw error;
+  }
+  return "signalled";
+}
+
 // /proc/<pid>/stat is "pid (comm) state ..."; comm may itself contain spaces and parentheses, so the
 // state is the first field after the last ")". Without procfs (macOS, Windows) the system init
 // reaps an orphan, and `kill(pid, 0)` is already exact there.
@@ -1770,10 +1783,28 @@ describe("activity log writer workers never outlive their test", () => {
     const stopped = await waitFor(() => (processIsRunning(pid) ? undefined : true), 10_000).catch(
       () => false,
     );
-    // Whatever the outcome, this test itself must not leave the writer running.
-    if (processIsRunning(pid)) process.kill(pid, "SIGKILL");
+    // Whatever the outcome, this test itself must not leave the writer running. It may have stopped
+    // by itself since the last probe (#4351), which is the wanted state, not an error.
+    signalWriter(pid);
     expect(stopped).toBe(true);
   }, 30_000);
+
+  it("treats a writer that exited before the cleanup signal as gone and nothing else as tolerable (#4351)", async () => {
+    const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+    const pid = child.pid;
+    if (pid === undefined) throw new Error("the stand-in process did not start");
+    await new Promise<void>((resolveExit) =>
+      child.once("exit", () => {
+        resolveExit();
+      }),
+    );
+    // The ordering behind the CI failure: the process ended after it was last seen running and before
+    // the signal. The positive control proves the ordering is real: a plain signal throws ESRCH.
+    expect(() => process.kill(pid, "SIGKILL")).toThrow(/ESRCH/u);
+    expect(signalWriter(pid)).toBe("gone");
+    // Any other fault is not swallowed: an unknown signal is rejected by Node before it is sent.
+    expect(() => signalWriter(process.pid, "SIGNOTASIGNAL" as NodeJS.Signals)).toThrow(/signal/iu);
+  });
 });
 
 describe("activity log segment lifecycle", () => {

@@ -16,7 +16,6 @@ import type {
 } from "@/lib/atlassian-connectors-api";
 import { JiraPodWorkspaceAction } from "../cards/JiraPodWorkspaceAction";
 import { verifyStatusCopyKey, verifyStatusLabelKey, verifyStatusTone } from "./connector-labels";
-import { VerifyStatusText } from "./VerifyConnectionStatus";
 import { PodActionsMenu, type PodMenuItem } from "./PodActionsMenu";
 import type { CardController } from "./useConnectorCard";
 import styles from "./connectors.module.css";
@@ -64,15 +63,27 @@ function StatusChip({ state }: { readonly state: LivePodState }): ReactNode {
   );
 }
 
+// What a failed check means for the Pod and the two ways out. A certificate refusal never fixes
+// itself and its own remedy is a setting outside the card, so the saved entry says what it is.
+function useFailureGuidance(status: AtlassianConnectorVerifyStatus): string {
+  const t = useTranslate();
+  const copy = t(verifyStatusCopyKey(status));
+  return status === "tls-failed"
+    ? `${copy} ${t("atlassianConnectors.live.tlsFailed.wayOut")}`
+    : copy;
+}
+
+function FailedHint({ status }: { readonly status: AtlassianConnectorVerifyStatus }): ReactNode {
+  return (
+    <p className="acx-hint" aria-hidden="true">
+      {useFailureGuidance(status)}
+    </p>
+  );
+}
+
 function StatusHint({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
-  if (state.kind === "failed") {
-    return (
-      <p className="acx-hint" aria-hidden="true">
-        {t(verifyStatusCopyKey(state.status))}
-      </p>
-    );
-  }
+  if (state.kind === "failed") return <FailedHint status={state.status} />;
   if (state.kind === "unknown") {
     return <p className="acx-hint">{t("atlassianConnectors.live.refreshRequired")}</p>;
   }
@@ -100,26 +111,31 @@ function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus |
   return checked;
 }
 
-// The one live region of the card. It exists before a check and is filled with the outcome, so
-// the announcement is reliable. A check run in this view that succeeded is also shown, not only
-// announced: the person who just connected a Pod must see that it is connected and ready, in the
-// words of the connection page (#4371). A failed check keeps the chip and its one remediation line
-// and is announced here; a card loaded at rest stays silent.
-function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
+// The one live region of the card. It exists before a check and announces only the CURRENT state:
+// the previous result is dropped the moment a new check runs, not one render later. A check run in
+// this view that ended well is also shown, not only announced: the person who just connected a Pod
+// must see that it is connected, in the words of the connection page (#4371). Every other outcome
+// stays announced only, with its guidance; the visible card keeps its chip and one failure line.
+export function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
-  const status = useCheckedStatus(state);
+  const checked = useCheckedStatus(state);
+  const status = state.kind === "verifying" ? undefined : checked;
+  const guidance = useFailureGuidance(status ?? "ok");
   const shown = status === "ok";
   return (
     <output
       className={shown ? "acx-notice" : "sr-only"}
-      data-tone={shown ? verifyStatusTone(status) : undefined}
+      data-tone={shown ? verifyStatusTone("ok") : undefined}
       data-status={status}
       data-testid="acx-verify-status"
     >
       {status === undefined ? null : shown ? (
-        <VerifyStatusText status={status} />
+        <>
+          <span className="acx-notice-label">{t(verifyStatusLabelKey(status))}</span>
+          <span>{guidance}</span>
+        </>
       ) : (
-        `${t(verifyStatusLabelKey(status))}. ${t(verifyStatusCopyKey(status))}`
+        `${t(verifyStatusLabelKey(status))}. ${guidance}`
       )}
     </output>
   );

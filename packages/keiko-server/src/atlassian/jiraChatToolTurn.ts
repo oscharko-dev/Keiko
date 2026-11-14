@@ -10,6 +10,7 @@ import type { ChatMessage } from "../store/index.js";
 import {
   JIRA_MUTATION_OPERATIONS,
   isJiraAvatarUploadOperation,
+  type JiraApprovalProject,
   type JiraAttachmentPreview,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -23,6 +24,7 @@ import {
 import { JIRA_DRAFT_PAGE_ITEMS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraChatConnectionFingerprint } from "./jiraChatConnectionIdentity.js";
 import { chatDraftArguments } from "./jiraChatDraftArguments.js";
+import { jiraApprovalProjectReferences, reviewedJiraProjects } from "./jiraChatApprovalProjects.js";
 import type { HeldJiraDraft } from "./jiraApprovalExpiry.js";
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import {
@@ -143,7 +145,7 @@ type ReviewAction = Pick<JiraChatCatalogAction, "actionId" | "argumentsDigest">;
 export type JiraChatTurnReviewPorts = Required<
   Pick<
     JiraChatAdmissionOptions,
-    "preflightWrite" | "attachmentPreview" | "draftItemRefs" | "holdDraft"
+    "preflightWrite" | "attachmentPreview" | "projectPreview" | "draftItemRefs" | "holdDraft"
   >
 > &
   Pick<JiraChatAdmissionOptions, "sourcePreparation">;
@@ -264,6 +266,7 @@ export function createJiraChatTurnReviewPorts(
       untracedAdvice: draftUntracedAdvice(options.deps, options.openTrace),
     }),
     attachmentPreview: (action) => reviewedAttachment(options, access, action),
+    projectPreview: (action) => reviewedProjectsOf(options, access, action),
     holdDraft: (action, context) => holdOpenDraft(options, access, action, context),
     draftItemRefs: (action): readonly string[] | undefined => {
       const args = proposedWriteArguments(access, action);
@@ -272,6 +275,29 @@ export function createJiraChatTurnReviewPorts(
       return draft.ok ? parseJiraDraft(draft.arguments)?.items.map((item) => item.ref) : undefined;
     },
   };
+}
+
+/** The projects the proposed write targets, read now so the approval card names each (F09). */
+async function reviewedProjectsOf(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+): Promise<readonly JiraApprovalProject[] | undefined> {
+  const args = proposedWriteArguments(access, action);
+  if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action))
+    return undefined;
+  const { deps, message, correlationId, authority, signal } = options;
+  return reviewedJiraProjects(
+    deps,
+    {
+      chatId: message.chatId,
+      authorityReference: authority.reference,
+      signal,
+      correlationId,
+      readAllowed: () => access.readAllowed(action),
+    },
+    jiraApprovalProjectReferences(deps, message.chatId, action.tool, args),
+  );
 }
 
 /** The file the model proposes to attach, read now for the human's review (#4176). */

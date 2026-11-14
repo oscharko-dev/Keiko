@@ -69,6 +69,34 @@ compose file passes the host's `KEIKO_VITEST_MAX_WORKERS` through and defaults i
 `KEIKO_VITEST_MAX_WORKERS=2 npm run gates:local` reproduces CI's count exactly when a starvation flake
 is suspected. Real CI on GitHub does not use this compose file and is unchanged.
 
+## The sandbox inside this container
+
+The product's verification sandbox wraps a command in bubblewrap's strict profile, which mounts a
+fresh procfs in its new root. Docker masks parts of the container's `/proc` by default and refuses
+that mount (`bwrap: Can't mount proc on /newroot/proc: Operation not permitted`), so every command the
+sandbox ran exited 1 in a few milliseconds and the six `runVerifyCli` tests in `keiko-cli` failed here
+while they pass on a GitHub runner, which is not a container. The compose file therefore starts the
+local gate container with `systempaths=unconfined`, which unmasks `/proc` so the sandbox runs as it
+does on a runner; like the seccomp and apparmor settings beside it, it applies to this local container
+only. GitHub CI does not use this compose file and is untouched.
+
+## What the image carries that the distribution does not
+
+Git is built from the upstream release (2.56.1, kernel.org, pinned by SHA-256 in
+`docker/gates/Dockerfile`) because the product's lazy-fetch guard needs git 2.45 or newer and
+Debian bookworm ships 2.39; CI's runners carry a current git. `iproute2` is installed because the
+sandbox's unshare fallback needs the `ip` tool to bring loopback up in its namespace. A host without
+either keeps the product's closed refusal for the case; the image simply matches what CI has.
+
+## Measured option, not built: externalising the server package under vitest
+
+A test that lazily imports `@oscharko-dev/keiko-server` makes vitest transform about 2,590 built
+workspace files one by one (26 to 29 s in this container against 3.5 s for a plain Node import)
+because workspace packages resolve outside `node_modules` and are inlined. Externalising only that
+package for the test projects that do not mock its internals should bring the load to roughly 4 s.
+It is not done: it needs a run of the keiko-cli and keiko-server suites to prove no test relies on
+mocking modules inside the server graph.
+
 ## Git worktrees
 
 A linked worktree's `.git` is a file pointing at the parent checkout, which is outside the mount, so

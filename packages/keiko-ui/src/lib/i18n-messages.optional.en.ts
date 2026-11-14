@@ -931,7 +931,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Save token",
   "atlassianConnectors.live.saving": "Saving changes…",
   "atlassianConnectors.live.rotateHint":
-    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; verify the connection again afterwards.",
+    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; Keiko verifies the new token right away.",
   "atlassianConnectors.live.operationFailed":
     "The operation could not be confirmed. Refresh the Pod status before making another change.",
   "atlassianConnectors.live.refresh": "Refresh status",
@@ -940,6 +940,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.state.ready": "Ready",
   "atlassianConnectors.live.refreshRequired": "Refresh the status before using this Pod.",
   "atlassianConnectors.live.verifyRequired": "Verify the connection before using this Pod.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "Until it verifies, this Pod stays saved but cannot be used; you can also remove it.",
   "atlassianConnectors.live.remove": "Remove Pod",
   "atlassianConnectors.live.keep": "Keep Pod",
   "atlassianConnectors.live.removeConfirm":
@@ -5476,7 +5478,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
   "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
   "atlassianConnectors.action.jira.draft-batch": "Draft Jira issues from requirements",
-  "chat.jira.report.estimateField": "Estimate field: {name} ({id})",
+  "chat.jira.report.estimateField": "Estimate field: {name}",
   "chat.jira.report.estimateUnavailable": "Estimate unavailable: {reason}",
   "chat.jira.report.estimateReason.project-not-specified": "no project was specified",
   "chat.jira.report.estimateReason.field-not-found":
@@ -5505,6 +5507,17 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.report.done": "Done",
   "chat.jira.report.donePercent": "{percent}% done",
   "chat.jira.report.compliance": "{issues} of {checked} issues deviate ({count} deviations)",
+  "chat.jira.report.templateNone":
+    "No issue was checked against a template: no template exists for {types}.",
+  "chat.jira.report.templatePartial":
+    "{checked} of {total} issues were checked against a template; {without} were not: no template for {types}.",
+  "chat.jira.report.templateNoneUnnamed": "No issue was checked against a template.",
+  "chat.jira.report.templatePartialUnnamed":
+    "{checked} of {total} issues were checked against a template; {without} were not.",
+  "chat.jira.report.requiredFieldsPartial":
+    "Required fields were checked for some issue types only.",
+  "chat.jira.report.requiredFieldsUnavailable": "Required fields could not be checked.",
+  "chat.jira.report.requiredFieldsClean": "Required fields: {judged} issues checked, no deviation.",
   "chat.jira.report.coverage":
     "{epics} epics without members, {orphans} issues without an epic or parent",
   "chat.jira.report.coverageUnobserved":

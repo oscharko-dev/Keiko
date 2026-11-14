@@ -44,6 +44,7 @@ import {
   isJiraCoreMetadataRead,
 } from "./jira-managed-core-metadata.js";
 import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
+import { withConnectionInstance } from "./jira-connection-instance.js";
 import {
   executeJiraConfigurationRead,
   isJiraConfigurationRead,
@@ -670,7 +671,10 @@ async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
       baseUrl: connected.baseUrl,
     });
   const administration = administrationRead(name, args, request);
-  if (administration !== undefined) return administration;
+  if (administration !== undefined)
+    return name === "jira.myself"
+      ? withConnectionInstance(administration, connected.baseUrl)
+      : administration;
   if (isJiraParticipationRead(name))
     return executeJiraParticipationRead(name, args, request, connected.baseUrl);
   if (isJiraSavedViewRead(name)) return executeJiraSavedViewRead(name, args, request);

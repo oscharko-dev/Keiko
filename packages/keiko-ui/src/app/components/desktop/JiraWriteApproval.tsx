@@ -27,7 +27,7 @@ import { JiraDecisionActions } from "./JiraDecisionActions";
 import { DraftFields, JiraDraftPreview } from "./JiraDraftPreview";
 import { jiraActionFacts } from "./jiraActionFacts";
 import { jiraDraftExcluded, jiraDraftTree } from "./jiraDraftTree";
-import { JiraNamesContext, type JiraNames } from "./jiraNames";
+import { JiraNamesContext, withApprovalProjects, type JiraNames } from "./jiraNames";
 import { jiraNamesBinding } from "./jiraFieldChoices";
 import { useJiraDecision } from "./useJiraDecision";
 import { useStagedJiraDraft, type StagedJiraDraft } from "./useStagedJiraDraft";
@@ -360,7 +360,11 @@ function ApprovalStatus({
 function useApprovalNames(approval: ChatToolWriteApprovalView): JiraNames {
   const names = useContext(JiraNamesContext);
   const binding = jiraNamesBinding(approval);
-  return useMemo(() => ({ ...names, binding }), [names, binding]);
+  const t = useTranslate();
+  return useMemo(
+    () => withApprovalProjects(names, binding, approval, t),
+    [names, binding, approval, t],
+  );
 }
 
 export function JiraWriteApproval({

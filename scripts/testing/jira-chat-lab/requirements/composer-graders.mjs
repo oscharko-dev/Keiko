@@ -91,6 +91,26 @@ export function gradeComposerCreate({ type, issues: all, conforms, related }) {
   };
 }
 
+/**
+ * Which way the model created several issues from one request (#4369): `commit` (a draft run committed),
+ * `stage plus commit`, `N creates`, `stage, then N creates`, `staged, not committed` (a stage and no write
+ * at all: the case Twin's browser walk met) or `no write`. A fact for the report; the verdict stays native.
+ */
+export function severalPath(exchanges) {
+  const list = Array.isArray(exchanges) ? exchanges : [];
+  const staged = list.some(isStageExchange);
+  const committed = list.some(
+    (exchange) => toolExchangeOf(exchange, "jira.draft") && wroteIssue(exchange),
+  );
+  const creates = list.filter(
+    (exchange) => toolExchangeOf(exchange, "jira.create") && wroteIssue(exchange),
+  ).length;
+  if (committed) return staged ? "stage plus commit" : "commit";
+  if (creates > 0)
+    return staged ? `stage, then ${String(creates)} creates` : `${String(creates)} creates`;
+  return staged ? "staged, not committed" : "no write";
+}
+
 /** The keys of `created` that the answer does not name (the model's words, graded softly). */
 export const keysMissingInAnswer = (created, answer) => {
   const named = new Set(String(answer ?? "").match(ISSUE_KEY) ?? []);
@@ -163,6 +183,55 @@ function gradeKeysInCards(made, exchanges) {
       };
 }
 
+/** The keys of the issues the stored write results say were created (a create's own `issueKey`, a draft item in state created). */
+function storedCreatedKeys(exchanges) {
+  const keys = writeCalls(exchanges).flatMap((exchange) => createdKeysOf(exchange.result?.data));
+  return [...new Set(keys)];
+}
+
+/** The keys one stored write result says it created. */
+function createdKeysOf(data) {
+  const own =
+    data?.outcome === "succeeded" && typeof data.issueKey === "string" ? [data.issueKey] : [];
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const drafted = items
+    .filter((item) => item?.state === "created" && typeof item.issueKey === "string")
+    .map((item) => item.issueKey);
+  return [...own, ...drafted];
+}
+
+/**
+ * Hard (#4355 AC1, part a): after the turn the product's stored conversation is read AGAIN, and the
+ * keys derived from its stored write results (the data the result card is rebuilt from) are the keys
+ * Jira holds natively: none missing, none invented. Without a stored write result nothing can be
+ * derived, which is unverified, never green. The lab has no browser: the keys are not read as links.
+ */
+export function gradeKeysAfterReread(made, stored) {
+  if (made.length === 0)
+    return { status: "unverified", detail: "nothing was created natively, no key to compare" };
+  const messages = Array.isArray(stored) ? stored : [];
+  const exchanges = messages.flatMap((message) =>
+    Array.isArray(message?.toolTranscript?.exchanges) ? message.toolTranscript.exchanges : [],
+  );
+  if (writeCalls(exchanges).length === 0)
+    return {
+      status: "unverified",
+      detail: "the stored conversation holds no write result, so no key can be derived from it",
+    };
+  const missing = keysMissingInCards(made, exchanges);
+  const native = new Set(made.map((issue) => issue.key));
+  const invented = storedCreatedKeys(exchanges).filter((key) => !native.has(key));
+  if (missing.length === 0 && invented.length === 0)
+    return {
+      status: "green",
+      detail: `the stored conversation read again names all ${String(made.length)} created keys and no other created key`,
+    };
+  return {
+    status: "red",
+    detail: `the stored conversation read again lacks ${String(missing.length)} created keys and names ${String(invented.length)} created keys Jira does not hold`,
+  };
+}
+
 /** Soft: the answer lists every created key (the model's words). */
 function gradeKeysInAnswer(made, answer) {
   if (made.length === 0) return soft(false, "nothing was created, no key to list");
@@ -209,6 +278,15 @@ export function gradeComposerRefusal({ type, exchanges, created, template, confo
     return { status: "red", detail: `${detail}; a card was shown for a refused write` };
   if (repair.receipts > 0)
     return { status: "red", detail: `${detail}; a refusal carries a receipt` };
+  // The gate did its part (a refusal before any card, receipt or effect). Whether the MODEL then repaired
+  // the request in the same turn is its behaviour: asking the person for the missing content is correct
+  // and a model observation, never red; a second issue is a defect.
+  if (own.length === 0)
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: the gate refused correctly, but no conformant ${type} followed in the same turn (${detail})`,
+    };
   return own.length === 1
     ? { status: "green", detail }
     : { status: "red", detail: `${detail}; exactly one conformant ${type} was expected` };

@@ -397,6 +397,11 @@ Tool `output` strings are redacted at two points:
    declared credential values and built-in secret patterns remain scrubbed, and child environment
    isolation is unchanged. Machine metadata containing a redaction marker is rejected before
    parsing or hashing; corrupted identities must never become verification facts or permit a push.
+   The verification runtime-target probe (`resolveVerificationRuntimeTarget`) uses the same scrub for
+   one reason: it runs only a fixed, repository-independent Node metadata script whose output is
+   bounded to 1 KiB and parsed against a closed key set, and a host that exports `NODE_VERSION` (the
+   official Node container image does) would otherwise have its Node version redacted and the target
+   refused; a credential-named value in that output still scrubs and still fails the probe closed.
    Content-bearing blob, patch and CI failure-log readers retain the default all-environment-value
    scrub; the pull-request body reader applies that same scrub to the body text it returns (text the
    scrub would alter is an altered read, never a fact) while the identity envelope around it is a

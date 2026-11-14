@@ -165,6 +165,16 @@ async function reviewedIdentity(
   return attachment === undefined ? undefined : { ...identity, attachment };
 }
 
+/** The reviewed identity, plus the projects the approval names by key and name (F09). */
+async function withProjects(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+  identity: JiraChatWriteActionIdentity,
+): Promise<JiraChatWriteActionIdentity> {
+  const projects = await options.projectPreview?.(action);
+  return projects === undefined ? identity : { ...identity, projects };
+}
+
 /**
  * What happened to the write approval a person was asked for: it ran out before anyone decided
  * (`expired`, so the model and the card say so instead of "declined"), or nothing special. An
@@ -202,7 +212,7 @@ async function requestedApproval(
     options.deps,
     context.chatId,
     context.authorityReference,
-    reviewed,
+    await withProjects(options, action, reviewed),
     new Date(options.now()).toISOString(),
     context.correlationId,
     identity.operation === "jira.draft" ? options.draftItemRefs?.(action) : undefined,

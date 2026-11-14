@@ -10,26 +10,12 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import type { AtlassianConnectorVerifyStatus } from "@/lib/atlassian-connectors-api";
 import { verifyStatusCopyKey, verifyStatusLabelKey, verifyStatusTone } from "./connector-labels";
 
-/** The label and the guidance of one closed status: the words every verification surface uses. */
-export function VerifyStatusText({
-  status,
-}: {
-  readonly status: AtlassianConnectorVerifyStatus;
-}): ReactNode {
-  const t = useTranslate();
-  return (
-    <>
-      <span className="acx-notice-label">{t(verifyStatusLabelKey(status))}</span>
-      <span>{t(verifyStatusCopyKey(status))}</span>
-    </>
-  );
-}
-
 export function VerifyConnectionStatus({
   status,
 }: {
   readonly status: AtlassianConnectorVerifyStatus;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <output
       className="acx-notice"
@@ -37,7 +23,8 @@ export function VerifyConnectionStatus({
       data-status={status}
       data-testid="acx-verify-status"
     >
-      <VerifyStatusText status={status} />
+      <span className="acx-notice-label">{t(verifyStatusLabelKey(status))}</span>
+      <span>{t(verifyStatusCopyKey(status))}</span>
     </output>
   );
 }

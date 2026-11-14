@@ -40,6 +40,7 @@ export function rehearsalContext(base, selection) {
     freshChat: async (mode) => ({ id: `rehearsal-${(chats += 1)}`, mode }),
     // The stored conversation read again: the user and assistant message of one turn.
     readStoredConversation: async () => ["rehearsal-user", "rehearsal-assistant"],
+    readStoredMessages: async () => [],
     // The rehearsal's Chats exist nowhere: there is no stored assistant message to read.
     storedAnswer: async () => undefined,
     composerSelection: selection ?? {},
