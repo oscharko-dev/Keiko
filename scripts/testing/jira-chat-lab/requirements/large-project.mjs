@@ -363,9 +363,29 @@ function typeProblems(data, jira) {
   return problems;
 }
 
+const STATUS_FIGURES_HEAD = "Issues per type and status (type;status;issues):";
+const STATUS_FIGURE = /^([^;]+);([^;]+);(\d+)$/u;
+/**
+ * The type and status rows of the plain figure lines. A summary lists a table beside the figures
+ * only when it is whole (#4356); a larger one is stated by the figures alone.
+ */
+function statusFigureRows(figures) {
+  const lines = String(figures ?? "").split("\n");
+  const start = lines.indexOf(STATUS_FIGURES_HEAD);
+  if (start < 0) return [];
+  const rows = [];
+  for (const line of lines.slice(start + 1)) {
+    const match = STATUS_FIGURE.exec(line.trim());
+    if (match === null) break;
+    rows.push({ typeName: match[1], statusName: match[2], total: Number(match[3]) });
+  }
+  return rows;
+}
+
 function statusProblems(data, jira) {
   const problems = [];
-  const rows = records(data.report.progress?.byStatus?.items);
+  const listed = records(data.report.progress?.byStatus?.items);
+  const rows = listed.length > 0 ? listed : statusFigureRows(data.report.figures);
   const stated = new Map(rows.map((item) => [`${item.typeName};${item.statusName}`, item.total]));
   for (const [key, expected] of jira.byStatus)
     expectEqual(problems, key, stated.get(key), expected);

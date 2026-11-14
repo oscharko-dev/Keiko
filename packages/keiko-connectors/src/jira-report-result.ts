@@ -59,6 +59,22 @@ function listed(
     ...(items.length > shown.length ? { section, nextStartAt: offset + shown.length } : {}),
   };
 }
+/**
+ * A summary list of a table that `report.figures` states in full (#4356). The figures are the model's
+ * one copy of such a table: a second list cut at `max` beside them reads as "the list" and was
+ * quoted in place of them (15 of 37 epics). The list is therefore whole, when the whole table fits
+ * under `max`, or no list at all: the size and where the section pages it, from `offset`.
+ */
+function listedOnce(
+  items: readonly CatalogJsonValue[],
+  section: JiraReportSection,
+  max = JIRA_REPORT_SUMMARY_LIST_MAX,
+  offset = 0,
+): CatalogJsonObject {
+  return items.length <= max
+    ? listed(items, section, max, offset)
+    : { total: items.length, section, nextStartAt: offset };
+}
 /** A list bounded for a tool result, with the true size beside it; the export carries every entry. */
 function capped<Item extends CatalogJsonValue>(
   items: readonly Item[],
@@ -160,7 +176,12 @@ function requirementsSummary(report: JiraReport): CatalogJsonValue {
     declared: requirements.declared,
     covered: requirements.covered,
     // The section pages the covered requirements first, then the uncovered ones.
-    uncovered: listed(requirements.uncovered, "requirements", undefined, requirements.items.length),
+    uncovered: listedOnce(
+      requirements.uncovered,
+      "requirements",
+      undefined,
+      requirements.items.length,
+    ),
     items: listed(all.slice(0, requirements.items.length), "requirements"),
     ...(derived === undefined
       ? {}
@@ -174,7 +195,7 @@ function requirementsSummary(report: JiraReport): CatalogJsonValue {
               undefined,
               headline,
             ),
-            uncovered: listed(
+            uncovered: listedOnce(
               all.slice(headline + derived.items.length),
               "requirements",
               undefined,
@@ -233,11 +254,11 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
     progress: {
       project: progress(report.progress.project),
       byType: report.progress.byType.slice(0, SUMMARY_TYPE_MAX).map((type) => ({ ...type })),
-      byStatus: listed(statusItems(report), "statuses", JIRA_REPORT_SUMMARY_STATUS_MAX),
+      byStatus: listedOnce(statusItems(report), "statuses", JIRA_REPORT_SUMMARY_STATUS_MAX),
       unassigned: report.progress.unassigned,
       overdue: report.progress.overdue,
     },
-    epics: listed(epicItems(report), "epics"),
+    epics: listedOnce(epicItems(report), "epics"),
     compliance: {
       requiredFieldRules: compliance.requiredFieldRules,
       checker: compliance.checker,
