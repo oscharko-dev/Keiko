@@ -13,10 +13,12 @@ fills the trace table in section 4. Nothing here is automated; the walk is the e
 | Walker (Windows)    | _filled at the walk_                                     |
 | Independent auditor | _filled at the walk_                                     |
 
-**Last checked against integration head `a60fe469a`** (`feat/jira-pod-release-1`, 2026-11-14). The
-write-path steps (W06 to W13 and W19) are written against the product texts of that head. Texts that
-come from a catalog are quoted as the catalog has them; a sentence the model says (for example the
-notice on an edit) is described in words, because the model words it.
+**Last checked against integration head `3aa28f761`** (`feat/jira-pod-release-1`, 2026-11-14), and
+against the browser walk on product `66f684b91`. The write-path steps (W06 to W13 and W19) are
+written against the product texts of that head. W14 and W15 describe the compliance and number
+wording of `child/4356-report-card-unchecked` (head `4c17e94f7`); they hold once that branch is
+integrated. Texts that come from a catalog are quoted as the catalog has them; a sentence the model
+says is described in words, because the model words it.
 
 The build must be one that contains the whole Release 1 scope: the template rule for Jira writes
 (#4354), attachments switched off, the connection and credential repairs (#4353), the Windows
@@ -222,8 +224,9 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Do:** for each of **Ask for approval**, **Supervised workspace** and **Full access**, ask Keiko to
   create an issue that breaks a rule (for example a summary below the template's minimum, or a missing
   required section).
-- **Expect:** the result card shows **Template rules not met** and one line per rule, for example
-  "The summary is too short." or "The description lacks the section “{subject}”." In **Ask for
+- **Expect:** the result card lists one line per rule (the list's accessible name is **Template
+  rules not met**, it is not a visible heading), for example "The summary is too short." or "The
+  description lacks the section “{subject}”." In **Ask for
   approval** and **Supervised workspace** no **Review Jira action** card appears, because a request
   that would be refused is never put to the person. In **Full access** nothing was asked either. Keiko
   tells you what to change and, when you agree, creates the corrected issue without you repairing the
@@ -237,12 +240,12 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Do:** ask Keiko to create an issue of a type that has no saved template (delete or rename the
   template of one type, or use a second project). Repeat once with a type whose only template is for
   entering a status (activation `transition:<status>`).
-- **Expect:** the result card shows **Template rules not met** and, for no template at all: "No
+- **Expect:** the result card lists, for no template at all: "No
   template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose
   “Propose from project”, review and save the template, then ask again." For the status-only template
   the line reads: "Only rules for entering a status exist for “{subject}”, so nothing was created.
   Open Skills, choose “Propose from project”, review and save a template for creating, then ask
-  again." (`{subject}` is `PROJECT/Issue type`.) Following the hint creates the template and the
+  again." (`{subject}` is the issue type's name, for example "Bug", not `PROJECT/Issue type`.) Following the hint creates the template and the
   repeated request then passes.
 - **Jira:** no issue was created.
 - **Proves:** epic AC1; #4354 template rule 1 ("With no template it is refused before any effect, with
@@ -255,8 +258,10 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   required fields. In **Ask for approval** and **Supervised workspace**, read the **Review Jira
   action** card (**Proposed action details**) and select **Approve this action**. In **Full access**
   no approval card appears. Use one summary with a German umlaut.
-- **Expect:** the result card lists each issue as a link with **Created**; the issues carry the
-  relations you asked for. After approval the card shows **Approval used for this action**.
+- **Expect:** each write shows **Jira change confirmed** (the progress line shows it as done), and
+  where Keiko creates several issues from a draft the result list shows each item with the state
+  **Created**; the issues carry the relations you asked for. After approval the card shows
+  **Approval used for this action**.
 - **Jira:** each issue exists with the right type, parent or Epic, and fields; the umlaut is exact.
 - **Proves:** epic AC1, AC4, and AC10 (encoding on the platform); #4354 template rule 1; #4359 step 4.
 
@@ -276,10 +281,11 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Do:** in Jira, create or edit an issue so that it breaks a template rule in one field (for example
   remove a required section from its description). In Keiko ask for an edit of a different field of
   that issue (for example the priority).
-- **Expect:** the edit is made, not refused. In its answer Keiko says the change was made, names in its
-  own words the template rule the issue still breaks, and offers to repair it; it does not repeat the
-  change. (The notice is told to the model with fixed guidance; the card shows no separate notice, so
-  this reaches you through Keiko's answer.)
+- **Expect:** the edit is made, not refused. The card shows the notice "The change was made. The issue
+  already breaks these template rules in fields this change did not touch. Ask Keiko to repair them,
+  or fix them in Jira." with one line per rule the issue still breaks. In its answer Keiko says the
+  change was made, names in its own words what is still broken and offers to repair it; it does not
+  repeat the change.
 - **Jira:** the edited field changed; the field that violated the rule is as it was.
 - **Proves:** epic AC1; #4354 template rule 2 ("Pre-existing violations in untouched fields do not
   block and are named as a notice").
@@ -288,7 +294,7 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 
 - **Do:** ask Keiko to change a field of a conforming issue so that it breaks a rule (for example
   remove a required label). Then ask for an edit of the issue's project or issue type.
-- **Expect:** the first edit is refused under **Template rules not met** with the rule lines. The
+- **Expect:** the first edit is refused with the rule lines. The
   second is refused too: Keiko says an edit does not change the project or issue type and points to
   Jira's Move or to creating the issue again.
 - **Jira:** both issues are unchanged.
@@ -309,27 +315,31 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   (activation `transition:<status>`), move an issue into that status without meeting the rule. A
   Jira in another language needs the status name as Jira reports it, for example "In Bearbeitung",
   in that rule.
-- **Expect:** the first move happens. The second is refused under **Template rules not met** with the
+- **Expect:** the first move happens. The second is refused with the
   rule lines (a field carried by a transition follows the edit rule). The entry-rule move is refused
   the same way, naming the rule.
 - **Jira:** the issues are in the statuses you expect; the refused ones did not move.
 - **Proves:** epic AC1, AC4; #4354 template rule 3 ("Only a template's explicit rules for entering a
   status apply") and rule 2 for the carried field.
 
-### W13 Comment, watcher, link, assignee, and the switched-off attachment
+### W13 Comment, watcher, link, assignee, and what this release does not offer
 
-- **Do:** ask Keiko to add a comment, edit that comment, add a watcher, link two issues, and assign an
-  issue to a person found by name. Then ask it to attach a file to an issue.
-- **Expect:** the comment, its edit and the watcher are done without any template rule. Assigning
-  and linking follow the issue's template like any other change: they work unless they would break a
-  saved rule (link behaviour is to be confirmed at the first rehearsal of the walk). The card shows
-  **Jira change confirmed** for each. Keiko does not offer attachments: asked anyway, it says in its
-  own words what the product tells it: "Attachments are not part of this release, so nothing was
-  changed in Jira. Describe the file in a comment instead, or add it in Jira itself."
-- **Jira:** the comment (in its edited form), watcher, link and assignee are there; no attachment was
-  added.
+- **Do:** ask Keiko to add a comment, edit that comment, watch an issue, link two issues, and assign an
+  issue to a person found by name. Then ask it to add another user as a watcher, and ask it to attach a
+  file to an issue.
+- **Expect:** the comment, its edit and watching the issue (as the connected user) are done without
+  any template rule. Assigning and linking follow the issue's template like any other change: they
+  work unless they would break a saved rule (link behaviour is to be confirmed at the first rehearsal
+  of the walk). The card shows **Jira change confirmed** for each. Adding **another** person as a
+  watcher and attaching a file are **not offered** in this release: asked anyway, Keiko answers in
+  one plain sentence, with what it can do instead, **without a failed tool call**, for example "Adding
+  another person as a watcher is not available yet. I can watch the issue for you instead." and
+  "Attachments are not part of this release, so nothing was changed in Jira. Describe the file in a
+  comment instead, or add it in Jira itself."
+- **Jira:** the comment (in its edited form), the connected user as watcher, link and assignee are
+  there; no other watcher and no attachment was added.
 - **Proves:** epic AC4; #4354 template rule 4 (comments and watchers never template-checked) and
-  rule 5 (attachments are blocked and left out in Release 1); #4359 step 5.
+  rule 5 (attachments are blocked and left out in Release 1); #4357 (the two answers); #4359 step 5.
 
 ### W14 The progress and compliance report
 
@@ -338,8 +348,13 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   issues one result page holds, and so how large that project must be, is to be confirmed at the first
   rehearsal of the walk; #4359 asks for a readback over at least two pages.)
 - **Expect:** the card shows **Complete: {read} issues read**, the counts **To do**, **In progress**,
-  **Done** and the percentage, and a line "{issues} of {checked} issues deviate ({count}
-  deviations)". An unfinished read shows **Incomplete ({reason}): …** and the figures then describe
+  **Done** and the percentage (German with a comma, for example "16,7 %"). Where every issue type has a
+  template the card shows "{issues} of {checked} issues deviate ({count} deviations)". Where a type has
+  no template the card says so instead of a clean count: "No issue was checked against a template: no
+  template exists for {types}." or "{checked} of {total} issues were checked against a template;
+  {without} were not: no template for {types}.", and the required-field check as its own line, for
+  example "Required fields: {judged} issues checked, no deviation." (or that it was checked for some
+  types only, or could not be checked). An unfinished read shows **Incomplete ({reason}): …** and the figures then describe
   only the issues read; an incomplete report is never shown as complete. The card states the figures
   are computed by Keiko, not by the model.
 - **Jira:** run the same scope as an issue search in Jira over every result page. The total and the
@@ -395,7 +410,7 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Expect:** nothing is sent to Jira. The result card says "The Jira connection changed since this
   draft was made, so nothing was changed. Create the draft again for the current Jira." A message
   sent after the switch without choosing the Pod again shows the notice **Jira connection changed**
-  with "Choose the Jira Pod again" and the hint to open the Data sources menu above the conversation.
+  with "Choose the Jira Pod again" and the hint to open the Connectors menu above the conversation.
   The Chat and its draft text stay.
 - **Jira:** nothing was created.
 - **Proves:** epic AC8; #4359 step 7.
@@ -458,18 +473,17 @@ release under emulation or on real hardware, whichever is recorded in the eviden
 
 Disclosed limitations that bound these verdicts (the long text is section 5):
 
-| Limitation                                                       | Epic criterion it bounds                     | Where it is disclosed                         |
-| ---------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------- |
-| S14 edit items are not in Release 1                              | AC4 (edits driven by a changed document)     | Section 5; #4359 narrowings                   |
-| The S19 oracle credits a refused create onto its twin            | AC1 (refused creates)                        | Section 5; #4359 narrowings                   |
-| The Pod card does not show the connected account                 | AC10 (W02)                                   | Section 5; W02                                |
-| The notice on an edit of a violating issue is only in the answer | AC1 (W10)                                    | Section 5; W10                                |
-| No detection of the same summary across chats                    | AC8                                          | Section 5; epic #4351 decision 2026-11-13     |
-| Attachments are off                                              | AC4 (W13)                                    | Section 5; W13                                |
-| A model without tool calling gets no tool tasks                  | AC1, AC3, AC4                                | Section 5; section 6                          |
-| Windows results come from an emulated x64 virtual machine        | AC10 and every Windows verdict               | Section 5; `windows-vm-cross-test-machine.md` |
-| Linux is a community tier                                        | AC10                                         | Section 5; ADR-0183                           |
-| The requirements-document path is Release 2                      | AC2 (not walked), AC3 (requirement coverage) | Section 5; section 1                          |
+| Limitation                                                | Epic criterion it bounds                     | Where it is disclosed                         |
+| --------------------------------------------------------- | -------------------------------------------- | --------------------------------------------- |
+| S14 edit items are not in Release 1                       | AC4 (edits driven by a changed document)     | Section 5; #4359 narrowings                   |
+| The S19 oracle credits a refused create onto its twin     | AC1 (refused creates)                        | Section 5; #4359 narrowings                   |
+| The Pod card does not show the connected account          | AC10 (W02)                                   | Section 5; W02                                |
+| No detection of the same summary across chats             | AC8                                          | Section 5; epic #4351 decision 2026-11-13     |
+| Attachments are off                                       | AC4 (W13)                                    | Section 5; W13                                |
+| A model without tool calling gets no tool tasks           | AC1, AC3, AC4                                | Section 5; section 6                          |
+| Windows results come from an emulated x64 virtual machine | AC10 and every Windows verdict               | Section 5; `windows-vm-cross-test-machine.md` |
+| Linux is a community tier                                 | AC10                                         | Section 5; ADR-0183                           |
+| The requirements-document path is Release 2               | AC2 (not walked), AC3 (requirement coverage) | Section 5; section 1                          |
 
 ## 5. Disclosed limitations
 
@@ -481,9 +495,6 @@ Each one is part of what Release 1 delivers; a verdict does not hide it.
   "the S19 oracle that credits a refused create onto its twin" (#4359, narrowings).
 - **The Pod card does not show the connected account.** For Release 1 the account is confirmed by
   asking in Chat (W02).
-- **The notice on an edit of an already-violating issue reaches the person only through Keiko's
-  answer, not on a card** (W10). The product tells the model to say which rule is still broken; a card
-  sentence for it is routed to the owning child, and this page changes when the product shows it.
 - **No detection of the same summary across chats.** The same order given in two fresh chats creates
   two issues by design (epic #4351, decision of 2026-11-13).
 - **Attachments are off** until Release 2 (epic #4351, template rule; `jira.attach` and
@@ -577,7 +588,12 @@ Open in editor: chat.skills.jira.openProposal (OPT)
 Save: chat.skills.save (OPT)
 Matches Jira.: chat.skills.jira.valid (OPT)
 Needs repair: chat.skills.jira.invalid (OPT)
-Template rules not met: chat.jira.outcome.rules (OPT)
+Template rules not met: chat.jira.outcome.rules (OPT) [the accessible name of the rule list]
+The change was made. The issue already breaks these template rules ...: chat.jira.outcome.templateNotices (OPT)
+No issue was checked against a template ...: chat.jira.report.templateNone, ...templatePartial,
+  ...templateNoneUnnamed, ...templatePartialUnnamed (OPT, child/4356-report-card-unchecked)
+Required fields: {judged} issues checked, no deviation.: chat.jira.report.requiredFieldsClean, ...Partial,
+  ...Unavailable (OPT, child/4356-report-card-unchecked)
 The summary is too short.: chat.jira.outcome.rule.summary-too-short (OPT)
 The description lacks the section “{subject}”.: chat.jira.outcome.rule.section-missing (OPT)
 No template exists for the issue type “{subject}”, ...: chat.jira.outcome.rule.template-missing (OPT)
@@ -606,10 +622,10 @@ Export Markdown / Export CSV: chat.jira.report.exportMarkdown, chat.jira.report.
 Settings → General → Language → Interface language: settings.title, settings.tabs.general,
   settings.language.title, settings.language.label (SET)
 Jira connection changed: chat.error.jiraPodConnectionChanged.title (CORE)
-Choose the Jira Pod again / Data sources menu above the conversation:
+Choose the Jira Pod again / Connectors menu above the conversation:
   chat.error.jiraPodConnectionChanged.message and .remediation (CORE)
-  The picker itself is labelled "Connectors" (chat.connectors.title); the "Data sources" label
-  (chat.grounding.dataLabel, OPT) is the knowledge-scope control above the conversation.
+  The picker is labelled "Connectors" (chat.connectors.title); the "Data sources" label
+  (chat.grounding.dataLabel, OPT) is the separate knowledge-scope control above the conversation.
 Create error report / Download report: supportReport.create, supportReport.download (CORE)
 Support ID: chat.error.supportId (CORE) "Support ID: {correlationId}"
 Report ready. Download it and send it to support.: supportReport.saved (CORE)

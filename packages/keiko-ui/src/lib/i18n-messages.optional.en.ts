@@ -931,7 +931,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Save token",
   "atlassianConnectors.live.saving": "Saving changes…",
   "atlassianConnectors.live.rotateHint":
-    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; verify the connection again afterwards.",
+    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; Keiko verifies the new token right away.",
   "atlassianConnectors.live.operationFailed":
     "The operation could not be confirmed. Refresh the Pod status before making another change.",
   "atlassianConnectors.live.refresh": "Refresh status",
@@ -940,6 +940,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.state.ready": "Ready",
   "atlassianConnectors.live.refreshRequired": "Refresh the status before using this Pod.",
   "atlassianConnectors.live.verifyRequired": "Verify the connection before using this Pod.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "Until it verifies, this Pod stays saved but cannot be used; you can also remove it.",
   "atlassianConnectors.live.remove": "Remove Pod",
   "atlassianConnectors.live.keep": "Keep Pod",
   "atlassianConnectors.live.removeConfirm":
@@ -2672,6 +2674,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
   "chat.skills.jira.proposing": "Reading project…",
+  "chat.skills.jira.proposalCount":
+    "{types} issue types: {proposals} with a proposal, {without} without.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn": "No issues of this type to learn from yet.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "The derived template was not valid, so none is proposed.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira did not answer for this type. Try again.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Not examined: the project has more issue types than one proposal run covers.",
+  "chat.skills.jira.withoutProposalMore": "and {count} more without a proposal.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira did not answer for the required fields of this type; check them before saving.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira did not answer for the sample issues of this type; check the sections before saving.",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
   "chat.skills.jira.error":
@@ -5511,7 +5528,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
   "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
   "atlassianConnectors.action.jira.draft-batch": "Draft Jira issues from requirements",
-  "chat.jira.report.estimateField": "Estimate field: {name} ({id})",
+  "chat.jira.report.estimateField": "Estimate field: {name}",
   "chat.jira.report.estimateUnavailable": "Estimate unavailable: {reason}",
   "chat.jira.report.estimateReason.project-not-specified": "no project was specified",
   "chat.jira.report.estimateReason.field-not-found":
@@ -5540,6 +5557,17 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.report.done": "Done",
   "chat.jira.report.donePercent": "{percent}% done",
   "chat.jira.report.compliance": "{issues} of {checked} issues deviate ({count} deviations)",
+  "chat.jira.report.templateNone":
+    "No issue was checked against a template: no template exists for {types}.",
+  "chat.jira.report.templatePartial":
+    "{checked} of {total} issues were checked against a template; {without} were not: no template for {types}.",
+  "chat.jira.report.templateNoneUnnamed": "No issue was checked against a template.",
+  "chat.jira.report.templatePartialUnnamed":
+    "{checked} of {total} issues were checked against a template; {without} were not.",
+  "chat.jira.report.requiredFieldsPartial":
+    "Required fields were checked for some issue types only.",
+  "chat.jira.report.requiredFieldsUnavailable": "Required fields could not be checked.",
+  "chat.jira.report.requiredFieldsClean": "Required fields: {judged} issues checked, no deviation.",
   "chat.jira.report.coverage":
     "{epics} epics without members, {orphans} issues without an epic or parent",
   "chat.jira.report.coverageUnobserved":

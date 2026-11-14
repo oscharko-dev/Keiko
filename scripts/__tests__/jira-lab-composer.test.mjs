@@ -31,8 +31,10 @@ import {
   keysMissingInAnswer,
   keysMissingInCards,
   gradeKeysAfterReread,
+  severalPath,
   stepProof,
 } from "../testing/jira-chat-lab/requirements/composer-graders.mjs";
+import { canonicalToolId } from "../testing/jira-chat-lab/requirements/tool-exchanges.mjs";
 import { COMPOSER_SCENARIOS } from "../testing/jira-chat-lab/requirements/composer-catalog.mjs";
 import {
   COMPOSER_TYPES,
@@ -375,6 +377,27 @@ describe("obligation a) creation, one and several", () => {
     expect(partial.listed.detail).toContain("1 created keys are in no stored write result");
     expect(several(three, "REQ-5 REQ-6 REQ-7", []).listed.status).toBe("unverified");
     expect(several([], "", []).listed.status).toBe("unverified");
+  });
+
+  it("names the path of a several-issue request from its tool exchanges", () => {
+    const create = createExchange(
+      { outcome: "succeeded", issueKey: "REQ-1", ...binding("POST /rest/api/2/issue") },
+      "completed",
+    );
+    const stage = {
+      call: { id: "s", name: "jira_draft_stage", arguments: {} },
+      result: {
+        toolRef: { canonicalId: canonicalToolId("jira.draft-stage"), contractVersion: 3 },
+        status: "completed",
+        data: { outcome: "succeeded" },
+      },
+    };
+    expect(severalPath([create, create, create])).toBe("3 creates");
+    expect(severalPath([stage, create])).toBe("stage, then 1 creates");
+    expect(severalPath([stage, draftCard(["REQ-1"])])).toBe("stage plus commit");
+    expect(severalPath([stage])).toBe("staged, not committed");
+    expect(severalPath([])).toBe("no write");
+    expect(severalPath(undefined)).toBe("no write");
   });
 
   it("hard (#4355 AC1 a): the stored conversation read again names exactly the created keys", () => {
@@ -1651,21 +1674,25 @@ describe("selecting types and modes", () => {
   });
 });
 
+/** The three titles a several-Tasks request names (its quoted words), created natively as the model would. */
+const severalFrom = (content, add) =>
+  [...content.matchAll(/„([^“]+)“/gu)].map((match) => add("Task", {}, match[1]).key);
+const draftCard = (keys) => ({
+  call: { id: "d", name: "jira_draft", arguments: {} },
+  result: {
+    toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+    status: "completed",
+    data: { items: keys.map((issueKey) => ({ issueKey, state: "created" })) },
+  },
+});
+
 describe("C01 creates every type, also several at once", () => {
   it("is green when every instruction creates a conformant issue and the several are listed", async () => {
     const good = lane({
       act: ({ content, add }) => {
         if (/drei Aufgaben/u.test(content)) {
-          const keys = ["A", "B", "C"].map((n) => add("Task", {}, `Composer Teil ${n}`).key);
-          const card = {
-            call: { id: "d", name: "jira_draft", arguments: {} },
-            result: {
-              toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
-              status: "completed",
-              data: { items: keys.map((issueKey) => ({ issueKey, state: "created" })) },
-            },
-          };
-          return { answer: `Angelegt: ${keys.join(", ")}`, toolExchanges: [card] };
+          const keys = severalFrom(content, add);
+          return { answer: `Angelegt: ${keys.join(", ")}`, toolExchanges: [draftCard(keys)] };
         }
         if (/unter Story/u.test(content)) {
           const violations = [
@@ -1695,10 +1722,10 @@ describe("C01 creates every type, also several at once", () => {
     expect(check.covers).toEqual(
       expect.arrayContaining([
         "create-conformant-bug",
-        "multi-create-all-created",
-        "multi-create-keys-listed",
-        "multi-create-keys-after-reread",
-        "multi-create-answer-keys",
+        "multi-create-all-created-ask-lab",
+        "multi-create-keys-listed-supervised-plain",
+        "multi-create-keys-after-reread-full-access-lab",
+        "multi-create-answer-keys-ask-plain",
         "unrepairable-refused-natively",
         "unrepairable-refused-by-gate",
         "unrepairable-answer-plain",
@@ -1737,7 +1764,90 @@ describe("C01 creates every type, also several at once", () => {
     });
     const check = await COMPOSER_JOURNEYS.C01(two, undefined);
     expect(check.status).toBe("red");
-    expect(check.detail).toContain("create several Tasks: red");
+    expect(check.detail).toContain("several Tasks, Ask for approval, lab wording: created: red");
+  });
+
+  const stageCard = {
+    call: { id: "s", name: "jira_draft_stage", arguments: {} },
+    result: {
+      toolRef: { canonicalId: canonicalToolId("jira.draft-stage"), contractVersion: 3 },
+      status: "completed",
+      data: { outcome: "succeeded" },
+    },
+  };
+  const onlyTasks = (act) =>
+    lane({
+      selection: { types: ["task"] },
+      act: (call) => (/drei Aufgaben/u.test(call.content) ? act(call) : undefined),
+    });
+  const severalDetail = (check) => check.detail;
+
+  it("asks for several Tasks in every mode, each in both wordings, each in a fresh Chat of its mode", async () => {
+    const ctx = onlyTasks(({ content, add }) => {
+      const keys = severalFrom(content, add);
+      return { answer: keys.join(" "), toolExchanges: [draftCard(keys)] };
+    });
+    const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
+    // The single Task of the journey first (Full access), then both wordings in each mode in turn.
+    expect(ctx.calls.fresh).toEqual([
+      "autonomous-delivery",
+      ...["governed-assist", "supervised-coding", "autonomous-delivery"].flatMap((mode) => [
+        mode,
+        mode,
+      ]),
+    ]);
+    expect(check.covers.filter((id) => id.startsWith("multi-create-"))).toHaveLength(24);
+    // The lab's wording names the template content; the plain wording is what a person types.
+    const [lab, plain] = ctx.calls.turns
+      .map((turn) => turn.content)
+      .filter((content) => content.includes("drei Aufgaben"));
+    expect(lab).toContain("Synthetischer Inhalt");
+    expect(plain).toMatch(/^Lege in REQ drei Aufgaben an: „/u);
+    expect(plain).not.toContain("Synthetischer Inhalt");
+  });
+
+  it("records the path the model took and how many review cards the person got", async () => {
+    const creates = onlyTasks(({ content, add }) => {
+      const keys = severalFrom(content, add);
+      const exchanges = keys.map((issueKey) =>
+        createExchange(
+          { outcome: "succeeded", issueKey, ...binding("POST /rest/api/2/issue") },
+          "completed",
+        ),
+      );
+      return { answer: keys.join(" "), toolExchanges: exchanges, writes: 3 };
+    });
+    const check = await COMPOSER_JOURNEYS.C01(creates, undefined);
+    expect(severalDetail(check)).toContain("path: 3 creates; review cards: 3");
+    const staged = onlyTasks(({ content, add }) => {
+      const keys = severalFrom(content, add);
+      return { answer: keys.join(" "), toolExchanges: [stageCard, draftCard(keys)], writes: 1 };
+    });
+    expect(severalDetail(await COMPOSER_JOURNEYS.C01(staged, undefined))).toContain(
+      "path: stage plus commit; review cards: 1",
+    );
+  });
+
+  it("is RED, not unverified, when a draft was staged and never committed", async () => {
+    const ctx = onlyTasks(() => ({
+      answer: "Der Entwurf ist vorbereitet, aber ich kann ihn nicht abschicken.",
+      toolExchanges: [stageCard],
+    }));
+    const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("staged, not committed");
+    expect(check.detail).toContain("path: staged, not committed");
+  });
+
+  it("reads a plain request that was met with a question as the model's observation, a lab wording that created nothing as red", async () => {
+    const asked = onlyTasks(({ content }) =>
+      /Synthetischer Inhalt/u.test(content)
+        ? undefined
+        : { answer: "Welchen Inhalt sollen die Abschnitte haben?" },
+    );
+    const check = await COMPOSER_JOURNEYS.C01(asked, undefined);
+    expect(severalDetail(check)).toContain("Ask for approval, plain wording: created: unverified");
+    expect(severalDetail(check)).toContain("Ask for approval, lab wording: created: red");
   });
 
   it("runs only the selected types", async () => {

@@ -3,6 +3,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { OPTIONAL_COUNT_FIELD } from "./activity-log-field-shapes.js";
 import { getServerLogger } from "./observability/index.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
@@ -86,41 +87,41 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
     },
     inputTokens: { type: "integer", dataClass: "count", required: true },
     inputBudget: { type: "integer", dataClass: "count", required: true },
-    contextWindowTokens: { type: "integer", dataClass: "count", required: false },
-    inputLimitTokens: { type: "integer", dataClass: "count", required: false },
-    inputCapacityUnavailableTokens: { type: "integer", dataClass: "count", required: false },
-    reservedOutputTokens: { type: "integer", dataClass: "count", required: false },
-    safetyMarginTokens: { type: "integer", dataClass: "count", required: false },
+    contextWindowTokens: OPTIONAL_COUNT_FIELD,
+    inputLimitTokens: OPTIONAL_COUNT_FIELD,
+    inputCapacityUnavailableTokens: OPTIONAL_COUNT_FIELD,
+    reservedOutputTokens: OPTIONAL_COUNT_FIELD,
+    safetyMarginTokens: OPTIONAL_COUNT_FIELD,
     tokensSaved: { type: "integer", dataClass: "count", required: true },
     // An inspection that projected automatic compaction: the stored history before the projection
     // and the projected history after it, so an oversized history that the meter reports as fitting
     // stays distinguishable from a small one (PR #3678 review).
-    storedHistoryTokens: { type: "integer", dataClass: "count", required: false },
-    projectedHistoryTokens: { type: "integer", dataClass: "count", required: false },
-    projectedMessagesCompacted: { type: "integer", dataClass: "count", required: false },
-    knowledgeSourceTokens: { type: "integer", dataClass: "count", required: false },
+    storedHistoryTokens: OPTIONAL_COUNT_FIELD,
+    projectedHistoryTokens: OPTIONAL_COUNT_FIELD,
+    projectedMessagesCompacted: OPTIONAL_COUNT_FIELD,
+    knowledgeSourceTokens: OPTIONAL_COUNT_FIELD,
     contextWindowAssumed: { type: "boolean", dataClass: "closed-enum", required: false },
     // The reading as the meter shows it, so a reported percentage and its breakdown can be rebuilt
     // from the log alone (PR #3678 review): the trigger (a grounded chat's lane-based one differs
     // from the whole-window one), the last knowledge request and the known shares.
-    autoCompactionAtTokens: { type: "integer", dataClass: "count", required: false },
-    conversationInputBudgetTokens: { type: "integer", dataClass: "count", required: false },
-    sourceCapacityTokens: { type: "integer", dataClass: "count", required: false },
-    lastRequestTokens: { type: "integer", dataClass: "count", required: false },
+    autoCompactionAtTokens: OPTIONAL_COUNT_FIELD,
+    conversationInputBudgetTokens: OPTIONAL_COUNT_FIELD,
+    sourceCapacityTokens: OPTIONAL_COUNT_FIELD,
+    lastRequestTokens: OPTIONAL_COUNT_FIELD,
     lastRequestMeasured: { type: "boolean", dataClass: "closed-enum", required: false },
-    lastRequestEstimatedTokens: { type: "integer", dataClass: "count", required: false },
-    sentReferenceCount: { type: "integer", dataClass: "count", required: false },
-    availableReferenceCount: { type: "integer", dataClass: "count", required: false },
-    systemTokens: { type: "integer", dataClass: "count", required: false },
+    lastRequestEstimatedTokens: OPTIONAL_COUNT_FIELD,
+    sentReferenceCount: OPTIONAL_COUNT_FIELD,
+    availableReferenceCount: OPTIONAL_COUNT_FIELD,
+    systemTokens: OPTIONAL_COUNT_FIELD,
     // The connectors a Chat offers its model and the tool definitions they add to each request:
     // counts only. Connectors without known tools are the ones not connected yet, which is why a
     // listed connector can still contribute zero tokens.
-    toolDefinitionTokens: { type: "integer", dataClass: "count", required: false },
-    connectorCount: { type: "integer", dataClass: "count", required: false },
-    connectorToolCount: { type: "integer", dataClass: "count", required: false },
-    connectorUnknownCount: { type: "integer", dataClass: "count", required: false },
-    summaryTokens: { type: "integer", dataClass: "count", required: false },
-    messageTokens: { type: "integer", dataClass: "count", required: false },
+    toolDefinitionTokens: OPTIONAL_COUNT_FIELD,
+    connectorCount: OPTIONAL_COUNT_FIELD,
+    connectorToolCount: OPTIONAL_COUNT_FIELD,
+    connectorUnknownCount: OPTIONAL_COUNT_FIELD,
+    summaryTokens: OPTIONAL_COUNT_FIELD,
+    messageTokens: OPTIONAL_COUNT_FIELD,
     contextWindowProbePending: { type: "boolean", dataClass: "closed-enum", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },

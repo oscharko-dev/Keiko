@@ -672,12 +672,34 @@ Only the source digests and `generatedAt` in the changed records were taken from
 fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
 
-## Jira turn endings worded in the person's language — 2026-11-15 (#4355, #4351)
+## Jira report card compliance and German wording — 2026-11-14 (#4356, #4351)
 
-The Chat window and the optional message catalogs gained the wording of a turn that ended early (the
-reason, the receipt lists, the counts line and the footer), so the freshness gate rejected the
-changed digests. The complete original nine-case producer ran in a Linux arm64 gates container
-(Node 24.18.0, fresh `npm ci`): all nine passed. Only the source digests and `generatedAt` in the
+The report card now says which issues no template checked, and the optional English and German
+message catalogs changed (new compliance sentences, the German Keiko sentence, the estimate field
+without its id), so the freshness gate rejected the two catalog digests. The complete original
+nine-case producer ran in the Linux arm64 gates container (Node 24.18.0, `--init`,
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed. Only the source digests and `generatedAt` in the
 three records were taken from this run; its fallback-font captures were discarded and the 14
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
+
+## Replace-token verification wording — 2026-11-14 (#4353)
+
+The optional English and German message catalogs changed again (the replace-token explanation now says
+Keiko verifies the new token right away, plus one sentence for a Pod that stays unverified), so the freshness gate rejected the two catalog digests
+once more. The complete original nine-case producer ran in the Linux arm64 gates container (Node
+24.18.0, `--init`, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed. Only the source digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
+numerical ceiling changed. This remains updater fixture evidence.
+
+## Jira template proposal accounting — 2026-11-14 (#4354)
+
+A template proposal now answers for every issue type of the project (a proposal, or one plain line
+with its reason, and the count), so the optional English and German message catalogs changed and the
+freshness gate rejected their digests. The complete original nine-case producer ran in the Linux
+arm64 gates container (Node 24.18.0, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed, and
+`npm run check:update-ui-evidence` passes. Only the source digests and `generatedAt` in the three
+records were taken from this run; its fallback-font captures were discarded and the 14 committed
+captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling changed. This
+remains updater fixture evidence.

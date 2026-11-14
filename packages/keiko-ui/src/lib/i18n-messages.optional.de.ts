@@ -984,7 +984,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Token speichern",
   "atlassianConnectors.live.saving": "Änderungen werden gespeichert…",
   "atlassianConnectors.live.rotateHint":
-    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen; prüfe die Verbindung danach erneut.",
+    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen; Keiko prüft das neue Token sofort.",
   "atlassianConnectors.live.operationFailed":
     "Die Aktion konnte nicht bestätigt werden. Aktualisiere den Pod-Status, bevor du weitere Änderungen vornimmst.",
   "atlassianConnectors.live.refresh": "Status aktualisieren",
@@ -995,6 +995,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Aktualisiere den Status, bevor du diesen Pod verwendest.",
   "atlassianConnectors.live.verifyRequired":
     "Prüfe die Verbindung, bevor du diesen Pod verwendest.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "Bis zur erfolgreichen Prüfung bleibt der Pod gespeichert, ist aber nicht nutzbar; du kannst ihn auch entfernen.",
   "atlassianConnectors.live.remove": "Pod entfernen",
   "atlassianConnectors.live.keep": "Pod behalten",
   "atlassianConnectors.live.removeConfirm":
@@ -2828,6 +2830,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalCount":
+    "{types} Vorgangstypen: {proposals} mit Vorschlag, {without} ohne.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn":
+    "Von diesem Typ gibt es noch keine Vorgänge, aus denen sich etwas ableiten lässt.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "Die abgeleitete Vorlage war nicht gültig, deshalb gibt es keinen Vorschlag.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira hat für diesen Typ nicht geantwortet. Versuch es noch einmal.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Nicht geprüft: Das Projekt hat mehr Vorgangstypen, als ein Vorschlagslauf abdeckt.",
+  "chat.skills.jira.withoutProposalMore": "und {count} weitere ohne Vorschlag.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira hat für die Pflichtfelder dieses Typs nicht geantwortet; prüf sie, bevor du speicherst.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira hat für die Beispielvorgänge dieses Typs nicht geantwortet; prüf die Abschnitte, bevor du speicherst.",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
   "chat.skills.jira.error":
@@ -5771,7 +5789,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
   "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
   "atlassianConnectors.action.jira.draft-batch": "Jira-Vorgänge aus Anforderungen entwerfen",
-  "chat.jira.report.estimateField": "Schätzfeld: {name} ({id})",
+  "chat.jira.report.estimateField": "Schätzfeld: {name}",
   "chat.jira.report.estimateUnavailable": "Schätzung nicht verfügbar: {reason}",
   "chat.jira.report.estimateReason.project-not-specified": "kein Projekt angegeben",
   "chat.jira.report.estimateReason.field-not-found":
@@ -5781,7 +5799,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.report.estimateReason.metadata-unavailable":
     "die Schätzkonfiguration des Projekts konnte nicht gelesen werden",
   "chat.jira.report.figures":
-    "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
+    "Keiko berechnet die Zahlen aus den gelesenen Jira-Daten, nicht das Modell.",
   "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",
   "chat.jira.report.readingUnknown": "Jira wird gelesen: {read} Vorgänge",
   "chat.jira.report.complete": "Vollständig: {read} Vorgänge gelesen",
@@ -5802,6 +5820,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.report.donePercent": "{percent} % erledigt",
   "chat.jira.report.compliance":
     "{issues} von {checked} Vorgängen weichen ab ({count} Abweichungen)",
+  "chat.jira.report.templateNone":
+    "Kein Vorgang wurde gegen eine Vorlage geprüft: Für {types} gibt es keine Vorlage.",
+  "chat.jira.report.templatePartial":
+    "{checked} von {total} Vorgängen wurden gegen eine Vorlage geprüft, {without} nicht: Für {types} gibt es keine Vorlage.",
+  "chat.jira.report.templateNoneUnnamed": "Kein Vorgang wurde gegen eine Vorlage geprüft.",
+  "chat.jira.report.templatePartialUnnamed":
+    "{checked} von {total} Vorgängen wurden gegen eine Vorlage geprüft, {without} nicht.",
+  "chat.jira.report.requiredFieldsPartial":
+    "Pflichtfelder wurden nur für einen Teil der Vorgangstypen geprüft.",
+  "chat.jira.report.requiredFieldsUnavailable": "Pflichtfelder konnten nicht geprüft werden.",
+  "chat.jira.report.requiredFieldsClean":
+    "Pflichtfelder: {judged} Vorgänge geprüft, keine Abweichung.",
   "chat.jira.report.coverage":
     "{epics} Epics ohne Inhalt, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
   "chat.jira.report.coverageUnobserved":

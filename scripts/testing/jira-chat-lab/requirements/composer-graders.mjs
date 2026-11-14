@@ -91,6 +91,26 @@ export function gradeComposerCreate({ type, issues: all, conforms, related }) {
   };
 }
 
+/**
+ * Which way the model created several issues from one request (#4369): `commit` (a draft run committed),
+ * `stage plus commit`, `N creates`, `stage, then N creates`, `staged, not committed` (a stage and no write
+ * at all: the case Twin's browser walk met) or `no write`. A fact for the report; the verdict stays native.
+ */
+export function severalPath(exchanges) {
+  const list = Array.isArray(exchanges) ? exchanges : [];
+  const staged = list.some(isStageExchange);
+  const committed = list.some(
+    (exchange) => toolExchangeOf(exchange, "jira.draft") && wroteIssue(exchange),
+  );
+  const creates = list.filter(
+    (exchange) => toolExchangeOf(exchange, "jira.create") && wroteIssue(exchange),
+  ).length;
+  if (committed) return staged ? "stage plus commit" : "commit";
+  if (creates > 0)
+    return staged ? `stage, then ${String(creates)} creates` : `${String(creates)} creates`;
+  return staged ? "staged, not committed" : "no write";
+}
+
 /** The keys of `created` that the answer does not name (the model's words, graded softly). */
 export const keysMissingInAnswer = (created, answer) => {
   const named = new Set(String(answer ?? "").match(ISSUE_KEY) ?? []);
