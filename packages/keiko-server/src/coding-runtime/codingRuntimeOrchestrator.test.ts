@@ -1082,6 +1082,56 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(bare.extra).not.toHaveProperty("opencodeVersion");
     expect(bare.extra).not.toHaveProperty("runtimeOrigin");
   });
+  // Audit of #4359: a version the metadata reports is a string, not a promise of a version. A value
+  // the registry refuses (a space, a URL, over-long) would throw while the start line is built, on
+  // the run's start path; it is omitted instead and the run still starts.
+  it.each([
+    ["a value with a space", "2.1.4 beta"],
+    ["a URL", "https://host.example/x"],
+    ["a path", "../2.1.4"],
+    ["an over-long value", `2.1.4-${"a".repeat(80)}`],
+    ["an empty value", ""],
+  ])("starts the run and omits the runtime version fields for %s", async (_name, reported) => {
+    const captured = captureActivityLog();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      ...Array.from({ length: 13 }, () => undefined),
+      { opencode: reported, pinned: "2.2.5", origin: "npm-runtime-package" },
+    );
+    await expect(f.orchestrator.start(start)).resolves.toBeDefined();
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).not.toHaveProperty("opencodeVersion");
+    expect(event.extra).not.toHaveProperty("runtimeOrigin");
+    expect(JSON.stringify(captured.records)).not.toContain("host.example");
+  });
+  it("keeps a pre-release or build suffix of a version", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      ...Array.from({ length: 13 }, () => undefined),
+      { opencode: "2.2.5-rc.1+build.7", pinned: "2.2.5", origin: "portable-release" },
+    );
+    await f.orchestrator.start(start);
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      opencodeVersion: "2.2.5-rc.1+build.7",
+      runtimeOrigin: "portable-release",
+    });
+  });
   it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);

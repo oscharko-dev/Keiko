@@ -431,9 +431,12 @@ keiko support analyze <report.json> --json
 - **Do:** open the Coding Workbench, switch the Pod on in **Connectors**, and in a task ask Keiko to
   read an issue, add a comment and move an issue to another status.
 - **Expect:** the three operations work as in Chat; a run with no Pod switched on uses no Jira Pod.
-  This step is a walk once; it does not block. It is valid only when the Workbench's Information
-  panel (the (i) icon, **Details**, "OpenCode runtime") shows the runtime this release ships, the
-  pinned version; a walk on another runtime is recorded with the version it showed.
+  This step is a walk once; it does not block. Release 1 ships two runtimes: npm installs carry
+  OpenCode 2.1.4 and the portable archives 2.2.5. Record the version the Workbench's Information
+  panel (the (i) icon, **Details**, "OpenCode runtime") showed, and walk each channel's runtime.
+  On both, a Code Mode program asks for approval first in Ask for approval and Supervised
+  workspace, because a `fetch` inside a program reaches no policy decision on 2.1.4, so that card
+  is the only decision for it (ADR-0137).
 - **Jira:** the comment and status are there.
 - **Proves:** AC4; #4359 "Workbench". Not available on Windows.
 
