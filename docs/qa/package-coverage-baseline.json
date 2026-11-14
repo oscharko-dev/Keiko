@@ -18,7 +18,7 @@
       }
     },
     "keiko-cli": {
-      "files": 70,
+      "files": 76,
       "uncoveredFiles": 0,
       "uncoveredLines": 419,
       "totalLines": 5836,
