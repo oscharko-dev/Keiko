@@ -750,6 +750,16 @@ function linkData(links: JiraMutationLinkAccount | undefined): Record<string, un
  */
 export const JIRA_REJECTED_GUIDANCE =
   "Jira refused this change and nothing was changed. Correct the fields named in fieldErrors (fieldId, fieldName, message) or messages, then send the corrected change once. If Jira refuses it again, tell the user in plain language which field is the problem and what Jira said.";
+/**
+ * Keiko's own refusal, made before anything was sent: it carries a closed `validation` and a sentence
+ * that names the rule, which Jira's own error document never does (#4357 AC3). Saying "Jira refused"
+ * there would be untrue.
+ */
+export const JIRA_LOCAL_REFUSAL_GUIDANCE =
+  "Keiko refused this change before sending it to Jira and nothing was changed. Correct the argument named in fieldId or messages, then send the corrected change once. If it is refused again, tell the user in plain language which argument is the problem.";
+/** A permission refusal is not a field to correct: retrying cannot succeed. */
+export const JIRA_PERMISSION_GUIDANCE =
+  "Jira refused this change because this connection may not make it, and nothing was changed. Do not retry it. Tell the user in plain language that the Jira account lacks the permission, and what Jira said.";
 export const JIRA_EXISTING_GUIDANCE =
   "Nothing was written: the Jira resource identified by this result already exists or already holds these values, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
 /** The journal holds no arguments or results, so a replay cannot repeat the earlier reasons. */
@@ -782,7 +792,17 @@ export function jiraResultGuidance(
   // An adapter independently observed the requested state before attempting any effect.
   if (outcome === "rejected" && reason === "conflict" && detail?.unchanged === true)
     return JIRA_EXISTING_GUIDANCE;
-  return outcome === "rejected" && jiraExplained(detail) ? JIRA_REJECTED_GUIDANCE : undefined;
+  return outcome === "rejected" && jiraExplained(detail)
+    ? explainedRefusalGuidance(reason, detail)
+    : undefined;
+}
+/** Who refused, and why, decides what the model is told to do (#4357 AC3). */
+function explainedRefusalGuidance(
+  reason: AtlassianConnectorWriteFailureReason | undefined,
+  detail: JiraMutationFailureDetail | undefined,
+): string {
+  if (reason === "permission-denied") return JIRA_PERMISSION_GUIDANCE;
+  return detail?.validation === undefined ? JIRA_REJECTED_GUIDANCE : JIRA_LOCAL_REFUSAL_GUIDANCE;
 }
 function uncertainOutcome(
   outcome: JiraMutationResultState,

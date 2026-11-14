@@ -6,6 +6,7 @@ import {
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
   type JiraIssueTemplate,
+  type JiraMutationFailureDetail,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -89,6 +90,8 @@ export type JiraTemplateGateResult =
       readonly ok: false;
       readonly reason: AtlassianConnectorWriteFailureReason;
       readonly violations?: readonly JiraTemplateViolation[];
+      /** The sentence of a refusal whose reason is not `field-validation`, which carries no violations. */
+      readonly detail?: JiraMutationFailureDetail;
     };
 
 const OK = { ok: true } as const;
@@ -128,6 +131,19 @@ function unreadableRefusal(names: readonly string[] | undefined): JiraTemplateGa
     violations: [{ ruleId: "template-unreadable", subject: subject.slice(0, 120), template: "*" }],
   };
 }
+/**
+ * The violation below reaches a model only through the dry run: a dispatch drops violations unless the
+ * reason is `field-validation`, which would leave the closed reason alone (#4357 AC3). So the refusal
+ * also carries one sentence per cause, which both paths keep.
+ */
+const IDENTITY_MESSAGES: Readonly<Record<string, string>> = {
+  "not-found":
+    "The project or issue type of this issue was not found or is not visible to this connection, so the project's template cannot be applied. Nothing was changed.",
+  "permission-denied":
+    "This connection may not read the issue's project or issue type, so the project's template cannot be applied. Nothing was changed.",
+};
+const IDENTITY_UNREADABLE =
+  "Jira's answer about the project and issue type could not be read completely, so the project's template cannot be applied. Nothing was changed.";
 function identityRefusal(
   failure: Extract<JiraTemplateGateResult, { ok: false }>,
 ): JiraTemplateGateResult {
@@ -136,6 +152,9 @@ function identityRefusal(
   // One violation: the refusal is about the unbound identity, so it names no candidate template.
   return {
     ...failure,
+    detail: failure.detail ?? {
+      messages: [IDENTITY_MESSAGES[failure.reason] ?? IDENTITY_UNREADABLE],
+    },
     violations: [
       {
         ruleId: "template-unreadable",

@@ -90,6 +90,17 @@ function fixture(attachmentSource?: JiraAttachmentSource): {
     },
   };
 }
+// #4357 AC3: a metadata refusal with no sentence of its own carries one sentence per closed reason,
+// pinned exactly (they replace the bare shape these expectations used to pin).
+const FIELD_SENTENCES = {
+  "required-field":
+    "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+  "invalid-operation":
+    "The operation sent for the field named in fieldId is not offered for it: use one the field list shows. Nothing was changed.",
+  "invalid-field":
+    "The value sent for the field named in fieldId does not fit its type: send it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+} as const;
+
 it.each(["project", "issuetype"])("rejects a caller routing override in fields.%s", async (id) => {
   const f = fixture();
   // A routing override is refused before HTTP and named; it moved here from the malformed-argument
@@ -184,7 +195,11 @@ it.each(["summary", "customfield_10000"])(
     ).toEqual({
       ok: false,
       reason: "field-validation",
-      detail: { fieldId: id, validation: "invalid-operation" },
+      detail: {
+        fieldId: id,
+        validation: "invalid-operation",
+        messages: [FIELD_SENTENCES["invalid-operation"]],
+      },
     });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
@@ -214,7 +229,11 @@ it("keeps selected routing references inside current metadata allowed values", a
   ).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { fieldId: "issuetype", validation: "invalid-field" },
+    detail: {
+      fieldId: "issuetype",
+      validation: "invalid-field",
+      messages: [FIELD_SENTENCES["invalid-field"]],
+    },
   });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
@@ -434,7 +453,11 @@ it.each(["jira.create", "jira.transition"] as const)(
     expect(await f.run(operation, args)).toEqual({
       ok: false,
       reason: "field-validation",
-      detail: { fieldId: "customfield_10000", validation: "required-field" },
+      detail: {
+        fieldId: "customfield_10000",
+        validation: "required-field",
+        messages: [FIELD_SENTENCES["required-field"]],
+      },
     });
     // A creation also reads the project and issue type that name the template it is judged by.
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(
@@ -538,7 +561,11 @@ it("collects all create pages before validating a required field on a later page
   ).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { fieldId: "customfield_10000", validation: "required-field" },
+    detail: {
+      fieldId: "customfield_10000",
+      validation: "required-field",
+      messages: [FIELD_SENTENCES["required-field"]],
+    },
   });
   // Two metadata pages, then the two identity reads that name the governing template.
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
@@ -606,7 +633,11 @@ it("does not fabricate a required unsupported plugin field", async () => {
   ).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { validation: "required-field", fieldId: "customfield_10001" },
+    detail: {
+      validation: "required-field",
+      fieldId: "customfield_10001",
+      messages: [FIELD_SENTENCES["required-field"]],
+    },
   });
   // The metadata read and the two identity reads that name what a template governs.
   expect(f.http).toHaveBeenCalledTimes(3);
@@ -621,7 +652,11 @@ it("revalidates metadata when edit operations change between actions", async () 
   expect(await f.run("jira.edit", args)).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { fieldId: "summary", validation: "invalid-operation" },
+    detail: {
+      fieldId: "summary",
+      validation: "invalid-operation",
+      messages: [FIELD_SENTENCES["invalid-operation"]],
+    },
   });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
     "GET",

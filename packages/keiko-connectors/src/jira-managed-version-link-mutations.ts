@@ -27,8 +27,9 @@ export function isJiraVersionLinkMutation(name: string): name is JiraVersionLink
 async function parent(
   request: JiraMutationRequest,
   input: VersionLinkInput,
+  beforeEffect = false,
 ): Promise<VersionLinkObservation<ReleaseContext>> {
-  const context = await readReleaseContext(request, input.selected);
+  const context = await readReleaseContext(request, input.selected, beforeEffect);
   if (!context.ok) return context;
   const version = await reviewedReleaseEntity(
     request,
@@ -138,7 +139,7 @@ export async function executeJiraVersionLinkMutation(
   const parsed = parseVersionLinkInput(operation, args);
   if (!parsed.ok) return parsed;
   const input = parsed.value;
-  const context = await parent(request, input);
+  const context = await parent(request, input, true);
   if (!context.ok) return context;
   const current = await readVersionLinkSet(request, input.selected.id, input.expected);
   if (!current.ok) return current;

@@ -8,6 +8,7 @@ import {
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { asRecord } from "./atlassian-sync-classify.js";
+import { savedText } from "./jira-saved-configuration-values.js";
 import {
   bindLinkActor,
   linkActorInput,
@@ -89,6 +90,35 @@ function input(operation: Operation, args: CatalogJsonObject): Input | undefined
     return base;
   }
   return undefined;
+}
+const LINK_ARGUMENTS = [...FIELDS].join(", ");
+/**
+ * What to change, named by the first rule the arguments break, in the order `input` checks them
+ * (#4357 AC3): one sentence for every cause left a model repeating the same call. No value the model
+ * sent is echoed.
+ */
+function issueLinkInvalidMessage(operation: Operation, args: CatalogJsonObject): string {
+  if (Object.keys(args).some((key) => !FIELDS.has(key)))
+    return `This call takes only ${LINK_ARGUMENTS}.`;
+  if (!savedText(args.expectedActorKey, 255))
+    return "expectedActorKey must be the key of the connected Jira user; jira.myself returns it.";
+  if (
+    !isSafeAtlassianIdentifier(args.inwardIssueIdOrKey) ||
+    !isSafeAtlassianIdentifier(args.outwardIssueIdOrKey)
+  )
+    return "inwardIssueIdOrKey and outwardIssueIdOrKey must each be the key or id of one issue.";
+  if (nativeLinkType(asRecord(args.linkType)) === undefined || !closedLinkType(args.linkType))
+    return "linkType must be exactly { id, name, inward, outward } of one type, as jira.link-types lists it.";
+  if (operation === "jira.delete-issue-link")
+    return "A delete takes linkId: the numeric ID of the link to delete.";
+  return "A create takes no linkId: Jira assigns it.";
+}
+function closedLinkType(value: unknown): boolean {
+  const raw = asRecord(value);
+  return (
+    raw !== undefined &&
+    Object.keys(raw).every((key) => ["id", "name", "inward", "outward"].includes(key))
+  );
 }
 async function inspect(
   request: JiraMutationRequest,
@@ -360,8 +390,7 @@ export async function executeJiraIssueLinkMutation(
   return runLinkMutation(
     {
       selected: input(operation, args),
-      invalid:
-        "Review both issues, the connected actor key and exact link type ID/name/inward/outward labels. Delete also requires the native link ID; optional comment side effects are unavailable.",
+      invalid: issueLinkInvalidMessage(operation, args),
       admit: (selected) => admitIssueLink(request, selected, templates),
       receiptFor,
       dispatch: (selected, state) => dispatchIssueLink(request, selected, state),

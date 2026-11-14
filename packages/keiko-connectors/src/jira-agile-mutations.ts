@@ -2,6 +2,7 @@ import type {
   JiraMutationAttempt,
   JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { SPRINT_CLOSED_DETAIL, SPRINT_STEP_DETAIL } from "./jira-sprint-transition-messages.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
@@ -109,7 +110,8 @@ function sprintTransition(
   body: CatalogJsonObject,
   current: CatalogJsonObject,
 ): AgileFailure | undefined {
-  if (current.state === "closed") return { ok: false, reason: "invalid-transition" };
+  if (current.state === "closed")
+    return { ok: false, reason: "invalid-transition", detail: SPRINT_CLOSED_DETAIL };
   const start = body.startDate ?? current.startDate;
   const end = body.endDate ?? current.endDate;
   if (!agileDateRange(start, end)) return { ok: false, reason: "field-validation" };
@@ -117,9 +119,9 @@ function sprintTransition(
   if (body.state === "active")
     return canStartSprint(current, start, end)
       ? undefined
-      : { ok: false, reason: "invalid-transition" };
+      : { ok: false, reason: "invalid-transition", detail: SPRINT_STEP_DETAIL };
   if (body.state === "closed" && current.state === "active") return undefined;
-  return { ok: false, reason: "invalid-transition" };
+  return { ok: false, reason: "invalid-transition", detail: SPRINT_STEP_DETAIL };
 }
 interface UpdateSelection {
   readonly path: string;

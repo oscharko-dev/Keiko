@@ -136,7 +136,16 @@ describe("the fields a transition carries (#4354)", () => {
   // vanished, or never existed, is refused before any write (the listing side of KEIKO-0814).
   it("refuses a transition id Jira no longer lists as invalid-transition, before any effect", async () => {
     const jira = run({ ...TRANSITION, transitionId: "99" }, GOVERNING);
-    expect(await jira.result).toMatchObject({ ok: false, reason: "invalid-transition" });
+    expect(await jira.result).toMatchObject({
+      ok: false,
+      reason: "invalid-transition",
+      detail: {
+        fieldId: "transitionId",
+        messages: [
+          "The transition id is not available for this issue in its current status: read jira.transitions for the ids it offers now. Nothing was changed.",
+        ],
+      },
+    });
     expect(jira.writes()).toBe(0);
   });
 

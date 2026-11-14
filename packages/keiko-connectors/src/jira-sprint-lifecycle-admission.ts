@@ -1,4 +1,5 @@
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { SPRINT_CLOSED_DETAIL, SPRINT_STEP_DETAIL } from "./jira-sprint-transition-messages.js";
 import { asArray } from "./atlassian-sync-classify.js";
 import { agileBoard, agileDate } from "./jira-agile-projection.js";
 import type { JiraAgileRequestPhase } from "./jira-agile-request.js";
@@ -139,13 +140,14 @@ function replacementTransition(
   current: SprintSnapshot,
   desired: SprintReplacement,
 ): SprintFailure | undefined {
-  if (current.state === "closed") return { ok: false, reason: "invalid-transition" };
+  if (current.state === "closed")
+    return { ok: false, reason: "invalid-transition", detail: SPRINT_CLOSED_DETAIL };
   if (
     desired.state !== current.state &&
     !(current.state === "future" && desired.state === "active") &&
     !(current.state === "active" && desired.state === "closed")
   )
-    return { ok: false, reason: "invalid-transition" };
+    return { ok: false, reason: "invalid-transition", detail: SPRINT_STEP_DETAIL };
   return undefined;
 }
 function scheduledDatesRefusal(desired: SprintReplacement): SprintFailure | undefined {

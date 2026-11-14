@@ -5,6 +5,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   JIRA_EXISTING_GUIDANCE,
+  JIRA_LOCAL_REFUSAL_GUIDANCE,
+  JIRA_PERMISSION_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
   jiraAttemptToolResult,
@@ -1091,5 +1093,41 @@ describe("template notices on a validated attempt", () => {
   it("adds none to an attempt that had none", () => {
     const attempt = validJiraMutationAttempt({ ok: true, receipt }, "jira.edit");
     expect(attempt).not.toHaveProperty("templateNotices");
+  });
+});
+
+// #4357 AC3: the instruction a refusal carries matches who refused it and why.
+describe("the guidance of a refusal says who refused it and what to do (#4357 AC3)", () => {
+  it("does not say Jira refused what Keiko refused before sending it", () => {
+    const data = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        validation: "invalid-field",
+        fieldId: "propertyKey",
+        messages: ["propertyKey must be the exact property key. Nothing was changed."],
+      },
+    }).data;
+    expect(data.guidance).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
+    expect(data.guidance).not.toMatch(/Jira refused/u);
+    expect(JIRA_LOCAL_REFUSAL_GUIDANCE).toContain("Keiko refused this change before sending it");
+  });
+  it("does not tell a permission refusal to correct fields", () => {
+    const data = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "permission-denied",
+      detail: { messages: ["You do not have permission to edit this issue."] },
+    }).data;
+    expect(data.guidance).toBe(JIRA_PERMISSION_GUIDANCE);
+    expect(data.guidance).not.toMatch(/Correct the fields/u);
+    expect(data.guidance).toContain("Do not retry it.");
+  });
+  it("keeps the correction instruction for Jira's own error document", () => {
+    const data = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldErrors: [{ fieldId: "summary", message: "Summary is required." }] },
+    }).data;
+    expect(data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
   });
 });

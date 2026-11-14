@@ -589,6 +589,9 @@ describe("jira.draft-stage (#4178)", () => {
         ref: "one",
         fieldId: "customfield_10103",
         validation: "required-field",
+        messages: [
+          "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+        ],
       },
     });
     expect(h.activity.at(-1)).toMatchObject({
@@ -806,11 +809,17 @@ describe("jira.draft-stage (#4178)", () => {
       draftId: "99999999-9999-4999-8999-999999999999",
       items: [item("b") as CatalogJsonObject],
     });
-    expect(unknown.data).toMatchObject({ reason: "draft-not-found" });
+    const NOT_FOUND =
+      "No draft with this draftId is held for this Chat, so nothing was staged. Stage the items again with jira.draft-stage and use the draftId it returns; do not invent one.";
+    expect(unknown.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
     const foreign = await h.stage({ draftId, items: [item("b") as CatalogJsonObject] }, "chat-2");
-    expect(foreign.data).toMatchObject({ reason: "draft-not-found" });
+    expect(foreign.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
     const repeated = await h.stage({ draftId, items: [item("a") as CatalogJsonObject] });
-    expect(repeated.data).toMatchObject({ reason: "duplicate-ref" });
+    expect(repeated.data).toMatchObject({
+      reason: "duplicate-ref",
+      guidance:
+        "Two items of the draft use the same ref. Give every item its own ref and stage the page again; nothing was staged.",
+    });
     expect(h.deps.store.peek(draftId, "chat-1")?.items).toHaveLength(1);
   });
 });

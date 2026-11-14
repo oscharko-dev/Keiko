@@ -219,3 +219,23 @@ describe("one native delegated reciprocal link", () => {
     },
   );
 });
+
+// #4357 AC3: before any request, a key that is not the connected user's is an argument to correct, as
+// for remote links; the model is told where the key comes from, not that a reviewed user changed.
+describe("an expectedActorKey that is not the connected user's, before the request", () => {
+  const ACTOR_KEY_RULE =
+    "expectedActorKey is not the key of the connected Jira user. It must be the key jira.myself returns: read it, then send the write again. Nothing was changed.";
+  it.each([false, true])("says where the key comes from, check=%s", async (check) => {
+    const native = reciprocalLinkFixture();
+    native.controls.actorChanged = true;
+    const refused = await execute(ARGS, native.request, native.ports, check);
+    expect(refused).toMatchObject({
+      ok: false,
+      reason: "conflict",
+      detail: { messages: [ACTOR_KEY_RULE] },
+    });
+    expect(JSON.stringify(refused)).not.toMatch(/reviewed user|replayed/u);
+    expect(new TextEncoder().encode(ACTOR_KEY_RULE).length).toBeLessThanOrEqual(200);
+    expect(native.calls.some((call) => call.method === "POST")).toBe(false);
+  });
+});

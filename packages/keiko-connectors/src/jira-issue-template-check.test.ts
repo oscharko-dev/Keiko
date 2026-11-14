@@ -235,6 +235,16 @@ describe("description sections", () => {
     ).toEqual(["section-empty:Context", "section-empty:Acceptance criteria"]);
   });
 
+  it("counts every placeholder the empty-section hint names as no content (#4357 AC3)", () => {
+    for (const placeholder of ["TBD", "TODO", "...", "-", "<text>"])
+      expect(
+        ids(
+          template,
+          subject({ description: `h2. Context\n${placeholder}\nh2. Acceptance criteria\nOK` }),
+        ),
+      ).toEqual(["section-empty:Context"]);
+  });
+
   it("does not take a heading from inside another section's text", () => {
     expect(
       ids(template, subject({ description: "Context and Acceptance criteria prose" })),
@@ -767,5 +777,49 @@ describe("native description rendering contract", () => {
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+// #4357 AC3: three rules whose subject alone does not say what to change get one short sentence each.
+describe("the hints of rules a subject does not explain (#4357 AC3)", () => {
+  const HINTS = {
+    "section-empty":
+      " A section that holds only a placeholder (TBD, TODO, ..., -, or <text>) counts as empty: write real content.",
+    "label-pattern":
+      " A label rule has a pattern: the subject is the label that does not match it; use a label the template's labels rule allows.",
+    "field-unavailable":
+      " A field-unavailable subject is a field this project's screen does not offer, so it cannot be set: do not retry with it, tell the person.",
+  } as const;
+  const guidanceFor = (ruleId: keyof typeof HINTS): string =>
+    jiraTemplateViolationGuidance([{ ruleId, subject: "x", template: "SYN/Story" }]) ?? "";
+  it.each(Object.keys(HINTS) as (keyof typeof HINTS)[])(
+    "adds the sentence for %s, and only for it",
+    (ruleId) => {
+      expect(guidanceFor(ruleId)).toContain(HINTS[ruleId]);
+      for (const other of Object.keys(HINTS) as (keyof typeof HINTS)[])
+        if (other !== ruleId) expect(guidanceFor(ruleId)).not.toContain(HINTS[other]);
+    },
+  );
+});
+
+describe("a bulk or schema change a formal rule refers to (#4357 AC3)", () => {
+  const IMPACT =
+    "Nothing was changed: a formal template rule of this project refers to a field this change would alter on issues that Keiko cannot check one by one. Do not retry it. Change the affected issues one at a time with the edit tool, or tell the person it has to be done in Jira.";
+  it.each([
+    "Bulk issue-field impact: Fix versions",
+    "Schema changes require complete governed issue migration",
+  ])("says the rule exists and what to do, not that evidence is missing: %s", (subject) => {
+    const guidance = jiraTemplateViolationGuidance([
+      { ruleId: "template-unreadable", subject, template: "SYN/Story" },
+    ]);
+    expect(guidance).toBe(IMPACT);
+    expect(guidance).not.toMatch(/could not be read|Missing evidence/u);
+  });
+  it("keeps the evidence wording for an unreadable library", () => {
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "template-unreadable", subject: "template library", template: "*" },
+      ]),
+    ).toMatch(/could not be read completely/u);
   });
 });

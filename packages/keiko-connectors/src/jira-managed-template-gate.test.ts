@@ -824,6 +824,12 @@ describe("dry run before approval", () => {
         ok: false,
         reason: "malformed-payload",
         violations: [{ ruleId: "template-unreadable" }],
+        // #4357 AC3: a dispatch drops the violations of this reason, so the sentence stays.
+        detail: {
+          messages: [
+            "Jira's answer about the project and issue type could not be read completely, so the project's template cannot be applied. Nothing was changed.",
+          ],
+        },
       });
     }
     expect(f.writes()).toEqual([]);

@@ -291,18 +291,40 @@ const UNTRACED_REFERENCES: Extract<JiraMutationAttempt, { ok: false }> = {
 const REFERENCES_PLACE = "requirementIds goes beside fields, not inside them.";
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+/**
+ * What a model reads when the metadata check refused a field without a sentence of its own (#4357
+ * AC3): the closed reason says it, the field is named in `fieldId`, and the field list says what to
+ * send. One sentence per reason, within the 200-byte bound of a detail message.
+ */
+const FIELD_VALIDATION_MESSAGES: Readonly<Record<JiraFieldValidationFailure, string>> = {
+  "required-field":
+    "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+  "unsupported-field":
+    "The field named in fieldId cannot be set through Keiko: leave it out. Nothing was changed.",
+  "invalid-operation":
+    "The operation sent for the field named in fieldId is not offered for it: use one the field list shows. Nothing was changed.",
+  "invalid-field":
+    "The value sent for the field named in fieldId does not fit its type: send it as jira.create-fields or jira.edit-fields lists it. Nothing was changed.",
+  "bounds-exceeded":
+    "The fields sent are more or larger than one call takes: send fewer or shorter values. Nothing was changed.",
+  "invalid-epic-link":
+    "The Epic Link must be the key of an existing Epic of this project that you can see. Nothing was changed.",
+};
 /** Keiko's own pre-dispatch refusal names the field and the closed reason. */
 function validationFailure(
   result: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
 ): Extract<JiraMutationAttempt, { ok: false }> {
   const message =
-    result.message ?? (result.fieldId === "requirementIds" ? REFERENCES_PLACE : undefined);
+    result.message ??
+    (result.fieldId === "requirementIds"
+      ? REFERENCES_PLACE
+      : FIELD_VALIDATION_MESSAGES[result.reason]);
   return {
     ...INVALID,
     detail: {
       validation: result.reason,
       ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
-      ...(message === undefined ? {} : { messages: [message] }),
+      messages: [message],
     },
   };
 }
@@ -507,7 +529,7 @@ function createArgumentsRefusal(
         numericId(args.issueTypeId),
         "issueTypeId",
         "required-field",
-        "issueTypeId must be the numeric issue-type ID jira.issue_types returns.",
+        "issueTypeId must be the numeric issue-type ID jira.issue-types returns.",
       ],
       [
         fields !== undefined && !Object.keys(fields).some(isCreateRoutingField),
@@ -1207,7 +1229,7 @@ async function checkAssignee(
     : refusedArgument(
         "assigneeName",
         "invalid-field",
-        "assigneeName must be the exact user name of one active user jira.assignable_users returns.",
+        "assigneeName must be the exact user name of one active user jira.assignable-users returns.",
       );
 }
 function uniqueActiveAssignee(users: readonly unknown[], name: string): boolean {
@@ -2179,7 +2201,12 @@ export async function checkJiraManagedMutationTemplates(
   // A Jira that cannot be read is told apart from a pass, so a caller can stop reading it.
   if (attempt.violations === undefined)
     return attempt.reason === "unavailable" ? { ok: false, reason: "unavailable" } : { ok: true };
-  return { ok: false, reason: attempt.reason, violations: attempt.violations };
+  return {
+    ok: false,
+    reason: attempt.reason,
+    violations: attempt.violations,
+    ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+  };
 }
 export type JiraMutationCheckResult =
   | { readonly ok: true }
@@ -2273,7 +2300,12 @@ export async function checkJiraManagedMutation(
   const attempt = await checkedAttempt(operation, source, context, connection, trace);
   if (attempt.ok) return { ok: true };
   if (attempt.violations !== undefined)
-    return { ok: false, reason: attempt.reason, violations: attempt.violations };
+    return {
+      ok: false,
+      reason: attempt.reason,
+      violations: attempt.violations,
+      ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+    };
   // Dedicated admission already resolved its concrete prerequisites and reviewed state using GETs.
   // A known refusal must not be turned into an approval for a write that cannot proceed.
   if (requiresSuccessfulPreflight(operation))
