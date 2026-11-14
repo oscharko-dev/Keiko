@@ -95,7 +95,9 @@ describe("the helper's command", () => {
 
   it("acts in this order: ready, the committed list, the end of this process, then deleting", () => {
     const at = (text: string): number => UNINSTALL_HELPER_SCRIPT.indexOf(text);
-    const ready = at("[System.IO.File]::WriteAllText($ready, 'ready')");
+    const ready = at(
+      "[System.IO.File]::WriteAllText($ready, [string][System.Diagnostics.Process]::GetCurrentProcess().Id)",
+    );
     const list = at("while (-not [System.IO.File]::Exists($list))");
     const owner = at("$owner.WaitForExit(");
     const deleting = at("foreach ($line in [System.IO.File]::ReadAllLines($list))");
@@ -116,9 +118,13 @@ describe("the helper's command", () => {
     expect(UNINSTALL_HELPER_SCRIPT).toContain(withoutList);
     expect(UNINSTALL_HELPER_SCRIPT).toContain("Remove-KeikoOwn; exit 3");
     // every exit before the deleting phase cleans up first
+    // (the start check ends with exit 2 before anything exists: there is nothing to clean up)
     const beforeDeleting = UNINSTALL_HELPER_SCRIPT.slice(
       0,
       UNINSTALL_HELPER_SCRIPT.indexOf("foreach ($line"),
+    ).replace(
+      "if (-not $sound) { [System.IO.File]::WriteAllText($refused, 'refused'); exit 2 }",
+      "",
     );
     for (const exit of beforeDeleting.match(/exit \d/gu) ?? []) {
       expect(beforeDeleting).toContain(`Remove-KeikoOwn; ${exit}`);
@@ -137,10 +143,36 @@ describe("the helper's command", () => {
     );
   });
 
-  it("deletes a registration entry only when it is one of the paths named at start", () => {
+  // Windows PowerShell 5.1 does not enumerate a JSON array the way PowerShell 7 does, so the list of
+  // registration paths is a delimited string: a flat string array on every version. The helper checks
+  // that it got what the caller sent before it reports ready.
+  it("reads the registration paths as a flat string array and checks them before it reports ready", () => {
+    expect(UNINSTALL_HELPER_SCRIPT).not.toMatch(/ConvertFrom-Json|ConvertTo-Json/u);
     expect(UNINSTALL_HELPER_SCRIPT).toContain(
-      "$externals = @(ConvertFrom-Json $env:KEIKO_UNINSTALL_EXTERNALS)",
+      "$externals = $env:KEIKO_UNINSTALL_EXTERNALS.Split([char]124)",
     );
+    const check = UNINSTALL_HELPER_SCRIPT.indexOf("if (-not $sound) {");
+    const ready = UNINSTALL_HELPER_SCRIPT.indexOf("WriteAllText($ready,");
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(ready);
+    // a refusal of its own start check is reported through a file, so the caller need not wait
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("WriteAllText($refused, 'refused'); exit 2");
+    // the ready file holds the real helper's own process id: what the caller probes at the commit
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "[System.Diagnostics.Process]::GetCurrentProcess().Id",
+    );
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "$externals.Length -eq [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT",
+    );
+  });
+
+  it("does not wait for a process id that names a younger process", () => {
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "if ($owner.StartTime -gt [System.Diagnostics.Process]::GetCurrentProcess().StartTime) { $owner = $null }",
+    );
+  });
+
+  it("deletes a registration entry only when it is one of the paths named at start", () => {
     expect(UNINSTALL_HELPER_SCRIPT).toContain(
       "if ($path.Equals($e, [System.StringComparison]::OrdinalIgnoreCase)) { $known = $true }",
     );
@@ -178,6 +210,7 @@ describe("startUninstallHelper", () => {
         readyTimeoutMs: 3,
         pollMs: 1,
         sleep: () => Promise.resolve(),
+        isProcessAlive: () => true,
         spawnFn: (_command, _args, options): { on: () => void; unref: () => void } => {
           started.push(options);
           behaviour(options, options.env.KEIKO_UNINSTALL_DIR ?? "");
@@ -191,7 +224,7 @@ describe("startUninstallHelper", () => {
   it("hands the helper only its own inputs and the system variables", async () => {
     const parent = tempParent();
     const { deps: d, started } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "ready");
+      writeFileSync(join(dir, "ready"), "4711");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     expect(result.kind).toBe("ready");
@@ -202,8 +235,12 @@ describe("startUninstallHelper", () => {
       shell: false,
     });
     expect(Object.keys(started[0]?.env ?? {}).sort()).toEqual([
+      "KEIKO_STAGE2_ARGS",
+      "KEIKO_STAGE2_EXE",
+      "KEIKO_STAGE2_SCRIPT",
       "KEIKO_UNINSTALL_DIR",
       "KEIKO_UNINSTALL_EXTERNALS",
+      "KEIKO_UNINSTALL_EXTERNALS_COUNT",
       "KEIKO_UNINSTALL_PID",
       "KEIKO_UNINSTALL_ROOT",
       "SystemRoot",
@@ -217,7 +254,7 @@ describe("startUninstallHelper", () => {
   it("commits the list atomically, one kind-tagged path per line", async () => {
     const parent = tempParent();
     const { deps: d } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "ready");
+      writeFileSync(join(dir, "ready"), "4711");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
@@ -244,7 +281,7 @@ describe("startUninstallHelper", () => {
   it("refuses a path that is not a plain path", async () => {
     const parent = tempParent();
     const { deps: d } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "ready");
+      writeFileSync(join(dir, "ready"), "4711");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
@@ -316,49 +353,25 @@ describe("startUninstallHelper", () => {
     expect(readdirSync(inside)).toEqual([]);
   });
 
-  it("names the exact external paths to the helper, starts it in the system directory and tracks its end", async () => {
+  it("names the exact external paths to the helper and starts it in the system directory", async () => {
     const parent = tempParent();
-    const ending: { exitCode: number | null } = { exitCode: null };
     const { deps: base, started } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "ready");
+      writeFileSync(join(dir, "ready"), "4711");
     });
-    const result = await startUninstallHelper(
-      ROOT,
-      env,
-      {
-        ...base,
-        spawnFn: (command, args, options) => {
-          base.spawnFn?.(command, args, options);
-          return {
-            on: (): void => undefined,
-            unref: (): void => undefined,
-            get exitCode(): number | null {
-              return ending.exitCode;
-            },
-          };
-        },
-      },
-      EXTERNALS,
-    );
+    const result = await startUninstallHelper(ROOT, env, base, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
-    expect(JSON.parse(started[0]?.env.KEIKO_UNINSTALL_EXTERNALS ?? "null")).toEqual(EXTERNALS);
+    expect((started[0]?.env.KEIKO_UNINSTALL_EXTERNALS ?? "").split("|")).toEqual(EXTERNALS);
+    expect(started[0]?.env.KEIKO_UNINSTALL_EXTERNALS_COUNT).toBe(String(EXTERNALS.length));
+    // the real helper's text travels in the environment of the second stage, not on a command line
+    expect(started[0]?.env.KEIKO_STAGE2_SCRIPT).toBe(UNINSTALL_HELPER_SCRIPT);
     // the working directory is the system directory: never an installation, never the caller's
     expect(started[0]?.cwd).toBe(String.raw`D:\Windows`);
-    const entries = [{ kind: "external-file", path: EXTERNALS[0] ?? "" }] as const;
-    const listFile = join(parent, readdirSync(parent)[0] ?? "", "residue.txt");
-    expect(result.handle.commit(entries)).toBe("committed");
-    expect(existsSync(listFile)).toBe(true);
-    // a helper that ended is not handed a list: the caller keeps the installation registered
-    rmSync(listFile);
-    ending.exitCode = 1;
-    expect(result.handle.commit(entries)).toBe("helper-gone");
-    expect(existsSync(listFile)).toBe(false);
   });
 
   it("refuses to commit a registration entry that was not named at start", async () => {
     const parent = tempParent();
     const { deps: d } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "ready");
+      writeFileSync(join(dir, "ready"), "4711");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
@@ -368,5 +381,100 @@ describe("startUninstallHelper", () => {
     expect(() => {
       result.handle.commit([{ kind: "external-directory", path: String.raw`C:\Windows` }]);
     }).toThrow("was not named at start");
+  });
+
+  // The exit code of a child is set only when the event loop processes its exit, and the removal
+  // between the start and the commit is synchronous: a helper that died meanwhile is found by probing
+  // its process id at the moment of the commit.
+  // The ready file names the real helper's own process id, because the first stage (the process this
+  // command started) ends on purpose, long before the helper does: only the real helper's id says
+  // whether anything will carry out the list.
+  it("probes the real helper's process id at the commit, whatever became of the first stage", async () => {
+    const parent = tempParent();
+    const probed: number[] = [];
+    let alive = true;
+    const { deps: base } = deps(parent, (_o, dir) => {
+      writeFileSync(join(dir, "ready"), "4711");
+    });
+    const result = await startUninstallHelper(
+      ROOT,
+      env,
+      {
+        ...base,
+        isProcessAlive: (pid) => {
+          probed.push(pid);
+          return alive;
+        },
+        // the first stage has ended, successfully, as it is meant to
+        spawnFn: (command, args, options) => {
+          base.spawnFn?.(command, args, options);
+          return { on: (): void => undefined, unref: (): void => undefined, exitCode: 0, pid: 99 };
+        },
+      },
+      EXTERNALS,
+    );
+    if (result.kind !== "ready") throw new Error("expected a ready helper");
+    const entries = [{ kind: "external-file", path: EXTERNALS[0] ?? "" }] as const;
+    const listFile = join(parent, readdirSync(parent)[0] ?? "", "residue.txt");
+    expect(result.handle.commit(entries)).toBe("committed");
+    expect(existsSync(listFile)).toBe(true);
+    rmSync(listFile);
+    alive = false;
+    expect(result.handle.commit(entries)).toBe("helper-gone");
+    expect(existsSync(listFile)).toBe(false);
+    expect(new Set(probed)).toEqual(new Set([4711]));
+  });
+
+  it("refuses at once when the first stage fails to start the helper", async () => {
+    const parent = tempParent();
+    const { deps: base } = deps(parent, () => undefined);
+    const started = Date.now();
+    const result = await startUninstallHelper(
+      ROOT,
+      env,
+      {
+        ...base,
+        readyTimeoutMs: 60_000,
+        spawnFn: () => ({ on: (): void => undefined, unref: (): void => undefined, exitCode: 1 }),
+      },
+      EXTERNALS,
+    );
+    expect(result).toEqual({ kind: "refused", reason: "spawn-failed" });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(readdirSync(parent)).toEqual([]);
+  });
+
+  it("refuses at once when the helper's own start check refuses, or reports no process id", async () => {
+    for (const report of ["refused", "not a number"]) {
+      const parent = tempParent();
+      const { deps: base } = deps(parent, (_o, dir) => {
+        writeFileSync(join(dir, report === "refused" ? "refused" : "ready"), report);
+      });
+      const started = Date.now();
+      const result = await startUninstallHelper(
+        ROOT,
+        env,
+        { ...base, readyTimeoutMs: 60_000 },
+        EXTERNALS,
+      );
+      expect(result).toEqual({ kind: "refused", reason: "not-ready" });
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(readdirSync(parent)).toEqual([]);
+    }
+  });
+
+  it("waits up to thirty seconds for the helper to report, before anything is deleted", () => {
+    expect(
+      readFileSync(new URL("./uninstall-windows-helper.ts", import.meta.url), "utf8"),
+    ).toContain("const HELPER_READY_TIMEOUT_MS = 30_000;");
+  });
+
+  it("refuses a registration path that holds the list delimiter", async () => {
+    const parent = tempParent();
+    const { deps: base } = deps(parent, () => undefined);
+    await expect(startUninstallHelper(ROOT, env, base, ["C:\\a|b"])).rejects.toThrow(
+      "not a plain path",
+    );
+    expect(readdirSync(parent)).toEqual([]);
   });
 });

@@ -1750,13 +1750,14 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
   function helperSeam(
     root: string,
     reportsReady: boolean,
+    folder = "helper-temp",
   ): {
     readonly calls: { readonly command: string; readonly options: Record<string, unknown> }[];
     readonly tempParent: string;
     readonly seam: NonNullable<UninstallCliDeps["managedRemoval"]>["helper"];
   } {
     const calls: { command: string; options: Record<string, unknown> }[] = [];
-    const tempParent = join(root, "helper-temp");
+    const tempParent = join(root, folder);
     mkdirSync(tempParent);
     return {
       calls,
@@ -1768,10 +1769,11 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
         readyTimeoutMs: 3,
         pollMs: 1,
         sleep: () => Promise.resolve(),
+        isProcessAlive: () => true,
         spawnFn: (command, _args, options): { on: () => void; unref: () => void } => {
           calls.push({ command, options: { ...options } });
           const directory = options.env.KEIKO_UNINSTALL_DIR ?? "";
-          if (reportsReady) writeFileSync(join(directory, "ready"), "ready");
+          if (reportsReady) writeFileSync(join(directory, "ready"), "4711");
           return { on: (): void => undefined, unref: (): void => undefined };
         },
       },
@@ -2025,6 +2027,18 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
       ["installation-gone"],
     ],
     [
+      "helper dies between two identity files (the record and the package are gone, the manifest is not)",
+      (l: string): boolean =>
+        l.startsWith("F\t") || (l.startsWith("I\t") && /runtime-activation|package\.json/u.test(l)),
+      ["files-remaining"],
+    ],
+    [
+      "helper dies between the registration entries (the Start-menu entry is gone, the registration is not)",
+      (l: string): boolean =>
+        /^[FID]\t/u.test(l) || (l.startsWith("X\t") && l.endsWith("Keiko.lnk")),
+      ["installation-gone"],
+    ],
+    [
       "helper dies right after the install root",
       (l: string): boolean => /^[FID]\t/u.test(l),
       ["installation-gone"],
@@ -2037,7 +2051,6 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
       const registration = join(where.root, ".keiko", "portable-install-state.json");
       // registered and resumable, whatever the helper got to
       expect(existsSync(registration)).toBe(true);
-      expect(existsSync(where.shortcut)).toBe(true);
 
       const next = await secondRun(where);
 
@@ -2106,10 +2119,8 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
           helper: {
             ...helper.seam,
             // the stand-in reports ready, and has ended before the list is committed
-            spawnFn: (command, args, options) => {
-              const child = helper.seam?.spawnFn?.(command, args, options);
-              return { on: (): void => undefined, unref: (): void => child?.unref(), exitCode: 1 };
-            },
+            // the real helper reported its process id, and is gone by the time the list is committed
+            isProcessAlive: () => false,
           },
           unlink: heldOpen(join("runtime", "node", "node.exe")),
         },
@@ -2128,6 +2139,43 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
       runUninstallCli(["--state"], makeIo().io, env, { cwd: root, homedir: () => home }),
     ).resolves.toBe(0);
     expect(existsSync(managedRoot)).toBe(false);
+  });
+
+  it("logs the real resume state on a resumed run that loses its helper", async () => {
+    const where = await handedOff();
+    carryOut(where.directory, (l) => l.startsWith("F\t"));
+    const helper = helperSeam(where.root, true, "helper-temp-2");
+    const events: SecurityLogEvent[] = [];
+
+    const code = await runUninstallCli(
+      ["--state"],
+      makeIo().io,
+      { ...where.env, ...WIN },
+      {
+        cwd: where.root,
+        homedir: () => where.home,
+        ...activityDeps(where.root, events),
+        ...insideCopy(where.managedRoot),
+        managedRemoval: {
+          helper: {
+            ...helper.seam,
+            spawnFn: (command, args, options) => {
+              helper.seam?.spawnFn?.(command, args, options);
+              return { on: (): void => undefined, unref: (): void => undefined, pid: 4711 };
+            },
+            isProcessAlive: () => false,
+          },
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    const handoff = events.filter(({ op }) => op === "cli.uninstall.handoff");
+    expect(handoff.map((event) => [extraOf(event).outcome, extraOf(event).resumeState])).toEqual([
+      ["resumed", "files-remaining"],
+      ["helper-ready", "files-remaining"],
+      ["helper-lost", "files-remaining"],
+    ]);
   });
 
   it("starts no helper on another platform or on a dry run, and a dry run names the handoff", async () => {

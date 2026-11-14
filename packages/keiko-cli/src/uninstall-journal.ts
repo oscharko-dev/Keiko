@@ -19,6 +19,8 @@ export interface UninstallJournal {
   readonly platformTarget: PortableTarget;
   readonly setupManifestSha256: string;
   readonly installRootIdentitySha256: string;
+  /** The same identity with letter case folded, for a root that is gone and spelled differently. */
+  readonly installRootFoldedSha256: string;
 }
 
 export function uninstallJournalPath(stateDir: string): string {
@@ -42,7 +44,9 @@ function isJournal(value: unknown): value is UninstallJournal {
     typeof record.setupManifestSha256 === "string" &&
     SHA256.test(record.setupManifestSha256) &&
     typeof record.installRootIdentitySha256 === "string" &&
-    SHA256.test(record.installRootIdentitySha256)
+    SHA256.test(record.installRootIdentitySha256) &&
+    typeof record.installRootFoldedSha256 === "string" &&
+    SHA256.test(record.installRootFoldedSha256)
   );
 }
 

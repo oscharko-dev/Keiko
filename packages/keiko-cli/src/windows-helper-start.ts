@@ -31,6 +31,8 @@ export interface VisibleWindowsHelperSpawnOptions {
 export interface WindowsHelperChild {
   on(event: "error", listener: (error: Error) => void): unknown;
   unref(): void;
+  /** The process id, once the program has started. */
+  readonly pid?: number | undefined;
   /** Set by the platform once the program has ended; absent while it runs. */
   readonly exitCode?: number | null;
   readonly signalCode?: NodeJS.Signals | null;
@@ -69,6 +71,77 @@ export function startVisibleWindowsHelper(
   spawnFn: WindowsHelperSpawn = spawn,
 ): WindowsHelperChild {
   return spawnFn(command, args, visibleWindowsHelperSpawnOptions(env));
+}
+
+/**
+ * What libuv does on Windows: every child that is not detached joins one job object that kills it
+ * when the parent ends, and the job lets only the processes libuv itself starts belong to it (their
+ * own children do not). So a helper started like the others ends with the keiko process that started
+ * it, and one that must outlive that process is started by a first, short-lived PowerShell: the first
+ * stage does nothing but start the real helper as its own process (hidden window) and end, and the
+ * real helper, a grandchild, is outside the job (#4358). The text below is the first stage's whole
+ * command; everything else reaches the real helper through its environment, so no quoting of the
+ * helper's text is ever needed.
+ */
+export const OUTLIVING_STAGE_ONE_SCRIPT =
+  "Start-Process -FilePath $env:KEIKO_STAGE2_EXE -ArgumentList $env:KEIKO_STAGE2_ARGS -WindowStyle Hidden";
+
+// The second stage reads its own text from the environment and runs it in its own session, so an
+// `exit` in it ends the process with its exit code.
+const STAGE_TWO_COMMAND = ["-Command", "Invoke-Expression", "$env:KEIKO_STAGE2_SCRIPT"] as const;
+
+const STAGE_ONE_FLAGS = [
+  "-NoLogo",
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-WindowStyle",
+  "Hidden",
+] as const;
+
+export interface OutlivingHelperInput {
+  readonly system: WindowsHelperSystem;
+  readonly env: NodeJS.ProcessEnv;
+  /** The real helper's PowerShell flags before its command, e.g. `-Sta` for a WPF window. */
+  readonly stageTwoFlags?: readonly string[] | undefined;
+  /** The real helper's whole text; it is handed over in an environment variable, never quoted. */
+  readonly script: string;
+  /** The real helper's own named inputs, besides the system variables. */
+  readonly extraEnv?: Readonly<Record<string, string>> | undefined;
+}
+
+/**
+ * Starts a helper that must outlive the keiko process that starts it: the attached, hidden first
+ * PowerShell (the start proven to run) that starts the real one. The returned child is the first
+ * stage; it is expected to end quickly, and its end says nothing about the real helper.
+ */
+export function startOutlivingWindowsHelper(
+  input: OutlivingHelperInput,
+  spawnFn: WindowsHelperSpawn = spawn,
+): WindowsHelperChild {
+  const stageTwoArguments = [
+    "-NoLogo",
+    "-NoProfile",
+    ...(input.stageTwoFlags ?? []),
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-WindowStyle",
+    "Hidden",
+    ...STAGE_TWO_COMMAND,
+  ];
+  return startVisibleWindowsHelper(
+    input.system.command,
+    [...STAGE_ONE_FLAGS, "-Command", OUTLIVING_STAGE_ONE_SCRIPT],
+    windowsHelperEnv(input.env, input.system, {
+      ...input.extraEnv,
+      KEIKO_STAGE2_EXE: input.system.command,
+      KEIKO_STAGE2_ARGS: stageTwoArguments.join(" "),
+      KEIKO_STAGE2_SCRIPT: input.script,
+    }),
+    spawnFn,
+  );
 }
 
 export interface WindowsHelperSystem {

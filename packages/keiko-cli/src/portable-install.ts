@@ -28,6 +28,7 @@ import {
   type ManagedSetupRegistration,
   readManagedRegistration,
   registrationMatches,
+  portableInstallRootFoldedSha256,
   portableInstallRootIdentityForRemoval,
   registrationResumeMatches,
   writeFailedRegistration,
@@ -1858,13 +1859,19 @@ function goneManagedLayout(
   registration: ManagedSetupRegistration,
   managedRoot: string,
   stateDir: string,
+  journal: UninstallJournal,
 ): PortableLayout | undefined {
   const target = registration.platformTarget;
   if (!managedRootAllowedForTarget(managedRoot, stateDir, target)) return undefined;
   const rootLayout = layoutFor(target, managedRoot);
   if (existsSync(rootLayout.setupManifestPath)) return undefined;
-  const identity = portableInstallRootIdentityForRemoval(managedRoot);
-  return identity === registration.installRootIdentitySha256 ? rootLayout : undefined;
+  const exact = portableInstallRootIdentityForRemoval(managedRoot);
+  // On Windows the same folder is spelled with different letter case by different records; the
+  // journal's folded identity was taken while the root existed.
+  const folded =
+    target === "windows-x64" &&
+    portableInstallRootFoldedSha256(managedRoot) === journal.installRootFoldedSha256;
+  return exact === registration.installRootIdentitySha256 || folded ? rootLayout : undefined;
 }
 
 export interface ResumedPortableInstallRecord {
@@ -1891,6 +1898,7 @@ function findResumed(
   registration: ManagedSetupRegistration,
   roots: readonly string[],
   stateDir: string,
+  journal: UninstallJournal,
 ): ResumedPortableInstallRecord | undefined {
   const target = registration.platformTarget;
   for (const managedRoot of roots) {
@@ -1901,7 +1909,7 @@ function findResumed(
     }
   }
   for (const managedRoot of roots) {
-    const layout = goneManagedLayout(registration, managedRoot, stateDir);
+    const layout = goneManagedLayout(registration, managedRoot, stateDir, journal);
     if (layout !== undefined) {
       return { registration, target, managedRoot, layout, state: "installation-gone" };
     }
@@ -1935,6 +1943,7 @@ export function resumedPortableInstallRecord(
     registration,
     candidateManagedRoots(registration, env, home, options),
     stateDir,
+    journal,
   );
 }
 

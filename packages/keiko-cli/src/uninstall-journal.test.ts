@@ -19,6 +19,7 @@ const journal: UninstallJournal = {
   platformTarget: "windows-x64",
   setupManifestSha256: "a".repeat(64),
   installRootIdentitySha256: "b".repeat(64),
+  installRootFoldedSha256: "c".repeat(64),
 };
 
 function stateDir(): string {
@@ -32,6 +33,7 @@ it("round-trips and holds digests and a platform label, never a path", () => {
   writeUninstallJournal(dir, journal);
   expect(readUninstallJournal(dir)).toEqual(journal);
   expect(Object.keys(journal).sort()).toEqual([
+    "installRootFoldedSha256",
     "installRootIdentitySha256",
     "platformTarget",
     "schemaVersion",
@@ -46,6 +48,7 @@ it.each([
   ["a different schema", JSON.stringify({ ...journal, schemaVersion: 2 })],
   ["an unknown platform", JSON.stringify({ ...journal, platformTarget: "plan9" })],
   ["a digest of the wrong shape", JSON.stringify({ ...journal, setupManifestSha256: "xyz" })],
+  ["no folded identity", JSON.stringify({ ...journal, installRootFoldedSha256: undefined })],
   ["oversized", `${JSON.stringify(journal)}${" ".repeat(5000)}`],
 ])("names no removal when the journal is %s", (_name, content) => {
   const dir = stateDir();

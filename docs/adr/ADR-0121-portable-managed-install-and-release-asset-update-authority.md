@@ -859,7 +859,9 @@ directory, so a helper never holds a folder of the installation. The helper repo
 a file. If it does not, nothing is removed and the person is told to run the uninstall from the
 downloaded release package, whose runtime lies outside the installation. The command then removes
 what it can and commits the remainder, as a list written atomically; a helper that has already ended
-is not handed a list, and the run reports the residue and keeps the installation registered.
+is not handed a list, and the run reports the residue and keeps the installation registered. That is
+read at the moment of the commit by probing the helper's process id, because the exit code of a child
+is set only when the event loop processes its exit, and the removal before the commit is synchronous.
 
 The helper acts in three phases, in this order: it waits for the committed list (generously: this
 process removes thousands of files first; it ends, deleting nothing, if this process ends without
@@ -867,7 +869,14 @@ committing one), then for this process to end (a short bound, after which it del
 only then deletes. It removes files and folders by path, a folder only if it is empty, entries of the
 installation only under its root, never through a link, and never a file kind it did not expect. The
 registration entries (the Start-menu entry, the registration, the journal and the state directory) are
-exactly the paths the command named when it started the helper; no other path is accepted for them.
+exactly the paths the command named when it started the helper, passed as one string split at `|`
+(a character no Windows path holds) with their count: Windows PowerShell 5.1, which is what runs on
+Windows, does not enumerate a parsed JSON array as PowerShell 7 does, so the helper reads no JSON. It
+checks that it got exactly that many rooted paths before it reports ready and ends without reporting
+otherwise, so the command refuses before its first deletion. A process id that has been reused since
+the command started names a younger process and is not waited for. A file the helper cannot see (a
+path over 260 characters on 5.1) is skipped, but its folder then is not empty, the folder and the
+root cannot be removed, and the run fails closed: the registration stays.
 The order of the list is: payload residue, the identity files (the runtime record, `app/package.json`,
 the launcher, the setup manifest), the folders, then the registration entries. Any entry that cannot
 be removed marks the run as failed, and a failed run leaves every identity file and every

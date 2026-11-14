@@ -1177,9 +1177,10 @@ function reportManagedResult(
   result: ManagedRemovalResult,
   io: CliIo,
   activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
+  resumeState: (typeof UNINSTALL_RESUME_STATES)[number],
 ): ManagedStepOutcome {
   if (result.kind === "handed-off") {
-    emitUninstallHandoff(activity, "residue-committed", result);
+    emitUninstallHandoff(activity, "residue-committed", { ...result, resumeState });
     io.out(
       `keiko uninstall: removed ${String(result.removedCount)} files. The last ${String(result.residueFileCount + result.residueDirectoryCount)} ` +
         "entries of this copy are removed when this command ends.\n",
@@ -1187,7 +1188,10 @@ function reportManagedResult(
     return { held: new Set(result.deferredStatePaths), incomplete: false };
   }
   if (result.kind === "incomplete") {
-    emitUninstallHandoff(activity, result.helperLost ? "helper-lost" : "residue-reported", result);
+    emitUninstallHandoff(activity, result.helperLost ? "helper-lost" : "residue-reported", {
+      ...result,
+      resumeState,
+    });
     const count = String(result.residueFileCount + result.residueDirectoryCount);
     io.err(
       result.helperLost
@@ -1210,8 +1214,16 @@ function applyManagedStep(
   if (planned.plan.resume !== "none") {
     emitUninstallHandoff(activity, "resumed", { resumeState: planned.plan.resume });
   }
-  if (planned.plan.helper !== undefined) emitUninstallHandoff(activity, "helper-ready");
-  return reportManagedResult(applyManagedRemoval(planned.plan, context), context.io, activity);
+  const resumeState = planned.plan.resume;
+  if (planned.plan.helper !== undefined) {
+    emitUninstallHandoff(activity, "helper-ready", { resumeState });
+  }
+  return reportManagedResult(
+    applyManagedRemoval(planned.plan, context),
+    context.io,
+    activity,
+    resumeState,
+  );
 }
 
 function emitUninstallCompleted(

@@ -1,5 +1,14 @@
-import { mkdtempSync, existsSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
+import { isProcessAlive as defaultIsProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import { join, posix, win32 } from "node:path";
 import {
   securityErrorKind,
@@ -8,8 +17,7 @@ import {
 } from "@oscharko-dev/keiko-security";
 import {
   resolveWindowsPowerShellHelper,
-  startVisibleWindowsHelper,
-  windowsHelperEnv,
+  startOutlivingWindowsHelper,
   type WindowsHelperChild,
   type WindowsHelperSpawn,
   type WindowsHelperSystem,
@@ -26,7 +34,10 @@ import {
 
 const HELPER_READY_FILE = "ready";
 const HELPER_LIST_FILE = "residue.txt";
-const HELPER_READY_TIMEOUT_MS = 10_000;
+const HELPER_REFUSED_FILE = "refused";
+// Before any deletion, so a long bound costs nothing: an attached, hidden PowerShell took four to five
+// seconds on an unloaded machine, and the real helper is started by a second one.
+const HELPER_READY_TIMEOUT_MS = 30_000;
 const HELPER_POLL_MS = 100;
 // How long the helper waits for the committed list, and then for this process to end. The first is
 // generous: this process removes thousands of files first. The second is short: the list is
@@ -83,11 +94,22 @@ const HELPER_SCRIPT = [
   "$dir = $env:KEIKO_UNINSTALL_DIR",
   "$root = [System.IO.Path]::GetFullPath($env:KEIKO_UNINSTALL_ROOT)",
   "$prefix = if ($root.EndsWith($sep)) { $root } else { $root + $sep }",
-  "$externals = @(ConvertFrom-Json $env:KEIKO_UNINSTALL_EXTERNALS)",
+  // The registration paths arrive as one string split at `|`, a character no Windows path holds: the
+  // result is a flat string array on every PowerShell version (ConvertFrom-Json does not enumerate a
+  // JSON array the same way in Windows PowerShell 5.1 and 7). Before the helper reports ready it
+  // checks that it got exactly the expected number of rooted paths; otherwise it ends without
+  // "ready", and the caller refuses before the first deletion.
+  "$externals = $env:KEIKO_UNINSTALL_EXTERNALS.Split([char]124)",
   `$ready = [System.IO.Path]::Combine($dir, '${HELPER_READY_FILE}')`,
   `$list = [System.IO.Path]::Combine($dir, '${HELPER_LIST_FILE}')`,
-  "[System.IO.File]::WriteAllText($ready, 'ready')",
-  "try { $owner = [System.Diagnostics.Process]::GetProcessById([int]$env:KEIKO_UNINSTALL_PID) } catch { $owner = $null }",
+  `$refused = [System.IO.Path]::Combine($dir, '${HELPER_REFUSED_FILE}')`,
+  "$sound = [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT -ge 1 -and $externals.Length -eq [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT",
+  "foreach ($x in $externals) { if ($x.Length -lt 3 -or -not [System.IO.Path]::IsPathRooted($x)) { $sound = $false } }",
+  "if (-not $sound) { [System.IO.File]::WriteAllText($refused, 'refused'); exit 2 }",
+  "[System.IO.File]::WriteAllText($ready, [string][System.Diagnostics.Process]::GetCurrentProcess().Id)",
+  // A process id that has been reused since this command started names a younger process: it is not
+  // the one to wait for, and the committed-list wait ends with the list or with its bound.
+  "try { $owner = [System.Diagnostics.Process]::GetProcessById([int]$env:KEIKO_UNINSTALL_PID); if ($owner.StartTime -gt [System.Diagnostics.Process]::GetCurrentProcess().StartTime) { $owner = $null } } catch { $owner = $null }",
   "function Invoke-Keiko([scriptblock]$action, [int]$attempts) { for ($i = 0; $i -lt $attempts; $i++) { try { & $action | Out-Null; return $true } catch { Start-Sleep -Milliseconds 500 } }; return $false }",
   "function Remove-KeikoOwn { foreach ($f in @($list, ($list + '.tmp'), $ready)) { [void](Invoke-Keiko { [System.IO.File]::Delete($f) } 3) }; [void](Invoke-Keiko { [System.IO.Directory]::Delete($dir, $false) } 3) }",
   `$until = [DateTime]::UtcNow.AddSeconds(${String(HELPER_WAIT_FOR_LIST_S)})`,
@@ -170,6 +192,8 @@ export interface UninstallHelperDeps {
   readonly sleep?: ((ms: number) => Promise<void>) | undefined;
   readonly identityCheck?: WindowsSystemDirectoryIdentityCheck | undefined;
   readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
+  /** Whether a process id names a running process; the platform probe unless a test names one. */
+  readonly isProcessAlive?: ((pid: number) => boolean) | undefined;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -208,33 +232,46 @@ function createHandle(
   };
 }
 
-// Polls for the helper's ready file, one bounded sleep at a time. Chained, not looped, so no step
+// What the real helper reported: its process id (the ready file holds nothing else), a refusal of its
+// own start check, or nothing yet.
+function readReport(directory: string): number | "refused" | undefined {
+  if (existsSync(join(directory, HELPER_REFUSED_FILE))) return "refused";
+  const readyPath = join(directory, HELPER_READY_FILE);
+  if (!existsSync(readyPath)) return undefined;
+  const pid = Number.parseInt(readFileSync(readyPath, "utf8").trim(), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : "refused";
+}
+
+// Polls for the real helper's report, one bounded sleep at a time. Chained, not looped, so no step
 // waits inside a loop.
-function waitUntilReady(
+function waitForReport(
   directory: string,
   failed: () => boolean,
   deps: UninstallHelperDeps,
-): Promise<boolean> {
+): Promise<number | "refused" | undefined> {
   const sleep = deps.sleep ?? defaultSleep;
   const pollMs = deps.pollMs ?? HELPER_POLL_MS;
   const attempts = Math.max(
     1,
     Math.ceil((deps.readyTimeoutMs ?? HELPER_READY_TIMEOUT_MS) / pollMs),
   );
-  const check = (attempt: number): Promise<boolean> => {
-    if (existsSync(join(directory, HELPER_READY_FILE))) return Promise.resolve(true);
-    if (failed() || attempt >= attempts) return Promise.resolve(false);
+  const check = (attempt: number): Promise<number | "refused" | undefined> => {
+    const report = readReport(directory);
+    if (report !== undefined) return Promise.resolve(report);
+    if (failed() || attempt >= attempts) return Promise.resolve(undefined);
     return sleep(pollMs).then(() => check(attempt + 1));
   };
   return check(0);
 }
 
-// The program has ended once the platform reports an exit code or a signal for it.
-function hasEnded(child: WindowsHelperChild | undefined): boolean {
-  if (child === undefined) return false;
+// The first stage ends quickly and on purpose; only a failing exit code says it did not start the
+// real helper.
+function firstStageFailed(child: WindowsHelperChild | undefined): boolean {
   return (
-    (child.exitCode !== undefined && child.exitCode !== null) ||
-    (child.signalCode !== undefined && child.signalCode !== null)
+    child !== undefined &&
+    child.exitCode !== undefined &&
+    child.exitCode !== null &&
+    child.exitCode !== 0
   );
 }
 
@@ -249,20 +286,6 @@ function recordRefusal(
     : { kind: "refused", reason, failureKind: securityErrorKind(error) };
 }
 
-function helperArguments(): readonly string[] {
-  return [
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-WindowStyle",
-    "Hidden",
-    "-Command",
-    HELPER_SCRIPT,
-  ];
-}
-
 /**
  * Starts the helper and waits until it reports that it runs. Nothing is removed before this
  * returns `ready`: a PowerShell blocked by policy, a spawn that fails and a helper that never
@@ -275,6 +298,9 @@ export async function startUninstallHelper(
   deps: UninstallHelperDeps,
   externals: readonly string[],
 ): Promise<UninstallHelperStart> {
+  if (externals.some((path) => path.includes("|"))) {
+    throw new Error("uninstall helper external path is not a plain path");
+  }
   let system: WindowsHelperSystem;
   try {
     system = resolveWindowsPowerShellHelper(env, deps.identityCheck, deps.existsAsFile);
@@ -289,16 +315,19 @@ export async function startUninstallHelper(
   }
   const state: { spawnFailed: boolean; child?: WindowsHelperChild } = { spawnFailed: false };
   try {
-    const helperEnv = windowsHelperEnv(env, system, {
-      KEIKO_UNINSTALL_DIR: directory,
-      KEIKO_UNINSTALL_PID: String(deps.pid),
-      KEIKO_UNINSTALL_ROOT: installRoot,
-      KEIKO_UNINSTALL_EXTERNALS: JSON.stringify(externals),
-    });
-    const child = startVisibleWindowsHelper(
-      system.command,
-      helperArguments(),
-      helperEnv,
+    const child = startOutlivingWindowsHelper(
+      {
+        system,
+        env,
+        script: HELPER_SCRIPT,
+        extraEnv: {
+          KEIKO_UNINSTALL_DIR: directory,
+          KEIKO_UNINSTALL_PID: String(deps.pid),
+          KEIKO_UNINSTALL_ROOT: installRoot,
+          KEIKO_UNINSTALL_EXTERNALS: externals.join("|"),
+          KEIKO_UNINSTALL_EXTERNALS_COUNT: String(externals.length),
+        },
+      },
       deps.spawnFn,
     );
     child.on("error", () => {
@@ -309,8 +338,17 @@ export async function startUninstallHelper(
   } catch (error) {
     return recordRefusal("spawn-failed", directory, error);
   }
-  if (!(await waitUntilReady(directory, () => state.spawnFailed, deps))) {
-    return recordRefusal(state.spawnFailed ? "spawn-failed" : "not-ready", directory);
+  const report = await waitForReport(
+    directory,
+    () => state.spawnFailed || firstStageFailed(state.child),
+    deps,
+  );
+  if (typeof report !== "number") {
+    const failedToStart = state.spawnFailed || firstStageFailed(state.child);
+    return recordRefusal(failedToStart ? "spawn-failed" : "not-ready", directory);
   }
-  return { kind: "ready", handle: createHandle(directory, externals, () => hasEnded(state.child)) };
+  // The real helper's own process id: it is what must be alive when the list is committed. The first
+  // stage has ended long before, and its end says nothing about the helper.
+  const alive = deps.isProcessAlive ?? defaultIsProcessAlive;
+  return { kind: "ready", handle: createHandle(directory, externals, () => !alive(report)) };
 }

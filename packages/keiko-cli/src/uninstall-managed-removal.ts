@@ -25,7 +25,10 @@ import {
   type UninstallHelperHandle,
   type UninstallHelperRefusal,
 } from "./uninstall-windows-helper.js";
-import { portableInstallRootIdentitySha256 } from "./portable-registration.js";
+import {
+  portableInstallRootFoldedSha256,
+  portableInstallRootIdentitySha256,
+} from "./portable-registration.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -215,6 +218,7 @@ function writeJournal(plan: ManagedRemovalPlan, stateDir: string): void {
     platformTarget: record.target,
     setupManifestSha256: sha256File(record.layout.setupManifestPath),
     installRootIdentitySha256: portableInstallRootIdentitySha256(record.layout.installRoot),
+    installRootFoldedSha256: portableInstallRootFoldedSha256(record.layout.installRoot),
   });
 }
 

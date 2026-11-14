@@ -119,12 +119,9 @@ export function portableInstallRootIdentitySha256(path: string): string {
   return sha256Text(realpathSync(path));
 }
 
-/**
- * The same identity for a root that may no longer exist: the real path of its nearest existing
- * ancestor with the missing tail appended. A root the managed-root policy admitted has no symbolic
- * link in its path, so this equals the identity recorded while it existed.
- */
-export function portableInstallRootIdentityForRemoval(path: string): string {
+// The real path of a root that may no longer exist: its nearest existing ancestor's real path with
+// the missing tail appended.
+function resolvedRootForRemoval(path: string): string {
   let cursor = resolve(path);
   const missing: string[] = [];
   while (!existsSync(cursor)) {
@@ -134,7 +131,25 @@ export function portableInstallRootIdentityForRemoval(path: string): string {
     cursor = parent;
   }
   const existing = existsSync(cursor) ? realpathSync(cursor) : cursor;
-  return sha256Text(join(existing, ...missing));
+  return join(existing, ...missing);
+}
+
+/**
+ * The same identity for a root that may no longer exist. A root the managed-root policy admitted has
+ * no symbolic link in its path, so this equals the identity recorded while it existed, as long as
+ * the path is spelled the way it was recorded.
+ */
+export function portableInstallRootIdentityForRemoval(path: string): string {
+  return sha256Text(resolvedRootForRemoval(path));
+}
+
+/**
+ * The identity with letter case folded: Windows paths differ only in case across the places a root
+ * is recorded (a Start-menu target, the default root), and a different spelling of the same folder
+ * must not make a resume fail closed. Written to the uninstall journal while the root exists.
+ */
+export function portableInstallRootFoldedSha256(path: string): string {
+  return sha256Text(resolvedRootForRemoval(path).toLowerCase());
 }
 
 // #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file

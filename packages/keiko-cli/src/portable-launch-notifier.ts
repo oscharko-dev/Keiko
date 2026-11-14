@@ -14,6 +14,7 @@ import {
 import { emitCliWindowsSystemFailure } from "./security-log.js";
 import {
   resolveWindowsPowerShellHelper,
+  startOutlivingWindowsHelper,
   startVisibleWindowsHelper,
   windowsHelperEnv,
   type WindowsHelperSystem,
@@ -308,6 +309,16 @@ function spawnWindowsAlertChild(
   log: WindowsAlertLog,
 ): DetachedAlertChild {
   try {
+    // The failure alert is shown just before the keiko process ends with its failure, and on Windows
+    // an attached child ends with the process that started it (libuv's job object): it needs the
+    // second stage, so the box outlives this process. The setup notice is shown for as long as the
+    // setup runs, which is the process that starts it, so it keeps the single, proven start.
+    if (box.kind === "failure") {
+      return startOutlivingWindowsHelper(
+        { system, env, stageTwoFlags: ["-Sta"], script: windowsAlertCommand(box) },
+        spawnFn,
+      );
+    }
     // The shared visible-helper start: attached with a hidden window, like the browser opener. The
     // launcher still never waits for the box; its caller unreferences the child.
     return startVisibleWindowsHelper(

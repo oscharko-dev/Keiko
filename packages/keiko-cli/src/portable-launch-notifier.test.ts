@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { createCliSecurityLogSink } from "./security-log.js";
+import { OUTLIVING_STAGE_ONE_SCRIPT } from "./windows-helper-start.js";
 import {
   type DetachedWindowsBoxOptions,
   notifyPortableLaunchFailure,
@@ -307,19 +308,20 @@ describe("runDetachedWindowsAlert", () => {
     expect(calls[0]?.[0]).toBe(
       String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     );
+    // Two stages (#4358): libuv ends every attached child with the process that started it, and the
+    // failure alert is shown just before that process ends. The first stage, the start proven to run,
+    // only starts the real box as its own process; the box's text and flags reach it through the
+    // environment, never through quoting.
     expect(calls[0]?.[1]).toEqual([
       "-NoLogo",
       "-NoProfile",
-      "-Sta",
-      "-WindowStyle",
-      "Hidden",
       "-NonInteractive",
       "-ExecutionPolicy",
       "Bypass",
+      "-WindowStyle",
+      "Hidden",
       "-Command",
-      "Add-Type -AssemblyName PresentationFramework; " +
-        "[System.Windows.MessageBox]::Show('can''t startbecause', " +
-        "'Keiko could not start', 'OK', 'Error') | Out-Null",
+      OUTLIVING_STAGE_ONE_SCRIPT,
     ]);
     // PowerShell/WPF need the core system variables to initialize; everything else stays
     // withheld from the child (no TEMP/TMP here because the caller env carries none). The child
@@ -328,7 +330,17 @@ describe("runDetachedWindowsAlert", () => {
     // child is unreferenced.
     expect(calls[0]?.[2]).toEqual({
       detached: false,
-      env: { SystemRoot: String.raw`D:\Windows`, WINDIR: String.raw`D:\Windows` },
+      env: {
+        SystemRoot: String.raw`D:\Windows`,
+        WINDIR: String.raw`D:\Windows`,
+        KEIKO_STAGE2_EXE: String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+        KEIKO_STAGE2_ARGS:
+          "-NoLogo -NoProfile -Sta -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command Invoke-Expression $env:KEIKO_STAGE2_SCRIPT",
+        KEIKO_STAGE2_SCRIPT:
+          "Add-Type -AssemblyName PresentationFramework; " +
+          "[System.Windows.MessageBox]::Show('can''t startbecause', " +
+          "'Keiko could not start', 'OK', 'Error') | Out-Null",
+      },
       shell: false,
       stdio: "ignore",
       windowsHide: true,
@@ -368,7 +380,18 @@ describe("runDetachedWindowsAlert", () => {
     );
     // WPF initialization needs a writable temp location when the profile provides one; both
     // variables must reach the child exactly as supplied, and nothing else may leak in.
-    expect((calls[0]?.[2] as { env: unknown }).env).toEqual({
+    const env = (calls[0]?.[2] as { env: Record<string, string> }).env;
+    expect(
+      Object.keys(env)
+        .filter((key) => !key.startsWith("KEIKO_STAGE2_"))
+        .sort(),
+    ).toEqual(["SystemRoot", "TEMP", "TMP", "WINDIR"]);
+    expect({
+      SystemRoot: env.SystemRoot,
+      WINDIR: env.WINDIR,
+      TEMP: env.TEMP,
+      TMP: env.TMP,
+    }).toEqual({
       SystemRoot: String.raw`D:\Windows`,
       WINDIR: String.raw`D:\Windows`,
       TEMP: String.raw`D:\Scratch\Temp`,
@@ -475,18 +498,21 @@ describe("notifyPortableSetupStarted", () => {
 describe("runDetachedWindowsBox as a setup notice", () => {
   const spawned = (): {
     readonly args: (readonly string[])[];
+    readonly envs: NodeJS.ProcessEnv[];
     readonly options: DetachedWindowsBoxOptions;
   } => {
     const args: (readonly string[])[] = [];
+    const envs: NodeJS.ProcessEnv[] = [];
     const options: DetachedWindowsBoxOptions = {
-      spawnFn: (_command, argv) => {
+      spawnFn: (_command, argv, spawnOptions) => {
         args.push(argv);
+        envs.push(spawnOptions.env);
         return { on: (): void => undefined, unref: (): void => undefined };
       },
       identityCheck: () => true,
       existsAsFile: () => true,
     };
-    return { args, options };
+    return { args, envs, options };
   };
 
   it("shows an information box titled Keiko whose text follows the Windows display language", () => {
@@ -515,7 +541,7 @@ describe("runDetachedWindowsBox as a setup notice", () => {
   });
 
   it("leaves the failure alert's command exactly as it was", () => {
-    const { args, options } = spawned();
+    const { args, envs, options } = spawned();
 
     runDetachedWindowsBox(
       { kind: "failure", message: "can't start\r\nbecause" },
@@ -523,11 +549,27 @@ describe("runDetachedWindowsBox as a setup notice", () => {
       options,
     );
 
-    expect(args[0]?.at(-1)).toBe(
+    // the command is the real box's text, handed over in the environment of the second stage
+    expect(args[0]?.at(-1)).toBe(OUTLIVING_STAGE_ONE_SCRIPT);
+    expect(envs[0]?.KEIKO_STAGE2_SCRIPT).toBe(
       "Add-Type -AssemblyName PresentationFramework; " +
         "[System.Windows.MessageBox]::Show('can''t startbecause', " +
         "'Keiko could not start', 'OK', 'Error') | Out-Null",
     );
+  });
+
+  it("starts the setup notice in one stage: it is shown while the setup runs, in the process that starts it", () => {
+    const { args, envs, options } = spawned();
+
+    runDetachedWindowsBox(
+      { kind: "setup-notice" },
+      { SystemRoot: String.raw`D:\Windows` },
+      options,
+    );
+
+    expect(args[0]).toContain("-Sta");
+    expect(args[0]).not.toContain(OUTLIVING_STAGE_ONE_SCRIPT);
+    expect(envs[0]?.KEIKO_STAGE2_SCRIPT).toBeUndefined();
   });
 });
 
