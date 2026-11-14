@@ -22,6 +22,7 @@ import type {
   JiraReportComplianceChecker,
   JiraReportStore,
 } from "@oscharko-dev/keiko-connectors";
+import { currentJiraChatConnectionFingerprint } from "./atlassian/jiraChatConnectionIdentity.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -1997,6 +1998,42 @@ export function currentGatewayVerification(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
 ): GatewayVerificationState {
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
+}
+
+// Models a person explicitly verified in Settings, per configuration holder and generation (#4351).
+const explicitModelUse = new WeakMap<
+  object,
+  { readonly generation: number; readonly models: Set<string> }
+>();
+
+/**
+ * An explicit Settings verification of this model passed: a person asked for the model, and it
+ * answered. Dropped with the configuration generation it was observed under, never persisted.
+ */
+export function recordExplicitModelUse(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+  observedGeneration: number | undefined,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined || observedGeneration !== holder.generation()) return;
+  const current = explicitModelUse.get(holder);
+  if (current?.generation === observedGeneration) current.models.add(modelId);
+  else explicitModelUse.set(holder, { generation: observedGeneration, models: new Set([modelId]) });
+}
+
+/**
+ * Whether a person has used this model in the current configuration generation: an actual model call
+ * (a Chat or Coding turn) completed through the generation's gateway, or an explicit Settings
+ * verification passed. A startup observation is not use. Passive reads gate any provider request on
+ * this, so opening a Chat saved on a model nobody used never loads that model.
+ */
+export function modelUsedByPerson(deps: UiHandlerDeps, modelId: string): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const explicit = explicitModelUse.get(holder);
+  if (explicit?.generation === holder.generation() && explicit.models.has(modelId)) return true;
+  return currentGateway(deps)?.hasServedModel(modelId) === true;
 }
 
 /** Legacy freshness window used only to describe the age of observed readiness in diagnostics. */
@@ -5164,10 +5201,12 @@ function installChatToolCatalogs(
     primary: options.activityLog ?? processServerLogSink(),
     diagnostics: options.diagnostics ?? defaultServerDiagnosticSink,
   };
-  return installKnowledgeChatCatalogRuntime(
-    installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log),
-    log,
+  const installed = installJiraChatCatalogRuntime(deps, log);
+  // A staged draft resolves only on the connection it was stored with (#4354, #4353 AC4).
+  installed.jiraDraftStore?.bindConnection((chatId) =>
+    currentJiraChatConnectionFingerprint(installed, chatId),
   );
+  return installKnowledgeChatCatalogRuntime(installMcpChatCatalogRuntime(installed, log), log);
 }
 
 /**

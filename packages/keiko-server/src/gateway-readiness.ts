@@ -25,6 +25,7 @@ import type {
   GatewayReadinessProbeResult,
   GatewayReadinessReport,
   GatewayReadinessRequest,
+  GatewayToolCallingOutcome,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogEvent,
@@ -51,6 +52,7 @@ import {
   currentConversationReadinessObservation,
   currentConversationReady,
   currentGatewayConfig,
+  recordExplicitModelUse,
 } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
 import {
@@ -65,18 +67,19 @@ import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-requ
 import {
   admittedGatewayProbeOutputLimit,
   gatewayProbeErrorEvidence,
-  probeGatewayToolCalling,
+  probeGatewayToolCallingVerdict,
   probeUsage,
   reserveGatewayProbeSpend,
   settleGatewayProbeSpend,
   transientGatewayStatus,
   type GatewayProbeSpendContext,
-  type GatewayToolCallingProbeStatus,
+  type ToolCallingProbeVerdict,
 } from "./gateway-tool-calling-probe.js";
 import {
   reconcileGatewayContextWindowReadiness,
   reconcileGatewayToolCallingReadiness,
 } from "./gateway-setup.js";
+import { createRequestCancellation } from "./request-cancellation.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { createEmbeddingAdapter } from "./local-knowledge-grounded-qa.js";
 import { normalizedEndpointFingerprint } from "./embedding-provider-identity.js";
@@ -129,6 +132,23 @@ const MINI_PDF_DATA_URL =
 // model id is operator-chosen text that no check proves body-free (#3557 review).
 const GATEWAY_READINESS_MODEL_ID_FIELDS = {
   modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+} as const;
+
+// #4351: how the two-step tool-calling check ended; present only when that probe ran.
+const GATEWAY_READINESS_TOOL_OUTCOME_FIELDS = {
+  toolCallingOutcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "called-unforced",
+      "called-only-forced",
+      "forced-refused",
+      "no-call",
+      "tools-refused",
+      "inconclusive",
+    ],
+  },
 } as const;
 
 // #3591 (1.1.7): the bound each probe of a run actually ran under, so an operator can tell from
@@ -274,6 +294,7 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
     // #3591: probes that ended without a verdict (timed out, unreachable, or a transient gateway
     // status). They decide the short re-probe cooldown, so the decision is reconstructable.
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
+    ...GATEWAY_READINESS_TOOL_OUTCOME_FIELDS,
   },
   diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
@@ -364,6 +385,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
+    ...GATEWAY_READINESS_TOOL_OUTCOME_FIELDS,
     embeddingModelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     embeddingDimensions: { type: "integer", dataClass: "count", required: false },
   },
@@ -726,15 +748,19 @@ function logAutomaticReadinessCompleted(
   correlationId: string,
   report: GatewayReadinessReport,
 ): void {
-  logAutomaticReadinessOutcome(
-    deps,
-    correlationId,
-    report.modelId,
-    report.overallStatus,
-    report.probes.length,
-    inconclusiveProbeCount(report),
-    report.verifiedCapabilities.testedContextTokens,
-  );
+  logAutomaticReadinessOutcome(deps, correlationId, report.modelId, {
+    overallStatus: report.overallStatus,
+    probeCount: report.probes.length,
+    inconclusiveProbes: inconclusiveProbeCount(report),
+    verifiedContextTokens: report.verifiedCapabilities.testedContextTokens,
+    toolCallingOutcome: toolCallingOutcomeOf(report),
+  });
+}
+
+function toolCallingOutcomeOf(
+  report: GatewayReadinessReport,
+): GatewayToolCallingOutcome | undefined {
+  return report.probes.find((probe) => probe.name === "tool_calling")?.toolCallingOutcome;
 }
 
 function inconclusiveProbeCount(report: GatewayReadinessReport): number {
@@ -781,15 +807,27 @@ function logAutomaticReadinessJoined(
   );
 }
 
+interface AutomaticReadinessOutcome {
+  readonly overallStatus: GatewayReadinessReport["overallStatus"];
+  readonly probeCount: number;
+  readonly inconclusiveProbes: number;
+  readonly verifiedContextTokens?: number | undefined;
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
+}
+
 function logAutomaticReadinessOutcome(
   deps: UiHandlerDeps,
   correlationId: string,
   modelId: string,
-  overallStatus: GatewayReadinessReport["overallStatus"],
-  probeCount: number,
-  inconclusiveProbes: number,
-  verifiedContextTokens?: number,
+  outcome: AutomaticReadinessOutcome,
 ): void {
+  const {
+    overallStatus,
+    probeCount,
+    inconclusiveProbes,
+    verifiedContextTokens,
+    toolCallingOutcome,
+  } = outcome;
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
@@ -800,6 +838,7 @@ function logAutomaticReadinessOutcome(
         probeCount,
         inconclusiveProbeCount: inconclusiveProbes,
         ...(verifiedContextTokens === undefined ? {} : { verifiedContextTokens }),
+        ...(toolCallingOutcome === undefined ? {} : { toolCallingOutcome }),
       },
     ),
   );
@@ -839,10 +878,18 @@ function logReadinessCompleted(
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
         inconclusiveProbeCount: inconclusiveProbeCount(report),
+        ...toolCallingOutcomeEvidence(report),
         ...retrievalProbeEvidence(report),
       },
     ),
   );
+}
+
+function toolCallingOutcomeEvidence(report: GatewayReadinessReport): {
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome;
+} {
+  const toolCallingOutcome = toolCallingOutcomeOf(report);
+  return toolCallingOutcome === undefined ? {} : { toolCallingOutcome };
 }
 
 function retrievalProbeEvidence(report: GatewayReadinessReport): {
@@ -1115,14 +1162,11 @@ function reserveEmbeddingProbe(
       passed = checked?.ok === true;
     } finally {
       if (automatic)
-        logAutomaticReadinessOutcome(
-          deps,
-          correlationId,
-          provider.modelId,
-          passed ? "ready" : "failed",
-          1,
-          inconclusive ? 1 : 0,
-        );
+        logAutomaticReadinessOutcome(deps, correlationId, provider.modelId, {
+          overallStatus: passed ? "ready" : "failed",
+          probeCount: 1,
+          inconclusiveProbes: inconclusive ? 1 : 0,
+        });
     }
   };
 }
@@ -1624,44 +1668,60 @@ async function probeToolCalling(
       probeError,
     );
   };
-  const status = await probeGatewayToolCalling(
+  const verdict = await probeGatewayToolCallingVerdict(
     config,
     provider,
     deps.gatewayReadinessFetch,
     reportFailure,
     probeSpendContext(deps, config, provider, correlationId),
     deps.gatewayReadinessSignal,
-  ).catch((probeError: unknown): GatewayToolCallingProbeStatus => {
+  ).catch((probeError: unknown): ToolCallingProbeVerdict => {
     reportFailure(probeError);
-    return "unverified";
+    return { status: "unverified", outcome: "inconclusive" };
   });
   if (failure !== undefined) return failure;
-  return observedToolCallingResult(status, start, provider);
+  return observedToolCallingResult(verdict, start, provider);
 }
 
+// What each closed outcome says to the person, and what they can do about it (#4351).
+const TOOL_CALLING_EVIDENCE: Readonly<Record<GatewayToolCallingOutcome, string>> = {
+  "called-unforced":
+    "The model called the tool on its own, the way Keiko offers tools, with schema-valid arguments.",
+  "called-only-forced":
+    "The model called the tool only when the call was forced. Keiko offers tools without forcing one, so the model may not use them in Chat or the Coding Workbench.",
+  "forced-refused":
+    "The model did not call the tool on its own, and the provider refused the forced call (a thinking mode often does). This is not a verdict that the model cannot call tools, but Keiko cannot confirm it either, and tool turns need a confirmed check: turn the thinking mode off and verify again.",
+  "no-call":
+    "The model answered without calling the tool, also when the call was forced. It does not call tools through this endpoint; choose a model that supports tool calling.",
+  "tools-refused":
+    "The endpoint refused the request that offers a tool. Tool calling is not accepted by this endpoint or model.",
+  inconclusive:
+    "Tool calling could not be confirmed: the gateway timed out, was rate-limited or answered with an error, or the model did not complete the test steps. Verify again later.",
+};
+
 function observedToolCallingResult(
-  status: GatewayToolCallingProbeStatus,
+  verdict: ToolCallingProbeVerdict,
   start: number,
   provider: ModelProviderConfig,
 ): GatewayReadinessProbeResult {
+  const { status, outcome } = verdict;
+  const evidence = TOOL_CALLING_EVIDENCE[outcome];
   if (status === "verified") {
-    return result(
-      "tool_calling",
-      "passed",
-      start,
-      "Native tool call returned the expected function and schema-valid arguments on the configured response path.",
-    );
+    // Admitted either way: a model that called a tool only when forced is told its limit by the
+    // closed outcome, which Settings words for the person.
+    return { ...result("tool_calling", "passed", start, evidence), toolCallingOutcome: outcome };
   }
   if (status === "transient") {
-    return result(
-      "tool_calling",
-      "failed",
-      start,
-      "Tool calling could not be verified: the gateway answered with a transient status.",
-      PROBE_GATEWAY_BUSY_WARNING,
-    );
+    return {
+      ...result("tool_calling", "failed", start, evidence, PROBE_GATEWAY_BUSY_WARNING),
+      toolCallingOutcome: outcome,
+    };
   }
-  return toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start, provider);
+  return {
+    ...toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start, provider),
+    evidence,
+    toolCallingOutcome: outcome,
+  };
 }
 
 function toolCallingResult(
@@ -2053,16 +2113,26 @@ async function probeLongContext(
 export const LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS = 300_000;
 // Automatic readiness must tolerate the same initial silence as the interactive answer it gates.
 export const WORKBENCH_PROBE_TIMEOUT_FLOOR_MS = GATEWAY_SILENCE_FLOOR_MS;
+// A check a person started in Settings waits for the answer of a model that may still be loading
+// (#4351): the conversational default of 120 s cut it off before a cold model had loaded, and a
+// probe that abandons a slow gateway proves nothing. Only that DEFAULT is lifted, to the interactive
+// silence floor: a timeout an operator set deliberately stays exactly as configured. The check is
+// bounded, cancelled when the person leaves, recorded on the run's start line (`chatProbeTimeoutMs`)
+// and announced as still running; it never applies to a conversation turn.
+export const EXPLICIT_CHECK_TIMEOUT_FLOOR_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 function probeTimeoutFloorMs(
   name: GatewayReadinessProbeName,
   options: GatewayReadinessOptions | undefined,
+  provider: ModelProviderConfig,
 ): number {
   if (name === "long_context") return LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS;
   if (options?.purpose === "coding-workbench-auto" || options?.purpose === "on-demand") {
     return WORKBENCH_PROBE_TIMEOUT_FLOOR_MS;
   }
-  return 0;
+  // No purpose: the explicit check a person started. Only the conversational default is lifted; a
+  // timeout the configuration names is an operator's choice whatever its value.
+  return provider.timeoutConfigured === true ? 0 : EXPLICIT_CHECK_TIMEOUT_FLOOR_MS;
 }
 
 export function probeProvider(
@@ -2070,7 +2140,7 @@ export function probeProvider(
   name: GatewayReadinessProbeName,
   options: GatewayReadinessOptions | undefined,
 ): ModelProviderConfig {
-  const floor = probeTimeoutFloorMs(name, options);
+  const floor = probeTimeoutFloorMs(name, options, provider);
   return provider.timeoutMs >= floor ? provider : { ...provider, timeoutMs: floor };
 }
 
@@ -2510,6 +2580,9 @@ export async function runGatewayReadiness(
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
+  // A person's own verification of the model, answered: it counts as use (#4351).
+  if (trigger === "settings" && request.options?.purpose === undefined && chat.status === "passed")
+    recordExplicitModelUse(deps, selection.provider.modelId, observedGeneration);
   recordReadinessVerdict(
     deps,
     report,
@@ -3983,14 +4056,11 @@ async function observeOnDemandProbe(
     );
   } finally {
     recordConversationCheckVerdict(deps, modelId, outcome);
-    logAutomaticReadinessOutcome(
-      deps,
-      probeCorrelationId,
-      modelId,
-      outcome.overallStatus,
-      1,
-      outcome.inconclusiveProbes,
-    );
+    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, {
+      overallStatus: outcome.overallStatus,
+      probeCount: 1,
+      inconclusiveProbes: outcome.inconclusiveProbes,
+    });
   }
 }
 
@@ -4182,7 +4252,30 @@ export async function handleGatewayReadiness(
 ): Promise<RouteResult> {
   const body = await readJsonBody(ctx.req, ctx.correlationId);
   if ("status" in body) return body;
-  const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId, "settings");
+  // A check a person started may run for minutes while a slow model loads (#4351), so it ends when
+  // the person leaves: closing the request cancels it. An in-process caller without a live response
+  // has nothing to cancel it and keeps the signal it brought.
+  const cancellation =
+    typeof ctx.res.once === "function" && deps.gatewayReadinessSignal === undefined
+      ? createRequestCancellation(ctx, "gateway readiness check cancelled")
+      : undefined;
+  try {
+    return await settleExplicitReadiness(
+      body.parsed,
+      cancellation === undefined ? deps : { ...deps, gatewayReadinessSignal: cancellation.signal },
+      ctx.correlationId,
+    );
+  } finally {
+    cancellation?.dispose();
+  }
+}
+
+async function settleExplicitReadiness(
+  parsed: GatewayReadinessRequest,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): Promise<RouteResult> {
+  const report = await runGatewayReadiness(parsed, deps, correlationId, "settings");
   if ("status" in report) return report;
   // An explicit verification that answered definitively ends the walk's pause on that model.
   recordConversationCheckVerdict(deps, report.modelId, {

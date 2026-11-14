@@ -169,6 +169,15 @@ export function mintAcceptedJiraChatAuthority(
     : (result ?? { ok: false, reason: "invalid" });
 }
 
+/** The credential this Chat is bound to and ready on now; none when it has no ready Jira Pod. */
+export function currentJiraChatCredential(
+  deps: JiraChatAuthorityDeps,
+  chatId: string,
+): JiraLivePodCredential | undefined {
+  const facts = currentFacts(deps, chatId);
+  return facts.ok ? facts.credential : undefined;
+}
+
 function currentFacts(
   deps: JiraChatAuthorityDeps,
   chatId: string,

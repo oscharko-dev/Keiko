@@ -691,6 +691,131 @@ describe("provider-facing alternatives schema (customer test 2026-11-10)", () =>
   });
 });
 
+// The provider sees a plain object schema; what Keiko accepts stays what the catalog's own schema
+// says. Each constraint the advertisement dropped or folded is still enforced on the call.
+describe("provider-neutral projection keeps Keiko's own validation exactly as strict", () => {
+  function bridgeFor(
+    inputSchema: Record<string, unknown>,
+  ): ReturnType<typeof createGatewayToolCatalogBridge> {
+    const initial = createInitialToolCatalog();
+    const original = initial.descriptors[0];
+    if (original === undefined) throw new TypeError("Missing fixture descriptor");
+    const declaration = Object.fromEntries(
+      Object.entries(original).filter(([key]) => key !== "descriptorDigest"),
+    );
+    const descriptor = createToolDescriptor({
+      ...declaration,
+      inputSchema: { $schema: "https://json-schema.org/draft/2020-12/schema", ...inputSchema },
+    });
+    const catalog = createToolCatalog(
+      {
+        descriptors: [descriptor],
+        profiles: [
+          {
+            profile: { id: "projection-fixture", version: 1 },
+            toolRefs: [{ toolRef: descriptor.toolRef, alias: "projected" }],
+            nativeExtensions: [],
+            adapterDialect: { id: "gateway-json-schema", version: 1 },
+            adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
+            compatibility: [],
+          },
+        ],
+        compatibility: [],
+      },
+      { referenceTimeMs: NOW },
+    );
+    const projection = compileToolProjection(catalog, { id: "projection-fixture", version: 1 });
+    const offered = {
+      ...advertisement().offered,
+      binding: {
+        ...advertisement().offered.binding,
+        catalogRevision: catalog.catalogRevision,
+        profile: projection.profile,
+        projectionDigest: projection.projectionDigest,
+      },
+      toolRefs: [descriptor.toolRef],
+    };
+    return createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: { kind: "bound", catalog, projection, offered } },
+      (): number => NOW,
+    );
+  }
+
+  function call(args: Record<string, unknown>): NormalizedToolCall {
+    return { id: "call-1", name: "projected", arguments: args };
+  }
+
+  const ROOT_ALLOF = {
+    type: "object",
+    properties: {
+      key: { type: "string", maxLength: 64 },
+      expectedValueNodes: { type: "array", maxItems: 4, items: { type: "string", maxLength: 8 } },
+      expectAbsent: { type: "boolean" },
+    },
+    required: ["key"],
+    additionalProperties: false,
+    allOf: [{ oneOf: [{ required: ["expectedValueNodes"] }, { required: ["expectAbsent"] }] }],
+  };
+
+  it("still refuses the call an advertised-away root allOf/oneOf excluded", () => {
+    const bridge = bridgeFor(ROOT_ALLOF);
+    const [tool] = bridge.tools;
+    for (const key of ["allOf", "oneOf"]) expect(tool?.parameters).not.toHaveProperty(key);
+    // The model is told the exclusive sets ...
+    expect(tool?.description).toContain("expectedValueNodes; or expectAbsent");
+    // ... and the advertised schema alone would accept all of these, so the catalog must refuse them.
+    expect(bridge.bind(call({ key: "k", expectAbsent: true }))).toMatchObject({
+      invocation: { kind: "bound" },
+    });
+    expect(() => bridge.bind(call({ key: "k" }))).toThrow(GatewayToolCatalogError);
+    expect(() =>
+      bridge.bind(call({ key: "k", expectAbsent: true, expectedValueNodes: ["x"] })),
+    ).toThrow(GatewayToolCatalogError);
+  });
+
+  it("still refuses the combination a dropped root not forbade", () => {
+    const bridge = bridgeFor({
+      type: "object",
+      properties: {
+        key: { type: "string", maxLength: 64 },
+        startAt: { type: "integer", minimum: 0 },
+        maxResults: { type: "integer", minimum: 1 },
+      },
+      additionalProperties: false,
+      not: { anyOf: [{ required: ["key", "startAt"] }, { required: ["key", "maxResults"] }] },
+    });
+    const [tool] = bridge.tools;
+    expect(tool?.parameters).not.toHaveProperty("not");
+    expect(tool?.description).toContain("key + startAt; or key + maxResults");
+    expect(bridge.bind(call({ key: "k" }))).toMatchObject({ invocation: { kind: "bound" } });
+    expect(bridge.bind(call({ startAt: 0, maxResults: 5 }))).toMatchObject({
+      invocation: { kind: "bound" },
+    });
+    expect(() => bridge.bind(call({ key: "k", startAt: 0 }))).toThrow(GatewayToolCatalogError);
+    expect(() => bridge.bind(call({ key: "k", maxResults: 5 }))).toThrow(GatewayToolCatalogError);
+  });
+
+  it("still enforces what a folded allOf member said", () => {
+    const folded = bridgeFor({
+      type: "object",
+      properties: { key: { type: "string", maxLength: 64 } },
+      required: ["key"],
+      allOf: [{ properties: { count: { type: "integer", minimum: 1 } }, required: ["count"] }],
+    });
+    // The member's property and requirement are part of what the model is shown ...
+    expect(folded.tools[0]?.parameters).toMatchObject({
+      properties: { key: { type: "string" }, count: { type: "integer" } },
+      required: ["key", "count"],
+    });
+    // ... and still what Keiko enforces.
+    expect(folded.bind(call({ key: "k", count: 2 }))).toMatchObject({
+      invocation: { kind: "bound" },
+    });
+    expect(() => folded.bind(call({ key: "k", count: "two" }))).toThrow(GatewayToolCatalogError);
+    expect(() => folded.bind(call({ key: "k" }))).toThrow(GatewayToolCatalogError);
+  });
+});
+
 describe("frozen bound advertisements (#4173)", () => {
   it("binds every round against that round's own offer over one frozen catalog", () => {
     const full = advertisement();
