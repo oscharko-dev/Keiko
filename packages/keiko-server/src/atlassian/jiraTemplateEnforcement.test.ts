@@ -1385,6 +1385,7 @@ describe("the dry run before approval", () => {
           state: "failed",
           reason: "field-validation",
           fieldId: "customfield_10103",
+          fieldName: "customfield_10103",
           validation: "required-field",
           messages: [
             "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
@@ -1520,6 +1521,7 @@ describe("the dry run before approval", () => {
       outcome: "rejected",
       reason: "field-validation",
       fieldId: "customfield_10103",
+      fieldName: "customfield_10103",
       validation: "required-field",
       messages: [
         "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",

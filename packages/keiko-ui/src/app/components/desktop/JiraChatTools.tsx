@@ -233,6 +233,13 @@ const DRAFT_PROBLEM_MESSAGES = {
   "ref-unknown": "chat.jira.outcome.draftProblem.ref-unknown",
   "ref-cycle": "chat.jira.outcome.draftProblem.ref-cycle",
 } as const satisfies Record<JiraDraftProblemCode, string>;
+/** The same closed sentences with the field's name, where the refusal knows the name (#4357). */
+const NAMED_VALIDATION_MESSAGES = {
+  "required-field": "chat.jira.outcome.validation.named.required-field",
+  "unsupported-field": "chat.jira.outcome.validation.named.unsupported-field",
+  "invalid-field": "chat.jira.outcome.validation.named.invalid-field",
+  "invalid-operation": "chat.jira.outcome.validation.named.invalid-operation",
+} as const;
 const VALIDATION_MESSAGES = {
   "required-field": "chat.jira.outcome.validation.required-field",
   "unsupported-field": "chat.jira.outcome.validation.unsupported-field",
@@ -427,6 +434,21 @@ function JiraRuleNotices({ view }: { readonly view: JiraToolOutcomeView }): Reac
     </>
   );
 }
+/** The closed sentence for Keiko's own refusal, naming the field by the name Jira shows. */
+function JiraValidationLine({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  const t = useTranslate();
+  const { validation, validationField } = view;
+  if (validation === undefined) return null;
+  if (validationField !== undefined && Object.hasOwn(NAMED_VALIDATION_MESSAGES, validation))
+    return (
+      <p>
+        {t(NAMED_VALIDATION_MESSAGES[validation as keyof typeof NAMED_VALIDATION_MESSAGES], {
+          field: validationField,
+        })}
+      </p>
+    );
+  return <p>{t(VALIDATION_MESSAGES[validation])}</p>;
+}
 function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   const nothingSent =
@@ -437,7 +459,7 @@ function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): R
     <>
       <JiraProblemList view={view} />
       <JiraDraftProblemLine view={view} />
-      {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
+      <JiraValidationLine view={view} />
       {view.itemValidations.map((item, index) => (
         <p key={`${String(item.item.position)}:${String(index)}`}>
           <JiraItemName item={item.item} />

@@ -197,6 +197,7 @@ it.each(["summary", "customfield_10000"])(
       reason: "field-validation",
       detail: {
         fieldId: id,
+        fieldName: id,
         validation: "invalid-operation",
         messages: [FIELD_SENTENCES["invalid-operation"]],
       },
@@ -231,6 +232,7 @@ it("keeps selected routing references inside current metadata allowed values", a
     reason: "field-validation",
     detail: {
       fieldId: "issuetype",
+      fieldName: "issuetype",
       validation: "invalid-field",
       messages: [FIELD_SENTENCES["invalid-field"]],
     },
@@ -456,6 +458,8 @@ it.each(["jira.create", "jira.transition"] as const)(
       detail: {
         fieldId: "customfield_10000",
         validation: "required-field",
+        // The name Jira shows travels beside the id so a card can name the field (#4357 R08).
+        fieldName: "customfield_10000",
         messages: [FIELD_SENTENCES["required-field"]],
       },
     });
@@ -563,6 +567,7 @@ it("collects all create pages before validating a required field on a later page
     reason: "field-validation",
     detail: {
       fieldId: "customfield_10000",
+      fieldName: "customfield_10000",
       validation: "required-field",
       messages: [FIELD_SENTENCES["required-field"]],
     },
@@ -636,6 +641,7 @@ it("does not fabricate a required unsupported plugin field", async () => {
     detail: {
       validation: "required-field",
       fieldId: "customfield_10001",
+      fieldName: "customfield_10001",
       messages: [FIELD_SENTENCES["required-field"]],
     },
   });
@@ -654,6 +660,7 @@ it("revalidates metadata when edit operations change between actions", async () 
     reason: "field-validation",
     detail: {
       fieldId: "summary",
+      fieldName: "summary",
       validation: "invalid-operation",
       messages: [FIELD_SENTENCES["invalid-operation"]],
     },

@@ -372,6 +372,38 @@ describe("Jira draft results as the production draft tool reports them", () => {
     },
   );
 
+  // #4357 R07 (acceptance walk): the stage tool carries its refusal in `reason`, not in `draftRefusal`.
+  // A Pod switched while a draft is open used to fall to "The Jira result is unavailable".
+  const stagedRefusal = (reason: string): ChatToolExchange => {
+    const exchange = draft("jira_draft_stage", {
+      outcome: "failed",
+      reason,
+      guidance: "Model-facing guidance that the person never reads.",
+    });
+    // The stage tool reports a refusal as an error result, which is what makes its card appear.
+    const { result } = exchange;
+    if (result === undefined) return exchange;
+    return {
+      ...exchange,
+      result: { ...result, status: "failed", reason: "provider-reported-error" } as NonNullable<
+        ChatToolExchange["result"]
+      >,
+    };
+  };
+  it.each(Object.keys(REFUSALS_EN))(
+    "says the same sentence when the stage tool refused with the reason %s",
+    async (reason) => {
+      await show(stagedRefusal(reason));
+      expect(screen.getByText(REFUSALS_EN[reason] ?? "")).toBeVisible();
+      expect(document.body.textContent).not.toContain("The Jira result is unavailable");
+      expect(document.body.textContent).not.toContain("Model-facing guidance");
+    },
+  );
+  it("keeps the generic text for a stage reason that has no sentence of its own", async () => {
+    await show(stagedRefusal("conflict"));
+    expect(document.body.textContent).not.toContain(REFUSALS_EN["connection-changed"] ?? "");
+  });
+
   it("keeps the generic field advice for a refusal it has no sentence for", async () => {
     await show(refusedDraft("draft-invalid"));
     expect(

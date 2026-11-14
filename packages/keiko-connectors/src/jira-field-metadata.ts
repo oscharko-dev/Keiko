@@ -320,6 +320,8 @@ export type JiraFieldValidationResult =
         | "invalid-operation"
         | "bounds-exceeded";
       readonly fieldId?: string;
+      /** The name Jira shows for the field, when the request's metadata knows it (#4357). */
+      readonly fieldName?: string;
       /** One fixed sentence for the model; never a value from the request or from Jira. */
       readonly message?: string;
     };
@@ -776,6 +778,19 @@ function validateUpdates(
  * `requireAll: false` judges only the supplied fields, so a refusal for a missing required field
  * can still name the template rules the rest of the write breaks; it never admits a write.
  */
+/**
+ * A refusal names its field by the name Jira shows, so a person reads "Resolution", not an id. Kept
+ * apart from the judgement itself: the closed result stays the pin it always was (#4357).
+ */
+export function withJiraFieldName(
+  metadata: readonly JiraFieldMetadata[],
+  result: JiraFieldValidationResult,
+): JiraFieldValidationResult {
+  if (result.ok || result.fieldId === undefined) return result;
+  const name = metadata.find((field) => field.id === result.fieldId)?.name;
+  return name === undefined || name.length === 0 ? result : { ...result, fieldName: name };
+}
+
 export function validateJiraFieldChanges(
   metadata: readonly JiraFieldMetadata[],
   changes: unknown,

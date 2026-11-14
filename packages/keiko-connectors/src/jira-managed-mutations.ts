@@ -188,6 +188,7 @@ import {
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import {
   validateJiraFieldChanges,
+  withJiraFieldName,
   prepareJiraDescriptionFields,
   type JiraFieldValidationResult,
 } from "./jira-field-metadata.js";
@@ -324,6 +325,11 @@ function validationFailure(
     detail: {
       validation: result.reason,
       ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+      // The name Jira shows lets a person read which field is meant; the sentence below stays for
+      // the model (#4357).
+      ...(result.fieldId === undefined || result.fieldName === undefined
+        ? {}
+        : { fieldName: result.fieldName }),
       messages: [message],
     },
   };
@@ -744,13 +750,21 @@ function createFieldState(
   create: CreateRequest,
   requireAll: boolean,
 ): ReturnType<typeof validateJiraFieldChanges> {
-  return validateJiraFieldChanges(
-    createContextFields(metadata),
-    { ...create.fields, project: { id: create.projectId }, issuetype: { id: create.issueTypeId } },
-    "create",
-    "data-center",
-    [],
-    requireAll,
+  const fields = createContextFields(metadata);
+  return withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...create.fields,
+        project: { id: create.projectId },
+        issuetype: { id: create.issueTypeId },
+      },
+      "create",
+      "data-center",
+      [],
+      requireAll,
+    ),
   );
 }
 function createTemplateGate(
@@ -900,12 +914,9 @@ function linkedFieldChanges(
   args: CatalogJsonObject,
   purpose: "edit" | "transition",
 ): LinkedFieldChanges {
-  const validated = validateJiraFieldChanges(
+  const validated = withJiraFieldName(
     fields,
-    args.fields ?? {},
-    purpose,
-    "data-center",
-    args.updates ?? [],
+    validateJiraFieldChanges(fields, args.fields ?? {}, purpose, "data-center", args.updates ?? []),
   );
   if (!validated.ok) return validationFailure(validated);
   return { ok: true, validated, links: parseJiraIssueLinks(args.links) ?? [] };
@@ -1536,15 +1547,19 @@ function draftItemFieldFailure(
   if (!input.ok) return undefined;
   const prepared = draftItemCreateFields(item, input.fields, metadata, trace);
   if (!prepared.ok) return validationFailure(prepared).detail;
-  const validated = validateJiraFieldChanges(
-    createContextFields(metadata),
-    {
-      ...prepared.fields,
-      project: { id: item.projectId },
-      issuetype: { id: item.issueTypeId },
-    },
-    "create",
-    "data-center",
+  const fields = createContextFields(metadata);
+  const validated = withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...prepared.fields,
+        project: { id: item.projectId },
+        issuetype: { id: item.issueTypeId },
+      },
+      "create",
+      "data-center",
+    ),
   );
   return validated.ok ? undefined : validationFailure(validated).detail;
 }

@@ -266,6 +266,8 @@ export interface JiraToolOutcomeView {
   /** Template rules an edit that succeeded left broken in fields it did not touch (#4354). */
   readonly templateNotices: readonly JiraOutcomeRule[];
   readonly validation: JiraFieldValidationFailure | undefined;
+  /** The name Jira shows for the field that check refused; absent when the refusal names none. */
+  readonly validationField?: string;
   /** Keiko's own field check refused these draft items; each is named by its summary. */
   readonly itemValidations: readonly JiraOutcomeItemValidation[];
   /** Problems beyond the shown ones, counted rather than dropped silently. */
@@ -908,7 +910,9 @@ function problemsOf(
   item?: JiraOutcomeItemName,
 ): JiraOutcomeProblem[] {
   const fieldErrors = Array.isArray(data?.fieldErrors) ? data.fieldErrors : [];
-  const messages = Array.isArray(data?.messages) ? data.messages : [];
+  // `messages` of a refusal Keiko's own field check made are the model's instructions, never the
+  // person's text; Jira's own field errors stay (#4357).
+  const messages = Array.isArray(data?.messages) && !keikoRefused(data) ? data.messages : [];
   const own = item === undefined ? {} : { item };
   return [
     ...fieldErrors.flatMap((entry): JiraOutcomeProblem[] => {
@@ -1006,6 +1010,15 @@ function itemProblemsOf(
     problemsOf(record(entry), itemName(entry, index, reviewed)),
   );
 }
+/** Whether Keiko's own field check refused this result or item before Jira saw it. */
+function keikoRefused(data: UnknownRecord | undefined): boolean {
+  return JIRA_FIELD_VALIDATION_FAILURES.some((value) => value === data?.validation);
+}
+/** The name Jira shows for the field Keiko's own check refused, when the refusal carries one. */
+function validationFieldOf(data: UnknownRecord): { readonly validationField: string } | undefined {
+  const name = keikoRefused(data) ? text(data.fieldName) : undefined;
+  return name === undefined ? undefined : { validationField: name };
+}
 /** A result that reports draft rows by state, or lists its keys as ranges, is a draft write. */
 function reportsDraftRows(data: UnknownRecord): boolean {
   const rows: readonly unknown[] = Array.isArray(data.items) ? data.items : [];
@@ -1042,7 +1055,9 @@ function notCreatedOf(data: UnknownRecord): number | undefined {
   return total > 0 ? total : undefined;
 }
 function draftRefusalOf(data: UnknownRecord | undefined): WidgetMessageKey | undefined {
-  const reason = text(data?.draftRefusal);
+  // The submit path names a refusal in `draftRefusal`; the stage tool carries the same closed word in
+  // `reason` (#4357): a draft held under another Jira connection must say so on both.
+  const reason = text(data?.draftRefusal) ?? text(data?.reason);
   return reason !== undefined && Object.hasOwn(JIRA_DRAFT_REFUSAL_MESSAGES, reason)
     ? JIRA_DRAFT_REFUSAL_MESSAGES[reason]
     : undefined;
@@ -1636,6 +1651,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     rules: privateAccount(exchange.call.name) ? [] : rulesOf(data),
     templateNotices: privateAccount(exchange.call.name) ? [] : templateNoticesOf(data),
     validation: JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === data.validation),
+    ...validationFieldOf(data),
     itemValidations: privateAccount(exchange.call.name)
       ? []
       : itemValidationsOf(data, reviewedItems(exchange)),
