@@ -22,7 +22,7 @@ const OVERRIDE_VARIABLE = "KEIKO_VITEST_MAX_WORKERS";
 
 function explicitOverride(env) {
   const raw = env[OVERRIDE_VARIABLE];
-  if (typeof raw !== "string" || !/^[0-9]{1,2}$/u.test(raw.trim())) return undefined;
+  if (typeof raw !== "string" || !/^\d{1,2}$/u.test(raw.trim())) return undefined;
   const count = Number(raw.trim());
   return count >= MIN_MAX_WORKERS && count <= MAX_MAX_WORKERS ? count : undefined;
 }
