@@ -135,6 +135,19 @@ describe("the refusals of the write path as the Chat card reads them", () => {
     expect(
       dispatchOf({ approval: { state: "approved" }, result: undefined, turnState: "completed" }),
     ).toBe("unknown");
+    // A revoke can hit a claimed write in flight and an eviction can expire an approved or claimed
+    // one, so neither proves that nothing ran; only a declined approval does (actionApprovals.ts).
+    for (const turnState of ["pending", "completed"]) {
+      expect(dispatchOf({ approval: { state: "revoked" }, result: undefined, turnState })).toBe(
+        "unknown",
+      );
+      expect(dispatchOf({ approval: { state: "expired" }, result: undefined, turnState })).toBe(
+        "unknown",
+      );
+      expect(dispatchOf({ approval: { state: "rejected" }, result: undefined, turnState })).toBe(
+        "not-dispatched",
+      );
+    }
     expect(
       dispatchOf({ approval: { state: "pending" }, result: undefined, turnState: "completed" }),
     ).toBe("not-dispatched");

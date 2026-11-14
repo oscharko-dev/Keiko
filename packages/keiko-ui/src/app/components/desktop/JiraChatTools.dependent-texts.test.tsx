@@ -188,6 +188,36 @@ describe.each(LOCALES)("the texts that depend on the write path (%s)", (locale) 
       expect(await axe(container)).toHaveNoViolations();
     },
   );
+  // A revoke can hit a claimed write in flight and an eviction can expire an approved or claimed
+  // one: without a result neither proves that nothing ran. A running turn verifies the card against
+  // the server first (it shows "unavailable" until then); the dispatch rule for it is pinned in
+  // tests/atlassian-connectors/jira-dependent-result-texts-view.test.ts.
+  it.each(["revoked", "expired"] as const)(
+    "stays neutral for a stored %s approval without a result",
+    async (state) => {
+      const container = await show(locale, {
+        call: { id: "call-1", name: "jira_edit", arguments: {} },
+        approval: approval(state),
+      });
+      expect(
+        screen.getByText(sentence(locale, "chat.jira.writeApproval.outcomeUnknownHint")),
+      ).toBeVisible();
+      expect(container.textContent).not.toContain(
+        sentence(locale, `chat.jira.writeApproval.${state}Hint`),
+      );
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+  it("adds no hint to a declined approval, which no write can have followed", async () => {
+    const container = await show(locale, {
+      call: { id: "call-1", name: "jira_edit", arguments: {} },
+      approval: approval("rejected"),
+    });
+    expect(container.textContent).toContain(sentence(locale, "chat.jira.writeApproval.rejected"));
+    expect(
+      screen.queryByText(sentence(locale, "chat.jira.writeApproval.outcomeUnknownHint")),
+    ).toBeNull();
+  });
   it("tells a pending approval of a running turn nothing about the outcome", async () => {
     await show(
       locale,
