@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import type { ClientCodingWorkbenchRepositorySource } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { REPOSITORY_ADDED_EVENT } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import {
   reportCodingWorkbenchInteraction,
@@ -148,6 +149,38 @@ function useRepositorySourceReport(
   }, [source]);
 }
 
+// A repository the person adds in the Git window reaches a Workbench window that has none of its
+// own: the window takes it as its repository, exactly as a pick in its own selector would (#4371).
+// A window that already holds a repository keeps it.
+function useAddedRepositoryAdoption(
+  root: string | null | undefined,
+  context: WindowRenderContext,
+): void {
+  // A window bound to an active task workspace never takes a repository on its own.
+  const holdsRepository = typeof root === "string" || context.activeBinding !== null;
+  const latest = useRef(context);
+  latest.current = context;
+  useEffect(() => {
+    if (holdsRepository) return;
+    const adopt = (event: Event): void => {
+      const path = event instanceof CustomEvent ? (event.detail as unknown) : undefined;
+      if (typeof path !== "string" || path.length === 0) return;
+      latest.current.updateCfg({
+        repositoryPath: path,
+        targetBranch: undefined,
+        targetBranchRoot: undefined,
+        executionLocation: undefined,
+      });
+      reportCodingWorkbenchInteraction(
+        { interaction: "repository-seeded" },
+        newClientCorrelationId(),
+      );
+    };
+    window.addEventListener(REPOSITORY_ADDED_EVENT, adopt);
+    return (): void => window.removeEventListener(REPOSITORY_ADDED_EVENT, adopt);
+  }, [holdsRepository]);
+}
+
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
 export function CodingWorkbenchWindowHost({
   cfg,
@@ -159,6 +192,7 @@ export function CodingWorkbenchWindowHost({
   const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
   const seedRoot = useShellSeedRoot(context, cfgRoot);
   const root = cfgRoot ?? seedRoot;
+  useAddedRepositoryAdoption(root, context);
   useRepositorySourceReport(repositorySourceOf(cfgRoot, seedRoot));
   const historySelection =
     typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;

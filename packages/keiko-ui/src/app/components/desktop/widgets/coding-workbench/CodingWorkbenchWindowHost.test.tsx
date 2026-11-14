@@ -8,13 +8,14 @@
 // they surfaced server-side as warn-level client failures for an ordinary pick.
 
 import { describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import type { WorkspaceBinding } from "@oscharko-dev/keiko-contracts";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import {
   ActiveWorkspaceProvider,
   type ActiveWorkspaceApi,
 } from "../../context/ActiveWorkspaceContext";
+import { REPOSITORY_ADDED_EVENT } from "@/lib/api";
 import { CodingWorkbenchWindowHost } from "./CodingWorkbenchWindowHost";
 import type { CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 
@@ -109,6 +110,35 @@ function renderHost(
   render(<CodingWorkbenchWindowHost cfg={cfg} context={context} />);
   return context;
 }
+
+function announceAdded(path: string): void {
+  act(() => {
+    window.dispatchEvent(new CustomEvent(REPOSITORY_ADDED_EVENT, { detail: path }));
+  });
+}
+
+// #4371 F22: a repository added in the Git window reaches a Workbench window that has none.
+describe("CodingWorkbenchWindowHost: a repository added in Git", () => {
+  it("becomes the repository of a window that has none", () => {
+    const context = renderHost({});
+    announceAdded("/repos/added");
+    expect(context.updateCfg).toHaveBeenCalledWith(
+      expect.objectContaining({ repositoryPath: "/repos/added" }),
+    );
+  });
+
+  it("is not taken by a window that already holds a repository", () => {
+    const context = renderHost({ repositoryPath: "/repos/cfg" });
+    announceAdded("/repos/added");
+    expect(context.updateCfg).not.toHaveBeenCalled();
+  });
+
+  it("is not taken by a window bound to an active task workspace", () => {
+    const context = renderHost({}, { activeBinding: BOUND });
+    announceAdded("/repos/added");
+    expect(context.updateCfg).not.toHaveBeenCalled();
+  });
+});
 
 describe("CodingWorkbenchWindowHost", () => {
   it("prefers the per-window cfg repository over the shared context selection", () => {

@@ -1214,7 +1214,19 @@ export async function createProject(
     correlationId,
   );
   clearProjectCache();
+  announceRepositoryAdded(response.project.path);
   return response;
+}
+
+/**
+ * A repository the person just added (opened or cloned). It carries only the path the server
+ * registered; a window that has no repository of its own may take it (#4371).
+ */
+export const REPOSITORY_ADDED_EVENT = "keiko:repository-added";
+
+export function announceRepositoryAdded(path: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent<string>(REPOSITORY_ADDED_EVENT, { detail: path }));
 }
 
 export interface CloneRepositoryInput {
@@ -1237,6 +1249,7 @@ export async function cloneRepository(
     correlationId,
   );
   clearProjectCache();
+  announceRepositoryAdded(response.project.path);
   return response;
 }
 
