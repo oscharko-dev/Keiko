@@ -42,6 +42,12 @@ const SECURITY_WINDOWS_LOCAL_VOLUME_REFUSED_OPERATION = defineActivityLogOperati
       required: true,
       values: ["input", "resolve", "host-start", "verify"],
     },
+    verdict: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-local", "unverifiable"],
+    },
   },
   causal: "none",
   lifecycle: "failure",
@@ -123,7 +129,44 @@ function commandFailed(result: BoundedPowerShellResult): boolean {
   ].some(Boolean);
 }
 
-type LocalVolumePhase = "input" | "resolve" | "host-start" | "verify";
+export type WindowsLocalVolumePhase = "input" | "resolve" | "host-start" | "verify";
+type LocalVolumePhase = WindowsLocalVolumePhase;
+
+/**
+ * What a refusal says about the folder. `not-local`: the check ran and denied it, or the input can
+ * never be accepted. `unverifiable`: nothing was learned about the volume, because Windows
+ * PowerShell could not be resolved, did not start in time, or the query did not finish in time.
+ * Both deny; only the second one can pass a moment later.
+ */
+export type WindowsLocalVolumeVerdict = "not-local" | "unverifiable";
+
+/** Every refusal of the check. The message and the cause are those of the refusal itself. */
+export class WindowsLocalVolumeError extends Error {
+  readonly verdict: WindowsLocalVolumeVerdict;
+  readonly phase: WindowsLocalVolumePhase;
+
+  constructor(
+    message: string,
+    verdict: WindowsLocalVolumeVerdict,
+    phase: WindowsLocalVolumePhase,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "WindowsLocalVolumeError";
+    this.verdict = verdict;
+    this.phase = phase;
+  }
+}
+
+/** The verdict of any error a caller caught around the check; a foreign error learned nothing. */
+export function windowsLocalVolumeVerdict(error: unknown): WindowsLocalVolumeVerdict {
+  return error instanceof WindowsLocalVolumeError ? error.verdict : "unverifiable";
+}
+
+function refusalVerdict(phase: LocalVolumePhase, error: unknown): WindowsLocalVolumeVerdict {
+  if (phase === "resolve" || phase === "host-start") return "unverifiable";
+  return error instanceof WindowsProgramWorkTimeoutError ? "unverifiable" : "not-local";
+}
 
 function localVolumeErrorKind(phase: LocalVolumePhase, error: unknown): ActivityLogErrorKind {
   if (phase === "input") return "invalid-request";
@@ -134,11 +177,14 @@ function localVolumeErrorKind(phase: LocalVolumePhase, error: unknown): Activity
 
 // Both messages keep "local volume": the launcher prints them, and a person must be able to tell a
 // volume that is not local from a check that could not be made.
-function hostStartError(cause: unknown): Error {
-  return new Error(
-    "Windows managed root could not be verified as a local volume: Windows PowerShell did not start in time",
-    { cause },
-  );
+const HOST_START_MESSAGE =
+  "Windows managed root could not be verified as a local volume: Windows PowerShell did not start in time";
+const NOT_LOCAL_MESSAGE = "Windows managed root must be on a local volume";
+
+function refusalMessage(error: unknown): string {
+  if (error instanceof WindowsProgramHostStartError) return HOST_START_MESSAGE;
+  if (error instanceof WindowsProgramWorkTimeoutError) return NOT_LOCAL_MESSAGE;
+  return error instanceof Error ? error.message : NOT_LOCAL_MESSAGE;
 }
 
 function reportLocalVolumeRefusal(
@@ -148,19 +194,16 @@ function reportLocalVolumeRefusal(
 ): never {
   // The host never reached the program: nothing about the volume was learned.
   const phase = error instanceof WindowsProgramHostStartError ? "host-start" : detected;
+  const verdict = refusalVerdict(phase, error);
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
       SECURITY_WINDOWS_LOCAL_VOLUME_REFUSED_OPERATION,
       { level: "error", errorKind: localVolumeErrorKind(phase, error) },
-      { failureKind: securityErrorKind(error), phase },
+      { failureKind: securityErrorKind(error), phase, verdict },
     ),
   );
-  if (error instanceof WindowsProgramHostStartError) throw hostStartError(error);
-  if (error instanceof WindowsProgramWorkTimeoutError) {
-    throw new Error("Windows managed root must be on a local volume", { cause: error });
-  }
-  throw error;
+  throw new WindowsLocalVolumeError(refusalMessage(error), verdict, phase, error);
 }
 
 function verifyLocalVolume(
@@ -178,7 +221,7 @@ function verifyLocalVolume(
     runner: options.runner ?? spawnSync,
     securityLogSink: options.securityLogSink,
   });
-  if (commandFailed(result)) throw new Error("Windows managed root must be on a local volume");
+  if (commandFailed(result)) throw new Error(NOT_LOCAL_MESSAGE);
 }
 
 export function assertWindowsLocalVolume(
@@ -196,4 +239,32 @@ export function assertWindowsLocalVolume(
   } catch (error) {
     reportLocalVolumeRefusal(options.securityLogSink, phase, error);
   }
+}
+
+// Folders a passive read has seen pass, by their exact spelling, for the life of this process.
+const REMEMBERED_LOCAL_VOLUMES = new Set<string>();
+
+/**
+ * The same check for PASSIVE reads only: detecting the install mode at start, answering a status
+ * or an update-availability read. A folder that passed once is not asked again in this process,
+ * because each check runs Windows PowerShell and blocks its caller for as long as that takes. Only
+ * a pass is remembered; a refusal of either verdict is asked again every time.
+ *
+ * Nothing that ACTS on the verdict may call this: the launcher's root policy, the update session
+ * and the start of the portable coding runtime call `assertWindowsLocalVolume`, which neither reads
+ * nor writes this memory.
+ */
+export function assertWindowsLocalVolumeForPassiveRead(
+  path: string,
+  options: WindowsLocalVolumeOptions = {},
+): void {
+  if ((options.platform ?? process.platform) !== "win32") return;
+  if (REMEMBERED_LOCAL_VOLUMES.has(path)) return;
+  assertWindowsLocalVolume(path, options);
+  REMEMBERED_LOCAL_VOLUMES.add(path);
+}
+
+/** Test seam: a process forgets nothing on its own. */
+export function forgetRememberedWindowsLocalVolumesForTest(): void {
+  REMEMBERED_LOCAL_VOLUMES.clear();
 }

@@ -18,6 +18,31 @@ import {
   type UpdateRuntimeFacts,
 } from "./update-install-mode.js";
 
+// The Windows local-volume check, replaceable per test: by default the real one runs.
+const volumeCheck = vi.hoisted(() => ({
+  override: undefined as undefined | ((kind: "enforcing" | "passive-read", path: string) => void),
+}));
+vi.mock("@oscharko-dev/keiko-security/windows-local-volume", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-security/windows-local-volume")>();
+  return {
+    ...actual,
+    assertWindowsLocalVolume: (
+      ...args: Parameters<typeof actual.assertWindowsLocalVolume>
+    ): void => {
+      if (volumeCheck.override === undefined) actual.assertWindowsLocalVolume(...args);
+      else volumeCheck.override("enforcing", args[0]);
+    },
+    assertWindowsLocalVolumeForPassiveRead: (
+      ...args: Parameters<typeof actual.assertWindowsLocalVolumeForPassiveRead>
+    ): void => {
+      if (volumeCheck.override === undefined)
+        actual.assertWindowsLocalVolumeForPassiveRead(...args);
+      else volumeCheck.override("passive-read", args[0]);
+    },
+  };
+});
+
 const ROOT = "/usr/local/lib/node_modules/@oscharko-dev/keiko";
 const YARN_ROOT = "/Users/alice/.config/yarn/global/node_modules/@oscharko-dev/keiko";
 const WINDOWS_NPM_ROOT =
@@ -841,8 +866,104 @@ describe("the Windows local-volume refusal of the portable install-mode detectio
         [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
       }),
     );
-    expect(mode).toMatchObject({ status: "unsupported", reason: "portable-registration-invalid" });
+    // Windows PowerShell cannot be resolved on this host: nothing was learned about the volume, so
+    // the reason is "could not be checked", no longer the borrowed "registration invalid" (#4358).
+    expect(mode).toMatchObject({ status: "unsupported", reason: "portable-volume-unverified" });
     expect(activityLogLossCounters()["port-unwired"]).toBe(0);
     expect(logs.events.map((event) => event.op)).toContain("security.windows-local-volume.refused");
+  });
+});
+
+// #4358: every refusal of the Windows local-volume check used to read "portable-registration-
+// invalid". A person must be able to tell a folder that is not on a local disk from a check that
+// could not be made, and the second one must not be final.
+describe("the verdict of the Windows local-volume check in the update detection", () => {
+  const installRoot = "/Users/alice/Applications/Keiko";
+  const detect = (
+    check?: Parameters<typeof detectUpdateInstallMode>[4],
+  ): ReturnType<typeof detectUpdateInstallMode> =>
+    detectUpdateInstallMode(
+      facts({
+        packageRoot: `${installRoot}/app`,
+        packageManagerHint: undefined,
+        installScope: "local",
+        portableStateDir: PORTABLE_STATE_DIR,
+      }),
+      {},
+      fakeFiles({
+        [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
+      }),
+      undefined,
+      check,
+    );
+  const refusing = async (verdict: "not-local" | "unverifiable"): Promise<string[]> => {
+    const { WindowsLocalVolumeError } = await vi.importActual<
+      typeof import("@oscharko-dev/keiko-security/windows-local-volume")
+    >("@oscharko-dev/keiko-security/windows-local-volume");
+    const calls: string[] = [];
+    volumeCheck.override = (kind): void => {
+      calls.push(kind);
+      throw new WindowsLocalVolumeError("refused", verdict, "verify", undefined);
+    };
+    return calls;
+  };
+
+  afterEach(() => {
+    volumeCheck.override = undefined;
+  });
+
+  it.each([
+    ["not-local", "portable-volume-not-local"],
+    ["unverifiable", "portable-volume-unverified"],
+  ] as const)("names a %s refusal with its own reason", async (verdict, reason) => {
+    await refusing(verdict);
+    const mode = detect();
+    expect(mode).toMatchObject({
+      status: "unsupported",
+      reason,
+      recommendedAction: "manual-download",
+    });
+    expect(mode.manualInstructions).not.toContain("could not be attested");
+  });
+
+  it("asks again on the next read after a check that could not be made", async () => {
+    const calls = await refusing("unverifiable");
+    expect(detect("passive-read").reason).toBe("portable-volume-unverified");
+    expect(detect("passive-read").reason).toBe("portable-volume-unverified");
+    expect(calls).toEqual(["passive-read", "passive-read"]);
+    // and the next read that passes is believed
+    volumeCheck.override = (kind): void => {
+      calls.push(kind);
+    };
+    expect(detect("passive-read").reason).not.toBe("portable-volume-unverified");
+  });
+
+  it("checks fresh unless the caller is a passive read", () => {
+    const calls: string[] = [];
+    volumeCheck.override = (kind): void => {
+      calls.push(kind);
+    };
+    detect();
+    detect("fresh");
+    detect("passive-read");
+    expect(calls).toEqual(["enforcing", "enforcing", "passive-read"]);
+  });
+
+  it("keeps an invalid registration what it is", () => {
+    volumeCheck.override = (): void => undefined;
+    const mode = detectUpdateInstallMode(
+      facts({
+        packageRoot: `${installRoot}/app`,
+        packageManagerHint: undefined,
+        installScope: "local",
+        portableStateDir: PORTABLE_STATE_DIR,
+      }),
+      {},
+      fakeFiles({
+        [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
+        [`${PORTABLE_STATE_DIR}/portable-install-state.json`]: "{ not a registration",
+      }),
+    );
+    expect(mode).toMatchObject({ status: "unsupported", reason: "portable-registration-invalid" });
   });
 });

@@ -22,7 +22,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { isSystemManagedPortableRoot } from "@oscharko-dev/keiko-security/portable-root-policy";
-import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
+import {
+  assertWindowsLocalVolume,
+  assertWindowsLocalVolumeForPassiveRead,
+  windowsLocalVolumeVerdict,
+} from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   generationBindingMatchesPackageLayout,
   parseWindowsGenerationBinding,
@@ -652,6 +656,12 @@ function manualInstructions(reason: UpdateInstallMode["reason"]): string {
   if (reason === "portable-setup-failed") {
     return "Portable setup did not complete. Re-run setup or download the latest Keiko package.";
   }
+  if (reason === "portable-volume-not-local") {
+    return "Keiko is installed on a network or redirected folder. In-app updates work only from a local disk: install Keiko on this computer's own disk.";
+  }
+  if (reason === "portable-volume-unverified") {
+    return "Keiko could not check its installation folder because Windows answered too slowly. In-app updates are paused until the check succeeds: try again in a moment or restart Keiko.";
+  }
   return "Portable update eligibility could not be attested. Download the latest Keiko package.";
 }
 
@@ -666,6 +676,10 @@ export function resolvePortableUnsupportedInstallKind(
     return "portable-it-managed";
   }
   if (reason === "portable-non-stable" && portable.status === "managed") {
+    return "portable-managed";
+  }
+  // A volume refusal says nothing about the setup: a managed install stays a managed install.
+  if (isPortableVolumeReason(reason) && portable.status === "managed") {
     return "portable-managed";
   }
   return "portable-bootstrap";
@@ -732,11 +746,43 @@ export function portableStateDirFromEnv(env: NodeJS.ProcessEnv): string | undefi
   return stateDir === undefined || stateDir.length === 0 ? undefined : stateDir;
 }
 
+/**
+ * How the Windows local-volume check may answer. `fresh` runs it now and is the default: whatever
+ * ACTS on the answer (the update session) uses it. `passive-read` may reuse a pass that an earlier
+ * passive read of this process saw (start-time detection, status and update-availability reads);
+ * a refusal is never reused.
+ */
+export type PortableVolumeCheck = "fresh" | "passive-read";
+
+type PortableVolumeReason = "portable-volume-not-local" | "portable-volume-unverified";
+
+function isPortableVolumeReason(
+  reason: UpdateInstallMode["reason"],
+): reason is PortableVolumeReason {
+  return reason === "portable-volume-not-local" || reason === "portable-volume-unverified";
+}
+
+// The check has already written its own refusal line (phase and verdict) to the sink it was given;
+// here its verdict becomes the reason a person reads. "Could not be checked" is not "not local",
+// and neither is an invalid registration.
+function portableVolumeReason(error: unknown): PortableVolumeReason {
+  return windowsLocalVolumeVerdict(error) === "not-local"
+    ? "portable-volume-not-local"
+    : "portable-volume-unverified";
+}
+
+function windowsVolumeCheck(volumeCheck: PortableVolumeCheck): typeof assertWindowsLocalVolume {
+  return volumeCheck === "passive-read"
+    ? assertWindowsLocalVolumeForPassiveRead
+    : assertWindowsLocalVolume;
+}
+
 export function detectPortableUpdateInstallMode(
   facts: PortableUpdateRuntimeFacts,
   fs: PortableDetectorFs,
   packageName: string,
   securityLogSink?: SecurityLogSink,
+  volumeCheck: PortableVolumeCheck = "fresh",
 ): UpdateInstallMode | undefined {
   const manifestSummary = bootstrapSummaryFromManifest(facts.packageRoot, fs, packageName);
   const registration = readPortableRegistration(facts.stateDir, fs);
@@ -745,11 +791,11 @@ export function detectPortableUpdateInstallMode(
     try {
       // Keep the original install-root spelling: canonicalization can hide mapped-share and
       // reparse boundaries which D3 explicitly denies.
-      assertWindowsLocalVolume(manifestSummary.layout.installRoot, { securityLogSink });
-    } catch {
+      windowsVolumeCheck(volumeCheck)(manifestSummary.layout.installRoot, { securityLogSink });
+    } catch (error) {
       return portableUnsupportedMode(
         packageName,
-        "portable-registration-invalid",
+        portableVolumeReason(error),
         manifestSummary.summary,
       );
     }

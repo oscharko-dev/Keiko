@@ -16,6 +16,7 @@ import {
   detectPortableUpdateInstallMode,
   portableStateDirFromEnv,
   type PortableManagementMode,
+  type PortableVolumeCheck,
 } from "./update-portable-install-mode.js";
 
 export const PACKAGE_NAME = "@oscharko-dev/keiko";
@@ -365,6 +366,9 @@ export function detectUpdateInstallMode(
   // lost that line and counted it as an unwired port on every start (#4351), so the process sink
   // is the default and a caller that has a narrower one still passes it.
   securityLogSink: SecurityLogSink = processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+  // Fresh unless the caller is a passive read (start, status, availability): the update session
+  // acts on this answer and therefore never passes "passive-read".
+  volumeCheck: PortableVolumeCheck = "fresh",
 ): UpdateInstallMode {
   const portableMode = detectPortableUpdateInstallMode(
     {
@@ -375,6 +379,7 @@ export function detectUpdateInstallMode(
     fs,
     PACKAGE_NAME,
     securityLogSink,
+    volumeCheck,
   );
   if (portableMode !== undefined) return portableMode;
   const blocker = installModeBlocker(facts, env, fs);

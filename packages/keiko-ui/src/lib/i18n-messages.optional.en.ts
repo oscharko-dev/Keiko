@@ -4925,6 +4925,22 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Checked just now. Keiko still cannot verify update download information.",
   "updates.check.portableSetupRequired":
     "Checked just now. Portable setup is still required before in-app updates can run.",
+  "updates.status.portableVolume.notLocal": "Not on a local disk",
+  "updates.status.portableVolume.unverified": "Installation folder not checked",
+  "updates.check.portableVolume.notLocal":
+    "Checked just now. Keiko is not installed on a local disk, so it cannot update itself.",
+  "updates.check.portableVolume.unverified":
+    "Checked just now. Keiko could not check its installation folder; try again in a moment.",
+  "updates.portableVolume.notLocal.title": "Keiko is not installed on a local disk",
+  "updates.portableVolume.notLocal.body":
+    "Keiko is installed in a network or redirected folder. In-app updates work only from this computer's own disk.",
+  "updates.portableVolume.notLocal.action":
+    "Install Keiko on a local drive of this computer, then check again.",
+  "updates.portableVolume.unverified.title": "Keiko could not check its installation folder",
+  "updates.portableVolume.unverified.body":
+    "Windows answered too slowly just now. In-app updates are paused until the check succeeds.",
+  "updates.portableVolume.unverified.action":
+    "Try again in a moment. If it keeps happening, restart Keiko.",
   "updates.check.portableExternallyManaged":
     "Checked just now. This install is still managed outside Keiko, so in-app updates are not available.",
   "updates.check.policyDisabled":

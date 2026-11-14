@@ -45,6 +45,8 @@ import {
   isManualUpdatePath,
   isPortableBootstrapSetupRequired,
   isPortableExternallyManaged,
+  portableVolumeIssue,
+  type PortableVolumeIssue,
   isPortableIntegrityBlocked,
   isPortableManagedManualPath,
   isPortableManagedOneClickPath,
@@ -550,6 +552,8 @@ function summaryTitleText(
   t: I18nTranslate,
 ): string {
   if (manualInstallState === "verified") return t("updates.status.success");
+  const volumeIssue = portableVolumeIssue(report);
+  if (volumeIssue !== undefined) return t(`updates.status.portableVolume.${volumeIssue}`);
   if (isPortableExternallyManaged(report, session)) {
     return t("updates.status.portableExternallyManaged");
   }
@@ -1239,6 +1243,10 @@ function ManualPath({
   readonly onCheck: () => void;
 }): ReactNode {
   const t = useTranslate();
+  const volumeIssue = portableVolumeIssue(report);
+  if (volumeIssue !== undefined) {
+    return <PortableVolumePath issue={volumeIssue} busy={busy} onCheck={onCheck} />;
+  }
   if (isPortableExternallyManaged(report, session)) {
     return <PortableExternallyManagedPath />;
   }
@@ -1312,6 +1320,40 @@ function ManualPath({
           <ExternalIcon size={13} aria-hidden="true" />
         </a>
       ) : null}
+    </section>
+  );
+}
+
+// The installation folder stops in-app updates: say which of the two it is and what to do.
+function PortableVolumePath({
+  issue,
+  busy,
+  onCheck,
+}: {
+  readonly issue: PortableVolumeIssue;
+  readonly busy: BusyAction;
+  readonly onCheck: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <section className="upd-panel upd-manual" aria-labelledby="updates-portable-volume-title">
+      <div className="upd-panel-head">
+        <strong id="updates-portable-volume-title">
+          {t(`updates.portableVolume.${issue}.title`)}
+        </strong>
+        <span>{t(`updates.portableVolume.${issue}.body`)}</span>
+      </div>
+      <div className="upd-manual-finish">
+        <span>{t(`updates.portableVolume.${issue}.action`)}</span>
+        <button
+          type="button"
+          className="upd-secondary-btn"
+          disabled={busy !== undefined}
+          onClick={onCheck}
+        >
+          {t("updates.action.check")}
+        </button>
+      </div>
     </section>
   );
 }
@@ -1631,6 +1673,8 @@ function checkFeedbackMessage(
   if (manualInstallState === "verified") {
     return t("updates.check.manualInstalled", { version: report.currentVersion });
   }
+  const volumeIssue = portableVolumeIssue(report);
+  if (volumeIssue !== undefined) return t(`updates.check.portableVolume.${volumeIssue}`);
   if (isPortableExternallyManaged(report, session)) {
     return t("updates.check.portableExternallyManaged");
   }

@@ -3982,6 +3982,8 @@ function resolvedUpdatePreflight(
               { ...args.options.env },
               undefined,
               bindSecurityLogCorrelation(processServerLogSink(), UNKNOWN_CORRELATION_ID),
+              // The preflight service only reads availability; the update session checks fresh.
+              "passive-read",
             ),
         }),
     ...(args.options.updatePreflightCatalog === undefined
