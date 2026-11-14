@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   askedForApproval,
+  isStageExchange,
   namesRule,
   ruleNames,
   soft,
@@ -142,7 +143,10 @@ export function gradeHintDelivered({ exchanges, ports = producerPorts }) {
     };
   // The two reds need no producer rule: a card for a write that can never pass, and a write that
   // succeeded although no template governs the type, are wrong in every build.
-  const cards = attempts.filter((exchange) => askedForApproval(exchange)).length;
+  // A staging step writes nothing: only a create or a draft commit can show a card for a write.
+  const cards = attempts.filter(
+    (exchange) => !isStageExchange(exchange) && askedForApproval(exchange),
+  ).length;
   if (cards > 0)
     return {
       status: "red",

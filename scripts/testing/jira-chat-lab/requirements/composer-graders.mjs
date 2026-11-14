@@ -26,9 +26,16 @@ export const soft = (holds, detail) =>
 /** Whether the stored exchange asked a human first: an approval card exists for the call. */
 export const askedForApproval = (exchange) => exchange?.approval !== undefined;
 
+/** The staging step of a draft: it checks the template and writes nothing, so it never asks a human. */
+export const isStageExchange = (exchange) => toolExchangeOf(exchange, "jira.draft-stage");
+
+/** The calls that attempt a write: a create, a draft commit, or the staging step that precedes it. */
 export const writeCalls = (exchanges) =>
   (Array.isArray(exchanges) ? exchanges : []).filter(
-    (exchange) => toolExchangeOf(exchange, "jira.create") || toolExchangeOf(exchange, "jira.draft"),
+    (exchange) =>
+      toolExchangeOf(exchange, "jira.create") ||
+      toolExchangeOf(exchange, "jira.draft") ||
+      isStageExchange(exchange),
   );
 
 /** The relation the request named, as Jira holds it, for one type. */

@@ -778,6 +778,77 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
   });
 });
 
+/**
+ * The refusal of the staging step of a draft, in the shape the product stored in the Gemma run of
+ * 2026-11-14 (`keiko.jira.draft.stage`, outcome rejected, the violations on the result itself, a
+ * `ref` of the staged item, the product's own guidance): the lab once recognised only `jira.create`
+ * and `jira.draft` and graded such a turn unverified.
+ */
+const stageRefusalOf = (ruleId, { subject = "parent: Task", guidance, extra = {} } = {}) => {
+  const violations = [{ ruleId, subject, template: "REQ/Sub-task" }];
+  return {
+    call: { id: "s", name: "jira_draft_stage", arguments: { items: [] } },
+    result: {
+      toolRef: { canonicalId: "keiko.jira.draft.stage", contractVersion: 1 },
+      status: "failed",
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "subtask-1",
+        violations,
+        guidance: guidance ?? guidanceOf(violations),
+      },
+    },
+    ...extra,
+  };
+};
+
+describe("a refusal that arrives on the staging step of a draft", () => {
+  it("is a stored refusal: the unrepairable gate and the hint are verified from it", () => {
+    const exchanges = [stageRefusalOf("parent-type-mismatch")];
+    const grade = gradeUnrepairable({
+      created: [],
+      exchanges,
+      answer: "Eine Teilaufgabe braucht eine Aufgabe als Eltern.",
+      turn: { answer: "x", toolExchanges: exchanges },
+      ports: PORTS,
+    });
+    expect([grade.refused.status, grade.gate.status, grade.plain.status]).toEqual([
+      "green",
+      "green",
+      "green",
+    ]);
+    const hint = gradeHintDelivered({
+      exchanges: [stageRefusalOf("template-missing", { subject: "REQ/Epic" })],
+      ports: PORTS,
+    });
+    expect(hint.status).toBe("green");
+  });
+
+  it("stays red when the stored guidance is not the producer's, and a staging step never counts as a card", () => {
+    const other = stageRefusalOf("parent-type-mismatch", { guidance: "Etwas anderes" });
+    expect(gradeParentRefusal({ exchanges: [other], ports: PORTS }).status).toBe("red");
+    const card = stageRefusalOf("template-missing", {
+      subject: "REQ/Epic",
+      extra: { approval: { state: "pending", approvalId: "a" } },
+    });
+    expect(gradeHintDelivered({ exchanges: [card], ports: PORTS }).status).toBe("green");
+  });
+
+  it("is an attempted write for nothing-created, and not a created issue", () => {
+    const exchanges = [stageRefusalOf("template-missing", { subject: "REQ/Epic" })];
+    const grade = gradeNoTemplate({
+      created: [],
+      exchanges,
+      answer: "",
+      turn: { answer: "x", toolExchanges: exchanges },
+      ports: PORTS,
+    });
+    expect(grade.refused.status).toBe("green");
+    expect(grade.refused.detail).toContain("a write was attempted");
+  });
+});
+
 describe("the unrepairable request: hard from Jira and the stored refusal, soft from the prose", () => {
   const stored = (overrides = {}) =>
     storedRefusalOf("parent-type-mismatch", { subject: "parent: Task", ...overrides });
