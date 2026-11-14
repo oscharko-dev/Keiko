@@ -679,6 +679,8 @@ async function dispatchDiscoveryTool(held, name, args) {
 async function discoveryProofFor(held, specification) {
   const { context } = held;
   if (!context.qualifyDiscovery || DISCOVERY_QUERIES[specification.tool] === undefined) return;
+  // Each case is its own accepted turn: a describe of an earlier one is not a selection to replace.
+  context.qualificationDiscoverySelection = [];
   const proof = await proveDiscovery(specification, (name, args) =>
     dispatchDiscoveryTool(held, name, args),
   );
