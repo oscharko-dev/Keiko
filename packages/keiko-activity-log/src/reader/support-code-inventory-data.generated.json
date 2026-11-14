@@ -357,6 +357,7 @@
     "keiko-connectors/jira-screen-tab-admission",
     "keiko-connectors/jira-sprint-lifecycle-admission",
     "keiko-connectors/jira-sprint-lifecycle-values",
+    "keiko-connectors/jira-sprint-transition-messages",
     "keiko-connectors/jira-store-bounds",
     "keiko-connectors/jira-sync-adapter",
     "keiko-connectors/jira-sync-fixtures",

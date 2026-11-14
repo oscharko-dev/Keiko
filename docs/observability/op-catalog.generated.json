@@ -122573,7 +122573,7 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:327",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:345",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
