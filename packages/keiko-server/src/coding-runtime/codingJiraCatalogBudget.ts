@@ -2,7 +2,21 @@ import type { CodingWorkbenchContextUsage } from "@oscharko-dev/keiko-contracts"
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ExternalMcpTool } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import type { CodingJiraFitBasis } from "./codingJiraPodBinding.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+
+/** What the budget of a selection stands on: the one closed word a refusal records (#4359). */
+export function codingJiraCatalogFitBasis(input: {
+  readonly usage: CodingWorkbenchContextUsage | undefined;
+  readonly geometry: OpenCodeContextGeometry;
+}): CodingJiraFitBasis {
+  const { usage, geometry } = input;
+  if (usage?.state !== "available" || usage.source !== "provider-reported") return "no-sample";
+  return usage.capacityTokens !== geometry.contextWindowTokens ||
+    usage.reservedOutputTokens !== geometry.maxOutputTokens
+    ? "geometry-mismatch"
+    : "provider-sample";
+}
 
 /** A read of existing accounting, never a second reservation or a guessed empty conversation. */
 export function codingJiraCatalogFits(input: {
@@ -46,4 +60,27 @@ export function codingJiraCatalogFits(input: {
     promptTokens <= geometry.maxInputTokens &&
     promptTokens + geometry.maxOutputTokens <= geometry.contextWindowTokens
   );
+}
+
+/**
+ * The accounting a bound run hands its Jira catalog: the real read of the run's provider-reported
+ * context sample, composed in one place for the backend and for the end-to-end proof, so no test
+ * has to stand in for it (#4359).
+ */
+export function codingJiraCatalogAccounting(input: {
+  readonly geometry: OpenCodeContextGeometry;
+  readonly usage: () => CodingWorkbenchContextUsage | undefined;
+}): {
+  readonly catalogFits: (
+    tools: readonly ExternalMcpTool[],
+    result: CatalogJsonObject,
+  ) => boolean | undefined;
+  readonly catalogFitBasis: () => CodingJiraFitBasis;
+} {
+  const { geometry } = input;
+  return {
+    catalogFits: (tools, result) =>
+      codingJiraCatalogFits({ tools, result, geometry, usage: input.usage() }),
+    catalogFitBasis: () => codingJiraCatalogFitBasis({ geometry, usage: input.usage() }),
+  };
 }

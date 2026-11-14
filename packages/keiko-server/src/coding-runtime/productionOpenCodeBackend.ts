@@ -2,7 +2,7 @@ import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJourna
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import { codingRunMcpServers, selectedRunMcpServers } from "./codingJiraPodBinding.js";
 import type { CodingJiraPods, CodingJiraRunAuthority } from "./codingJiraPodMcp.js";
-import { codingJiraCatalogFits } from "./codingJiraCatalogBudget.js";
+import { codingJiraCatalogAccounting } from "./codingJiraCatalogBudget.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -21,10 +21,6 @@ import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-c
 import { isCodingSafeActivityToolPresentation } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
-import {
-  activityLogEvent,
-  defineActivityLogOperation,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createRuntimeGatewayConfinement,
   nativeHomeDeniedReadRoots,
@@ -151,33 +147,6 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
-
-const CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "coding-runtime.context-usage.observed",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.productionOpenCodeBackend.recordContextTelemetry",
-  fields: {
-    state: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["accepted", "rejected"],
-    },
-    capacityTokens: { type: "integer", dataClass: "count", required: true },
-    usedInputTokens: { type: "integer", dataClass: "count", required: true },
-    reservedOutputTokens: { type: "integer", dataClass: "count", required: true },
-    sampleDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["coding-runtime-context-usage"],
-  proofIds: ["coding-runtime.context-usage.observed.emitted-line"],
-  releaseImpact: "patch",
-});
 
 /**
  * Functional-evidence stand-in for a platform-qualified portable OpenCode runtime. It is reachable
@@ -397,7 +366,7 @@ function createOpenCodeRun(
   toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
-  const contextGeometry = admittedRunGeometry(input, run);
+  const contextGeometry = admittedAndBoundRunGeometry(input, run);
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,
@@ -532,8 +501,6 @@ function composeOpenCodeRun(
       run.minted.authorityRef.envelopeDigest,
       input.runtimeEvidence,
       run,
-      contextGeometry,
-      input.activityLog ?? processServerLogSink(),
     ),
     onQuestionObserved: liveQuestionSignal(
       run.minted.authorityRef.runId,
@@ -604,6 +571,20 @@ interface BoundJira {
 
 // A run the human started with a Jira Pod: the resolver bound it, and this composition must be able
 // to serve it. A run that cannot be served as asked fails closed instead of starting without Jira.
+// The model gateway reports each call's real prompt size by run; the registry reads it against
+// the geometry this run was admitted with (#4359).
+function admittedAndBoundRunGeometry(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeRuntimeCompositionInput["contextGeometry"] {
+  const geometry = admittedRunGeometry(input, run);
+  run.contextUsage?.bindGeometry(run.request.runId, {
+    capacityTokens: geometry.contextWindowTokens,
+    reservedOutputTokens: geometry.maxOutputTokens,
+  });
+  return geometry;
+}
+
 function boundJira(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
@@ -623,13 +604,10 @@ function boundJira(
     binding,
     authority: {
       ...authority,
-      catalogFits: (tools, result) =>
-        codingJiraCatalogFits({
-          tools,
-          result,
-          geometry,
-          usage: run.contextUsage?.read(run.request.runId),
-        }),
+      ...codingJiraCatalogAccounting({
+        geometry,
+        usage: () => run.contextUsage?.readLargest(run.request.runId),
+      }),
     },
   };
 }
@@ -1756,8 +1734,6 @@ function idempotentEventSink(
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   run: ProductionRuntimeBackendInput,
-  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
-  activityLog: ServerLogSink,
 ): OpenCodeRuntimeCompositionInput["governedEventSink"] {
   // KEIKO-0707: use the same bounded-correlation primitive the governed-tool call path uses so
   // idempotency identity retention is capped at MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS instead of
@@ -1775,67 +1751,24 @@ function idempotentEventSink(
           state: "running",
           authorityDigest,
         });
-        recordContextTelemetry(run, event, contextGeometry, activityLog);
+        recordContextTelemetry(run, event);
       }
       return Promise.resolve(duplicate ? "duplicate" : "applied");
     },
   };
 }
 
-type ContextUsageActivityMeta =
-  | { readonly level: "info"; readonly correlationId: string }
-  | {
-      readonly level: "warn";
-      readonly correlationId: string;
-      readonly errorKind: "conflict";
-    };
-
-function contextUsageActivityMeta(
-  accepted: boolean,
-  correlationId: string,
-): ContextUsageActivityMeta {
-  if (accepted) return { level: "info", correlationId };
-  return { level: "warn", correlationId, errorKind: "conflict" };
-}
-
 export function recordContextTelemetry(
   run: ProductionRuntimeBackendInput,
   event: OpenCodeReconciliationEvent,
-  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
-  activityLog: ServerLogSink,
 ): void {
-  const registry = run.contextUsage;
-  if (registry === undefined) return;
-  const providerTokenUsage = event.providerTokenUsage;
-  const completedCompaction =
-    event.compaction?.event === "completed" ? event.compaction : undefined;
-  if (providerTokenUsage === undefined && completedCompaction === undefined) return;
-  const updatedAt = new Date().toISOString();
-  if (providerTokenUsage !== undefined) {
-    const accepted = registry.recordProviderSample(run.request.runId, {
-      sampleId: event.digest,
-      capacityTokens: contextGeometry.contextWindowTokens,
-      reservedOutputTokens: contextGeometry.maxOutputTokens,
-      inputTokens: providerTokenUsage.inputTokens,
-      updatedAt,
-    });
-    activityLog.write(
-      activityLogEvent(
-        CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION,
-        contextUsageActivityMeta(accepted, run.request.runId),
-        {
-          state: accepted ? "accepted" : "rejected",
-          capacityTokens: contextGeometry.contextWindowTokens,
-          usedInputTokens: providerTokenUsage.inputTokens,
-          reservedOutputTokens: contextGeometry.maxOutputTokens,
-          sampleDigest: event.digest,
-        },
-      ),
-    );
-  }
-  if (completedCompaction !== undefined) {
-    registry.recordCompaction(run.request.runId, completedCompaction.compactionIdSha256, updatedAt);
-  }
+  const completed = event.compaction?.event === "completed" ? event.compaction : undefined;
+  if (completed === undefined) return;
+  run.contextUsage?.recordCompaction(
+    run.request.runId,
+    completed.compactionIdSha256,
+    new Date().toISOString(),
+  );
 }
 
 /**

@@ -10118,7 +10118,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "coding-runtime.context-usage.observed",
     category: "process",
     owner: "keiko-server",
-    emitter: "coding-runtime.productionOpenCodeBackend.recordContextTelemetry",
+    emitter: "coding-runtime.codingRuntimeContextUsageObservation.recordContextUsageObservation",
     fields: {
       completeness: {
         type: "string",
@@ -11741,7 +11741,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["bind", "call", "serialize-description"],
+        values: ["bind", "call", "discover", "describe", "serialize-description"],
       },
       outcome: {
         type: "string",
@@ -11761,6 +11761,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unsupported-runtime",
           "tool-failed",
           "scope-missing",
+          "invalid-arguments",
+          "effect-denied",
+          "handler-unavailable",
+          "budget-exhausted",
+          "input-bound",
           "internal",
         ],
       },
@@ -11768,7 +11773,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["jira-read", "jira-write"],
+        values: ["jira-read", "jira-write", "jira-discovery"],
+      },
+      stage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["current", "busy", "identity", "scope", "admit", "size", "fits"],
+      },
+      fitBasis: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["provider-sample", "no-sample", "geometry-mismatch"],
       },
       toolDigest: {
         type: "string",

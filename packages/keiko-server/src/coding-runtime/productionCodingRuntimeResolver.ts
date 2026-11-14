@@ -160,6 +160,7 @@ import {
   createCodingRuntimeContextUsageRegistry,
   type CodingRuntimeContextUsageRegistry,
 } from "./codingRuntimeContextUsage.js";
+import { observeGatewayPromptTokens } from "./codingRuntimeContextUsageObservation.js";
 import {
   createCodingRuntimeRunEffortRegistry,
   type CodingRuntimeRunEffortRegistry,
@@ -585,15 +586,19 @@ type ModelCallAdmission = ReturnType<CodingRuntimeAuthorityService["admitModelCa
   readonly modelCallId?: number;
 };
 
-function runtimeCapabilityAuthenticatorFor(
-  authority: CodingRuntimeAuthorityService,
-  runs: Map<string, ResolverRunRecord>,
-  { runEffort }: Pick<RunComposition, "runEffort">,
-): NonNullable<QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]> & {
+type ResolverCapabilityAuthenticator = NonNullable<
+  QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]
+> & {
   readonly settlePromptTokens: (
     capability: string,
     reservedPromptTokens: number,
     actualPromptTokens: number,
+    modelCallId?: number,
+  ) => unknown;
+  readonly observeProviderPromptTokens: (
+    capability: string,
+    providerPromptTokens: number,
+    conversationKey: string,
     modelCallId?: number,
   ) => unknown;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
@@ -603,7 +608,13 @@ function runtimeCapabilityAuthenticatorFor(
   readonly unavailableOptionalTools: (
     runId: string,
   ) => ReadonlySet<OpenCodeOptionalToolName> | undefined;
-} {
+};
+
+function runtimeCapabilityAuthenticatorFor(
+  authority: CodingRuntimeAuthorityService,
+  runs: Map<string, ResolverRunRecord>,
+  { runEffort, contextUsage }: Pick<RunComposition, "runEffort" | "contextUsage">,
+): ResolverCapabilityAuthenticator {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
     admitModelCall: (capability, estimatedPromptTokens): ModelCallAdmission => {
@@ -626,6 +637,22 @@ function runtimeCapabilityAuthenticatorFor(
       if (!authenticated.ok) return { ok: false };
       runEffort.modelCallSettled(authenticated.binding.runId, modelCallId, actualPromptTokens);
       return { ok: true };
+    },
+    observeProviderPromptTokens: (
+      capability,
+      providerPromptTokens,
+      conversationKey,
+      modelCallId,
+    ): void => {
+      const authenticated = authority.authenticateCapability(capability, "model-gateway");
+      if (!authenticated.ok) return;
+      observeGatewayPromptTokens(
+        contextUsage,
+        authenticated.binding.runId,
+        conversationKey,
+        providerPromptTokens,
+        modelCallId,
+      );
     },
     unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools(),
   };

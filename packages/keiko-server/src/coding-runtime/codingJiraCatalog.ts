@@ -24,7 +24,11 @@ import {
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import { recordJiraCatalogSelection } from "../atlassian/jiraCatalogSelectionActivity.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { CodingJiraTool } from "./codingJiraPodBinding.js";
+import type {
+  CodingJiraFitBasis,
+  CodingJiraSelectionStage,
+  CodingJiraTool,
+} from "./codingJiraPodBinding.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   emitServerDiagnostic,
@@ -93,6 +97,25 @@ interface CodingJiraCatalogInput<Context extends ManagedMcpInvocationContext> {
     tools: readonly ExternalMcpTool[],
     result: CatalogJsonObject,
   ) => boolean | undefined;
+  /** What the accounting stood on, for the body-free line of a refusal it could not establish. */
+  readonly fitBasis?: (() => CodingJiraFitBasis) | undefined;
+  /** One body-free observation per refused selection: the check that refused, never its input. */
+  readonly observeRefusal?: (
+    refusal: CodingJiraSelectionRefusal,
+    context: ManagedMcpInvocationContext,
+  ) => void;
+}
+
+/** The closed facts of a refused describe: which check, which fault, what the budget stood on. */
+export interface CodingJiraSelectionRefusal {
+  readonly stage: CodingJiraSelectionStage;
+  readonly reason: "effect-denied" | "handler-unavailable" | "budget-exhausted" | "input-bound";
+  readonly fitBasis?: CodingJiraFitBasis | undefined;
+}
+
+interface SelectionTrace {
+  stage: CodingJiraSelectionStage;
+  fitBasis?: CodingJiraFitBasis;
 }
 class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
   readonly discovery: ManagedMcpHost<JiraCatalogDiscoveryContext>;
@@ -131,21 +154,53 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
   private selectedNames(
     identities: readonly string[],
     context: ManagedMcpInvocationContext,
+    trace: SelectionTrace,
   ): CodingJiraTool[] {
     return jiraToolsForIdentities(identities).map((name) => {
+      trace.stage = "identity";
       const tool = this.input.tools.find((allowedName) => allowedName === name);
       requireDispatch(tool !== undefined, "denied", "effect-denied");
+      trace.stage = "scope";
       requireDispatch(this.input.admitted(tool, context), "denied", "effect-denied");
       return tool;
     });
   }
+  /** The checks between a candidate host and its publication, each naming itself for the log. */
+  private requireSelectable(
+    narrowed: readonly CodingJiraTool[],
+    next: readonly ExternalMcpTool[],
+    result: CatalogJsonObject,
+    context: ManagedMcpInvocationContext,
+    trace: SelectionTrace,
+  ): void {
+    trace.stage = "size";
+    requireDispatch(
+      Buffer.byteLength(JSON.stringify(next)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
+      "denied",
+      "budget-exhausted",
+    );
+    trace.stage = "current";
+    this.requireCurrent(context);
+    trace.stage = "scope";
+    requireDispatch(
+      narrowed.every((name) => this.input.admitted(name, context)),
+      "denied",
+      "effect-denied",
+    );
+    this.requireFittingSelection(narrowed, next, result, trace);
+  }
+
   private requireFittingSelection(
     narrowed: readonly CodingJiraTool[],
     next: readonly ExternalMcpTool[],
     result: CatalogJsonObject,
+    trace: SelectionTrace,
   ): void {
     if (narrowed.length > 0) {
+      trace.stage = "fits";
       const fits = this.input.fits(next, result);
+      if (fits === undefined && this.input.fitBasis !== undefined)
+        trace.fitBasis = this.input.fitBasis();
       requireDispatch(fits !== undefined, "failed", "handler-unavailable");
       requireDispatch(fits, "denied", "budget-exhausted");
     }
@@ -167,15 +222,42 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
     this.identities = Object.freeze([...identities]);
   }
 
+  /** Selects like the Chat catalog and reports which check refused, as closed words only. */
   async select(
     identities: readonly string[],
     result: CatalogJsonObject,
     context: ManagedMcpInvocationContext,
   ): Promise<void> {
+    const trace: SelectionTrace = { stage: "current" };
+    try {
+      await this.selectChecked(identities, result, context, trace);
+    } catch (error) {
+      const reason = refusalReason(error);
+      if (reason !== undefined)
+        this.input.observeRefusal?.(
+          {
+            stage: trace.stage,
+            reason,
+            ...(trace.fitBasis === undefined ? {} : { fitBasis: trace.fitBasis }),
+          },
+          context,
+        );
+      throw error;
+    }
+  }
+
+  private async selectChecked(
+    identities: readonly string[],
+    result: CatalogJsonObject,
+    context: ManagedMcpInvocationContext,
+    trace: SelectionTrace,
+  ): Promise<void> {
     this.requireCurrent(context);
+    trace.stage = "busy";
     requireDispatch(!this.selecting, "denied", "effect-denied");
-    const narrowed = this.selectedNames(identities, context);
+    const narrowed = this.selectedNames(identities, context, trace);
     // The same refusal as the Chat catalog: an oversized selection never reaches a host.
+    trace.stage = "size";
     if (narrowed.length > MANAGED_MCP_TOOLS_MAX) throw new ToolCatalogError("input-bound");
     this.selecting = true;
     let candidate: ManagedMcpHost<Context> | undefined;
@@ -185,20 +267,10 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
           providers: [this.input.provider(narrowed)],
           log: this.input.log,
         });
+      trace.stage = "admit";
       await candidate?.admit(context.correlationId);
       const next = [...this.initial, ...(candidate === undefined ? [] : advertised(candidate))];
-      requireDispatch(
-        Buffer.byteLength(JSON.stringify(next)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
-        "denied",
-        "budget-exhausted",
-      );
-      this.requireCurrent(context);
-      requireDispatch(
-        narrowed.every((name) => this.input.admitted(name, context)),
-        "denied",
-        "effect-denied",
-      );
-      this.requireFittingSelection(narrowed, next, result);
+      this.requireSelectable(narrowed, next, result, context, trace);
       const previous = this.selected;
       this.selected = candidate;
       candidate = undefined;
@@ -213,6 +285,16 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
       await retire(candidate, context.correlationId);
     }
   }
+}
+
+/** The closed fault a refused selection carries; anything else is not a refusal of this catalog. */
+function refusalReason(error: unknown): CodingJiraSelectionRefusal["reason"] | undefined {
+  if (error instanceof ToolCatalogError)
+    return error.reason === "input-bound" ? "input-bound" : undefined;
+  if (error instanceof ManagedMcpError) return "handler-unavailable";
+  if (!(error instanceof CatalogDispatchFault)) return undefined;
+  if (error.reason === "budget-exhausted") return "budget-exhausted";
+  return error.reason === "handler-unavailable" ? "handler-unavailable" : "effect-denied";
 }
 
 /** One run's replaceable subset, using the same managed hosts and local discovery as Chat. */

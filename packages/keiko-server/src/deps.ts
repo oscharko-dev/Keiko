@@ -898,6 +898,16 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
               modelCallId?: number,
             ) => unknown)
           | undefined;
+        // A prompt size the provider itself reported for an admitted call (never an estimate): the
+        // run's context usage reads it (#4359).
+        readonly observeProviderPromptTokens?:
+          | ((
+              capability: string,
+              providerPromptTokens: number,
+              conversationKey: string,
+              modelCallId?: number,
+            ) => unknown)
+          | undefined;
       }
     | undefined;
   /** Current server-owned delivery authority; absent means Git delivery executes fail closed. */

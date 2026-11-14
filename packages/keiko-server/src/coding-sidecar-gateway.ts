@@ -184,6 +184,12 @@ interface PromptTokenReservation {
    * of the same size. Absent when the authenticator answered none.
    */
   readonly modelCallId?: number | undefined;
+  /**
+   * A digest of the head of the conversation this call belongs to. The route sees one run, but a
+   * run can hold several conversations (subagents, forks) whose prompts differ in size; the
+   * context usage of a call is attributed by this key (#4359).
+   */
+  readonly conversationKey: string;
   settled: boolean;
   settlement?: PromptTokenSettlement;
 }
@@ -220,6 +226,15 @@ function settlePromptTokenReservation(
   discardedPromptTokens = 0,
 ): PromptTokenSettlement {
   const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
+  // The run's context usage reads the prompt size the provider reported for this call: the one
+  // fact every native run sends through this gateway, whatever events its runtime emits (#4359).
+  if (providerReported && !reservation.settled)
+    runtimeCapabilityAuthenticator(deps)?.observeProviderPromptTokens?.(
+      reservation.capability,
+      actualPromptTokens,
+      reservation.conversationKey,
+      reservation.modelCallId,
+    );
   return applyPromptTokenSettlement(deps, reservation, {
     promptTokens:
       (providerReported ? actualPromptTokens : reservation.reservedPromptTokens) +
@@ -2995,6 +3010,15 @@ interface RuntimeCapabilityAuthenticator {
         modelCallId?: number,
       ) => unknown)
     | undefined;
+  /** A prompt size the provider reported for an admitted call, never an estimate (#4359). */
+  readonly observeProviderPromptTokens?:
+    | ((
+        capability: string,
+        providerPromptTokens: number,
+        conversationKey: string,
+        modelCallId?: number,
+      ) => unknown)
+    | undefined;
   // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the real per-run fact behind the
   // outgoing tool-catalog advertisement's readiness (#3413-AC1/#3414-AC4/AC9). `undefined` for a
   // runId this capability has no record of (or an authenticator that predates this wiring)
@@ -3341,11 +3365,28 @@ function isRuntimeTransportProfileId(modelProfileId: string | undefined): boolea
   );
 }
 
+/**
+ * The key of the conversation a request continues: the system prompt and the first user message
+ * start every conversation and stay the same through all its rounds, while a subagent starts from
+ * its own. A digest, never any of the text.
+ */
+function conversationKeyOf(messages: readonly CodingSidecarGatewayChatMessage[]): string {
+  const hash = createHash("sha256");
+  hash.update("keiko.coding-sidecar.conversation.v1\0");
+  for (const role of ["system", "user"] as const) {
+    const head = messages.find((message) => message.role === role);
+    const content = head?.content ?? "";
+    hash.update(`${role}:${String(content.length)}:${content}\0`);
+  }
+  return hash.digest("hex");
+}
+
 function admitGatewayModelCall(
   deps: UiHandlerDeps,
   capability: string,
   runId: string,
   reservedPromptTokens: number,
+  conversationKey: string,
 ): PromptTokenReservation | undefined {
   const reserved = runtimeCapabilityAuthenticator(deps)?.admitModelCall?.(
     capability,
@@ -3356,6 +3397,7 @@ function admitGatewayModelCall(
   return {
     capability,
     reservedPromptTokens,
+    conversationKey,
     ...(modelCallId === undefined ? {} : { modelCallId }),
     settled: false,
   };
@@ -5942,6 +5984,7 @@ function executeBudgetedGatewayChat(
     authentication.capability,
     authentication.runId,
     estimatedPromptTokens,
+    conversationKeyOf(parsed.messages),
   );
   if (promptTokenReservation === undefined) {
     const answer = forbiddenGatewayRequest();

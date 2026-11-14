@@ -310,21 +310,23 @@ function canonicalIdentities(
   );
   const resolved: string[] = [];
   for (const entry of requested) {
-    const identity = known.has(entry) ? entry : namedOperation(listed, entry, options)?.identity;
+    const identity = known.has(entry) ? entry : namedOperation(listed, entry)?.identity;
     if (identity === undefined) return undefined;
     resolved.push(identity);
   }
   return new Set(resolved).size === resolved.length ? resolved : undefined;
 }
+/**
+ * One matcher for Chat and Coding: the dotted registry name and its underscore form name the same
+ * operation. `nativeToolNames` only chooses which of the two jira.discover shows; the description
+ * promises both, so both must resolve (#4359: a Coding model copying `jira_issue` was refused).
+ */
 function namedOperation(
   listed: readonly { readonly identity: string; readonly tool: string }[],
   entry: string,
-  options: DiscoveryOptions,
 ): { readonly identity: string } | undefined {
   return listed.find(
-    (definition) =>
-      definition.tool === entry ||
-      (options.nativeToolNames !== true && definition.tool.replace(/[.-]/gu, "_") === entry),
+    (definition) => definition.tool === entry || definition.tool.replace(/[.-]/gu, "_") === entry,
   );
 }
 
@@ -381,7 +383,7 @@ const INVALID_DESCRIPTION = {
   outcome: "failed",
   reason: "invalid-arguments",
   guidance:
-    "Pass only the identity or the tool name that jira.discover returned for an operation, each operation at most once; a name jira.discover did not list is refused. The current tool selection was not changed.",
+    'Pass only the identity or the tool name that jira.discover returned for an operation, each operation at most once; a name jira.discover did not list is refused. Copy a hit\'s "tool" (for example jira.priorities) or its "identity" exactly, or call jira.discover first. The current tool selection was not changed.',
 } as const;
 
 /** More operations than one tool host or catalog can carry; nothing was selected. */

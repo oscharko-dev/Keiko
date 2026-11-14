@@ -50,7 +50,6 @@ import {
 } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
-  isOpenCodeProviderTokenUsage,
   isOpenCodeCompactionActivity,
   OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
@@ -1566,22 +1565,11 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
 
 const RECONCILIATION_EVENT_KEYS = ["id", "aggregateId", "sequence", "digest", "kind"];
 const RECONCILIATION_EVENT_COMPACTION_KEYS = [...RECONCILIATION_EVENT_KEYS, "compaction"];
-const RECONCILIATION_EVENT_USAGE_KEYS = [...RECONCILIATION_EVENT_KEYS, "providerTokenUsage"];
-const RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS = [
-  ...RECONCILIATION_EVENT_KEYS,
-  "compaction",
-  "providerTokenUsage",
-];
 
 function reconciliationEventKeys(event: OpenCodeReconciliationEvent): readonly string[] {
-  if (event.compaction !== undefined) {
-    return event.providerTokenUsage === undefined
-      ? RECONCILIATION_EVENT_COMPACTION_KEYS
-      : RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS;
-  }
-  return event.providerTokenUsage === undefined
+  return event.compaction === undefined
     ? RECONCILIATION_EVENT_KEYS
-    : RECONCILIATION_EVENT_USAGE_KEYS;
+    : RECONCILIATION_EVENT_COMPACTION_KEYS;
 }
 
 function validEvent(event: OpenCodeReconciliationEvent): boolean {
@@ -1593,8 +1581,7 @@ function validEvent(event: OpenCodeReconciliationEvent): boolean {
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
     OPEN_CODE_EVENT_KINDS.includes(event.kind) &&
-    isOpenCodeCompactionActivity(event.compaction) &&
-    isOpenCodeProviderTokenUsage(event.providerTokenUsage)
+    isOpenCodeCompactionActivity(event.compaction)
   );
 }
 

@@ -45,6 +45,8 @@ import {
   codingJiraServerDefinition,
   type CodingJiraPodBinding,
 } from "./codingJiraPodBinding.js";
+import { codingJiraCatalogAccounting } from "./codingJiraCatalogBudget.js";
+import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import { jiraOperationDefinitions } from "../atlassian/jiraOperationRegistry.js";
 import { postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
@@ -390,7 +392,7 @@ function connect(h: Harness, connections: CodingJiraConnections): Client {
   };
 }
 
-function proofLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
+function podLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
   return h.records
     .filter((record) => record.op === "coding-runtime.jira-pod")
     .map((record) =>
@@ -399,6 +401,16 @@ function proofLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
         formatActivityLogProofLine(record),
       ),
     );
+}
+
+/** The decision lines of binding and calls. The client's own describe is observed separately. */
+function proofLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
+  return podLines(h).filter((line) => line.toolClass !== "jira-discovery");
+}
+
+/** The lines of discover and describe (#4359): refused or completed, in closed words. */
+function discoveryLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
+  return podLines(h).filter((line) => line.toolClass === "jira-discovery");
 }
 
 describe("resolving the Pod the human chose", () => {
@@ -566,6 +578,111 @@ describe("serving the bound Pod through the relay", () => {
     expect(h.http).not.toHaveBeenCalled();
     expect(h.retained).toEqual([]);
     expect(h.begun).toEqual([]);
+  });
+
+  // #4359: every other case here hands the catalog `catalogFits: () => true`. This one composes the
+  // run's accounting exactly as the backend does, from the real context-usage registry, and drives
+  // discover, describe and a typed call against the fixture Jira without a stand-in for admission.
+  it("serves discover, describe and a call on the real accounting once the run has a provider sample", async () => {
+    const h = retainingHarness(harness());
+    const registry = createCodingRuntimeContextUsageRegistry();
+    const geometry = {
+      contextWindowTokens: 272_000,
+      maxInputTokens: 239_232,
+      maxOutputTokens: 32_768,
+    };
+    const client = connect(
+      h,
+      h.pods.connections(undefined, bound(h), {
+        runId: h.context.correlationId,
+        currentScopes: () => ["issue-tracker.read"],
+        ...codingJiraCatalogAccounting({
+          geometry,
+          usage: () => registry.read(h.context.correlationId),
+        }),
+      }),
+    );
+    const found = await client.rawCall("jira.discover", { query: "issue", maxResults: 5 });
+    expect(found.structuredContent).toMatchObject({ outcome: "succeeded" });
+    // The documented first moment of a run: no provider usage yet, so no schema expansion.
+    expect(
+      (await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"])).structuredContent,
+    ).toMatchObject({
+      outcome: "failed",
+      reason: "selection-unavailable",
+    });
+    expect(discoveryLines(h).at(-1)).toMatchObject({
+      action: "describe",
+      outcome: "refused",
+      stage: "fits",
+      fitBasis: "no-sample",
+    });
+    registry.recordProviderSample(h.context.correlationId, {
+      sampleId: "first-provider-usage",
+      capacityTokens: geometry.contextWindowTokens,
+      reservedOutputTokens: geometry.maxOutputTokens,
+      inputTokens: 7_303,
+      updatedAt: "2026-11-14T14:34:10.000Z",
+    });
+    const selected = await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
+    expect(selected.structuredContent).toMatchObject({ outcome: "succeeded" });
+    expect(await client.list()).toContain("jira.issue");
+    const read = await client.rawCall("jira.issue", { issueKey: "SYN-1" });
+    expect(read.structuredContent).toMatchObject({ outcome: "succeeded" });
+    expect(JSON.stringify(read)).toContain("SYN-1");
+    expect(h.http).toHaveBeenCalled();
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({ action: "call", outcome: "completed", toolClass: "jira-read" }),
+    ]);
+  });
+
+  // #4359: a refused describe reached the model only as a generic tool error and left no line, so
+  // a clerk's Workbench run could not be reconstructed. The line names the check that refused.
+  it("records which check refused a describe, and what its budget stood on, as closed words", async () => {
+    const h = retainingHarness(harness());
+    let fits: boolean | undefined;
+    const client = connect(
+      h,
+      h.pods.connections(undefined, bound(h), {
+        ...runAuthority(h),
+        catalogFits: () => fits,
+        catalogFitBasis: () => "no-sample",
+      }),
+    );
+    await client.rawCall("jira.discover", { maxResults: 1 });
+    await client.select(["GET /rest/api/2/project"]);
+    fits = false;
+    await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
+    fits = true;
+    await client.select(["jira.not-an-operation"]);
+    await client.select(["GET /rest/api/2/project"]);
+    const lines = discoveryLines(h);
+    expect(lines).toEqual([
+      expect.objectContaining({ action: "discover", outcome: "completed" }),
+      expect.objectContaining({
+        action: "describe",
+        outcome: "refused",
+        reason: "handler-unavailable",
+        stage: "fits",
+        fitBasis: "no-sample",
+      }),
+      expect.objectContaining({
+        action: "describe",
+        outcome: "refused",
+        reason: "budget-exhausted",
+        stage: "fits",
+      }),
+      expect.objectContaining({
+        action: "describe",
+        outcome: "refused",
+        reason: "invalid-arguments",
+        stage: "identity",
+      }),
+      expect.objectContaining({ action: "describe", outcome: "completed" }),
+    ]);
+    // Closed words only: neither a requested identity, a path nor a tool name is recorded.
+    expect(JSON.stringify(lines)).not.toMatch(/rest\/api|issueIdOrKey|not-an-operation|project/u);
+    expect(h.http).not.toHaveBeenCalled();
   });
 
   // #4176: an attachment reads Chat-connected files, which a Coding run has no authority over, so

@@ -7085,6 +7085,89 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     },
   );
 
+  // #4359: the run's context usage reads the prompt size the provider reported through this
+  // gateway, because the pinned native runtime emits no event Keiko reads it from. Only the
+  // provider's own count is observed, never the conservative estimate of a failed call.
+  it("hands the run's context usage the provider-reported prompt size, and never an estimate", async () => {
+    const observed: { capability: string; promptTokens: number; conversationKey: string }[] = [];
+    const reportingAuthenticator = {
+      authenticate: (): unknown => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+      admitModelCall: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      settlePromptTokens: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      observeProviderPromptTokens: (
+        capability: string,
+        promptTokens: number,
+        conversationKey: string,
+      ): unknown => {
+        observed.push({ capability, promptTokens, conversationKey });
+        return undefined;
+      },
+    };
+    const answering = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), {
+      ...depsValue(configValue(provider(), capability()), () => answering),
+      runtimeCapabilityAuthenticator: reportingAuthenticator,
+    });
+    expect(observed).toEqual([
+      {
+        capability: "gateway-capability-material-0000000001",
+        promptTokens: 12,
+        conversationKey: observed[0]?.conversationKey,
+      },
+    ]);
+    expect(observed[0]?.conversationKey).toMatch(/^[0-9a-f]{64}$/u);
+    observed.length = 0;
+    const failing = vi.fn(() => Promise.reject(new Error("provider unavailable")));
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), {
+      ...depsValue(configValue(provider(), capability()), () => failing),
+      runtimeCapabilityAuthenticator: reportingAuthenticator,
+    });
+    expect(observed).toEqual([]);
+  });
+
+  // #4359: a run can hold several conversations (a subagent starts from its own head); the key a
+  // call is attributed by is a digest of the head, the same through every round of a conversation.
+  it("attributes a call to the conversation head: one key per conversation, a different one for a subagent", async () => {
+    const keys: string[] = [];
+    const authenticator = {
+      authenticate: (): unknown => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+      admitModelCall: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      settlePromptTokens: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      observeProviderPromptTokens: (_capability: string, _tokens: number, key: string): unknown => {
+        keys.push(key);
+        return undefined;
+      },
+    };
+    const turn = async (messages: readonly object[]): Promise<void> => {
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "azure-coding-model", messages, tools: [] }),
+        {
+          ...depsValue(configValue(provider(), capability()), () =>
+            vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model"))),
+          ),
+          runtimeCapabilityAuthenticator: authenticator,
+        },
+      );
+    };
+    const head = [
+      { role: "system", content: "primary system prompt" },
+      { role: "user", content: "fix the build" },
+    ];
+    await turn(head);
+    await turn([
+      ...head,
+      { role: "assistant", content: "looking" },
+      { role: "user", content: "and then?" },
+    ]);
+    await turn([
+      { role: "system", content: "subagent system prompt" },
+      { role: "user", content: "summarize this file" },
+    ]);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
   it("settles conservatively (the full reserved estimate) when the provider call fails before usage is observed", async () => {
     const chat = vi.fn(() => Promise.reject(new Error("provider unavailable")));
     const settlements: { reservedPromptTokens: number; actualPromptTokens: number }[] = [];

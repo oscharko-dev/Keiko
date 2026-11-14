@@ -233,6 +233,29 @@ describe("local Jira operation discovery", () => {
     }
   });
 
+  it("accepts both name forms in the Coding catalog too and answers an unknown name with the valid form (#4359)", async () => {
+    const f = fixture();
+    const native = createJiraCatalogDiscoveryProvider({
+      tools: new Set(["jira.projects"]),
+      nativeToolNames: true,
+    })
+      .tools()
+      .find((tool) => tool.name === "jira.describe");
+    if (native === undefined) throw new TypeError("Missing describe tool");
+    for (const name of ["jira.projects", "jira_projects"]) {
+      f.select.mockClear();
+      const result = await native.execute({ identities: [name] }, f.context);
+      expect(result.isError, name).toBeUndefined();
+      expect(result.data.items, name).toEqual([
+        { identity: "GET /rest/api/2/project", tool: "jira.projects" },
+      ]);
+    }
+    const unknown = await native.execute({ identities: ["jira.get-issue"] }, f.context);
+    expect(unknown.isError).toBe(true);
+    expect(unknown.data).toMatchObject({ reason: "invalid-arguments" });
+    expect(JSON.stringify(unknown.data.guidance)).toContain("jira.priorities");
+  });
+
   it("accepts the dotted tool name only where jira.discover returns it, and never twice for one operation", async () => {
     const f = fixture();
     const native = createJiraCatalogDiscoveryProvider({
