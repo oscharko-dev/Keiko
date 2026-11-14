@@ -1461,6 +1461,7 @@
     "keiko-server/atlassian/jiraOperationActivity",
     "keiko-server/atlassian/jiraOperationLogFields",
     "keiko-server/atlassian/jiraOperationRegistry",
+    "keiko-server/atlassian/jiraOperationSummary",
     "keiko-server/atlassian/jiraOptionSchemeMutationDescriptors",
     "keiko-server/atlassian/jiraOptionSchemeSchemas",
     "keiko-server/atlassian/jiraParticipationDescriptors",

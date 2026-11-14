@@ -76,10 +76,10 @@ function participation(description: string): JiraNativeDefinition {
 }
 export const JIRA_PARTICIPATION_WRITE_DEFINITIONS = {
   "jira.watch": participation(
-    "Start watching the issue as the connected Jira user. Read current state first, perform one native POST and independently confirm isWatching=true. Other users cannot be selected. An already matching state causes no write; never retry an unknown outcome.",
+    "Start watching the issue as the connected Jira user; confirms isWatching=true and writes nothing when already watching. Other users cannot be selected.",
   ),
   "jira.unwatch": participation(
-    "Stop watching the issue as the connected Jira user. Resolve that user's identity through the bound credential, perform one native DELETE and independently confirm isWatching=false. No other actor or target can be selected. Never retry an unknown outcome.",
+    "Stop watching the issue as the connected Jira user; confirms isWatching=false. Other users cannot be selected.",
   ),
   "jira.vote": participation(
     "Cast the connected user's vote for the issue using one native POST after current-state inspection. Jira voting rules and permissions remain authoritative. Independently confirm hasVoted=true; never claim success from the HTTP acknowledgement alone or retry an unknown outcome.",

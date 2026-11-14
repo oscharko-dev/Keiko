@@ -2000,6 +2000,42 @@ export function currentGatewayVerification(
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
 }
 
+// Models a person explicitly verified in Settings, per configuration holder and generation (#4351).
+const explicitModelUse = new WeakMap<
+  object,
+  { readonly generation: number; readonly models: Set<string> }
+>();
+
+/**
+ * An explicit Settings verification of this model passed: a person asked for the model, and it
+ * answered. Dropped with the configuration generation it was observed under, never persisted.
+ */
+export function recordExplicitModelUse(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+  observedGeneration: number | undefined,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined || observedGeneration !== holder.generation()) return;
+  const current = explicitModelUse.get(holder);
+  if (current?.generation === observedGeneration) current.models.add(modelId);
+  else explicitModelUse.set(holder, { generation: observedGeneration, models: new Set([modelId]) });
+}
+
+/**
+ * Whether a person has used this model in the current configuration generation: an actual model call
+ * (a Chat or Coding turn) completed through the generation's gateway, or an explicit Settings
+ * verification passed. A startup observation is not use. Passive reads gate any provider request on
+ * this, so opening a Chat saved on a model nobody used never loads that model.
+ */
+export function modelUsedByPerson(deps: UiHandlerDeps, modelId: string): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const explicit = explicitModelUse.get(holder);
+  if (explicit?.generation === holder.generation() && explicit.models.has(modelId)) return true;
+  return currentGateway(deps)?.hasServedModel(modelId) === true;
+}
+
 /** Legacy freshness window used only to describe the age of observed readiness in diagnostics. */
 export const CONVERSATION_READINESS_CACHED_AFTER_MS = 5 * 60_000;
 

@@ -16,7 +16,7 @@ export const JIRA_POD_REFUSALS = {
   "verification-required": {
     code: "JIRA_POD_VERIFICATION_REQUIRED",
     message:
-      "The Jira Pod must be verified again before this Chat can use it. Verify it in the Knowledge Pods Hub.",
+      "The Jira Pod must be verified again before this Chat can use it. Verify it in the Local Knowledge window.",
   },
   "generation-changed": {
     code: "JIRA_POD_CONNECTION_CHANGED",

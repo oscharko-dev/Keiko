@@ -1977,7 +1977,10 @@ it.each(["answer", "uncited"] as const)(
 it("settles a committed mutation when the adopted window cannot fit the current tool catalog", async () => {
   const f = runtime(true);
   // A bounded native selection still fits the catalog's compound byte ceiling while its full
-  // physical prompt exceeds the adopted window. The curated base alone now fits that window.
+  // physical prompt exceeds the adopted window (the base alone already does; see below).
+  // The selection is eight natives: the base grew by jira.myself, jira.watch and jira.unwatch
+  // (#4357, +8,123 catalog bytes), and the ten natives that filled the ceiling before no longer fit
+  // beside it. Every assertion below still holds: the selection fits, its prompt exceeds the window.
   preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, [
     "jira.project",
     "jira.project-permissions",
@@ -1987,8 +1990,6 @@ it("settles a committed mutation when the adopted window cannot fit the current 
     "jira.project-categories",
     "jira.project-category",
     "jira.project-version-page",
-    "jira.priority",
-    "jira.priority-page",
   ]);
   const requests = provider(["write", "overflow", "answer"]);
   const body = {
@@ -2010,6 +2011,15 @@ it("settles a committed mutation when the adopted window cannot fit the current 
   if (typeof refused?.promptTokens !== "number" || typeof refused.inputBudget !== "number")
     throw new TypeError("Expected complete adopted-window admission bounds");
   expect(refused.promptTokens).toBeGreaterThan(refused.inputBudget);
+  // Measured, and the reverse of what this test's earlier comment said: the curated base's tool
+  // definitions alone, counted by the gateway's own counter, already exceed this window's input
+  // budget. The refusal therefore never depended on the selection; the selection only has to fit the
+  // catalog's byte ceiling for the turn to reach it (#4357).
+  const baseFloor = countGatewayPromptTokens({
+    messages: [],
+    tools: f.deps.jiraChatCatalog?.toolDefinitions({ knowledgeScoped: true }) ?? [],
+  });
+  expect(baseFloor).toBeGreaterThan(refused.inputBudget);
   const messages = f.deps.store.listMessages(f.chatId);
   expect(messages[0]?.turnState).toBe("completed");
   expect(messages[0]?.toolTranscript?.exchanges[0]).toMatchObject({

@@ -617,3 +617,12 @@ ran in the Linux arm64 gates container (Node 24.18.0): all nine passed. Only the
 `generatedAt` in the three records were taken from this run; its fallback-font captures were
 discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
 numerical ceiling changed. This remains updater fixture evidence.
+
+## Chat shell control names and Local Knowledge window label — 2026-11-14 (#4371, #4351)
+
+The Chat shell controls gained their accessible names and the Local Knowledge window label was
+aligned, so the freshness gate rejected the changed catalog digests. The complete original
+nine-case producer ran in the Linux arm64 gates container (Node 24.18.0): all nine passed. Only the
+catalog digests and `generatedAt` in the three records were taken from this run; its fallback-font
+captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
+assertion or numerical ceiling changed. This remains updater fixture evidence.
