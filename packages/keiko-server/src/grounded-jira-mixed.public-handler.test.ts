@@ -1076,6 +1076,19 @@ function providerToolName(step: ProviderStep): string {
 // tool with the closed reason and keep the earlier selection, and the turn goes on: never
 // GATEWAY_MALFORMED_TOOL_CALL or a 502 reaching the person. Walked here with real identities, one
 // size after the other, through the real describe round.
+/** One turn that selects `count` natives through a real describe, as one closed outcome string. */
+async function walkedMixedOutcome(natives: readonly string[], count: number): Promise<string> {
+  const f = runtime(false, {}, true);
+  describeManyIdentities = natives.slice(0, count);
+  const requests = provider(["describe-many", "tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  const exchange = f.deps.store
+    .listMessages(f.chatId)[0]
+    ?.toolTranscript?.exchanges.find((entry) => entry.call.name === "jira_describe");
+  const refused = JSON.stringify(exchange?.result?.data ?? {}).includes("selection-too-large");
+  return `${String(count)}:${String(result.status)}:${String(exchange?.result?.status)}:${refused ? "too-large" : "-"}:${String(requests.length)}`;
+}
+
 it("walks a real describe in a mixed turn to the ceiling: every size ends the turn, a size that does not fit is refused, no 502", async () => {
   const probe = runtime(false, {}, true);
   const curated = new Set(
@@ -1100,26 +1113,20 @@ it("walks a real describe in a mixed turn to the ceiling: every size ends the tu
     .slice(0, 60)
     .map((definition) => definition.identity);
   const outcomes: string[] = [];
-  for (const count of [0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48]) {
-    const f = runtime(false, {}, true);
-    describeManyIdentities = natives.slice(0, count);
-    provider(["describe-many", "tool", "answer"]);
-    const result = await askFeatureAndProjects(f);
-    const exchange = f.deps.store
-      .listMessages(f.chatId)[0]
-      ?.toolTranscript?.exchanges.find((entry) => entry.call.name === "jira_describe");
-    const refused = JSON.stringify(exchange?.result?.data ?? {}).includes("selection-too-large");
-    outcomes.push(
-      `${String(count)}:${String(result.status)}:${String(exchange?.result?.status)}:${refused ? "too-large" : "-"}`,
-    );
-  }
-  // Measured on 2026-11-14 with the heaviest descriptors first: 20 natives fit, 24 do not. Every size
-  // ends the turn with a 200; the size that does not fit is refused with the closed reason.
-  const sizes = [0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48];
+  for (const count of [0, 1, 2, 4, 8, 20, 48])
+    outcomes.push(await walkedMixedOutcome(natives, count));
+  // Measured on 2026-11-14 with the heaviest descriptors first: the base of a mixed turn already
+  // takes most of the gateway's one envelope budget for catalog, projection and offer (the gateway
+  // copies them together on the first round of a selection), so one native fits and two do not. The
+  // size that does not fit is refused with the closed reason and the turn continues on its earlier
+  // selection. Every size reaches all three provider rounds: an admitted selection always binds.
+  // Before the selection admission ran that copy, two to twenty natives were admitted and the round
+  // after them died with a 502 the stream carried after its 200, so only one provider request was seen.
+  const sizes = [0, 1, 2, 4, 8, 20, 48];
   outcomes.forEach((outcome, index) => {
     const count = sizes[index] ?? 0;
     expect(outcome, `${String(count)} natives`).toBe(
-      count <= 20 ? `${String(count)}:200:completed:-` : `${String(count)}:200:failed:too-large`,
+      count <= 1 ? `${String(count)}:200:completed:-:3` : `${String(count)}:200:failed:too-large:3`,
     );
   });
 });
@@ -2160,18 +2167,18 @@ it("settles a committed mutation when the adopted window cannot fit the current 
   const f = runtime(true);
   // A bounded native selection still fits the catalog's compound byte ceiling while its full
   // physical prompt exceeds the adopted window (the base alone already does; see below).
-  // The selection is eight natives: the base grew by jira.myself, jira.watch and jira.unwatch
-  // (#4357, +8,123 catalog bytes), and the ten natives that filled the ceiling before no longer fit
-  // beside it. Every assertion below still holds: the selection fits, its prompt exceeds the window.
+  // The ceiling is the gateway's one envelope budget for catalog, projection and offer together
+  // (262,144 bytes). This fixture preselects around the selection admission, so it must itself stay
+  // within it: the base grew by jira.myself, jira.watch and jira.unwatch (#4357) and by the draft run
+  // that every Chat now offers (#4355), and measured on 2026-11-14 five of these natives fit
+  // (261,013 bytes) while six do not (266,649). Every assertion below still holds: the selection
+  // fits, its prompt exceeds the window.
   preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, [
     "jira.project",
     "jira.project-permissions",
     "jira.project-statuses",
     "jira.project-types",
     "jira.project-type",
-    "jira.project-categories",
-    "jira.project-category",
-    "jira.project-version-page",
   ]);
   const requests = provider(["write", "overflow", "answer"]);
   const body = {

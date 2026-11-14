@@ -4918,14 +4918,14 @@ function demandSelectedModel(
   });
 }
 
-// #4355: the base round holds the draft run beside staging, so a Chat reaches the catalog's byte
-// ceiling (catalog and projection together, 262,144 bytes) with fewer selected natives. A real Chat
-// that selects one more native than fits gets a closed refusal at the selecting tool, names the reason
-// and keeps its earlier selection, and the turn goes on; it never reaches GATEWAY_MALFORMED_TOOL_CALL or
-// a 502 from the bridge. The real numbers are walked here, one more native each time, through the real
-// describe round and the next round of a Chat without Knowledge scopes: the base plus the project
-// native fit up to six more natives, the seventh is refused. The boundary is pinned on purpose: a
-// change that grows the base or a descriptor moves it, and the author has to look.
+// #4355: the gateway binds every round by copying catalog, projection and offer together under one
+// byte budget (262,144 bytes), and the base round, with the draft run beside staging, already takes
+// most of it. A selection is therefore admitted only when that same copy accepts it: one native more
+// than fits gets a closed refusal at the selecting tool, names the reason and keeps its earlier
+// selection, and the turn goes on; it never reaches GATEWAY_MALFORMED_TOOL_CALL or a 502 from the
+// bridge. The real numbers are walked here, one more native each time, through the real describe round
+// and the next round of a Chat without Knowledge scopes. The boundary is pinned on purpose: a change
+// that grows the base or a descriptor moves it, and the author has to look.
 it("walks the selection to the catalog's ceiling: the last fitting size works, the next is refused, no 502", async () => {
   // Reads of the ordinary API root outside the curated base, in registry order: real, selectable
   // identities, so a refusal can only be the budget.
@@ -4942,7 +4942,7 @@ it("walks the selection to the catalog's ceiling: the last fitting size works, t
     .slice(0, 48)
     .map((definition) => definition.identity);
   const outcomes: string[] = [];
-  for (const count of [0, 30, 33, 34, 35, 36, 37, 38, 39, 42]) {
+  for (const count of [0, 1, 2, 3, 4, 5, 8, 37]) {
     const f = fixture(false, undefined, true, false, false, undefined, true);
     configure(f.deps, true, 32768);
     demandSelectedModel(f, false, undefined, natives.slice(0, count));
@@ -4958,11 +4958,13 @@ it("walks the selection to the catalog's ceiling: the last fitting size works, t
       `${String(count)}:${String(describe?.result?.status)}:${refused ? "too-large" : "-"}`,
     );
   }
-  // Measured on 2026-11-14 with the real registry: 37 natives fit beside the base of a Chat without
-  // Knowledge scopes, 38 do not. A change that grows the base or a descriptor moves this, on purpose.
-  const LAST_FITTING = 37;
+  // Measured on 2026-11-14 with the real registry in registry order: three natives fit beside the base
+  // of a Chat without Knowledge scopes, four do not. Before the admission ran the gateway's copy, up to
+  // 37 were admitted, and the round after any selection beyond the budget failed in the gateway. A
+  // change that grows the base or a descriptor moves this, on purpose.
+  const LAST_FITTING = 3;
   outcomes.forEach((outcome, index) => {
-    const count = [0, 30, 33, 34, 35, 36, 37, 38, 39, 42][index] ?? 0;
+    const count = [0, 1, 2, 3, 4, 5, 8, 37][index] ?? 0;
     expect(outcome, `${String(count)} natives`).toBe(
       count <= LAST_FITTING ? `${String(count)}:completed:-` : `${String(count)}:failed:too-large`,
     );
