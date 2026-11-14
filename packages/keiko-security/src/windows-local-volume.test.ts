@@ -380,7 +380,7 @@ describe("the verdict of a refusal", () => {
       "Windows PowerShell that cannot be resolved",
       {
         resolvePowerShell: (): string => {
-          throw new WindowsSystemBinaryMissingError("powershell");
+          throw new WindowsSystemBinaryMissingError();
         },
       },
       "unverifiable",
