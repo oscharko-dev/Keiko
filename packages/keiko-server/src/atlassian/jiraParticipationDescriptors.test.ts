@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraParticipationDeclarationForTool } from "./jiraParticipationDescriptors.js";
+import { plainOperationSummary } from "./jiraOperationSummary.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
 it.each([
@@ -75,4 +76,24 @@ it.each([
 it("does not synthesize a worklog deletion or arbitrary property endpoint", () => {
   expect(jiraParticipationDeclarationForTool("jira.delete-worklog")).toBeUndefined();
   expect(jiraParticipationDeclarationForTool("constructor")).toBeUndefined();
+});
+
+// Release 1 offers no write for another person as a watcher (#4357, W13/F13). The model reads this
+// description on every turn (jira.watch is a base tool), so it can answer in one plain sentence
+// without a search or a failed call, and the one-line summary jira.discover returns says the same.
+it("tells the model that another person cannot be added as a watcher yet, in the description and the summary", () => {
+  const declaration = jiraParticipationDeclarationForTool("jira.watch");
+  if (declaration === undefined) throw new TypeError("Missing participation declaration");
+  const { description } = declaration.descriptor;
+  expect(description).toMatch(/another person as a watcher is not available yet/u);
+  expect(description).toMatch(/offer to watch the issue for the user instead/u);
+  expect(description).toMatch(/do not search for another tool/u);
+  expect(plainOperationSummary(description)).toMatch(/connected Jira user only/u);
+  // The operation itself stays typed for the connected user: no user selection exists.
+  expect(
+    describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, {
+      issueKey: "APP-1",
+      username: "x",
+    }),
+  ).toBeDefined();
 });
