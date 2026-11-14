@@ -198,6 +198,8 @@ function JiraResultItems({
     </ul>
   );
 }
+/** The server caps a rule subject at 120 characters; the card holds the same bound. */
+const RULE_SUBJECT_CHARS_MAX = 120;
 const RULE_MESSAGES = {
   "summary-too-short": "chat.jira.outcome.rule.summary-too-short",
   "summary-too-long": "chat.jira.outcome.rule.summary-too-long",
@@ -397,17 +399,23 @@ function JiraDraftProblemLine({ view }: { readonly view: JiraToolOutcomeView }):
       : t("chat.jira.outcome.draftItem", { position: draftProblem.position });
   return <p>{`${item} ${sentence}`}</p>;
 }
-function JiraRuleList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+/** A list of template rules, worded from the catalog; the subject is bounded like the server's. */
+function JiraRules({ rules }: { readonly rules: readonly JiraOutcomeRule[] }): ReactNode {
   const t = useTranslate();
-  return view.rules.length === 0 ? null : (
+  return (
     <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.rules")}>
-      {view.rules.map((rule) => (
+      {rules.map((rule) => (
         <li key={`${rule.ruleId}:${rule.subject}`}>
-          {t(RULE_MESSAGES[rule.ruleId], { subject: rule.subject })}
+          {t(RULE_MESSAGES[rule.ruleId], {
+            subject: rule.subject.slice(0, RULE_SUBJECT_CHARS_MAX),
+          })}
         </li>
       ))}
     </ul>
   );
+}
+function JiraRuleList({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  return view.rules.length === 0 ? null : <JiraRules rules={view.rules} />;
 }
 /** A change that was made although the issue already broke template rules in untouched fields. */
 function JiraRuleNotices({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
@@ -415,13 +423,7 @@ function JiraRuleNotices({ view }: { readonly view: JiraToolOutcomeView }): Reac
   return view.templateNotices.length === 0 ? null : (
     <>
       <p>{t("chat.jira.outcome.templateNotices")}</p>
-      <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.rules")}>
-        {view.templateNotices.map((rule) => (
-          <li key={`${rule.ruleId}:${rule.subject}`}>
-            {t(RULE_MESSAGES[rule.ruleId], { subject: rule.subject })}
-          </li>
-        ))}
-      </ul>
+      <JiraRules rules={view.templateNotices} />
     </>
   );
 }
@@ -594,6 +596,7 @@ function outcomeIsEmpty(view: JiraToolOutcomeView): boolean {
     view.unreadableCount === 0 &&
     view.problems.length === 0 &&
     view.rules.length === 0 &&
+    view.templateNotices.length === 0 &&
     view.itemValidations.length === 0 &&
     view.validation === undefined &&
     view.failure === undefined
@@ -723,6 +726,7 @@ function ToolExchangeCards({
           approval={exchange.approval}
           call={exchange.call}
           turnState={turnState}
+          result={exchange.result}
         />
       )}
       {awaitsDecision(exchange, turnState) || !toolCardHasContent(exchange, turnState) ? null : (

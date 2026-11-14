@@ -20,7 +20,24 @@ interface OutcomeView {
 }
 type OutcomeViewer = (exchange: ChatToolExchange) => OutcomeView;
 let view: OutcomeViewer;
+type Dispatch = (input: {
+  readonly approval: { readonly state: string };
+  readonly result: unknown;
+  readonly turnState: string | undefined;
+}) => "not-dispatched" | "unknown";
+let dispatchOf: Dispatch;
+const UI_DISPATCH_MODULE =
+  "../../packages/keiko-ui/src/app/components/desktop/jira-approval-dispatch.ts";
 beforeAll(async () => {
+  const dispatchModule: unknown = await import(UI_DISPATCH_MODULE);
+  if (
+    typeof dispatchModule !== "object" ||
+    dispatchModule === null ||
+    !("jiraApprovalDispatch" in dispatchModule) ||
+    typeof dispatchModule.jiraApprovalDispatch !== "function"
+  )
+    throw new TypeError("jira-approval-dispatch.ts does not export jiraApprovalDispatch");
+  dispatchOf = dispatchModule.jiraApprovalDispatch as Dispatch;
   const loaded: unknown = await import(UI_OUTCOME_MODULE);
   if (
     typeof loaded !== "object" ||
@@ -97,6 +114,33 @@ describe("the refusals of the write path as the Chat card reads them", () => {
     const shown = view(exchangeOf("jira_attach", data));
     expect(shown.failure).toBe("chat.jira.outcome.failure.releaseScope");
     expect(shown.problems).toEqual([]);
+  });
+
+  // The card says "nothing was changed" only against evidence that no write was dispatched: the
+  // producer's own not-dispatched result, never the clock (audit of 3847c53a2).
+  it("decides the approval hint from the producer's result, not from the state", () => {
+    const expired = { status: "completed", data: jiraApprovalExpiredResult(undefined) };
+    const ran = {
+      status: "completed",
+      data: jiraAttemptToolResult("succeeded", { ok: true, receipt: { issueKey: "SYN-1" } }).data,
+    };
+    for (const state of ["approved", "claimed", "expired", "revoked"])
+      expect(dispatchOf({ approval: { state }, result: expired, turnState: "completed" })).toBe(
+        "not-dispatched",
+      );
+    for (const state of ["approved", "claimed", "expired", "revoked"])
+      expect(dispatchOf({ approval: { state }, result: ran, turnState: "completed" })).toBe(
+        "unknown",
+      );
+    expect(
+      dispatchOf({ approval: { state: "approved" }, result: undefined, turnState: "completed" }),
+    ).toBe("unknown");
+    expect(
+      dispatchOf({ approval: { state: "pending" }, result: undefined, turnState: "completed" }),
+    ).toBe("not-dispatched");
+    expect(
+      dispatchOf({ approval: { state: "pending" }, result: undefined, turnState: "pending" }),
+    ).toBe("unknown");
   });
 
   it.each(["expired", "revoked"])(

@@ -45,7 +45,10 @@ function exchange(
     ...(approval === undefined ? {} : { approval }),
   };
 }
-function approval(state: ChatToolWriteApprovalView["state"]): ChatToolWriteApprovalView {
+function approval(
+  state: ChatToolWriteApprovalView["state"],
+  expiresAt = Date.now() + 60000,
+): ChatToolWriteApprovalView {
   return {
     kind: "jira-chat-write",
     approvalId: "approval-1",
@@ -57,19 +60,20 @@ function approval(state: ChatToolWriteApprovalView["state"]): ChatToolWriteAppro
     operation: "jira.edit",
     actionDigest: "a".repeat(64),
     requestedAt: Date.now(),
-    expiresAt: Date.now() + 60000,
+    expiresAt,
     state,
   };
 }
 async function show(
   locale: (typeof LOCALES)[number],
   tool: ChatToolExchange,
+  turnState: "completed" | "pending" = "completed",
 ): Promise<HTMLElement> {
   await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
   window.localStorage.setItem(I18N_STORAGE_KEY, locale);
   const { container } = render(
     <I18nProvider>
-      <JiraChatTools transcript={{ schemaVersion: 1, exchanges: [tool] }} turnState="completed" />
+      <JiraChatTools transcript={{ schemaVersion: 1, exchanges: [tool] }} turnState={turnState} />
     </I18nProvider>,
   );
   return container;
@@ -108,6 +112,156 @@ describe.each(LOCALES)("the texts that depend on the write path (%s)", (locale) 
       expect(await axe(container)).toHaveNoViolations();
     },
   );
+
+  // The clock never decides that nothing was changed: a stored approval that was granted or claimed
+  // may belong to a write that ran, however long ago it expired (#4355 AC5, audit of 3847c53a2).
+  const PAST = Date.now() - 3_600_000;
+  it.each([
+    ["a succeeded result", { outcome: "succeeded", issueKey: "SYN-1" }],
+    ["an unknown outcome", { outcome: "unknown" }],
+  ] as const)(
+    "never says nothing was changed for a stored approved approval with %s",
+    async (_name, data) => {
+      const container = await show(locale, exchange("jira_edit", data, approval("approved", PAST)));
+      expect(
+        screen.getByText(sentence(locale, "chat.jira.writeApproval.outcomeUnknownHint")),
+      ).toBeVisible();
+      // The state line states what was stored, not what the clock says.
+      expect(container.textContent).toContain(sentence(locale, "chat.jira.writeApproval.approved"));
+      expect(container.textContent).not.toContain(
+        sentence(locale, "chat.jira.writeApproval.expired"),
+      );
+      expect(container.textContent).not.toContain(
+        sentence(locale, "chat.jira.writeApproval.expiredHint"),
+      );
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+  it("states a claimed approval as claimed, whatever the clock says, and claims nothing", async () => {
+    const container = await show(locale, {
+      call: { id: "call-1", name: "jira_edit", arguments: {} },
+      approval: approval("claimed", PAST),
+    });
+    expect(container.textContent).toContain(sentence(locale, "chat.jira.writeApproval.claimed"));
+    expect(container.textContent).not.toContain(
+      sentence(locale, "chat.jira.writeApproval.expiredHint"),
+    );
+    expect(container.textContent).not.toContain(
+      sentence(locale, "chat.jira.writeApproval.expired"),
+    );
+  });
+  it("says only that the approval was revoked when a write has a result", async () => {
+    const container = await show(
+      locale,
+      exchange("jira_edit", { outcome: "succeeded", issueKey: "SYN-1" }, approval("revoked")),
+    );
+    expect(container.textContent).toContain(sentence(locale, "chat.jira.writeApproval.revoked"));
+    expect(
+      screen.getByText(sentence(locale, "chat.jira.writeApproval.outcomeUnknownHint")),
+    ).toBeVisible();
+    expect(container.textContent).not.toContain(
+      sentence(locale, "chat.jira.writeApproval.revokedHint"),
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it.each([
+    ["no result", undefined],
+    [
+      "the producer's not-dispatched result",
+      { outcome: "not-dispatched", reason: "effect-denied" },
+    ],
+  ] as const)(
+    "says nothing was changed when the turn ended while the approval waited (%s)",
+    async (_name, data) => {
+      const base =
+        data === undefined
+          ? {
+              call: { id: "call-1", name: "jira_edit", arguments: {} },
+              approval: approval("pending"),
+            }
+          : exchange("jira_edit", data, approval("pending"));
+      const container = await show(locale, base);
+      expect(
+        screen.getByText(sentence(locale, "chat.jira.writeApproval.expiredHint")),
+      ).toBeVisible();
+      expect(container.textContent).toContain(sentence(locale, "chat.jira.writeApproval.expired"));
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+  it("tells a pending approval of a running turn nothing about the outcome", async () => {
+    await show(
+      locale,
+      {
+        call: { id: "call-1", name: "jira_edit", arguments: {} },
+        approval: approval("pending"),
+      },
+      "pending",
+    );
+    expect(screen.queryByText(sentence(locale, "chat.jira.writeApproval.expiredHint"))).toBeNull();
+    expect(
+      screen.queryByText(sentence(locale, "chat.jira.writeApproval.outcomeUnknownHint")),
+    ).toBeNull();
+  });
+  it("announces the hint with the state line, inside the live status", async () => {
+    await show(locale, exchange("jira_edit", { outcome: "not-dispatched" }, approval("expired")));
+    const hint = screen.getByText(sentence(locale, "chat.jira.writeApproval.expiredHint"));
+    expect(hint.closest("output")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("shows a template notice even when it is all the card has to say", async () => {
+    // A read-shaped call whose card would otherwise stay empty: the notice alone earns the card.
+    await show(
+      locale,
+      exchange("jira_projects", {
+        outcome: "succeeded",
+        templateNotices: [{ ruleId: "label-count", subject: "labels", template: "SYN/Story" }],
+      }),
+    );
+    expect(screen.getByText(sentence(locale, "chat.jira.outcome.templateNotices"))).toBeVisible();
+  });
+  it("bounds a rule subject like the server does", async () => {
+    await show(
+      locale,
+      exchange("jira_edit", {
+        outcome: "succeeded",
+        templateNotices: [{ ruleId: "parent-missing", subject: "S".repeat(300), template: "x" }],
+      }),
+    );
+    expect(
+      screen.getByText(
+        sentence(locale, "chat.jira.outcome.rule.parent-missing", { subject: "S".repeat(120) }),
+      ),
+    ).toBeVisible();
+  });
+  it("labels the switch's sentence only for the attachment call it refused", async () => {
+    const container = await show(
+      locale,
+      exchange("jira_edit", {
+        outcome: "failed",
+        reason: "unavailable",
+        messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE],
+      }),
+    );
+    // Any other tool keeps the message as an ordinary problem beside its ordinary failure line,
+    // and the sentence is not turned into the release-scope line.
+    expect(container.textContent).toContain(JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE);
+    expect(container.textContent).toContain(
+      sentence(locale, "chat.jira.outcome.failure.unavailable"),
+    );
+  });
+  it("words the refusal of a delete-attachment call as well", async () => {
+    await show(
+      locale,
+      exchange("jira_delete_attachment", {
+        outcome: "failed",
+        reason: "unavailable",
+        messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE],
+      }),
+    );
+    expect(
+      screen.getByText(sentence(locale, "chat.jira.outcome.failure.releaseScope")),
+    ).toBeVisible();
+  });
 
   it.each([
     ["template-missing", "Story"],
@@ -189,6 +343,7 @@ describe("the added texts exist in both languages (#4355 AC6)", () => {
     const keys = [
       "chat.jira.writeApproval.expiredHint",
       "chat.jira.writeApproval.revokedHint",
+      "chat.jira.writeApproval.outcomeUnknownHint",
       "chat.jira.outcome.templateNotices",
       "chat.jira.outcome.failure.releaseScope",
       "chat.jira.outcome.rule.template-missing",

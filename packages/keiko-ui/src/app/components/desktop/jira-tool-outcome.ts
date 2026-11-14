@@ -920,10 +920,7 @@ function problemsOf(
     }),
     ...messages.flatMap((entry): JiraOutcomeProblem[] => {
       const message = text(entry);
-      // The release switch's own sentence is worded from the catalog (failureMessage), not shown raw.
-      return message === undefined || message === JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE
-        ? []
-        : [{ ...own, message }];
+      return message === undefined ? [] : [{ ...own, message }];
     }),
   ];
 }
@@ -1173,11 +1170,18 @@ function outcomeStatedElsewhere(exchange: ChatToolExchange): boolean {
   // A refused or stopped draft batch names its own reason in the state line.
   return jiraBatchRefusalKey(exchange) !== undefined;
 }
-/** The release switch's refusal of an attachment call: the sentence only the switch writes (#4354). */
-function releaseScopeRefusal(data: UnknownRecord | undefined): boolean {
-  return JIRA_ATTACHMENT_OPERATIONS.some((operation) =>
-    isJiraReleaseScopeRefusal(operation, data?.messages),
+/** The attachment operation a call alias names: `jira_attach`, `jira_delete_attachment`. */
+function attachmentOperationOf(
+  alias: string,
+): (typeof JIRA_ATTACHMENT_OPERATIONS)[number] | undefined {
+  return JIRA_ATTACHMENT_OPERATIONS.find(
+    (operation) => alias === `jira_${operation.slice("jira.".length).replaceAll("-", "_")}`,
   );
+}
+/** The release switch's refusal of THIS exchange's attachment call: its sentence, its operation (#4354). */
+function releaseScopeRefusal(exchange: ChatToolExchange, data: UnknownRecord | undefined): boolean {
+  const operation = attachmentOperationOf(exchange.call.name);
+  return operation !== undefined && isJiraReleaseScopeRefusal(operation, data?.messages);
 }
 function failureMessage(
   exchange: ChatToolExchange,
@@ -1186,7 +1190,7 @@ function failureMessage(
   if (outcomeStatedElsewhere(exchange)) return undefined;
   const localRead = jiraLocalReadFailureNotice(exchange);
   if (localRead !== undefined) return localRead;
-  if (releaseScopeRefusal(data)) return "chat.jira.outcome.failure.releaseScope";
+  if (releaseScopeRefusal(exchange, data)) return "chat.jira.outcome.failure.releaseScope";
   const reason = failureReason(data, exchange);
   if (reason !== undefined && Object.hasOwn(FAILURE_MESSAGES, reason))
     return FAILURE_MESSAGES[reason];
@@ -1553,9 +1557,19 @@ function problemViews(
   data: UnknownRecord,
 ): Pick<JiraToolOutcomeView, "problems" | "hiddenProblemCount"> {
   // Private credential/session validators expose only closed reasons and violation counts.
-  const all = privateAccount(exchange.call.name)
-    ? []
-    : [...problemsOf(data), ...itemProblemsOf(data, reviewedItems(exchange))];
+  const all = (
+    privateAccount(exchange.call.name)
+      ? []
+      : [...problemsOf(data), ...itemProblemsOf(data, reviewedItems(exchange))]
+  ).filter(
+    // The release switch's own sentence is worded from the catalog (failureMessage), not shown raw,
+    // and only for the attachment call it refused.
+    (problem) =>
+      !(
+        releaseScopeRefusal(exchange, data) &&
+        problem.message === JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE
+      ),
+  );
   return {
     problems: all.slice(0, JIRA_OUTCOME_PROBLEMS_SHOWN),
     hiddenProblemCount: Math.max(0, all.length - JIRA_OUTCOME_PROBLEMS_SHOWN),

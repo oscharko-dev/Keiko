@@ -1016,6 +1016,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Freigabe ist abgelaufen, bevor jemand entschieden hat, deshalb wurde in Jira nichts geändert. Frage erneut an und gib die Freigabe frei, solange die Karte offen ist.",
   "chat.jira.writeApproval.revokedHint":
     "Die Freigabe wurde widerrufen, deshalb wurde in Jira nichts geändert. Frage erneut an, wenn du die Änderung noch willst, und gib sie dann frei.",
+  "chat.jira.writeApproval.outcomeUnknownHint":
+    "Diese Karte kann nicht zeigen, ob die Aktion ausgeführt wurde. Das Ergebnis zeigt den Ausgang; gibt es keines, prüfe den Vorgang in Jira.",
   "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
   "chat.jira.writeApproval.working": "Aktion wird geprüft…",
   "chat.jira.writeApproval.failed":

@@ -961,6 +961,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The approval expired before anyone decided, so nothing was changed in Jira. Ask again and approve while the card is open.",
   "chat.jira.writeApproval.revokedHint":
     "The approval was revoked, so nothing was changed in Jira. Ask again if you still want the change, then approve it.",
+  "chat.jira.writeApproval.outcomeUnknownHint":
+    "This card cannot show whether the action ran. Its result shows the outcome; if there is none, check the issue in Jira.",
   "chat.jira.writeApproval.preview": "Proposed action details",
   "chat.jira.writeApproval.working": "Checking this action…",
   "chat.jira.writeApproval.failed":

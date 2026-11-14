@@ -20,6 +20,7 @@ import {
   useOptionalWidgetTranslate as useTranslate,
   type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
+import { jiraApprovalDispatch, type JiraApprovalDispatch } from "./jira-approval-dispatch";
 import { jiraCallLabel } from "./jira-tool-presentation";
 import { JiraAttachmentReview } from "./JiraAttachmentReview";
 import { JiraDecisionActions } from "./JiraDecisionActions";
@@ -40,30 +41,12 @@ const APPROVAL_KEYS: Readonly<Record<ChatToolWriteApprovalView["state"], WidgetM
   expired: "chat.jira.writeApproval.expired",
   revoked: "chat.jira.writeApproval.revoked",
 };
-/** What a person does after an approval ended without their decision (#4355 AC5). */
-const APPROVAL_HINT_KEYS: Readonly<
-  Partial<Record<ChatToolWriteApprovalView["state"], WidgetMessageKey>>
-> = {
-  expired: "chat.jira.writeApproval.expiredHint",
-  revoked: "chat.jira.writeApproval.revokedHint",
-};
-function ApprovalHint({
-  verified,
-  state,
-  ended,
-}: {
-  readonly verified: boolean;
-  readonly state: ChatToolWriteApprovalView["state"];
-  readonly ended: boolean;
-}): ReactNode {
-  const t = useTranslate();
-  const hint = APPROVAL_HINT_KEYS[ended && state === "pending" ? "expired" : state];
-  return verified && hint !== undefined ? <p>{t(hint)}</p> : null;
-}
 interface ApprovalProps {
   readonly approval: ChatToolWriteApprovalView;
   readonly call: ChatToolExchange["call"];
   readonly turnState: ChatTurnState | undefined;
+  /** The exchange's stored result; it decides whether the card may say nothing was changed. */
+  readonly result?: ChatToolExchange["result"];
   readonly decide?: typeof decideJiraChatWriteApproval;
   readonly observe?: typeof getJiraChatWriteApproval;
   readonly loadDraft?: typeof getJiraStagedDraft;
@@ -303,13 +286,75 @@ function useDraftReview(
   };
 }
 
+type ApprovalState = ChatToolWriteApprovalView["state"];
+/** What a person does after an approval ended without their decision, or that it cannot be told. */
+const APPROVAL_HINT_KEYS = {
+  expired: "chat.jira.writeApproval.expiredHint",
+  revoked: "chat.jira.writeApproval.revokedHint",
+  unknown: "chat.jira.writeApproval.outcomeUnknownHint",
+} as const;
+/**
+ * The state line never calls a write that may have run "expired": a lapsed clock turns a stored
+ * approved or claimed approval into "expired" only where nothing proves that no write was sent.
+ */
+function labelState(
+  view: ApprovalState,
+  settled: ApprovalState,
+  dispatch: JiraApprovalDispatch,
+): ApprovalState {
+  const mayHaveRun = settled === "approved" || settled === "claimed";
+  return dispatch === "unknown" && view === "expired" && mayHaveRun ? settled : view;
+}
+function approvalHint(
+  view: ApprovalState,
+  dispatch: JiraApprovalDispatch,
+): WidgetMessageKey | undefined {
+  if (view !== "expired" && view !== "revoked") return undefined;
+  return APPROVAL_HINT_KEYS[dispatch === "not-dispatched" ? view : "unknown"];
+}
 function approvalStatusKey(
   verified: boolean,
-  state: ChatToolWriteApprovalView["state"],
+  state: ApprovalState,
   ended: boolean,
 ): WidgetMessageKey {
   if (!verified) return "chat.jira.writeApproval.unavailable";
   return APPROVAL_KEYS[ended && state === "pending" ? "expired" : state];
+}
+
+/** The state line and the hint under it; both follow the same evidence of what was dispatched. */
+function approvalPresentation(
+  state: ReturnType<typeof useJiraDecision<ChatToolWriteApprovalView>>,
+  result: ChatToolExchange["result"],
+  turnState: ChatTurnState | undefined,
+): { readonly status: WidgetMessageKey; readonly hint: WidgetMessageKey | undefined } {
+  const ended = turnState !== undefined && turnState !== "pending";
+  const dispatch = jiraApprovalDispatch({ approval: state.settled, result, turnState });
+  const shown = labelState(state.view.state, state.settled.state, dispatch);
+  // A turn that ended while the approval waited counts as lapsed, like the state line says.
+  const lapsed = ended && state.view.state === "pending" ? "expired" : state.view.state;
+  return {
+    status: approvalStatusKey(state.verified, shown, ended),
+    hint: state.verified && !state.busy ? approvalHint(lapsed, dispatch) : undefined,
+  };
+}
+
+/** The live status: the hint is announced and read with the state line it explains. */
+function ApprovalStatus({
+  busy,
+  status,
+  hint,
+}: {
+  readonly busy: boolean;
+  readonly status: WidgetMessageKey;
+  readonly hint: WidgetMessageKey | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <output aria-live="polite">
+      {t(busy ? "chat.jira.writeApproval.working" : status)}
+      {hint === undefined ? null : <p>{t(hint)}</p>}
+    </output>
+  );
 }
 
 function useApprovalNames(approval: ChatToolWriteApprovalView): JiraNames {
@@ -322,6 +367,7 @@ export function JiraWriteApproval({
   approval,
   call,
   turnState,
+  result,
   decide = decideJiraChatWriteApproval,
   observe = getJiraChatWriteApproval,
   loadDraft,
@@ -345,7 +391,7 @@ export function JiraWriteApproval({
     ...(loadDraft === undefined ? {} : { loadDraft }),
     deselection,
   });
-  const status = approvalStatusKey(state.verified, state.view.state, ended);
+  const { status, hint } = approvalPresentation(state, result, turnState);
   const boundNames = useApprovalNames(approval);
   return (
     <JiraNamesContext.Provider value={boundNames}>
@@ -360,10 +406,7 @@ export function JiraWriteApproval({
           toggle={toggle}
         />
         <JiraAttachmentReview approval={approval} />
-        <output aria-live="polite">
-          {t(state.busy ? "chat.jira.writeApproval.working" : status)}
-        </output>
-        <ApprovalHint verified={state.verified} state={state.view.state} ended={ended} />
+        <ApprovalStatus busy={state.busy} status={status} hint={hint} />
         <WriteApprovalActions state={state} turnState={turnState} empty={blocked} />
       </section>
     </JiraNamesContext.Provider>
