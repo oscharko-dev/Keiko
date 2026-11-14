@@ -25,14 +25,14 @@ import {
   gradeEditBreaking,
   gradeEditPreexisting,
   gradeMultiCreate,
+  gradeConversationSurvives,
   gradeRepeat,
-  gradeNoTemplate,
-  gradeUnrepairable,
   gradeUngovernedChange,
   gradeWatcher,
   composerRelation,
   ofType,
 } from "./composer-graders.mjs";
+import { gradeNoTemplate, gradeUnrepairable } from "./composer-refusals.mjs";
 import { JOURNEYS } from "./journey-checks.mjs";
 import { NO_TURN, aggregateParts, sequentially, snapshotBefore } from "./journey-support.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
@@ -194,9 +194,7 @@ async function createEveryType(ctx) {
       return { turn, part: part(`create ${type}`, [`create-conformant-${slugOf(type)}`], grade) };
     });
     const several = types.includes("Task") ? [await createSeveralTasks(ctx, fixture)] : [];
-    const unrepairable = types.includes("Sub-task")
-      ? [await unrepairableRequest(ctx, fixture)]
-      : [];
+    const unrepairable = types.includes("Sub-task") ? await unrepairableRequest(ctx, fixture) : [];
     return parts([...singles, ...several, ...unrepairable]);
   });
 }
@@ -211,10 +209,21 @@ async function unrepairableRequest(ctx, fixture) {
     exchanges: turn.toolExchanges,
     answer: turn.answer,
   });
-  return {
-    turn,
-    part: part("unrepairable request", ["refusal-readable-unrepairable"], grade),
-  };
+  // Hard from Jira and the stored refusal, soft from the prose; one turn serves all three.
+  return [
+    {
+      turn,
+      part: part("unrepairable: nothing created", ["unrepairable-refused-natively"], grade.refused),
+    },
+    {
+      turn: NO_TURN,
+      part: part("unrepairable: parent refusal", ["unrepairable-refused-by-gate"], grade.gate),
+    },
+    {
+      turn: NO_TURN,
+      part: part("unrepairable: plain answer", ["unrepairable-answer-plain"], grade.plain),
+    },
+  ];
 }
 
 const SEVERAL_TITLES = ["Composer Teil A", "Composer Teil B", "Composer Teil C"];
@@ -285,23 +294,39 @@ async function refuseWithoutTemplate(ctx) {
   const { types, modes } = composerSelection(ctx);
   await prepareTemplates(ctx, { types: [], ungoverned: types });
   const cases = types.flatMap((type) => modes.map((entry) => ({ type, ...entry })));
-  return parts(
-    await sequentially(cases, async ({ type, mode, key, label }) => {
-      const { turn, issues } = await composerTurn(ctx, fixture, {
-        mode,
-        prompt: createPrompt(type, `Ohne Vorlage ${type} ${key}`, fixture),
-      });
-      const grade = gradeNoTemplate({
-        created: issues.created,
-        exchanges: turn.toolExchanges,
-        answer: turn.answer,
-      });
-      return {
+  const runs = await sequentially(cases, async ({ type, mode, key, label }) => {
+    const { turn, issues } = await composerTurn(ctx, fixture, {
+      mode,
+      prompt: createPrompt(type, `Ohne Vorlage ${type} ${key}`, fixture),
+    });
+    const grade = gradeNoTemplate({
+      created: issues.created,
+      exchanges: turn.toolExchanges,
+      answer: turn.answer,
+    });
+    const id = `${slugOf(type)}-${key}`;
+    const name = `${type} in ${label}`;
+    // Hard from Jira and the stored refusal, soft from the prose; one turn serves all three.
+    return [
+      {
         turn,
-        part: part(`${type} in ${label}`, [`no-template-${slugOf(type)}-${key}`], grade),
-      };
-    }),
-  );
+        part: part(`${name}: nothing created`, [`no-template-refused-${id}`], grade.refused),
+      },
+      {
+        turn: NO_TURN,
+        part: part(`${name}: hint delivered`, [`no-template-hint-${id}`], grade.hint),
+      },
+      {
+        turn: NO_TURN,
+        part: part(
+          `${name}: answer mentions template`,
+          [`no-template-answer-${id}`],
+          grade.mentions,
+        ),
+      },
+    ];
+  });
+  return parts(runs.flat());
 }
 
 const EDIT_TITLE = "Composer geänderte Zusammenfassung";
@@ -425,27 +450,31 @@ async function reloadAndRepeat(ctx) {
     const title = "Composer Wiederholung";
     const prompt = createPrompt("Task", title, fixture);
     const chat = await ctx.freshChat("autonomous-delivery");
-    const { keys: knownBefore } = await snapshotBefore(ctx, `project = ${PROJECT}`);
     const one = await composerTurn(ctx, fixture, { prompt, chat });
     const created = ofType(one.issues, "Task").created.filter(
       (issue) => issue.fields?.summary === title,
     );
-    await ctx.reloadChat(chat);
+    const before = await ctx.reloadChat(chat);
+    const after = await ctx.reloadChat(chat);
     const two = await composerTurn(ctx, fixture, { prompt, chat });
     const afterTwo = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
     const three = await composerTurn(ctx, fixture, { prompt, chat });
     const afterThree = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
-    const graded = (turn, after) => ({
+    const graded = (run, listed) => ({
       title,
       created,
-      after,
-      knownBefore,
-      repeated: turn.issues,
-      answer: turn.turn.answer,
-      turn: turn.turn,
+      after: listed,
+      repeated: run.issues,
+      answer: run.turn.answer,
+      turn: run.turn,
     });
     return aggregateParts(
       [
+        part(
+          "conversation after the reload",
+          ["conversation-survives-reload"],
+          gradeConversationSurvives({ before, after }),
+        ),
         part(
           "same order again after a reload",
           ["repeat-after-reload-no-duplicate"],
@@ -457,7 +486,7 @@ async function reloadAndRepeat(ctx) {
           gradeRepeat(graded(three, afterThree)),
         ),
       ],
-      [one.turn, two.turn, three.turn],
+      [one.turn, NO_TURN, two.turn, three.turn],
     );
   });
 }

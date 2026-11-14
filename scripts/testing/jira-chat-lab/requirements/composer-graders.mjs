@@ -17,7 +17,7 @@ const ISSUE_KEY = /\b[A-Z][A-Z0-9_]+-\d+\b/gu;
 /** Whether the stored exchange asked a human first: an approval card exists for the call. */
 export const askedForApproval = (exchange) => exchange?.approval !== undefined;
 
-const writeCalls = (exchanges) =>
+export const writeCalls = (exchanges) =>
   (Array.isArray(exchanges) ? exchanges : []).filter(
     (exchange) => toolExchangeOf(exchange, "jira.create") || toolExchangeOf(exchange, "jira.draft"),
   );
@@ -168,145 +168,14 @@ export function gradeComposerRefusal({ type, exchanges, created, template, confo
     : { status: "red", detail: `${detail}; exactly one conformant ${type} was expected` };
 }
 
-/**
- * The template noun as the OBJECT of a creating verb addressed to the person. Two shapes carry it:
- * the verb first ("lege (zuerst) eine Vorlage an", "create a template") and the German infinitive
- * last ("eine Vorlage für diesen Typ anlegen"). The noun must follow an article, so "keine Vorlage",
- * "ohne Vorlage" and "a template exists" are never the object; participles ("hinterlegt",
- * "definiert", "angelegt") describe a state, they do not ask for anything.
- */
-const ARTICLE = String.raw`(?:eine|die|diese|neue|passende|entsprechende|a|an|the|this|new)`;
-const NOUN = String.raw`(?:vorlage|template)`;
-const FIRST =
-  String.raw`\b(?:lege|legen|erstelle|erstellen|definiere|definieren|richte|create|define|add)\b` +
-  String.raw`(?:\s+(?:\w+)){0,3}\s+${ARTICLE}\s+(?:\w+\s+)?${NOUN}\b`;
-const LAST =
-  String.raw`\b${ARTICLE}\s+(?:\w+\s+)?${NOUN}\b(?:\s+\p{L}+){0,4}\s+` +
-  String.raw`(?:anlegen|erstellen|definieren|einrichten|hinterlegen)\b`;
-const HINT_SHAPES = [new RegExp(FIRST, "iu"), new RegExp(LAST, "iu")];
-/** A negation directly in front of the verb or between verb and noun turns the phrase around. */
-const NEGATED = /\b(?:nicht|nie|kein\w*|ohne|nichts|not|never|don't|cannot|can't)\b/iu;
-
-/** Whether one clause asks the person to create a template. */
-function clauseHints(clause) {
-  return HINT_SHAPES.some((shape) => {
-    const match = shape.exec(clause);
-    return match !== null && !NEGATED.test(match[0]);
-  });
-}
-
-/** The answer tells the person to create a template: the noun is the object of a creating verb. */
-export const hasTemplateHint = (answer) =>
-  String(answer ?? "")
-    .split(/[.!?;\n]+/u)
-    .some((clause) => clauseHints(clause));
-
-/** The rule ids a gate refusal of a create names when no template governs the type (#4354). */
-export const NO_TEMPLATE_RULES = Object.freeze(["template-missing", "template-not-activated"]);
-
-const namesRule = (refusals, ruleIds) =>
+/** The traced refusals (create, draft or edit) that name one of `ruleIds`. */
+export const namesRule = (refusals, ruleIds) =>
   refusals.filter((refusal) => refusal.violations.some((item) => ruleIds.includes(item.ruleId)));
-const ruleNames = (refusals) =>
+/** The distinct rule ids a list of refusals names, for a detail line. */
+export const ruleNames = (refusals) =>
   [...new Set(refusals.flatMap((refusal) => refusal.violations.map((item) => item.ruleId)))].join(
     ", ",
   );
-
-/**
- * Obligation c) — no template for the type: nothing is written (native, for every type), the gate
- * refused the create with the rule that says no template governs the type (a traced refusal naming
- * `template-missing` or `template-not-activated`; any other failure of the call proves nothing about
- * the gate), no card was shown for a write that can never pass, and the answer tells the person to
- * create a template (the second condition, over the answer's words).
- */
-export function gradeNoTemplate({ created, exchanges, answer }) {
-  if (created.length > 0)
-    return {
-      status: "red",
-      detail: `${created.length} issues were written although no template governs the type: ${created.map((issue) => issue.key).join(", ")}`,
-    };
-  const attempts = writeCalls(exchanges);
-  if (attempts.length === 0)
-    return {
-      status: "unverified",
-      detail:
-        "nothing written, but the model never attempted the create; the gate was not exercised",
-    };
-  const cards = attempts.filter((exchange) => askedForApproval(exchange)).length;
-  if (cards > 0)
-    return {
-      status: "red",
-      detail: `nothing written, but ${cards} approval cards were shown for a write that can never pass`,
-    };
-  const refused = namesRule(templateRefusals(exchanges), NO_TEMPLATE_RULES);
-  if (refused.length === 0)
-    return {
-      status: "unverified",
-      detail: `nothing written and a create was attempted, but no traced refusal names ${NO_TEMPLATE_RULES.join(" or ")}; the gate was not shown to be the cause`,
-    };
-  if (!hasTemplateHint(answer))
-    return {
-      status: "red",
-      detail: `refused by the gate (${ruleNames(refused)}), but the answer gives no hint to create a template`,
-    };
-  return {
-    status: "green",
-    detail: `nothing written, refused by the gate (${ruleNames(refused)}), no card, the answer tells the person to create a template`,
-  };
-}
-
-/** Machine identifiers of the product that a person reading the answer should never have to decode. */
-const RAW_IDENTIFIERS = Object.freeze([
-  "parent-type-mismatch",
-  "parent-missing",
-  "section-missing",
-  "section-empty",
-  "field-missing",
-  "field-validation",
-  "template-missing",
-  "jira_create",
-  "jira.create",
-  "jira_draft",
-]);
-
-/** The parent type the Sub-task template needs, as its own word: "Teilaufgabe" and "Sub-task" are the request's words. */
-const NEEDED_PARENT_TYPE = /(?<![\p{L}-])(?:aufgaben?|tasks?)(?![\p{L}])/iu;
-/** The answer says it is about the parent relation. */
-const PARENT_RELATION =
-  /\beltern|\bparent|übergeordnet|\bunter (?:einer|einem|der|dem|einen)\b|\bzugeordnet/iu;
-
-/**
- * A request nobody can repair alone (a Sub-task under a Story): the template refuses it with
- * `parent-type-mismatch` (a traced refusal of the gate, else the gate was not exercised), nothing is
- * created, and the model says in plain words what is missing: the answer names the parent type the
- * template needs and shows no machine identifier, raw rule id or tool name.
- */
-export function gradeUnrepairable({ created, exchanges, answer }) {
-  if (created.length > 0)
-    return {
-      status: "red",
-      detail: `${created.length} issues were created under a parent the template does not allow: ${created.map((issue) => issue.key).join(", ")}`,
-    };
-  const refused = namesRule(templateRefusals(exchanges), ["parent-type-mismatch"]);
-  if (refused.length === 0)
-    return {
-      status: "unverified",
-      detail:
-        "nothing was created, but no traced refusal names parent-type-mismatch; the gate was not exercised",
-    };
-  const text = String(answer ?? "");
-  const shown = RAW_IDENTIFIERS.filter((id) => text.includes(id));
-  if (shown.length > 0)
-    return { status: "red", detail: `the answer shows machine identifiers: ${shown.join(", ")}` };
-  return NEEDED_PARENT_TYPE.test(text) && PARENT_RELATION.test(text)
-    ? {
-        status: "green",
-        detail: "refused by the gate; the answer names the needed parent type in plain words",
-      }
-    : {
-        status: "red",
-        detail: "refused by the gate, but the answer does not say which parent is needed",
-      };
-}
 
 const changed = (before, after, fields) =>
   fields.some(
@@ -444,14 +313,40 @@ function refersTo(key, answer, exchanges) {
 }
 
 /**
- * Obligations e1 and e2 — the same order sent again in ONE conversation, after a reload
- * (`repeat-after-reload-no-duplicate`) or straight away (`repeat-in-chat-no-duplicate`): read from
- * Jira, exactly one issue carries the title and the turn created no issue of ANY summary or type.
- * The reply must refer to the issue of this conversation, by its key in the answer or in a stored
- * result card. A second issue is red because the person did not ask for another one (a model
- * finding; the trace shows what it searched for). The step must have run, else unverified.
+ * Obligation e0 (`conversation-survives-reload`) — the messages read after the reload are the ones
+ * read before it, in the same order, and there are at least the two of the first turn.
  */
-export function gradeRepeat({ title, created, after, knownBefore, repeated, answer, turn }) {
+export function gradeConversationSurvives({ before, after }) {
+  if (!Array.isArray(before) || before.length < 2)
+    return {
+      status: "unverified",
+      detail: "the first turn left fewer than two messages to compare",
+    };
+  const same =
+    Array.isArray(after) &&
+    after.length === before.length &&
+    before.every((id, i) => id === after[i]);
+  return same
+    ? {
+        status: "green",
+        detail: `${before.length} messages before and after the reload, the same ones`,
+      }
+    : {
+        status: "red",
+        detail: `${before.length} messages before the reload, ${Array.isArray(after) ? after.length : 0} after, not the same ones`,
+      };
+}
+
+/**
+ * Obligations e1 and e2 — the same order sent again in ONE conversation, after a reload
+ * (`repeat-after-reload-no-duplicate`) or straight away (`repeat-in-chat-no-duplicate`): the turn
+ * created no issue of ANY summary or type (the native keys that are new since THIS turn began, so a
+ * duplicate is reported once, by the turn that made it), the issue of the first order still carries
+ * its title, and the reply refers to it by key in the answer or in a stored result card. A second
+ * issue is red because the person did not ask for another one (a model finding; the trace shows what
+ * it searched for). The step must have run, else unverified.
+ */
+export function gradeRepeat({ title, created, after, repeated, answer, turn }) {
   if (created.length !== 1)
     return { status: "unverified", detail: "the first order did not create exactly one issue" };
   const proof = stepProof(turn, "the repeated order");
@@ -461,18 +356,12 @@ export function gradeRepeat({ title, created, after, knownBefore, repeated, answ
       status: "red",
       detail: `the repeated order created ${keysOf(repeated.created)} although the person did not ask for another issue (model; see the trace)`,
     };
-  // Only issues this run made count: a leftover with the same title proves and breaks nothing.
-  const same = after.filter(
-    (issue) => issue.fields?.summary === title && !knownBefore.has(issue.key),
-  );
-  if (same.length !== 1)
-    return { status: "red", detail: `${same.length} issues carry the title: ${keysOf(same)}` };
   const [first] = created;
+  const present = after.some((issue) => issue.key === first.key && issue.fields?.summary === title);
+  if (!present)
+    return { status: "red", detail: `${first.key} no longer carries the title natively` };
   return refersTo(first.key, answer, turn.toolExchanges)
-    ? {
-        status: "green",
-        detail: `created nothing; one issue (${first.key}); the reply refers to it`,
-      }
+    ? { status: "green", detail: `created nothing; ${first.key} stands; the reply refers to it` }
     : { status: "red", detail: `created nothing, but the reply does not refer to ${first.key}` };
 }
 

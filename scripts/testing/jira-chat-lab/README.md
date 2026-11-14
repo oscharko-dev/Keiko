@@ -1462,6 +1462,15 @@ the one order that works and prints the inventory. Seed first (`seed.mjs`, `qual
   a private-class Jira URL can be walked live and a Windows guest reaches the lab without a tunnel.
   Loopback, wildcard, IPv6 and public addresses are refused; without the variable nothing changes.
 
+**Limit of the renewal (AC4).** A token revoked outside the lab is not recreated automatically: the owner of the
+tokens refuses to guess (`active-token-not-observed`, `initial-creation-unreconciled`) and the operator restores it by
+hand (remove the actor's `*-token` files and its `pat-creation-started` marker, then run `fixture-tokens.mjs`).
+
+**Document set and language.** The requirements (document) set reads the oracles as the administrator for a session
+without `language.json`, for any `en_*` and for any other locale, and as the localized lab actor only for `de_DE`; it
+refuses nothing, so its default path stays byte-identical for sessions that never ran `seed-language.mjs`. The Composer
+set refuses a session without a language record and any locale other than `en_*` and `de_DE`.
+
 **Renewal and isolation.** Every run starts with `prepareLabRun`: the license window (`ensureLicenseWindow`
 restarts the owned lab), the Personal Access Tokens (`ensureFixtureToken`) and the TLS certificate
 (`tls-window.mjs` runs the owned session's `start`, which regenerates the certificate generation and
@@ -1530,7 +1539,7 @@ own product start with `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off`.
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | C01 | With templates for Epic, Story, Task, Sub-task and Bug active at once, a plain titled instruction creates each type conformant (Story, Task and Bug in the named Epic, the Sub-task under the named Task, the Bug linked to it); one request creates three Tasks: all exist natively and every key is listed in the answer or the result card                                                                                                                                                                                                                                                                            |
 | C02 | A request that violates the template is refused before any approval card and before any effect, per type and in each of the three autonomy modes; the corrected request then succeeds. A violating issue that exists in Jira is red whatever the tool trace says (15 runs)                                                                                                                                                                                                                                                                                                                                               |
-| C03 | No template for the type: nothing is written (any type), the create was refused by the gate, no card was shown for a write that can never pass, and the answer tells the person to create a template; per type and mode. **Red on today's product** (#4354)                                                                                                                                                                                                                                                                                                                                                              |
+| C03 | No template for the type, per type and mode, three obligations: `no-template-refused-*` (hard) nothing was created natively, any type; `no-template-hint-*` (hard) the stored tool exchange of the turn carries the product's closed missing-template refusal and its own guidance text, both derived from the producer of the build; `no-template-answer-*` (soft) the answer mentions the template and claims no created issue. **The hard hint half is `unverified` until the producer defines the refusal (#4354)**                                                                                                  |
 | C04 | The edit rules, compared natively before and after: a breaking edit (clear a section, remove the parent) is refused through any tool; an edit of an issue with a pre-existing violation in an untouched field passes and the answer names it; an edit of a type without template and a status change without template pass. The breaking-edit obligations are red until #4354 lands                                                                                                                                                                                                                                      |
 | C05 | One conversation, three turns in ONE Chat: an order creates one Task; after a reload (the Chat's messages are read back) the same order is sent again, and once more without a reload. Each repeat must create no issue of ANY summary or type, exactly one issue of this run carries the title (leftovers from before the run are ignored), and the reply refers to that issue by its key in the answer or in a stored result card. A second issue is red as a model finding. A step that failed or answered nothing leaves the obligation unverified. The lane proves what a repeat does, not that a reload reconciles |
 | C06 | The three modes and a readable approval, with the document lane's S18 grader and a plain Bug request                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -1588,14 +1597,21 @@ lane and in C07. Its results are not comparable with any run before 2026-11-13.
 `--only C07 --parts s10`); a missing record or another locale is refused before any journey, because the English
 graders would misjudge a Jira that shows other names.
 
-**What a Composer verdict rests on.** A refusal is the gate's, shown by the closed fields of the tool trace, never by
-the model's words: C03 requires a traced create or draft refusal naming `template-missing` or
-`template-not-activated` (any other failure of the call leaves the obligation `unverified`); the two breaking edits of
-C04 require a traced `jira.edit` rejection naming a content rule of the template (`section-missing`,
-`section-empty`, `parent-missing`, `field-missing`); the pre-existing violation of C04 requires a succeeded
-`jira.edit` carrying a `templateNotices` entry for `section-missing`, and no other field of the issue may change.
-The wording of the answer (the template hint, naming the remaining violation, saying attachments are not part of
-the release) is a second condition for green, evaluated only after the closed outcome. C09 binds to the `jira.attach` operation (model alias `jira_attach`): a call of it that succeeded, or that was
+**What a Composer verdict rests on.** The hard verdict comes from what Jira and the PRODUCT state
+deterministically; the model's prose is graded softly and apart. A soft failure is a model observation: it is shown
+as `unverified` with the words "model observation", never red. The expected refusal ids and the hint text are derived
+from the producer (the built contracts and connectors packages: `JIRA_TEMPLATE_RULE_IDS` and
+`jiraTemplateViolationGuidance`), never from a copy; a producer that defines no such refusal in this build leaves the
+hard half `unverified`. C03 is three obligations (nothing created natively, the stored product refusal and its own
+guidance, then the answer mentioning the template without claiming a created issue); the unrepairable parent request of
+C01 likewise (nothing created, the stored `parent-type-mismatch` refusal whose subject names the allowed parent type and
+whose text is the producer's guidance, then an answer without the bare rule id that names the parent type; the product's
+refusal does not name the type that was found). The two breaking edits of C04 require a traced `jira.edit` rejection
+naming a content rule of the template (`section-missing`, `section-empty`, `parent-missing`, `field-missing`); the
+pre-existing violation of C04 requires a succeeded `jira.edit` carrying a `templateNotices` entry for `section-missing`,
+and no other field of the issue may change. The wording of the answer (naming the remaining violation, saying
+attachments are not part of the release) is a second condition for green, evaluated only after the closed outcome.
+C09 binds to the `jira.attach` operation (model alias `jira_attach`): a call of it that succeeded, or that was
 offered to a human as an approval card, is red until #4354 switches attachments off; with it off no call can exist.
 In both states the native attachment count must stay and no write of any kind may have succeeded in the turn. A create of any other type than the requested one is red in C01 and C02. C01's
 several-at-once request is graded on the three requested titles. C08 reads the watcher list before the turn

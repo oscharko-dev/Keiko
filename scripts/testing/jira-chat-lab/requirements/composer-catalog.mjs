@@ -19,7 +19,9 @@ export const COMPOSER_SCENARIOS = Object.freeze([
       ...slugs.map((slug) => `create-conformant-${slug}`),
       "multi-create-all-created",
       "multi-create-keys-listed",
-      "refusal-readable-unrepairable",
+      "unrepairable-refused-natively",
+      "unrepairable-refused-by-gate",
+      "unrepairable-answer-plain",
     ],
   },
   {
@@ -36,9 +38,13 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     requirement: "composer",
     issue: 4354,
     title:
-      "No template for the type: the create is refused by the gate, with the hint, in every mode",
+      "No template for the type: nothing is created, the product's own refusal and hint are stored, in every mode",
     obligations: slugs.flatMap((slug) =>
-      COMPOSER_MODES.map((mode) => `no-template-${slug}-${mode.key}`),
+      COMPOSER_MODES.flatMap((mode) => [
+        `no-template-refused-${slug}-${mode.key}`,
+        `no-template-hint-${slug}-${mode.key}`,
+        `no-template-answer-${slug}-${mode.key}`,
+      ]),
     ),
   },
   {
@@ -61,7 +67,11 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     issue: 4354,
     title:
       "The same order sent again in one conversation, after a reload and without, creates no duplicate",
-    obligations: ["repeat-after-reload-no-duplicate", "repeat-in-chat-no-duplicate"],
+    obligations: [
+      "conversation-survives-reload",
+      "repeat-after-reload-no-duplicate",
+      "repeat-in-chat-no-duplicate",
+    ],
   },
   {
     id: "C06",

@@ -1,6 +1,8 @@
 // The Composer lane (#4369): graders and journeys in both directions, through the real entry points,
 // over an in-memory Jira and a stub model. No live Jira, no model, no Knowledge Pod.
 import { Buffer } from "node:buffer";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   COMPOSER_JOURNEYS,
@@ -19,10 +21,8 @@ import {
   gradeEditBreaking,
   gradeEditPreexisting,
   gradeMultiCreate,
+  gradeConversationSurvives,
   gradeRepeat,
-  gradeNoTemplate,
-  hasTemplateHint,
-  gradeUnrepairable,
   gradeUngovernedChange,
   gradeWatcher,
   keysListed,
@@ -36,9 +36,24 @@ import {
   unrepairablePrompt,
   violationPrompt,
 } from "../testing/jira-chat-lab/requirements/composer-templates.mjs";
+import {
+  PRODUCER_NO_TEMPLATE_RULES,
+  gradeHintDelivered,
+  gradeMentionsTemplate,
+  gradeNoTemplate,
+  gradeParentAnswer,
+  gradeParentRefusal,
+  gradeUnrepairable,
+} from "../testing/jira-chat-lab/requirements/composer-refusals.mjs";
 import { SCENARIOS } from "../testing/jira-chat-lab/requirements/catalog.mjs";
 import { evidenceLines, scenarioVerdict } from "../testing/jira-chat-lab/requirements/coverage.mjs";
 import { turnIssues } from "../testing/jira-chat-lab/requirements/oracles.mjs";
+
+const { jiraTemplateViolationGuidance } = await import(
+  pathToFileURL(
+    join(import.meta.dirname, "../../packages/keiko-connectors/dist/jira-issue-template-check.js"),
+  ).href
+);
 
 const LINK = "customfield_10109";
 const FIXTURE = { epic: "REQ-1", task: "REQ-2", epicLink: LINK };
@@ -347,13 +362,6 @@ const refusal = (type, extra = {}, data = {}) =>
     extra,
   );
 const success = (key) => createExchange({ outcome: "succeeded", issueKey: key }, "completed");
-/** The gate's refusal of a create when no template governs the type (#4354): its rule ids, no receipt. */
-const refusedNoTemplate = (extra = {}, ruleId = "template-missing") =>
-  createExchange(
-    { outcome: "rejected", reason: "field-validation", violations: [{ ruleId }] },
-    "failed",
-    extra,
-  );
 /** A create that failed for another reason: the product's closed refusal is not a gate refusal. */
 const failedElsewhere = () =>
   createExchange({ outcome: "failed", reason: "unavailable" }, "failed");
@@ -452,156 +460,217 @@ describe("obligation b) refusal before any card or effect, decided by the native
   });
 });
 
-describe("the template hint is a template-creation phrase, not a refusal to create the issue", () => {
-  it.each([
-    "Dafür gibt es keine Vorlage. Bitte lege zuerst eine Vorlage an.",
-    "Lege zuerst eine Vorlage für diesen Vorgangstyp an.",
-    "Erstelle bitte eine Vorlage, dann lege ich den Vorgang an.",
-    "Du solltest eine Vorlage für diesen Typ erstellen.",
-    "There is no template for this type; please create a template first.",
-    "You need to define a template before I can create it.",
-  ])("accepts: %s", (answer) => {
-    expect(hasTemplateHint(answer)).toBe(true);
-  });
+/** A stand-in producer: the closed rule ids and the guidance text a producer defines. */
+const guidanceOf = (violations) => `G:${violations.map((item) => item.ruleId).join(",")}`;
+const PORTS = {
+  noTemplateRules: ["template-missing", "template-not-activated"],
+  parentRules: ["parent-type-mismatch"],
+  guidance: guidanceOf,
+  allRuleIds: ["parent-type-mismatch", "section-missing", "template-missing"],
+};
+/** The product's stored refusal of a create, carrying the guidance the producer states for it. */
+const storedRefusalOf = (ruleId, { subject = "REQ/Epic", guidance, extra = {} } = {}) => {
+  const violations = [{ ruleId, subject, template: "REQ/Epic" }];
+  return createExchange(
+    {
+      outcome: "rejected",
+      reason: "field-validation",
+      violations,
+      guidance: guidance ?? guidanceOf(violations),
+    },
+    "failed",
+    extra,
+  );
+};
 
-  it.each([
-    "Für diesen Typ ist keine Vorlage hinterlegt.",
-    "Ich konnte den Vorgang nicht anlegen, weil keine Vorlage definiert ist.",
-    "Ohne Vorlage kann ich nichts anlegen.",
-    "Ich kann keinen Vorgang ohne Vorlage anlegen.",
-    "You need to create the issue again once a template exists.",
-    "Ich konnte den Vorgang nicht anlegen.",
-    "Ich konnte den Vorgang nicht anlegen, weil keine Vorlage existiert.",
-    "I could not create the issue because there is no template.",
-    "Das Anlegen ist nicht möglich.",
-    "Die Vorlage ist leider nicht verfügbar.",
-    "",
-    undefined,
-  ])("refuses: %s", (answer) => {
-    expect(hasTemplateHint(answer)).toBe(false);
-  });
-
-  it("a plain refusal to create the issue is not the hint in the no-template grader", () => {
-    const grade = gradeNoTemplate({
-      created: [],
-      exchanges: [refusedNoTemplate()],
-      answer: "Ich konnte den Vorgang nicht anlegen, weil es keine Vorlage gibt.",
-    });
-    expect(grade.status).toBe("red");
-    expect(grade.detail).toContain("no hint to create a template");
-  });
-});
-
-describe("obligation c) no template: nothing written, the gate refused, no card, the hint", () => {
-  const hint = "Dafür gibt es keine Vorlage. Bitte lege zuerst eine Vorlage an.";
+describe("obligation c) no template: hard from Jira and the stored refusal, soft from the prose", () => {
   const created = (count) =>
     turnOf(
       Array.from({ length: count }, (_, i) => conformant(`REQ-${i + 5}`, i % 2 ? "Bug" : "Task")),
     ).created;
+  const hint = (overrides) =>
+    gradeHintDelivered({
+      exchanges: [storedRefusalOf("template-missing")],
+      ports: PORTS,
+      ...overrides,
+    });
 
-  it("is green only when all four claims hold", () => {
-    for (const ruleId of ["template-missing", "template-not-activated"])
-      expect(
-        gradeNoTemplate({
-          created: [],
-          exchanges: [refusedNoTemplate({}, ruleId)],
-          answer: hint,
-        }).status,
-      ).toBe("green");
+  it("derives its expected refusal ids from the producer of this build, not from a copy", async () => {
+    const { JIRA_TEMPLATE_RULE_IDS } = await import(
+      pathToFileURL(
+        join(import.meta.dirname, "../../packages/keiko-contracts/dist/jira-issue-template.js"),
+      ).href
+    );
+    expect(PRODUCER_NO_TEMPLATE_RULES).toEqual(
+      ["template-missing", "template-not-activated"].filter((id) =>
+        JIRA_TEMPLATE_RULE_IDS.includes(id),
+      ),
+    );
   });
 
-  it("is unverified, never green, when the create failed for another reason or the rule is another one", () => {
-    for (const exchanges of [
-      [failedElsewhere()],
-      [refusedNoTemplate({}, "section-missing")],
-      [success("REQ-5")],
-    ]) {
-      const grade = gradeNoTemplate({ created: [], exchanges, answer: hint });
-      expect(grade.status).toBe("unverified");
-      expect(grade.detail).toContain("template-missing");
-    }
-  });
-
-  it("is red when anything was written, of any type", () => {
+  it("refused natively: green when nothing was created, red naming every key of any type otherwise", () => {
     expect(
-      gradeNoTemplate({ created: created(1), exchanges: [success("REQ-5")], answer: "Angelegt" })
+      gradeNoTemplate({ created: [], exchanges: [], answer: "", ports: PORTS }).refused.status,
+    ).toBe("green");
+    const wrote = gradeNoTemplate({ created: created(2), exchanges: [], answer: "", ports: PORTS });
+    expect(wrote.refused.status).toBe("red");
+    expect(wrote.refused.detail).toContain("REQ-5, REQ-6");
+  });
+
+  it("hint delivered: green when the stored refusal names a missing-template rule and carries the producer's text", () => {
+    for (const ruleId of ["template-missing", "template-not-activated"])
+      expect(hint({ exchanges: [storedRefusalOf(ruleId)] }).status).toBe("green");
+  });
+
+  it("hint delivered: red when the product's own text is absent or differs, when a card was shown, or when it wrote", () => {
+    expect(
+      hint({ exchanges: [storedRefusalOf("template-missing", { guidance: "Etwas anderes" })] })
         .status,
     ).toBe("red");
-    expect(
-      gradeNoTemplate({ created: created(2), exchanges: [refusedNoTemplate()], answer: hint })
-        .detail,
-    ).toContain("2 issues were written");
-  });
-
-  it("is unverified when the model never attempted the create, red when a card appeared or the hint is missing", () => {
-    expect(gradeNoTemplate({ created: [], exchanges: [], answer: hint }).status).toBe("unverified");
-    const card = refusedNoTemplate({ approval: { state: "pending", approvalId: "a" } });
-    expect(gradeNoTemplate({ created: [], exchanges: [card], answer: hint }).status).toBe("red");
-    // The hint is a second condition: without it a traced gate refusal alone is still red.
-    for (const answer of ["Das war nicht möglich.", "", undefined, "Es gibt eine Vorlage"])
-      expect(
-        gradeNoTemplate({ created: [], exchanges: [refusedNoTemplate()], answer }).status,
-      ).toBe("red");
-  });
-});
-
-describe("the unrepairable request: refused by the gate, said in plain words", () => {
-  const mismatch = () =>
-    createExchange(
+    const bare = createExchange(
       {
         outcome: "rejected",
         reason: "field-validation",
-        violations: [{ ruleId: "parent-type-mismatch" }],
+        violations: [{ ruleId: "template-missing", subject: "x", template: "REQ/Epic" }],
       },
       "failed",
     );
-  const plain =
-    "Eine Teilaufgabe braucht eine Aufgabe als Eltern, keine Story. Nenne mir eine Aufgabe.";
-  const grade = (overrides) =>
-    gradeUnrepairable({ created: [], exchanges: [mismatch()], answer: plain, ...overrides });
-
-  it("is green when nothing was created, the gate refused and the answer names the parent type", () => {
-    expect(grade({}).status).toBe("green");
+    expect(hint({ exchanges: [bare] }).detail).toContain(
+      "does not carry the product's own guidance",
+    );
+    const card = { approval: { state: "pending", approvalId: "a" } };
+    expect(hint({ exchanges: [storedRefusalOf("template-missing", { extra: card })] }).status).toBe(
+      "red",
+    );
+    const wrote = hint({ exchanges: [success("REQ-5")] });
+    expect(wrote.status).toBe("red");
+    expect(wrote.detail).toContain("succeeded instead of");
   });
 
-  it("is red when an issue was created under the wrong parent", () => {
-    const result = grade({ created: turnOf([conformant("REQ-9", "Sub-task")]).created });
-    expect(result.status).toBe("red");
-    expect(result.detail).toContain("REQ-9");
+  it("hint delivered: unverified when there is no stored write, no producer refusal, or another reason", () => {
+    expect(hint({ exchanges: [] }).detail).toContain("no stored write exchange");
+    expect(hint({ ports: { ...PORTS, noTemplateRules: [] } }).detail).toContain(
+      "defines no missing-template refusal",
+    );
+    expect(hint({ exchanges: [failedElsewhere()] }).status).toBe("unverified");
+    expect(hint({ exchanges: [storedRefusalOf("section-missing")] }).status).toBe("unverified");
+    expect(hint({ ports: { ...PORTS, guidance: () => undefined } }).detail).toContain(
+      "states no guidance",
+    );
   });
 
-  it("is red when the answer shows machine identifiers or does not say which parent is needed", () => {
+  it.runIf(PRODUCER_NO_TEMPLATE_RULES.length === 0)(
+    "hint delivered: with the producer of this build, which has no such refusal yet, it is unverified",
+    () => {
+      const grade = gradeHintDelivered({ exchanges: [storedRefusalOf("template-missing")] });
+      expect(grade.status).toBe("unverified");
+      expect(grade.detail).toContain("defines no missing-template refusal");
+    },
+  );
+
+  it("answer mentions the template: soft, a model observation and never red", () => {
+    for (const answer of [
+      "Für diesen Typ ist keine Vorlage hinterlegt.",
+      "Bitte lege für Bugs zuerst eine Vorlage an.",
+      "Bitte hinterlege eine Vorlage für Bugs.",
+      "Erstelle bitte zunächst eine Vorlage, dann lege ich den Vorgang an.",
+      "You can set up a template for this issue type in the Jira Pod.",
+      "Es fehlt eine Vorlage, sie müsste definiert werden.",
+      "I did not create the issue because a template is missing.",
+      "Ich kann nichts erstellen, weil die Vorlage fehlt.",
+    ])
+      expect(gradeMentionsTemplate(answer).status, answer).toBe("green");
+    for (const answer of [
+      "Das hat leider nicht geklappt.",
+      "",
+      undefined,
+      "Der Vorgang REQ-5 wurde angelegt, die Vorlage ist in Ordnung.",
+      "I created the issue; the template allowed it.",
+    ]) {
+      const grade = gradeMentionsTemplate(answer);
+      expect(grade.status, String(answer)).toBe("unverified");
+      expect(grade.observation).toBe(true);
+      expect(grade.detail).toContain("model observation");
+    }
+  });
+
+  it("the three obligations of one turn are separate verdicts", () => {
+    const grade = gradeNoTemplate({
+      created: [],
+      exchanges: [storedRefusalOf("template-missing")],
+      answer: "Nichts passiert.",
+      ports: PORTS,
+    });
+    expect([grade.refused.status, grade.hint.status, grade.mentions.status]).toEqual([
+      "green",
+      "green",
+      "unverified",
+    ]);
+  });
+});
+
+describe("the unrepairable request: hard from Jira and the stored refusal, soft from the prose", () => {
+  const stored = (overrides = {}) =>
+    storedRefusalOf("parent-type-mismatch", { subject: "parent: Task", ...overrides });
+  const refusal = (overrides) =>
+    gradeParentRefusal({ exchanges: [stored()], allowed: ["Task"], ports: PORTS, ...overrides });
+
+  it("refused natively and by the gate: green with the parent rule, the allowed type and the producer's text", () => {
+    const grade = gradeUnrepairable({
+      created: [],
+      exchanges: [stored()],
+      answer: "",
+      ports: PORTS,
+    });
+    expect([grade.refused.status, grade.gate.status]).toEqual(["green", "green"]);
+  });
+
+  it("is red when an issue was created or the stored refusal does not name the allowed type or carry the text", () => {
+    const made = gradeUnrepairable({
+      created: turnOf([conformant("REQ-9", "Sub-task")]).created,
+      exchanges: [stored()],
+      answer: "",
+      ports: PORTS,
+    });
+    expect(made.refused.status).toBe("red");
+    expect(made.refused.detail).toContain("REQ-9");
+    expect(refusal({ exchanges: [stored({ subject: "parent: Bug" })] }).status).toBe("red");
+    expect(refusal({ exchanges: [stored({ guidance: "Etwas anderes" })] }).status).toBe("red");
+  });
+
+  it("is unverified when no stored refusal names the parent rule or the producer defines none", () => {
+    expect(refusal({ exchanges: [] }).status).toBe("unverified");
+    expect(refusal({ exchanges: [failedElsewhere()] }).status).toBe("unverified");
+    expect(refusal({ exchanges: [storedRefusalOf("section-missing")] }).status).toBe("unverified");
+    expect(refusal({ ports: { ...PORTS, parentRules: [] } }).detail).toContain(
+      "defines no parent-type",
+    );
+  });
+
+  it("answer: soft, a model observation when it shows the bare rule id or does not name the parent type", () => {
+    for (const answer of [
+      "Eine Teilaufgabe braucht eine Aufgabe als Eltern, keine Story.",
+      "A sub-task needs a Task as its parent.",
+      "Die Teilaufgabe muss unter einer Aufgabe liegen.",
+    ])
+      expect(gradeParentAnswer(answer, PORTS).status, answer).toBe("green");
     for (const answer of [
       "Abgelehnt: parent-type-mismatch (Aufgabe erforderlich).",
-      "Fehler field-validation, eine Aufgabe fehlt.",
-      "Aufruf jira_create gescheitert, Aufgabe nötig.",
-    ])
-      expect(grade({ answer }).status).toBe("red");
-    expect(grade({ answer: "Das hat leider nicht geklappt." }).status).toBe("red");
-    expect(grade({ answer: "" }).status).toBe("red");
-  });
-
-  it("is red when the answer names only the request's own words or only the relation, not the needed parent type", () => {
-    for (const answer of [
       "Die Teilaufgabe wurde abgelehnt, die Eltern-Beziehung passt nicht.",
-      "Ein Sub-task kann dort nicht angelegt werden, der Parent ist falsch.",
-      "Die Teilaufgabe braucht einen anderen übergeordneten Vorgang.",
-      "Eine Aufgabe ist nötig.",
-      "Eine Aufgabe wäre unter anderem richtig.",
-    ])
-      expect(grade({ answer }).status, answer).toBe("red");
-    for (const answer of [
-      "Die Teilaufgabe braucht eine Aufgabe als Eltern.",
-      "A sub-task needs a Task as its parent.",
-      "Die Teilaufgabe muss unter einer Aufgabe liegen, nicht unter einer Story.",
-    ])
-      expect(grade({ answer }).status, answer).toBe("green");
+      "Ein Sub-task kann dort nicht angelegt werden.",
+      "",
+    ]) {
+      const grade = gradeParentAnswer(answer, PORTS);
+      expect(grade.status, answer).toBe("unverified");
+      expect(grade.observation).toBe(true);
+    }
   });
 
-  it("is unverified when no traced refusal names parent-type-mismatch", () => {
-    expect(grade({ exchanges: [] }).status).toBe("unverified");
-    expect(grade({ exchanges: [failedElsewhere()] }).status).toBe("unverified");
-    expect(grade({ exchanges: [refusal("Sub-task")] }).status).toBe("unverified");
+  it("no prose pattern can turn the hard half red or green", () => {
+    const wording = "Die Teilaufgabe braucht eine Aufgabe als Eltern.";
+    const plain = gradeUnrepairable({ created: [], exchanges: [], answer: wording, ports: PORTS });
+    expect(plain.gate.status).toBe("unverified");
+    expect(plain.refused.status).toBe("green");
   });
 });
 
@@ -747,7 +816,6 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
       title,
       created,
       after: [task("REQ-5")],
-      knownBefore: new Set(),
       repeated: turnOf([]),
       answer: "Den Vorgang gibt es schon: REQ-5.",
       turn: { answer: "Den Vorgang gibt es schon: REQ-5.", toolExchanges: [] },
@@ -786,18 +854,37 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     expect(another.detail).toContain("REQ-7");
   });
 
-  it("repeat: red when the native list holds two issues of this run with the title", () => {
-    const two = repeatOf({ after: [task("REQ-5"), task("REQ-6")] });
-    expect(two.status).toBe("red");
-    expect(two.detail).toContain("2 issues carry the title");
+  it("repeat: red when the first order's issue no longer carries its title natively", () => {
+    const gone = repeatOf({ after: [conformant("REQ-5", "Task", "Umbenannt")] });
+    expect(gone.status).toBe("red");
+    expect(gone.detail).toContain("no longer carries the title");
+    expect(repeatOf({ after: [] }).status).toBe("red");
   });
 
-  it("repeat: a leftover with the title, known before the run, is neither proof nor duplicate", () => {
-    const grade = repeatOf({
-      after: [task("REQ-5"), task("REQ-1")],
-      knownBefore: new Set(["REQ-1"]),
-    });
-    expect(grade.status).toBe("green");
+  it("repeat: a leftover with the title, or a duplicate of an earlier turn, is neither proof nor reported again", () => {
+    // The listing holds a leftover and the first issue; only the turn's own new keys count.
+    expect(repeatOf({ after: [task("REQ-5"), task("REQ-1")] }).status).toBe("green");
+    // A duplicate made by an EARLIER turn sits in the listing but not in this turn's new keys.
+    expect(repeatOf({ after: [task("REQ-5"), task("REQ-6")], repeated: turnOf([]) }).status).toBe(
+      "green",
+    );
+  });
+
+  it("conversation: the messages read after the reload are the ones read before it", () => {
+    expect(gradeConversationSurvives({ before: ["u1", "a1"], after: ["u1", "a1"] }).status).toBe(
+      "green",
+    );
+    const lost = gradeConversationSurvives({ before: ["u1", "a1"], after: ["u1"] });
+    expect(lost.status).toBe("red");
+    expect(lost.detail).toContain("2 messages before the reload, 1 after");
+    expect(gradeConversationSurvives({ before: ["u1", "a1"], after: ["a1", "u1"] }).status).toBe(
+      "red",
+    );
+    expect(gradeConversationSurvives({ before: ["u1", "a1"], after: undefined }).status).toBe(
+      "red",
+    );
+    expect(gradeConversationSurvives({ before: ["u1"], after: ["u1"] }).status).toBe("unverified");
+    expect(gradeConversationSurvives({ before: undefined, after: [] }).status).toBe("unverified");
   });
 
   it("repeat: unverified, never green, when the first order did not create one issue or the step did not run", () => {
@@ -1006,7 +1093,7 @@ function lane({ act, library = [], selection } = {}) {
     },
     reloadChat: async () => {
       calls.reloads += 1;
-      return 2;
+      return ["m1", "m2"];
     },
     freshChat: async (mode) => {
       calls.fresh.push(mode);
@@ -1144,14 +1231,18 @@ describe("C01 creates every type, also several at once", () => {
           const keys = ["A", "B", "C"].map((n) => add("Task", {}, `Composer Teil ${n}`).key);
           return { answer: `Angelegt: ${keys.join(", ")}` };
         }
-        if (/unter Story/u.test(content))
+        if (/unter Story/u.test(content)) {
+          const violations = [
+            { ruleId: "parent-type-mismatch", subject: "parent: Task", template: "REQ/Sub-task" },
+          ];
           return {
             toolExchanges: [
               createExchange(
                 {
                   outcome: "rejected",
                   reason: "field-validation",
-                  violations: [{ ruleId: "parent-type-mismatch" }],
+                  violations,
+                  guidance: jiraTemplateViolationGuidance(violations),
                 },
                 "failed",
               ),
@@ -1159,6 +1250,7 @@ describe("C01 creates every type, also several at once", () => {
             answer:
               "Eine Teilaufgabe braucht eine Aufgabe als Eltern. Nenne mir bitte eine Aufgabe.",
           };
+        }
         add(typeOfPrompt(content));
       },
     });
@@ -1169,7 +1261,9 @@ describe("C01 creates every type, also several at once", () => {
         "create-conformant-bug",
         "multi-create-all-created",
         "multi-create-keys-listed",
-        "refusal-readable-unrepairable",
+        "unrepairable-refused-natively",
+        "unrepairable-refused-by-gate",
+        "unrepairable-answer-plain",
       ]),
     );
     expect(good.calls.http.filter((name) => name === "template-import")).toHaveLength(5);
@@ -1288,32 +1382,55 @@ describe("C02 refuses violations in every mode", () => {
 
 describe("C03 without a template", () => {
   const hint = "Für diesen Typ gibt es keine Vorlage. Lege zuerst eine Vorlage an.";
-  const attempt = ({ chat }) => ({ toolExchanges: [refusedNoTemplate()], answer: hint, chat });
+  const attempt = ({ chat }) => ({
+    toolExchanges: [storedRefusalOf("template-missing")],
+    answer: hint,
+    chat,
+  });
+  const hintIds = (check) => check.covers.filter((id) => id.startsWith("no-template-hint-"));
 
-  it("is red on a product that writes unchecked and green on one that refuses with the hint, in every mode", async () => {
+  it("is red on a product that writes unchecked: the native part is hard in every mode", async () => {
     const unchecked = lane({ act: ({ content, add }) => void add(typeOfPrompt(content)) });
-    expect((await COMPOSER_JOURNEYS.C03(unchecked, undefined)).status).toBe("red");
+    const check = await COMPOSER_JOURNEYS.C03(unchecked, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("nothing created: red");
     expect(unchecked.calls.http).not.toContain("template-import");
+  });
+
+  it("splits every case into three obligations; the stored-hint half is read from the producer of the build", async () => {
     const refusing = lane({ act: attempt });
-    const green = await COMPOSER_JOURNEYS.C03(refusing, undefined);
-    expect(green.status).toBe("green");
-    expect(green.covers).toHaveLength(15);
+    const check = await COMPOSER_JOURNEYS.C03(refusing, undefined);
+    expect(check.status).toBe("green");
+    expect(check.covers.filter((id) => id.startsWith("no-template-refused-"))).toHaveLength(15);
+    expect(check.covers.filter((id) => id.startsWith("no-template-answer-"))).toHaveLength(15);
+    // This build's producer defines no missing-template refusal yet: the hard hint half is unverified.
+    expect(hintIds(check)).toHaveLength(PRODUCER_NO_TEMPLATE_RULES.length === 0 ? 0 : 15);
     expect(new Set(refusing.calls.fresh)).toEqual(
       new Set(COMPOSER_MODES.map((entry) => entry.mode)),
     );
   });
 
-  it("is red when any other type was written, unverified when the create was never attempted", async () => {
-    const other = lane({
-      selection: { types: ["epic"], modes: ["ask"] },
-      act: ({ add }) => ({ toolExchanges: [refusedNoTemplate()], answer: hint, issue: add("Bug") }),
-    });
-    expect((await COMPOSER_JOURNEYS.C03(other, undefined)).status).toBe("red");
+  it("a model that only talks is a model observation: nothing created is green, the hint is not proven", async () => {
     const idle = lane({
       selection: { types: ["epic"], modes: ["ask"] },
-      act: () => ({ answer: hint }),
+      act: () => ({ answer: "Das geht nicht." }),
     });
-    expect((await COMPOSER_JOURNEYS.C03(idle, undefined)).status).toBe("unverified");
+    const check = await COMPOSER_JOURNEYS.C03(idle, undefined);
+    expect(check.covers).toEqual(["no-template-refused-epic-ask"]);
+    expect(check.detail).toContain("hint delivered: unverified");
+    expect(check.detail).toContain("model observation");
+  });
+
+  it("is red when any other type was written", async () => {
+    const other = lane({
+      selection: { types: ["epic"], modes: ["ask"] },
+      act: ({ add }) => ({
+        toolExchanges: [storedRefusalOf("template-missing")],
+        answer: hint,
+        issue: add("Bug"),
+      }),
+    });
+    expect((await COMPOSER_JOURNEYS.C03(other, undefined)).status).toBe("red");
   });
 
   it("is a lab state, not a verdict, when a baseline template governs the type", async () => {
@@ -1467,13 +1584,15 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
     expect(check.status).toBe("green");
     expect(check.covers).toEqual([
+      "conversation-survives-reload",
       "repeat-after-reload-no-duplicate",
       "repeat-in-chat-no-duplicate",
     ]);
     // One conversation: a single Chat carries all three turns, with one reload between the first two.
     expect(ctx.calls.fresh).toHaveLength(1);
     expect(new Set(ctx.calls.turns.map((turn) => turn.chat.id)).size).toBe(1);
-    expect(ctx.calls.reloads).toBe(1);
+    // The page showed the conversation after the first turn and again after the reload.
+    expect(ctx.calls.reloads).toBe(2);
     expect(ctx.calls.turns[0].content).toContain("Aufgabe");
     expect(ctx.calls.turns.map((turn) => turn.content)).toEqual(
       Array(3).fill(ctx.calls.turns[0].content),
@@ -1502,7 +1621,10 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     // A product that creates nothing because it sees the leftover proves nothing either.
     const idle = lane({ act: () => ({ answer: "Gibt es schon." }) });
     await idle.nativeCreate(taskFields);
-    expect((await COMPOSER_JOURNEYS.C05(idle, undefined)).status).toBe("unverified");
+    const check = await COMPOSER_JOURNEYS.C05(idle, undefined);
+    expect(check.covers).toEqual(["conversation-survives-reload"]);
+    expect(check.detail).toContain("same order again after a reload: unverified");
+    expect(check.detail).toContain("same order again in the same chat: unverified");
   });
 
   it("a leftover Epic with the title never makes C01 green for a product that created nothing", async () => {
@@ -1528,6 +1650,15 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
     expect(check.status).toBe("red");
     expect(check.detail).toContain("did not ask for another issue");
+  });
+
+  it("is red when the conversation read after the reload is not the one before it", async () => {
+    const ctx = conversation(refer);
+    let reads = 0;
+    ctx.reloadChat = async () => (++reads === 1 ? ["m1", "m2"] : ["m1"]);
+    const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("conversation after the reload: red");
   });
 
   it("is red when the reply after the reload does not refer to the issue", async () => {

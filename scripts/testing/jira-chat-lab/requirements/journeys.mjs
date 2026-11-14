@@ -45,6 +45,7 @@ import {
   showsOutage,
 } from "./validity.mjs";
 import { sequentially } from "./journey-support.mjs";
+import { storedMessageOf } from "./raw-keys.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
 const READINESS_LIMIT_MS = 120_000;
@@ -602,13 +603,16 @@ export function journeyContext(live, session, truth) {
     },
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
     // The stored assistant message of the Chat (its grounded-answer uncertainty is the flag state).
-    storedAnswer: async (chat) =>
-      (await api(ctx, "stored-answer", messagesPath(ctx, chat), undefined, "GET")).messages
-        .filter((message) => message.role === "assistant")
-        .at(-1),
+    storedAnswer: async (chat, answer) =>
+      storedMessageOf(
+        (await api(ctx, "stored-answer", messagesPath(ctx, chat), undefined, "GET")).messages,
+        answer,
+      ),
     // A page reload re-reads the conversation from the product; the count of messages it holds.
     reloadChat: async (chat) =>
-      (await api(ctx, "reload", messagesPath(ctx, chat), undefined, "GET")).messages.length,
+      (await api(ctx, "reload", messagesPath(ctx, chat), undefined, "GET")).messages.map(
+        (message) => message.id,
+      ),
     search: (query, fields) => jql(session, query, fields),
     searchPages: (query, fields) => pagedJql(session, query, fields),
     count: (query) => jqlCount(session, query),

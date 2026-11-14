@@ -3,6 +3,7 @@
 // templates name no requirement: one template per issue type of the work project, all active at
 // once, built from the lab's own template builder and its structure rules. Conformity is judged by
 // the lab from what Jira holds, never from the product's account of a refusal.
+import { SUBTASK_PARENT_TYPES } from "./composer-refusals.mjs";
 import { STRUCTURE_RULES } from "./corpus.mjs";
 import { sectionsPresent } from "./oracles.mjs";
 import { STORY_STRUCTURE_RULE, templateMarkdown } from "./templates.mjs";
@@ -40,7 +41,7 @@ export function composerTemplates(project, epicLinkFieldId, { activateOn = ["cre
       rule: RULES[issueType],
       activateOn,
       ...(hierarchy ? { parentField: epicLinkFieldId } : {}),
-      ...(subtask ? { parentField: "parent", parentIssueTypes: ["Task"] } : {}),
+      ...(subtask ? { parentField: "parent", parentIssueTypes: [...SUBTASK_PARENT_TYPES] } : {}),
       requiredFields: issueType === "Bug" ? ["priority"] : [],
     });
     return { name: `${project}-Composer-${issueType}`, markdown, issueType };

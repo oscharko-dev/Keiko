@@ -56,6 +56,10 @@ describe("scorecard usage errors, by execution", () => {
   it("refuses every invocation that would grade nothing or run the wrong thing", async () => {
     const english = sessionDirectory("en_US");
     const german = sessionDirectory("de_DE");
+    // Sessions that cannot be told: no language record at all, French, Austrian German.
+    const unrecorded = sessionDirectory(undefined);
+    const french = sessionDirectory("fr_FR");
+    const austrian = sessionDirectory("de_AT");
     const base = ["--project", "KEIKO", "--set", "composer"];
     const cases = [
       ["a Composer run with neither a model nor a rehearsal", [english, ...base], "needs --model"],
@@ -80,6 +84,13 @@ describe("scorecard usage errors, by execution", () => {
         [german, ...base, "--model", "m", "--only", "C01"],
         "German-language",
       ],
+      [
+        "a session without a language record",
+        [unrecorded, ...base, "--model", "m"],
+        "no language.json",
+      ],
+      ["a French session", [french, ...base, "--model", "m"], "neither en_* nor de_DE"],
+      ["an Austrian-German session", [austrian, ...base, "--rehearse"], "neither en_* nor de_DE"],
     ];
     const answers = await Promise.all(cases.map(([, args]) => refusal(args)));
     cases.forEach(([name, , message], index) => {

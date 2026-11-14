@@ -380,7 +380,7 @@ async function answerCleanPart(ctx, chat, turn) {
     ...gradeAnswerClean({
       answer: turn.answer,
       exchanges: turn.toolExchanges,
-      stored: await ctx.storedAnswer?.(chat),
+      stored: await ctx.storedAnswer?.(chat, turn.answer),
       turn,
     }),
   };

@@ -88,6 +88,48 @@ export async function requireExclusiveLab(session) {
     throw new TypeError("Another Jira laboratory is running; wait for an exclusive window");
 }
 
+/**
+ * Containers of this session whose network no longer exists (Docker removes unused networks, also
+ * those of stopped lab stacks). Such a stack cannot start: its containers still name the removed
+ * network. Returns the container names with the missing network's name, or an empty list.
+ */
+export async function containersOfMissingNetwork(session, docker = labDocker) {
+  const ids = (
+    await docker([
+      "ps",
+      "-a",
+      "-q",
+      "--filter",
+      `label=com.docker.compose.project=${session.project}`,
+    ])
+  )
+    .split("\n")
+    .filter((id) => id.length > 0);
+  if (ids.length === 0) return [];
+  const existing = new Set(
+    (await docker(["network", "ls", "-q", "--no-trunc"])).split("\n").filter((id) => id.length > 0),
+  );
+  // A reading Docker does not answer in JSON is no diagnosis: `compose up` then reports its own error.
+  let inspected;
+  try {
+    inspected = JSON.parse(await docker(["inspect", ...ids]));
+  } catch (error) {
+    if (error instanceof SyntaxError) return [];
+    throw error;
+  }
+  return inspected.flatMap((container) =>
+    Object.entries(container.NetworkSettings?.Networks ?? {})
+      .filter(([, network]) => !existing.has(network.NetworkID))
+      .map(([network]) => ({ container: String(container.Name).replace(/^\//u, ""), network })),
+  );
+}
+
+/** What to do about a stopped stack whose network was removed: nothing is lost, the volumes hold the state. */
+export const MISSING_NETWORK_REMEDY =
+  "Docker removed the network of this stopped laboratory (an unused-network prune). Its data is in the named volumes. " +
+  "Save `docker inspect` of exactly the containers listed, `docker rm` exactly those containers (never with -v, never a volume, never a prune), " +
+  "then run the session start again: it recreates them on a new network.";
+
 export async function inspectServices(session) {
   await requireExclusiveLab(session);
   const ids = (

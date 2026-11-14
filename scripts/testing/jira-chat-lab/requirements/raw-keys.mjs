@@ -6,21 +6,40 @@ import { completedToolExchange } from "./tool-exchanges.mjs";
 
 const CAMEL_CASE = /^[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*$/u;
 
-/** Every camelCase property name found anywhere in the stored `jira.report` results of the turn. */
+/**
+ * Every STRUCTURAL camelCase member name of the stored `jira.report` results of the turn: a name
+ * that is also a string value of the same results (a data-driven map key such as a status named
+ * "inProgress") is data, not a member of the product's result, and does not count.
+ */
 export function reportResultKeys(exchanges) {
-  const keys = new Set();
+  const names = new Set();
+  const values = new Set();
   const walk = (value) => {
     if (Array.isArray(value)) value.forEach(walk);
+    else if (typeof value === "string") values.add(value);
     else if (typeof value === "object" && value !== null)
       for (const [key, inner] of Object.entries(value)) {
-        if (CAMEL_CASE.test(key)) keys.add(key);
+        if (CAMEL_CASE.test(key)) names.add(key);
         walk(inner);
       }
   };
   for (const exchange of Array.isArray(exchanges) ? exchanges : [])
     if (completedToolExchange(exchange, "jira.report")) walk(exchange.result.data);
-  return keys;
+  return new Set([...names].filter((name) => !values.has(name)));
 }
+
+/**
+ * The stored assistant message OF THIS TURN: the assistant message whose content equals the turn's
+ * answer (the last such, when a Chat repeated itself), never "the last assistant message", which a
+ * later turn or a retry could have replaced. Undefined when none carries that content.
+ */
+export const storedMessageOf = (messages, answer) =>
+  (Array.isArray(messages) ? messages : [])
+    .filter(
+      (message) =>
+        message?.role === "assistant" && String(message.content).trim() === String(answer).trim(),
+    )
+    .at(-1);
 
 /** The kinds of uncertainty element that mark an answer as partly unsupported or unjudged. */
 export const FLAG_KINDS = Object.freeze(["unsupported-claim", "entailment-unavailable"]);

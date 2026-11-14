@@ -1,10 +1,10 @@
 // The Composer lane's command line and native fixtures (#4369): selection errors, baseline grouping,
 // report directory, required fields read from the project's own metadata, and the work-project lock.
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reads = vi.hoisted(() => new Map());
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
@@ -62,9 +62,16 @@ describe("types and modes", () => {
   });
 });
 
+const tempDirectories = [];
+afterEach(() => {
+  for (const directory of tempDirectories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
+
 describe("the account a Composer run reads as, from the session's own language record", () => {
   const sessionWith = (language) => {
     const directory = mkdtempSync(join(tmpdir(), "composer-reader-"));
+    tempDirectories.push(directory);
     if (language !== undefined) writeFileSync(join(directory, "language.json"), language);
     return { directory };
   };
@@ -174,6 +181,7 @@ describe("baseline grouping and settings", () => {
 describe("the account the oracles read Jira as", () => {
   const sessionWith = (language) => {
     const directory = mkdtempSync(join(tmpdir(), "oracle-reader-"));
+    tempDirectories.push(directory);
     if (language !== undefined) writeFileSync(join(directory, "language.json"), language);
     return { directory };
   };
@@ -182,6 +190,14 @@ describe("the account the oracles read Jira as", () => {
     expect(oracleReader(sessionWith(undefined))).toBe("admin");
     expect(oracleReader(sessionWith(JSON.stringify({ locale: "en_US" })))).toBe("admin");
     expect(oracleReader({})).toBe("admin");
+  });
+
+  it("keeps the document set's default: a missing record, any en_* and any unknown locale read as the administrator", () => {
+    // Stated limit, not a refusal: the default document path stays byte-identical for sessions that
+    // never ran seed-language.mjs. Only the Composer set refuses an unknown locale (composerReader).
+    for (const locale of ["en_GB", "fr_FR", "de_AT", "de", ""])
+      expect(oracleReader(sessionWith(JSON.stringify({ locale })))).toBe("admin");
+    expect(oracleReader(sessionWith("{}"))).toBe("admin");
   });
 
   it("is the localized lab actor in a German session, the account whose names the product sees", () => {
@@ -334,5 +350,37 @@ describe("the selection lane's creates in the work project", () => {
     expect(locked).toEqual(["create-epic", "create-story", "create-bug"]);
     for (const id of ["create-task", "create-subtask"])
       expect(SELECTION_CASES.find((entry) => entry.id === id).workProject).toBe(false);
+  });
+});
+
+describe("the oracle limits in a report header", () => {
+  const header = async (id) => {
+    const { scorecardMarkdown } =
+      await import("../testing/jira-chat-lab/requirements/scorecard-markdown.mjs");
+    return scorecardMarkdown({
+      startedAt: "2026-11-14T00:00:00Z",
+      counts: { green: 0, red: 0, partial: 0, invalid: 0, "probe-only": 0, unchecked: 1 },
+      repeat: 1,
+      results: [
+        {
+          id,
+          status: "unchecked",
+          requirement: "x",
+          issue: 1,
+          title: "t",
+          checks: [],
+          covered: [],
+          uncovered: [],
+          deferred: [],
+          obligations: [],
+        },
+      ],
+    });
+  };
+
+  it("names the flag limit of answer-clean for S10 and for C07", async () => {
+    for (const id of ["S10", "C07"])
+      expect(await header(id)).toContain("holds by construction on a Jira-Pod-only Chat");
+    expect(await header("S11")).not.toContain("holds by construction");
   });
 });

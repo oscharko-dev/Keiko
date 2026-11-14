@@ -4,6 +4,7 @@ import {
   gradeAnswerClean,
   reportResultKeys,
   storedFlags,
+  storedMessageOf,
 } from "../testing/jira-chat-lab/requirements/raw-keys.mjs";
 
 const report = (data) => ({
@@ -131,5 +132,50 @@ describe("gradeAnswerClean", () => {
     expect(clean({ answer: "  " }).status).toBe("unverified");
     // The raw key would be red, but a turn that never answered proves nothing either way.
     expect(clean({ answer: "", exchanges: [RESULT] }).status).toBe("unverified");
+  });
+});
+
+describe("structural member names only", () => {
+  it("a data-driven map key that is also a string value of the result is data, not a member", () => {
+    const data = report({
+      report: {
+        // A status literally named "inProgress" is a value here and a map key there.
+        byStatus: { items: [{ statusName: "inProgress", total: 3 }] },
+        counts: { inProgress: 3 },
+      },
+    });
+    const keys = reportResultKeys([data]);
+    expect(keys.has("inProgress")).toBe(false);
+    expect(keys.has("byStatus")).toBe(true);
+    expect(keys.has("statusName")).toBe(true);
+    // The answer that says the status name is therefore not a raw-key hit.
+    const grade = gradeAnswerClean({
+      answer: "ANZAHL;Task;inProgress;3",
+      exchanges: [data],
+      stored: { role: "assistant" },
+      turn: {},
+    });
+    expect(grade.status).toBe("green");
+  });
+});
+
+describe("the stored message of THIS turn", () => {
+  const messages = [
+    { role: "assistant", content: "Antwort eins" },
+    { role: "user", content: "Frage" },
+    { role: "assistant", content: " Antwort zwei \n" },
+    { role: "assistant", content: "Eine spätere Antwort" },
+  ];
+
+  it("is the assistant message whose content equals the answer, not the last assistant message", () => {
+    expect(storedMessageOf(messages, "Antwort zwei")).toBe(messages[2]);
+    expect(storedMessageOf(messages, "Antwort eins")).toBe(messages[0]);
+  });
+
+  it("is undefined when no assistant message carries the answer, which leaves answer-clean unverified", () => {
+    expect(storedMessageOf(messages, "Etwas anderes")).toBeUndefined();
+    expect(storedMessageOf(messages, "Frage")).toBeUndefined();
+    expect(storedMessageOf(undefined, "x")).toBeUndefined();
+    expect(clean({ stored: storedMessageOf(messages, "Etwas anderes") }).status).toBe("unverified");
   });
 });

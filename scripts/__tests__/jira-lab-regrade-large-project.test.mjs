@@ -1,10 +1,10 @@
 // The offline re-grade of a saved large-project run (#4369): the saved turn is found in the retained
 // messages and read back, and no model or Keiko turn is needed.
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   savedLargeTurn,
   savedMessages,
@@ -12,6 +12,12 @@ import {
 
 const message = (role, content, toolTranscript) => ({ role, content, toolTranscript });
 const PROMPT = "Werte den Fortschritt des Jira-Projekts LRG aus. Antworte nur mit Zeilen.";
+
+const directories = [];
+afterEach(() => {
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
 
 describe("the saved large-project turn", () => {
   it("is the LRG progress prompt, its report exchanges and the answer that followed", () => {
@@ -34,6 +40,7 @@ describe("the saved large-project turn", () => {
 
   it("is read from the retained state's ui.db in order, with the transcript parsed", () => {
     const directory = mkdtempSync(join(tmpdir(), "regrade-"));
+    directories.push(directory);
     const database = new DatabaseSync(join(directory, "ui.db"));
     database.exec(
       "create table chat_messages (role text, content text, tool_transcript_json text, timestamp integer)",

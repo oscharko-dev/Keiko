@@ -39,7 +39,7 @@ export function rehearsalContext(base, selection) {
     turn: async () => EMPTY_TURN,
     freshChat: async (mode) => ({ id: `rehearsal-${(chats += 1)}`, mode }),
     // A reload reads back the conversation so far: the user and assistant message of one turn.
-    reloadChat: async () => 2,
+    reloadChat: async () => ["rehearsal-user", "rehearsal-assistant"],
     // The rehearsal's Chats exist nowhere: there is no stored assistant message to read.
     storedAnswer: async () => undefined,
     composerSelection: selection ?? {},

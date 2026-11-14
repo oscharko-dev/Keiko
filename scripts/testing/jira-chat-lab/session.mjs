@@ -12,7 +12,11 @@ import {
 } from "./tls-front.mjs";
 import { DEFAULT_LAB_CONNECTION, loadSession, normalizeLabSession } from "./lab-client.mjs";
 import { assertLabDirectoryOutsideTemporary } from "./lab-directory.mjs";
-import { requireExclusiveLab } from "./lab-services.mjs";
+import {
+  MISSING_NETWORK_REMEDY,
+  containersOfMissingNetwork,
+  requireExclusiveLab,
+} from "./lab-services.mjs";
 
 const [
   action,
@@ -72,6 +76,11 @@ if (action === "init") {
   const privateAddress = readLabPrivateAddress(tlsDirectory);
   if (action === "start") {
     await requireExclusiveLab(session);
+    const orphaned = await containersOfMissingNetwork(session);
+    if (orphaned.length > 0)
+      throw new TypeError(
+        `${MISSING_NETWORK_REMEDY} Containers: ${orphaned.map((entry) => `${entry.container} (network ${entry.network})`).join(", ")}`,
+      );
     initializeLabTls(tlsDirectory, {
       privateAddress,
       onRenew: () => {
