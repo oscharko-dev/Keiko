@@ -2130,6 +2130,7 @@ export {
   JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
   JIRA_ATTACHMENT_OPERATIONS,
   jiraOperationInReleaseScope,
+  isJiraReleaseScopeRefusal,
   type JiraAttachmentOperation,
 } from "./jira-release-scope.js";
 export {

@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { TEMPLATE_NOTICE_GUIDANCE } from "./jiraMutationResult.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gateway";
@@ -193,7 +194,9 @@ type RemoteMode =
   | "html-error-page"
   | "server-error"
   | "voting-disabled"
-  | "time-tracking-disabled";
+  | "time-tracking-disabled"
+  | "transition-moved-404"
+  | "transition-moved-400";
 /** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
@@ -208,9 +211,29 @@ const REFUSALS: Readonly<Record<string, { readonly status: number; readonly body
   "html-error-page": { status: 400, body: "<html><body>Bad Request</body></html>" },
   "server-error": { status: 503, body: JIRA_ERROR_DOCUMENT },
 };
+/** The workflow moved between the listing and the write: Jira refuses the listed transition (KEIKO-0814). */
+const MOVED_TRANSITION = {
+  "transition-moved-404": { status: 404, messages: ["Issue Does Not Exist"] },
+  "transition-moved-400": {
+    status: 400,
+    messages: ["Transition id '31' is not valid for this issue."],
+  },
+} as const;
+function movedTransitionRefusal(mode: RemoteMode, request: Request): Response | undefined {
+  const moved =
+    mode in MOVED_TRANSITION ? MOVED_TRANSITION[mode as keyof typeof MOVED_TRANSITION] : undefined;
+  if (moved === undefined || request.method !== "POST") return undefined;
+  if (!new URL(request.url).pathname.endsWith("/transitions")) return undefined;
+  return new Response(JSON.stringify({ errorMessages: moved.messages, errors: {} }), {
+    status: moved.status,
+    headers: { "content-type": "application/json" },
+  });
+}
 async function scriptedRefusal(mode: RemoteMode, request: Request): Promise<Response | undefined> {
   const native = nativeOperationRefusal(mode, request);
   if (native !== undefined) return native;
+  const moved = movedTransitionRefusal(mode, request);
+  if (moved !== undefined) return moved;
   const refusal = REFUSALS[mode];
   if (refusal === undefined || !(await request.clone().text()).includes(REJECTED_VALUE))
     return undefined;
@@ -1108,7 +1131,7 @@ it.each([
       kind: "settled",
       result: { data: { outcome: "succeeded", templateNotices: [NOTICE] } },
     });
-    expect(JSON.stringify(outcome)).toContain("already broke these template rules");
+    expect(JSON.stringify(outcome)).toContain(TEMPLATE_NOTICE_GUIDANCE);
     const notices = sink.events.filter(
       (event) => event.op === "jira.template.admission" && event.extra?.stage === "notice",
     );
@@ -1239,6 +1262,36 @@ it("returns Jira's field error and lets the corrected retry succeed in the same 
   expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
   expect(f.logs.lines().join()).not.toContain(JIRA_FIELD_ERROR);
 });
+// A transition Jira listed and then refused because the workflow moved: it settles `rejected` with
+// the typed invalid-transition reason and Jira's own words, and a later write of the turn is not
+// blocked. Without the error document it would settle `unknown` and block the turn (#4354).
+it.each(["transition-moved-404", "transition-moved-400"] as const)(
+  "settles a moved-away transition as rejected, not unknown, and does not block the turn (%s)",
+  async (mode) => {
+    const f = await fixture(mode, undefined, "jira.transition");
+
+    const refused = await f.invoke("jira.transition", {
+      issueKey: "SYN-1",
+      transitionId: "31",
+      fields: { customfield_10000: "Required" },
+    });
+
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "rejected", reason: "invalid-transition" } },
+    });
+    expect(f.journal.find(f.intent().invocationId)).toMatchObject({
+      phase: "settled",
+      outcome: "rejected",
+    });
+    expect(f.writes()).toBe(1);
+    expect(await f.invoke("jira.comment", { issueKey: "SYN-1", body: "Moving on" })).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "succeeded" } },
+    });
+    expect(f.writes()).toBe(2);
+  },
+);
 it.each(["html-error-page", "server-error"] as const)(
   "keeps the turn blocked after %s: the write may have been applied (#2953)",
   async (mode) => {

@@ -22,3 +22,16 @@ export function jiraOperationInReleaseScope(operation: string): boolean {
     !(JIRA_ATTACHMENT_OPERATIONS as readonly string[]).includes(operation)
   );
 }
+
+/**
+ * Whether a failure carries this release switch's own refusal of the operation: an operation the
+ * switch withholds and the refusal sentence only the switch writes. Any other failure of such an
+ * operation is some other refusal and is not labelled as the switch's.
+ */
+export function isJiraReleaseScopeRefusal(operation: string, messages: unknown): boolean {
+  return (
+    !jiraOperationInReleaseScope(operation) &&
+    Array.isArray(messages) &&
+    messages.includes(JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE)
+  );
+}

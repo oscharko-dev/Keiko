@@ -693,13 +693,15 @@ export function validJiraMutationAttempt(
       ? failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation)
       : { ok: false, reason: "malformed-payload" };
   const links = sanitizeJiraMutationLinkAccount(value.links);
+  const notices = boundedViolations(value.templateNotices);
   return {
     ok: true,
     receipt: snapshotReceipt(receipt),
     ...(links === undefined ? {} : { links }),
     // The rules an untouched field already broke (#4354): the executor's collector attached them to
-    // the attempt, and this validated copy is what the model's result and the log are built from.
-    ...(value.templateNotices === undefined ? {} : { templateNotices: value.templateNotices }),
+    // the attempt, and this validated copy is what the model's result and the log are built from,
+    // so they are bounded and checked against the closed rule ids here, like a refusal's violations.
+    ...(notices === undefined ? {} : { templateNotices: notices }),
     ...descriptionFormattingFacts(value),
   };
 }
@@ -860,7 +862,7 @@ function attemptReceipt(
  * Fixed words for a change that succeeded although the issue already broke template rules in fields
  * the change did not touch: the change is not undone and not blocked, and the person is told.
  */
-const TEMPLATE_NOTICE_GUIDANCE =
+export const TEMPLATE_NOTICE_GUIDANCE =
   "The change was made. The issue already broke these template rules in fields this change did not touch (templateNotices: ruleId, subject). " +
   "Tell the person plainly what is still missing and offer to repair it; do not repeat the change.";
 export function jiraAttemptToolResult(

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
+  type JiraMutationAttempt,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   JIRA_EXISTING_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
@@ -1046,6 +1049,43 @@ describe("template notices on a validated attempt", () => {
       outcome: "succeeded",
       templateNotices: [notice],
     });
+  });
+
+  it("bounds them like a refusal's violations: closed rule ids only, at most the shared limit", () => {
+    const many = Array.from({ length: JIRA_TEMPLATE_VIOLATIONS_MAX + 10 }, (_, index) => ({
+      ...notice,
+      subject: `label ${String(index)} ${"x".repeat(300)}`,
+    }));
+    const attempt = validJiraMutationAttempt(
+      {
+        ok: true,
+        receipt,
+        templateNotices: [
+          { ruleId: "not-a-rule-id" as never, subject: "dropped", template: "SYN/Task" },
+          ...many,
+        ],
+      },
+      "jira.edit",
+    );
+    if (!attempt.ok) throw new TypeError("Expected a succeeded attempt");
+    const kept = attempt.templateNotices ?? [];
+    expect(kept).toHaveLength(JIRA_TEMPLATE_VIOLATIONS_MAX);
+    expect(kept.every((item) => item.ruleId === "label-missing")).toBe(true);
+    expect(kept.every((item) => item.subject.length <= 120)).toBe(true);
+  });
+
+  it("drops the field when no notice survives the closed rule ids", () => {
+    const attempt = validJiraMutationAttempt(
+      {
+        ok: true,
+        receipt,
+        templateNotices: [
+          { ruleId: "not-a-rule-id" as never, subject: "dropped", template: "SYN/Task" },
+        ],
+      },
+      "jira.edit",
+    );
+    expect(attempt).not.toHaveProperty("templateNotices");
   });
 
   it("adds none to an attempt that had none", () => {

@@ -61,6 +61,10 @@ function candidateKeys(fields: Readonly<Record<string, unknown>>): boolean {
   );
 }
 
+/** What the model is told when an Epic Link names an issue the instance does not know as an Epic. */
+export function jiraEpicLinkRefusalMessage(target: string): string {
+  return `${target} is not an Epic, or this account cannot see it, so it cannot be the Epic Link. Link to the key of an existing Epic of this project that you can see, or create the Epic first. Nothing was changed.`;
+}
 /**
  * The refusal for an Epic Link whose target the instance does not know as an Epic, or undefined:
  * no Epic Link among the fields, no agile request on this invocation, or an epic endpoint that
@@ -90,9 +94,7 @@ export async function epicLinkTargetRefusal(
     detail: {
       fieldId,
       validation: "invalid-epic-link",
-      messages: [
-        `${target} is not an Epic, or this account cannot see it, so it cannot be the Epic Link. Link to the key of an existing Epic of this project that you can see, or create the Epic first. Nothing was changed.`,
-      ],
+      messages: [jiraEpicLinkRefusalMessage(target)],
     },
   };
 }

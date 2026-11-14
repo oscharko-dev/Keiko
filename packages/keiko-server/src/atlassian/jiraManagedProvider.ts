@@ -116,7 +116,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
-  jiraOperationInReleaseScope,
+  isJiraReleaseScopeRefusal,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -630,14 +630,18 @@ export function isCurrentJiraOperationBinding(
   return contract !== undefined && matchesJiraOperationBinding(contract, value);
 }
 
-/** One closed line per provider call: the release switch's refusal, or the call's completion. */
+/**
+ * One closed line per provider call: the release switch's own refusal, or the call's completion.
+ * Only the refusal sentence the switch writes is labelled as the switch's; any other failure of an
+ * operation it withholds stays an ordinary failed call.
+ */
 function recordProviderResult(
   correlationId: string,
   operation: JiraManagedReadToolName | JiraMutationOperation,
-  outcome: "completed" | "failed",
+  result: ManagedMcpToolResult,
 ): void {
-  // The release switch refused it: the one line names that, not a generic tool failure.
-  if (outcome === "failed" && !jiraOperationInReleaseScope(operation))
+  const outcome = result.isError === true ? "failed" : "completed";
+  if (outcome === "failed" && isJiraReleaseScopeRefusal(operation, result.data.messages))
     recordJiraReleaseScopeRefusal(correlationId, operation);
   else recordJiraProviderCall(correlationId, operation, outcome);
 }
@@ -680,11 +684,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          recordProviderResult(
-            args[1].correlationId,
-            operation,
-            result.isError === true ? "failed" : "completed",
-          );
+          recordProviderResult(args[1].correlationId, operation, result);
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },

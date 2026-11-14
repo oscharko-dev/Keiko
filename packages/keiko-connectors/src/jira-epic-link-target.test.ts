@@ -15,6 +15,7 @@ import {
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
+import { jiraEpicLinkRefusalMessage } from "./jira-epic-link-target.js";
 import { parseJiraDraft, type JiraDraftItem } from "./jira-draft.js";
 import {
   executeJiraDraftItem,
@@ -131,9 +132,7 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
       detail: { fieldId: "customfield_10014", validation: "invalid-epic-link" },
     });
     // Both halves of the wording: the target may be no Epic, or an issue this account cannot see.
-    expect(JSON.stringify(result)).toContain(
-      `${TASK} is not an Epic, or this account cannot see it, so it cannot be the Epic Link`,
-    );
+    expect(JSON.stringify(result)).toContain(jiraEpicLinkRefusalMessage(TASK));
     expect(jira.writes()).toBe(0);
   });
 
@@ -151,7 +150,7 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
       fields: { customfield_10014: TASK },
     });
     expect(result).toMatchObject({ ok: false, reason: "field-validation" });
-    expect(JSON.stringify(result)).toContain("or this account cannot see it");
+    expect(JSON.stringify(result)).toContain(jiraEpicLinkRefusalMessage(TASK));
     expect(jira.writes()).toBe(0);
   });
 
@@ -199,9 +198,7 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
         { reconcile: false },
       );
       expect(refusals.refusals).toHaveLength(1);
-      expect(JSON.stringify(refusals.refusals[0])).toContain(
-        `${TASK} is not an Epic, or this account cannot see it`,
-      );
+      expect(JSON.stringify(refusals.refusals[0])).toContain(jiraEpicLinkRefusalMessage(TASK));
       expect(jira.writes()).toBe(0);
     });
 
@@ -254,7 +251,7 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
         { reconcile: false },
       );
       expect(refusals.refusals).toHaveLength(1);
-      expect(JSON.stringify(refusals.refusals[0])).toContain("not an Epic");
+      expect(JSON.stringify(refusals.refusals[0])).toContain(jiraEpicLinkRefusalMessage("DRAFT-1"));
     });
 
     it("reads the field list and each target once, however many items name it", async () => {
@@ -280,7 +277,7 @@ describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {
       if (item === undefined) throw new TypeError("Expected one draft item");
       const result = await executeJiraDraftItem(item, new Map(), jira.context, jira.connection);
       expect(result).toMatchObject({ ok: false, reason: "field-validation" });
-      expect(JSON.stringify(result)).toContain("not an Epic");
+      expect(JSON.stringify(result)).toContain(jiraEpicLinkRefusalMessage(TASK));
       expect(jira.writes()).toBe(0);
     });
   });

@@ -437,10 +437,15 @@ async function statusMutation(
   transition = false,
 ): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
-  if (!response.ok)
+  if (!response.ok) {
+    const failure = dispatchFailure(response, metadata);
+    // Jira's own error document stays on the failure: the Chat journal settles a dispatched 4xx as
+    // "rejected without effect" only when it holds that document, and an uncertain settlement
+    // would tell the model a write may have happened and block the turn's later writes.
     return transition && transitionMovedAway(response)
-      ? { ok: false, reason: "invalid-transition" }
-      : dispatchFailure(response, metadata);
+      ? { ...failure, reason: "invalid-transition" }
+      : failure;
+  }
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
 function isCreateRoutingField(id: string): boolean {

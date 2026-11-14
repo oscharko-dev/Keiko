@@ -10,7 +10,7 @@ import {
 import { recordJiraHumanInput } from "../atlassian/credentialActivity.js";
 import { createJiraPrivateLifetime } from "../atlassian/httpPrivateIdentity.js";
 import {
-  jiraOperationInReleaseScope,
+  isJiraReleaseScopeRefusal,
   jiraRequiredConnectorScope,
   JIRA_MANAGED_ACTION_TYPES,
   JIRA_MUTATION_OPERATIONS,
@@ -332,7 +332,8 @@ function preflightRefusal(
   operation: JiraMutationOperation,
   checked: Extract<Awaited<ReturnType<typeof checkJiraManagedMutation>>, { ok: false }>,
 ): string {
-  if (!jiraOperationInReleaseScope(operation)) recordJiraReleaseScopeRefusal(runId, operation);
+  if (isJiraReleaseScopeRefusal(operation, checked.detail?.messages))
+    recordJiraReleaseScopeRefusal(runId, operation);
   else if (checked.violations !== undefined)
     recordJiraTemplateRefusal(runId, {
       operation,

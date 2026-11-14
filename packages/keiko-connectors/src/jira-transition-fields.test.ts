@@ -152,6 +152,21 @@ describe("the fields a transition carries (#4354)", () => {
     expect(jira.writes()).toBe(1);
   });
 
+  // The control of the retired legacy pin: a failure that is not a moved workflow stays derived from
+  // the status Jira answered, never invalid-transition.
+  it.each([
+    [500, "unavailable"],
+    [409, "conflict"],
+  ] as const)("keeps a %i on the POST of a transition as %s", async (status, reason) => {
+    const jira = run(TRANSITION, [], {
+      status,
+      body: { errorMessages: ["Synthetic refusal"], errors: {} },
+    });
+    const result = await jira.result;
+    expect(result).toMatchObject({ ok: false, reason });
+    expect(result).not.toMatchObject({ reason: "invalid-transition" });
+  });
+
   it("keeps a 400 that names a refused field a field refusal, not a moved workflow", async () => {
     const jira = run(TRANSITION, [], {
       status: 400,
