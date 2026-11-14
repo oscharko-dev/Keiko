@@ -12735,6 +12735,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "external_directory",
           "doom_loop",
           "opencode_session_move",
+          "opencode_session_rename",
           "opencode_worktree_create",
           "opencode_schedule",
           "mcp",

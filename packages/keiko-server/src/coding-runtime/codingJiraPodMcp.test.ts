@@ -509,7 +509,7 @@ describe("serving the bound Pod through the relay", () => {
       expect(description).not.toMatch(/untrusted data|Data Center only|Never retry/u);
   });
 
-  it("starts with only local discovery, then replaces the exact selected typed tools", async () => {
+  it("starts with only local discovery, then merges the exact selected typed tools", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
@@ -518,7 +518,12 @@ describe("serving the bound Pod through the relay", () => {
     expect(await client.list()).toEqual(["jira.discover", "jira.describe", "jira.projects"]);
     expect(client.notifications).toEqual(["notifications/tools/list_changed"]);
     await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
-    expect(await client.list()).toEqual(["jira.discover", "jira.describe", "jira.issue"]);
+    expect(await client.list()).toEqual([
+      "jira.discover",
+      "jira.describe",
+      "jira.issue",
+      "jira.projects",
+    ]);
     await client.select([]);
     expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
     expect(h.http).not.toHaveBeenCalled();
@@ -661,6 +666,8 @@ describe("serving the bound Pod through the relay", () => {
       stage: "fits",
       fitBasis: "provider-sample",
     });
+    // The compaction is reconciled from the runtime's history; the primary's context is rewritten.
+    registry.recordCompaction(h.context.correlationId, "compaction-1", "2026-11-14T14:40:00.000Z");
     gatewaySample({ ...primary, headKey: "build-head-after-compaction" }, 9_006);
     expect((await client.select(["GET /rest/api/2/project"])).structuredContent).toMatchObject({
       outcome: "succeeded",

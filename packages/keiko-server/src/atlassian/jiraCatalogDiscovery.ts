@@ -470,9 +470,7 @@ async function describe(
   const selected = new Set(identities);
   const previous = new Set(context.selectedJiraOperations?.() ?? []);
   const known = summaries(options);
-  const deselected = known
-    .filter((item) => previous.has(item.identity) && !selected.has(item.identity))
-    .map((item) => ({ identity: item.identity, tool: item.tool }));
+  const deselected = replacedItems(options, known, previous, selected);
   const data: CatalogJsonObject = {
     outcome: "succeeded",
     items: known
@@ -486,6 +484,20 @@ async function describe(
     ...(deselected.length === 0 ? {} : { deselected, guidance: DESELECTED_GUIDANCE }),
   };
   return selectedDescription(context.selectJiraOperations.bind(context), identities, data);
+}
+
+/** A catalog that merges (Coding's) reports what left itself; only a replacing one lists it here. */
+function replacedItems(
+  options: DiscoveryOptions,
+  known: readonly Summary[],
+  previous: ReadonlySet<string>,
+  selected: ReadonlySet<string>,
+): readonly CatalogJsonObject[] {
+  return options.callNamespace !== undefined
+    ? []
+    : known
+        .filter((item) => previous.has(item.identity) && !selected.has(item.identity))
+        .map((item) => ({ identity: item.identity, tool: item.tool }));
 }
 
 /** A replacing selection names what it dropped, so a model never calls a tool it lost unknowingly. */
@@ -514,6 +526,16 @@ const RESULT_SCHEMA = object(
     total: { type: "integer", minimum: 0 },
     nextStartAt: { type: "integer", minimum: 0 },
     selectedFor: { type: "string", enum: ["next-round"] },
+    retained: {
+      type: "array",
+      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+      items: ITEM,
+    },
+    dropped: {
+      type: "array",
+      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+      items: ITEM,
+    },
     deselected: {
       type: "array",
       maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,

@@ -21,6 +21,7 @@ export const OPENCODE_NATIVE_POLICY_WAIT_MS =
  */
 export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
   "opencode_session_move",
+  "opencode_session_rename",
   "opencode_worktree_create",
 ] as const);
 
@@ -30,6 +31,14 @@ export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
  * admit the run's own session moving inside the task workspace.
  */
 export const OPENCODE_CODE_MODE_SESSION_MOVE = "opencode_session_move";
+
+/**
+ * The governed management tool that retitles a session, the current one when `sessionID` is
+ * omitted (#4359). It changes nothing but the title of the run's own OpenCode session, so the
+ * policy decides it like a move: allowed for the run's own session in every mode, refused for any
+ * other. The producer asserts no permission for it, so the hook asks for one.
+ */
+export const OPENCODE_CODE_MODE_SESSION_RENAME = "opencode_session_rename";
 
 /**
  * The governed management tool that would add an unmanaged worktree (#3903 AC4): the hook sends
@@ -168,14 +177,14 @@ function managementSource(): readonly string[] {
   return [
     ...scheduleSource(),
     "// A session move is reviewed by the directory it names and the session it moves (absent: the",
-    "// calling one); a new worktree by the name it is given.",
+    "// calling one), a rename by the title it sets, a new worktree by the name it is given.",
     "function managementResources(tool, input) {",
     '  if (!input || typeof input !== "object") return [];',
-    `  const value = tool === ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} ? input.directory : tool === ${JSON.stringify(OPENCODE_CODE_MODE_WORKTREE_CREATE)} ? input.name : undefined;`,
+    `  const value = tool === ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} ? input.directory : tool === ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_RENAME)} ? input.title : tool === ${JSON.stringify(OPENCODE_CODE_MODE_WORKTREE_CREATE)} ? input.name : undefined;`,
     '  return typeof value === "string" ? [value] : [];',
     "}",
     "function managementTarget(tool, input) {",
-    `  if (tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} || !input || typeof input !== "object") return null;`,
+    `  if ((tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} && tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_RENAME)}) || !input || typeof input !== "object") return null;`,
     "  return input.sessionID === undefined ? null : input.sessionID;",
     "}",
   ];

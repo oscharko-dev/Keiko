@@ -180,6 +180,15 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
       "jira-write",
       "jira-discovery",
     ]);
+    // The budget a refused describe stood on and the check that refused it are closed vocabularies.
+    expect(registration?.fields.fitBasis).toMatchObject({
+      dataClass: "closed-enum",
+      values: ["provider-sample", "no-sample", "geometry-mismatch"],
+    });
+    expect(registration?.fields.stage).toMatchObject({
+      dataClass: "closed-enum",
+      values: ["current", "busy", "identity", "scope", "admit", "size", "fits"],
+    });
     expect(registration?.fields.toolDigest).toMatchObject({ dataClass: "digest", maxLength: 64 });
     expect(registration?.fields).not.toHaveProperty("tool");
     const digests = new Set<string>();

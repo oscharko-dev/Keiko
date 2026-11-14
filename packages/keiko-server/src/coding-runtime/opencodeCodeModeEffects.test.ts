@@ -7,8 +7,14 @@ import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers
 
 import { codingJiraServerDefinition } from "./codingJiraPodBinding.js";
 import { OPENCODE_CODE_MODE_GOVERNED_TOOLS } from "./opencodeNativePolicyPlugin.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import {
   decideOpenCodeNativePolicy,
+  recordOpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyRequest,
 } from "./opencodeNativePolicy.js";
@@ -87,18 +93,18 @@ const MANAGEMENT_TOOLS = OPENCODE_NATIVE_TOOL_DEFINITIONS.filter(
 /**
  * How each management tool a program can call is decided: by the plugin's tool hook before it
  * runs ("tool-hook"), by the permission the producer itself asserts for it ("permission-hook"), or
- * not at all ("none"). The ones decided by nothing either only read, or change nothing but the
- * title of the run's own OpenCode session: no file, command, network or repository.
+ * by nothing because it only reads ("read": the worktree listing and the model search change no
+ * state, no file, no command and no network).
  */
-const DECIDED_BY: Readonly<Record<string, "tool-hook" | "permission-hook" | "none">> = {
+const DECIDED_BY: Readonly<Record<string, "tool-hook" | "permission-hook" | "read">> = {
   opencode_session_move: "tool-hook",
+  opencode_session_rename: "tool-hook",
   opencode_worktree_create: "tool-hook",
   opencode_worktree_remove: "permission-hook",
   opencode_list_mcp_resources: "permission-hook",
   opencode_read_mcp_resource: "permission-hook",
-  opencode_worktree_list: "none",
-  opencode_models: "none",
-  opencode_session_rename: "none",
+  opencode_worktree_list: "read",
+  opencode_models: "read",
 };
 
 describe("every effect of a Code Mode program reaches the native policy", () => {
@@ -114,23 +120,106 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
     expect([...OPENCODE_CODE_MODE_GOVERNED_TOOLS].sort()).toEqual(hooked.sort());
   });
 
-  it("names the one undecided state change and the reads that decide nothing", () => {
-    // session_rename changes the title of the run's own OpenCode session and nothing else; the
-    // producer asserts no permission for it and the plugin does not hook it. Pinned as a fact: a
-    // change here is a change of what a program can do without a decision of its own.
-    const undecided = Object.entries(DECIDED_BY)
-      .filter(([, source]) => source === "none")
+  it("leaves no state change undecided: only the two pure reads decide nothing", () => {
+    const reads = Object.entries(DECIDED_BY)
+      .filter(([, source]) => source === "read")
       .map(([tool]) => tool)
       .sort();
-    expect(undecided).toEqual([
-      "opencode_models",
-      "opencode_session_rename",
-      "opencode_worktree_list",
+    expect(reads).toEqual(["opencode_models", "opencode_worktree_list"]);
+  });
+
+  it("allows the program itself in every mode, since each of its effects is decided on its own", () => {
+    expect(decisions("execute", ["return 1;"])).toEqual(["allow", "allow", "allow"]);
+    // A program that names no code keeps the matrix: refused below Full access, nothing to approve.
+    expect(decisions("execute", [])).toEqual([
+      "deny:nothing-to-review",
+      "deny:nothing-to-review",
+      "allow",
     ]);
   });
 
-  it("decides the program itself as command execution: ask, ask, allow", () => {
-    expect(decisions("execute", ["return 1;"])).toEqual(["ask", "ask", "allow"]);
+  it("never lets a stricter mode allow what a looser one asks (monotonic)", () => {
+    const rank: Readonly<Record<string, number>> = { allow: 0, ask: 1 };
+    const probes: readonly (readonly [string, readonly string[]])[] = [
+      ["execute", ["return 1;"]],
+      ["opencode_session_rename", ["A title"]],
+      ["opencode_worktree_create", ["feature-x"]],
+      ["opencode_schedule", ["create", 'when:{"in":"5m"}']],
+      ["edit", [join(workspace, "sub")]],
+    ];
+    for (const [permission, resources] of probes) {
+      const [strict, middle, loose] = decisions(permission, resources).map(
+        (outcome) => rank[outcome],
+      );
+      expect(strict, permission).toBeGreaterThanOrEqual(middle ?? -1);
+      expect(middle, permission).toBeGreaterThanOrEqual(loose ?? -1);
+    }
+  });
+
+  it("logs the allowed program with its closed permission and class, and a rename the same way", () => {
+    const lines: ServerLogEvent[] = [];
+    for (const [permission, resources] of [
+      ["execute", ["return 1;"]],
+      ["opencode_session_rename", ["A title"]],
+    ] as const) {
+      const req = request(permission, resources);
+      recordOpenCodeNativePolicyDecision(
+        { write: (event) => void lines.push(event) },
+        "run-code-mode",
+        {
+          mode: "governed-assist",
+          request: req,
+          decision: decideOpenCodeNativePolicy({
+            mode: "governed-assist",
+            workspaceRoot: workspace,
+            request: req,
+            nowMs: NOW,
+          }),
+          outcome: "allowed",
+        },
+      );
+    }
+    const proofs = lines.map((line) =>
+      expectActivityLogProof(
+        "coding-runtime.native-policy.decided.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    );
+    expect(proofs[0]).toMatchObject({
+      permission: "execute",
+      effect: "allow",
+      outcome: "allowed",
+      risk: "low",
+    });
+    expect(proofs[1]).toMatchObject({
+      permission: "opencode_session_rename",
+      effect: "allow",
+      outcome: "allowed",
+    });
+    expect(JSON.stringify(lines)).not.toContain("return 1;");
+    expect(JSON.stringify(lines)).not.toContain("A title");
+  });
+
+  it("decides a session rename like a move: allowed for the run's own session in every mode", () => {
+    expect(decisions("opencode_session_rename", ["A new title"])).toEqual([
+      "allow",
+      "allow",
+      "allow",
+    ]);
+    const refused = [
+      "deny:unsupported-action",
+      "deny:unsupported-action",
+      "deny:unsupported-action",
+    ];
+    expect(
+      decisions("opencode_session_rename", ["A title"], {
+        targetSessionID: "ses_other00000000000002",
+      }),
+    ).toEqual(refused);
+    expect(decisions("opencode_session_rename", ["two\nlines"])).toEqual(refused);
+    expect(decisions("opencode_session_rename", ["x".repeat(201)])).toEqual(refused);
+    expect(decisions("opencode_session_rename", ["   "])).toEqual(refused);
+    expect(decisions("opencode_session_rename", [])).toEqual(refused);
   });
 
   it("decides a session move inside the workspace as navigation in every mode, and refuses the rest", () => {
@@ -189,7 +278,7 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
   });
 
   it("refuses every other permission a program might assert", () => {
-    for (const permission of ["bash", "net", "opencode_session_rename", "opencode_anything"])
+    for (const permission of ["bash", "net", "opencode_session_delete", "opencode_anything"])
       expect(decisions(permission, ["x"]), permission).toEqual([
         "deny:unsupported-action",
         "deny:unsupported-action",

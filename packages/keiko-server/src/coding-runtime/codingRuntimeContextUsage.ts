@@ -26,19 +26,14 @@ const UNATTRIBUTED_CONVERSATION: CodingRuntimeConversation = {
 };
 const MAX_SESSIONS_PER_RUN = 8;
 /**
- * A conversation that has seen no request while the run served this many further requests of
- * other conversations has ended: its last prompt size no longer describes the run's pressure.
- */
-const LIVE_REQUEST_WINDOW = 16;
-
-/**
  * Which conversation of a run a call belongs to, from what the model gateway sees of the request.
- * The rule: only requests that offer tools count (the runtime's title and summary requests do
- * not); a conversation is its agent (the digest of its system prompt) plus its head (that digest
- * with the first user message); a new head of the same agent supersedes the old one (a
- * compaction or history rewrite continues the conversation under a new head); the primary is the
- * first agent that offered tools; a conversation unheard of for {@link LIVE_REQUEST_WINDOW}
- * further requests has ended.
+ * The rule, conservative by construction because it guards a budget: only requests that offer
+ * tools count (the runtime's title and summary requests do not); a conversation is its head (the
+ * digest of its system prompt and first user message) and its sample is the latest of that head;
+ * the fits read is the LARGEST of them, never aged out and never superseded by another head, so
+ * parallel conversations of the same agent cannot hide one another; a recorded compaction of the
+ * run's own conversation (the primary: the first agent that offered tools) drops that agent's
+ * samples, because its context has been rewritten, and nothing else does.
  */
 export interface CodingRuntimeConversation {
   readonly agentKey: string;
@@ -55,11 +50,11 @@ interface SessionSample {
 
 interface RunUsage {
   readonly sampleIds: Set<string>;
-  /** The latest provider sample of each live conversation of the run, by head. */
+  /** The latest provider sample of each conversation of the run, by head. */
   readonly sessions: Map<string, SessionSample>;
   /** The agent of the first request that offered tools: the run's own conversation. */
   primaryAgent: string | undefined;
-  /** Requests that offered tools so far: the clock a conversation's liveness is read against. */
+  /** Requests that offered tools so far: the order idle conversations are evicted in. */
   requestSeq: number;
   cumulativePromptTokens: number;
   latest: CodingWorkbenchContextUsage | undefined;
@@ -217,10 +212,6 @@ function rememberSession(
 ): void {
   record.primaryAgent ??= conversation.agentKey;
   record.requestSeq += 1;
-  // A new head of the same agent continues that conversation: the old head is superseded.
-  for (const [head, held] of record.sessions)
-    if (held.agentKey === conversation.agentKey && head !== conversation.headKey)
-      record.sessions.delete(head);
   record.sessions.set(conversation.headKey, {
     sample,
     agentKey: conversation.agentKey,
@@ -259,12 +250,9 @@ function readLargest(state: UsageState, runId: string): CodingWorkbenchContextUs
   const record = state.records.get(runId);
   if (record === undefined) return undefined;
   let fullest: CodingRuntimeProviderUsageSample | undefined;
-  for (const held of record.sessions.values()) {
-    if (held.seq <= record.requestSeq - LIVE_REQUEST_WINDOW && held.seq !== record.requestSeq)
-      continue;
+  for (const held of record.sessions.values())
     if (fullest === undefined || held.sample.inputTokens > fullest.inputTokens)
       fullest = held.sample;
-  }
   return fullest === undefined ? undefined : contextUsage(record, fullest);
 }
 
@@ -279,6 +267,9 @@ function recordCompactionOf(
   if (!rememberSample(record, `compaction:${compactionId}`)) return false;
   record.compactionCount += 1;
   record.lastCompactedAt = updatedAt;
+  // The run's own conversation was rewritten: what was sampled before no longer describes it.
+  for (const [head, held] of record.sessions)
+    if (held.agentKey === record.primaryAgent) record.sessions.delete(head);
   if (record.latest?.state === "available") {
     record.latest = {
       ...record.latest,

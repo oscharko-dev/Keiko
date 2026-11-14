@@ -7206,6 +7206,8 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     expect(fits()).toBe(true);
     await turn(140_004, "build agent", "fix the build", true);
     expect(fits()).toBe(false);
+    // The runtime's history reports the compaction; the primary then continues under a new head.
+    registry.recordCompaction("run-gateway-test", "compaction-1", "2026-11-14T14:40:00.000Z");
     await turn(12_005, "build agent", "summary of the earlier work", true);
     expect(fits()).toBe(true);
     expect(registry.read("run-gateway-test")?.usedInputTokens).toBe(12_005);

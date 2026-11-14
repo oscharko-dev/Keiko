@@ -1306,12 +1306,25 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `opencode_read_mcp_resource`, `opencode_list_mcp_resources` (whose producer default is already
   `allow`) and `worktree_remove` (as `edit` on the worktree directory); worktree creation, session
   moves and renames, model search and the worktree listing assert nothing, and the `execute` call
-  itself evaluates no permission. The generated plugin therefore decides the Code Mode program
-  itself through `tool.hook("execute.before")`: the policy classifies `execute` as command
-  execution, so Ask for approval and Supervised workspace ask before a program starts and a
-  refusal blocks it before it runs. The human reviews the program itself: its text, split at line
-  breaks into the bounded review resources (64 × 2,048 characters; a longer line is refused as too
-  large to review), is the ask's resource and is never logged. A `fetch` inside an admitted program
+  itself evaluates no permission. The generated plugin therefore decides the changing management tools and the program itself
+  through `tool.hook("execute.before")`. **Owner decision (2026-11-14, #4359):** the program
+  (`execute`) is allowed in every mode, because it runs nothing of its own: a program can only call
+  the nested tools of the catalog and `fetch`, and each of those reaches the policy as its own
+  decision (`opencodeCodeModeEffects.test.ts` pins every effect in every mode). The human therefore
+  decides about what a program does (a nested Jira write, a worktree, a schedule, a fetch), not
+  about the program text, which stays visible in the run's timeline. Before this decision the
+  policy classified `execute` as command execution and Ask for approval and Supervised workspace
+  asked for every program, reads included (nine to twelve cards for one issue). A program that
+  names no code keeps the old matrix (refused below Full access: nothing to approve). The
+  `opencode_session_rename` tool, which asserted no permission and was decided by nothing, is now
+  governed like a move: it sets only the title of the run's own session, so it is allowed in every
+  mode for that session and refused for another, one line of at most 200 characters. The worktree
+  listing and the model search change nothing and stay reads. The closed decision line of the
+  program is `coding-runtime.native-policy.decided` with `permission: execute`, `effect: allow`,
+  `outcome: allowed`, risk low. The plugin still splits a program into the bounded
+  review resources (64 × 2,048 characters) and refuses a line too long to review, so a program stays
+  reviewable should the matrix ever ask about one again.
+  A `fetch` inside an admitted program
   asserts the `webfetch` permission since OpenCode 2.2, so the policy decides it like the ordinary
   tool; the kernel egress rule stays underneath (loopback below Full access).
 - **A Code Mode session move stays inside the task workspace (#3903 AC4).** The policy plugin sends

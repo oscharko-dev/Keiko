@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a55d0f60cbd2491831ec89c479195931281cfe4d0975b2bc26df497d1b8a384e",
+    "catalogDigest": "f509698cb867de585141f759d9a9a2bb8ea4851da2402fff0f84480038a9e4dc",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13242,6 +13242,7 @@
               "external_directory",
               "doom_loop",
               "opencode_session_move",
+              "opencode_session_rename",
               "opencode_worktree_create",
               "opencode_schedule",
               "mcp",
@@ -13352,8 +13353,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1608",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1837"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1681",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1911"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -120738,7 +120739,7 @@
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1611",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1684",
       "package": "keiko-server"
     },
     {
@@ -121457,7 +121458,7 @@
     {
       "op": "coding.jira-pod.catalog-cleanup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraCatalog.ts:81",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraCatalog.ts:83",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

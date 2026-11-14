@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a55d0f60cbd2491831ec89c479195931281cfe4d0975b2bc26df497d1b8a384e"
+    "catalogDigest": "f509698cb867de585141f759d9a9a2bb8ea4851da2402fff0f84480038a9e4dc"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1883,6 +1883,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.native-policy.decided.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCodeModeEffects.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicyLinks.test.ts"
     ],

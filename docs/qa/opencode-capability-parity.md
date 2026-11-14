@@ -91,18 +91,18 @@ unsupported actions, exhausted budgets and platform restrictions.
 evaluates. [native-policy-test][native-policy-test] pins these classifications; `skill`, `question`,
 `list` and `doom_loop` share the read set without an assertion of their own.
 
-| Native permission                                                                                                                                                    | Classification                                         | Ask     | Supervised | Full    |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------- | ---------- | ------- |
-| `read`, `list`, `glob` and `grep` (the searched directory is checked), `skill`, `subagent`, `question`, `todowrite`, `doom_loop`                                     | workspace read                                         | allowed | allowed    | allowed |
-| `edit` (the `edit`, `write` and `patch` tools)                                                                                                                       | workspace-contained, medium                            | asks    | allowed    | allowed |
-| `shell`, vetted (package scripts, tests, type checks, linters, builds, read-only Git and file inspection; options and path-valued options are read, ADR-0137, #4271) | workspace-contained, low                               | asks    | allowed    | allowed |
-| `shell`, any other command                                                                                                                                           | workspace-contained, high                              | asks    | asks       | allowed |
-| `webfetch`, `websearch`                                                                                                                                              | internet                                               | refused | refused    | allowed |
-| plan-directory read or edit (the plan agent's notes)                                                                                                                 | planning                                               | allowed | allowed    | allowed |
-| `external_directory` outside the plan directory, a path outside the workspace                                                                                        | hard denial (`workspace-escape`)                       | refused | refused    | refused |
-| `.env`, keys and other credential-named paths                                                                                                                        | hard denial (`sensitive-path`)                         | refused | refused    | refused |
-| Git delivery, ref or configuration writes (`update-ref`, `config`, …) or `gh pr`, `repo`, `release`, `api` through the shell                                         | hard denial (`delivery-reserved`)                      | refused | refused    | refused |
-| A Code Mode `opencode_session_move` of another session or out of the workspace, a `opencode_worktree_create` without one plain name; any unclassified action         | hard denial (`unsupported-action`, `workspace-escape`) | refused | refused    | refused |
+| Native permission                                                                                                                                                                                             | Classification                                         | Ask     | Supervised | Full    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------- | ---------- | ------- |
+| `read`, `list`, `glob` and `grep` (the searched directory is checked), `skill`, `subagent`, `question`, `todowrite`, `doom_loop`                                                                              | workspace read                                         | allowed | allowed    | allowed |
+| `edit` (the `edit`, `write` and `patch` tools)                                                                                                                                                                | workspace-contained, medium                            | asks    | allowed    | allowed |
+| `shell`, vetted (package scripts, tests, type checks, linters, builds, read-only Git and file inspection; options and path-valued options are read, ADR-0137, #4271)                                          | workspace-contained, low                               | asks    | allowed    | allowed |
+| `shell`, any other command                                                                                                                                                                                    | workspace-contained, high                              | asks    | asks       | allowed |
+| `webfetch`, `websearch`                                                                                                                                                                                       | internet                                               | refused | refused    | allowed |
+| plan-directory read or edit (the plan agent's notes)                                                                                                                                                          | planning                                               | allowed | allowed    | allowed |
+| `external_directory` outside the plan directory, a path outside the workspace                                                                                                                                 | hard denial (`workspace-escape`)                       | refused | refused    | refused |
+| `.env`, keys and other credential-named paths                                                                                                                                                                 | hard denial (`sensitive-path`)                         | refused | refused    | refused |
+| Git delivery, ref or configuration writes (`update-ref`, `config`, …) or `gh pr`, `repo`, `release`, `api` through the shell                                                                                  | hard denial (`delivery-reserved`)                      | refused | refused    | refused |
+| A Code Mode `opencode_session_move` of another session or out of the workspace, an `opencode_session_rename` of another session, a `opencode_worktree_create` without one plain name; any unclassified action | hard denial (`unsupported-action`, `workspace-escape`) | refused | refused    | refused |
 
 Internet below Full is refused at once, with an explanation, because the kernel profile has no route
 outside the machine; see Q5 and section 6.
@@ -142,7 +142,8 @@ All points are [R] unless tagged.
   effect of every evaluated action. It can only keep or narrow the configured effect; a missing,
   failed or oversized answer denies, and so does a resource list over 64 entries of 2,048
   characters. Its shell hook strips the server password and every `KEIKO_*` binding from each shell
-  the agent starts; its `execute.before` hook decides the two state-changing Code Mode tools.
+  the agent starts; its `execute.before` hook decides the Code Mode program (allowed in every mode, #4359) and the
+  three state-changing management tools (session move and rename, worktree creation).
   A run is ready only once `GET /api/plugin` reports the three generated plugins
   (`keiko.native-policy`, `keiko.native-context`, `keiko.native-delivery`) active within 10 seconds
   ([readiness][native-readiness]).
@@ -649,9 +650,11 @@ The order is by developer impact, not a schedule.
   shell classification applies (T09).
 - **Q3.** Superseded: the native `shell` replaced the planned governed command tool, so the order of
   work between it and the connector, plugin and MCP packs (#2287) no longer applies.
-- **Q4.** The runtime evaluates no permission for a Code Mode `execute` call (T21). In Ask and
-  Supervised a script may therefore run without a decision, bounded by the confined interpreter,
-  the kernel egress rule and the nested tools. Keep that, or ask for every `execute` call?
+- **Q4.** Decided (owner, 2026-11-14, #4359): the runtime evaluates no permission for a Code Mode
+  `execute` call (T21), and Keiko no longer asks for the program itself in any mode. Every effect
+  of a program (nested tools, `fetch`, the management tools) reaches the native policy as its own
+  decision, pinned per mode in `opencodeCodeModeEffects.test.ts`; `opencode_session_rename` is now
+  governed like a move. See ADR-0137.
 - **Q5.** ADR-0124 and the Workbench text say internet use asks below Full access, but the native
   policy refuses it at once because the kernel profile has no route outside the machine. Keep the
   immediate refusal, or ask and let the kernel profile follow the decision?

@@ -89,24 +89,51 @@ describe("coding runtime context usage", () => {
       expect(registry.readLargest("run-1")?.usedInputTokens).toBe(120_000);
     });
 
-    it("lets a new head of the same agent supersede the old one, so a compaction frees a describe", () => {
+    // The audit's two holes in the safety direction: a read that is too small admits a selection
+    // that overflows the receiving session.
+    it("sizes against the largest of two parallel conversations of the same agent", () => {
       const registry = bound();
-      record(registry, BUILD, 180_000);
-      record(registry, { ...BUILD, headKey: "build-after-compaction" }, 12_000);
-      expect(registry.read("run-1")?.usedInputTokens).toBe(12_000);
-      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(12_000);
+      const a = { agentKey: "agent-explore", headKey: "head-a", toolBearing: true };
+      const b = { agentKey: "agent-explore", headKey: "head-b", toolBearing: true };
+      record(registry, BUILD, 5_000);
+      record(registry, a, 150_000);
+      record(registry, b, 4_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(150_000);
+      // The same conversation reports its own latest size.
+      record(registry, a, 152_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(152_000);
     });
 
-    it("ends a conversation that has seen no request while the run served 16 others", () => {
+    it("never ages the run's own conversation out while others keep requesting", () => {
       const registry = bound();
       record(registry, BUILD, 180_000);
-      for (let round = 0; round < 15; round += 1) record(registry, EXPLORE, 2_000);
+      for (let round = 0; round < 40; round += 1) record(registry, EXPLORE, 2_000 + round);
       expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
-      record(registry, EXPLORE, 2_000);
-      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(2_000);
-      expect(registry.read("run-1")?.usedInputTokens).toBe(180_000);
-      record(registry, BUILD, 40_000);
-      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(40_000);
+    });
+
+    it("lets a recorded compaction of the run's own conversation free a describe, and only that", () => {
+      const registry = bound();
+      record(registry, BUILD, 180_000);
+      record(registry, EXPLORE, 150_000);
+      // A new head of the same agent does NOT replace the old sample by itself.
+      record(registry, { ...BUILD, headKey: "build-after-compaction" }, 12_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
+      expect(registry.recordCompaction("run-1", "compaction-1", AT)).toBe(true);
+      // The primary's samples before it are gone; a parallel conversation's large one stays.
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(150_000);
+      record(registry, { ...BUILD, headKey: "build-after-compaction" }, 13_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(150_000);
+      expect(registry.read("run-1")).toMatchObject({
+        usedInputTokens: 13_000,
+        compaction: { count: 1 },
+      });
+    });
+
+    it("leaves no sample, so a describe is refused, when the compaction drops the only one", () => {
+      const registry = bound();
+      record(registry, BUILD, 180_000);
+      registry.recordCompaction("run-1", "compaction-1", AT);
+      expect(registry.readLargest("run-1")).toBeUndefined();
     });
 
     it("never evicts the fullest conversation, or the primary, past the retention bound", () => {
