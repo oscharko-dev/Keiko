@@ -8,7 +8,6 @@ import {
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { asRecord } from "./atlassian-sync-classify.js";
-import { savedText } from "./jira-saved-configuration-values.js";
 import {
   bindLinkActor,
   linkActorInput,
@@ -70,6 +69,13 @@ const refused = (message: string): IssueLinkCheck => ({ ok: false, message });
  * of the validation and a check added later cannot be left without its sentence. No value the model
  * sent is echoed.
  */
+/** The link type when it is exactly the four fields of one type, and nothing else. */
+function closedLinkType(value: unknown): NativeLinkType | undefined {
+  const raw = asRecord(value);
+  return raw !== undefined && Object.keys(raw).every((key) => LINK_TYPE_KEYS.has(key))
+    ? nativeLinkType(raw)
+    : undefined;
+}
 function checkIssueLinkInput(operation: Operation, args: CatalogJsonObject): IssueLinkCheck {
   if (Object.keys(args).some((key) => !FIELDS.has(key)))
     return refused(`This call takes only ${LINK_ARGUMENTS}.`);
@@ -84,13 +90,8 @@ function checkIssueLinkInput(operation: Operation, args: CatalogJsonObject): Iss
     return refused(
       "inwardIssueIdOrKey and outwardIssueIdOrKey must each be the key or id of one issue.",
     );
-  const raw = asRecord(args.linkType);
-  const type = nativeLinkType(raw);
-  if (
-    type === undefined ||
-    raw === undefined ||
-    !Object.keys(raw).every((key) => LINK_TYPE_KEYS.has(key))
-  )
+  const type = closedLinkType(args.linkType);
+  if (type === undefined)
     return refused(
       "linkType must be exactly { id, name, inward, outward } of one type, as jira.link-types lists it.",
     );

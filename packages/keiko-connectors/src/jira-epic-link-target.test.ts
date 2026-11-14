@@ -136,7 +136,7 @@ describe("the Epic Link sentence stays whole for any key (#4357 AC3)", () => {
     ["an over-long key", `${"PROJECTKEY".repeat(12)}-1234567890`],
     ["CJK text", "任務".repeat(25)],
     ["quotes and a backslash", 'SYN-5"\\"'],
-    ["a split surrogate", `SYN-1${"\ud83d"}`],
+    ["a split surrogate", "SYN-1\ud83d"],
     ["free text", "not a key at all"],
   ])("names the target without repeating it when it is %s", (_name, target) => {
     const message = jiraEpicLinkRefusalMessage(target);

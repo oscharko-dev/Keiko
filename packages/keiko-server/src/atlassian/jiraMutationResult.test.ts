@@ -1110,9 +1110,7 @@ describe("the guidance of a refusal says who refused it and what to do (#4357 AC
   const refuse = (
     reason: "field-validation" | "conflict" | "invalid-transition" | "permission-denied",
     detail: Record<string, unknown>,
-  ): unknown =>
-    jiraAttemptToolResult("rejected", { ok: false, reason, detail } as JiraMutationAttempt).data
-      .guidance;
+  ): unknown => jiraAttemptToolResult("rejected", { ok: false, reason, detail }).data.guidance;
   it.each([
     [
       "a field check of Keiko",
@@ -1163,7 +1161,7 @@ describe("the guidance of a refusal says who refused it and what to do (#4357 AC
       ok: false,
       reason: "field-validation",
       detail: { fromJira: true, messages: ["m"] },
-    } as JiraMutationAttempt).data;
+    }).data;
     expect(JSON.stringify(data)).not.toContain("fromJira");
   });
 });
