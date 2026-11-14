@@ -378,8 +378,8 @@ node scripts/testing/jira-chat-lab/session.mjs status "$HOME/.local/share/keiko-
 ```
 
 Every initialization creates an independent Compose project, persistent volumes,
-three independent private passwords, and a private seven-day development CA and
-server certificate under `secrets/tls`. The frontend container receives only its
+three independent private passwords, and a private 365-day development CA and
+server certificate under `secrets/tls` (renewed by `session.mjs start` when seven days or less remain). The frontend container receives only its
 server key/certificate as read-only mounts; the CA key remains on the host. System
 trust is unchanged. HTTP administration defaults to port 18081; product-path
 qualification defaults to HTTPS port 18443. The existing initializer also accepts:
