@@ -69,6 +69,17 @@ compose file passes the host's `KEIKO_VITEST_MAX_WORKERS` through and defaults i
 `KEIKO_VITEST_MAX_WORKERS=2 npm run gates:local` reproduces CI's count exactly when a starvation flake
 is suspected. Real CI on GitHub does not use this compose file and is unchanged.
 
+## The sandbox inside this container
+
+The product's verification sandbox wraps a command in bubblewrap's strict profile, which mounts a
+fresh procfs in its new root. Docker masks parts of the container's `/proc` by default and refuses
+that mount (`bwrap: Can't mount proc on /newroot/proc: Operation not permitted`), so every command the
+sandbox ran exited 1 in a few milliseconds and the six `runVerifyCli` tests in `keiko-cli` failed here
+while they pass on a GitHub runner, which is not a container. The compose file therefore starts the
+local gate container with `systempaths=unconfined`, which unmasks `/proc` so the sandbox runs as it
+does on a runner; like the seccomp and apparmor settings beside it, it applies to this local container
+only. GitHub CI does not use this compose file and is untouched.
+
 ## Git worktrees
 
 A linked worktree's `.git` is a file pointing at the parent checkout, which is outside the mount, so
