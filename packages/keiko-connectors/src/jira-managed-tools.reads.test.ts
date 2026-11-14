@@ -295,8 +295,13 @@ it.each([
   "refuses invalid %s input %j before connection resolution",
   async (name, args) => {
     const f = fixture({});
+    // The refusal still happens before any connection or request; it now also says the rule (#4357).
     expect(await f.run(name, args)).toEqual({
-      data: { outcome: "failed", reason: "invalid-input" },
+      data: {
+        outcome: "failed",
+        reason: "invalid-input",
+        messages: [expect.stringMatching(/^Pass /u)],
+      },
       isError: true,
     });
     expect(f.connection).not.toHaveBeenCalled();

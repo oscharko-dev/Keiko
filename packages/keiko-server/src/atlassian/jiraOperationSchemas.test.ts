@@ -18,7 +18,11 @@ import {
   verifyToolDescriptor,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationContracts, jiraOperationForTool } from "./jiraManagedProvider.js";
-import { createJiraOperationContract, jiraOperationDefinitions } from "./jiraOperationRegistry.js";
+import {
+  createJiraOperationContract,
+  jiraOperationDefinitions,
+  withReadFailureProperties,
+} from "./jiraOperationRegistry.js";
 import { JIRA_JOB_OBSERVATION_READ_DEFINITIONS } from "./jiraJobObservationDescriptors.js";
 import { jiraNativeDeclaration } from "./jiraProjectStructureDescriptors.js";
 import { object, text } from "./jiraManagedSchemas.js";
@@ -288,7 +292,8 @@ describe("operation bindings preserve closed result alternatives", () => {
       resultSchema: {
         ...original.resultSchema,
         properties: {
-          ...schemaObject(original.resultSchema.properties),
+          // A read also carries what a failed read says (#4357): that part comes from its producer.
+          ...withReadFailureProperties(schemaObject(original.resultSchema.properties), "full"),
           operationBinding: object(
             {
               identity: text(192),

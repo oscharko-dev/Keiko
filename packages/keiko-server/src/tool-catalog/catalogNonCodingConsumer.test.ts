@@ -9,6 +9,7 @@ import {
   createJiraProviderForCatalog,
   jiraOperationBindingForTool,
 } from "../atlassian/jiraManagedProvider.js";
+import { jiraReadFailureGuidance } from "../atlassian/jiraReadFailureGuidance.js";
 import type {
   ManagedMcpTool,
   ManagedMcpToolResult,
@@ -445,7 +446,15 @@ it.each([
     try {
       const operationBinding = jiraOperationBindingForTool("jira.projects");
       if (operationBinding === undefined) throw new TypeError("Missing canonical project binding");
-      const expected = { ...data, operationBinding };
+      // The model also receives what to change (#4357); the sentence comes from its producer.
+      const guidance = jiraReadFailureGuidance({
+        tool: "jira.projects",
+        reason: data.reason,
+        argumentNames: [],
+        administration: false,
+      });
+      if (guidance === undefined) throw new TypeError("Missing read failure guidance");
+      const expected = { ...data, guidance: guidance.text, operationBinding };
       const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
       expect(result).toMatchObject({
         kind: "settled",

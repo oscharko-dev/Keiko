@@ -1,6 +1,7 @@
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  type AtlassianConnectorWriteFailureReason,
   JIRA_READ_TOOL_FAMILIES,
   JIRA_CORE_MUTATIONS,
   JIRA_ANONYMIZATION_UNLOCK_MUTATIONS,
@@ -521,11 +522,13 @@ export function recordJiraProviderCall(
   correlationId: string,
   tool: JiraManagedReadToolName | JiraMutationOperation,
   outcome: "completed" | "failed",
+  /** The closed word Jira's refusal of a read carried, when the model was told what to change. */
+  refusal?: AtlassianConnectorWriteFailureReason,
 ): void {
   recordGuarded(correlationId, tool, outcome === "failed" ? "warn" : "info", {
     stage: "provider-call",
     outcome,
-    reason: outcome === "failed" ? "tool-failed" : "none",
+    reason: outcome === "failed" ? (refusal ?? "tool-failed") : "none",
   });
 }
 

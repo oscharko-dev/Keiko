@@ -116,6 +116,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
+  isAtlassianConnectorWriteFailureReason,
   isJiraReleaseScopeRefusal,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -130,6 +131,7 @@ import type {
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { recordJiraProviderCall, recordJiraReleaseScopeRefusal } from "./jiraOperationActivity.js";
+import { withJiraReadFailureGuidance } from "./jiraReadFailureGuidance.js";
 import {
   compileExternalCatalogSchema,
   createToolDescriptor,
@@ -639,11 +641,37 @@ function recordProviderResult(
   correlationId: string,
   operation: JiraManagedReadToolName | JiraMutationOperation,
   result: ManagedMcpToolResult,
+  explained: boolean,
 ): void {
   const outcome = result.isError === true ? "failed" : "completed";
   if (outcome === "failed" && isJiraReleaseScopeRefusal(operation, result.data.messages))
     recordJiraReleaseScopeRefusal(correlationId, operation);
-  else recordJiraProviderCall(correlationId, operation, outcome);
+  else {
+    const { reason } = result.data;
+    recordJiraProviderCall(
+      correlationId,
+      operation,
+      outcome,
+      explained && isAtlassianConnectorWriteFailureReason(reason) ? reason : undefined,
+    );
+  }
+}
+
+/**
+ * What the model receives for a provider result: a failed native read also says what class of refusal
+ * it was and what to change (#4357), and every result carries the server-owned operation binding.
+ * Provider response content never chooses the operation or its contract authority.
+ */
+function receivedProviderResult(
+  operation: JiraManagedReadToolName | JiraMutationOperation,
+  args: CatalogJsonObject,
+  correlationId: string,
+  result: ManagedMcpToolResult,
+  binding: JiraOperationBinding,
+): ManagedMcpToolResult {
+  const explained = withJiraReadFailureGuidance(jiraOperationForTool(operation), args, result);
+  recordProviderResult(correlationId, operation, explained.result, explained.class !== undefined);
+  return { ...explained.result, data: { ...explained.result.data, operationBinding: binding } };
 }
 
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
@@ -684,9 +712,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          recordProviderResult(args[1].correlationId, operation, result);
-          // Provider response content never chooses the operation or its contract authority.
-          return { ...result, data: { ...result.data, operationBinding: binding } };
+          return receivedProviderResult(operation, args[0], args[1].correlationId, result, binding);
         },
       });
     }),

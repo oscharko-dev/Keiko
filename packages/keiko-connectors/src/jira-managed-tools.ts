@@ -695,6 +695,26 @@ async function projectMetadataRead<Context extends ManagedMcpInvocationContext>(
     : await executeJiraVersionRead(name, args, request);
   return boundJiraReadResult(result);
 }
+/**
+ * What the model must pass, one sentence per tool, said when a call is refused before it reaches
+ * Jira (#4357). Every sentence names only registered tools and stays far below the message bound.
+ */
+const INPUT_RULES: Readonly<Record<string, string>> = {
+  "jira.assignable-users":
+    "Pass exactly one of projectKey or issueKey, optionally with query. Do not pass both.",
+  "jira.issue-types": "Pass projectKey: a project key that jira.projects lists.",
+  "jira.create-fields":
+    "Pass projectKey, a key that jira.projects lists, and issueTypeId, a numeric id that jira.issue-types lists for that project.",
+  "jira.search": "Pass jql, the search text, and no other arguments than the ones this tool lists.",
+  "jira.edit-fields": "Pass issueKey: the key of one issue, for example one jira.search returns.",
+  "jira.issue": "Pass issueKey: the key of one issue, for example one jira.search returns.",
+  "jira.comments": "Pass issueKey: the key of one issue, for example one jira.search returns.",
+  "jira.transitions": "Pass issueKey: the key of one issue, for example one jira.search returns.",
+};
+const GENERIC_INPUT_RULE = "Pass only the arguments this tool lists, each in the form it states.";
+function inputRuleOf(name: JiraManagedReadToolName): string {
+  return INPUT_RULES[name] ?? GENERIC_INPUT_RULE;
+}
 async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
@@ -702,7 +722,7 @@ async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   connection: JiraManagedProviderDeps<Context>["connection"],
 ): Promise<ManagedMcpToolResult> {
   const selected = selection(name, args);
-  if (selected === undefined) return failure("invalid-input");
+  if (selected === undefined) return failure("invalid-input", { messages: [inputRuleOf(name)] });
   const connected = await connection(context);
   const { deployment, baseUrl } = connected;
   if (deployment !== "data-center") return failure("unsupported-deployment");

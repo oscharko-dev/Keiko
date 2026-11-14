@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9cd32fbd139fa741cbe781fc849fb767cc6238bd71b41cda4ff2805a33c682ff",
+    "catalogDigest": "bf5fd7368c3eec1f9770ec05ed297326d5520ea0d1f8ed26d5417e3a07a49963",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -34717,8 +34717,8 @@
           }
         },
         "proofIds": ["jira.operation.avatars.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:293",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:436"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:294",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:437"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34851,8 +34851,8 @@
           }
         },
         "proofIds": ["jira.operation.configuration.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:321",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:442"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:322",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:443"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34983,8 +34983,8 @@
           }
         },
         "proofIds": ["jira.operation.core.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:363",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:451"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:364",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:452"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35139,8 +35139,8 @@
           }
         },
         "proofIds": ["jira.operation.identities.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:279",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:433"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:280",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:434"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35275,8 +35275,8 @@
           }
         },
         "proofIds": ["jira.operation.issues.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:209",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:418"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:210",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:419"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35369,8 +35369,8 @@
           }
         },
         "proofIds": ["jira.operation.local.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:377",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:456"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:378",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:457"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35489,8 +35489,8 @@
           }
         },
         "proofIds": ["jira.operation.maintenance.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:335",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:445"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:336",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:446"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35626,8 +35626,8 @@
           }
         },
         "proofIds": ["jira.operation.metadata.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:251",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:427"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:252",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:428"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35752,8 +35752,8 @@
           }
         },
         "proofIds": ["jira.operation.planning.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:223",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:421"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:224",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:422"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35881,8 +35881,8 @@
           }
         },
         "proofIds": ["jira.operation.projects.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:237",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:424"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:238",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:425"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36008,8 +36008,8 @@
           }
         },
         "proofIds": ["jira.operation.properties.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:307",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:439"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:308",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:440"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36120,8 +36120,8 @@
           }
         },
         "proofIds": ["jira.operation.saved-views.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:349",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:448"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:350",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:449"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36277,8 +36277,8 @@
           }
         },
         "proofIds": ["jira.operation.schemes.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:265",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:430"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:266",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:431"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -119492,7 +119492,7 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:510",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:511",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122587,79 +122587,79 @@
     {
       "op": "jira.operation.avatars",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:295",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:296",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.configuration",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:323",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:324",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.core",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:365",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:366",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.identities",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:281",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:282",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.issues",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:211",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:212",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.local",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:379",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:380",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.maintenance",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:337",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:338",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:253",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:254",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.planning",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:225",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:226",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.projects",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:239",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:240",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.properties",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:309",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:310",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.saved-views",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:351",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:352",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.schemes",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:267",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:268",
       "package": "keiko-server"
     },
     {
