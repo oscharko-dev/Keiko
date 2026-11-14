@@ -53,7 +53,7 @@ Cloud connectors retain their existing sync and action workflows. See
 
 ### Create and connect a Pod
 
-In the Knowledge Pods hub, select **Create Jira Pod**, enter a name, the HTTPS Jira base URL
+In the Local Knowledge window, select **Create Jira Pod**, enter a name, the HTTPS Jira base URL
 (including any context path), and a PAT, then select **Create Jira Pod** once. Keiko saves the
 connection and verifies it automatically before closing the form. Verification checks
 bounded REST-v2 `serverInfo` and `myself` responses and the active identity. A successful check is
@@ -74,7 +74,7 @@ Jira answers some permission refusals with HTTP 401, which looks like a failed l
 checks the token once with the identity request before it treats any 401 as a rejected token (the
 identity request itself is the only definitive 401). A token that really expired or was revoked is
 reported as "Jira authentication failed" with the remedy: replace the token on the Jira Pod in the
-Knowledge Pods hub and verify again; the Chat and its draft stay. A Jira release below 10.3.0 is
+Local Knowledge window and verify again; the Chat and its draft stay. A Jira release below 10.3.0 is
 refused with the 10.3.0 floor named. A certificate that Keiko does not trust names the
 `KEIKO_CA_BUNDLE_PATH` setting; see
 [the CA bundle note](../troubleshooting/ca-bundle-fallback.md). Never disable certificate

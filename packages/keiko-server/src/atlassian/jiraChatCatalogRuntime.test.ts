@@ -49,6 +49,10 @@ const CURATED_JIRA_ALIASES = [
   "jira_comment",
   "jira_transition",
   "jira_draft",
+  // Offered without a search, because a person's first requests need them (#4357).
+  "jira_myself",
+  "jira_watch",
+  "jira_unwatch",
 ] as const;
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -137,6 +141,10 @@ function expectedDefaultCatalogTools(): Set<string> {
   return new Set<string>([
     ...reads,
     ...writes,
+    // The intended base additions, stated as literals and not derived from the runtime (#4357).
+    "jira.myself",
+    "jira.watch",
+    "jira.unwatch",
     "jira.draft-batch",
     "jira.draft",
     ...JIRA_CATALOG_DISCOVERY_TOOLS,
@@ -173,7 +181,7 @@ describe("default Jira catalog set", () => {
 });
 
 describe("application-owned Jira catalog initialization", () => {
-  it("advertises all 18 curated Jira tools with discovery, Knowledge and batch before selection", async () => {
+  it("advertises all 21 curated Jira tools with discovery, Knowledge and batch before selection", async () => {
     const f = fixture();
     expect(
       f.runtime
@@ -207,7 +215,7 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    expect(first.catalog.descriptors).toHaveLength(20 + KNOWLEDGE_CHAT_TOOLS.length);
+    expect(first.catalog.descriptors).toHaveLength(22 + KNOWLEDGE_CHAT_TOOLS.length);
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");
     const records = f.lines.map((line) =>

@@ -2371,7 +2371,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.workspaceHint":
     "Drag this Jira Pod onto the workspace, or add it with this button. Connect its port to a Chat.",
   "chat.jira.liveReady": "Verified Jira Pod",
-  "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
+  "chat.jira.liveUnavailable":
+    "Jira Pod unavailable; open the Local Knowledge window to verify or reconnect.",
   "chat.connectors.title": "Connectors",
   "chat.connectors.active": "Connectors: {count} active",
   "chat.connectors.mcp": "MCP servers",
