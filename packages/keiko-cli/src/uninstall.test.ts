@@ -28,6 +28,7 @@ import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
 import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
 import { makeCapturedIo } from "./test-support/cli-io.js";
+import { writePortableRuntimePayload } from "./test-support/portable-runtime-payload.js";
 import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
@@ -178,7 +179,12 @@ function writePortableWindowsFixture(root: string, version = "0.2.11"): void {
 
 async function installPortableWindows(
   root: string,
-  options: { readonly managedRoot?: string | undefined; readonly home?: string | undefined } = {},
+  options: {
+    readonly managedRoot?: string | undefined;
+    readonly home?: string | undefined;
+    // what a real payload carries: the runtime files and the record that names them
+    readonly runtimePayload?: boolean | undefined;
+  } = {},
 ): Promise<{
   readonly home: string;
   readonly managedRoot: string;
@@ -191,6 +197,7 @@ async function installPortableWindows(
   const managedRoot = options.managedRoot ?? join(env.LOCALAPPDATA, "Programs", "Keiko");
   const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
   writePortableWindowsFixture(source);
+  if (options.runtimePayload === true) writePortableRuntimePayload(source, "windows-x64");
   const c = makeIo();
   const code = await runPortableCli(
     [
@@ -243,7 +250,10 @@ function writePortableMacFixture(root: string, target: "macos-arm64" | "macos-x6
   );
 }
 
-async function installPortableMacCustom(root: string): Promise<{
+async function installPortableMacCustom(
+  root: string,
+  runtimePayload = false,
+): Promise<{
   readonly home: string;
   readonly managedRoot: string;
 }> {
@@ -251,6 +261,9 @@ async function installPortableMacCustom(root: string): Promise<{
   const source = join(root, "portable-bootstrap");
   const managedRoot = join(home, "Portable Apps", "Keiko.app");
   writePortableMacFixture(source, "macos-x64");
+  if (runtimePayload) {
+    writePortableRuntimePayload(join(source, "Keiko.app", "Contents", "Resources"), "macos-x64");
+  }
   const c = makeIo();
   const code = await runPortableCli(
     [
@@ -1411,6 +1424,63 @@ describe("runUninstallCli — portable managed install", () => {
     ).resolves.toBe(0);
     expect(existsSync(managedRoot)).toBe(false);
     expect(existsSync(join(root, ".keiko"))).toBe(false);
+  });
+
+  // #4358, Windows guest: the uninstall of a real first installation ended with "unknown entry:
+  // .portable/runtime-activation.json". A real payload carries that record and the runtime files
+  // it names; the fixture above carries neither.
+  it("removes a Windows install whose payload carries the runtime record and its files", async () => {
+    const root = makeRoot();
+    const { home, managedRoot, env } = await installPortableWindows(root, { runtimePayload: true });
+    expect(existsSync(join(managedRoot, ".portable", "runtime-activation.json"))).toBe(true);
+    expect(existsSync(join(managedRoot, "runtime", "native", "usearch.node"))).toBe(true);
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
+    expect(c.err()).toBe("");
+    expect(existsSync(managedRoot)).toBe(false);
+    expect(existsSync(join(root, ".keiko"))).toBe(false);
+  });
+
+  it("removes a macOS install whose payload carries the runtime record and its files", async () => {
+    const root = makeRoot();
+    const { home, managedRoot } = await installPortableMacCustom(root, true);
+    const resources = join(managedRoot, "Contents", "Resources");
+    expect(existsSync(join(resources, ".portable", "runtime-activation.json"))).toBe(true);
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
+    expect(c.err()).toBe("");
+    expect(existsSync(managedRoot)).toBe(false);
+  });
+
+  it("refuses a runtime file the record does not name and records the refusal", async () => {
+    const root = makeRoot();
+    const { home, managedRoot, env } = await installPortableWindows(root, { runtimePayload: true });
+    writeFileSync(join(managedRoot, "runtime", "native", "unknown.exe"), "unowned\n", "utf8");
+    const c = makeIo();
+    const events: SecurityLogEvent[] = [];
+
+    await expect(
+      runUninstallCli(["--state"], c.io, env, {
+        cwd: root,
+        homedir: () => home,
+        activityStateDir: join(root, "control-state"),
+        securityLogSinkFactory: () => ({
+          write: (event): void => void events.push(event),
+        }),
+      }),
+    ).resolves.toBe(1);
+    expect(c.err()).toContain("unknown entry: runtime/native/unknown.exe");
+    expect(existsSync(managedRoot)).toBe(true);
+    const failed = events.filter(({ op }) => op === "cli.uninstall.failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ errorKind: "internal" });
+    expect(extraOf(failed[0]).reason).toBe("operation-error");
   });
 
   it("refuses a locator tampered toward a policy-invalid repository root even when hashes match", async () => {
