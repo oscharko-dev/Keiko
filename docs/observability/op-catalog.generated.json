@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "414de3b08350e9180b5e139083f20c565850d6ba2308b851898bd3ce41ae36e0",
+    "catalogDigest": "6408d87ceda06741ac7c939c434cc8398d5ac1fc62fb328519f8b78cb922a9fa",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10914,7 +10914,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:90",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:542"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:548"
         ]
       },
       {
@@ -10966,7 +10966,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:137",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:561"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:567"
         ]
       },
       {
@@ -38831,9 +38831,9 @@
         "failureClasses": ["portable-native-helper-binding"],
         "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:305",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:329",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:340"
+          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:364"
         ]
       },
       {
@@ -44634,6 +44634,12 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": ["input", "resolve", "host-start", "verify"]
+          },
+          "verdict": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["not-local", "unverifiable"]
           }
         },
         "causal": "none",
@@ -44643,7 +44649,7 @@
         "proofIds": ["security.windows-local-volume.refused.phase"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:30",
-        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:153"]
+        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:227"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -49309,6 +49315,8 @@
               "portable-setup-failed",
               "portable-it-managed",
               "portable-registration-invalid",
+              "portable-volume-not-local",
+              "portable-volume-unverified",
               "portable-non-stable"
             ]
           },
@@ -49331,7 +49339,7 @@
         "proofIds": ["update.install-mode.detected.body-free"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:277",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:356"]
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:358"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -49543,8 +49551,8 @@
         "failureClasses": ["update-runtime"],
         "proofIds": ["update.registry.checked.failure"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:373",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:442"]
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:375",
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:444"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -115711,6 +115719,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "verdict",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
@@ -118973,7 +118987,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:201",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:204",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120293,7 +120307,7 @@
     {
       "op": "coding-runtime.composition.retired-setting",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:6482",
+      "site": "packages/keiko-server/src/deps.ts:6484",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121314,7 +121328,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:295",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:319",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122945,7 +122959,7 @@
     {
       "op": "portable.runtime.native-helper-bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:308",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:332",
       "package": "keiko-server"
     },
     {
@@ -123263,7 +123277,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4842",
+      "site": "packages/keiko-server/src/deps.ts:4844",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123710,7 +123724,7 @@
     {
       "op": "update.registry.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-preflight-activity.ts:376",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:378",
       "package": "keiko-server"
     },
     {
