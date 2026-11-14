@@ -1696,7 +1696,7 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
 
     expect(code).toBe(1);
     expect(c.out()).toContain(`remaining: ${join(managedRoot, HELD)}`);
-    expect(c.err()).toContain("10 entries of the installation could not be removed");
+    expect(c.err()).toMatch(/\d+ entries of the installation could not be removed/u);
     expect(c.err()).toContain("run keiko uninstall again");
     expect(existsSync(join(managedRoot, HELD))).toBe(true);
     // never half-removed from the product's point of view: still registered, still resumable
@@ -1705,14 +1705,17 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
     expect(existsSync(join(root, ".keiko", "ui.log"))).toBe(true);
     expect(existsSync(shortcut)).toBe(true);
     expect(existsSync(join(managedRoot, ".portable", "setup-manifest.json"))).toBe(true);
-    expect(existsSync(join(managedRoot, "runtime", "node", "node.exe"))).toBe(false);
+    // the held file stopped the removal before the run set: the copy's own command still runs
+    expect(existsSync(join(managedRoot, "runtime", "node", "node.exe"))).toBe(true);
+    expect(existsSync(join(managedRoot, "app", "dist", "cli", "index.js"))).toBe(true);
     const handoff = events.filter(({ op }) => op === "cli.uninstall.handoff");
     expect(handoff.map((event) => extraOf(event).outcome)).toEqual(["residue-reported"]);
-    expect(extraOf(handoff[0])).toMatchObject({
-      residueFileCount: 5,
-      residueDirectoryCount: 5,
-      refusal: "none",
-    });
+    // the held file, the run set (a rerun from this copy needs it) and the four identity files
+    expect(extraOf(handoff[0])).toMatchObject({ refusal: "none" });
+    expect(extraOf(handoff[0]).residueFileCount).toBeGreaterThan(5);
+    expect(c.err()).toContain(
+      `${String(Number(extraOf(handoff[0]).residueFileCount) + Number(extraOf(handoff[0]).residueDirectoryCount))} entries`,
+    );
     expect(extraOf(events.find(({ op }) => op === "cli.uninstall.failed")).reason).toBe(
       "removal-incomplete",
     );
@@ -1773,7 +1776,7 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
         spawnFn: (command, _args, options): { on: () => void; unref: () => void } => {
           calls.push({ command, options: { ...options } });
           const directory = options.env.KEIKO_UNINSTALL_DIR ?? "";
-          if (reportsReady) writeFileSync(join(directory, "ready"), "4711");
+          if (reportsReady) writeFileSync(join(directory, "ready"), "4711\n");
           return { on: (): void => undefined, unref: (): void => undefined };
         },
       },
@@ -1827,6 +1830,9 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
     expect(c.out()).toMatch(
       /The last \d+ entries of this copy are removed when this command ends/u,
     );
+    // what a person is told to do if the helper cannot remove everything (a file it cannot see, a lock)
+    expect(c.out()).toContain("the installation stays registered");
+    expect(c.out()).toContain("from the downloaded Keiko release package");
     // the installation is still registered and resumable until the helper has removed the rest
     expect(existsSync(join(managedRoot, "runtime", "node", "node.exe"))).toBe(true);
     expect(existsSync(join(managedRoot, ".portable", "setup-manifest.json"))).toBe(true);
@@ -1840,7 +1846,15 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
     const kinds = lines.map((line) => line.slice(0, 1)).join("");
     expect(kinds).toMatch(/^F+I{4}D+X+S$/u);
     const files = lines.filter((line) => line.startsWith("F\t")).map((line) => line.slice(2));
-    expect(files[0]).toBe(join(managedRoot, "runtime", "node", "node.exe"));
+    // after everything the command could remove itself, only the run set is left to the helper: the
+    // Node runtime, the CLI entry and the packages it loads (a rerun from this copy needs them)
+    expect(files).toContain(join(managedRoot, "runtime", "node", "node.exe"));
+    for (const file of files) {
+      expect(file).toMatch(/[\\/](?:app[\\/](?:dist|node_modules)|runtime[\\/]node)[\\/]/u);
+    }
+    expect(existsSync(join(managedRoot, "runtime", "native", "usearch.node"))).toBe(false);
+    for (const file of files) expect(existsSync(file)).toBe(true);
+    expect(existsSync(join(managedRoot, "app", "dist", "cli", "index.js"))).toBe(true);
     // the identity files, in the order a second run needs them
     expect(lines.filter((line) => line.startsWith("I\t")).map((line) => line.slice(2))).toEqual([
       join(managedRoot, ".portable", "runtime-activation.json"),
@@ -1956,8 +1970,11 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
   });
 
   // What a helper (or the parent) leaves when it dies at each point, and that the next run finishes
-  // from the journal and the registration. The stand-in carries out the committed list the way the
-  // helper does, in order, up to a point.
+  // from the journal and the registration. `carryOut` is a JavaScript stand-in that applies the
+  // committed list the way the helper's script does, in order, up to a point: it restates the script's
+  // F/I/D/X/S semantics and is no proof of the script. The real script text is driven in the pwsh
+  // rehearsal (scenarios K1, T1 and S1 to S12); the first crash row below is the state after the
+  // command's own first batch with the helper never having run, which needs only what is still on disk.
   function carryOut(directory: string, keep: (line: string) => boolean): void {
     const lines = readFileSync(join(directory, "residue.txt"), "utf8").trim().split("\n");
     for (const line of lines.filter(keep)) {
@@ -2044,7 +2061,7 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
       ["installation-gone"],
     ],
   ] as const)(
-    "%s: the next run finishes from the journal and the registration",
+    "stand-in for the helper (its own script is rehearsed in pwsh): %s: the next run finishes from the journal and the registration",
     async (_name, keep, state) => {
       const where = await handedOff();
       carryOut(where.directory, keep);

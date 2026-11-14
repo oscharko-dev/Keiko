@@ -105,6 +105,18 @@ function generationInstall(): Install {
   return { layout, runtimeTarget: "windows-x64" };
 }
 
+// What `keiko uninstall` needs to run again from the copy: the Node runtime, the CLI entry and the
+// packages it loads (everything else of the payload goes before it).
+function runSetFiles(layout: PortableLayout): readonly string[] {
+  const prefixes = ["dist", "node_modules"].map((name) =>
+    join(layout.resourceRoot, "app", name, ""),
+  );
+  prefixes.push(join(layout.resourceRoot, "runtime", "node", ""));
+  return inspectPortableManagedInstall(layout).files.filter((file) =>
+    prefixes.some((prefix) => file.startsWith(prefix)),
+  );
+}
+
 function removedFiles(root: string): readonly string[] {
   return readdirSync(root, { recursive: true }).map(String).sort();
 }
@@ -333,15 +345,45 @@ describe("removal that meets a held-open entry", () => {
   });
 
   it.each(INSTALLS)(
+    "removes every other payload file, then the run set, then the identity files (%s)",
+    (_name, make) => {
+      const { layout } = make();
+      const runSet = runSetFiles(layout);
+      const order: string[] = [];
+      removePortableManagedInstallTolerant(layout, noopIo, {
+        deferIdentity: false,
+        unlink: (path) => {
+          order.push(path);
+          unlinkSync(path);
+        },
+      });
+      const firstRunSet = order.findIndex((path) => runSet.includes(path));
+      const lastRunSet = Math.max(
+        ...order.map((path, index) => (runSet.includes(path) ? index : -1)),
+      );
+      const firstIdentity = order.indexOf(recordPath(layout));
+      expect(firstRunSet).toBeGreaterThan(0);
+      expect(order.slice(0, firstRunSet).some((path) => runSet.includes(path))).toBe(false);
+      expect(lastRunSet).toBeLessThan(firstIdentity);
+      expect(order.slice(firstRunSet, lastRunSet + 1).every((path) => runSet.includes(path))).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(INSTALLS)(
     "goes on past a held-open file, keeps the identity files and accepts what is left (%s)",
     (_name, make) => {
       const { layout } = make();
       const total = inspectPortableManagedInstall(layout).files.length;
+      const runSet = runSetFiles(layout);
+      const touched: string[] = [];
       let calls = 0;
       let held: string | undefined;
       const outcome = removePortableManagedInstallTolerant(layout, noopIo, {
         deferIdentity: false,
         unlink: (path) => {
+          touched.push(path);
           calls += 1;
           if (calls === 3) {
             held = path;
@@ -351,21 +393,25 @@ describe("removal that meets a held-open entry", () => {
         },
       });
       expect(held).toBeDefined();
-      // the held file and the four identity files stay; everything else went
+      // the held file stays, and with it everything a later run needs: the run set (the Node runtime,
+      // the CLI entry and its packages) and the four identity files, which are not even attempted
+      expect(runSet.length).toBeGreaterThan(0);
       expect(outcome.residueFiles).toEqual([
         held,
+        ...runSet,
         recordPath(layout),
         layout.packageJsonPath,
         layout.primaryLauncherPath,
         layout.setupManifestPath,
       ]);
+      expect(touched.filter((path) => runSet.includes(path))).toEqual([]);
       expect(outcome.identityResidue).toEqual([
         recordPath(layout),
         layout.packageJsonPath,
         layout.primaryLauncherPath,
         layout.setupManifestPath,
       ]);
-      expect(outcome.removedCount).toBe(total - 5);
+      expect(outcome.removedCount).toBe(total - 1 - runSet.length - 4);
       expect(outcome.residueDirectories.at(-1)).toBe(layout.installRoot);
       // the partly removed installation is still one the inspection accepts ...
       expect(inspectPortableManagedInstall(layout).issues).toEqual([]);
@@ -384,6 +430,7 @@ describe("removal that meets a held-open entry", () => {
     "leaves the identity files to the caller when it defers them (%s)",
     (_name, make) => {
       const { layout } = make();
+      const runSet = runSetFiles(layout);
       const touched: string[] = [];
       const outcome = removePortableManagedInstallTolerant(layout, noopIo, {
         deferIdentity: true,
@@ -392,13 +439,15 @@ describe("removal that meets a held-open entry", () => {
           unlinkSync(path);
         },
       });
-      expect(outcome.residueFiles).toEqual([
+      expect(outcome.identityResidue).toEqual([
         recordPath(layout),
         layout.packageJsonPath,
         layout.primaryLauncherPath,
         layout.setupManifestPath,
       ]);
-      expect(outcome.identityResidue).toEqual(outcome.residueFiles);
+      // after everything the caller can do without them: the run set, then the identity files
+      expect(outcome.residueFiles).toEqual([...runSet, ...outcome.identityResidue]);
+      expect(touched.filter((path) => runSet.includes(path))).toEqual([]);
       expect(touched).not.toContain(layout.setupManifestPath);
       expect(outcome.residueDirectories.at(-1)).toBe(layout.installRoot);
       expect(inspectPortableManagedInstall(layout).issues).toEqual([]);

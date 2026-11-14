@@ -889,9 +889,24 @@ checks that it got exactly that many rooted paths before it reports ready and en
 otherwise, so the command refuses before its first deletion. A process id that has been reused since
 the command started names a younger process and is not waited for. A file the helper cannot see (a
 path over 260 characters on 5.1) is skipped, but its folder then is not empty, the folder and the
-root cannot be removed, and the run fails closed: the registration stays.
-The order of the list is: payload residue, the identity files (the runtime record, `app/package.json`,
-the launcher, the setup manifest), the folders, then the registration entries. Any entry that cannot
+root cannot be removed, and the run fails closed: the registration stays. Measured on Windows PowerShell
+5.1: the helper leaves such a path after its retries, removes the entries before and after it, and still
+cleans its own folder. The command's closing sentence tells the person that the installation then stays
+registered and that `keiko uninstall`, run again from the downloaded release package, names what is
+left; that second run removes the path through Node, which uses the extended-length form for it (not
+yet confirmed on Windows).
+The order of the files is chosen so that an interrupted removal (a logoff, a restart) leaves a copy whose
+own `keiko uninstall` still runs: every payload file the command does not need to run again goes first;
+then the run set, the Node runtime, the CLI entry and the packages it loads (`app/dist`,
+`app/node_modules`, `runtime/node`); then the identity files (the runtime record, `app/package.json`,
+the launcher, the setup manifest); then the folders and the registration entries. The command touches
+the run set only when nothing before it was held open, and hands it, with the identity files, to the
+helper when it runs from inside the installation. An interruption inside the run set itself leaves a
+copy whose command may no longer run; the uninstall from the downloaded release package, whose runtime
+lies outside the installation, finishes it from the journal and the registration. The helper reads
+its own start inputs defensively: a root that is not an absolute path equal to its own full path, or
+that is a drive root, and a path it cannot normalise, are refusals or failed entries, never a crash
+that skips its cleanup; a ready file that is empty or not yet complete is "not yet", not a refusal. Any entry that cannot
 be removed marks the run as failed, and a failed run leaves every identity file and every
 registration entry: the installation stays registered and resumable. A state directory that still holds
 an entry that is not Keiko's is kept on purpose and is not a failure.

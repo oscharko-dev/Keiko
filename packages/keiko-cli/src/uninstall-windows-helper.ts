@@ -77,11 +77,16 @@ const OIC = "[System.StringComparison]::OrdinalIgnoreCase";
 // manifest, which a later run needs to find the installation), X and S entry, so the installation
 // stays registered and resumable until its last file is gone.
 const ENTRY_STEPS = [
+  "if ($line.Length -eq 0) { continue }",
   "if ($line.Length -lt 3 -or $line[1] -ne [char]9) { $failed = $true; continue }",
   "$kind = $line.Substring(0, 1)",
   "$path = $line.Substring(2)",
   "if ($kind -eq 'I' -and $failed) { continue }",
-  "if (-not [System.IO.Path]::IsPathRooted($path) -or [System.IO.Path]::GetFullPath($path) -ne $path) { $failed = $true; continue }",
+  // GetFullPath throws for a path over 260 characters on Windows PowerShell 5.1: that is a failed
+  // entry, never an end of the script that skips its cleanup.
+  "$full = $null",
+  "try { $full = [System.IO.Path]::GetFullPath($path) } catch { $full = $null }",
+  "if (-not [System.IO.Path]::IsPathRooted($path) -or $full -ne $path) { $failed = $true; continue }",
   `if ($kind -eq 'X' -or $kind -eq 'S') { $known = $false; foreach ($e in $externals) { if ($path.Equals($e, ${OIC})) { $known = $true } }; if (-not $known) { $failed = $true; continue }; if ($failed) { continue } } else { if (-not (($path + $sep).Equals($prefix, ${OIC}) -or $path.StartsWith($prefix, ${OIC}))) { $failed = $true; continue } }`,
   "$isFile = [System.IO.File]::Exists($path)",
   "$isDir = [System.IO.Directory]::Exists($path)",
@@ -95,21 +100,22 @@ const HELPER_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "$sep = [string][System.IO.Path]::DirectorySeparatorChar",
   "$dir = $env:KEIKO_UNINSTALL_DIR",
-  "$root = [System.IO.Path]::GetFullPath($env:KEIKO_UNINSTALL_ROOT)",
-  "$prefix = if ($root.EndsWith($sep)) { $root } else { $root + $sep }",
-  // The registration paths arrive as one string split at `|`, a character no Windows path holds: the
-  // result is a flat string array on every PowerShell version (ConvertFrom-Json does not enumerate a
-  // JSON array the same way in Windows PowerShell 5.1 and 7). Before the helper reports ready it
-  // checks that it got exactly the expected number of rooted paths; otherwise it ends without
-  // "ready", and the caller refuses before the first deletion.
-  "$externals = $env:KEIKO_UNINSTALL_EXTERNALS.Split([char]124)",
   `$ready = [System.IO.Path]::Combine($dir, '${HELPER_READY_FILE}')`,
   `$list = [System.IO.Path]::Combine($dir, '${HELPER_LIST_FILE}')`,
   `$refused = [System.IO.Path]::Combine($dir, '${HELPER_REFUSED_FILE}')`,
-  "$sound = [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT -ge 1 -and $externals.Length -eq [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT",
-  "foreach ($x in $externals) { if ($x.Length -lt 3 -or -not [System.IO.Path]::IsPathRooted($x)) { $sound = $false } }",
+  // The deletion boundary and the registration paths are checked before the helper reports ready; any
+  // doubt ends it with a `refused` file and no deletion. The root must be an absolute path that
+  // equals its own full path (a relative one would resolve against the helper's working directory)
+  // and longer than a drive root. The registration paths arrive as one string split at `|`, a
+  // character no Windows path holds: a flat string array on every PowerShell version
+  // (ConvertFrom-Json does not enumerate a JSON array the same way in Windows PowerShell 5.1 and 7),
+  // and exactly the expected number of rooted paths.
+  "$sound = $true",
+  "$externals = @()",
+  "try { $root = [System.IO.Path]::GetFullPath($env:KEIKO_UNINSTALL_ROOT); if (-not [System.IO.Path]::IsPathRooted($env:KEIKO_UNINSTALL_ROOT) -or $root -ne $env:KEIKO_UNINSTALL_ROOT -or $root.Length -le 3) { $sound = $false }; $externals = $env:KEIKO_UNINSTALL_EXTERNALS.Split([char]124); $expected = [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT; if ($expected -lt 1 -or $externals.Length -ne $expected) { $sound = $false }; foreach ($x in $externals) { if ($x.Length -lt 3 -or -not [System.IO.Path]::IsPathRooted($x)) { $sound = $false } } } catch { $sound = $false }",
   "if (-not $sound) { [System.IO.File]::WriteAllText($refused, 'refused'); exit 2 }",
-  "[System.IO.File]::WriteAllText($ready, [string][System.Diagnostics.Process]::GetCurrentProcess().Id)",
+  "$prefix = if ($root.EndsWith($sep)) { $root } else { $root + $sep }",
+  "[System.IO.File]::WriteAllText($ready, [string][System.Diagnostics.Process]::GetCurrentProcess().Id + [char]10)",
   // A process id that has been reused since this command started names a younger process: it is not
   // the one to wait for, and the committed-list wait ends with the list or with its bound.
   "try { $owner = [System.Diagnostics.Process]::GetProcessById([int]$env:KEIKO_UNINSTALL_PID); if ($owner.StartTime -gt [System.Diagnostics.Process]::GetCurrentProcess().StartTime) { $owner = $null } } catch { $owner = $null }",
@@ -119,7 +125,7 @@ const HELPER_SCRIPT = [
   `while (-not [System.IO.File]::Exists($list)) { if ($owner -eq $null -or $owner.HasExited) { if ([System.IO.File]::Exists($list)) { break }; Remove-KeikoOwn; exit 0 }; if ([DateTime]::UtcNow -gt $until) { Remove-KeikoOwn; exit 3 }; Start-Sleep -Milliseconds 200 }`,
   `if ($owner -ne $null) { if (-not $owner.WaitForExit(${String(HELPER_WAIT_FOR_OWNER_MS)})) { Remove-KeikoOwn; exit 3 } }`,
   "$failed = $false",
-  `foreach ($line in [System.IO.File]::ReadAllLines($list)) { ${ENTRY_STEPS.join("; ")} }`,
+  `try { foreach ($line in [System.IO.File]::ReadAllLines($list)) { ${ENTRY_STEPS.join("; ")} } } catch { $failed = $true }`,
   "Remove-KeikoOwn",
   "if ($failed) { exit 1 } else { exit 0 }",
 ].join("; ");
@@ -208,6 +214,7 @@ function defaultSleep(ms: number): Promise<void> {
 }
 
 function serializeEntries(entries: readonly HelperEntry[]): string {
+  if (entries.length === 0) return "";
   const lines = entries.map((entry) => {
     if (/[\r\n\t]/u.test(entry.path)) throw new Error("uninstall helper entry is not a plain path");
     return `${ENTRY_CODE[entry.kind]}\t${entry.path}`;
@@ -238,15 +245,35 @@ function createHandle(
 }
 
 // What the real helper reported: its process id (the ready file holds nothing else), a refusal of its
-// own start check, or nothing yet.
+// own start check, or nothing yet. A ready file that is empty, not yet complete (the id ends with a
+// line break, so a partial write is recognisable) or being written is "not yet", never a refusal: only
+// the helper's own `refused` file and a failing first stage refuse at once.
 type HelperReport = number | "refused" | undefined;
 
-function readReport(directory: string): HelperReport {
+interface ReportState {
+  /** The last error met while reading the ready file; evidence if the wait ends without a report. */
+  lastReadError?: unknown;
+}
+
+function recordReadFailure(state: ReportState, error: unknown): HelperReport {
+  state.lastReadError = error;
+  return undefined;
+}
+
+function readReport(directory: string, state: ReportState): HelperReport {
   if (existsSync(join(directory, HELPER_REFUSED_FILE))) return "refused";
   const readyPath = join(directory, HELPER_READY_FILE);
   if (!existsSync(readyPath)) return undefined;
-  const pid = Number.parseInt(readFileSync(readyPath, "utf8").trim(), 10);
-  return Number.isInteger(pid) && pid > 0 ? pid : "refused";
+  let text: string;
+  try {
+    text = readFileSync(readyPath, "utf8");
+  } catch (error) {
+    // The helper may hold the file while it writes (EBUSY, EPERM on Windows): not yet.
+    return recordReadFailure(state, error);
+  }
+  if (!text.endsWith("\n")) return undefined;
+  const pid = Number.parseInt(text.trim(), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
 // Polls for the real helper's report, one bounded sleep at a time. Chained, not looped, so no step
@@ -255,6 +282,7 @@ function waitForReport(
   directory: string,
   failed: () => boolean,
   deps: UninstallHelperDeps,
+  state: ReportState,
 ): Promise<HelperReport> {
   const sleep = deps.sleep ?? defaultSleep;
   const pollMs = deps.pollMs ?? HELPER_POLL_MS;
@@ -264,7 +292,7 @@ function waitForReport(
   );
   let noticed = false;
   const check = (attempt: number): Promise<HelperReport> => {
-    const report = readReport(directory);
+    const report = readReport(directory, state);
     if (report !== undefined) return Promise.resolve(report);
     if (!noticed && attempt * pollMs >= HELPER_NOTICE_AFTER_MS) {
       noticed = true;
@@ -364,9 +392,14 @@ export async function startUninstallHelper(
     return recordRefusal("spawn-failed", directory, error);
   }
   const failed = (): boolean => state.spawnFailed || firstStageFailed(state.child);
-  const report = await waitForReport(directory, failed, deps);
+  const reportState: ReportState = {};
+  const report = await waitForReport(directory, failed, deps, reportState);
   if (typeof report !== "number") {
-    return recordRefusal(failed() ? "spawn-failed" : "not-ready", directory);
+    return recordRefusal(
+      failed() ? "spawn-failed" : "not-ready",
+      directory,
+      reportState.lastReadError,
+    );
   }
   // The real helper's own process id: it is what must be alive when the list is committed. The first
   // stage has ended long before, and its end says nothing about the helper.

@@ -1183,7 +1183,9 @@ function reportManagedResult(
     emitUninstallHandoff(activity, "residue-committed", { ...result, resumeState });
     io.out(
       `keiko uninstall: removed ${String(result.removedCount)} files. The last ${String(result.residueFileCount + result.residueDirectoryCount)} ` +
-        "entries of this copy are removed when this command ends.\n",
+        "entries of this copy are removed when this command ends. If the helper cannot remove them all, " +
+        "the installation stays registered: run keiko uninstall again from the downloaded Keiko release package, " +
+        "and it names what is left.\n",
     );
     return { held: new Set(result.deferredStatePaths), incomplete: false };
   }

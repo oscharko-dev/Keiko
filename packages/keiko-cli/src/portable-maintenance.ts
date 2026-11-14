@@ -948,6 +948,26 @@ function identityLast(
   };
 }
 
+// What `keiko uninstall` needs to run once more from this copy: the Node runtime, the CLI entry and the
+// packages it loads. These go after every other payload file, and before only the identity files, so
+// that a removal that is interrupted (a logoff, a restart) leaves a copy whose own command still runs
+// and finishes the removal, as long as only the other files were gone.
+function splitRunSet(
+  layout: PortableLayout,
+  payload: readonly string[],
+): { readonly rest: readonly string[]; readonly runSet: readonly string[] } {
+  const prefixes = [
+    join(layout.resourceRoot, "app", "dist"),
+    join(layout.resourceRoot, "app", "node_modules"),
+    join(layout.resourceRoot, "runtime", "node"),
+  ].map((path) => `${path}${sep}`);
+  const inRunSet = (file: string): boolean => prefixes.some((prefix) => file.startsWith(prefix));
+  return {
+    rest: payload.filter((file) => !inRunSet(file)),
+    runSet: payload.filter(inRunSet),
+  };
+}
+
 function removeEntryTolerant(path: string, remove: (path: string) => void): "removed" | "locked" {
   try {
     remove(path);
@@ -958,6 +978,60 @@ function removeEntryTolerant(path: string, remove: (path: string) => void): "rem
     if (code !== undefined && LOCKED_ENTRY_CODES.has(code)) return "locked";
     throw error;
   }
+}
+
+interface FileRemovalState {
+  removedCount: number;
+  readonly residueFiles: string[];
+  readonly identityResidue: string[];
+}
+
+// Removes `paths` in order; what cannot be removed joins the residue.
+function removeFilesTolerant(
+  paths: readonly string[],
+  state: FileRemovalState,
+  io: CliIo,
+  unlink: (path: string) => void,
+): void {
+  for (const file of paths) {
+    if (removeEntryTolerant(file, unlink) === "removed") {
+      state.removedCount += 1;
+      io.out(`removed: ${file}\n`);
+    } else state.residueFiles.push(file);
+  }
+}
+
+function removeFilesInOrder(
+  layout: PortableLayout,
+  files: readonly string[],
+  io: CliIo,
+  options: ManagedRemovalOptions,
+): FileRemovalState {
+  const unlink = options.unlink ?? unlinkSync;
+  const { payload, identity } = identityLast(layout, files);
+  const { rest, runSet } = splitRunSet(layout, payload);
+  const state: FileRemovalState = { removedCount: 0, residueFiles: [], identityResidue: [] };
+  removeFilesTolerant(rest, state, io, unlink);
+  // The run set and then the identity files are touched only when nothing before them is left: a
+  // second run needs them to find the installation, and the run set to run at all. A caller that
+  // hands the rest to a helper takes both over, in this order.
+  const keepIdentity = (): void => {
+    state.residueFiles.push(...identity);
+    state.identityResidue.push(...identity);
+  };
+  if (options.deferIdentity || state.residueFiles.length > 0) {
+    state.residueFiles.push(...runSet);
+    keepIdentity();
+    return state;
+  }
+  removeFilesTolerant(runSet, state, io, unlink);
+  if (state.residueFiles.length > 0) {
+    keepIdentity();
+    return state;
+  }
+  removeFilesTolerant(identity, state, io, unlink);
+  state.identityResidue.push(...state.residueFiles);
+  return state;
 }
 
 /**
@@ -976,31 +1050,13 @@ export function removePortableManagedInstallTolerant(
   }
   const scan = inspectPortableManagedInstall(layout);
   if (scan.issues.length > 0) throw new Error(scan.issues[0]);
-  const unlink = options.unlink ?? unlinkSync;
   const rmdir = options.rmdir ?? rmdirSync;
-  const { payload, identity } = identityLast(layout, scan.files);
-  const residueFiles: string[] = [];
-  let removedCount = 0;
-  const removeAll = (paths: readonly string[]): void => {
-    for (const file of paths) {
-      if (removeEntryTolerant(file, unlink) === "removed") {
-        removedCount += 1;
-        io.out(`removed: ${file}\n`);
-      } else residueFiles.push(file);
-    }
-  };
-  removeAll(payload);
-  // The identity files are touched only when nothing else is left: a second run needs them to find
-  // the installation. A caller that hands the rest to a helper takes them over as well.
-  const identityResidue: string[] = [];
-  if (options.deferIdentity || residueFiles.length > 0) {
-    residueFiles.push(...identity);
-    identityResidue.push(...identity);
-  } else {
-    const before = residueFiles.length;
-    removeAll(identity);
-    identityResidue.push(...residueFiles.slice(before));
-  }
+  const { removedCount, residueFiles, identityResidue } = removeFilesInOrder(
+    layout,
+    scan.files,
+    io,
+    options,
+  );
   const residueDirectories: string[] = [];
   for (const directory of [...scan.directories].reverse()) {
     const holdsResidue = [...residueFiles, ...residueDirectories].some((entry) =>

@@ -95,9 +95,7 @@ describe("the helper's command", () => {
 
   it("acts in this order: ready, the committed list, the end of this process, then deleting", () => {
     const at = (text: string): number => UNINSTALL_HELPER_SCRIPT.indexOf(text);
-    const ready = at(
-      "[System.IO.File]::WriteAllText($ready, [string][System.Diagnostics.Process]::GetCurrentProcess().Id)",
-    );
+    const ready = at("[System.IO.File]::WriteAllText($ready,");
     const list = at("while (-not [System.IO.File]::Exists($list))");
     const owner = at("$owner.WaitForExit(");
     const deleting = at("foreach ($line in [System.IO.File]::ReadAllLines($list))");
@@ -135,7 +133,7 @@ describe("the helper's command", () => {
     expect(UNINSTALL_HELPER_SCRIPT).toContain(
       "if (-not (($path + $sep).Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase))) { $failed = $true; continue }",
     );
-    expect(UNINSTALL_HELPER_SCRIPT).toContain("[System.IO.Path]::GetFullPath($path) -ne $path");
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("$full -ne $path");
     // the root is never trimmed: a drive root keeps its separator
     expect(UNINSTALL_HELPER_SCRIPT).not.toContain("TrimEnd");
     expect(UNINSTALL_HELPER_SCRIPT).toContain(
@@ -162,8 +160,36 @@ describe("the helper's command", () => {
       "[System.Diagnostics.Process]::GetCurrentProcess().Id",
     );
     expect(UNINSTALL_HELPER_SCRIPT).toContain(
-      "$externals.Length -eq [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT",
+      "if ($expected -lt 1 -or $externals.Length -ne $expected) { $sound = $false }",
     );
+  });
+
+  it("checks the deletion boundary before it reports ready: absolute, its own full path, not a drive root", () => {
+    const check = UNINSTALL_HELPER_SCRIPT.indexOf(
+      "$root = [System.IO.Path]::GetFullPath($env:KEIKO_UNINSTALL_ROOT)",
+    );
+    const ready = UNINSTALL_HELPER_SCRIPT.indexOf("WriteAllText($ready,");
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(ready);
+    for (const part of [
+      "-not [System.IO.Path]::IsPathRooted($env:KEIKO_UNINSTALL_ROOT)",
+      "$root -ne $env:KEIKO_UNINSTALL_ROOT",
+      "$root.Length -le 3",
+    ]) {
+      expect(UNINSTALL_HELPER_SCRIPT).toContain(part);
+    }
+    // a failure of the check itself is a refusal, not a crash
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("} catch { $sound = $false }");
+  });
+
+  it("treats a path it cannot normalise as a failed entry and still cleans up", () => {
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "try { $full = [System.IO.Path]::GetFullPath($path) } catch { $full = $null }",
+    );
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("$full -ne $path");
+    // the whole deleting loop is guarded, and the cleanup after it always runs
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("} } catch { $failed = $true }; Remove-KeikoOwn;");
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("if ($line.Length -eq 0) { continue }");
   });
 
   it("does not wait for a process id that names a younger process", () => {
@@ -224,7 +250,7 @@ describe("startUninstallHelper", () => {
   it("hands the helper only its own inputs and the system variables", async () => {
     const parent = tempParent();
     const { deps: d, started } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "4711");
+      writeFileSync(join(dir, "ready"), "4711\n");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     expect(result.kind).toBe("ready");
@@ -254,7 +280,7 @@ describe("startUninstallHelper", () => {
   it("commits the list atomically, one kind-tagged path per line", async () => {
     const parent = tempParent();
     const { deps: d } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "4711");
+      writeFileSync(join(dir, "ready"), "4711\n");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
@@ -278,10 +304,22 @@ describe("startUninstallHelper", () => {
     );
   });
 
+  it("commits an empty list as an empty file: nothing to do, not a failure", async () => {
+    const parent = tempParent();
+    const { deps: d } = deps(parent, (_o, dir) => {
+      writeFileSync(join(dir, "ready"), "4711\n");
+    });
+    const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
+    if (result.kind !== "ready") throw new Error("expected a ready helper");
+    expect(result.handle.commit([])).toBe("committed");
+    const directory = join(parent, readdirSync(parent)[0] ?? "");
+    expect(readFileSync(join(directory, "residue.txt"), "utf8")).toBe("");
+  });
+
   it("refuses a path that is not a plain path", async () => {
     const parent = tempParent();
     const { deps: d } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "4711");
+      writeFileSync(join(dir, "ready"), "4711\n");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
@@ -356,7 +394,7 @@ describe("startUninstallHelper", () => {
   it("names the exact external paths to the helper and starts it in the system directory", async () => {
     const parent = tempParent();
     const { deps: base, started } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "4711");
+      writeFileSync(join(dir, "ready"), "4711\n");
     });
     const result = await startUninstallHelper(ROOT, env, base, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
@@ -371,7 +409,7 @@ describe("startUninstallHelper", () => {
   it("refuses to commit a registration entry that was not named at start", async () => {
     const parent = tempParent();
     const { deps: d } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "4711");
+      writeFileSync(join(dir, "ready"), "4711\n");
     });
     const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
@@ -394,7 +432,7 @@ describe("startUninstallHelper", () => {
     const probed: number[] = [];
     let alive = true;
     const { deps: base } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "4711");
+      writeFileSync(join(dir, "ready"), "4711\n");
     });
     const result = await startUninstallHelper(
       ROOT,
@@ -444,23 +482,85 @@ describe("startUninstallHelper", () => {
     expect(readdirSync(parent)).toEqual([]);
   });
 
-  it("refuses at once when the helper's own start check refuses, or reports no process id", async () => {
-    for (const report of ["refused", "not a number"]) {
+  it("refuses at once when the helper's own start check refuses", async () => {
+    const parent = tempParent();
+    const { deps: base } = deps(parent, (_o, dir) => {
+      writeFileSync(join(dir, "refused"), "refused");
+    });
+    const started = Date.now();
+    const result = await startUninstallHelper(
+      ROOT,
+      env,
+      { ...base, readyTimeoutMs: 60_000 },
+      EXTERNALS,
+    );
+    expect(result).toEqual({ kind: "refused", reason: "not-ready" });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(readdirSync(parent)).toEqual([]);
+  });
+
+  // The ready file exists from the moment the helper creates it, and its content comes a moment later:
+  // a read in between is "not yet", never a refusal of a healthy helper.
+  it.each(["", "47", "not a number\n", "-3\n", "0\n"])(
+    "keeps polling while the ready file holds %j, and takes the id once it is complete",
+    async (early) => {
       const parent = tempParent();
+      let polls = 0;
       const { deps: base } = deps(parent, (_o, dir) => {
-        writeFileSync(join(dir, report === "refused" ? "refused" : "ready"), report);
+        writeFileSync(join(dir, "ready"), early);
       });
-      const started = Date.now();
       const result = await startUninstallHelper(
         ROOT,
         env,
-        { ...base, readyTimeoutMs: 60_000 },
+        {
+          ...base,
+          readyTimeoutMs: 100,
+          pollMs: 1,
+          sleep: () => {
+            polls += 1;
+            if (polls === 3) {
+              writeFileSync(join(parent, readdirSync(parent)[0] ?? "", "ready"), "4711\n");
+            }
+            return Promise.resolve();
+          },
+        },
         EXTERNALS,
       );
-      expect(result).toEqual({ kind: "refused", reason: "not-ready" });
-      expect(Date.now() - started).toBeLessThan(5000);
-      expect(readdirSync(parent)).toEqual([]);
-    }
+      expect(result.kind).toBe("ready");
+      expect(polls).toBeGreaterThanOrEqual(3);
+    },
+  );
+
+  it("refuses only at the bound when the ready file never gets a process id", async () => {
+    const parent = tempParent();
+    const { deps: base } = deps(parent, (_o, dir) => {
+      writeFileSync(join(dir, "ready"), "");
+    });
+    const result = await startUninstallHelper(
+      ROOT,
+      env,
+      { ...base, readyTimeoutMs: 20 },
+      EXTERNALS,
+    );
+    expect(result).toEqual({ kind: "refused", reason: "not-ready" });
+    expect(readdirSync(parent)).toEqual([]);
+  });
+
+  it("treats a ready file it cannot read as not yet, and names the error if the wait ends", async () => {
+    const parent = tempParent();
+    // a folder in the file's place: reading it fails, as it does while the helper holds the file
+    const { deps: base } = deps(parent, (_o, dir) => {
+      mkdirSync(join(dir, "ready"));
+    });
+    const result = await startUninstallHelper(
+      ROOT,
+      env,
+      { ...base, readyTimeoutMs: 20 },
+      EXTERNALS,
+    );
+    expect(result).toMatchObject({ kind: "refused", reason: "not-ready" });
+    expect(result.kind === "refused" ? result.failureKind : undefined).toBeDefined();
+    expect(readdirSync(parent)).toEqual([]);
   });
 
   it("waits up to two minutes for the helper to report, before anything is deleted", () => {
@@ -494,7 +594,7 @@ describe("startUninstallHelper", () => {
         sleep: () => {
           polls += 1;
           if (polls === 12) {
-            writeFileSync(join(parent, readdirSync(parent)[0] ?? "", "ready"), "4711");
+            writeFileSync(join(parent, readdirSync(parent)[0] ?? "", "ready"), "4711\n");
           }
           return Promise.resolve();
         },
@@ -512,7 +612,7 @@ describe("startUninstallHelper", () => {
     const parent = tempParent();
     let notices = 0;
     const { deps: base } = deps(parent, (_o, dir) => {
-      writeFileSync(join(dir, "ready"), "4711");
+      writeFileSync(join(dir, "ready"), "4711\n");
     });
     await startUninstallHelper(
       ROOT,
