@@ -126,9 +126,10 @@ language, with the setup wording and a sentence that the box may be closed, only
 still running after about two seconds; the box lives on its own thread, never keeps the launcher
 alive, and is closed when the `portable launch` child has ended. A named mutex per installation root
 (`Local\KeikoPortableLauncher-<hash of the folded root>`) lets a second double-click bring the first
-box to the front and exit 0 without starting a second setup. Known limit, not built: when that box is
-not showing (not yet shown or closed by the person), the second double-click exits 0 and shows nothing,
-because no window can be brought forward. A start from a terminal shows the CLI's output and neither
+box to the front and exit 0 without starting a second setup. When no such box is showing (not yet
+shown, closed by the person, or a first launcher that hangs), the second start shows its own short
+"Keiko is already starting" message in the same two languages and exits 0, so a hung first launcher
+cannot make every later double-click silent; it still starts nothing. A start from a terminal shows the CLI's output and neither
 the box nor the guard. The PowerShell notice the CLI showed for the same purpose is removed: one
 mechanism, and the failure alert is unchanged. The native box cannot write the Activity Log; its
 proof is a measurement on Windows, and the wording, delay, close and single-instance promises are
@@ -915,9 +916,22 @@ the launcher, the setup manifest); then the folders and the registration entries
 the run set only when nothing before it was held open, and hands it, with the identity files, to the
 helper when it runs from inside the installation. An interruption inside the run set itself leaves a
 copy whose command may no longer run; the uninstall from the downloaded release package, whose runtime
-lies outside the installation, finishes it from the journal and the registration. The helper reads
+lies outside the installation, finishes it from the journal and the registration. The run set is
+named, not inferred: the command does not load `runtime/native`, `runtime/sidecars`,
+`runtime/licenses`, the package's notices, `release-impact.catalog.json` or `scripts/`, and a test
+classifies every file of the real package and runtime payload as run set, identity or not needed, so a
+new top-level entry is classified deliberately; that the closure is complete is measured on Windows.
+The helper never follows a link at any component: before it deletes a file or folder of the
+installation it checks every folder from the entry's parent up to the root for a reparse point and counts
+the entry as not removed when one is a link (confirmed on the Windows guest: without that check a file
+listed through a junction in the middle of the path was deleted; the scan refuses links, so such an
+entry needs one put in place after it). The exact registration paths named at start lie outside the
+installation and are not walked.
+An install root is a directory below a drive or share root, never the root itself: the managed-root
+policy refuses a volume or share root, and the helper refuses it again (also the bare
+`\\server\share` and the `\\?\UNC\` spelling, through `GetPathRoot`). The helper reads
 its own start inputs defensively: a root that is not an absolute path equal to its own full path, or
-that is a drive root, and a path it cannot normalise, are refusals or failed entries, never a crash
+that is a drive or share root, and a path it cannot normalise, are refusals or failed entries, never a crash
 that skips its cleanup; a ready file that is empty or not yet complete is "not yet", not a refusal. Any entry that cannot
 be removed marks the run as failed, and a failed run leaves every identity file and every
 registration entry: the installation stays registered and resumable. A state directory that still holds

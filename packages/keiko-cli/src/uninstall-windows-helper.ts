@@ -92,6 +92,12 @@ const ENTRY_STEPS = [
   "$isDir = [System.IO.Directory]::Exists($path)",
   "if (-not $isFile -and -not $isDir) { continue }",
   "if (([System.IO.File]::GetAttributes($path) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { $failed = $true; continue }",
+  // The helper never follows a link, at any component: a junction or symbolic link in the middle of
+  // an installation path (put there after the scan, which refuses links) would carry a delete out of
+  // the installation. Every folder from the entry's parent up to and including the root is checked;
+  // an entry below a link is a failed entry. The exact paths named at start (X, S) are not walked:
+  // they lie outside the installation, where a redirected folder is legitimate.
+  "if ($kind -ne 'X' -and $kind -ne 'S') { if (Test-KeikoLinked $path) { $failed = $true; continue } }",
   "if ($kind -eq 'F' -or $kind -eq 'I' -or $kind -eq 'X') { if (-not $isFile) { $failed = $true; continue }; $ok = Invoke-Keiko { [System.IO.File]::Delete($path) } 20 } elseif ($kind -eq 'D' -or $kind -eq 'S') { if (-not $isDir) { $failed = $true; continue }; $ok = Invoke-Keiko { [System.IO.Directory]::Delete($path, $false) } 6 } else { $failed = $true; continue }",
   "if (-not $ok -and $kind -ne 'S') { $failed = $true }",
 ];
@@ -106,13 +112,16 @@ const HELPER_SCRIPT = [
   // The deletion boundary and the registration paths are checked before the helper reports ready; any
   // doubt ends it with a `refused` file and no deletion. The root must be an absolute path that
   // equals its own full path (a relative one would resolve against the helper's working directory)
-  // and longer than a drive root. The registration paths arrive as one string split at `|`, a
+  // and a directory below its volume root: neither a drive root (`C:\`) nor a bare share
+  // (`\\server\share`, which GetFullPath returns without a trailing separator and which is longer
+  // than three characters), and `GetPathRoot` also reads the `\\?\UNC\server\share` spelling that
+  // Node's path parser does not. The registration paths arrive as one string split at `|`, a
   // character no Windows path holds: a flat string array on every PowerShell version
   // (ConvertFrom-Json does not enumerate a JSON array the same way in Windows PowerShell 5.1 and 7),
   // and exactly the expected number of rooted paths.
   "$sound = $true",
   "$externals = @()",
-  "try { $root = [System.IO.Path]::GetFullPath($env:KEIKO_UNINSTALL_ROOT); if (-not [System.IO.Path]::IsPathRooted($env:KEIKO_UNINSTALL_ROOT) -or $root -ne $env:KEIKO_UNINSTALL_ROOT -or $root.Length -le 3) { $sound = $false }; $externals = $env:KEIKO_UNINSTALL_EXTERNALS.Split([char]124); $expected = [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT; if ($expected -lt 1 -or $externals.Length -ne $expected) { $sound = $false }; foreach ($x in $externals) { if ($x.Length -lt 3 -or -not [System.IO.Path]::IsPathRooted($x)) { $sound = $false } } } catch { $sound = $false }",
+  "try { $root = [System.IO.Path]::GetFullPath($env:KEIKO_UNINSTALL_ROOT); if (-not [System.IO.Path]::IsPathRooted($env:KEIKO_UNINSTALL_ROOT) -or $root -ne $env:KEIKO_UNINSTALL_ROOT -or $root.Length -le 3 -or $root -eq [System.IO.Path]::GetPathRoot($root)) { $sound = $false }; $externals = $env:KEIKO_UNINSTALL_EXTERNALS.Split([char]124); $expected = [int]$env:KEIKO_UNINSTALL_EXTERNALS_COUNT; if ($expected -lt 1 -or $externals.Length -ne $expected) { $sound = $false }; foreach ($x in $externals) { if ($x.Length -lt 3 -or -not [System.IO.Path]::IsPathRooted($x)) { $sound = $false } } } catch { $sound = $false }",
   "if (-not $sound) { [System.IO.File]::WriteAllText($refused, 'refused'); exit 2 }",
   "$prefix = if ($root.EndsWith($sep)) { $root } else { $root + $sep }",
   "[System.IO.File]::WriteAllText($ready, [string][System.Diagnostics.Process]::GetCurrentProcess().Id + [char]10)",
@@ -120,6 +129,7 @@ const HELPER_SCRIPT = [
   // the one to wait for, and the committed-list wait ends with the list or with its bound.
   "try { $owner = [System.Diagnostics.Process]::GetProcessById([int]$env:KEIKO_UNINSTALL_PID); if ($owner.StartTime -gt [System.Diagnostics.Process]::GetCurrentProcess().StartTime) { $owner = $null } } catch { $owner = $null }",
   "function Invoke-Keiko([scriptblock]$action, [int]$attempts) { for ($i = 0; $i -lt $attempts; $i++) { try { & $action | Out-Null; return $true } catch { Start-Sleep -Milliseconds 500 } }; return $false }",
+  "function Test-KeikoLinked([string]$leaf) { try { $p = [System.IO.Path]::GetDirectoryName($leaf); while ($p -ne $null -and $p.Length -ge $root.Length) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $true }; $p = [System.IO.Path]::GetDirectoryName($p) }; return $false } catch { return $true } }",
   "function Remove-KeikoOwn { foreach ($f in @($list, ($list + '.tmp'), $ready)) { [void](Invoke-Keiko { [System.IO.File]::Delete($f) } 3) }; [void](Invoke-Keiko { [System.IO.Directory]::Delete($dir, $false) } 3) }",
   `$until = [DateTime]::UtcNow.AddSeconds(${String(HELPER_WAIT_FOR_LIST_S)})`,
   `while (-not [System.IO.File]::Exists($list)) { if ($owner -eq $null -or $owner.HasExited) { if ([System.IO.File]::Exists($list)) { break }; Remove-KeikoOwn; exit 0 }; if ([DateTime]::UtcNow -gt $until) { Remove-KeikoOwn; exit 3 }; Start-Sleep -Milliseconds 200 }`,

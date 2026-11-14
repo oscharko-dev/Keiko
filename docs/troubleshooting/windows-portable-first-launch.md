@@ -33,8 +33,12 @@ before Node loads, so it appears even while the virus scanner still reads the in
 files. The setup copies and attests the whole installation, so minutes can pass before the browser
 opens. Closing the box does not stop Keiko; it closes by itself when the start has ended, and a closed
 box does not return. A second double-click on the same launcher while the first one is still starting
-brings that box to the front and starts nothing; if the box is not showing (not yet shown, or already
-closed), the second double-click does nothing visible either. A start from a terminal shows the CLI's
+brings that box to the front and starts nothing; if the box is not showing (not yet shown, already
+closed, or the first start hangs), the second double-click shows one short message ("Keiko is already
+starting. Your browser opens when it is ready."; German: "Keiko startet bereits. Dein Browser öffnet
+sich, sobald Keiko bereit ist.") and also starts nothing. If every double-click only answers that
+message and no browser opens, the first start is stuck: end the `Keiko.exe` and `node.exe` processes
+in Task Manager and start it again. A start from a terminal shows the CLI's
 own output instead and no box. A setup that fails afterwards shows one of the dialogs above. This box
 leaves no Activity Log line: the native launcher cannot write the log, and the CLI cannot observe it.
 

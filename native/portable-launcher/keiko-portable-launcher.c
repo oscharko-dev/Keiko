@@ -172,8 +172,10 @@ static void free_launcher_buffers(keiko_launcher_buffers *buffers) {
  * already shows the CLI's output. */
 enum { KEIKO_FEEDBACK_DELAY_MS = 2000, KEIKO_FEEDBACK_JOIN_MS = 3000 };
 
-/* The wording of the CLI's setup notice (PORTABLE_SETUP_NOTICE and PORTABLE_SETUP_NOTICE_DE in
- * portable-launch-notifier.ts; a test keeps them equal) plus one sentence: the message may be closed.
+/* The wording of the first-start message: the former CLI setup notice plus one sentence that the
+ * message may be closed. packages/keiko-cli/src/portable-launcher-feedback.test.ts matches the text
+ * of this source against fixed strings; it proves the wording and the order of the calls, not the
+ * behavior, which is measured on Windows.
  * Wide escapes end their string literal so that no hex digit that follows is read into them. */
 #define KEIKO_FEEDBACK_TEXT_EN \
   L"Keiko is being set up. The first start can take several minutes. " \
@@ -185,15 +187,30 @@ enum { KEIKO_FEEDBACK_DELAY_MS = 2000, KEIKO_FEEDBACK_JOIN_MS = 3000 };
   L"Du kannst diese Meldung schlie\x00df" L"en; Keiko startet weiter und dein Browser " \
   L"\x00f6" L"ffnet sich, sobald Keiko bereit ist."
 
+/* What a second start shows when it finds no first-start message to bring forward: the first
+ * launcher is still starting (or hangs) and this one starts nothing, so it says so rather than
+ * leaving a double-click without any answer. */
+#define KEIKO_ALREADY_STARTING_TEXT_EN \
+  L"Keiko is already starting. Your browser opens when it is ready."
+#define KEIKO_ALREADY_STARTING_TEXT_DE \
+  L"Keiko startet bereits. Dein Browser \x00f6" L"ffnet sich, sobald Keiko bereit ist."
+
 typedef struct {
   HANDLE done; /* manual-reset event: set by the main thread when the child has ended */
   HANDLE thread;
   DWORD thread_id;
 } keiko_feedback;
 
+static int ui_language_is_german(void) {
+  return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN;
+}
+
 static const wchar_t *feedback_text(void) {
-  return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN ? KEIKO_FEEDBACK_TEXT_DE
-                                                                  : KEIKO_FEEDBACK_TEXT_EN;
+  return ui_language_is_german() ? KEIKO_FEEDBACK_TEXT_DE : KEIKO_FEEDBACK_TEXT_EN;
+}
+
+static const wchar_t *already_starting_text(void) {
+  return ui_language_is_german() ? KEIKO_ALREADY_STARTING_TEXT_DE : KEIKO_ALREADY_STARTING_TEXT_EN;
 }
 
 static DWORD WINAPI feedback_thread(LPVOID context) {
@@ -224,8 +241,10 @@ static BOOL CALLBACK close_feedback_window(HWND window, LPARAM unused) {
 static void feedback_stop(keiko_feedback *feedback) {
   if (feedback->done != NULL) (void)SetEvent(feedback->done);
   if (feedback->thread != NULL) {
-    /* A box that is showing is closed. One that is only about to show ends with this process, which
-     * never waits longer than the bounded join below for the thread. */
+    /* A box that is showing is closed. A box whose delay ran out just before this stop is not yet a
+     * window and is not found; it shows late and ends with this process, which waits for the thread
+     * at most the bounded join below (three seconds) and then returns, so the launcher is never kept
+     * alive by it. */
     (void)EnumThreadWindows(feedback->thread_id, close_feedback_window, 0);
     (void)WaitForSingleObject(feedback->thread, KEIKO_FEEDBACK_JOIN_MS);
     (void)CloseHandle(feedback->thread);
@@ -253,18 +272,22 @@ static BOOL CALLBACK find_feedback_window(HWND window, LPARAM parameter) {
   return FALSE;
 }
 
-static void bring_feedback_forward(void) {
+/* Returns 1 when another launcher's message was found and brought to the front, 0 when none is
+ * showing (not yet shown, closed by the person, or the first launcher hangs). */
+static int bring_feedback_forward(void) {
   keiko_window_search search;
   search.self = GetCurrentProcessId();
   search.found = NULL;
   (void)EnumWindows(find_feedback_window, (LPARAM)&search);
-  if (search.found == NULL) return; /* not showing yet, or closed by the person: nothing to show */
+  if (search.found == NULL) return 0;
   if (IsIconic(search.found)) (void)ShowWindow(search.found, SW_RESTORE);
   (void)SetForegroundWindow(search.found);
+  return 1;
 }
 
-/* One launcher per executable path at a time. Returns 0 when another one runs: it was told, and
- * nothing else is started. When the guard cannot be created the start goes on without it. */
+/* One launcher per installation root at a time. Returns 0 when another one runs: its message was
+ * brought forward, or, when none shows, this start says that Keiko is already starting; nothing else
+ * is started either way. When the guard cannot be created the start goes on without it. */
 static int claim_launcher_instance(const wchar_t *root, HANDLE *instance) {
   wchar_t name[64];
   unsigned long long hash = 1469598103934665603ULL;
@@ -278,7 +301,9 @@ static int claim_launcher_instance(const wchar_t *root, HANDLE *instance) {
   *instance = CreateMutexW(NULL, FALSE, name);
   if (*instance == NULL) return 1;
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
-    bring_feedback_forward();
+    if (!bring_feedback_forward()) {
+      (void)MessageBoxW(NULL, already_starting_text(), L"Keiko", MB_OK | MB_ICONINFORMATION);
+    }
     (void)CloseHandle(*instance);
     *instance = NULL;
     return 0;

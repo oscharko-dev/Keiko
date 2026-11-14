@@ -141,6 +141,32 @@ describe("the helper's command", () => {
     );
   });
 
+  // #4358, Windows guest on v4: a file listed with a path THROUGH a junction in the middle of the
+  // path was deleted, although the helper skipped a junction as the entry itself. The helper checks
+  // every folder from the entry's parent up to and including the root, before it deletes anything
+  // (the exact paths named at start are outside the installation and are not walked). The script is
+  // rehearsed on pwsh (scenario S13: a symbolic link in the middle of a listed path), and the Windows
+  // window repeats it with a junction.
+  it("never follows a link at any component of an installation path", () => {
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "function Test-KeikoLinked([string]$leaf) { try { $p = [System.IO.Path]::GetDirectoryName($leaf); while ($p -ne $null -and $p.Length -ge $root.Length) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $true }; $p = [System.IO.Path]::GetDirectoryName($p) }; return $false } catch { return $true } }",
+    );
+    const walk = UNINSTALL_HELPER_SCRIPT.indexOf(
+      "if ($kind -ne 'X' -and $kind -ne 'S') { if (Test-KeikoLinked $path) { $failed = $true; continue } }",
+    );
+    const remove = UNINSTALL_HELPER_SCRIPT.indexOf("[System.IO.File]::Delete($path)");
+    expect(walk).toBeGreaterThan(-1);
+    // before any delete, and after the entry's own reparse-point check
+    expect(walk).toBeLessThan(remove);
+    expect(walk).toBeGreaterThan(
+      UNINSTALL_HELPER_SCRIPT.indexOf(
+        "-band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { $failed = $true; continue }",
+      ),
+    );
+    // a failure of the walk itself counts as a link: fail closed
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("} catch { return $true } }");
+  });
+
   // Windows PowerShell 5.1 does not enumerate a JSON array the way PowerShell 7 does, so the list of
   // registration paths is a delimited string: a flat string array on every version. The helper checks
   // that it got what the caller sent before it reports ready.
@@ -164,7 +190,7 @@ describe("the helper's command", () => {
     );
   });
 
-  it("checks the deletion boundary before it reports ready: absolute, its own full path, not a drive root", () => {
+  it("checks the deletion boundary before it reports ready: absolute, its own full path, not a drive or share root", () => {
     const check = UNINSTALL_HELPER_SCRIPT.indexOf(
       "$root = [System.IO.Path]::GetFullPath($env:KEIKO_UNINSTALL_ROOT)",
     );
@@ -175,6 +201,8 @@ describe("the helper's command", () => {
       "-not [System.IO.Path]::IsPathRooted($env:KEIKO_UNINSTALL_ROOT)",
       "$root -ne $env:KEIKO_UNINSTALL_ROOT",
       "$root.Length -le 3",
+      // #4358 audit: a bare share root passes the length rule, so the root itself is refused too
+      "$root -eq [System.IO.Path]::GetPathRoot($root)",
     ]) {
       expect(UNINSTALL_HELPER_SCRIPT).toContain(part);
     }

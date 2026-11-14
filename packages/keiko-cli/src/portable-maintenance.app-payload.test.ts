@@ -541,3 +541,46 @@ describe("removal that meets a held-open entry", () => {
     });
   });
 });
+
+// #4358 audit: the run set is what `keiko uninstall` loads when it runs once more from the copy
+// (`app/dist`, `app/node_modules`, `runtime/node`, plus `app/package.json`, which is in the identity
+// set and goes last). A hermetic test cannot prove an import closure, so this one makes the
+// classification explicit: every file of the real package and of a real runtime payload is either in
+// the run set, an identity file, or named below as not needed by the uninstall. A new top-level
+// entry of the package fails here until someone classifies it, instead of being removed early (or
+// late) by default. The proof that the closure is complete is the uninstall in a tree reduced to the
+// run set and the identity files, which the Windows window runs for real.
+describe("the run set of the uninstall", () => {
+  // Not loaded by `keiko uninstall`: licenses and notices, the release-impact catalog read by the
+  // release tooling, and the local-state auditor that only `keiko audit` resolves, at its own run.
+  const APP_NOT_NEEDED = new Set([
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "TRADEMARKS.md",
+    "release-impact.catalog.json",
+    "scripts/lib/local-state-audit.mjs",
+  ]);
+
+  it("classifies every file of the real package as run set, identity or not needed", () => {
+    const unclassified = realRootPackListing().filter(
+      (path) =>
+        !path.startsWith("dist/") &&
+        !path.startsWith("node_modules/") &&
+        path !== "package.json" &&
+        !APP_NOT_NEEDED.has(path),
+    );
+    expect(unclassified).toEqual([]);
+  });
+
+  it("keeps the files of the real runtime payload outside runtime/node out of the run set", () => {
+    const files = writePortableRuntimePayload(newRoot(), "windows-x64");
+    // the helpers, the vector add-on and the search tool (`runtime/native`), their licenses and the
+    // coding sidecar are loaded by the product, not by the uninstall command
+    const outside = files.filter((file) => !file.startsWith("runtime/node/"));
+    expect(outside.length).toBeGreaterThan(0);
+    for (const file of outside) {
+      expect(file).toMatch(/^runtime\/(native|licenses|sidecars)\//u);
+    }
+  });
+});

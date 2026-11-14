@@ -2038,6 +2038,23 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
       (l: string): boolean => l.startsWith("F\t"),
       ["files-remaining"],
     ],
+    // #4358 audit: the run set (the copy's own CLI, its packages and the Node runtime) goes last, so a
+    // helper that dies inside it leaves a copy that is missing some of the files its command needs.
+    // The next run starts from the downloaded release package, not from this copy, and finishes from
+    // the journal and the registration. The copy still attests as installed (its launcher and Node
+    // runtime are there), so the run removes it by the ordinary path and records no resume state;
+    // every row below must also leave nothing behind.
+    [
+      "helper dies inside the run set (the CLI is gone, its packages and the Node runtime are not)",
+      (l: string): boolean => l.startsWith("F\t") && /[\\/]app[\\/]dist[\\/]/u.test(l),
+      [],
+    ],
+    [
+      "helper dies inside the run set (the CLI and its packages are gone, the Node runtime is not)",
+      (l: string): boolean =>
+        l.startsWith("F\t") && /[\\/]app[\\/](?:dist|node_modules)[\\/]/u.test(l),
+      [],
+    ],
     [
       "helper dies right after the setup manifest",
       (l: string): boolean => l.startsWith("F\t") || l.startsWith("I\t"),

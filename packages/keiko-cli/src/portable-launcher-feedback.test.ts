@@ -99,9 +99,40 @@ describe("the Windows launcher's own start feedback", () => {
   it("lets a second start of the same installation bring the first box forward and start nothing", () => {
     expect(launcherSource).toMatch(/Local\\\\KeikoPortableLauncher-%016llx/u);
     expect(launcherSource).toMatch(
-      /GetLastError\(\) == ERROR_ALREADY_EXISTS\) \{\s*bring_feedback_forward\(\);/u,
+      /GetLastError\(\) == ERROR_ALREADY_EXISTS\) \{\s*if \(!bring_feedback_forward\(\)\)/u,
     );
     expect(launcherSource).toMatch(/SetForegroundWindow\(search\.found\)/u);
+    // the claim returns 0 for a second start and run_with_feedback returns before anything starts
+    expect(launcherSource).toMatch(
+      /if \(!has_console && !claim_launcher_instance\(buffers->root, &instance\)\) return 0;/u,
+    );
+  });
+
+  // #4358 audit: with no first message showing (not yet shown, closed, or a first launcher that
+  // hangs) a second double-click would otherwise be silent. It says so, in the same two languages,
+  // before it exits without starting anything.
+  it("tells a second start without a visible first box that Keiko is already starting", () => {
+    expect(decodedFeedbackText("KEIKO_ALREADY_STARTING_TEXT_EN")).toBe(
+      "Keiko is already starting. Your browser opens when it is ready.",
+    );
+    expect(decodedFeedbackText("KEIKO_ALREADY_STARTING_TEXT_DE")).toBe(
+      "Keiko startet bereits. Dein Browser öffnet sich, sobald Keiko bereit ist.",
+    );
+    const claim =
+      /static int claim_launcher_instance[\s\S]*?\n\}\n/u.exec(launcherSource)?.[0] ?? "";
+    const forward = claim.indexOf("if (!bring_feedback_forward())");
+    const message = claim.indexOf("MessageBoxW(NULL, already_starting_text()");
+    const refusal = claim.indexOf("return 0;");
+    expect(forward).toBeGreaterThan(-1);
+    expect(message).toBeGreaterThan(forward);
+    expect(refusal).toBeGreaterThan(message);
+  });
+
+  it("bounds the wait for a box that shows late, and says so", () => {
+    expect(launcherSource).toMatch(
+      /A box whose delay ran out just before this stop[\s\S]*bounded join below \(three seconds\)/u,
+    );
+    expect(launcherSource).toMatch(/KEIKO_FEEDBACK_JOIN_MS = 3000/u);
   });
 });
 

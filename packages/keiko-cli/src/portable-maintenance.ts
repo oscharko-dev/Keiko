@@ -952,6 +952,15 @@ function identityLast(
 // packages it loads. These go after every other payload file, and before only the identity files, so
 // that a removal that is interrupted (a logoff, a restart) leaves a copy whose own command still runs
 // and finishes the removal, as long as only the other files were gone.
+//
+// The set is `app/dist` (the CLI and the workspace packages it imports), `app/node_modules` (their
+// dependencies, native add-ons that sit there included) and `runtime/node` (the Node binary). The
+// version `uninstall` reads from `app/package.json` is an identity file and goes after this set, and
+// the registration, journal and state files it reads go last. It does not load `runtime/native`
+// (helpers, vector add-on, search tool), `runtime/sidecars`, `runtime/licenses`, the package's
+// notices, `release-impact.catalog.json` or `scripts/`: those go earlier. The classification of the
+// real package and runtime payload is pinned in portable-maintenance.app-payload.test.ts; the
+// completeness of the closure itself is measured on Windows.
 function splitRunSet(
   layout: PortableLayout,
   payload: readonly string[],
