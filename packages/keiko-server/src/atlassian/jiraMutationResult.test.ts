@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   type JiraMutationAttempt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
+  boundedGuidance,
   JIRA_EXISTING_GUIDANCE,
   JIRA_LOCAL_REFUSAL_GUIDANCE,
   JIRA_PERMISSION_GUIDANCE,
@@ -1101,6 +1103,23 @@ describe("template notices on a validated attempt", () => {
   it("adds none to an attempt that had none", () => {
     const attempt = validJiraMutationAttempt({ ok: true, receipt }, "jira.edit");
     expect(attempt).not.toHaveProperty("templateNotices");
+  });
+});
+
+// The net under the producer's sentences (#4354): a guidance longer than the result schema allows
+// must be cut, never sent, or the catalog rejects the whole result.
+describe("the guidance bound of a mutation result", () => {
+  it("keeps a guidance that fits, untouched", () => {
+    expect(boundedGuidance("Nothing was changed.")).toBe("Nothing was changed.");
+    expect(boundedGuidance(undefined)).toBeUndefined();
+    const exact = "x".repeat(JIRA_RESULT_GUIDANCE_MAX_CHARS);
+    expect(boundedGuidance(exact)).toBe(exact);
+  });
+
+  it("cuts a longer guidance to the bound and says so", () => {
+    const cut = boundedGuidance("x".repeat(JIRA_RESULT_GUIDANCE_MAX_CHARS + 500));
+    expect(cut).toHaveLength(JIRA_RESULT_GUIDANCE_MAX_CHARS);
+    expect(cut?.endsWith("…")).toBe(true);
   });
 });
 
