@@ -6036,6 +6036,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "event-stream-reconnecting",
           "history-workspace-switched",
           "history-run-held",
+          "recovery-left",
           "repository-seeded",
           "repository-seed-skipped",
           "bridge-registration-refused",

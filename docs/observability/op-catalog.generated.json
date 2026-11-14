@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8f7b72db634a792d6b131eec09f0caf69583a7b068b2fe0f66f783b6caab8e44",
+    "catalogDigest": "0d5915f480cad292b6ee74c11a18f638fd71fe73926a1dcdda5d99d859189187",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6261,6 +6261,7 @@
               "event-stream-reconnecting",
               "history-workspace-switched",
               "history-run-held",
+              "recovery-left",
               "repository-seeded",
               "repository-seed-skipped",
               "bridge-registration-refused",
