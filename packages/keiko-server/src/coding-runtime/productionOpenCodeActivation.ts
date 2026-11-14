@@ -73,7 +73,7 @@ import type {
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import {
-  discoverQualifiedPortableOpenCode,
+  discoverPortableOpenCode,
   readWindowsGatewayServiceStatus,
 } from "./productionPortableCodingRuntime.js";
 import {
@@ -512,8 +512,14 @@ function resolveRuntime(
     arch: input.arch,
     diagnostics: input.diagnostics,
   };
-  const packaged = discoverQualifiedPortableOpenCode(host);
-  if (packaged !== undefined) return { portable: packaged };
+  const packaged = discoverPortableOpenCode(host);
+  if (packaged !== undefined) {
+    // A portable install whose folder the volume check refuses is still a portable install: it
+    // reports that reason instead of falling through to the checkout and npm lanes.
+    return "runtime" in packaged
+      ? { portable: packaged.runtime }
+      : { unavailableReason: packaged.unavailableReason };
+  }
   const activityLog = input.activityLog ?? processServerLogSink();
   // The trusted dev launcher explicitly selected current checkout artifacts. Honor that selection
   // (including its refusal) before an optional npm dependency left from a released installation.

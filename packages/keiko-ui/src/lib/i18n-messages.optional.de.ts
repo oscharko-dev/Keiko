@@ -5162,6 +5162,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Gerade geprüft. Keiko kann die Update-Download-Informationen weiterhin nicht prüfen.",
   "updates.check.portableSetupRequired":
     "Gerade geprüft. Portable Setup ist weiterhin erforderlich, bevor App-interne Updates funktionieren können.",
+  "updates.status.portableVolume.notLocal": "Nicht auf einem lokalen Laufwerk",
+  "updates.status.portableVolume.unverified": "Installationsordner nicht geprüft",
+  "updates.check.portableVolume.notLocal":
+    "Gerade geprüft. Keiko ist nicht auf einem lokalen Laufwerk installiert und kann sich deshalb nicht selbst aktualisieren.",
+  "updates.check.portableVolume.unverified":
+    "Gerade geprüft. Keiko konnte seinen Installationsordner nicht prüfen; versuch es gleich noch einmal.",
+  "updates.portableVolume.notLocal.title": "Keiko ist nicht auf einem lokalen Laufwerk installiert",
+  "updates.portableVolume.notLocal.body":
+    "Keiko liegt in einem Netzwerkordner oder einem umgeleiteten Ordner. App-interne Updates funktionieren nur von der eigenen Festplatte dieses Computers.",
+  "updates.portableVolume.notLocal.action":
+    "Installiere Keiko auf einem lokalen Laufwerk dieses Computers und prüfe dann erneut.",
+  "updates.portableVolume.unverified.title": "Keiko konnte seinen Installationsordner nicht prüfen",
+  "updates.portableVolume.unverified.body":
+    "Windows hat gerade zu langsam geantwortet. App-interne Updates pausieren, bis die Prüfung gelingt.",
+  "updates.portableVolume.unverified.action":
+    "Versuch es gleich noch einmal. Wenn es so bleibt, starte Keiko neu.",
   "updates.check.portableExternallyManaged":
     "Gerade geprüft. Diese Installation wird weiterhin außerhalb von Keiko verwaltet, daher sind App-interne Updates nicht verfügbar.",
   "updates.check.policyDisabled":

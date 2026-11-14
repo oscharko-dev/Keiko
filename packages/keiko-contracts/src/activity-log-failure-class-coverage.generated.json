@@ -52784,6 +52784,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "verdict",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],

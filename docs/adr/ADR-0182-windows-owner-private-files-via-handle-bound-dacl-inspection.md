@@ -167,6 +167,42 @@ The verdict stays fail closed in every case. The two failures are told apart: th
 refusal carries the phase `host-start` and no longer says the volume is not local, and a slow or
 timed-out program is one `security.windows-program.run` line with its duration.
 
+### D7 — The local-volume refusal carries a verdict; a pass is remembered for passive reads only
+
+Amended 2026-11-14 (#4358). The local-volume check refuses in four phases, and its callers used to
+turn every refusal into one answer: the update detection said "portable registration invalid" and
+the portable coding runtime was silently not found. A folder that is not on a local disk and a
+check that could not be made are different facts for a person: the first is final for that folder,
+the second passes a moment later.
+
+- Every refusal carries a closed verdict. `not-local`: the query ran to its answer and denied the
+  folder, or the input can never be accepted. `unverifiable`: nothing was learned, because Windows
+  PowerShell could not be resolved, did not start in time, never ran the query (the process could
+  not be started or was ended), or the query did not finish in time. Both deny. The refusal line
+  `security.windows-local-volume.refused` carries the verdict beside the phase. Refusals are
+  `WindowsLocalVolumeError`, except in the resolve phase: the resolver's own error classes keep
+  their identity, because the launcher matches them, and read as `unverifiable`.
+- The update detection answers with its own closed reason for each verdict
+  (`portable-volume-not-local`, `portable-volume-unverified`); `portable-registration-invalid`
+  keeps its real meaning. An unverifiable answer is never final: the next read asks again.
+- The portable coding runtime discovery reports the same two facts through the Workbench's
+  existing unavailable reason (`install-volume-not-local`, `install-volume-unverified`) instead of
+  finding nothing, and such an install no longer falls through to the checkout and npm lanes.
+- The update window and the Workbench say which of the two it is and what the person can do, in
+  English and German.
+- What is remembered: a PASS, per install root in its exact spelling, for the life of the process,
+  and only through `assertWindowsLocalVolumeForPassiveRead`, which one passive reader uses: the
+  update pre-report (the preflight service and its route), which answers whether an update is
+  available and how it could be installed. Each check is one synchronous Windows PowerShell run,
+  and that report is read repeatedly.
+- What is never remembered: a refusal of either verdict; and nothing is remembered for a caller
+  that ACTS on the verdict. The launcher's root policy at setup and launch, the update session's
+  detector (on start, status and candidate rejection), the start-time detection of the UI command
+  and the discovery that starts the portable coding runtime call `assertWindowsLocalVolume`, which
+  neither reads nor writes that memory and asks Windows every time. The root policy, the session
+  detector and the runtime discovery are each pinned by a test that a remembered pass is not
+  consulted there.
+
 ## Consequences
 
 - MCP, native plugins, remote skills, global configuration and external instruction sources become
