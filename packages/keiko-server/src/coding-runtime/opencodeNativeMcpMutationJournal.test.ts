@@ -837,6 +837,38 @@ it("matches only the current real Human turn and refuses changed arguments or se
   );
 });
 
+// #4359: the card shows the call that was prepared, and only that call may be dispatched. The
+// prepared record is keyed by the digest of the exact arguments, so a call that differs after the
+// ask, in any nested field, finds no approval and never reaches a remote effect.
+it("dispatches exactly the approved arguments of a Jira-shaped write and nothing else", () => {
+  const f = fixture();
+  const approved = {
+    projectId: "10002",
+    issueTypeId: "10002",
+    fields: { summary: "Approved summary", description: "Approved body" },
+  };
+  f.owner.prepare({ ...request, argumentsValue: approved });
+  const changedAfterTheAsk = [
+    { ...approved, fields: { ...approved.fields, summary: "Another summary" } },
+    { ...approved, projectId: "10003" },
+    { ...approved, fields: { ...approved.fields, labels: ["extra"] } },
+    { projectId: approved.projectId, issueTypeId: approved.issueTypeId },
+  ];
+  for (const argumentsValue of changedAfterTheAsk)
+    expect(f.owner.begin({ ...request, argumentsValue, beforeEffect: () => true })).toBeUndefined();
+  expect(f.owner.unsettled(identity.runId)).toBe(false);
+  // The same call, whatever order its keys arrive in, is the approved one.
+  const reordered = {
+    fields: { description: approved.fields.description, summary: approved.fields.summary },
+    issueTypeId: approved.issueTypeId,
+    projectId: approved.projectId,
+  };
+  expect(
+    f.owner.begin({ ...request, argumentsValue: reordered, beforeEffect: () => true })
+      ?.invocationId,
+  ).toBe(nativeMcpInvocationId({ ...request, argumentsValue: approved }));
+});
+
 it("refuses an ambiguous pair of identically prepared writes before either remote effect", () => {
   const f = fixture();
   f.owner.prepare(request);

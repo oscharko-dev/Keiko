@@ -13,6 +13,7 @@ import {
   resolveNamedOperation,
 } from "./jiraCatalogDiscovery.js";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
+import { mcpToolKey } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
 import { jiraChatCatalogRoutes, type JiraChatCatalogConsumer } from "./jiraChatCatalogConsumer.js";
 import { createManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
@@ -272,6 +273,19 @@ describe("local Jira operation discovery", () => {
         tool,
       ]);
     expect([...byKey.values()].filter((names) => names.length > 1)).toEqual([]);
+  });
+
+  // The Code Mode sandbox resolves one key per tool; two tools sharing a key after sanitising would
+  // reach the wrong one, so every key and every `callAs` must be unique over the real registry.
+  it("gives every tool of the Coding catalog a unique sandbox key and callAs", () => {
+    const tools = [
+      ...jiraOperationDefinitions().map((definition) => definition.tool),
+      ...JIRA_CATALOG_DISCOVERY_TOOLS,
+    ];
+    const keys = tools.map((tool) => mcpToolKey(tool));
+    expect(new Set(keys).size).toBe(keys.length);
+    const callAs = keys.map((key) => `tools.jira["${key}"]`);
+    expect(new Set(callAs).size).toBe(callAs.length);
   });
 
   it("resolves every registered tool name, by either spelling, to its own operation only", () => {

@@ -2,7 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
+import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
 
 // Every pinned runtime version's committed protocol-surface capture that exists; the current pin's
 // follows the constant, so no version is restated here.
@@ -68,8 +71,10 @@ function witnessedBaseNames(): ReadonlySet<string> {
 }
 
 describe("event types the OpenCode history reader depends on", () => {
-  it("reads at least one pinned protocol-surface capture", () => {
-    expect(FIXTURES.length).toBeGreaterThan(0);
+  it("compares the current pinned version's protocol-surface capture, which must exist", () => {
+    const current = `opencodeProtocolSurface.opencode-${OPENCODE_PINNED_VERSION}.fixture.json`;
+    expect(existsSync(new URL(current, import.meta.url))).toBe(true);
+    expect(FIXTURES).toContain(current);
   });
 
   it("finds the reader's event types", () => {

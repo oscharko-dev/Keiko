@@ -12291,6 +12291,10 @@ describe("the plain approval of a managed Jira write", () => {
       resources: ["*"],
       jira: { tool: "jira.create" },
     });
+    // What the card shows is the very input the approval is prepared for and dispatched with.
+    expect(review.mock.calls.at(-1)?.[0]).toMatchObject({
+      arguments: request.mcpInput,
+    });
   });
 
   it("leaves a write of any other server, and a run without a review, as asked", () => {

@@ -204,6 +204,14 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
       }),
     ).toEqual(refused);
     expect(decisions("opencode_session_rename", ["two\nlines"])).toEqual(refused);
+    for (const breaking of ["\u0085", "\u2028", "\u2029", "\u009f", "\u007f"])
+      expect(decisions("opencode_session_rename", [`a${breaking}b`]), breaking).toEqual(refused);
+    // A request that names no calling session never matches a missing target.
+    expect(
+      decisions("opencode_session_rename", ["A title"], {
+        sessionID: undefined as unknown as string,
+      }),
+    ).toEqual(refused);
     expect(decisions("opencode_session_rename", ["x".repeat(201)])).toEqual(refused);
     expect(decisions("opencode_session_rename", ["   "])).toEqual(refused);
     expect(decisions("opencode_session_rename", [])).toEqual(refused);

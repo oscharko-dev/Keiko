@@ -31,9 +31,12 @@ const MAX_SESSIONS_PER_RUN = 8;
  * tools count (the runtime's title and summary requests do not); a conversation is its head (the
  * digest of its system prompt and first user message) and its sample is the latest of that head;
  * the fits read is the LARGEST of them, never aged out and never superseded by another head, so
- * parallel conversations of the same agent cannot hide one another; a recorded compaction of the
- * run's own conversation (the primary: the first agent that offered tools) drops that agent's
- * samples, because its context has been rewritten, and nothing else does.
+ * parallel conversations of the same agent cannot hide one another. A recorded compaction names no
+ * session and no agent, so it deletes nothing by itself: it only marks the samples that existed
+ * before it. A marked sample is dropped when the SAME agent (same system-prompt digest) is next
+ * seen under a head not held before, the proof that this agent's conversation was rewritten. A compaction of a
+ * subagent can thus never drop the primary's sample, and a compaction nobody follows up drops
+ * nothing (a describe may stay refused: the safe side).
  */
 export interface CodingRuntimeConversation {
   readonly agentKey: string;
@@ -44,6 +47,8 @@ export interface CodingRuntimeConversation {
 interface SessionSample {
   readonly sample: CodingRuntimeProviderUsageSample;
   readonly agentKey: string;
+  /** A compaction was recorded after this sample: the next new head of its agent retires it. */
+  readonly beforeCompaction: boolean;
   /** The run's request counter when this conversation was last heard from. */
   readonly seq: number;
 }
@@ -212,9 +217,17 @@ function rememberSession(
 ): void {
   record.primaryAgent ??= conversation.agentKey;
   record.requestSeq += 1;
+  // The agent is next seen under a new head after a recorded compaction: its conversation was
+  // rewritten, so its older marked samples no longer describe it.
+  // A head already held is not new: it was there before the compaction.
+  const newHead = !record.sessions.has(conversation.headKey);
+  for (const [head, held] of record.sessions)
+    if (newHead && held.beforeCompaction && held.agentKey === conversation.agentKey)
+      record.sessions.delete(head);
   record.sessions.set(conversation.headKey, {
     sample,
     agentKey: conversation.agentKey,
+    beforeCompaction: false,
     seq: record.requestSeq,
   });
   while (record.sessions.size > MAX_SESSIONS_PER_RUN) {
@@ -267,9 +280,9 @@ function recordCompactionOf(
   if (!rememberSample(record, `compaction:${compactionId}`)) return false;
   record.compactionCount += 1;
   record.lastCompactedAt = updatedAt;
-  // The run's own conversation was rewritten: what was sampled before no longer describes it.
+  // Nothing is deleted: the compaction names no session, so it only marks what existed before it.
   for (const [head, held] of record.sessions)
-    if (held.agentKey === record.primaryAgent) record.sessions.delete(head);
+    record.sessions.set(head, { ...held, beforeCompaction: true });
   if (record.latest?.state === "available") {
     record.latest = {
       ...record.latest,

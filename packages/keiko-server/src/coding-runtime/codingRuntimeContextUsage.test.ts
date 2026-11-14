@@ -111,29 +111,37 @@ describe("coding runtime context usage", () => {
       expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
     });
 
-    it("lets a recorded compaction of the run's own conversation free a describe, and only that", () => {
+    // A compaction carries no session and no agent, so it only marks what existed before it; the
+    // agent's next NEW head is the proof that its own conversation was rewritten.
+    it("keeps the primary's sample when a subagent compacts, and frees it when the primary does", () => {
       const registry = bound();
-      record(registry, BUILD, 180_000);
-      record(registry, EXPLORE, 150_000);
-      // A new head of the same agent does NOT replace the old sample by itself.
+      record(registry, BUILD, 150_000);
+      record(registry, EXPLORE, 40_000);
+      registry.recordCompaction("run-1", "compaction-1", AT);
+      // The subagent compacts and comes back under a new head: only its own older sample leaves.
+      record(registry, { ...EXPLORE, headKey: "explore-after-compaction" }, 5_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(150_000);
+      // The primary compacts later and comes back under a new head at 12k: its 150k leaves.
+      registry.recordCompaction("run-1", "compaction-2", AT);
       record(registry, { ...BUILD, headKey: "build-after-compaction" }, 12_000);
-      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
-      expect(registry.recordCompaction("run-1", "compaction-1", AT)).toBe(true);
-      // The primary's samples before it are gone; a parallel conversation's large one stays.
-      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(150_000);
-      record(registry, { ...BUILD, headKey: "build-after-compaction" }, 13_000);
-      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(150_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(12_000);
       expect(registry.read("run-1")).toMatchObject({
-        usedInputTokens: 13_000,
-        compaction: { count: 1 },
+        usedInputTokens: 12_000,
+        compaction: { count: 2 },
       });
     });
 
-    it("leaves no sample, so a describe is refused, when the compaction drops the only one", () => {
+    it("drops nothing for a compaction nobody follows up, or for a new head without one", () => {
       const registry = bound();
       record(registry, BUILD, 180_000);
+      // A new head alone does not retire the old sample: no compaction was recorded.
+      record(registry, { ...BUILD, headKey: "build-new-head" }, 12_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
       registry.recordCompaction("run-1", "compaction-1", AT);
-      expect(registry.readLargest("run-1")).toBeUndefined();
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
+      // The same conversation continuing after the compaction rewrote nothing.
+      record(registry, { ...BUILD, headKey: "build-new-head" }, 13_000);
+      expect(registry.readLargest("run-1")?.usedInputTokens).toBe(180_000);
     });
 
     it("never evicts the fullest conversation, or the primary, past the retention bound", () => {
