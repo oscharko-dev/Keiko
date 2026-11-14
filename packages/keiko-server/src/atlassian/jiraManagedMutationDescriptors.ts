@@ -135,6 +135,7 @@ import {
   JIRA_DRAFT_REFUSALS,
   JIRA_DRAFT_RESULT_ROWS_MAX,
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
@@ -380,7 +381,8 @@ const VIOLATION_BYTES_MAX =
   JSON_OBJECT_OVERHEAD;
 const LINK_TYPE_UNITS_MAX = 255;
 const LINK_REF_BYTES_MAX = LINK_TYPE_UNITS_MAX * JSON_BYTES_PER_UNIT_MAX + 128 + 64;
-const USUAL_RESULT_BYTES_MAX = 4096;
+// The usual result without its guidance (3584) plus the most guidance the schema allows.
+const USUAL_RESULT_BYTES_MAX = 3584 + JIRA_RESULT_GUIDANCE_MAX_CHARS;
 const SINGLE_RESULT_BYTES_MAX = USUAL_RESULT_BYTES_MAX + DETAIL_BYTES_MAX;
 const GATED_RESULT_BYTES_MAX =
   SINGLE_RESULT_BYTES_MAX + JIRA_TEMPLATE_VIOLATIONS_MAX * VIOLATION_BYTES_MAX;
@@ -422,7 +424,7 @@ const DRAFT_RESULT_SCHEMA = object(
   {
     outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
     reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
-    guidance: text(512),
+    guidance: text(JIRA_RESULT_GUIDANCE_MAX_CHARS),
     items: {
       type: "array",
       maxItems: JIRA_DRAFT_RESULT_ROWS_MAX,
@@ -484,7 +486,7 @@ const RESULT_FIELDS = {
   outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
   reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
   replayed: { type: "boolean" },
-  guidance: text(512),
+  guidance: text(JIRA_RESULT_GUIDANCE_MAX_CHARS),
   browseUrl: text(4096),
   issueKey: text(128),
   issueId: text(128),

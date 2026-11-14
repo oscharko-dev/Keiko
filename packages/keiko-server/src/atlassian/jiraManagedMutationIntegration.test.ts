@@ -45,15 +45,18 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type {
-  AtlassianCredentialMetadata,
-  AtlassianHttpBodyPort,
-  JiraAttachmentSource,
-  JiraManagedMutationExecutor,
+import {
+  jiraTemplateViolationGuidance,
+  type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
+  type JiraAttachmentSource,
+  type JiraManagedMutationExecutor,
 } from "@oscharko-dev/keiko-connectors";
 import {
+  field,
   fixtureRead,
   fixtureWrite,
+  FIELDS,
   response,
 } from "../../../../tests/support/jira-managed-remote.js";
 import {
@@ -199,7 +202,8 @@ type RemoteMode =
   | "transition-moved-400"
   | "transition-moved-empty"
   | "transition-moved-html"
-  | "transition-moved-truncated";
+  | "transition-moved-truncated"
+  | "parent-offered";
 /** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
@@ -322,6 +326,34 @@ function withIssueIdentity(
     },
   });
 }
+/**
+ * A create screen that offers the parent field, as a Sub-task's does, and an edit screen that offers
+ * the parent and the description (the two refusals of the parent rule are proven through them).
+ */
+function parentOfferedRead(
+  path: string,
+  state: MutationRemoteState,
+): ReturnType<typeof fixtureRead> | undefined {
+  if (path.includes("createmeta")) {
+    const values = [...FIELDS, field("parent", "issuelink")];
+    return response({ values, start: 0, size: 100, last: true, total: values.length });
+  }
+  if (!path.endsWith("editmeta")) return undefined;
+  const answered = fixtureRead(path, state);
+  const body = JSON.parse(answered.kind === "response" ? answered.bodyText : "{}") as {
+    fields?: Record<string, unknown>;
+  };
+  return response({
+    fields: {
+      ...body.fields,
+      parent: field("parent", "issuelink"),
+      description: {
+        ...field("description", "string"),
+        schema: { type: "string", system: "description" },
+      },
+    },
+  });
+}
 async function fixtureReadResult(
   mode: RemoteMode,
   url: string,
@@ -332,6 +364,10 @@ async function fixtureReadResult(
 ): Promise<ReturnType<typeof fixtureRead>> {
   if (mode === "readback-denied" && writes > 0) return response({}, 403);
   const path = new URL(url).pathname;
+  if (mode === "parent-offered") {
+    const offered = parentOfferedRead(path, state);
+    if (offered !== undefined) return offered;
+  }
   // The deleted issue: after the DELETE, a read of any issue is a 404, as Jira answers for a gone one.
   if (mode === "issue-gone-after-write" && writes > 0 && path.includes("/rest/api/2/issue/"))
     return response({ errorMessages: ["Issue Does Not Exist"], errors: {} }, 404);
@@ -1330,6 +1366,119 @@ it.each(["transition-moved-empty", "transition-moved-html", "transition-moved-tr
       result: { data: { outcome: "not-dispatched", reason: "conflict" } },
     });
     expect(f.writes()).toBe(1);
+  },
+);
+// #4354 (live Gemma composer run): a Sub-task asked under a Story is refused by the template's parent
+// rule, and the model must RECEIVE that refusal: a valid, explained result naming the rule and the
+// type the parent actually has. The refusal's guidance once exceeded the result schema of jira.create
+// and the catalog rejected the whole result (`result-contract-failed`, data null).
+it("settles a create refused by the template's parent rule as a valid, explained result", async () => {
+  const parsed = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Task",
+      "activateOn: [create]",
+      'parentField: "parent"',
+      "parentIssueTypes: [Story]",
+      "---",
+      "# Task",
+    ].join("\n"),
+  );
+  if (!parsed.ok) throw new TypeError("Expected a parseable template");
+  const f = await fixture("parent-offered", undefined, "jira.create", {}, () => ({
+    templates: [parsed.template],
+    unreadable: 0,
+  }));
+
+  const refused = await f.invoke("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "A task under a task", customfield_10000: "Required", parent: "SYN-1" },
+  });
+
+  // SYN-1 is a Task in this synthetic Jira, the template wants a Story parent: nothing is written.
+  expect(f.writes()).toBe(0);
+  expect(refused).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "failed",
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations: [{ ruleId: "parent-type-mismatch", template: "SYN/Task" }],
+      },
+    },
+  });
+  expect(JSON.stringify(refused)).toContain("found: Task");
+  if (refused.kind !== "settled") throw new TypeError("Expected a settled outcome");
+  const { data } = refused.result;
+  if (typeof data !== "object" || data === null || Array.isArray(data))
+    throw new TypeError("Expected a result object");
+  expect(Reflect.get(data, "guidance")).toBe(
+    jiraTemplateViolationGuidance([
+      { ruleId: "parent-type-mismatch", subject: "parent", template: "SYN/Task" },
+    ]),
+  );
+});
+// The same proof for an EDIT (#4354): refused by the template's parent rule alone, and by the parent
+// rule together with a missing section, the longest guidance the gate writes. Each settles as a
+// valid, explained result through the catalog's own result validation.
+function parentTemplate(...extra: readonly string[]): ReturnType<typeof integrationTemplates> {
+  const parsed = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Task",
+      "activateOn: [edit]",
+      'parentField: "parent"',
+      "parentIssueTypes: [Story]",
+      "---",
+      "# Task",
+      ...extra,
+    ].join("\n"),
+  );
+  if (!parsed.ok) throw new TypeError("Expected a parseable template");
+  return { templates: [parsed.template], unreadable: 0 };
+}
+it.each([
+  ["the parent rule", [], { parent: "SYN-2" }, [{ ruleId: "parent-type-mismatch" }]],
+  [
+    "the parent rule together with a missing section",
+    ["## Acceptance criteria"],
+    { parent: "SYN-2", description: "No such section here." },
+    [{ ruleId: "parent-type-mismatch" }, { ruleId: "section-missing" }],
+  ],
+] as const)(
+  "settles an edit refused by %s as a valid, explained result",
+  async (_name, sections, fields, violations) => {
+    const f = await fixture("parent-offered", undefined, "jira.edit", {}, () =>
+      parentTemplate(...sections),
+    );
+
+    const refused = await f.invoke("jira.edit", { issueKey: "SYN-1", fields });
+
+    expect(f.writes()).toBe(0);
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "failed",
+        data: { outcome: "rejected", reason: "field-validation", violations },
+      },
+    });
+    if (refused.kind !== "settled") throw new TypeError("Expected a settled outcome");
+    const { data } = refused.result;
+    if (typeof data !== "object" || data === null || Array.isArray(data))
+      throw new TypeError("Expected a result object");
+    expect(Reflect.get(data, "guidance")).toBe(
+      jiraTemplateViolationGuidance(
+        violations.map(({ ruleId }) => ({ ruleId, subject: "x", template: "SYN/Task" })),
+      ),
+    );
   },
 );
 it.each(["html-error-page", "server-error"] as const)(

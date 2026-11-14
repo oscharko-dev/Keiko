@@ -901,3 +901,12 @@ export function sanitizeJiraMutationLinkAccount(
     ? { requested, created, missing: refs, unconfirmed }
     : undefined;
 }
+
+/**
+ * The most characters of the `guidance` sentence any Jira mutation result may carry. The template
+ * refusals' guidance (a parent rule, a section rule, both) is the longest the producer writes; the
+ * result schemas of every mutation tool and the producer share this one bound, so a refusal can never
+ * be longer than its own contract allows (a longer one made the catalog reject the whole result:
+ * `result-contract-failed`, data null, #4354).
+ */
+export const JIRA_RESULT_GUIDANCE_MAX_CHARS = 1024;
