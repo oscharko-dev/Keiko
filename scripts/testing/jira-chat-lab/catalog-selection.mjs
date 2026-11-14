@@ -438,7 +438,7 @@ async function main() {
     throw new TypeError("A previous write attempt is pending; reconcile it natively first");
   await requireLicense(session);
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
-  // The default selection is the 35 cases; a language case runs only when `--only` names it.
+  // The default selection is the 36 cases; a language case runs only when `--only` names it.
   const cases = (
     only === undefined ? SELECTION_CASES : [...SELECTION_CASES, ...LANGUAGE_SELECTION_CASES]
   ).filter((entry) => only === undefined || only.has(entry.id));

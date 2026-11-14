@@ -1,3 +1,4 @@
+import { URL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 const nativeReads = vi.hoisted(() => new Map());
@@ -30,7 +31,7 @@ import {
   LIFECYCLE_ATTEMPTS_MAX,
   turnRefusals,
 } from "../testing/jira-chat-lab/catalog-selection.mjs";
-import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
+import { actorDetails, labSessionConnection } from "../testing/jira-chat-lab/lab-client.mjs";
 import { LANGUAGE_SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 
 const FIXTURE = {
@@ -974,5 +975,43 @@ describe("a read restricted to one type (search-by-type, #4369)", () => {
     const turn = { exchanges: [call("jira_priorities")], gateway: healthy };
     expect(gradeSelection(READ, turn, { tokens: ["High"], restriction }).status).toBe("selected");
     expect(gradeSelection(READ, turn, { tokens: ["High"] }).status).toBe("selected");
+  });
+});
+
+describe("whoami-instance: which Jira and as whom (#4369)", () => {
+  const entry = SELECTION_CASES.find((candidate) => candidate.id === "whoami-instance");
+
+  it("sits beside myself, names neither the tool nor an argument, and accepts the session read", () => {
+    expect(entry).toMatchObject({ tool: "jira.myself", alternatives: ["jira.current-session"] });
+    expect(entry.prompt()).toBe("Mit welchem Konto und welchem Jira bin ich verbunden?");
+    expect(SELECTION_CASES.findIndex((candidate) => candidate.id === "myself")).toBe(
+      SELECTION_CASES.indexOf(entry) - 1,
+    );
+  });
+
+  it("holds the account name and the host with its port of the Pod's base URL as truth", async () => {
+    nativeReads.set("/rest/api/2/myself", { name: "synthetic-api" });
+    const truth = await selectionTruth(undefined, FIXTURE, entry);
+    expect(truth).toEqual(["synthetic-api", new URL(labSessionConnection().httpsOrigin).host]);
+    expect(truth[1]).toMatch(/:\d+$/u);
+  });
+
+  it("is selected only when the result carries BOTH the account and the instance host", () => {
+    const tokens = ["synthetic-api", "127.0.0.1:18443"];
+    const read = (data) => ({ exchanges: [call("jira_myself", data)], gateway: healthy });
+    const both = {
+      outcome: "succeeded",
+      name: "synthetic-api",
+      instance: { host: "127.0.0.1:18443" },
+    };
+    expect(gradeSelection(entry, read(both), { tokens }).status).toBe("selected");
+    // The account alone, a host without its port, and another host are not the instance.
+    expect(
+      gradeSelection(entry, read({ outcome: "succeeded", name: "synthetic-api" }), { tokens })
+        .status,
+    ).toBe("wrong-result");
+    expect(
+      gradeSelection(entry, read({ ...both, instance: { host: "127.0.0.1" } }), { tokens }).status,
+    ).toBe("wrong-result");
   });
 });

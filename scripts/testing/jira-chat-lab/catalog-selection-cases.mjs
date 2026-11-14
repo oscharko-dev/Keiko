@@ -3,8 +3,15 @@
 // jira.discover / jira.describe) and build the arguments from the person's words. Every truth is an
 // independent native Jira read with the lab actor's credentials, never Keiko's own answer; a read
 // that cannot see an owned object, or a list beyond the tools' first page, makes the attempt invalid.
+import { URL } from "node:url";
 import { ownedIssue, voteKey } from "./catalog-selection-objects.mjs";
-import { actorDetails, basicAuth, checked, labRequest } from "./lab-client.mjs";
+import {
+  actorDetails,
+  basicAuth,
+  checked,
+  labRequest,
+  labSessionConnection,
+} from "./lab-client.mjs";
 
 const TRUTH_TOKENS_MAX = 20;
 const native = (session, path, actor = "api") =>
@@ -104,6 +111,18 @@ const DISCOVERY_READS = [
     prompt: () =>
       "Mit welchem Jira-Benutzerkonto bin ich gerade verbunden? Nenne den Benutzernamen.",
     truth: async (s) => [String((await native(s, "/rest/api/2/myself")).name)],
+  },
+  {
+    id: "whoami-instance",
+    tool: "jira.myself",
+    // The session read names the account and the instance just as well.
+    alternatives: ["jira.current-session"],
+    prompt: () => "Mit welchem Konto und welchem Jira bin ich verbunden?",
+    // The account as Jira reports it and the host (with its port) of the base URL the Pod was bound to.
+    truth: async (s) => [
+      String((await native(s, "/rest/api/2/myself")).name),
+      new URL(labSessionConnection(s).httpsOrigin).host,
+    ],
   },
   {
     id: "project-lead",
