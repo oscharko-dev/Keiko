@@ -3,14 +3,9 @@ import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { createCliSecurityLogSink } from "./security-log.js";
 import { OUTLIVING_STAGE_ONE_SCRIPT } from "./windows-helper-start.js";
 import {
-  type DetachedWindowsBoxOptions,
   notifyPortableLaunchFailure,
-  notifyPortableSetupStarted,
-  PORTABLE_SETUP_NOTICE,
-  PORTABLE_SETUP_NOTICE_DE,
   runDetachedAlert,
   runDetachedWindowsAlert,
-  runDetachedWindowsBox,
 } from "./portable-launch-notifier.js";
 
 const UI_LAUNCH = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
@@ -400,153 +395,55 @@ describe("runDetachedWindowsAlert", () => {
   });
 });
 
-describe("notifyPortableSetupStarted", () => {
-  const env = { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`D:\Windows` };
-
-  it("shows the fixed setup notice for a Windows double-click and records that it was requested", () => {
-    const shown: [string, unknown][] = [];
-    const { sink, events } = recordingSecuritySink();
-
-    notifyPortableSetupStarted(env, {
-      platform: () => "win32",
-      securityLogSink: sink,
-      runWindowsAlert: (message, alertEnv) => {
-        shown.push([message, alertEnv]);
-      },
-    });
-
-    expect(shown).toEqual([[PORTABLE_SETUP_NOTICE, env]]);
-    expect(PORTABLE_SETUP_NOTICE).toBe(
-      "Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is ready.",
-    );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      op: "portable.setup-notice.requested",
-      level: "info",
-      extra: { surface: "portable-setup-notice" },
-    });
-    // neither a text nor the language enters the line
-    expect(JSON.stringify(events[0])).not.toMatch(/being set up|eingerichtet|"de"|"en"/u);
-  });
-
-  it.each([
-    ["no double-click marker", {}, "win32"],
-    ["macOS", env, "darwin"],
-    ["Linux", env, "linux"],
-  ] as const)("stays silent with %s", (_name, launchEnv, platform) => {
-    let shown = false;
-    const { sink, events } = recordingSecuritySink();
-
-    notifyPortableSetupStarted(launchEnv, {
-      platform: () => platform,
-      securityLogSink: sink,
-      runWindowsAlert: () => {
-        shown = true;
-      },
-    });
-
-    expect(shown).toBe(false);
-    expect(events).toEqual([]);
-  });
-
-  it("never fails the launch when the notice cannot be shown, and does not claim it was requested", () => {
-    const reported: string[] = [];
-    const { sink, events } = recordingSecuritySink();
-
-    expect(() => {
-      notifyPortableSetupStarted(env, {
-        platform: () => "win32",
-        securityLogSink: sink,
-        reportAlertFailure: (line) => {
-          reported.push(line);
-        },
-        runWindowsAlert: () => {
-          throw new Error("no PowerShell");
-        },
-      });
-    }).not.toThrow();
-
-    expect(reported).toEqual(["keiko portable launch: the setup notice could not be shown\n"]);
-    expect(events).toEqual([]);
-  });
-
-  it("logs a body-free refusal under the notice's own surface when Windows cannot be resolved", () => {
-    const reported: string[] = [];
-    const { sink, events } = recordingSecuritySink();
-
-    notifyPortableSetupStarted(
-      { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`\\attacker\share` },
-      {
-        platform: () => "win32",
-        securityLogSink: sink,
-        reportAlertFailure: (line) => {
-          reported.push(line);
-        },
-      },
-    );
-
-    expect(reported).toEqual(["keiko portable launch: the setup notice could not be shown\n"]);
-    // the shared alert path keeps its security refusal line; the second line names the notice
-    expect(events.map((event) => [event.op, event.extra?.surface])).toEqual([
-      ["security.windows-portable-alert.system-root-refused", "portable-failure-alert"],
-      ["portable.windows-alert.spawn-failed", "portable-setup-notice"],
-    ]);
-    expect(events[1]?.extra?.failureKind).toBe("WindowsSystemDirectoryError");
-  });
-});
-
-describe("runDetachedWindowsBox as a setup notice", () => {
+// #4358 v5: the setup notice moved out of this file. A double-click on the downloaded launcher now
+// gets its feedback from the native launcher itself (native/portable-launcher), before Node loads;
+// the wording, the delay and the single-instance behavior are pinned in
+// portable-launcher-feedback.test.ts. What stays here is the failure alert, unchanged.
+describe("the failure alert's Windows box", () => {
   const spawned = (): {
     readonly args: (readonly string[])[];
     readonly envs: NodeJS.ProcessEnv[];
-    readonly options: DetachedWindowsBoxOptions;
+    readonly options: { detached: boolean; windowsHide?: boolean; stdio: string; cwd?: string }[];
+    readonly unreferenced: boolean[];
+    readonly spawnFn: Parameters<typeof runDetachedWindowsAlert>[2];
   } => {
     const args: (readonly string[])[] = [];
     const envs: NodeJS.ProcessEnv[] = [];
-    const options: DetachedWindowsBoxOptions = {
-      spawnFn: (_command, argv, spawnOptions) => {
-        args.push(argv);
-        envs.push(spawnOptions.env);
-        return { on: (): void => undefined, unref: (): void => undefined };
-      },
-      identityCheck: () => true,
-      existsAsFile: () => true,
+    const options: { detached: boolean; windowsHide?: boolean; stdio: string; cwd?: string }[] = [];
+    const unreferenced: boolean[] = [];
+    const spawnFn: Parameters<typeof runDetachedWindowsAlert>[2] = (
+      _command,
+      argv,
+      spawnOptions,
+    ) => {
+      const index = args.length;
+      args.push(argv);
+      envs.push(spawnOptions.env);
+      options.push({ ...spawnOptions });
+      unreferenced.push(false);
+      return {
+        on: (): void => undefined,
+        unref: (): void => {
+          unreferenced[index] = true;
+        },
+      };
     };
-    return { args, envs, options };
+    return { args, envs, options, unreferenced, spawnFn };
   };
+  const windows = { SystemRoot: String.raw`D:\Windows` };
+  const trusted = [(): boolean => true, undefined, (): boolean => true] as const;
 
-  it("shows an information box titled Keiko whose text follows the Windows display language", () => {
-    const { args, options } = spawned();
+  it("shows the recorded reason in an error box that outlives the keiko process", () => {
+    const { args, envs, spawnFn } = spawned();
 
-    runDetachedWindowsBox(
-      { kind: "setup-notice" },
-      { SystemRoot: String.raw`D:\Windows` },
-      options,
-    );
-
-    expect(PORTABLE_SETUP_NOTICE_DE).toBe(
-      "Keiko wird eingerichtet. Der erste Start kann einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist.",
-    );
-    // The command reaches PowerShell as one plain argument after -Command: Node hands Windows a
-    // UTF-16 command line, so the umlaut arrives intact. No -EncodedCommand is involved.
-    expect(args).toHaveLength(1);
-    expect(args[0]?.at(-2)).toBe("-Command");
-    expect(args[0]).not.toContain("-EncodedCommand");
-    expect(args[0]?.at(-1)).toBe(
-      "Add-Type -AssemblyName PresentationFramework; " +
-        "$keikoText = if ((Get-UICulture).TwoLetterISOLanguageName -eq 'de') " +
-        `{ '${PORTABLE_SETUP_NOTICE_DE}' } else { '${PORTABLE_SETUP_NOTICE}' }; ` +
-        "[System.Windows.MessageBox]::Show($keikoText, 'Keiko', 'OK', 'Information') | Out-Null",
-    );
-  });
-
-  it("leaves the failure alert's command exactly as it was", () => {
-    const { args, envs, options } = spawned();
-
-    runDetachedWindowsBox(
-      { kind: "failure", message: "can't start\r\nbecause" },
-      { SystemRoot: String.raw`D:\Windows` },
-      options,
+    runDetachedWindowsAlert(
+      "can't start\r\nbecause",
+      windows,
+      spawnFn,
+      undefined,
+      trusted[0],
+      trusted[1],
+      trusted[2],
     );
 
     // the command is the real box's text, handed over in the environment of the second stage
@@ -558,56 +455,29 @@ describe("runDetachedWindowsBox as a setup notice", () => {
     );
   });
 
-  it("starts the setup notice in one stage: it is shown while the setup runs, in the process that starts it", () => {
-    const { args, envs, options } = spawned();
+  // #4358, Windows window on build cb59ec31f: a box that was requested and logged did not appear.
+  // The alert starts through the one visible-helper start the browser opener uses.
+  it("starts attached, hidden and unreferenced, from the system directory", () => {
+    const { options, unreferenced, spawnFn } = spawned();
 
-    runDetachedWindowsBox(
-      { kind: "setup-notice" },
-      { SystemRoot: String.raw`D:\Windows` },
-      options,
+    runDetachedWindowsAlert(
+      "it failed",
+      windows,
+      spawnFn,
+      undefined,
+      trusted[0],
+      trusted[1],
+      trusted[2],
     );
 
-    expect(args[0]).toContain("-Sta");
-    expect(args[0]).not.toContain(OUTLIVING_STAGE_ONE_SCRIPT);
-    expect(envs[0]?.KEIKO_STAGE2_SCRIPT).toBeUndefined();
-  });
-});
-
-// #4358, Windows window on build cb59ec31f: the setup notice was requested and logged, and no box
-// appeared. Both boxes start through the one visible-helper start the browser opener uses.
-describe("the Windows boxes start like the browser opener", () => {
-  it.each([
-    ["setup notice", { kind: "setup-notice" }],
-    ["failure alert", { kind: "failure", message: "it failed" }],
-  ] as const)("starts the %s attached, hidden and unreferenced", (_name, box) => {
-    const started: { options: Record<string, unknown>; unreferenced: boolean }[] = [];
-    runDetachedWindowsBox(
-      box,
-      { SystemRoot: String.raw`D:\Windows` },
-      {
-        spawnFn: (_command, _args, options) => {
-          const record = { options: { ...options }, unreferenced: false };
-          started.push(record);
-          return {
-            on: (): void => undefined,
-            unref: (): void => {
-              record.unreferenced = true;
-            },
-          };
-        },
-        identityCheck: () => true,
-        existsAsFile: () => true,
-      },
-    );
-
-    expect(started).toHaveLength(1);
-    expect(started[0]?.options).toMatchObject({
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({
       detached: false,
       windowsHide: true,
       stdio: "ignore",
       shell: false,
       cwd: String.raw`D:\Windows`,
     });
-    expect(started[0]?.unreferenced).toBe(true);
+    expect(unreferenced).toEqual([true]);
   });
 });

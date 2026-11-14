@@ -3506,47 +3506,49 @@ describe("runPortableCli", () => {
     expect(leftovers).toEqual([]);
   });
 
-  // A double-click on the downloaded `Keiko.exe` shows nothing for minutes while the managed
-  // installation is set up (#4358: about nine minutes under x64 emulation, then the cold start).
-  // The launcher says so once, through the existing alert path, when it begins a first installation.
-  describe("first-installation notice", () => {
+  // #4358 v5: a double-click on the downloaded `Keiko.exe` shows nothing for minutes while the
+  // managed installation is set up (about nine minutes under x64 emulation, then the cold start).
+  // That feedback now comes from the native launcher itself, before Node loads (pinned in
+  // portable-launcher-feedback.test.ts); the CLI no longer starts a PowerShell of its own for it.
+  // What moved here from the old "first-installation notice" tests: the setup is still the same
+  // path for a first installation, the installed copy and an upgrade, and the CLI starts no helper
+  // process of its own on any of them - the only process it starts is the managed launcher.
+  describe("first installation under a double-click", () => {
     const launcherDeps = (
       home: string,
-      notices: unknown[],
+      spawned: { command: string }[],
     ): Parameters<typeof runPortableCli>[3] => ({
       homedir: () => home,
       now: () => NOW,
-      spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
-      lifecycleFn: () => Promise.resolve(0),
-      notifySetupStartedFn: (env): void => {
-        notices.push(env);
+      spawnFn: (command): ReturnType<typeof spawn> => {
+        spawned.push({ command });
+        return spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
       },
+      lifecycleFn: () => Promise.resolve(0),
     });
 
-    it("announces the setup once when a downloaded Windows package starts a first installation", async () => {
+    it("sets up and starts only the managed launcher: no notice process of its own", async () => {
       const root = tempRoot();
       const home = join(root, "home");
       const source = writePortableFixture(join(root, "bootstrap"), "windows-x64");
+      const managedRoot = managedRootForTarget(home, "windows-x64");
       const env = { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" };
-      const notices: unknown[] = [];
+      const spawned: { command: string }[] = [];
 
       const code = await runPortableCli(
-        portableLaunchArgs(
-          "windows-x64",
-          source,
-          managedRootForTarget(home, "windows-x64"),
-          join(root, "state"),
-        ),
+        portableLaunchArgs("windows-x64", source, managedRoot, join(root, "state")),
         capture().io,
         env,
-        launcherDeps(home, notices),
+        launcherDeps(home, spawned),
       );
 
       expect(code).toBe(0);
-      expect(notices).toEqual([env]);
+      expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.11");
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]?.command).toContain(managedRoot);
     });
 
-    it("stays silent for the launch of the installed copy and for an upgrade over it", async () => {
+    it("upgrades over an installed copy and launches the installed copy the same way", async () => {
       const root = tempRoot();
       const home = join(root, "home");
       const stateDir = join(root, "state");
@@ -3554,66 +3556,29 @@ describe("runPortableCli", () => {
       const env = { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" };
       const oldSource = writePortableFixture(join(root, "bootstrap"), "windows-x64", "0.2.11");
       const newSource = writePortableFixture(join(root, "downloaded"), "windows-x64", "0.2.12");
+      const spawned: { command: string }[] = [];
       await runPortableCli(
         portableLaunchArgs("windows-x64", oldSource, managedRoot, stateDir),
         capture().io,
         env,
-        launcherDeps(home, []),
+        launcherDeps(home, spawned),
       );
-      const notices: unknown[] = [];
 
       const installed = await runPortableCli(
         portableLaunchArgs("windows-x64", managedRoot, managedRoot, stateDir),
         capture().io,
         env,
-        launcherDeps(home, notices),
+        launcherDeps(home, spawned),
       );
       const upgrade = await runPortableCli(
         portableLaunchArgs("windows-x64", newSource, managedRoot, stateDir),
         capture().io,
         env,
-        launcherDeps(home, notices),
+        launcherDeps(home, spawned),
       );
 
       expect([installed, upgrade]).toEqual([0, 0]);
       expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.12");
-      expect(notices).toEqual([]);
-    });
-
-    it("stays silent for a dry run and on a platform whose launcher shows its own progress", async () => {
-      const root = tempRoot();
-      const home = join(root, "home");
-      const windowsSource = writePortableFixture(join(root, "bootstrap"), "windows-x64");
-      const macosSource = writePortableFixture(join(root, "mac"), "macos-arm64");
-      const notices: unknown[] = [];
-
-      await runPortableCli(
-        [
-          ...portableLaunchArgs(
-            "windows-x64",
-            windowsSource,
-            managedRootForTarget(home, "windows-x64"),
-            join(root, "state"),
-          ),
-          "--dry-run",
-        ],
-        capture().io,
-        { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" },
-        launcherDeps(home, notices),
-      );
-      await runPortableCli(
-        portableLaunchArgs(
-          "macos-arm64",
-          macosSource,
-          managedRootForTarget(home, "macos-arm64"),
-          join(root, "mac-state"),
-        ),
-        capture().io,
-        { KEIKO_PORTABLE_UI_LAUNCH: "1" },
-        launcherDeps(home, notices),
-      );
-
-      expect(notices).toEqual([]);
     });
   });
 });

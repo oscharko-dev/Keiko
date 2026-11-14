@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8ab1d74e6c1dbc028f27a824371995cba9ba3a2ee21be3371665063c9037fddc"
+    "catalogDigest": "d97dbe2644305c514e136bcd25ac817b0b0d34c676fa341c82737ede940095b1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 702,
-    "proofCount": 725,
-    "resolvedProofCount": 725,
+    "operationCount": 701,
+    "proofCount": 724,
+    "resolvedProofCount": 724,
     "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -788,7 +788,6 @@
         "activity-log.writer-rejected",
         "chat.content-policy.resolved",
         "memory.audit.state-cache.seeded",
-        "portable.setup-notice.requested",
         "portable.windows-alert.spawn-failed",
         "process.exiting",
         "process.fatal",
@@ -2891,9 +2890,6 @@
     ],
     "portable.runtime.native-helper-bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.test.ts"
-    ],
-    "portable.setup-notice.requested.emitted-line": [
-      "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"
     ],
     "portable.windows-alert.spawn-failed.emitted-line": [
       "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"

@@ -15,6 +15,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <wctype.h>
 #include <windows.h>
 
 #if defined(KEIKO_PORTABLE_GENERATION_ID)
@@ -162,6 +163,143 @@ static void free_launcher_buffers(keiko_launcher_buffers *buffers) {
   }
 }
 
+/* First feedback of a double-click start (#4358). Before this, the launcher was silent until the CLI
+ * had loaded under the virus scanner and started a whole PowerShell for its notice, which took
+ * minutes on a slow machine. The launcher itself, a native program with no runtime to start, now
+ * shows one message when a start is still running after two seconds, and closes it when the
+ * `portable launch` child has ended. A second start of the same executable brings that message to
+ * the front and starts nothing. Both apply only to a start without a console: a terminal start
+ * already shows the CLI's output. */
+enum { KEIKO_FEEDBACK_DELAY_MS = 2000, KEIKO_FEEDBACK_JOIN_MS = 3000 };
+
+/* The wording of the CLI's setup notice (PORTABLE_SETUP_NOTICE and PORTABLE_SETUP_NOTICE_DE in
+ * portable-launch-notifier.ts; a test keeps them equal) plus one sentence: the message may be closed.
+ * Wide escapes end their string literal so that no hex digit that follows is read into them. */
+#define KEIKO_FEEDBACK_TEXT_EN \
+  L"Keiko is being set up. The first start can take several minutes. " \
+  L"Your browser opens when Keiko is ready.\r\n\r\n" \
+  L"You can close this message; Keiko keeps starting and your browser opens when it is ready."
+#define KEIKO_FEEDBACK_TEXT_DE \
+  L"Keiko wird eingerichtet. Der erste Start kann einige Minuten dauern. " \
+  L"Dein Browser \x00f6" L"ffnet sich, sobald Keiko bereit ist.\r\n\r\n" \
+  L"Du kannst diese Meldung schlie\x00df" L"en; Keiko startet weiter und dein Browser " \
+  L"\x00f6" L"ffnet sich, sobald Keiko bereit ist."
+
+typedef struct {
+  HANDLE done; /* manual-reset event: set by the main thread when the child has ended */
+  HANDLE thread;
+  DWORD thread_id;
+} keiko_feedback;
+
+static const wchar_t *feedback_text(void) {
+  return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN ? KEIKO_FEEDBACK_TEXT_DE
+                                                                  : KEIKO_FEEDBACK_TEXT_EN;
+}
+
+static DWORD WINAPI feedback_thread(LPVOID context) {
+  const keiko_feedback *feedback = (const keiko_feedback *)context;
+  /* Only a start that is still running after the delay shows anything: a fast one never flashes. */
+  if (WaitForSingleObject(feedback->done, KEIKO_FEEDBACK_DELAY_MS) != WAIT_TIMEOUT) return 0;
+  /* The box is the person's to close; it is shown once and never again. A failure to show it is
+   * not a failure to start Keiko. */
+  (void)MessageBoxW(NULL, feedback_text(), L"Keiko", MB_OK | MB_ICONINFORMATION);
+  return 0;
+}
+
+static void feedback_start(keiko_feedback *feedback) {
+  feedback->done = NULL;
+  feedback->thread = NULL;
+  feedback->thread_id = 0;
+  feedback->done = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (feedback->done == NULL) return; /* no feedback, the start itself goes on */
+  feedback->thread = CreateThread(NULL, 0, feedback_thread, feedback, 0, &feedback->thread_id);
+}
+
+static BOOL CALLBACK close_feedback_window(HWND window, LPARAM unused) {
+  (void)unused;
+  (void)PostMessageW(window, WM_CLOSE, 0, 0);
+  return TRUE;
+}
+
+static void feedback_stop(keiko_feedback *feedback) {
+  if (feedback->done != NULL) (void)SetEvent(feedback->done);
+  if (feedback->thread != NULL) {
+    /* A box that is showing is closed. One that is only about to show ends with this process, which
+     * never waits longer than the bounded join below for the thread. */
+    (void)EnumThreadWindows(feedback->thread_id, close_feedback_window, 0);
+    (void)WaitForSingleObject(feedback->thread, KEIKO_FEEDBACK_JOIN_MS);
+    (void)CloseHandle(feedback->thread);
+  }
+  if (feedback->done != NULL) (void)CloseHandle(feedback->done);
+  feedback->done = NULL;
+  feedback->thread = NULL;
+}
+
+typedef struct {
+  DWORD self;
+  HWND found;
+} keiko_window_search;
+
+/* The message of another launcher process: a dialog titled "Keiko". */
+static BOOL CALLBACK find_feedback_window(HWND window, LPARAM parameter) {
+  keiko_window_search *search = (keiko_window_search *)parameter;
+  wchar_t title[8];
+  wchar_t class_name[16];
+  DWORD process_id = 0;
+  if (GetWindowTextW(window, title, 8) <= 0 || wcscmp(title, L"Keiko") != 0) return TRUE;
+  if (GetClassNameW(window, class_name, 16) <= 0 || wcscmp(class_name, L"#32770") != 0) return TRUE;
+  if (GetWindowThreadProcessId(window, &process_id) == 0 || process_id == search->self) return TRUE;
+  search->found = window;
+  return FALSE;
+}
+
+static void bring_feedback_forward(void) {
+  keiko_window_search search;
+  search.self = GetCurrentProcessId();
+  search.found = NULL;
+  (void)EnumWindows(find_feedback_window, (LPARAM)&search);
+  if (search.found == NULL) return; /* not showing yet, or closed by the person: nothing to show */
+  if (IsIconic(search.found)) (void)ShowWindow(search.found, SW_RESTORE);
+  (void)SetForegroundWindow(search.found);
+}
+
+/* One launcher per executable path at a time. Returns 0 when another one runs: it was told, and
+ * nothing else is started. When the guard cannot be created the start goes on without it. */
+static int claim_launcher_instance(const wchar_t *root, HANDLE *instance) {
+  wchar_t name[64];
+  unsigned long long hash = 1469598103934665603ULL;
+  for (const wchar_t *cursor = root; *cursor != L'\0'; ++cursor) {
+    hash ^= (unsigned long long)towlower(*cursor);
+    hash *= 1099511628211ULL;
+  }
+  if (_snwprintf_s(name, 64, _TRUNCATE, L"Local\\KeikoPortableLauncher-%016llx", hash) <= 0) {
+    return 1;
+  }
+  *instance = CreateMutexW(NULL, FALSE, name);
+  if (*instance == NULL) return 1;
+  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    bring_feedback_forward();
+    (void)CloseHandle(*instance);
+    *instance = NULL;
+    return 0;
+  }
+  return 1;
+}
+
+static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console);
+
+static int run_with_feedback(keiko_launcher_buffers *buffers, int has_console) {
+  HANDLE instance = NULL;
+  keiko_feedback feedback = {NULL, NULL, 0};
+  int result;
+  if (!has_console && !claim_launcher_instance(buffers->root, &instance)) return 0;
+  if (!has_console) feedback_start(&feedback);
+  result = launch_after_preflight(buffers, has_console);
+  feedback_stop(&feedback);
+  if (instance != NULL) (void)CloseHandle(instance);
+  return result;
+}
+
 static int run_selected_launcher(keiko_launcher_buffers *buffers, int has_console) {
   if (!quote_arg(buffers->quoted_node, KEIKO_PATH_CAP, buffers->node)) {
     return 1;
@@ -188,6 +326,10 @@ static int run_selected_launcher(keiko_launcher_buffers *buffers, int has_consol
     return 1;
   }
 
+  return run_with_feedback(buffers, has_console);
+}
+
+static int launch_after_preflight(keiko_launcher_buffers *buffers, int has_console) {
   /* Explorer starts pre-parse the CLI bundle: `node --check` refuses a truncated or
    * syntax-broken app/dist/cli/index.js WITHOUT executing it — the class where Node would die
    * during module load, before the notifier exists, with CREATE_NO_WINDOW hiding the only

@@ -120,6 +120,20 @@ They may locate, start, and relaunch the managed install, but they do not introd
 Tauri, or a native wrapper runtime in this wave. Wrapper ownership remains deferred until a later
 decision creates a real need for it.
 
+The Windows launcher answers a start without a console itself (#4358). Before the CLI is
+loaded it shows one message box titled `Keiko`, in German or English by the Windows user interface
+language, with the setup wording and a sentence that the box may be closed, only when the start is
+still running after about two seconds; the box lives on its own thread, never keeps the launcher
+alive, and is closed when the `portable launch` child has ended. A named mutex per installation root
+(`Local\KeikoPortableLauncher-<hash of the folded root>`) lets a second double-click bring the first
+box to the front and exit 0 without starting a second setup. Known limit, not built: when that box is
+not showing (not yet shown or closed by the person), the second double-click exits 0 and shows nothing,
+because no window can be brought forward. A start from a terminal shows the CLI's output and neither
+the box nor the guard. The PowerShell notice the CLI showed for the same purpose is removed: one
+mechanism, and the failure alert is unchanged. The native box cannot write the Activity Log; its
+proof is a measurement on Windows, and the wording, delay, close and single-instance promises are
+pinned structurally from the C source in `portable-launcher-feedback.test.ts`.
+
 Native launcher integrity is part of portable installability and is established by the signed
 manifest's digest and provenance bindings. Native platform signatures, notarization, and publisher
 chains are verified and recorded when present, but their absence does not make a release or
@@ -863,9 +877,7 @@ hidden first PowerShell only starts the real helper as its own process (a hidden
 the real helper, a grandchild outside the job, survives (confirmed on the guest, also for a message
 box). The helper's text, flags and inputs reach it through its environment, so nothing of it is ever
 quoted. The failure alert, which is shown just before the keiko process ends, starts the same way; the
-setup notice is shown for as long as the setup runs, which is the process that starts it, and keeps
-the single stage; the browser opener needs no second stage, because the browser is already a
-grandchild. The real helper reports ready by writing its own process id into a file (and a refusal of
+browser opener needs no second stage, because the browser is already a grandchild. The real helper reports ready by writing its own process id into a file (and a refusal of
 its own start check into another), which the command reads before it ends and probes again when it
 commits. The ready wait is two minutes, measured at up to 58 seconds for the two stages beside other
 work; after a few seconds the command says once that it is preparing the removal. If the helper does
@@ -1248,3 +1260,7 @@ Security review for implementation under this ADR must cover:
   push whose version is approved. Its attestations name `refs/heads/dev`, its bundle cannot reach
   the publisher, and the publisher and the operator guide verify attestations bound to the
   `portable-assets` workflow and the stable tag.
+- **2026-11-14 — Issue #4358:** Amended D2. The Windows launcher itself shows the first-start
+  message and keeps one launcher per installation, replacing the CLI's PowerShell notice; the
+  uninstall and its helper paragraphs under D5 state how the removal completes from inside the
+  installation.

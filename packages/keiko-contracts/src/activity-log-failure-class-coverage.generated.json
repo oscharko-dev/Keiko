@@ -52686,52 +52686,24 @@
       "failureClass": "windows-alert-spawn",
       "requirementContract": "windows-alert-spawn",
       "productSurfaces": ["keiko-cli"],
-      "lifecycleTransitions": ["failure", "state"],
+      "lifecycleTransitions": ["failure"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["portable.setup-notice.requested"],
+        "state": [],
         "end": [],
         "failure": ["portable.windows-alert.spawn-failed"],
         "loss": []
       },
       "causalEdges": [
         {
-          "op": "portable.setup-notice.requested",
-          "mode": "none"
-        },
-        {
           "op": "portable.windows-alert.spawn-failed",
           "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["portable.setup-notice.requested"],
+      "resourceSignals": [],
       "replayReferences": [],
       "operations": [
-        {
-          "op": "portable.setup-notice.requested",
-          "owner": "keiko-cli",
-          "category": "diagnostic",
-          "lifecycle": "state",
-          "causal": "none",
-          "analyzerProjection": "timeline",
-          "safeContextFields": [
-            {
-              "name": "surface",
-              "type": "string",
-              "dataClass": "closed-enum",
-              "required": true
-            }
-          ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
-          "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
-          },
-          "proofIds": ["portable.setup-notice.requested.emitted-line"],
-          "replayReferences": [],
-          "missingObligations": []
-        },
         {
           "op": "portable.windows-alert.spawn-failed",
           "owner": "keiko-cli",

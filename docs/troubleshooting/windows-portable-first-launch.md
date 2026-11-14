@@ -24,14 +24,19 @@ installed version, either nothing else happens at all, or one of four native dia
 A related report: the setup companion stays alive as a background process after the CLI phase is
 aborted.
 
-Not a failure: on the first installation, a double-click shows one information box titled `Keiko`
-("Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is
-ready."; with a German Windows display language: "Keiko wird eingerichtet. Der erste Start kann
-einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist."). The launcher has no window of its own, and the setup copies and attests the whole
-installation while the virus scanner reads every new file, so minutes can pass before the browser
-opens. The box appears once, when that first installation begins; it does not appear for a start of
-the installed copy or for an upgrade, and it never updates. A setup that fails afterwards shows one
-of the dialogs above. The Activity Log records the request as `portable.setup-notice.requested`.
+Not a failure: a double-click on the launcher shows one information box titled `Keiko` when the
+start is still running after about two seconds ("Keiko is being set up. The first start can take
+several minutes. Your browser opens when Keiko is ready." plus a sentence that the message may be
+closed; with a German Windows display language: "Keiko wird eingerichtet. Der erste Start kann einige
+Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist."). The launcher itself shows it,
+before Node loads, so it appears even while the virus scanner still reads the installation's first
+files. The setup copies and attests the whole installation, so minutes can pass before the browser
+opens. Closing the box does not stop Keiko; it closes by itself when the start has ended, and a closed
+box does not return. A second double-click on the same launcher while the first one is still starting
+brings that box to the front and starts nothing; if the box is not showing (not yet shown, or already
+closed), the second double-click does nothing visible either. A start from a terminal shows the CLI's
+own output instead and no box. A setup that fails afterwards shows one of the dialogs above. This box
+leaves no Activity Log line: the native launcher cannot write the log, and the CLI cannot observe it.
 
 **Root Cause**
 
