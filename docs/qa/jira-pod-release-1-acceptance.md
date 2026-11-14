@@ -13,11 +13,17 @@ fills the trace table in section 4. Nothing here is automated; the walk is the e
 | Walker (Windows)    | _filled at the walk_                                     |
 | Independent auditor | _filled at the walk_                                     |
 
-**Last checked against integration head `3aa28f761`** (`feat/jira-pod-release-1`, 2026-11-14), and
-against the browser walk on product `66f684b91`. The write-path steps (W06 to W13 and W19) are
-written against the product texts of that head. W14 and W15 describe the compliance and number
-wording of `child/4356-report-card-unchecked` (head `4c17e94f7`); they hold once that branch is
-integrated. Texts that come from a catalog are quoted as the catalog has them; a sentence the model
+**Last checked against integration head `e5ee928ff`** (`feat/jira-pod-release-1`, 2026-11-14), against
+the browser walk on product `66f684b91`, and against the released heads of three branches that are
+not integrated yet: `child/4371-ui-walk-fixes` (`401d205bd`), `child/4356-approval-project-name`
+(`3f2132089`) and `child/4353-replace-token-verifies` (`7da817258`). The write-path steps (W06 to W13
+and W19) are written against the product texts of the integration head; W14 and W15 hold on it
+(`child/4356-report-card-unchecked`, head `4c17e94f7`, is integrated). A step or sentence marked
+"holds once `<branch>` is integrated" describes one of the three branches above and is wrong on a
+build that lacks it. Three places are waiting for the final pass and are not changed here: the
+sentence "Repeat until each of the four types has a template" in W06, the sentence about two
+templates for one issue type in W06, and W21 (the Workbench path with the Jira Pod is being repaired).
+Texts that come from a catalog are quoted as the catalog has them; a sentence the model
 says is described in words, because the model words it.
 
 The build must be one that contains the whole Release 1 scope: the template rule for Jira writes
@@ -151,7 +157,12 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   npx keiko start
   ```
 
-- **Expect:** the browser opens Keiko at `http://127.0.0.1:1983` without a pairing step.
+- **Expect:** the browser opens Keiko at `http://127.0.0.1:1983` without a pairing step. If Keiko was
+  started from a folder inside a tool's own state area (a path with a segment such as `.claude`,
+  `.keiko` or `.config`), that folder is not preselected as the project: the Coding Workbench says
+  "No project chosen yet: choose a folder.", the Git window shows its own empty state "No repository
+  connected", and the folder field of the Files and Editor **New window** dialogs starts empty.
+  (Holds once `child/4371-ui-walk-fixes` is integrated.)
 - **Jira:** not applicable.
 - **Proves:** AC10 (a clean install runs on the platform); #4359 step 1.
 
@@ -164,8 +175,12 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   Knowledge**, section **Jira Live Pods**; **Manage** in the Chat's **Connectors** menu leads to the
   same place by design. Without a configured model the workspace stays behind **Model gateway
   setup**: finish that first.
-- **Expect:** the form shows **Verifying…** and closes; the Pod card shows **Connection verified** and
-  the status **Ready**. The Pod card itself shows no user: the account is read in Chat. The answer
+- **Expect:** the form shows **Verifying…** and closes; the Pod card shows the result of that check:
+  **Connection verified** with the line "The credential authenticated successfully." (holds once
+  `child/4371-ui-walk-fixes` is integrated; before it the result was only announced to a screen
+  reader). A healthy Pod shows no **Ready** chip in the Local Knowledge overview: **Ready** is the
+  chip of the Pod card in the connector settings. A check that failed shows its chip and one line
+  that names the way out. The Pod card itself shows no user: the account is read in Chat. The answer
   names the user and instance you expect.
 - **Jira:** the named user exists on that instance.
 - **Proves:** AC10 (credential custody and TLS trust on the platform); #4359 step 1.
@@ -176,6 +191,10 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   **Access**.
 - **Expect:** the trigger reads **Connectors: 1 active**; **Access** offers **Ask for approval**,
   **Supervised workspace** and **Full access**, and shows the effective mode the deployment allows.
+  The source picker above the conversation reads **Sources** with the entry **Jira Pod only**, and
+  shows no sentence about missing Knowledge Pods (holds once `child/4371-ui-walk-fixes` is
+  integrated; before it the picker read "Data sources / No Data sources" and "No ready Data Pods or
+  Pod Sets are available.").
 - **Jira:** not applicable.
 - **Proves:** AC1, AC4 (precondition); #4359 step 1.
 
@@ -183,8 +202,14 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 
 - **Do:** stop Keiko (`npx keiko stop`, or close the app) and start it again from the launcher.
 - **Expect:** if the browser asks, **Connect this browser** appears with **Connect browser**; one click
-  reconnects and the open chat and its draft are kept. The Pod still shows **Connection verified** or
-  **Ready**; no token is asked for. A Pod that asks for **Verify connection** after a restart is a finding.
+  reconnects and the open chat and its draft are kept. No token is asked for. A healthy Pod card
+  shows its name and **Add to workspace** and no status text: **Connection verified** appears only as
+  the result of a check run in that view (holds once `child/4371-ui-walk-fixes` is integrated). A
+  Pod card that shows **Not verified yet** or **Status unknown** with its repair button, and so asks
+  for **Verify connection** after a restart, is a finding. Select **Replace token** once and enter a
+  valid token: Keiko verifies the new token by itself (**Verifying…**, then the result) and no
+  further **Verify connection** is needed; closing the tab right after **Save** does not leave the
+  Pod unverified (holds once `child/4353-replace-token-verifies` is integrated).
 - **Jira:** not applicable.
 - **Proves:** AC8, AC10 (the credential survives a restart on the platform).
 
@@ -204,7 +229,12 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   review it, and select **Save**. Repeat until each of the four types has a template. A template that
   governs creation lists `create` in its `activateOn`.
 - **Expect:** each proposal shows **Matches Jira.**; a template that does not match shows **Needs
-  repair**. A saved template appears in the group.
+  repair**. A saved template appears in the group, one line per template in the form "{PROJECT} ·
+  {Issue type} — Matches Jira.". The entry is named by the template's first heading (a proposal
+  carries "# {Issue type} template"); a template saved without any heading is named "{PROJECT} ·
+  {Issue type}", for example "REQ · Task", and no longer by its file name (holds once
+  `child/4371-ui-walk-fixes` is integrated). After **Save** no "unsaved changes" question stays on
+  the screen (the same branch).
 - **Jira:** the project and issue types named in the templates exist.
 - **Proves:** epic AC1; #4354 "A Task or Sub-task template validates the actual parent relation of
   the instance"; #4359 step 2.
@@ -257,7 +287,11 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
   Task that belongs to it; a Sub-task of that Story or Task; a Bug. State each summary and the
   required fields. In **Ask for approval** and **Supervised workspace**, read the **Review Jira
   action** card (**Proposed action details**) and select **Approve this action**. In **Full access**
-  no approval card appears. Use one summary with a German umlaut.
+  no approval card appears. Use one summary with a German umlaut. The card names the project by name
+  and key, for example "Anforderungen Schadenmeldung (REQ)", on the first approval of a Chat as on
+  every later one; a project Jira did not answer is shown as "ID {number}", never as a name (holds
+  once `child/4356-approval-project-name` is integrated; before it the first card of a Chat could
+  show the bare numeric id).
 - **Expect:** each write shows **Jira change confirmed** (the progress line shows it as done), and
   where Keiko creates several issues from a draft the result list shows each item with the state
   **Created**; the issues carry the relations you asked for. After approval the card shows
@@ -389,7 +423,9 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Do:** in **Ask for approval**, ask Keiko to draft several issues (so that the draft stays the Chat's
   open draft) and leave the **Review Jira action** card undecided for more than ten minutes. Then
   tell Keiko to ask again.
-- **Expect:** the card shows **Action approval expired**. Keiko says in plain language that the
+- **Expect:** the card shows **Action approval expired** with the line "The approval expired before
+  anyone decided, so nothing was changed in Jira. Ask again and approve while the card is open."
+  Keiko says in plain language that the
   approval expired, that nothing was changed and that this was not a refusal by you. It does not draft
   the issues anew: the same draft comes back with a new **Review Jira action** card. For a single
   create without a draft, asking again makes a new card.
@@ -546,8 +582,9 @@ and then `keiko support analyze <report.json> --json`. Look for `toolCallingOutc
 
 <!--
 Catalog check for the walk (every quoted UI label, with its message key). Paths are under
-packages/keiko-ui/src. Every key below was read on integration head a60fe469a; keys marked
-[not a label] are not UI labels.
+packages/keiko-ui/src. Every key below was read on integration head a60fe469a, except the ones that
+name a branch, which were read on that branch's released head (401d205bd, 3f2132089, 7da817258);
+keys marked [not a label] are not UI labels.
 
 Catalogs: CORE = lib/i18n-messages.en.ts, OPT = lib/i18n-messages.optional.en.ts,
 SET = app/components/desktop/widgets/panels/settings-i18n.messages.json,
@@ -562,8 +599,17 @@ Base URL: atlassianConnectors.add.baseUrl (OPT)
 API token: atlassianConnectors.add.token (OPT)
 Verifying…: atlassianConnectors.verify.verifying (OPT)
 Connection verified: atlassianConnectors.verify.ok.label (OPT)
-Ready: atlassianConnectors.live.state.ready (OPT)
+Ready: atlassianConnectors.live.state.ready (OPT) [the chip of the Pod card in the connector settings; the Local Knowledge overview shows no chip on a healthy Pod]
 Verify connection: atlassianConnectors.verify.button (OPT)
+Not verified yet / Status unknown: atlassianConnectors.list.healthUnknown, atlassianConnectors.live.state.unknown (OPT)
+Replace token: atlassianConnectors.live.replaceToken (OPT; child/4353-replace-token-verifies)
+The credential authenticated successfully.: the closed copy line of the verify status "ok" (OPT)
+Sources / Jira Pod only: chat.grounding.label, chat.grounding.jiraOnly (OPT; child/4371-ui-walk-fixes)
+No project chosen yet: choose a folder. / Choose folder: codingWorkbench.repository.noProject,
+  codingWorkbench.repository.chooseFolder (WB; child/4371-ui-walk-fixes)
+ID {number} (a project Jira did not answer): memoria.id (OPT; child/4356-approval-project-name)
+The approval expired before anyone decided ...: chat.jira.writeApproval.expiredHint (OPT)
+Keiko looked up which Jira actions fit.: chat.jira.catalog.found (OPT; child/4371-ui-walk-fixes)
 Read the current Jira account: atlassianConnectors.action.jira.myself (OPT)
 Connectors: chat.connectors.title (OPT)
 Connectors: 1 active: chat.connectors.active (OPT) "Connectors: {count} active"
@@ -620,8 +666,10 @@ Settings → General → Language → Interface language: settings.title, settin
 Jira connection changed: chat.error.jiraPodConnectionChanged.title (CORE)
 Choose the Jira Pod again / Connectors menu above the conversation:
   chat.error.jiraPodConnectionChanged.message and .remediation (CORE)
-  The picker is labelled "Connectors" (chat.connectors.title); the "Data sources" label
-  (chat.grounding.dataLabel, OPT) is the separate knowledge-scope control above the conversation.
+  The picker is labelled "Connectors" (chat.connectors.title). The separate source control above the
+  conversation reads "Sources" (chat.grounding.label, OPT) and, with a Jira Pod on, its entry
+  "Jira Pod only" (chat.grounding.jiraOnly, OPT; child/4371-ui-walk-fixes). The old keys
+  chat.grounding.dataLabel, .noDataSources and .dataCatalogEmpty no longer exist there.
 Create error report / Download report: supportReport.create, supportReport.download (CORE)
 Support ID: chat.error.supportId (CORE) "Support ID: {correlationId}"
 Report ready. Download it and send it to support.: supportReport.saved (CORE)
